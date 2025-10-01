@@ -1,0 +1,8 @@
+Severity,CheckName,Detail
+INFO,Detailed information for dns_server_check:,"Node 10.48.70.154: 
+INFO: Only one name server 10.48.104.10 is configured
+
+Refer to KB 3005 (http://portal.nutanix.com/kb/3005) for details on dns_server_check"
+INFO,Detailed information for check_cvm_ssh_security:,"Node 10.48.70.154: 
+INFO: Password-based remote login is enabled on the cluster. It is recommended to use key-based ssh access instead of password-based ssh access for better security.
+Refer to KB 14104 (http://portal.nutanix.com/kb/14104) for details on check_cvm_ssh_security"

@@ -1,0 +1,26 @@
+# For Linux x86_64
+GOOS=linux GOARCH=amd64 go build -ldflags "-w -s \
+  -X main.Version=0.1.3_LINUX_AMD64 \
+  -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
+  -X main.Stream=Beta \
+  -X main.GoVersion=$(go version | cut -d ' ' -f 3)" \
+  -o ncc-orchestrator-linux-amd64
+
+# For Windows x86_64
+GOOS=windows GOARCH=amd64 go build -ldflags "-w -s \
+  -X main.Version=0.1.3_WIN_AMD64 \
+  -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
+  -X main.Stream=Beta \
+  -X main.GoVersion=$(go version | cut -d ' ' -f 3)" \
+  -o ncc-orchestrator-win-amd64.exe
+
+# For Mac ARM64
+GOOS=darwin GOARCH=arm64 go build -ldflags "-w -s \
+  -X main.Version=0.1.3_MAC_ARM \
+  -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
+  -X main.Stream=Beta \
+  -X main.GoVersion=$(go version | cut -d ' ' -f 3)" \
+  -o ncc-orchestrator-mac-arm64
+
+
+Check using: go tool dist list

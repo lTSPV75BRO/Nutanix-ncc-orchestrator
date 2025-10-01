@@ -1,0 +1,30 @@
+# NCC Runner configuration (dummy values)
+
+# Required
+clusters: "10.48.52.74,10.48.70.178"      	  # Comma-separated list of Prism cluster IPs/hosts
+username: "admin"                         # Prism username
+password: ""                              # Prefer env NCC_PASSWORD in CI; leave empty here if using env
+
+# TLS and timeouts
+insecure-skip-verify: true                # Set true only for lab/self-signed
+timeout: "15m"                            # Per-cluster overall timeout  
+request-timeout: "30s"                    # Per HTTP request timeout  
+poll-interval: "15s"                      # Polling interval for task status  
+poll-jitter: "2s"                         # Random jitter to avoid herd behavior  
+
+# Concurrency and outputs
+max-parallel: 4                           # Parallel clusters processed  
+outputs: "html,csv"                       # One or more: html,csv  
+output-dir-logs: "nccfiles"               # Directory for raw NCC summary text  
+output-dir-filtered: "outputfiles"        # Directory for generated HTML/CSV  
+
+# Logging
+log-file: "logs/ncc-runner.log"           # Rotated JSON logs path  
+log-level: "2"                            # 0 trace, 1 debug, 2 info, 3 warn, 4 error  
+log-http: false                           # Set true only for debugging; logs request/response dumps  
+
+# Retry behavior
+retry-max-attempts: 6                     # Max attempts per request  
+retry-base-delay: "2000ms"                 # Base backoff delay  
+retry-max-delay: "8s"                     # Max jittered backoff delay  
+

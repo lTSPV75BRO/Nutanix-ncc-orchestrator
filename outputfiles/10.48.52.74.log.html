@@ -1,0 +1,81 @@
+
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>NCC Report</title>
+  <style>
+    :root {
+      --fail: #ef4444;
+      --warn: #f59e0b;
+      --info: #3b82f6;
+      --err:  #374151;
+      --border: #d1d5db;
+      --thead: #f3f4f6;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 16px; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: #111827; }
+    h1 { margin: 0 0 8px 0; font-size: 20px; }
+    .meta { color: #6b7280; font-size: 12px; margin-bottom: 12px; }
+    table { border-collapse: collapse; width: 100%; border: 1px solid var(--border); }
+    thead th {
+      position: sticky; top: 0; background: var(--thead);
+      border-bottom: 1px solid var(--border);
+      padding: 10px; text-align: left; font-size: 13px;
+    }
+    tbody td { border-bottom: 1px solid var(--border); padding: 10px; vertical-align: top; }
+    tbody tr:nth-child(odd) { background: #fafafa; }
+    .sev { display: inline-block; padding: 2px 8px; border-radius: 999px; font-weight: 600; font-size: 12px; }
+    .sev.FAIL { color: #fff; background: var(--fail); }
+    .sev.WARN { color: #111827; background: #fde68a; }
+    .sev.INFO { color: #fff; background: var(--info); }
+    .sev.ERR  { color: #111827; background: #e5e7eb; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+  </style>
+</head>
+<body>
+  <h1>NCC Report</h1>
+  <div class="meta">Generated at 2025-09-29T19:55:34&#43;05:30</div>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:120px">Severity</th>
+        <th style="width:360px">NCC Check Name</th>
+        <th>Detail Information</th>
+      </tr>
+    </thead>
+    <tbody>
+      
+      <tr>
+        <td><span class="sev FAIL">FAIL</span></td>
+        <td class="mono">Detailed information for ldap_config_check:</td>
+        <td class="mono">Node 10.48.52.67: <br>FAIL: 1 ldap url ports non-connectable: [(&#39;10.48.52.77&#39;, 389)]<br>Refer to KB 2997 (http://portal.nutanix.com/kb/2997) for details on ldap_config_check</td>
+      </tr>
+      
+      <tr>
+        <td><span class="sev INFO">INFO</span></td>
+        <td class="mono">Detailed information for ec_enablement_check:</td>
+        <td class="mono">Node 10.48.52.67: <br>INFO: Consider enabling erasure coding on container default-container-95217839260693 to get 24% space savings.<br>INFO: Consider enabling erasure coding on container SelfServiceContainer to get 23% space savings.<br>INFO: Consider enabling erasure coding on container EraContainer-12743 to get 26% space savings.<br>Refer to KB 14293 (http://portal.nutanix.com/kb/14293) for details on ec_enablement_check</td>
+      </tr>
+      
+      <tr>
+        <td><span class="sev INFO">INFO</span></td>
+        <td class="mono">Detailed information for check_cvm_ssh_security:</td>
+        <td class="mono">Node 10.48.52.67: <br>INFO: Password-based remote login is enabled on the cluster. It is recommended to use key-based ssh access instead of password-based ssh access for better security.<br>Refer to KB 14104 (http://portal.nutanix.com/kb/14104) for details on check_cvm_ssh_security</td>
+      </tr>
+      
+      <tr>
+        <td><span class="sev INFO">INFO</span></td>
+        <td class="mono">Detailed information for orphan_vm_snapshot_check:</td>
+        <td class="mono">Node 10.48.52.67: <br>INFO: Found 1 orphan VM snapshot(s): [&#39;32c6748c-a77d-45dc-9139-8a3d7ba82cf9&#39;].<br>Refer to KB 3752 (http://portal.nutanix.com/kb/3752) for details on orphan_vm_snapshot_check</td>
+      </tr>
+      
+      <tr>
+        <td><span class="sev INFO">INFO</span></td>
+        <td class="mono">Detailed information for secure_boot_check:</td>
+        <td class="mono">Node 10.48.52.67: <br>INFO: Secure boot is not enabled on following hosts: 10.48.52.61; 10.48.52.62; 10.48.52.64; 10.48.52.12<br>Refer to KB 8193 (http://portal.nutanix.com/kb/8193) for details on secure_boot_check</td>
+      </tr>
+      
+    </tbody>
+  </table>
+</body>
+</html>

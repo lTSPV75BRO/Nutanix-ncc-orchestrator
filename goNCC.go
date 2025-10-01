@@ -1,0 +1,2256 @@
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/tls"
+	"encoding/csv"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"html"
+	"html/template"
+	"io"
+	"math"
+	"math/rand"
+	"net"
+	"net/http"
+	"net/http/httputil"
+	"os"
+	"path/filepath"
+	"regexp"
+	"runtime/debug"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	"github.com/rs/zerolog/pkgerrors"
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+	"github.com/vbauerster/mpb/v7"
+	"github.com/vbauerster/mpb/v7/decor"
+	"golang.org/x/term"
+	lumberjack "gopkg.in/natefinch/lumberjack.v2"
+)
+
+/************** Config **************/
+
+type Config struct {
+	Clusters           []string
+	Username           string
+	Password           string
+	InsecureSkipVerify bool
+	Timeout            time.Duration // per-cluster overall timeout
+	RequestTimeout     time.Duration // per HTTP request timeout
+	PollInterval       time.Duration
+	PollJitter         time.Duration
+	OutputDirLogs      string
+	OutputDirFiltered  string
+	OutputFormats      []string // html,csv
+	MaxParallel        int
+	TLSMinVersion      uint16
+	LogFile            string
+
+	// Logging options
+	LogLevel string // 0..5 or names
+	LogHTTP  bool   // dump HTTP request/response
+
+	// Retry tuning
+	RetryMaxAttempts int
+	RetryBaseDelay   time.Duration
+	RetryMaxDelay    time.Duration
+}
+
+const termsText = `
+This script is created by Prajwal Vernekar (prajwal.vernekar@nutanix.com).
+
+Script Description:
+Nutanix NCC Orchestrator is a CLI tool to run NCC checks across multiple clusters in parallel, aggregate results, and generate HTML/CSV reports.
+
+How the Script Works:
+- Reads configuration from config file, environment variables, or CLI flags.
+- Starts NCC checks on each cluster via API.
+- Polls for completion and fetches summaries.
+- Generates per-cluster and aggregated reports in specified formats.
+
+Usage:
+./ncc-orchestrator [flags]
+./ncc-orchestrator --help for more details.
+
+Instructions for config.yaml File:
+Create a config.yaml with keys like:
+# Required
+clusters: "10.0.XX.XX,10.1.XX.XX"      	  # Comma-separated list of Prism cluster IPs/hosts  
+username: "admin"                         # Prism username  
+password: ""                              # Prefer env NCC_PASSWORD in CI; leave empty here if using env  
+
+# TLS and timeouts
+insecure-skip-verify: false               # Set true only for lab/self-signed  
+timeout: "15m"                            # Per-cluster overall timeout  
+request-timeout: "30s"                    # Per HTTP request timeout  
+poll-interval: "15s"                      # Polling interval for task status  
+poll-jitter: "2s"                         # Random jitter to avoid herd behavior  
+
+# Concurrency and outputs
+max-parallel: 4                           # Parallel clusters processed  
+outputs: "html,csv"                       # One or more: html,csv  
+output-dir-logs: "nccfiles"               # Directory for raw NCC summary text  
+output-dir-filtered: "outputfiles"        # Directory for generated HTML/CSV  
+
+# Logging
+log-file: "logs/ncc-runner.log"           # Rotated JSON logs path  
+log-level: "2"                            # 0 trace, 1 debug, 2 info, 3 warn, 4 error  
+log-http: false                           # Set true only for debugging; logs request/response dumps  
+ 
+# Retry behavior
+retry-max-attempts: 6                     # Max attempts per request  
+retry-base-delay: "400ms"                 # Base backoff delay  
+retry-max-delay: "8s"                     # Max jittered backoff delay  
+
+Use --config to specify file path.
+
+Nutanix APIs used:
+
+1. POST https://{cluster_IP}:9440/PrismGateway/services/rest/v1/ncc/checks        -> Initiates NCC checks on the cluster. Returns a task UUID for polling.
+2. GET  https://{cluster_IP}:9440/PrismGateway/services/rest/v2.0/tasks/{taskID}  -> Polls the status of the NCC task. Returns progress (percentage complete and status).
+3. GET  https://{cluster_IP}:9440/PrismGateway/services/rest/v1/ncc/{taskID}      -> Fetches the NCC run summary once the task is complete. Returns the raw summary text.
+
+Disclaimer:
+     Use at your own risk. Running this program implies acceptance of associated risks.
+     The developer or Nutanix shall not be held liable for any consequences resulting from its use.
+`
+
+func splitCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func mustParseDur(s string, def time.Duration) time.Duration {
+	if s == "" {
+		return def
+	}
+	if d, err := time.ParseDuration(s); err == nil {
+		return d
+	}
+	return def
+}
+
+func writeDummyConfig(path string) error {
+	ext := strings.ToLower(filepath.Ext(path))
+	dummy := ""
+	switch ext {
+	case ".yaml", ".yml":
+		dummy = `# NCC Runner configuration (dummy values)
+
+# Required
+clusters: "10.2.XX.XX,10.0.XX.XX"      	  # Comma-separated list of Prism Element cluster IPs/cluster FQDNs
+username: "admin"                         # Prism element username
+password: ""                              # Prefer env NCC_PASSWORD in CLI; leave empty here if using env
+
+# TLS and timeouts
+insecure-skip-verify: false               # Set true only for lab/self-signed
+timeout: "15m"                            # Per-cluster overall timeout  
+request-timeout: "30s"                    # Per HTTP request timeout  
+poll-interval: "15s"                      # Polling interval for task status  
+poll-jitter: "2s"                         # Random jitter to avoid herd behavior  
+
+# Concurrency and outputs
+max-parallel: 4                           # Parallel clusters processed  
+outputs: "html,csv"                       # One or more: html,csv  
+output-dir-logs: "nccfiles"               # Directory for raw NCC summary text  
+output-dir-filtered: "outputfiles"        # Directory for generated HTML/CSV  
+
+# Logging
+log-file: "logs/ncc-runner.log"           # Rotated JSON logs path  
+log-level: "2"                            # 0 trace, 1 debug, 2 info, 3 warn, 4 error  
+log-http: false                           # Set true only for debugging; logs request/response dumps  
+
+# Retry behavior
+retry-max-attempts: 6                     # Max attempts per request  
+retry-base-delay: "400ms"                 # Base backoff delay  
+retry-max-delay: "8s"                     # Max jittered backoff delay  
+
+`
+	case ".json":
+		dummy = `{
+  "clusters": ["10.0.0.1", "10.0.0.2"],
+  "username": "admin",
+  "password": "",
+  "insecure-skip-verify": false,
+  "timeout": "15m",
+  "request-timeout": "30s",
+  "poll-interval": "15s",
+  "poll-jitter": "2s",
+  "max-parallel": 4,
+  "outputs": "html,csv",
+  "output-dir-logs": "nccfiles",
+  "output-dir-filtered": "outputfiles",
+  "log-file": "logs/ncc-runner.log",
+  "log-level": "2",
+  "log-http": false,
+  "retry-max-attempts": 6,
+  "retry-base-delay": "400ms",
+  "retry-max-delay": "8s"
+}
+`
+	default:
+		dummy = `# NCC Runner configuration (dummy values)
+
+# Required
+clusters: "10.2.XX.XX,10.0.XX.XX"      	  # Comma-separated list of Prism Element cluster IPs/cluster FQDNs
+username: "admin"                         # Prism element username
+password: ""                              # Prefer env NCC_PASSWORD in CLI; leave empty here if using env
+
+# TLS and timeouts
+insecure-skip-verify: false               # Set true only for lab/self-signed
+timeout: "15m"                            # Per-cluster overall timeout  
+request-timeout: "30s"                    # Per HTTP request timeout  
+poll-interval: "15s"                      # Polling interval for task status  
+poll-jitter: "2s"                         # Random jitter to avoid herd behavior  
+
+# Concurrency and outputs
+max-parallel: 4                           # Parallel clusters processed  
+outputs: "html,csv"                       # One or more: html,csv  
+output-dir-logs: "nccfiles"               # Directory for raw NCC summary text  
+output-dir-filtered: "outputfiles"        # Directory for generated HTML/CSV  
+
+# Logging
+log-file: "logs/ncc-runner.log"           # Rotated JSON logs path  
+log-level: "2"                            # 0 trace, 1 debug, 2 info, 3 warn, 4 error  
+log-http: false                           # Set true only for debugging; logs request/response dumps  
+
+# Retry behavior
+retry-max-attempts: 6                     # Max attempts per request  
+retry-base-delay: "400ms"                 # Base backoff delay  
+retry-max-delay: "8s"                     # Max jittered backoff delay  
+`
+	}
+	dir := filepath.Dir(path)
+	if dir != "." {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(path, []byte(dummy), 0644)
+}
+
+func parseLogLevel(s string) zerolog.Level {
+	if s == "" {
+		if env := os.Getenv("LOG_LEVEL"); env != "" {
+			s = env
+		} else {
+			return zerolog.InfoLevel
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "trace", "0":
+		return zerolog.TraceLevel
+	case "debug", "1":
+		return zerolog.DebugLevel
+	case "info", "2":
+		return zerolog.InfoLevel
+	case "warn", "warning", "3":
+		return zerolog.WarnLevel
+	case "error", "4":
+		return zerolog.ErrorLevel
+	case "fatal", "5":
+		return zerolog.FatalLevel
+	default:
+		if n, err := strconv.Atoi(s); err == nil {
+			return zerolog.Level(n)
+		}
+		return zerolog.InfoLevel
+	}
+}
+
+func bindConfig() (Config, error) {
+	cfgFile := viper.GetString("config")
+	if cfgFile != "" {
+		viper.SetConfigFile(cfgFile)
+		if _, err := os.Stat(cfgFile); errors.Is(err, os.ErrNotExist) {
+			if err := writeDummyConfig(cfgFile); err != nil {
+				return Config{}, fmt.Errorf("failed to create dummy config at %s: %w", cfgFile, err)
+			}
+			fmt.Printf("Created dummy config at %s. Please edit it according to your Nutanix environment and re-run.\n", cfgFile)
+			return Config{}, errors.New("dummy config created; edit and re-run")
+		}
+		if err := viper.ReadInConfig(); err != nil {
+			var nf viper.ConfigFileNotFoundError
+			if !errors.As(err, &nf) {
+				return Config{}, fmt.Errorf("read config: %w", err)
+			}
+		}
+	}
+
+	viper.SetEnvPrefix("ncc")
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+	viper.AutomaticEnv()
+
+	cfg := Config{
+		Clusters:           splitCSV(viper.GetString("clusters")),
+		Username:           viper.GetString("username"),
+		Password:           viper.GetString("password"),
+		InsecureSkipVerify: viper.GetBool("insecure-skip-verify"),
+		Timeout:            mustParseDur(viper.GetString("timeout"), 15*time.Minute),
+		RequestTimeout:     mustParseDur(viper.GetString("request-timeout"), 20*time.Second),
+		PollInterval:       mustParseDur(viper.GetString("poll-interval"), 15*time.Second),
+		PollJitter:         mustParseDur(viper.GetString("poll-jitter"), 2*time.Second),
+		OutputDirLogs:      viper.GetString("output-dir-logs"),
+		OutputDirFiltered:  viper.GetString("output-dir-filtered"),
+		OutputFormats:      splitCSV(viper.GetString("outputs")),
+		MaxParallel:        viper.GetInt("max-parallel"),
+		TLSMinVersion:      tls.VersionTLS12,
+		LogFile:            viper.GetString("log-file"),
+		LogLevel:           viper.GetString("log-level"),
+		LogHTTP:            viper.GetBool("log-http"),
+		RetryMaxAttempts:   viper.GetInt("retry-max-attempts"),
+		RetryBaseDelay:     mustParseDur(viper.GetString("retry-base-delay"), 400*time.Millisecond),
+		RetryMaxDelay:      mustParseDur(viper.GetString("retry-max-delay"), 8*time.Second),
+	}
+	if cfg.OutputDirLogs == "" {
+		cfg.OutputDirLogs = "nccfiles"
+	}
+	if cfg.OutputDirFiltered == "" {
+		cfg.OutputDirFiltered = "outputfiles"
+	}
+	if len(cfg.OutputFormats) == 0 {
+		cfg.OutputFormats = []string{"html"}
+	}
+	if cfg.MaxParallel <= 0 {
+		cfg.MaxParallel = 4
+	}
+	if cfg.LogFile == "" {
+		cfg.LogFile = "logs/ncc-runner.log"
+	}
+	if cfg.RetryMaxAttempts <= 0 {
+		cfg.RetryMaxAttempts = 6
+	}
+	if cfg.RetryBaseDelay <= 0 {
+		cfg.RetryBaseDelay = 400 * time.Millisecond
+	}
+	if cfg.RetryMaxDelay <= 0 {
+		cfg.RetryMaxDelay = 8 * time.Second
+	}
+	return cfg, nil
+}
+
+/************** Logging **************/
+
+// In setupFileLogger, add the new version fields to the global logger context
+func setupFileLogger(logPath string, lvl zerolog.Level) error {
+	dir := filepath.Dir(logPath)
+	if dir != "." {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
+	}
+	fileWriter := &lumberjack.Logger{
+		Filename:   logPath,
+		MaxSize:    20, // MB
+		MaxBackups: 5,
+		MaxAge:     30, // days
+		Compress:   true,
+	}
+	zerolog.TimeFieldFormat = time.RFC3339Nano
+	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
+	var gitRevision string
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		for _, s := range bi.Settings {
+			if s.Key == "vcs.revision" {
+				gitRevision = s.Value
+				break
+			}
+		}
+		log.Logger = zerolog.New(fileWriter).Level(lvl).With().
+			Timestamp().
+			Str("git_revision", gitRevision).
+			Str("go_version", bi.GoVersion).
+			Str("Version", Version).
+			Str("stream", Stream).
+			Logger()
+	} else {
+		log.Logger = zerolog.New(fileWriter).Level(lvl).With().Timestamp().Logger()
+	}
+	return nil
+}
+
+/************** Retry helpers **************/
+
+func jitteredBackoff(base, maxDelay time.Duration, attempt int) time.Duration {
+	exp := float64(base) * math.Pow(2, float64(attempt-1))
+	capDelay := time.Duration(exp)
+	if capDelay > maxDelay {
+		capDelay = maxDelay
+	}
+	if capDelay <= 0 {
+		return 0
+	}
+	return time.Duration(rand.Int63n(int64(capDelay)))
+}
+
+func isRetryableStatus(code int) bool {
+	switch code {
+	case 408, 429, 500, 502, 503, 504:
+		return true
+	default:
+		return false
+	}
+}
+
+func retryAfterDelay(resp *http.Response) (time.Duration, bool) {
+	if resp == nil {
+		return 0, false
+	}
+	ra := resp.Header.Get("Retry-After")
+	if ra == "" {
+		return 0, false
+	}
+	if secs, err := strconv.Atoi(ra); err == nil {
+		return time.Duration(secs) * time.Second, true
+	}
+	if t, err := http.ParseTime(ra); err == nil {
+		d := time.Until(t)
+		if d < 0 {
+			d = 0
+		}
+		return d, true
+	}
+	return 0, false
+}
+
+/************** HTTP and FS **************/
+
+type HTTPClient interface {
+	Do(req *http.Request) (*http.Response, error)
+}
+
+type LoggingTransport struct {
+	Base    http.RoundTripper
+	MaxBody int // bytes; 0 = unlimited
+}
+
+func (t *LoggingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	base := t.Base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	if d, err := httputil.DumpRequestOut(req, true); err == nil {
+		dump := d
+		if t.MaxBody > 0 && len(dump) > t.MaxBody {
+			dump = append(dump[:t.MaxBody], []byte("...[truncated]")...)
+		}
+		log.Debug().
+			Str("method", req.Method).
+			Str("url", req.URL.String()).
+			RawJSON("request_dump", dump).
+			Msg("http request")
+	}
+	resp, err := base.RoundTrip(req)
+	if err != nil {
+		log.Error().Err(err).Str("url", req.URL.String()).Msg("http roundtrip error")
+		return nil, err
+	}
+	if resp != nil {
+		if d, err := httputil.DumpResponse(resp, true); err == nil {
+			dump := d
+			if t.MaxBody > 0 && len(dump) > t.MaxBody {
+				dump = append(dump[:t.MaxBody], []byte("...[truncated]")...)
+			}
+			log.Debug().
+				Int("status", resp.StatusCode).
+				RawJSON("response_dump", dump).
+				Msg("http response")
+		}
+	}
+	return resp, nil
+}
+
+func NewHTTPClient(cfg Config) *http.Client {
+	tr := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ResponseHeaderTimeout: 10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: cfg.InsecureSkipVerify,
+			MinVersion:         cfg.TLSMinVersion,
+		},
+		IdleConnTimeout: 90 * time.Second,
+		MaxIdleConns:    100,
+	}
+	rt := http.RoundTripper(tr)
+	if cfg.LogHTTP || os.Getenv("LOG_HTTP") == "1" {
+		rt = &LoggingTransport{Base: tr, MaxBody: 64 * 1024}
+	}
+	return &http.Client{
+		Timeout:   cfg.Timeout, // overall guard
+		Transport: rt,
+	}
+}
+
+/************** FS **************/
+
+type FS interface {
+	MkdirAll(path string, perm os.FileMode) error
+	WriteFile(path string, data []byte, perm os.FileMode) error
+	ReadFile(path string) ([]byte, error)
+	ReadDir(path string) ([]os.DirEntry, error)
+	Create(path string) (*os.File, error)
+}
+
+type OSFS struct{}
+
+func (OSFS) MkdirAll(path string, perm os.FileMode) error { return os.MkdirAll(path, perm) }
+func (OSFS) WriteFile(path string, data []byte, perm os.FileMode) error {
+	return os.WriteFile(path, data, perm)
+}
+func (OSFS) ReadFile(path string) ([]byte, error)       { return os.ReadFile(path) }
+func (OSFS) ReadDir(path string) ([]os.DirEntry, error) { return os.ReadDir(path) }
+func (OSFS) Create(path string) (*os.File, error)       { return os.Create(path) }
+
+/************** API Types **************/
+
+type TaskStatus struct {
+	PercentageComplete int    `json:"percentage_complete"`
+	ProgressStatus     string `json:"progress_status"`
+}
+
+type NCCSummary struct {
+	RunSummary string `json:"runSummary"`
+}
+
+/************** Parser **************/
+
+var (
+	reBlockStart = regexp.MustCompile(`^Detailed information for .*`)
+	reBlockEnd   = regexp.MustCompile(`^Refer to.*`)
+	reSeverity   = regexp.MustCompile(`\b(FAIL|WARN|INFO|ERR):`)
+)
+
+type Row struct {
+	Severity  string
+	CheckName string
+	Detail    template.HTML
+}
+
+type ParsedBlock struct {
+	Severity  string
+	CheckName string
+	DetailRaw string
+}
+
+func splitLines(s string) []string {
+	sc := bufio.NewScanner(strings.NewReader(s))
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	lines := []string{}
+	for sc.Scan() {
+		lines = append(lines, sc.Text())
+	}
+	if len(s) > 0 && strings.HasSuffix(s, "\n") {
+		lines = append(lines, "")
+	}
+	return lines
+}
+
+func detectSeverity(s string) string {
+	loc := reSeverity.FindStringSubmatch(s)
+	if len(loc) > 1 {
+		return loc[1]
+	}
+	switch {
+	case strings.Contains(s, "FAIL:"):
+		return "FAIL"
+	case strings.Contains(s, "WARN:"):
+		return "WARN"
+	case strings.Contains(s, "ERR:"):
+		return "ERR"
+	case strings.Contains(s, "INFO:"):
+		return "INFO"
+	default:
+		return "INFO"
+	}
+}
+
+func ParseSummary(text string) ([]ParsedBlock, error) {
+	lines := splitLines(text)
+	var blocks []ParsedBlock
+	for i := 0; i < len(lines); i++ {
+		if reBlockStart.MatchString(lines[i]) {
+			checkName := lines[i]
+			i++
+			var buf []string
+			for i < len(lines) && !reBlockEnd.MatchString(lines[i]) {
+				buf = append(buf, lines[i])
+				i++
+			}
+			if i < len(lines) {
+				buf = append(buf, lines[i])
+			}
+			joined := strings.Join(buf, "\n")
+			blocks = append(blocks, ParsedBlock{
+				Severity:  detectSeverity(joined),
+				CheckName: checkName,
+				DetailRaw: joined,
+			})
+		}
+	}
+	return blocks, nil
+}
+
+/************** Renderers **************/
+
+// func generateHTML(fs FS, rows []Row, filename string) error {
+// 	const tmpl = `
+// <html>
+// <head>
+// <meta charset="utf-8">
+// <style>
+// table { border: 2px solid black; border-collapse: collapse; width: 100%; }
+// th { border: 2px solid black; padding: 10px; text-align: center; background-color: #f2f2f2; }
+// td { border: 2px solid black; padding: 10px; text-align: left; }
+// .FAIL { background-color: red; color: white; }
+// .WARN { background-color: yellow; color: black; }
+// .INFO { background-color: blue; color: white; }
+// .ERR  { background-color: white; color: black; }
+// </style>
+// </head>
+// <body>
+// <table>
+//     <tr>
+//         <th>Severity</th>
+//         <th>NCC Check Name</th>
+//         <th>Detail Information</th>
+//     </tr>
+//     {{range .}}
+//     <tr>
+//         <td class="{{.Severity}}">{{.Severity}}</td>
+//         <td>{{.CheckName}}</td>
+//         <td>{{.Detail}}</td>
+//     </tr>
+//     {{end}}
+// </table>
+// </body>
+// </html>
+// `
+// 	f, err := fs.Create(filename)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	defer f.Close()
+// 	t := template.Must(template.New("table").Parse(tmpl))
+// 	return t.Execute(f, rows)
+// }
+
+func generateHTML(fs FS, rows []Row, filename string) error {
+	const tmpl = `
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>NCC Report</title>
+  <style>
+    :root {
+      --fail: #ef4444;
+      --warn: #f59e0b;
+      --info: #3b82f6;
+      --err:  #374151;
+      --border: #d1d5db;
+      --thead: #f3f4f6;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 16px; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: #111827; }
+    h1 { margin: 0 0 8px 0; font-size: 20px; }
+    .meta { color: #6b7280; font-size: 12px; margin-bottom: 12px; }
+    table { border-collapse: collapse; width: 100%; border: 1px solid var(--border); }
+    thead th {
+      position: sticky; top: 0; background: var(--thead);
+      border-bottom: 1px solid var(--border);
+      padding: 10px; text-align: left; font-size: 13px;
+    }
+    tbody td { border-bottom: 1px solid var(--border); padding: 10px; vertical-align: top; }
+    tbody tr:nth-child(odd) { background: #fafafa; }
+    .sev { display: inline-block; padding: 2px 8px; border-radius: 999px; font-weight: 600; font-size: 12px; }
+    .sev.FAIL { color: #fff; background: var(--fail); }
+    .sev.WARN { color: #111827; background: #fde68a; }
+    .sev.INFO { color: #fff; background: var(--info); }
+    .sev.ERR  { color: #111827; background: #e5e7eb; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+  </style>
+</head>
+<body>
+  <h1>NCC Report</h1>
+  <div class="meta">Generated at {{.Now}}</div>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:120px">Severity</th>
+        <th style="width:360px">NCC Check Name</th>
+        <th>Detail Information</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Rows}}
+      <tr>
+        <td><span class="sev {{.Severity}}">{{.Severity}}</span></td>
+        <td class="mono">{{.CheckName}}</td>
+        <td class="mono">{{.Detail}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</body>
+</html>`
+	f, err := fs.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	data := struct {
+		Rows []Row
+		Now  string
+	}{
+		Rows: rows,
+		Now:  time.Now().Format(time.RFC3339),
+	}
+	t := template.Must(template.New("table").Parse(tmpl))
+	return t.Execute(f, data)
+}
+
+func generateCSV(fs FS, blocks []ParsedBlock, filename string) error {
+	f, err := fs.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	w := csv.NewWriter(f)
+	defer w.Flush()
+	if err := w.Write([]string{"Severity", "CheckName", "Detail"}); err != nil {
+		return err
+	}
+	for _, b := range blocks {
+		if err := w.Write([]string{b.Severity, b.CheckName, b.DetailRaw}); err != nil {
+			return err
+		}
+	}
+	return w.Error()
+}
+
+func rowsFromBlocks(blocks []ParsedBlock) []Row {
+	rows := make([]Row, 0, len(blocks))
+	for _, b := range blocks {
+		detail := template.HTML(strings.ReplaceAll(html.EscapeString(b.DetailRaw), "\n", "<br>"))
+		rows = append(rows, Row{
+			Severity:  b.Severity,
+			CheckName: html.EscapeString(strings.ReplaceAll(b.CheckName, "\n", " ")),
+			Detail:    detail,
+		})
+	}
+	return rows
+}
+
+/************** Aggregation **************/
+
+type AggBlock struct {
+	Cluster  string
+	Severity string
+	Check    string
+	Detail   string
+}
+
+func writeAggregatedHTMLSingle(fs FS, outDir string, rows []AggBlock, perCluster []struct{ Cluster, HTML, CSV string }) error {
+	if err := fs.MkdirAll(outDir, 0755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", outDir, err)
+	}
+	path := filepath.Join(outDir, "index.html")
+	abs, _ := filepath.Abs(path)
+	const tmpl = `
+	<html>
+	<head>
+	<meta charset="utf-8">
+	<title>NCC Aggregated Report</title>
+	<style>
+	:root {
+	  --bg: #0f172a;
+	  --card: #111827;
+	  --text: #e5e7eb;
+	  --muted: #9ca3af;
+	  --accent: #2563eb;
+	  --row1: #0b1224;
+	  --row2: #0e1630;
+	  --border: #1f2937;
+	  --fail: #ef4444;
+	  --warn: #f59e0b;
+	  --info: #3b82f6;
+	  --details: #aaa;
+	  --err:  #94a3b8;
+	}
+	* { box-sizing: border-box; }
+	html, body { height: 100%; }
+	body {
+	  margin: 0;
+	  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+	  background: linear-gradient(180deg,#0b1224,#0e1630);
+	  color: var(--text);
+	}
+	.container { max-width: 1200px; margin: 24px auto; padding: 0 16px; }
+	.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+	.title h1 { margin: 0; font-size: 22px; font-weight: 700; }
+	.title .sub { color: var(--muted); font-size: 12px; }
+	.controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 12px 0 18px 0; }
+	.control { background: #0d152b; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: flex; gap: 8px; align-items: center; }
+	.control label { font-size: 12px; color: var(--muted); margin-right: 6px; }
+	input[type="text"] { background: #0a1123; border: 1px solid var(--border); color: var(--text); padding: 8px 10px; border-radius: 8px; outline: none; width: 280px; }
+	select, button { background: #0a1123; border: 1px solid var(--border); color: var(--text); padding: 8px 10px; border-radius: 8px; outline: none; }
+	button:hover { border-color: var(--accent); cursor: pointer; }
+	.badge { display:inline-flex; align-items:center; gap:6px; padding: 6px 10px; border-radius: 999px; background:#0a1123; border:1px solid var(--border); user-select:none; }
+	.badge .dot { width: 8px; height: 8px; border-radius: 999px; display:inline-block; }
+	.dot.fail{ background: var(--fail); } .dot.warn{ background: var(--warn); }
+	.dot.info{ background: var(--info); } .dot.err{ background: var(--err); }
+	.legend { display:flex; gap:8px; flex-wrap: wrap; }
+	.card { background: #0d152b; border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
+	
+	/* Summary counters visible */
+	.summary { display:grid; grid-template-columns: repeat(5, 1fr); gap:12px; margin: 16px 0; }
+	.sum-item { background: #0a1123; border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
+	.sum-item .label { font-size: 12px; color: var(--muted); }
+	.sum-item .count { font-size: 18px; font-weight: 700; margin-top: 6px; }
+	.progress { height: 6px; border-radius: 999px; background: #0d152b; margin-top: 8px; overflow: hidden; border:1px solid var(--border); }
+	.progress > span { display:block; height:100%; }
+	.progress.fail > span { background: var(--fail); } .progress.warn > span { background: var(--warn); }
+	.progress.err  > span { background: var(--err); }  .progress.info > span { background: var(--info); }
+	
+	/* Scroll container for wide tables */
+	.scroll { overflow-x: auto; overflow-y: hidden; }
+	.scroll::-webkit-scrollbar { height: 10px; }
+	.scroll::-webkit-scrollbar-thumb { background: #22304d; border-radius: 8px; }
+	.scroll::-webkit-scrollbar-track { background: #0a1123; }
+	
+	/* Table */
+	table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+	thead th {
+	  position: sticky; top: 0; z-index: 1;
+	  background: #0d152b; border-bottom: 1px solid var(--border);
+	  padding: 10px; text-align: left; font-size: 12px; color: var(--muted);
+	}
+	tbody td { padding: 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+	thead th, tbody td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	
+	tbody tr:nth-child(odd) { background: var(--row1); }
+	tbody tr:nth-child(even){ background: var(--row2); }
+	
+	td .severity { padding: 2px 8px; border-radius: 999px; font-size: 12px; }
+	.sev-FAIL { background: #2b0d0d; color: var(--fail); border: 1px solid #4c1d1d; }
+	.sev-WARN { background: #2b1f0d; color: var(--warn); border: 1px solid #4a3112; }
+	.sev-INFO { background: #0c1f35; color: var(--info); border: 1px solid #173e6d; }
+	.sev-ERR  { background: #1b2130; color: var(--err);  border: 1px solid #2c354a; }
+	
+	small.mono { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+	.highlight { background: #3b82f655; }
+	
+	/* Column sizing */
+	th.col-cluster, td.col-cluster   { width: 140px; }
+	th.col-sev,     td.col-sev       { width: 96px; }
+	th.col-title,   td.col-title     { width: 240px; }
+	th.col-kb,      td.col-kb        { width: 110px; }
+	th.col-detail,  td.col-detail    { width: 640px; }
+	th.col-actions, td.col-actions   { width: 220px; }
+	
+    td.col-detail { white-space: normal; overflow: visible; }
+    .detail-full { color: var(--details); font-size: 13px; line-height: 1.35; }
+	
+	/* Actions */
+	tbody tr.selected { outline: 2px solid var(--accent); outline-offset: -2px; }
+	.actions { white-space: nowrap; display: inline-flex; gap: 6px; flex-wrap: wrap; }
+	.actions button { background:#0a1123; border:1px solid var(--border); color:var(--text); padding:6px 8px; border-radius:8px; }
+	.actions button:hover { border-color: var(--accent); cursor:pointer; }
+	
+	/* Link styling (URLs) */
+	a { color: #93c5fd; text-decoration: none; }
+	a:hover { text-decoration: underline; color: #bfdbfe; }
+	a:visited { color: #a5b4fc; }
+	a[href^="http"]::after {
+	  content: "↗";
+	  font-size: 11px;
+	  margin-left: 4px;
+	  color: #64748b;
+	}
+	  /* Custom checkbox - hide default */
+.control input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  cursor: pointer;
+  height: 0;
+  width: 0;
+}
+
+
+.control span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  padding-left: 24px;
+  min-height: 16px; /* Match box height */
+  cursor: pointer;
+  color: var(--muted);
+}
+
+
+.control span::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%); /* Vertically center the box itself */
+  height: 16px;
+  width: 16px;
+  background-color: #0a1123;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-sizing: border-box; /* Ensure border is included in size */
+}
+
+
+.control span::after {
+  content: "";
+  width: 9px;
+  height: 9px;
+  background-color: var(--muted);
+  position: absolute;
+  top: 50%;
+  left: 8px; /* Half of box width (16px / 2 = 8px) for horizontal center */
+  transform: translate(-50%, -50%) scale(0); /* Vertical center with translate */
+  transition: transform 0.2s ease-in-out;
+  border-radius: 2px;
+}
+
+
+.control input[type="checkbox"]:checked ~ span::after {
+  transform: translate(-50%, -50%) scale(1);
+}
+
+
+/* Hover effect on box */
+.control span:hover::before {
+  border-color: var(--accent);
+}
+
+
+/* Focus effect for accessibility */
+.control input[type="checkbox"]:focus + span::before {
+  outline: 2px solid var(--accent);
+}
+
+	</style>
+	<script>
+	// Embedded data
+	const AGG = {{.JSON}};
+	
+	// State
+	let state = {
+	  sortKey: "Cluster",
+	  sortDir: "asc",
+	  filterSev: new Set(["FAIL","WARN","ERR","INFO"]),
+	  filterClusters: new Set(),
+	  search: ""
+	};
+	
+	const sevRank = { FAIL: 1, WARN: 2, ERR: 3, INFO: 4 };
+	let selIndex = -1;
+	
+	function init() {
+	  buildClusterFilter();
+	  updateAndRender();
+	  document.addEventListener("keydown", onKey);
+	}
+	
+	function buildClusterFilter() {
+	  const clusters = Array.from(new Set(AGG.map(r => r.Cluster))).sort();
+	  const sel = document.getElementById("clusterSel");
+	  sel.innerHTML = "";
+	  clusters.forEach(c => {
+		const opt = document.createElement("option");
+		opt.value = c; opt.textContent = c;
+		sel.appendChild(opt);
+	  });
+	  state.filterClusters = new Set(clusters); // select all by default
+	  sel.size = Math.min(6, clusters.length);
+	}
+	
+	function setSev(checked, sev) {
+	  if (checked) state.filterSev.add(sev); else state.filterSev.delete(sev);
+	  updateAndRender();
+	}
+	
+	function onClusterChange(sel) {
+	  const chosen = new Set(Array.from(sel.selectedOptions).map(o => o.value));
+	  if (chosen.size === 0) {
+		Array.from(sel.options).forEach(o => o.selected = true);
+		chosen.clear(); Array.from(sel.options).forEach(o => chosen.add(o.value));
+	  }
+	  state.filterClusters = chosen;
+	  updateAndRender();
+	}
+	
+	function onSearch(inp) {
+	  state.search = inp.value.trim();
+	  updateAndRender();
+	}
+	
+	let debounceTimer;
+	function onSearchDebounced(inp) {
+	  clearTimeout(debounceTimer);
+	  debounceTimer = setTimeout(() => onSearch(inp), 150);
+	}
+	
+	function sortBy(key) {
+	  if (state.sortKey === key) state.sortDir = state.sortDir === "asc" ? "desc" : "asc";
+	  else { state.sortKey = key; state.sortDir = "asc"; }
+	  updateAndRender();
+	}
+	
+	function filterData() {
+	  const needle = state.search.toLowerCase();
+	  return AGG.filter(r => {
+		if (!state.filterSev.has(r.Severity)) return false;
+		if (!state.filterClusters.has(r.Cluster)) return false;
+		if (!needle) return true;
+		const hay = (r.Cluster + " " + r.Severity + " " + r.Check + " " + r.Detail).toLowerCase();
+		return hay.includes(needle);
+	  });
+	}
+	
+	function sortData(rows) {
+	  const k = state.sortKey, dir = state.sortDir;
+	  const mul = dir === "asc" ? 1 : -1;
+	  rows.sort((a,b) => {
+		let av = a[k], bv = b[k];
+		if (k === "Severity") { av = sevRank[av] || 99; bv = sevRank[bv] || 99; }
+		return (av > bv ? 1 : av < bv ? -1 : 0) * mul;
+	  });
+	  return rows;
+	}
+	
+	function updateCounts(rows) {
+	  const total = rows.length;
+	  const cnt = { FAIL:0, WARN:0, ERR:0, INFO:0 };
+	  rows.forEach(r => { if (cnt[r.Severity] !== undefined) cnt[r.Severity]++; });
+	
+	  document.getElementById("countTotal").textContent = total;
+	  document.getElementById("countFail").textContent = cnt.FAIL;
+	  document.getElementById("countWarn").textContent = cnt.WARN;
+	  document.getElementById("countErr").textContent  = cnt.ERR;
+	  document.getElementById("countInfo").textContent = cnt.INFO;
+	
+	  const pct = {};
+	  Object.keys(cnt).forEach(k => pct[k] = total ? Math.round(cnt[k]*100/total) : 0);
+	  document.getElementById("barFail").style.width = pct.FAIL + "%";
+	  document.getElementById("barWarn").style.width = pct.WARN + "%";
+	  document.getElementById("barErr").style.width  = pct.ERR  + "%";
+	  document.getElementById("barInfo").style.width = pct.INFO + "%";
+	
+	  // Per-cluster summary with links
+	  const pc = document.getElementById("perCluster");
+	  pc.innerHTML = "";
+	  const map = {};
+	  rows.forEach(r => {
+		map[r.Cluster] = map[r.Cluster] || { FAIL:0,WARN:0,ERR:0,INFO:0, total:0 };
+		map[r.Cluster][r.Severity]++; map[r.Cluster].total++;
+	  });
+	  const table = document.createElement("table");
+	  table.innerHTML = '<thead><tr><th>Cluster</th><th>FAIL</th><th>WARN</th><th>ERR</th><th>INFO</th><th>Total</th></tr></thead><tbody></tbody>';
+	  const tb = table.querySelector("tbody");
+	  Object.keys(map).sort().forEach(c => {
+		const m = map[c];
+		const tr = document.createElement("tr");
+		const link = encodeURIComponent(c) + '.log.html';
+		tr.innerHTML =
+		  '<td><a class="mono" href="' + link + '">' + escapeHtml(c) + '</a></td>' +
+		  '<td><span class="severity sev-FAIL">' + m.FAIL + '</span></td>' +
+		  '<td><span class="severity sev-WARN">' + m.WARN + '</span></td>' +
+		  '<td><span class="severity sev-ERR">'  + m.ERR  + '</span></td>' +
+		  '<td><span class="severity sev-INFO">' + m.INFO + '</span></td>' +
+		  '<td>' + m.total + '</td>';
+		tb.appendChild(tr);
+	  });
+	  pc.appendChild(table);
+	}
+	
+	function extractKB(detail) {
+	  const text = detail || "";
+	  const re = /(https?:\/\/[^\s)]+portal\.nutanix\.com\/kb\/\d+|https?:\/\/[^\s)]+)/i;
+	  const m = text.match(re);
+	  return m ? m[0] : "";
+	}
+	function kbLabel(url) {
+	  if (!url) return "";
+	  const m = url.match(/\/kb\/(\d+)\b/i);
+	  return m ? ('KB-' + m[1]) : 'KB';
+	}
+	
+	function escapeHtml(s) {
+	  return (s || "").toString()
+		.replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
+		.replaceAll('"',"&quot;").replaceAll("'","&#39;");
+	}
+	
+	function highlight(text, needle) {
+	  if (!needle) return escapeHtml(text);
+	  const re = new RegExp("(" + needle.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&") + ")", "ig");
+	  return escapeHtml(text).replace(re, '<span class="highlight">$1</span>');
+	}
+	
+	function formatCheckTitle(s) {
+ 	 s = s || "";
+  	return s.replace(/^detailed information for\s*/i, "").replace(/:$/, "");
+	}
+
+	function jsEscape(s) {
+	  return (s || "").toString()
+		.replaceAll("\\", "\\\\").replaceAll("\n", "\\n").replaceAll("\r", " ")
+		.replaceAll("'", "\\'").replaceAll("\"", "\\\"");
+	}
+	
+	async function copyText(text) {
+	  try { await navigator.clipboard.writeText(text); }
+	  catch {
+		const ta = document.createElement("textarea");
+		ta.value = text; document.body.appendChild(ta);
+		ta.select(); document.execCommand("copy");
+		document.body.removeChild(ta);
+	  }
+	}
+	
+	function renderTable(rows) {
+	  const tbody = document.getElementById("tbody");
+	  tbody.innerHTML = "";
+	  const needle = state.search;
+	  const frag = document.createDocumentFragment();
+	  rows.forEach((r, idx) => {
+		const tr = document.createElement("tr");
+		tr.setAttribute("tabindex", "0");
+		tr.dataset.index = idx.toString();
+	
+		const detailEsc = (r.Detail || "").replaceAll("\\n","<br>");
+	
+		const kb = extractKB(r.Detail);
+		const kbCell = kb ? ('<a href="' + kb + '" target="_blank" rel="noopener">' + kbLabel(kb) + '</a>') : '';
+		const clusterUrl = 'https://' + encodeURIComponent(r.Cluster) + ':9440';
+		const rowText = (r.Cluster + " " + r.Severity + " " + r.Check + " " + (r.Detail || "")).trim();
+		const actHTML =
+		  '<div class="actions">' +
+		  '<button onclick="copyText(\'' + jsEscape(rowText) + '\')">Copy row</button>' +
+		  '<button onclick="copyText(\'' + jsEscape(r.Detail || "") + '\')">Copy detail</button>' +
+		  '</div>';
+		const checkTitle = formatCheckTitle(r.Check || "");
+		tr.innerHTML =
+		  '<td class="col-cluster"><small class="mono"><a href="' + clusterUrl + '" target="_blank" rel="noopener">' + highlight(r.Cluster, needle) + '</a></small></td>' +
+		  '<td class="col-sev"><span class="severity sev-' + r.Severity + '">' + r.Severity + '</span></td>' +
+		  '<td class="col-title"><small class="mono">' + highlight(checkTitle, needle) + '</small></td>' +
+		  '<td class="col-kb">' + kbCell + '</td>' +
+		  '<td class="col-detail"><div class="detail-full">' + highlight(detailEsc, needle) + '</div></td>' +
+		  '<td class="col-actions">' + actHTML + '</td>';
+	
+		tr.addEventListener("focus", () => selectRow(tr));
+		frag.appendChild(tr);
+	  });
+	  tbody.appendChild(frag);
+	}
+	
+	function selectRow(tr) {
+	  const tbody = document.getElementById("tbody");
+	  Array.from(tbody.querySelectorAll("tr.selected")).forEach(x => x.classList.remove("selected"));
+	  tr.classList.add("selected");
+	  selIndex = parseInt(tr.dataset.index || "-1", 10);
+	}
+	
+	function focusRow(i) {
+	  const rows = document.querySelectorAll("#tbody tr");
+	  if (!rows.length) return;
+	  if (i < 0) i = 0;
+	  if (i >= rows.length) i = rows.length - 1;
+	  selIndex = i;
+	  const tr = rows[i];
+	  tr.focus({preventScroll:false});
+	  selectRow(tr);
+	  tr.scrollIntoView({block:"nearest", inline:"nearest"});
+	}
+	
+	function onKey(e) {
+	  const k = e.key;
+	  if (k === "/") {
+		e.preventDefault();
+		const sb = document.getElementById("searchBox");
+		sb.focus(); sb.select();
+		return;
+	  }
+	  if (k === "Escape") {
+		if (state.search) {
+		  state.search = ""; document.getElementById("searchBox").value = "";
+		  updateAndRender();
+		}
+		return;
+	  }
+	  if (k === "ArrowDown") { e.preventDefault(); focusRow(selIndex + 1); return; }
+	  if (k === "ArrowUp")   { e.preventDefault(); focusRow(selIndex - 1); return; }
+	}
+	
+	function updateAndRender() {
+	  let rows = filterData();
+	  // Update visible counters
+	  const total = rows.length;
+	  const cnt = { FAIL:0, WARN:0, ERR:0, INFO:0 };
+	  rows.forEach(r => { if (cnt[r.Severity] !== undefined) cnt[r.Severity]++; });
+	  document.getElementById("countTotal").textContent = total;
+	  document.getElementById("countFail").textContent = cnt.FAIL;
+	  document.getElementById("countWarn").textContent = cnt.WARN;
+	  document.getElementById("countErr").textContent  = cnt.ERR;
+	  document.getElementById("countInfo").textContent = cnt.INFO;
+	  const pct = {};
+	  Object.keys(cnt).forEach(k => pct[k] = total ? Math.round(cnt[k]*100/total) : 0);
+	  document.getElementById("barFail").style.width = pct.FAIL + "%";
+	  document.getElementById("barWarn").style.width = pct.WARN + "%";
+	  document.getElementById("barErr").style.width  = pct.ERR  + "%";
+	  document.getElementById("barInfo").style.width = pct.INFO + "%";
+	
+	  // Per-cluster summary and table
+	  updateCounts(rows);
+	  rows = sortData(rows.slice());
+	  renderTable(rows);
+	}
+	
+	function downloadCSV() {
+		const rows = filterData();
+		const headers = ["Cluster","Severity","NCC Alert Title","Detail"];
+		const lines = [headers.join(",")];
+		rows.forEach(r => {
+		  const title = formatCheckTitle(r.Check || "");
+		  const row = [r.Cluster, r.Severity, title, r.Detail || ""].map(v => {
+		    const s = (v ?? "").toString().replaceAll('"','""').replaceAll("\r"," ").replaceAll("\n","\\n");
+		    return '"' + s + '"';
+		  }).join(",");
+		  lines.push(row);
+		});
+	  const blob = new Blob([lines.join("\n")], {type: "text/csv;charset=utf-8;"});
+	  triggerDownload(blob, "aggregated_filtered.csv");
+	}
+	
+	function downloadJSON() {
+	  const rows = filterData();
+	  const blob = new Blob([JSON.stringify(rows, null, 2)], {type: "application/json;charset=utf-8;"});
+	  triggerDownload(blob, "aggregated_filtered.json");
+	}
+	
+	function triggerDownload(blob, name) {
+	  const a = document.createElement("a");
+	  a.href = URL.createObjectURL(blob);
+	  a.download = name;
+	  document.body.appendChild(a);
+	  a.click();
+	  document.body.removeChild(a);
+	}
+	</script>
+	</head>
+	<body onload="init()">
+	<div class="container">
+	  <div class="header">
+		<div class="title">
+		  <h1>NCC Aggregated Report</h1>
+		  <div class="sub">Generated at {{.GeneratedAt}}</div>
+		</div>
+        <!--
+        <div class="legend">
+          <span class="badge"><span class="dot fail"></span> FAIL</span>
+          <span class="badge"><span class="dot warn"></span> WARN</span>
+          <span class="badge"><span class="dot err"></span> ERR</span>
+          <span class="badge"><span class="dot info"></span> INFO</span>
+        </div>
+        -->
+	  </div>
+	
+	  <div class="controls">
+		<div class="control">
+		  <label>Search</label>
+		  <input id="searchBox" type="text" placeholder="Type to filter..." oninput="onSearchDebounced(this)" />
+		</div>
+		<div class="control">
+		  <label>Severity</label>
+<label>
+    <input type="checkbox" checked onchange="setSev(this.checked,'FAIL')">
+    <span style="color: var(--fail);">FAIL</span>
+  </label>
+  <label>
+    <input type="checkbox" checked onchange="setSev(this.checked,'WARN')">
+    <span style="color: var(--warn);">WARN</span>
+  </label>
+    <label>
+    <input type="checkbox" checked onchange="setSev(this.checked,'ERR')">
+    <span style="color: var(--err);">ERR</span>
+  </label>
+  <label>
+    <input type="checkbox" checked onchange="setSev(this.checked,'INFO')">
+    <span style="color: var(--info);">INFO</span>
+  </label>
+		</div>
+		<div class="control">
+		  <label>Clusters</label>
+		  <select id="clusterSel" multiple onchange="onClusterChange(this)"></select>
+		</div>
+		<div class="control">
+		  <button onclick="downloadCSV()">Export CSV</button>
+		  <button onclick="downloadJSON()">Export JSON</button>
+		</div>
+	  </div>
+	
+	  <div class="summary">
+		<div class="sum-item">
+		  <div class="label">Total</div>
+		  <div class="count" id="countTotal">0</div>
+		</div>
+		<div class="sum-item">
+		  <div class="label">FAIL</div>
+		  <div class="count" id="countFail">0</div>
+		  <div class="progress fail"><span id="barFail" style="width:0%"></span></div>
+		</div>
+		<div class="sum-item">
+		  <div class="label">WARN</div>
+		  <div class="count" id="countWarn">0</div>
+		  <div class="progress warn"><span id="barWarn" style="width:0%"></span></div>
+		</div>
+		<div class="sum-item">
+		  <div class="label">ERR</div>
+		  <div class="count" id="countErr">0</div>
+		  <div class="progress err"><span id="barErr" style="width:0%"></span></div>
+		</div>
+		<div class="sum-item">
+		  <div class="label">INFO</div>
+		  <div class="count" id="countInfo">0</div>
+		  <div class="progress info"><span id="barInfo" style="width:0%"></span></div>
+		</div>
+	  </div>
+	
+	  <div class="card" style="margin-bottom:14px">
+		<div class="label" style="margin-bottom:8px">Per-Cluster Summary</div>
+		<div id="perCluster"></div>
+	  </div>
+	
+	  <div class="card">
+		<div class="scroll">
+		  <table>
+			<thead>
+			  <tr>
+				<th class="col-cluster" onclick="sortBy('Cluster')">Cluster</th>
+				<th class="col-sev" onclick="sortBy('Severity')">Severity</th>
+				<th class="col-title" onclick="sortBy('Check')">NCC Alert Title</th>
+				<th class="col-kb">KB</th>
+				<th class="col-detail">Detail</th>
+				<th class="col-actions">Actions</th>
+			  </tr>
+			</thead>
+			<tbody id="tbody"></tbody>
+		  </table>
+		</div>
+	  </div>
+	
+     <footer class="report-footer">
+    Keyboard: “/” to focus search, ↑/↓ to move, Esc to clear search. Full details visible in table.
+</footer>
+
+
+<style>
+    .report-footer {
+        font-size: 0.8125rem;
+        color: #666; /* Better contrast than #aaa */
+        margin-bottom: 0;
+        padding: 10px; /* Adds breathing room */
+        bottom: 0;
+        left: 0;
+        width: 100%;
+    }
+</style>
+	</div>
+	</body>
+	</html>`
+
+	// Build data for template with embedded JSON
+	type tmplRow struct {
+		Cluster  string
+		Severity string
+		Check    string
+		Detail   string
+	}
+	aggRows := make([]tmplRow, 0, len(rows))
+	for _, r := range rows {
+		aggRows = append(aggRows, tmplRow(r))
+	}
+	// Embed JSON safely
+	jsonBytes, err := json.Marshal(aggRows)
+	if err != nil {
+		return fmt.Errorf("marshal agg json: %w", err)
+	}
+	data := struct {
+		JSON        template.JS
+		Clusters    []struct{ Cluster, HTML, CSV string }
+		GeneratedAt string
+	}{
+		JSON:        template.JS(jsonBytes), // trusted program output
+		Clusters:    perCluster,
+		GeneratedAt: time.Now().Format(time.RFC3339),
+	}
+
+	f, err := fs.Create(path)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", path, err)
+	}
+	defer f.Close()
+	t := template.Must(template.New("index").Parse(tmpl))
+	if err := t.Execute(f, data); err != nil {
+		return fmt.Errorf("template execute %s: %w", path, err)
+	}
+	log.Info().Str("file", abs).Int("rows", len(rows)).Int("clusters", len(perCluster)).Msg("aggregated HTML generated")
+	return nil
+}
+
+/************** Retryable HTTP wrappers **************/
+
+func doWithRetry(ctx context.Context, client HTTPClient, req *http.Request, cfg Config, op string) (*http.Response, []byte, error) {
+	attempts := cfg.RetryMaxAttempts
+	if attempts < 1 {
+		attempts = 1
+	}
+	var lastErr error
+	var resp *http.Response
+	var body []byte
+
+	// Snapshot original body if present
+	var origBody []byte
+	var hasBody bool
+	if req.Body != nil {
+		b, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, nil, err
+		}
+		_ = req.Body.Close()
+		origBody = b
+		hasBody = true
+		req.Body = io.NopCloser(bytes.NewReader(origBody))
+	}
+
+	for attempt := 1; attempt <= attempts; attempt++ {
+		reqCtx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
+		reqClone := req.Clone(reqCtx)
+		if hasBody {
+			reqClone.Body = io.NopCloser(bytes.NewReader(origBody))
+		}
+
+		resp, lastErr = client.Do(reqClone)
+		if lastErr != nil {
+			cancel()
+			if ctx.Err() != nil {
+				return nil, nil, ctx.Err()
+			}
+			if attempt < attempts {
+				back := jitteredBackoff(cfg.RetryBaseDelay, cfg.RetryMaxDelay, attempt)
+				log.Warn().Str("op", op).Int("attempt", attempt).Err(lastErr).Dur("backoff", back).Msg("transport error, retrying")
+				select {
+				case <-ctx.Done():
+					return nil, nil, ctx.Err()
+				case <-time.After(back):
+				}
+				continue
+			}
+			return nil, nil, lastErr
+		}
+
+		func() {
+			defer cancel()
+			defer resp.Body.Close()
+			var err error
+			body, err = io.ReadAll(resp.Body)
+			if err != nil {
+				lastErr = err
+			} else {
+				lastErr = nil
+			}
+		}()
+		if lastErr != nil {
+			if attempt < attempts {
+				back := jitteredBackoff(cfg.RetryBaseDelay, cfg.RetryMaxDelay, attempt)
+				log.Warn().Str("op", op).Int("attempt", attempt).Err(lastErr).Dur("backoff", back).Msg("read body failed, retrying")
+				select {
+				case <-ctx.Done():
+					return nil, nil, ctx.Err()
+				case <-time.After(back):
+				}
+				continue
+			}
+			return resp, nil, lastErr
+		}
+
+		status := resp.StatusCode
+		if status >= 200 && status < 300 {
+			log.Debug().Str("op", op).Int("status", status).Msg("request succeeded")
+			return resp, body, nil
+		}
+
+		retryable := isRetryableStatus(status)
+		var back time.Duration
+		if status == 429 {
+			if ra, ok := retryAfterDelay(resp); ok {
+				back = ra
+			}
+		}
+		if back == 0 {
+			back = jitteredBackoff(cfg.RetryBaseDelay, cfg.RetryMaxDelay, attempt)
+		}
+
+		if retryable && attempt < attempts {
+			log.Warn().Str("op", op).Int("attempt", attempt).Int("status", status).Dur("backoff", back).Msg("retryable status, retrying")
+			select {
+			case <-ctx.Done():
+				return resp, body, ctx.Err()
+			case <-time.After(back):
+			}
+			continue
+		}
+
+		log.Error().Str("op", op).Int("status", status).Int("attempts", attempt).Msg("request failed, not retrying")
+		return resp, body, fmt.Errorf("%s HTTP %d", op, status)
+	}
+
+	if lastErr != nil {
+		return nil, nil, lastErr
+	}
+	return resp, body, fmt.Errorf("%s exhausted retries", op)
+}
+
+/************** NCC Client **************/
+
+type NCCClient struct {
+	baseURL string
+	user    string
+	pass    string
+	http    HTTPClient
+	cfg     Config
+}
+
+func NewNCCClient(cluster, user, pass string, httpc HTTPClient, cfg Config) *NCCClient {
+	return &NCCClient{
+		baseURL: fmt.Sprintf("https://%s:9440/PrismGateway/services/rest", cluster),
+		user:    user,
+		pass:    pass,
+		http:    httpc,
+		cfg:     cfg,
+	}
+}
+
+func (c *NCCClient) StartChecks(ctx context.Context) (string, []byte, error) {
+	url := c.baseURL + "/v1/ncc/checks"
+	payload := []byte(`{"sendEmail":false}`)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
+	if err != nil {
+		return "", nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.SetBasicAuth(c.user, c.pass)
+
+	resp, body, err := doWithRetry(ctx, c.http, req, c.cfg, "start checks")
+	if err != nil {
+		log.Error().Err(err).Str("url", url).Str("method", "POST").Msg("http do error")
+		return "", body, err
+	}
+	_ = resp
+	log.Debug().Str("url", url).RawJSON("body", body).Msg("start checks response")
+
+	var data map[string]interface{}
+	if err := json.Unmarshal(body, &data); err != nil {
+		return "", body, err
+	}
+	uuid, _ := data["taskUuid"].(string)
+	if uuid == "" {
+		if alt, ok := data["task_uuid"].(string); ok && alt != "" {
+			uuid = alt
+		}
+	}
+	if uuid == "" {
+		return "", body, errors.New("missing taskUuid in response")
+	}
+	return uuid, body, nil
+}
+
+func (c *NCCClient) GetTask(ctx context.Context, taskID string) (TaskStatus, []byte, error) {
+	url := c.baseURL + "/v2.0/tasks/" + taskID
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return TaskStatus{}, nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.SetBasicAuth(c.user, c.pass)
+
+	resp, body, err := doWithRetry(ctx, c.http, req, c.cfg, "get task")
+	if err != nil {
+		log.Error().Err(err).Str("url", url).Msg("http do error")
+		return TaskStatus{}, body, err
+	}
+	_ = resp
+	log.Debug().Str("url", url).RawJSON("body", body).Msg("get task response")
+
+	var status TaskStatus
+	if err := json.Unmarshal(body, &status); err != nil {
+		return TaskStatus{}, body, err
+	}
+	return status, body, nil
+}
+
+func (c *NCCClient) GetRunSummary(ctx context.Context, taskID string) (NCCSummary, []byte, error) {
+	url := c.baseURL + "/v1/ncc/" + taskID
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return NCCSummary{}, nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.SetBasicAuth(c.user, c.pass)
+
+	resp, body, err := doWithRetry(ctx, c.http, req, c.cfg, "get summary")
+	if err != nil {
+		log.Error().Err(err).Str("url", url).Msg("http do error")
+		return NCCSummary{}, body, err
+	}
+	_ = resp
+	log.Debug().Str("url", url).RawJSON("body", body).Msg("get summary response")
+
+	var summary NCCSummary
+	if err := json.Unmarshal(body, &summary); err != nil {
+		return NCCSummary{}, body, err
+	}
+	return summary, body, nil
+}
+
+/************** Orchestration with bars **************/
+
+func sanitizeSummary(s string) string {
+	return strings.ReplaceAll(s, "\\n", "\n")
+}
+
+func writeSummary(fs FS, folder, cluster, summary string) (string, error) {
+	if err := fs.MkdirAll(folder, 0755); err != nil {
+		return "", err
+	}
+	outPath := filepath.Join(folder, fmt.Sprintf("%s.log", cluster))
+	log.Debug().Str("path", outPath).Int("bytes", len(summary)).Msg("writing summary")
+	if err := fs.WriteFile(outPath, []byte(sanitizeSummary(summary)), 0644); err != nil {
+		return "", err
+	}
+	return outPath, nil
+}
+
+func filterBlocksToFile(fs FS, inputPath, outputPath string) error {
+	data, err := fs.ReadFile(inputPath)
+	if err != nil {
+		return err
+	}
+	log.Debug().Str("path", inputPath).Int("bytes", len(data)).Msg("read raw log")
+	blocks, err := ParseSummary(string(data))
+	if err != nil {
+		return err
+	}
+	if err := fs.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+		return err
+	}
+	var b strings.Builder
+	for _, pb := range blocks {
+		b.WriteString(pb.CheckName)
+		b.WriteString("\n")
+		b.WriteString(pb.DetailRaw)
+		b.WriteString("\n\n---------------------------------------\n")
+	}
+	if err := fs.WriteFile(outputPath, []byte(b.String()), 0644); err != nil {
+		return err
+	}
+	log.Debug().Str("path", outputPath).Int("bytes", len(b.String())).Msg("wrote filtered")
+	return nil
+}
+
+func runClusterWithBars(
+	ctx context.Context,
+	cfg Config,
+	fs FS,
+	httpc HTTPClient,
+	cluster string,
+	onPct func(int),
+	setPhase func(string),
+) ([]ParsedBlock, error) {
+	l := log.With().Str("cluster", cluster).Logger()
+	client := NewNCCClient(cluster, cfg.Username, cfg.Password, httpc, cfg)
+
+	setPhase("starting")
+	l.Info().Msg("starting NCC checks")
+	taskID, body, err := client.StartChecks(ctx)
+	if err != nil {
+		l.Error().Err(err).RawJSON("response_body", body).Msg("start checks failed")
+		return nil, fmt.Errorf("start checks failed: %w", err)
+	}
+	l.Info().Str("taskID", taskID).Msg("ncc task started")
+	onPct(1)
+
+	last := 1
+	setPhase("polling")
+	for {
+		select {
+		case <-ctx.Done():
+			l.Error().Err(ctx.Err()).Msg("context done during polling")
+			return nil, ctx.Err()
+		case <-func() <-chan time.Time {
+			jitter := time.Duration(rand.Int63n(int64(cfg.PollJitter)))
+			return time.After(cfg.PollInterval + jitter)
+		}():
+			if dl, ok := ctx.Deadline(); ok {
+				rem := time.Until(dl)
+				if rem < 10*time.Second {
+					l.Warn().Dur("remaining", rem).Msg("cluster deadline near")
+				}
+			}
+			status, body, err := client.GetTask(ctx, taskID)
+			if err != nil {
+				l.Error().Err(err).RawJSON("response_body", body).Msg("poll failed")
+				return nil, fmt.Errorf("poll failed: %w", err)
+			}
+			pct := status.PercentageComplete
+			if pct < last {
+				pct = last
+			}
+			if pct > 100 {
+				pct = 100
+			}
+			onPct(pct)
+			l.Debug().Int("pct", pct).Str("progress", status.ProgressStatus).Msg("task status")
+			last = pct
+
+			if status.ProgressStatus == "Failed" {
+				return nil, fmt.Errorf("ncc task failed")
+			}
+			if pct >= 100 {
+				goto SUMMARY
+			}
+		}
+	}
+
+SUMMARY:
+	setPhase("summary")
+	summary, body, err := client.GetRunSummary(ctx, taskID)
+	if err != nil {
+		l.Error().Err(err).RawJSON("response_body", body).Msg("get summary failed")
+		return nil, fmt.Errorf("get summary failed: %w", err)
+	}
+
+	setPhase("writing")
+	logPath, err := writeSummary(fs, cfg.OutputDirLogs, cluster, summary.RunSummary)
+	if err != nil {
+		l.Error().Err(err).Msg("write summary failed")
+		return nil, err
+	}
+	l.Info().Str("logPath", logPath).Msg("summary written")
+
+	filteredPath := filepath.Join(cfg.OutputDirFiltered, fmt.Sprintf("%s.log", cluster))
+	if err := filterBlocksToFile(fs, logPath, filteredPath); err != nil {
+		l.Error().Err(err).Msg("filter blocks failed")
+		return nil, err
+	}
+	l.Info().Str("filteredPath", filteredPath).Msg("filtered written")
+
+	data, err := fs.ReadFile(filteredPath)
+	if err != nil {
+		l.Error().Err(err).Msg("read filtered failed")
+		return nil, err
+	}
+	l.Debug().Str("path", filteredPath).Int("bytes", len(data)).Msg("read filtered bytes")
+	blocks, err := ParseSummary(string(data))
+	if err != nil {
+		l.Error().Err(err).Msg("parse filtered failed")
+		return nil, err
+	}
+	if len(blocks) == 0 {
+		l.Warn().Str("path", filteredPath).Msg("no blocks parsed from summary")
+	}
+
+	base := filteredPath
+	for _, f := range cfg.OutputFormats {
+		switch strings.ToLower(strings.TrimSpace(f)) {
+		case "html":
+			htmlFile := base + ".html"
+			if err := generateHTML(fs, rowsFromBlocks(blocks), htmlFile); err != nil {
+				l.Error().Err(err).Str("file", htmlFile).Msg("write HTML failed")
+				return nil, err
+			}
+			l.Info().Str("file", htmlFile).Msg("HTML generated")
+		case "csv":
+			csvFile := base + ".csv"
+			if err := generateCSV(fs, blocks, csvFile); err != nil {
+				l.Error().Err(err).Str("file", csvFile).Msg("write CSV failed")
+				return nil, err
+			}
+			l.Info().Str("file", csvFile).Msg("CSV generated")
+		default:
+			l.Warn().Str("format", f).Msg("unknown output format")
+		}
+	}
+
+	setPhase("done")
+	return blocks, nil
+}
+
+/************** CLI **************/
+
+type ClusterResult struct {
+	Cluster string
+	Blocks  []ParsedBlock
+	Err     error
+}
+
+type proxyDecorator struct{ text string }
+
+func (p *proxyDecorator) Decor(ctx decor.Statistics) string { return p.text }
+func (p *proxyDecorator) Sync() (chan int, bool)            { return nil, false }
+func (p *proxyDecorator) GetConf() decor.WC                 { return decor.WC{} }
+func (p *proxyDecorator) SetConf(wc decor.WC)               {}
+func (p *proxyDecorator) SetText(s string)                  { p.text = s }
+
+func promptPasswordIfEmpty(p string, Username string) (string, error) {
+	if p != "" {
+		return p, nil
+	}
+	fmt.Printf("Prism Password (%s): ", Username)
+	bytePw, err := term.ReadPassword(int(os.Stdin.Fd()))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(bytePw)), nil
+}
+
+var (
+	Version   string
+	BuildDate string
+	GoVersion string
+	Stream    string // e.g., "prod", "dev", "beta"
+)
+
+func init() {
+	var gitRevision string
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		for _, s := range bi.Settings {
+			if s.Key == "vcs.revision" {
+				gitRevision = s.Value
+				break
+			}
+		}
+		if GoVersion == "" {
+			GoVersion = bi.GoVersion
+		}
+	}
+	if Version == "" {
+		if gitRevision != "" {
+			Version = gitRevision
+		} else {
+			Version = "unknown"
+		}
+	}
+	if BuildDate == "" {
+		BuildDate = "unknown" // Override at build time with -ldflags
+	}
+	if Stream == "" {
+		Stream = "dev" // Default; override via build or config
+	}
+}
+
+func newRootCmd() *cobra.Command {
+
+	cmd := &cobra.Command{
+		Use:   "ncc-orchestrator",
+		Short: "Nutanix NCC Orchestrator",
+		Long: `A tool to run NCC checks on multiple clusters, aggregate results, and generate reports.
+Use --config for setup.
+
+Examples:
+
+  # Basic usage with configuration file
+  ncc-orchestrator --config config.yaml
+
+  # Specify clusters and username via flags
+  ncc-orchestrator --clusters 10.0.1.1,10.0.2.1 --username admin
+
+  # Show all available environment variables
+  ncc-orchestrator --env-info
+
+Run 'ncc-orchestrator --help' for a full list of options.
+`,
+		Version: fmt.Sprintf(`
+Version: %s
+Stream: %s
+Build Date: %s
+Go Version: %s`, Version, Stream, BuildDate, GoVersion),
+		RunE: func(cmd *cobra.Command, args []string) error {
+
+			cfg, err := bindConfig()
+			if err != nil {
+				return err
+			}
+
+			lvl := parseLogLevel(cfg.LogLevel)
+			if err := setupFileLogger(cfg.LogFile, lvl); err != nil {
+				return fmt.Errorf("setup logger: %w", err)
+			}
+			log.Info().
+				Strs("clusters", cfg.Clusters).
+				Str("username", cfg.Username).
+				Bool("insecureSkipVerify", cfg.InsecureSkipVerify).
+				Dur("timeout", cfg.Timeout).
+				Dur("requestTimeout", cfg.RequestTimeout).
+				Dur("pollInterval", cfg.PollInterval).
+				Dur("pollJitter", cfg.PollJitter).
+				Int("maxParallel", cfg.MaxParallel).
+				Strs("outputs", cfg.OutputFormats).
+				Str("logsDir", cfg.OutputDirLogs).
+				Str("filteredDir", cfg.OutputDirFiltered).
+				Str("logFile", cfg.LogFile).
+				Str("logLevel", lvl.String()).
+				Bool("logHTTP", cfg.LogHTTP || os.Getenv("LOG_HTTP") == "1").
+				Int("retryMaxAttempts", cfg.RetryMaxAttempts).
+				Dur("retryBaseDelay", cfg.RetryBaseDelay).
+				Dur("retryMaxDelay", cfg.RetryMaxDelay).
+				Msg("starting NCC orchestrator")
+
+			if tc, _ := cmd.Flags().GetBool("tc"); tc {
+				fmt.Println(termsText)
+				return nil
+			}
+			if len(cfg.Clusters) == 0 {
+				return errors.New("no clusters provided (--clusters, env, or config)")
+			}
+			if cfg.Username == "" {
+				return errors.New("missing --username or config username")
+			}
+
+			if envInfo, err := cmd.Flags().GetBool("env-info"); err == nil && envInfo {
+				fmt.Println("Possible Environment Variables (prefix: NCC_) and Current Values:")
+				envKeys := []string{
+					"CLUSTERS",
+					"USERNAME",
+					"PASSWORD",
+					"INSECURE_SKIP_VERIFY",
+					"TIMEOUT",
+					"REQUEST_TIMEOUT",
+					"POLL_INTERVAL",
+					"POLL_JITTER",
+					"MAX_PARALLEL",
+					"OUTPUTS",
+					"OUTPUT_DIR_LOGS",
+					"OUTPUT_DIR_FILTERED",
+					"LOG_FILE",
+					"LOG_LEVEL",
+					"LOG_HTTP",
+					"RETRY_MAX_ATTEMPTS",
+					"RETRY_BASE_DELAY",
+					"RETRY_MAX_DELAY",
+				}
+				for _, key := range envKeys {
+					envVar := "NCC_" + key
+					val := os.Getenv(envVar)
+					if val != "" {
+						fmt.Printf("%s = %s\n", envVar, val)
+					} else {
+						fmt.Printf("%s = (not set)\n", envVar)
+					}
+				}
+				return nil // Exit after printing
+			}
+
+			cfg.Password, err = promptPasswordIfEmpty(cfg.Password, cfg.Username)
+			if err != nil {
+				return err
+			}
+
+			fs := OSFS{}
+			httpc := NewHTTPClient(cfg)
+			if err := fs.MkdirAll(cfg.OutputDirLogs, 0755); err != nil {
+				return err
+			}
+			if err := fs.MkdirAll(cfg.OutputDirFiltered, 0755); err != nil {
+				return err
+			}
+
+			// Fast replay mode: skip API, parse existing logs and render everything
+			if cmd.Flags().Changed("replay") && viper.GetBool("replay") {
+				var agg []AggBlock
+				var clusterFiles []struct{ Cluster, HTML, CSV string }
+
+				for _, cluster := range cfg.Clusters {
+					// Ensure filtered log exists
+					filtered := filepath.Join(cfg.OutputDirFiltered, fmt.Sprintf("%s.log", cluster))
+					if _, err := os.Stat(filtered); err != nil {
+						// Try to build it from raw ncc log
+						raw := filepath.Join(cfg.OutputDirLogs, fmt.Sprintf("%s.log", cluster))
+						if _, err2 := os.Stat(raw); err2 == nil {
+							if err3 := filterBlocksToFile(OSFS{}, raw, filtered); err3 != nil {
+								log.Error().Str("cluster", cluster).Err(err3).Msg("replay: build filtered failed")
+								continue
+							}
+							log.Info().Str("cluster", cluster).Str("filtered", filtered).Msg("replay: built filtered")
+						} else {
+							log.Warn().Str("cluster", cluster).Msg("replay: no filtered or raw log, skipping")
+							continue
+						}
+					}
+					// Parse filtered
+					data, err := os.ReadFile(filtered)
+					if err != nil {
+						log.Error().Str("cluster", cluster).Err(err).Msg("replay: read filtered failed")
+						continue
+					}
+					blocks, err := ParseSummary(string(data))
+					if err != nil {
+						log.Error().Str("cluster", cluster).Err(err).Msg("replay: parse filtered failed")
+						continue
+					}
+					// Per-cluster outputs
+					base := filtered
+					for _, f := range cfg.OutputFormats {
+						switch strings.ToLower(strings.TrimSpace(f)) {
+						case "html":
+							_ = generateHTML(OSFS{}, rowsFromBlocks(blocks), base+".html")
+						case "csv":
+							_ = generateCSV(OSFS{}, blocks, base+".csv")
+						}
+					}
+
+					clusterFiles = append(clusterFiles, struct{ Cluster, HTML, CSV string }{
+						Cluster: cluster,
+						HTML:    filepath.Base(base + ".html"),
+						CSV:     filepath.Base(base + ".csv"),
+					})
+					for _, b := range blocks {
+						agg = append(agg, AggBlock{
+							Cluster:  cluster,
+							Severity: b.Severity,
+							Check:    b.CheckName,
+							Detail:   b.DetailRaw,
+						})
+					}
+				}
+
+				if err := writeAggregatedHTMLSingle(OSFS{}, cfg.OutputDirFiltered, agg, clusterFiles); err != nil {
+					log.Error().Err(err).Msg("replay: write aggregated HTML failed")
+					return err
+				}
+				log.Info().Int("clusters", len(clusterFiles)).Int("rows", len(agg)).Msg("replay: aggregated page generated")
+				return nil
+			}
+
+			// Inside RunE, after setting up cfg, fs, httpc...
+			fmt.Println("You have accepted T&C, Check using --tc flag")
+
+			p := mpb.New(mpb.WithWidth(80)) // Removed invalid WithDebug
+
+			ctx := context.Background()
+			sem := make(chan struct{}, cfg.MaxParallel)
+			var wg sync.WaitGroup
+			results := make(chan ClusterResult, len(cfg.Clusters))
+
+			for _, cluster := range cfg.Clusters {
+				wg.Add(1)
+				sem <- struct{}{}
+
+				mainBar := p.New(
+					100,
+					mpb.BarStyle().Rbound("|"),
+					mpb.PrependDecorators(
+						decor.Name(fmt.Sprintf("%-18s", cluster), decor.WC{W: 20, C: decor.DidentRight}),
+					),
+					mpb.AppendDecorators(
+						decor.Percentage(decor.WC{W: 4}),
+						decor.Name(" • "),
+						decor.Elapsed(decor.ET_STYLE_GO, decor.WC{W: 4}),
+					),
+				)
+
+				phaseProxy := &proxyDecorator{text: "starting"}
+
+				phaseBar := p.New(
+					1,
+					mpb.NopStyle(),
+					mpb.PrependDecorators(decor.Name(strings.Repeat(" ", 20))),
+					mpb.AppendDecorators(phaseProxy),
+				)
+
+				go func(cl string, b *mpb.Bar, phase *proxyDecorator, phaseBar *mpb.Bar) {
+					defer wg.Done()
+					defer func() { <-sem }()
+					defer func() {
+						if r := recover(); r != nil {
+							b.Abort(false)
+							b.SetTotal(b.Current(), true)
+							phaseBar.SetCurrent(1)     // Set current to match total
+							phaseBar.SetTotal(1, true) // Complete phaseBar on panic
+							log.Error().Interface("panic", r).Stack().Str("cluster", cl).Msg("cluster goroutine panic")
+							results <- ClusterResult{Cluster: cl, Blocks: nil, Err: fmt.Errorf("panic: %v", r)}
+						}
+					}()
+
+					reqCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
+					defer cancel()
+
+					onPct := func(pct int) { b.SetCurrent(int64(pct)) }
+					setPhase := func(text string) {
+						phase.SetText(text)
+						log.Info().Str("cluster", cl).Str("phase", text).Msg("phase change")
+					}
+
+					blocks, err := runClusterWithBars(reqCtx, cfg, fs, httpc, cl, onPct, setPhase)
+					if err != nil {
+						b.Abort(false)
+						b.SetTotal(b.Current(), true)
+						setPhase("failed")
+						phaseBar.SetCurrent(1)     // Set current to match total
+						phaseBar.SetTotal(1, true) // Complete phaseBar on error
+						log.Error().Str("cluster", cl).Err(err).Msg("cluster run failed")
+						results <- ClusterResult{Cluster: cl, Blocks: nil, Err: err}
+						return
+					}
+
+					b.SetCurrent(100)
+					b.SetTotal(100, true)
+					setPhase("done")
+					phaseBar.SetCurrent(1)     // Set current to match total
+					phaseBar.SetTotal(1, true) // Complete phaseBar on success
+					log.Info().Str("cluster", cl).Msg("cluster run completed")
+					results <- ClusterResult{Cluster: cl, Blocks: blocks, Err: nil}
+				}(cluster, mainBar, phaseProxy, phaseBar) // Pass phaseBar
+			}
+
+			// Wait for workers, close and drain results
+			wg.Wait()
+			close(results)
+
+			var failed []string
+			var agg []AggBlock
+			var clusterFiles []struct{ Cluster, HTML, CSV string }
+
+			for r := range results {
+				if r.Err != nil {
+					failed = append(failed, r.Cluster)
+					continue
+				}
+				for _, b := range r.Blocks {
+					agg = append(agg, AggBlock{
+						Cluster:  r.Cluster,
+						Severity: b.Severity,
+						Check:    b.CheckName,
+						Detail:   b.DetailRaw,
+					})
+				}
+				basePath := filepath.Join(cfg.OutputDirFiltered, fmt.Sprintf("%s.log", r.Cluster))
+				htmlPath := basePath + ".html"
+				csvPath := basePath + ".csv"
+				clusterFiles = append(clusterFiles, struct{ Cluster, HTML, CSV string }{
+					Cluster: r.Cluster,
+					HTML:    filepath.Base(htmlPath),
+					CSV:     filepath.Base(csvPath),
+				})
+			}
+
+			// Write aggregated page
+			if err := writeAggregatedHTMLSingle(fs, cfg.OutputDirFiltered, agg, clusterFiles); err != nil {
+				log.Error().Err(err).Msg("write aggregated HTML failed")
+			}
+
+			// // Flush progress rendering
+			// log.Info().Msg("Before p.Wait()") // Temporary debug log
+			// p.Wait()
+			// log.Info().Msg("After p.Wait()") // Temporary debug log
+
+			if len(failed) > 0 {
+				log.Error().Strs("failedClusters", failed).Msg("some clusters failed")
+				return fmt.Errorf("some clusters failed: %v", failed) // Use this for the message; remove fmt.Printf
+			}
+
+			log.Info().Msg("all clusters processed successfully")
+			fmt.Printf("All clusters processed successfully\n")
+			return nil
+		},
+	}
+
+	cmd.SilenceUsage = true
+
+	// flags
+	cmd.Flags().Bool("env-info", false, "Display possible environment variables and their current values")
+	cmd.Flags().Bool("tc", false, "Display terms and conditions")
+	cmd.Flags().String("config", "", "Config file path (yaml/json)")
+	cmd.Flags().String("clusters", "", "Comma-separated cluster IPs or FQDNs")
+	cmd.Flags().String("username", "admin", "Username for Prism Gateway")
+	cmd.Flags().String("password", "", "Password (omit to be prompted)")
+	cmd.Flags().Bool("insecure-skip-verify", false, "Skip TLS verify (only for trusted labs)")
+	cmd.Flags().String("timeout", "15m", "Overall per-cluster timeout")
+	cmd.Flags().String("request-timeout", "20s", "Per-request timeout")
+	cmd.Flags().String("poll-interval", "15s", "Polling interval for task status")
+	cmd.Flags().String("poll-jitter", "2s", "Additive jitter to polling interval")
+	cmd.Flags().Int("max-parallel", 4, "Max concurrent clusters")
+	cmd.Flags().String("outputs", "html,csv", "Comma-separated outputs: html,csv for per-cluster files")
+	cmd.Flags().String("output-dir-logs", "nccfiles", "Directory for raw logs")
+	cmd.Flags().String("output-dir-filtered", "outputfiles", "Directory for filtered and aggregated results")
+	cmd.Flags().String("log-file", "logs/ncc-runner.log", "Path to log file (rotated)")
+	cmd.Flags().String("log-level", "", "Log level (trace/debug/info/warn/error or 0..5)")
+	cmd.Flags().Bool("log-http", false, "Enable HTTP request/response dump logs")
+	cmd.Flags().Int("retry-max-attempts", 6, "Max retry attempts for HTTP calls")
+	cmd.Flags().String("retry-base-delay", "400ms", "Base retry delay (with jitter, exponential)")
+	cmd.Flags().String("retry-max-delay", "8s", "Max retry delay cap")
+	cmd.Flags().Bool("replay", false, "Replay from existing logs without running NCC")
+
+	// viper bindings
+	_ = viper.BindPFlag("config", cmd.Flags().Lookup("config"))
+	_ = viper.BindPFlag("clusters", cmd.Flags().Lookup("clusters"))
+	_ = viper.BindPFlag("username", cmd.Flags().Lookup("username"))
+	_ = viper.BindPFlag("password", cmd.Flags().Lookup("password"))
+	_ = viper.BindPFlag("insecure-skip-verify", cmd.Flags().Lookup("insecure-skip-verify"))
+	_ = viper.BindPFlag("timeout", cmd.Flags().Lookup("timeout"))
+	_ = viper.BindPFlag("request-timeout", cmd.Flags().Lookup("request-timeout"))
+	_ = viper.BindPFlag("poll-interval", cmd.Flags().Lookup("poll-interval"))
+	_ = viper.BindPFlag("poll-jitter", cmd.Flags().Lookup("poll-jitter"))
+	_ = viper.BindPFlag("max-parallel", cmd.Flags().Lookup("max-parallel"))
+	_ = viper.BindPFlag("outputs", cmd.Flags().Lookup("outputs"))
+	_ = viper.BindPFlag("output-dir-logs", cmd.Flags().Lookup("output-dir-logs"))
+	_ = viper.BindPFlag("output-dir-filtered", cmd.Flags().Lookup("output-dir-filtered"))
+	_ = viper.BindPFlag("log-file", cmd.Flags().Lookup("log-file"))
+	_ = viper.BindPFlag("log-level", cmd.Flags().Lookup("log-level"))
+	_ = viper.BindPFlag("log-http", cmd.Flags().Lookup("log-http"))
+	_ = viper.BindPFlag("retry-max-attempts", cmd.Flags().Lookup("retry-max-attempts"))
+	_ = viper.BindPFlag("retry-base-delay", cmd.Flags().Lookup("retry-base-delay"))
+	_ = viper.BindPFlag("retry-max-delay", cmd.Flags().Lookup("retry-max-delay"))
+	_ = viper.BindPFlag("replay", cmd.Flags().Lookup("replay"))
+
+	return cmd
+}
+
+func main() {
+	if err := newRootCmd().Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err.Error()) // Prints just the message without extra prefix
+		os.Exit(1)
+	}
+	os.Exit(0)
+}
