@@ -1,10 +1,11 @@
-.DS_Store
-NCC_backup.backup
-temp
-outputfiles
-nccfiles
-logs
-ncc-orchestrator-linux-amd64
-ncc-orchestrator-win-amd64.exe
-ncc-orchestrator-mac-arm64
-.vscode
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Logs and outputs from your tool
+nccfiles/
+outputfiles/
+logs/
