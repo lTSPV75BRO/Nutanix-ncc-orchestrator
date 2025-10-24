@@ -1,6 +1,6 @@
 module goncc
 
-go 1.25.0
+go 1.25.3
 
 require (
 	github.com/rs/zerolog v1.34.0
