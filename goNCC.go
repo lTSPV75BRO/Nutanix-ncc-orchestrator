@@ -271,7 +271,9 @@ func parseLogLevel(s string) zerolog.Level {
 		return zerolog.FatalLevel
 	default:
 		if n, err := strconv.Atoi(s); err == nil {
-			return zerolog.Level(n)
+			if n >= math.MinInt8 && n <= math.MaxInt8 {
+				return zerolog.Level(n)
+			}
 		}
 		return zerolog.InfoLevel
 	}
