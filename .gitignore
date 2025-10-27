@@ -5,9 +5,10 @@
 *.so
 *.dylib
 .DS_Store
+*.prom
 temp* 
 config.yaml
-
+ncc-orchestrator
 # Logs and outputs from your tool
 nccfiles/
 outputfiles/
