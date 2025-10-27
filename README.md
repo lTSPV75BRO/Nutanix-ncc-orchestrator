@@ -18,7 +18,7 @@ A CLI tool to run NCC (Nutanix Cluster Check) across multiple clusters in parall
 ### From Source
 1. Clone the repo: `git clone https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator.git`
 2. Navigate to the directory: `cd Nutanix-ncc-orchestrator`
-3. Build: `go build -ldflags "-w -s -X main.Version=Custom_Build -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -X main.Stream=Beta -X main.GoVersion=$(go version | cut -d ' ' -f 3)" -o ncc-orchestrator goNCC.go`
+3. Build: `go build -ldflags "-w -s -X main.Version=Custom_Build -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -X main.Stream=Beta -X main.GoVersion=$(go version | cut -d ' ' -f 3)" -o ncc-orchestrator cmd/main.go`
 4. Run: `./ncc-orchestrator --help`
 
 ### Binary Releases
