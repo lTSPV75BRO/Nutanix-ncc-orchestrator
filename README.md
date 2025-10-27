@@ -16,13 +16,13 @@ A CLI tool to run NCC (Nutanix Cluster Check) across multiple clusters in parall
 - Nutanix Prism access (username, password, cluster IPs).
 
 ### From Source
-1. Clone the repo: `git clone https://github.com/ITSPV75BRO/ncc-orchestrator.git`
-2. Navigate to the directory: `cd ncc-orchestrator`
-3. Build: `go build -o ncc-orchestrator cmd/ncc-orchestrator/main.go`
+1. Clone the repo: `git clone https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator.git`
+2. Navigate to the directory: `cd Nutanix-ncc-orchestrator`
+3. Build: `go build -ldflags "-w -s -X main.Version=Custom_Build -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -X main.Stream=Beta -X main.GoVersion=$(go version | cut -d ' ' -f 3)" -o ncc-orchestrator goNCC.go`
 4. Run: `./ncc-orchestrator --help`
 
 ### Binary Releases
-Download pre-built binaries for Linux/Windows/macOS from the [Releases](https://github.com/yourusername/ncc-orchestrator/releases) page.
+Download pre-built binaries for Linux/Windows/macOS from the [Releases](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases) page.
 
 ## Usage
 Basic command:
