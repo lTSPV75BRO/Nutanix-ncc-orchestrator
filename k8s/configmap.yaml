@@ -1,0 +1,46 @@
+# config.yaml for NCC orchestrator (clusters, options).
+# Password: leave empty here and set via Secret + env NCC_PASSWORD (see secret.yaml and cronjob.yaml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ncc-orchestrator-config
+  namespace: ncc-orchestrator
+  labels:
+    app.kubernetes.io/name: ncc-orchestrator
+data:
+  config.yaml: |
+    # Cluster list (comma-separated IPs or hostnames); replace with your Prism IPs
+    clusters: "10.0.XX.XX"
+    username: "admin"
+    password: ""
+    insecure-skip-verify: false   # Set true for lab/self-signed Prism certs
+    timeout: "15m"
+    request-timeout: "30s"
+    poll-interval: "15s"
+    poll-jitter: "2s"
+    max-parallel: 4
+    outputs: "html"
+    # Paths inside the container; PVC is mounted at /data in the CronJob
+    output-dir-logs: "/data/nccfiles"
+    output-dir-filtered: "/data/outputfiles"
+    log-file: "/data/logs/ncc-runner.log"
+    log-level: "2"
+    log-http: false
+    retry-max-attempts: 6
+    retry-base-delay: "400ms"
+    retry-max-delay: "8s"
+    prom-dir: "/data/promfiles"
+    # Email notifications (optional)
+    email-enabled: false
+    smtp-server: "smtp.example.com"
+    smtp-port: 587
+    smtp-user: "ncc@example.com"
+    smtp-password: ""
+    email-from: "ncc@example.com"
+    email-to: "ops@example.com,sre@example.com"
+    email-use-tls: true
+    # Webhook notifications (optional)
+    webhook-enabled: false
+    webhook-url: "https://hooks.example.com/ncc"
+    webhook-headers:
+      X-Auth-Token: "changeme"

@@ -67,6 +67,27 @@ retry-max-delay: "8s"                     # Max jittered backoff delay
 
 Run with: `ncc-orchestrator --config config.yaml`
 
+## Kubernetes deployment
+
+You can run the NCC Orchestrator on Kubernetes with a **CronJob** (e.g. every 4 hours), a shared **NFS volume** for logs and reports, and a **webserver** (Nginx) that serves the generated HTML report. MetalLB can assign an external IP to the report UI.
+
+- **Manifests**: All Kubernetes manifests are in the [`k8s/`](k8s/) directory.
+- **Full guide**: See **[k8s/README.md](k8s/README.md)** for:
+  - Architecture and manifest list
+  - Prerequisites (MetalLB, StorageClass `nfs-storage`, Docker image)
+  - Step-by-step deployment and configuration
+  - Troubleshooting (permissions, TLS, logs)
+
+**Quick start (after editing config and secret):**
+
+```bash
+kubectl apply -f k8s/namespace.yaml -f k8s/configmap.yaml -f k8s/nginx-configmap.yaml
+kubectl create secret generic ncc-orchestrator-credentials -n ncc-orchestrator --from-literal=password=YOUR_PRISM_PASSWORD
+kubectl apply -f k8s/pvc.yaml -f k8s/cronjob.yaml -f k8s/deployment.yaml -f k8s/service.yaml
+```
+
+The report is then available at the LoadBalancer external IP (e.g. `http://<EXTERNAL-IP>`).
+
 ## Building and Contributing
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 

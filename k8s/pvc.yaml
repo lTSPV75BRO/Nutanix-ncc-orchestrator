@@ -1,0 +1,15 @@
+# Shared volume for logs, nccfiles, outputfiles, promfiles. Written by CronJob, served by webserver.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ncc-orchestrator-output
+  namespace: ncc-orchestrator
+  labels:
+    app.kubernetes.io/name: ncc-orchestrator
+spec:
+  storageClassName: nfs-storage
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi

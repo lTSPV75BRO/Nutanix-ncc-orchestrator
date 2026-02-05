@@ -1,0 +1,21 @@
+# LoadBalancer for MetalLB: assigns an external IP from your IPAddressPool.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ncc-orchestrator-web
+  namespace: ncc-orchestrator
+  labels:
+    app.kubernetes.io/name: ncc-orchestrator
+  # MetalLB: set to your IPAddressPool name so this Service gets an IP from that pool
+  annotations:
+    metallb.io/address-pool: "metallb"   # Change to your pool name (e.g. public, lan)
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 80
+      targetPort: 80
+      protocol: TCP
+      name: http
+  selector:
+    app: ncc-orchestrator
+    component: webserver
