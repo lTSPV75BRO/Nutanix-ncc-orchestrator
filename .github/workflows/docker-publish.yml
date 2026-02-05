@@ -1,0 +1,88 @@
+# Build and push Docker image to Docker Hub.
+# Image tag = version from VERSION file (on push to main) or from release tag (on release).
+# Required repo secrets: DOCKERHUB_USERNAME, DOCKERHUB_TOKEN (Docker Hub access token).
+name: Docker build and push
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Dockerfile'
+      - 'VERSION'
+      - '.github/workflows/docker-publish.yml'
+  release:
+    types: [published]
+  # Optional: uncomment to also run on version tags (e.g. v0.1.13)
+  # push:
+  #   tags:
+  #     - 'v*'
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: prajwalnutant/nutanix-ncc-orchestrator
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="${{ github.event.release.tag_name }}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION=$(cat VERSION 2>/dev/null || echo "0.0.0-dev")
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Using version: ${VERSION}"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Build Linux binary
+        run: |
+          mkdir -p dist
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          GOOS=linux GOARCH=amd64 go build -ldflags "-w -s \
+            -X main.Version=${VERSION} \
+            -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
+            -X main.Stream=Beta \
+            -X main.GoVersion=$(go version | cut -d ' ' -f 3)" \
+            -o dist/ncc-orchestrator-linux-amd64 .
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

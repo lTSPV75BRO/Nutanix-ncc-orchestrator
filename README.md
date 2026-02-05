@@ -35,6 +35,14 @@ The script was created by Prajwal Vernekar (prajwal.vernekar@nutanix.com)
 ### Binary Releases
 Download pre-built binaries for Linux/Windows/macOS from the [Releases](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases) page.
 
+### Docker image and CI
+The [GitHub Action](.github/workflows/docker-publish.yml) builds and pushes the image to Docker Hub on push to `main` (and on release). The **image tag is the same as the code version**:
+
+- **Version source**: the [`VERSION`](VERSION) file (e.g. `0.1.12`). Update this file when you want to release a new image version.
+- **Triggers**: push to `main` (when Go code, Dockerfile, or VERSION change) and on GitHub release.
+- **Image**: `prajwalnutant/nutanix-ncc-orchestrator:<version>` and `:latest`.
+- **Secrets**: In the repo settings, add `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (Docker Hub → Account → Security → New Access Token) so the workflow can push.
+
 ## Usage
 Basic command:
 - `ncc-orchestrator --clusters "10.0.1.1,10.0.2.1" --username admin --password yourpassword`
