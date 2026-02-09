@@ -10,7 +10,7 @@ metadata:
 data:
   config.yaml: |
     # Cluster list (comma-separated IPs or hostnames); replace with your Prism IPs
-    clusters: "10.0.XX.XX"
+    clusters: "10.48.XX.XX,10.48.XX.XX"
     username: "admin"
     password: ""
     insecure-skip-verify: false   # Set true for lab/self-signed Prism certs

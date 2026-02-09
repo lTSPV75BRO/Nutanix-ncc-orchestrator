@@ -4175,8 +4175,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				}
 			} else if len(failed) > 0 {
 				if err := writeAllClustersFailedHTML(fs, cfg.OutputDirFiltered, failed); err != nil {
-					log.Error().Err(err).Msg("write all-failed HTML failed")
-					return fmt.Errorf("write all-failed HTML: %w", err)
+					log.Error().Err(err).Msg("write all-failed HTML failed (non-fatal)")
 				}
 			}
 
