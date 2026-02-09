@@ -767,15 +767,18 @@ func bindConfig() (Config, error) {
 // are reported early instead of during normal writes.
 func checkOutputPermissions(cfg *Config) error {
 	probeName := ".ncc-writecheck"
+	indexHTML := filepath.Join(cfg.OutputDirFiltered, "index.html")
 	checks := []struct {
-		label  string
-		path   string
-		remove bool
+		label    string
+		path     string
+		remove   bool
+		truncate bool // open with O_TRUNC so we can overwrite existing file (e.g. NFS stale ownership)
 	}{
-		{"log file", cfg.LogFile, false},
-		{"output dir (raw logs)", filepath.Join(cfg.OutputDirLogs, probeName), true},
-		{"output dir (filtered)", filepath.Join(cfg.OutputDirFiltered, probeName), true},
-		{"prom dir", filepath.Join(cfg.PromDir, probeName), true},
+		{"log file", cfg.LogFile, false, false},
+		{"output dir (raw logs)", filepath.Join(cfg.OutputDirLogs, probeName), true, false},
+		{"output dir (filtered)", filepath.Join(cfg.OutputDirFiltered, probeName), true, false},
+		{"aggregated index.html", indexHTML, false, true},
+		{"prom dir", filepath.Join(cfg.PromDir, probeName), true, false},
 	}
 	for _, c := range checks {
 		dir := filepath.Dir(c.path)
@@ -784,7 +787,11 @@ func checkOutputPermissions(cfg *Config) error {
 				return fmt.Errorf("cannot create directory %s: %w", dir, err)
 			}
 		}
-		f, err := os.OpenFile(c.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		flags := os.O_CREATE | os.O_WRONLY | os.O_APPEND
+		if c.truncate {
+			flags = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+		}
+		f, err := os.OpenFile(c.path, flags, 0644)
 		if err != nil {
 			return fmt.Errorf("cannot open/create file for write (%s): %w", c.label, err)
 		}

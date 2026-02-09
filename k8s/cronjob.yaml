@@ -26,8 +26,8 @@ spec:
           initContainers:
             - name: create-dirs
               image: busybox:1.36
-              # Create dirs, remove current log so we can rotate, then chmod so NFS anon user can write (if NFS allows)
-              command: ["sh", "-c", "mkdir -p /data/logs /data/nccfiles /data/outputfiles /data/promfiles && rm -f /data/logs/ncc-runner.log && chmod -R 777 /data 2>/dev/null || true"]
+              # Create dirs, remove log and aggregated output so we can create them fresh (avoids NFS ownership issues)
+              command: ["sh", "-c", "mkdir -p /data/logs /data/nccfiles /data/outputfiles /data/promfiles && rm -f /data/logs/ncc-runner.log /data/outputfiles/index.html && chmod -R 777 /data 2>/dev/null || true"]
               volumeMounts:
                 - name: output
                   mountPath: /data
