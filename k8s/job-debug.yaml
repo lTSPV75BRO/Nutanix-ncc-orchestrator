@@ -22,8 +22,8 @@ spec:
       initContainers:
         - name: create-dirs
           image: busybox:1.36
-          # Create dirs, remove log and aggregated output so we can create them fresh (avoids NFS ownership issues)
-          command: ["sh", "-c", "mkdir -p /data/logs /data/nccfiles /data/outputfiles /data/promfiles && rm -f /data/logs/ncc-runner.log /data/outputfiles/index.html && chmod -R 777 /data 2>/dev/null || true"]
+          # Create dirs; remove log, aggregated index, per-cluster HTML/CSV/JSON and .prom so we can create them fresh (avoids NFS ownership issues). Keep *.log in outputfiles for replay.
+          command: ["sh", "-c", "mkdir -p /data/logs /data/nccfiles /data/outputfiles /data/promfiles && rm -f /data/logs/ncc-runner.log /data/outputfiles/index.html /data/outputfiles/*.log.html /data/outputfiles/*.log.csv /data/outputfiles/*.log.json /data/promfiles/*.prom && chmod -R 777 /data 2>/dev/null || true"]
           volumeMounts:
             - name: output
               mountPath: /data
