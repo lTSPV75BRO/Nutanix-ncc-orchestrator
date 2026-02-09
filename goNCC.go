@@ -762,6 +762,42 @@ func bindConfig() (Config, error) {
 	return cfg, nil
 }
 
+// checkOutputPermissions verifies the process can create/open files for write in the log path
+// and in each output directory. Returns a clear error on first failure so permission issues
+// are reported early instead of during normal writes.
+func checkOutputPermissions(cfg *Config) error {
+	probeName := ".ncc-writecheck"
+	checks := []struct {
+		label  string
+		path   string
+		remove bool
+	}{
+		{"log file", cfg.LogFile, false},
+		{"output dir (raw logs)", filepath.Join(cfg.OutputDirLogs, probeName), true},
+		{"output dir (filtered)", filepath.Join(cfg.OutputDirFiltered, probeName), true},
+		{"prom dir", filepath.Join(cfg.PromDir, probeName), true},
+	}
+	for _, c := range checks {
+		dir := filepath.Dir(c.path)
+		if dir != "." {
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				return fmt.Errorf("cannot create directory %s: %w", dir, err)
+			}
+		}
+		f, err := os.OpenFile(c.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			return fmt.Errorf("cannot open/create file for write (%s): %w", c.label, err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close probe file %s: %w", c.path, err)
+		}
+		if c.remove {
+			_ = os.Remove(c.path)
+		}
+	}
+	return nil
+}
+
 // ==================== Logging ====================
 
 // In setupFileLogger, add the new version fields to the global logger context
@@ -3731,6 +3767,11 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 			if lvl > zerolog.FatalLevel {
 				consoleLogger.Warn().Int("level", int(lvl)).Msg("invalid log level, using info level")
 				lvl = zerolog.InfoLevel
+			}
+
+			if err := checkOutputPermissions(&cfg); err != nil {
+				consoleLogger.Error().Err(err).Msg("output permissions check failed (cannot open/create required files)")
+				return fmt.Errorf("output permissions check: %w", err)
 			}
 
 			if err := setupFileLogger(cfg.LogFile, lvl); err != nil {
