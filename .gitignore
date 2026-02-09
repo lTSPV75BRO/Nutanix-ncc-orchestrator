@@ -13,6 +13,8 @@ nccfiles/
 outputfiles/
 logs/
 dist/
+k8s/configmap.yaml
+k8s/secret.yaml
 
 # Prometheus metrics
 promfiles/
