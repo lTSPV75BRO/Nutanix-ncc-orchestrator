@@ -1654,6 +1654,39 @@ type AggBlock struct {
 	NCCVersion     string
 }
 
+// writeAllClustersFailedHTML writes a minimal index.html when every cluster failed, so the report page exists.
+func writeAllClustersFailedHTML(fs FS, outDir string, failedClusters []string) error {
+	if err := fs.MkdirAll(outDir, 0755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", outDir, err)
+	}
+	path := filepath.Join(outDir, "index.html")
+	const tmpl = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>NCC Aggregated Report</title></head>
+<body style="font-family: system-ui; max-width: 800px; margin: 2rem auto; padding: 1rem; background: #0f172a; color: #e5e7eb;">
+<h1>NCC Aggregated Report</h1>
+<p style="color: #f59e0b;">All clusters failed. No data was collected.</p>
+<p>Failed clusters:</p>
+<ul>{{range .Failed}}
+<li><code>{{.}}</code></li>{{end}}
+</ul>
+<p style="color: #9ca3af; font-size: 14px;">Generated at {{.GeneratedAt}}</p>
+</body>
+</html>`
+	t := template.Must(template.New("allfailed").Parse(tmpl))
+	type data struct {
+		Failed      []string
+		GeneratedAt string
+	}
+	d := data{Failed: failedClusters, GeneratedAt: time.Now().Format(time.RFC3339)}
+	f, err := fs.Create(path)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", path, err)
+	}
+	defer f.Close()
+	return t.Execute(f, d)
+}
+
 func writeAggregatedHTMLSingle(fs FS, outDir string, rows []AggBlock, perCluster []struct{ Cluster, HTML, CSV string }) error {
 	if err := fs.MkdirAll(outDir, 0755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", outDir, err)
@@ -4134,9 +4167,17 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				})
 			}
 
-			// Write aggregated page
-			if err := writeAggregatedHTMLSingle(fs, cfg.OutputDirFiltered, agg, clusterFiles); err != nil {
-				log.Error().Err(err).Msg("write aggregated HTML failed")
+			// Always write final HTML so the report exists even when some or all clusters fail
+			if len(agg) > 0 {
+				if err := writeAggregatedHTMLSingle(fs, cfg.OutputDirFiltered, agg, clusterFiles); err != nil {
+					log.Error().Err(err).Msg("write aggregated HTML failed")
+					return fmt.Errorf("write aggregated HTML: %w", err)
+				}
+			} else if len(failed) > 0 {
+				if err := writeAllClustersFailedHTML(fs, cfg.OutputDirFiltered, failed); err != nil {
+					log.Error().Err(err).Msg("write all-failed HTML failed")
+					return fmt.Errorf("write all-failed HTML: %w", err)
+				}
 			}
 
 			// Check if context was cancelled during execution
@@ -4149,8 +4190,14 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 			}
 
 			if len(failed) > 0 {
-				log.Error().Strs("failedClusters", failed).Msg("some clusters failed")
-				return fmt.Errorf("some clusters failed: %v", failed)
+				if len(clusterFiles) > 0 {
+					log.Warn().Strs("failedClusters", failed).Int("succeeded", len(clusterFiles)).Msg("some clusters failed; aggregated report written for successful clusters")
+					fmt.Printf("Some clusters failed: %v (report written for %d successful cluster(s))\n", failed, len(clusterFiles))
+					// Job succeeds so the partial report is the final output
+					return nil
+				}
+				log.Error().Strs("failedClusters", failed).Msg("all clusters failed")
+				return fmt.Errorf("all clusters failed: %v", failed)
 			}
 
 			log.Info().Msg("all clusters processed successfully")
