@@ -2,27 +2,30 @@
 
 A CLI tool to run NCC (Nutanix Cluster Check) across multiple clusters in parallel, aggregate results, and generate HTML/CSV reports. Built in Go for efficiency and cross-platform support.
 
+**Contents:** [Features](#features) · [Installation](#installation) · [Usage](#usage) · [Configuration](#configuration) · [Kubernetes](#kubernetes-deployment) · [Scripts](#scripts) · [Building](#building-and-contributing)
+
+---
 
 ## Author
 
-The script was created by Prajwal Vernekar (prajwal.vernekar@nutanix.com)
+Prajwal Vernekar (prajwal.vernekar@nutanix.com)
 
--------------------------------
-
+---
 
 ## Features
-- Parallel execution on multiple Nutanix clusters.
-- API integration with Prism Gateway for starting checks, polling status, and fetching summaries.
-- Configurable via YAML/JSON, environment variables, or CLI flags.
-- Output formats: HTML reports with styling, CSV exports.
-- Retry logic, logging, and progress bars for reliability.
-- Replay mode to generate reports from existing logs without re-running checks.
-- Prometheus exporter for data visualisation
+- **Parallel execution** on multiple Nutanix clusters via Prism Gateway API (start checks, poll status, fetch summaries).
+- **Configurable** via YAML/JSON config file, environment variables (`NCC_*`), or CLI flags.
+- **Outputs**: HTML reports (styled), CSV, and optional JSON; aggregated `index.html` plus per-cluster pages.
+- **Reliability**: Retry logic, progress bars, rotated JSON logging, and a **preflight check** that verifies output paths are writable before running.
+- **Replay mode** (`--replay`): Regenerate reports from existing logs without calling the NCC API.
+- **Notifications**: Optional email, webhook, and Slack notifications.
+- **Prometheus**: Writes `.prom` files for scraping; see [Prometheus.md](Prometheus.md) for monitoring setup.
 
 ## Installation
+
 ### Prerequisites
-- Go 1.24+ (for building binaries from source).
-- Nutanix Prism API access (username, password, cluster IPs).
+- **Go 1.24+** (for building from source; see [go.mod](go.mod)).
+- **Nutanix Prism** API access (username, password, cluster IPs).
 
 ### From Source
 1. Clone the repo: `git clone https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator.git`
@@ -47,46 +50,75 @@ The [GitHub Action](.github/workflows/docker-publish.yml) builds and pushes the 
 Basic command:
 - `ncc-orchestrator --clusters "10.0.1.1,10.0.2.1" --username admin --password yourpassword`
 
-Full options: Run `ncc-orchestrator --help` for details on flags like `--config`, `--insecure-skip-verify`, `--max-parallel`, etc.
+Full options: Run `ncc-orchestrator --help` for all flags. To see current env values: `ncc-orchestrator --env-info`.
 
 ### Configuration
-Create a `config.yaml`:
+Config file (YAML/JSON), CLI flags, and **environment variables** (prefix `NCC_`) are supported. Env overrides config file; flags override both.
 
-```
-clusters: "10.2.XX.XX,10.0.XX.XX"      	  # Comma-separated list of Prism Element cluster IPs/cluster FQDNs
-username: "admin"                         # Prism element username
-password: ""                              # Prefer env NCC_PASSWORD in CLI; leave empty here if using env
-insecure-skip-verify: false               # Set true only for lab/self-signed
-timeout: "15m"                            # Per-cluster overall timeout  
-request-timeout: "30s"                    # Per HTTP request timeout  
-poll-interval: "15s"                      # Polling interval for task status  
-poll-jitter: "2s"                         # Random jitter to avoid herd behavior  
-max-parallel: 4                           # Parallel clusters processed  
-outputs: "html,csv"                       # One or more: html,csv  
-output-dir-logs: "nccfiles"               # Directory for raw NCC summary text  
-output-dir-filtered: "outputfiles"        # Directory for generated HTML/CSV  
-log-file: "logs/ncc-runner.log"           # Rotated JSON logs path  
-log-level: "2"                            # 0 trace, 1 debug, 2 info, 3 warn, 4 error  
-log-http: false                           # Set true only for debugging; logs request/response dumps  
-retry-max-attempts: 6                     # Max attempts per request  
-retry-base-delay: "400ms"                 # Base backoff delay  
-retry-max-delay: "8s"                     # Max jittered backoff delay  
-```
+Create a `config.yaml` with any of the options below. Run with: `ncc-orchestrator --config config.yaml`
 
-Run with: `ncc-orchestrator --config config.yaml`
+| Option | Default | Description |
+|--------|---------|-------------|
+| `clusters` | — | Comma-separated Prism cluster IPs or FQDNs |
+| `username` | `admin` | Prism Gateway username |
+| `password` | — | Prism password (prefer env `NCC_PASSWORD`) |
+| `insecure-skip-verify` | `false` | Skip TLS verify (lab/self-signed only) |
+| `timeout` | `15m` | Per-cluster overall timeout |
+| `request-timeout` | `20s` | Per HTTP request timeout |
+| `poll-interval` | `15s` | Polling interval for NCC task status |
+| `poll-jitter` | `2s` | Jitter added to poll interval |
+| `max-parallel` | `4` | Max concurrent clusters |
+| `outputs` | `html,csv` | Comma-separated: html, csv, json |
+| `output-dir-logs` | `nccfiles` | Directory for raw NCC summary logs |
+| `output-dir-filtered` | `outputfiles` | Directory for filtered HTML/CSV |
+| `log-file` | `logs/ncc-runner.log` | Rotated JSON log path |
+| `log-level` | — | 0–5 or trace/debug/info/warn/error |
+| `log-http` | `false` | Dump HTTP request/response (debug) |
+| `retry-max-attempts` | `6` | Max retries per HTTP call |
+| `retry-base-delay` | `400ms` | Base backoff delay |
+| `retry-max-delay` | `8s` | Max backoff cap |
+| `prom-dir` | `promfiles` | Directory for Prometheus .prom files |
+| `severity-filter` | — | Comma-separated FAIL,WARN,ERR,INFO; empty = all |
+| `dry-run` | `false` | Validate config only, no checks |
+| `replay` | `false` | Replay from existing logs (no NCC API) |
+| `max-idle-conns` | `100` | HTTP client max idle conns |
+| `max-idle-conns-per-host` | `10` | Max idle conns per host |
+| `max-conns-per-host` | `0` | Max conns per host (0 = unlimited) |
+| `idle-conn-timeout` | `90s` | Idle connection timeout |
+| `email-enabled` | `false` | Enable email notifications |
+| `smtp-server`, `smtp-port`, `smtp-user`, `smtp-password`, `email-from`, `email-to`, `email-use-tls` | — | SMTP settings |
+| `webhook-enabled` | `false` | Enable webhook notifications |
+| `webhook-url`, `webhook-headers` | — | Webhook endpoint and headers |
+| `slack-enabled` | `false` | Enable Slack notifications |
+| `slack-webhook-url`, `slack-channel` | — | Slack webhook and channel |
+
+### Environment variables (NCC_ prefix)
+Any config key can be set via env: **`NCC_`** + key in UPPER_SNAKE (hyphens become underscores). Examples:
+
+- `NCC_CONFIG` — Config file path  
+- `NCC_CLUSTERS` — Comma-separated cluster list  
+- `NCC_USERNAME`, `NCC_PASSWORD` — Prism credentials  
+- `NCC_INSECURE_SKIP_VERIFY` — true/false  
+- `NCC_TIMEOUT`, `NCC_REQUEST_TIMEOUT`, `NCC_POLL_INTERVAL`, `NCC_POLL_JITTER`  
+- `NCC_MAX_PARALLEL`, `NCC_OUTPUTS`  
+- `NCC_OUTPUT_DIR_LOGS`, `NCC_OUTPUT_DIR_FILTERED`, `NCC_LOG_FILE`, `NCC_LOG_LEVEL`, `NCC_LOG_HTTP`  
+- `NCC_RETRY_MAX_ATTEMPTS`, `NCC_RETRY_BASE_DELAY`, `NCC_RETRY_MAX_DELAY`  
+- `NCC_PROM_DIR`, `NCC_SEVERITY_FILTER`, `NCC_DRY_RUN`, `NCC_REPLAY`  
+- `NCC_MAX_IDLE_CONNS`, `NCC_MAX_IDLE_CONNS_PER_HOST`, `NCC_MAX_CONNS_PER_HOST`, `NCC_IDLE_CONN_TIMEOUT`  
+- `NCC_EMAIL_ENABLED`, `NCC_SMTP_SERVER`, `NCC_SMTP_PORT`, `NCC_SMTP_USER`, `NCC_SMTP_PASSWORD`, `NCC_EMAIL_FROM`, `NCC_EMAIL_TO`, `NCC_EMAIL_USE_TLS`  
+- `NCC_WEBHOOK_ENABLED`, `NCC_WEBHOOK_URL`, `NCC_WEBHOOK_HEADERS`  
+- `NCC_SLACK_ENABLED`, `NCC_SLACK_WEBHOOK_URL`, `NCC_SLACK_CHANNEL`  
+
+Run **`ncc-orchestrator --env-info`** to print all possible env vars and their current values.
 
 ## Kubernetes deployment
 
-You can run the NCC Orchestrator on Kubernetes with a **CronJob** (e.g. every 4 hours), a shared **NFS volume** for logs and reports, and a **webserver** (Nginx) that serves the generated HTML report. MetalLB can assign an external IP to the report UI.
+Run the NCC Orchestrator on Kubernetes with a **CronJob** (e.g. every 4 hours), a shared **PVC** (e.g. NFS RWX) for logs and reports, and a **Deployment** (Nginx) serving the HTML report. Optional LoadBalancer Service (e.g. MetalLB) for external access.
 
-- **Manifests**: All Kubernetes manifests are in the [`k8s/`](k8s/) directory.
-- **Full guide**: See **[k8s/README.md](k8s/README.md)** for:
-  - Architecture and manifest list
-  - Prerequisites (MetalLB, StorageClass `nfs-storage`, Docker image)
-  - Step-by-step deployment and configuration
-  - Troubleshooting (permissions, TLS, logs)
+- **Manifests**: [`k8s/`](k8s/) — namespace, ConfigMap, Secret, PVC, CronJob, Deployment, Service. **One-off / replay**: [`k8s/job-debug.yaml`](k8s/job-debug.yaml) runs with `--replay` for debugging or regenerating from existing logs.
+- **Full guide**: **[k8s/README.md](k8s/README.md)** — architecture, prerequisites (e.g. StorageClass, MetalLB), deployment steps, troubleshooting (permissions, TLS, logs, getting job logs).
 
-**Quick start (after editing config and secret):**
+**Quick start (set config and secret first):**
 
 ```bash
 kubectl apply -f k8s/namespace.yaml -f k8s/configmap.yaml -f k8s/nginx-configmap.yaml
@@ -94,10 +126,31 @@ kubectl create secret generic ncc-orchestrator-credentials -n ncc-orchestrator -
 kubectl apply -f k8s/pvc.yaml -f k8s/cronjob.yaml -f k8s/deployment.yaml -f k8s/service.yaml
 ```
 
-The report is then available at the LoadBalancer external IP (e.g. `http://<EXTERNAL-IP>`).
+Report UI: `http://<LoadBalancer-EXTERNAL-IP>`. To **uninstall** (delete namespace and all resources): see [Scripts](#scripts) below.
+
+## Scripts
+
+Helper scripts (run from repo root; set `KUBECONFIG` if needed):
+
+| Script | Purpose |
+|--------|---------|
+| **[scripts/uninstall-ncc-orchestrator.sh](scripts/uninstall-ncc-orchestrator.sh)** | Delete the `ncc-orchestrator` namespace and everything in it. Use `--force` to skip confirmation, `--dry-run` to preview. After uninstall you can be asked to prune NCC images from worker nodes, or use `--prune-images` to do it without prompt (set `SSH_KEY` if needed). |
+| **[scripts/prune-ncc-images-workers.sh](scripts/prune-ncc-images-workers.sh)** | Remove NCC container images from worker nodes via SSH (e.g. to clear old image with same tag). Set `SSH_KEY` and optionally `NODE_IPS`; see script header. |
+
+Example:
+
+```bash
+export KUBECONFIG=~/kubecon/mycluster.conf
+./scripts/uninstall-ncc-orchestrator.sh --dry-run   # preview
+./scripts/uninstall-ncc-orchestrator.sh --force     # uninstall
+```
 
 ## Building and Contributing
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## See also
+- [Prometheus.md](Prometheus.md) — Prometheus/Grafana monitoring using NCC Orchestrator `.prom` output.
+- [k8s/README.md](k8s/README.md) — Full Kubernetes deployment and troubleshooting.
 
 ## License
 MIT License. See [LICENSE](LICENSE) for details.

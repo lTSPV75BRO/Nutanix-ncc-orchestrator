@@ -1,5 +1,6 @@
 # config.yaml for NCC orchestrator (clusters, options).
 # Password: leave empty here and set via Secret + env NCC_PASSWORD (see secret.yaml and cronjob.yaml).
+# Any option can be overridden by env NCC_<KEY> (e.g. NCC_CLUSTERS, NCC_LOG_LEVEL). Run with --env-info to list.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -30,6 +31,13 @@ data:
     retry-base-delay: "400ms"
     retry-max-delay: "8s"
     prom-dir: "/data/promfiles"
+    # Severity filter: comma-separated FAIL,WARN,ERR,INFO; empty = all
+    severity-filter: ""
+    # HTTP connection pool (optional)
+    max-idle-conns: 100
+    max-idle-conns-per-host: 10
+    max-conns-per-host: 0
+    idle-conn-timeout: "90s"
     # Email notifications (optional)
     email-enabled: false
     smtp-server: "smtp.example.com"
@@ -44,3 +52,7 @@ data:
     webhook-url: "https://hooks.example.com/ncc"
     webhook-headers:
       X-Auth-Token: "changeme"
+    # Slack notifications (optional)
+    slack-enabled: false
+    slack-webhook-url: ""
+    slack-channel: ""

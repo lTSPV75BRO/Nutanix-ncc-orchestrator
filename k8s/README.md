@@ -12,6 +12,7 @@ Deploy the Nutanix NCC Orchestrator on Kubernetes so that NCC checks run on a sc
 - [Deployment steps](#deployment-steps)
 - [Configuration reference](#configuration-reference)
 - [Verification and usage](#verification-and-usage)
+- [Uninstall](#uninstall)
 - [Troubleshooting](#troubleshooting)
 - [Summary](#summary)
 
@@ -224,6 +225,42 @@ Replace `<job-name>` with the name from the first command (e.g. `ncc-manual-1`).
 
 ---
 
+## Uninstall
+
+To remove the application and the entire namespace (CronJob, Deployment, Service, ConfigMap, Secret, PVC, Jobs, etc.):
+
+```bash
+# From the repo root; KUBECONFIG must point at your cluster
+export KUBECONFIG=~/kubecon/wolverine.conf   # or your kubeconfig
+./scripts/uninstall-ncc-orchestrator.sh
+```
+
+You will be prompted to confirm unless you pass `--force`. After the namespace is deleted, you will be asked whether to **prune NCC container images from worker nodes** (removes old/same-tag images via SSH). Set `SSH_KEY` (and optionally `NODE_IPS`) if needed for prune.
+
+```bash
+./scripts/uninstall-ncc-orchestrator.sh --force
+```
+
+To uninstall and always run the image prune (no prompt for prune):
+
+```bash
+./scripts/uninstall-ncc-orchestrator.sh --force --prune-images
+```
+
+To only see what would be deleted:
+
+```bash
+./scripts/uninstall-ncc-orchestrator.sh --dry-run
+```
+
+To uninstall a different namespace (e.g. a custom name):
+
+```bash
+NAMESPACE=my-ncc-ns ./scripts/uninstall-ncc-orchestrator.sh --force
+```
+
+---
+
 ## Troubleshooting
 
 ### Permission denied on `/data` (logs or promfiles)
@@ -240,13 +277,47 @@ x509: cannot validate certificate for 10.x.x.x because it doesn't contain any IP
 
 set **`insecure-skip-verify: true`** in the ConfigMap `config.yaml` (for lab/self-signed Prism certs only). Re-apply the ConfigMap; the next CronJob run will pick it up.
 
+### Failed CronJob runs – how to get logs
+
+`kubectl logs` expects a **Pod** name (or a Job via the `job/` prefix), not a Job name by itself. Use one of these:
+
+**Logs for a specific Job (e.g. failed run):**
+```bash
+# Use the job/ prefix so kubectl finds the Job's pod(s)
+kubectl logs -n ncc-orchestrator job/ncc-orchestrator-29510880 --all-containers=true
+```
+
+**Or use the job's label (same result):**
+```bash
+kubectl logs -n ncc-orchestrator -l job-name=ncc-orchestrator-29510880 --all-containers=true
+```
+
+**If the pod is already gone** (garbage-collected), inspect the Job and events:
+```bash
+kubectl describe job ncc-orchestrator-29510880 -n ncc-orchestrator
+```
+
+**Logs from the most recent Job** (any status):
+```bash
+JOB=$(kubectl get jobs -n ncc-orchestrator -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+kubectl logs -n ncc-orchestrator job/$JOB --all-containers=true
+```
+(Jobs are listed by creation time; adjust sort if needed, e.g. `--sort-by=.metadata.creationTimestamp` and take the last one.)
+
+**Reproduce and follow logs** with the one-off debug Job (see `job-debug.yaml`):
+```bash
+kubectl delete job ncc-debug -n ncc-orchestrator --ignore-not-found=true
+kubectl apply -f k8s/job-debug.yaml -n ncc-orchestrator
+kubectl logs -n ncc-orchestrator -f job/ncc-debug --all-containers=true
+```
+
 ### Job fails immediately
 
 - Check **Secret** exists and has key `password`:  
   `kubectl get secret ncc-orchestrator-credentials -n ncc-orchestrator -o yaml`
 - Check **ConfigMap** and that `clusters` and paths are correct:  
   `kubectl get configmap ncc-orchestrator-config -n ncc-orchestrator -o yaml`
-- Inspect **pod logs** (replace with the actual job pod name):  
+- Inspect **pod logs** (use `job/<job-name>` or the label as above):  
   `kubectl logs -n ncc-orchestrator -l job-name=<job-name> --all-containers=true`
 
 ### Changing the schedule
