@@ -14,6 +14,7 @@ Deploy the Nutanix NCC Orchestrator on Kubernetes so that NCC checks run on a sc
 - [Verification and usage](#verification-and-usage)
 - [Uninstall](#uninstall)
 - [Troubleshooting](#troubleshooting)
+- [Runbook](#runbook)
 - [Summary](#summary)
 
 ---
@@ -323,6 +324,31 @@ kubectl logs -n ncc-orchestrator -f job/ncc-debug --all-containers=true
 ### Changing the schedule
 
 Edit `spec.schedule` in `k8s/cronjob.yaml` (standard cron format). Example for every 6 hours at minute 0: `0 */6 * * *`. Then run `kubectl apply -f k8s/cronjob.yaml`.
+
+---
+
+## Runbook
+
+When a **CronJob run fails** or reports are missing:
+
+1. **Logs**  
+   Get logs from the failing job:  
+   `kubectl logs -n ncc-orchestrator job/<job-name> --all-containers=true`  
+   (Use `kubectl get jobs -n ncc-orchestrator` to find the job name, or use the label `job-name=ncc-orchestrator-<cron-id>`.)
+
+2. **One-off debug job**  
+   Run with `--replay` to regenerate from existing logs without calling the API:  
+   `kubectl apply -f k8s/job-debug.yaml -n ncc-orchestrator`  
+   Then: `kubectl logs -n ncc-orchestrator -f job/ncc-debug --all-containers=true`  
+   See [k8s/job-debug.yaml](job-debug.yaml) for the command and volume mounts.
+
+3. **NFS / permissions**  
+   If you see "permission denied" on `/data/logs`, `/data/outputfiles`, or `/data/promfiles`, check NFS export and `fsGroup` (e.g. `securityContext.fsGroup: 1000` in `cronjob.yaml` and `deployment.yaml`). Adjust to match your NFS anon GID if needed.
+
+4. **Prune NCC images (optional)**  
+   After uninstall or to clear old NCC images on workers:  
+   `./scripts/prune-ncc-images-workers.sh`  
+   Set `SSH_KEY` and optionally `NODE_IPS`; see script header.
 
 ---
 

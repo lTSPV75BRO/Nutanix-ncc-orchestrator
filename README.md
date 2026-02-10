@@ -50,7 +50,7 @@ The [GitHub Action](.github/workflows/docker-publish.yml) builds and pushes the 
 Basic command:
 - `ncc-orchestrator --clusters "10.0.1.1,10.0.2.1" --username admin --password yourpassword`
 
-Full options: Run `ncc-orchestrator --help` for all flags. To see current env values: `ncc-orchestrator --env-info`.
+Full options: Run `ncc-orchestrator --help` for all flags. To see current env values: `ncc-orchestrator --env-info`. Run `ncc-orchestrator --version` to print version, stream, build date, and Go version, then exit.
 
 ### Configuration
 Config file (YAML/JSON), CLI flags, and **environment variables** (prefix `NCC_`) are supported. Env overrides config file; flags override both.
@@ -81,13 +81,16 @@ Create a `config.yaml` with any of the options below. Run with: `ncc-orchestrato
 | `severity-filter` | — | Comma-separated FAIL,WARN,ERR,INFO; empty = all |
 | `dry-run` | `false` | Validate config only, no checks |
 | `replay` | `false` | Replay from existing logs (no NCC API) |
-| `max-idle-conns` | `100` | HTTP client max idle conns |
+| `max-idle-conns` | `100` | HTTP client connection pool: max idle conns total |
 | `max-idle-conns-per-host` | `10` | Max idle conns per host |
 | `max-conns-per-host` | `0` | Max conns per host (0 = unlimited) |
-| `idle-conn-timeout` | `90s` | Idle connection timeout |
+| `idle-conn-timeout` | `90s` | Idle connection timeout before close |
 | `email-enabled` | `false` | Enable email notifications |
+| `email-attach-html` | `false` | Attach per-cluster (or digest) HTML report to notification email |
+| `notify-digest` | `false` | Send one email/webhook/Slack per run with run overview (and optional index.html attach) instead of per-cluster |
 | `smtp-server`, `smtp-port`, `smtp-user`, `smtp-password`, `email-from`, `email-to`, `email-use-tls` | — | SMTP settings |
 | `webhook-enabled` | `false` | Enable webhook notifications |
+| `webhook-include-html` | `false` | Include per-cluster HTML report as base64 in webhook JSON (brief overview always in payload) |
 | `webhook-url`, `webhook-headers` | — | Webhook endpoint and headers |
 | `slack-enabled` | `false` | Enable Slack notifications |
 | `slack-webhook-url`, `slack-channel` | — | Slack webhook and channel |
@@ -105,11 +108,33 @@ Any config key can be set via env: **`NCC_`** + key in UPPER_SNAKE (hyphens beco
 - `NCC_RETRY_MAX_ATTEMPTS`, `NCC_RETRY_BASE_DELAY`, `NCC_RETRY_MAX_DELAY`  
 - `NCC_PROM_DIR`, `NCC_SEVERITY_FILTER`, `NCC_DRY_RUN`, `NCC_REPLAY`  
 - `NCC_MAX_IDLE_CONNS`, `NCC_MAX_IDLE_CONNS_PER_HOST`, `NCC_MAX_CONNS_PER_HOST`, `NCC_IDLE_CONN_TIMEOUT`  
-- `NCC_EMAIL_ENABLED`, `NCC_SMTP_SERVER`, `NCC_SMTP_PORT`, `NCC_SMTP_USER`, `NCC_SMTP_PASSWORD`, `NCC_EMAIL_FROM`, `NCC_EMAIL_TO`, `NCC_EMAIL_USE_TLS`  
-- `NCC_WEBHOOK_ENABLED`, `NCC_WEBHOOK_URL`, `NCC_WEBHOOK_HEADERS`  
+- `NCC_EMAIL_ENABLED`, `NCC_EMAIL_ATTACH_HTML`, `NCC_NOTIFY_DIGEST`, `NCC_SMTP_SERVER`, `NCC_SMTP_PORT`, `NCC_SMTP_USER`, `NCC_SMTP_PASSWORD`, `NCC_EMAIL_FROM`, `NCC_EMAIL_TO`, `NCC_EMAIL_USE_TLS`  
+- `NCC_WEBHOOK_ENABLED`, `NCC_WEBHOOK_INCLUDE_HTML`, `NCC_WEBHOOK_URL`, `NCC_WEBHOOK_HEADERS`  
 - `NCC_SLACK_ENABLED`, `NCC_SLACK_WEBHOOK_URL`, `NCC_SLACK_CHANNEL`  
 
 Run **`ncc-orchestrator --env-info`** to print all possible env vars and their current values.
+
+### Example webhook payload
+
+When webhook is enabled, the app sends a JSON POST with a structure like:
+
+```json
+{
+  "Cluster": "10.0.1.1",
+  "StartedAt": "2025-02-05T10:00:00Z",
+  "FinishedAt": "2025-02-05T10:15:00Z",
+  "FailCount": 2,
+  "WarnCount": 5,
+  "ErrCount": 0,
+  "InfoCount": 10,
+  "TotalChecks": 17,
+  "OutputFiles": ["10.0.1.1.log"],
+  "Overview": "NCC run completed for cluster 10.0.1.1. FAIL: 2, WARN: 5, ERR: 0, INFO: 10. Total: 17 checks.",
+  "ReportHTMLBase64": "<base64-encoded HTML if webhook-include-html is true>"
+}
+```
+
+In **digest mode** (`notify-digest: true`), one payload per run is sent; `Cluster` is `"run"` and counts reflect clusters OK/failed and total checks.
 
 ## Kubernetes deployment
 

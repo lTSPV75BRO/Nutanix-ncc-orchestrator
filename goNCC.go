@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -84,19 +85,22 @@ type Config struct {
 	PromDir string `mapstructure:"prom-dir"`
 
 	// Email
-	EmailEnabled bool
-	SMTPServer   string
-	SMTPPort     int
-	SMTPUser     string
-	SMTPPassword string
-	EmailFrom    string
-	EmailTo      []string
-	EmailUseTLS  bool
+	EmailEnabled    bool
+	EmailAttachHTML bool // Attach per-cluster (or digest) HTML report to email
+	NotifyDigest    bool // When true: one email/webhook/slack per run (with run overview); when false: per-cluster
+	SMTPServer      string
+	SMTPPort        int
+	SMTPUser        string
+	SMTPPassword    string
+	EmailFrom       string
+	EmailTo         []string
+	EmailUseTLS     bool
 
 	// Webhook
-	WebhookEnabled bool
-	WebhookURL     string
-	WebhookHeaders map[string]string `mapstructure:"webhook-headers"`
+	WebhookEnabled     bool
+	WebhookIncludeHTML bool // Include per-cluster HTML report as base64 in webhook payload
+	WebhookURL         string
+	WebhookHeaders     map[string]string `mapstructure:"webhook-headers"`
 
 	// Slack
 	SlackEnabled    bool
@@ -105,15 +109,17 @@ type Config struct {
 }
 
 type NotificationSummary struct {
-	Cluster     string
-	StartedAt   time.Time
-	FinishedAt  time.Time
-	FailCount   int
-	WarnCount   int
-	ErrCount    int
-	InfoCount   int
-	TotalChecks int
-	OutputFiles []string // paths to HTML/CSV generated
+	Cluster          string
+	StartedAt        time.Time
+	FinishedAt       time.Time
+	FailCount        int
+	WarnCount        int
+	ErrCount         int
+	InfoCount        int
+	TotalChecks      int
+	OutputFiles      []string
+	Overview         string // Brief text summary for email body and webhook
+	ReportHTMLBase64 string `json:"ReportHTMLBase64,omitempty"` // Optional: base64-encoded HTML when WebhookIncludeHTML
 }
 
 type HTMLMeta struct {
@@ -462,6 +468,20 @@ func validateConfig(cfg Config) error {
 		}
 	}
 
+	// Validate output paths (non-empty)
+	if strings.TrimSpace(cfg.OutputDirLogs) == "" {
+		return errors.New("output-dir-logs cannot be empty")
+	}
+	if strings.TrimSpace(cfg.OutputDirFiltered) == "" {
+		return errors.New("output-dir-filtered cannot be empty")
+	}
+	if strings.TrimSpace(cfg.LogFile) == "" {
+		return errors.New("log-file cannot be empty")
+	}
+	if strings.TrimSpace(cfg.PromDir) == "" {
+		return errors.New("prom-dir cannot be empty")
+	}
+
 	// Validate retry settings
 	if cfg.RetryMaxAttempts <= 0 {
 		return errors.New("retry-max-attempts must be greater than 0")
@@ -708,6 +728,8 @@ func bindConfig() (Config, error) {
 		MaxConnsPerHost:     viper.GetInt("max-conns-per-host"),
 		IdleConnTimeout:     mustParseDur(viper.GetString("idle-conn-timeout"), defaultIdleConnTimeout),
 		EmailEnabled:        viper.GetBool("email-enabled"),
+		EmailAttachHTML:     viper.GetBool("email-attach-html"),
+		NotifyDigest:        viper.GetBool("notify-digest"),
 		SMTPServer:          viper.GetString("smtp-server"),
 		SMTPPort:            viper.GetInt("smtp-port"),
 		SMTPUser:            viper.GetString("smtp-user"),
@@ -716,6 +738,7 @@ func bindConfig() (Config, error) {
 		EmailTo:             splitCSV(viper.GetString("email-to")),
 		EmailUseTLS:         viper.GetBool("email-use-tls"),
 		WebhookEnabled:      viper.GetBool("webhook-enabled"),
+		WebhookIncludeHTML:  viper.GetBool("webhook-include-html"),
 		WebhookURL:          viper.GetString("webhook-url"),
 		WebhookHeaders:      viper.GetStringMapString("webhook-headers"),
 		SeverityFilter:      splitCSV(viper.GetString("severity-filter")),
@@ -900,16 +923,89 @@ type LoggingTransport struct {
 	MaxBody int // bytes; 0 = unlimited
 }
 
+// redactHTTPDump masks Authorization and other sensitive headers/body in HTTP dumps for logging.
+func redactHTTPDump(dump []byte, maxBody int) []byte {
+	lines := bytes.SplitAfter(dump, []byte("\n"))
+	var out []byte
+	for _, line := range lines {
+		if bytes.HasPrefix(bytes.TrimLeft(line, " \t"), []byte("Authorization:")) ||
+			bytes.HasPrefix(bytes.TrimLeft(line, " \t"), []byte("authorization:")) {
+			out = append(out, []byte("Authorization: [REDACTED]\r\n")...)
+			continue
+		}
+		if bytes.HasPrefix(bytes.TrimLeft(line, " \t"), []byte("Cookie:")) ||
+			bytes.HasPrefix(bytes.TrimLeft(line, " \t"), []byte("cookie:")) {
+			out = append(out, []byte("Cookie: [REDACTED]\r\n")...)
+			continue
+		}
+		out = append(out, line...)
+	}
+	// If body looks like JSON and contains password field, mask the value
+	if bytes.Contains(out, []byte(`"password"`)) || bytes.Contains(out, []byte(`"Password"`)) {
+		out = redactJSONPasswordValue(out)
+	}
+	if maxBody > 0 && len(out) > maxBody {
+		out = append(append([]byte(nil), out[:maxBody]...), []byte("...[truncated]")...)
+	}
+	return out
+}
+
+func redactJSONPasswordValue(b []byte) []byte {
+	// Replace "password":"<anything>" or "password": "<anything>" with "password":"[REDACTED]"
+	i := 0
+	for {
+		idx := bytes.Index(b[i:], []byte(`"password"`))
+		if idx < 0 {
+			idx = bytes.Index(b[i:], []byte(`"Password"`))
+		}
+		if idx < 0 {
+			break
+		}
+		start := i + idx
+		i = start + 10 // past the key
+		// Skip whitespace and colon
+		for i < len(b) && (b[i] == ' ' || b[i] == '\t' || b[i] == ':') {
+			i++
+		}
+		for i < len(b) && (b[i] == ' ' || b[i] == '\t') {
+			i++
+		}
+		if i >= len(b) {
+			break
+		}
+		// Find value end (string or number)
+		valueStart := i
+		if b[i] == '"' {
+			i++
+			for i < len(b) && b[i] != '"' {
+				if b[i] == '\\' {
+					i++
+				}
+				i++
+			}
+			if i < len(b) {
+				i++
+			}
+		} else {
+			for i < len(b) && b[i] != ',' && b[i] != '}' && b[i] != '\n' && b[i] != '\r' {
+				i++
+			}
+		}
+		// Replace value with [REDACTED]
+		replacement := []byte(`"[REDACTED]"`)
+		b = append(append(append([]byte(nil), b[:valueStart]...), replacement...), b[i:]...)
+		i = valueStart + len(replacement)
+	}
+	return b
+}
+
 func (t *LoggingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	base := t.Base
 	if base == nil {
 		base = http.DefaultTransport
 	}
 	if d, err := httputil.DumpRequestOut(req, true); err == nil {
-		dump := d
-		if t.MaxBody > 0 && len(dump) > t.MaxBody {
-			dump = append(dump[:t.MaxBody], []byte("...[truncated]")...)
-		}
+		dump := redactHTTPDump(d, t.MaxBody)
 		log.Debug().
 			Str("method", req.Method).
 			Str("url", req.URL.String()).
@@ -923,10 +1019,7 @@ func (t *LoggingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	}
 	if resp != nil {
 		if d, err := httputil.DumpResponse(resp, true); err == nil {
-			dump := d
-			if t.MaxBody > 0 && len(dump) > t.MaxBody {
-				dump = append(dump[:t.MaxBody], []byte("...[truncated]")...)
-			}
+			dump := redactHTTPDump(d, t.MaxBody)
 			log.Debug().
 				Int("status", resp.StatusCode).
 				RawJSON("response_dump", dump).
@@ -1195,7 +1288,7 @@ func parseNCCHeader(path string) (HTMLMeta, error) {
 
 // ==================== Email Notifications ====================
 
-func sendEmail(cfg Config, subj string, body string) error {
+func sendEmail(cfg Config, subj string, body string, attachPath string) error {
 	if !cfg.EmailEnabled || cfg.SMTPServer == "" || len(cfg.EmailTo) == 0 {
 		return nil
 	}
@@ -1203,14 +1296,41 @@ func sendEmail(cfg Config, subj string, body string) error {
 	addr := fmt.Sprintf("%s:%d", cfg.SMTPServer, cfg.SMTPPort)
 	auth := smtp.PlainAuth("", cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPServer)
 
-	msg := bytes.Buffer{}
-	msg.WriteString(fmt.Sprintf("From: %s\r\n", cfg.EmailFrom))
-	msg.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(cfg.EmailTo, ",")))
-	msg.WriteString(fmt.Sprintf("Subject: %s\r\n", subj))
-	msg.WriteString("MIME-Version: 1.0\r\n")
-	msg.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
-	msg.WriteString("\r\n")
-	msg.WriteString(body)
+	var msg bytes.Buffer
+	attachHTML := cfg.EmailAttachHTML && attachPath != ""
+	if attachHTML {
+		attachBody, err := os.ReadFile(attachPath)
+		if err != nil {
+			return fmt.Errorf("read attachment %s: %w", attachPath, err)
+		}
+		boundary := "ncc-report-boundary"
+		msg.WriteString(fmt.Sprintf("From: %s\r\n", cfg.EmailFrom))
+		msg.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(cfg.EmailTo, ",")))
+		msg.WriteString(fmt.Sprintf("Subject: %s\r\n", subj))
+		msg.WriteString("MIME-Version: 1.0\r\n")
+		msg.WriteString(fmt.Sprintf("Content-Type: multipart/mixed; boundary=%s\r\n", boundary))
+		msg.WriteString("\r\n")
+		msg.WriteString(fmt.Sprintf("--%s\r\n", boundary))
+		msg.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
+		msg.WriteString("\r\n")
+		msg.WriteString(body)
+		msg.WriteString("\r\n")
+		msg.WriteString(fmt.Sprintf("--%s\r\n", boundary))
+		msg.WriteString("Content-Type: text/html; charset=UTF-8\r\n")
+		msg.WriteString("Content-Disposition: attachment; filename=\"" + filepath.Base(attachPath) + "\"\r\n")
+		msg.WriteString("\r\n")
+		msg.Write(attachBody)
+		msg.WriteString("\r\n")
+		msg.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
+	} else {
+		msg.WriteString(fmt.Sprintf("From: %s\r\n", cfg.EmailFrom))
+		msg.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(cfg.EmailTo, ",")))
+		msg.WriteString(fmt.Sprintf("Subject: %s\r\n", subj))
+		msg.WriteString("MIME-Version: 1.0\r\n")
+		msg.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
+		msg.WriteString("\r\n")
+		msg.WriteString(body)
+	}
 
 	if cfg.EmailUseTLS {
 		// STARTTLS-style connection:
@@ -1245,6 +1365,23 @@ func sendEmail(cfg Config, subj string, body string) error {
 	}
 
 	return smtp.SendMail(addr, auth, cfg.EmailFrom, cfg.EmailTo, msg.Bytes())
+}
+
+const notificationRetryAttempts = 3
+
+func sendEmailWithRetry(cfg Config, subj string, body string, attachPath string) error {
+	var lastErr error
+	for attempt := 1; attempt <= notificationRetryAttempts; attempt++ {
+		lastErr = sendEmail(cfg, subj, body, attachPath)
+		if lastErr == nil {
+			return nil
+		}
+		if attempt < notificationRetryAttempts {
+			backoff := jitteredBackoff(cfg.RetryBaseDelay, cfg.RetryMaxDelay, attempt)
+			time.Sleep(backoff)
+		}
+	}
+	return lastErr
 }
 
 // ==================== Webhook Notifications ====================
@@ -1307,6 +1444,25 @@ func sendWebhook(ctx context.Context, client HTTPClient, cfg Config, summary Not
 		}
 	}
 	return fmt.Errorf("webhook exhausted retries")
+}
+
+func sendWebhookWithRetry(ctx context.Context, client HTTPClient, cfg Config, summary NotificationSummary) error {
+	var lastErr error
+	for attempt := 1; attempt <= notificationRetryAttempts; attempt++ {
+		lastErr = sendWebhook(ctx, client, cfg, summary)
+		if lastErr == nil {
+			return nil
+		}
+		if attempt < notificationRetryAttempts {
+			backoff := jitteredBackoff(cfg.RetryBaseDelay, cfg.RetryMaxDelay, attempt)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+	}
+	return lastErr
 }
 
 // ==================== Slack Notifications ====================
@@ -3570,45 +3726,14 @@ SUMMARY:
 		}
 		counts[sev]++
 	}
-	summaryNotify := NotificationSummary{
-		Cluster:     cluster,
-		StartedAt:   clusterStart,
-		FinishedAt:  time.Now(),
-		FailCount:   counts["FAIL"],
-		WarnCount:   counts["WARN"],
-		ErrCount:    counts["ERR"],
-		InfoCount:   counts["INFO"],
-		TotalChecks: len(blocks),
-		OutputFiles: []string{filteredPath},
-	}
-
-	subj := fmt.Sprintf("NCC %s: FAIL=%d WARN=%d", summaryNotify.Cluster,
-		summaryNotify.FailCount, summaryNotify.WarnCount)
-	bodyEmail := fmt.Sprintf("FAIL: %d | WARN: %d | Total: %d\nFiltered: %s",
-		summaryNotify.FailCount, summaryNotify.WarnCount, len(blocks), filteredPath)
-
-	if err := sendEmail(cfg, subj, bodyEmail); err != nil {
-		l.Error().Err(err).Msg("email failed")
-	}
-	if err := sendWebhook(ctx, httpc, cfg, summaryNotify); err != nil {
-		l.Error().Err(err).Msg("webhook failed")
-	}
-	if err := sendSlack(ctx, httpc, cfg, summaryNotify); err != nil {
-		l.Error().Err(err).Msg("slack notification failed")
-	}
-	l.Info().Int("fail", summaryNotify.FailCount).Int("warn", summaryNotify.WarnCount).Msg("notifications sent")
-
-	if len(blocks) == 0 {
-		l.Warn().Str("path", filteredPath).Msg("no blocks parsed from summary")
-	}
-
-	// Write Prometheus file once, outside the loop
+	// Write Prometheus file and output formats (HTML/CSV/JSON) before notifications so we can attach HTML
 	if err := writePrometheusFile(fs, cfg.PromDir, cluster, blocks); err != nil {
 		l.Error().Err(err).Msg("write Prometheus .prom failed")
 	} else {
 		log.Info().Str("cluster", cluster).Str("prom_dir", cfg.PromDir).Msg("Prometheus .prom written")
 	}
 
+	var htmlPathForNotify string
 	base := filteredPath
 	for _, f := range cfg.OutputFormats {
 		switch strings.ToLower(strings.TrimSpace(f)) {
@@ -3622,6 +3747,7 @@ SUMMARY:
 				return nil, err
 			}
 			l.Info().Str("file", htmlFile).Msg("HTML generated")
+			htmlPathForNotify = htmlFile
 		case "csv":
 			csvFile := base + ".csv"
 			if err := generateCSV(fs, blocks, csvFile); err != nil {
@@ -3641,6 +3767,49 @@ SUMMARY:
 		default:
 			l.Warn().Str("format", f).Msg("unknown output format")
 		}
+	}
+
+	if len(blocks) == 0 {
+		l.Warn().Str("path", filteredPath).Msg("no blocks parsed from summary")
+	}
+
+	// Build notification summary with brief overview; optionally include HTML in webhook
+	overview := fmt.Sprintf("NCC run completed for cluster %s. FAIL: %d, WARN: %d, ERR: %d, INFO: %d. Total: %d checks.",
+		cluster, counts["FAIL"], counts["WARN"], counts["ERR"], counts["INFO"], len(blocks))
+	summaryNotify := NotificationSummary{
+		Cluster:     cluster,
+		StartedAt:   clusterStart,
+		FinishedAt:  time.Now(),
+		FailCount:   counts["FAIL"],
+		WarnCount:   counts["WARN"],
+		ErrCount:    counts["ERR"],
+		InfoCount:   counts["INFO"],
+		TotalChecks: len(blocks),
+		OutputFiles: []string{filteredPath},
+		Overview:    overview,
+	}
+	if cfg.WebhookIncludeHTML && htmlPathForNotify != "" {
+		if b, err := os.ReadFile(htmlPathForNotify); err == nil {
+			summaryNotify.ReportHTMLBase64 = base64.StdEncoding.EncodeToString(b)
+		}
+	}
+
+	subj := fmt.Sprintf("NCC %s: FAIL=%d WARN=%d", summaryNotify.Cluster,
+		summaryNotify.FailCount, summaryNotify.WarnCount)
+	bodyEmail := overview + "\n\n" + fmt.Sprintf("FAIL: %d | WARN: %d | Total: %d\nFiltered: %s",
+		summaryNotify.FailCount, summaryNotify.WarnCount, len(blocks), filteredPath)
+
+	if !cfg.NotifyDigest {
+		if err := sendEmailWithRetry(cfg, subj, bodyEmail, htmlPathForNotify); err != nil {
+			l.Error().Err(err).Msg("email failed")
+		}
+		if err := sendWebhookWithRetry(ctx, httpc, cfg, summaryNotify); err != nil {
+			l.Error().Err(err).Msg("webhook failed")
+		}
+		if err := sendSlack(ctx, httpc, cfg, summaryNotify); err != nil {
+			l.Error().Err(err).Msg("slack notification failed")
+		}
+		l.Info().Int("fail", summaryNotify.FailCount).Int("warn", summaryNotify.WarnCount).Msg("notifications sent")
 	}
 
 	setPhase("done")
@@ -3685,13 +3854,13 @@ var (
 func init() {
 	// Defaults
 	if Version == "" {
-		Version = "0.1.11"
+		Version = "0.1.12"
 	}
 	if BuildDate == "" {
 		BuildDate = "unknown"
 	}
 	if Stream == "" {
-		Stream = "Alpha"
+		Stream = "dev"
 	}
 
 	// Optional build info enrichment
@@ -3878,6 +4047,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 					"MAX_CONNS_PER_HOST",
 					"IDLE_CONN_TIMEOUT",
 					"EMAIL_ENABLED",
+					"EMAIL_ATTACH_HTML",
 					"SMTP_SERVER",
 					"SMTP_PORT",
 					"SMTP_USER",
@@ -3886,6 +4056,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 					"EMAIL_TO",
 					"EMAIL_USE_TLS",
 					"WEBHOOK_ENABLED",
+					"WEBHOOK_INCLUDE_HTML",
 					"WEBHOOK_URL",
 					"WEBHOOK_HEADERS",
 					"SLACK_ENABLED",
@@ -3968,6 +4139,8 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 						}
 						counts[sev]++
 					}
+					overviewReplay := fmt.Sprintf("NCC replay for cluster %s. FAIL: %d, WARN: %d, ERR: %d, INFO: %d. Total: %d checks (from existing log).",
+						cluster, counts["FAIL"], counts["WARN"], counts["ERR"], counts["INFO"], len(blocks))
 					replaySummary := NotificationSummary{
 						Cluster:     cluster,                           // from replay filename or param
 						StartedAt:   time.Now().Add(-10 * time.Minute), // estimate
@@ -3978,46 +4151,31 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 						InfoCount:   counts["INFO"],
 						TotalChecks: len(blocks),
 						OutputFiles: []string{filtered},
+						Overview:    overviewReplay,
 					}
 
 					subj := fmt.Sprintf("NCC REPLAY %s: FAIL=%d WARN=%d",
 						replaySummary.Cluster, replaySummary.FailCount, replaySummary.WarnCount)
-					body := fmt.Sprintf("REPLAY MODE - From existing log:\nFAIL: %d | WARN: %d | Total: %d\nLog: %s",
+					body := overviewReplay + "\n\n" + fmt.Sprintf("REPLAY MODE - From existing log:\nFAIL: %d | WARN: %d | Total: %d\nLog: %s",
 						replaySummary.FailCount, replaySummary.WarnCount, len(blocks), filtered)
 
-					ctx := context.Background()
-					httpc := NewHTTPClient(cfg)
-
-					if err := sendEmail(cfg, subj, body); err != nil {
-						log.Error().Err(err).Str("cluster", cluster).Msg("replay email failed")
-					}
-					if err := sendWebhook(ctx, httpc, cfg, replaySummary); err != nil {
-						log.Error().Err(err).Str("cluster", cluster).Msg("replay webhook failed")
-					}
-					log.Info().Int("fail", replaySummary.FailCount).Int("warn", replaySummary.WarnCount).
-						Str("cluster", cluster).Msg("replay notifications sent")
-
-					// Per-cluster outputs
+					// Per-cluster outputs: generate HTML and CSV before notifications so we can attach HTML to email
 					base := filtered
+					var replayHTMLPath string
 					for _, f := range cfg.OutputFormats {
-						_ = writePrometheusFile(fs, cfg.PromDir, cluster, blocks)
 						switch strings.ToLower(strings.TrimSpace(f)) {
 						case "html":
 							htmlFile := base + ".html"
-
-							// raw NCC log for this cluster, reused in replay
+							replayHTMLPath = htmlFile
 							rawPath := filepath.Join(cfg.OutputDirLogs, fmt.Sprintf("%s.log", cluster))
-
 							meta, err := parseNCCHeader(rawPath)
 							if err != nil {
-								// fall back to no meta if header log not present in older runs
 								log.Warn().Err(err).Str("rawPath", rawPath).Msg("replay: parseNCCHeader failed, using empty meta")
 								meta = HTMLMeta{}
 							}
-
-							// 4‑arg version that uses meta in template
 							if err := generateHTML(OSFS{}, rowsFromBlocks(blocks), htmlFile, meta); err != nil {
 								log.Error().Err(err).Str("file", htmlFile).Msg("replay: write HTML failed")
+								replayHTMLPath = ""
 							}
 						case "csv":
 							_ = generateCSV(OSFS{}, blocks, base+".csv")
@@ -4027,6 +4185,26 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 						}
 						log.Info().Str("cluster", cluster).Str("prom_dir", cfg.PromDir).Msg("replay: Prometheus .prom written")
 					}
+
+					attachPath := ""
+					if cfg.EmailAttachHTML && replayHTMLPath != "" {
+						attachPath = replayHTMLPath
+					}
+					if cfg.WebhookIncludeHTML && replayHTMLPath != "" {
+						if b, err := os.ReadFile(replayHTMLPath); err == nil {
+							replaySummary.ReportHTMLBase64 = base64.StdEncoding.EncodeToString(b)
+						}
+					}
+					ctx := context.Background()
+					httpc := NewHTTPClient(cfg)
+					if err := sendEmailWithRetry(cfg, subj, body, attachPath); err != nil {
+						log.Error().Err(err).Str("cluster", cluster).Msg("replay email failed")
+					}
+					if err := sendWebhookWithRetry(ctx, httpc, cfg, replaySummary); err != nil {
+						log.Error().Err(err).Str("cluster", cluster).Msg("replay webhook failed")
+					}
+					log.Info().Int("fail", replaySummary.FailCount).Int("warn", replaySummary.WarnCount).
+						Str("cluster", cluster).Msg("replay notifications sent")
 
 					clusterFiles = append(clusterFiles, struct{ Cluster, HTML, CSV string }{
 						Cluster: cluster,
@@ -4095,6 +4273,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 			sem := make(chan struct{}, cfg.MaxParallel)
 			var wg sync.WaitGroup
 			results := make(chan ClusterResult, len(cfg.Clusters))
+			runStart := time.Now()
 
 			for _, cluster := range cfg.Clusters {
 				wg.Add(1)
@@ -4249,6 +4428,54 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				}
 			}
 
+			runDuration := time.Since(runStart)
+			indexPath := filepath.Join(cfg.OutputDirFiltered, "index.html")
+			log.Info().
+				Int("clusters_ok", len(clusterFiles)).
+				Int("clusters_failed", len(failed)).
+				Float64("duration_s", runDuration.Seconds()).
+				Str("index_html", indexPath).
+				Msg("run summary")
+
+			if cfg.NotifyDigest {
+				overview := fmt.Sprintf("Run completed in %s. Clusters OK: %d, Failed: %d.",
+					runDuration.Round(time.Second), len(clusterFiles), len(failed))
+				if len(failed) > 0 {
+					overview += fmt.Sprintf(" Failed: %v.", failed)
+				}
+				subj := fmt.Sprintf("NCC Run: OK=%d FAIL=%d", len(clusterFiles), len(failed))
+				bodyEmail := overview + "\n\nIndex report: " + indexPath
+				attachPath := ""
+				if cfg.EmailAttachHTML {
+					if _, err := os.Stat(indexPath); err == nil {
+						attachPath = indexPath
+					}
+				}
+				if err := sendEmailWithRetry(cfg, subj, bodyEmail, attachPath); err != nil {
+					log.Error().Err(err).Msg("digest email failed")
+				}
+				digestSummary := NotificationSummary{
+					Cluster:     "run",
+					StartedAt:   runStart,
+					FinishedAt:  time.Now(),
+					FailCount:   len(failed),
+					WarnCount:   len(clusterFiles),
+					TotalChecks: len(agg),
+					Overview:    overview,
+				}
+				if cfg.WebhookIncludeHTML {
+					if b, err := os.ReadFile(indexPath); err == nil {
+						digestSummary.ReportHTMLBase64 = base64.StdEncoding.EncodeToString(b)
+					}
+				}
+				if err := sendWebhookWithRetry(ctx, httpc, cfg, digestSummary); err != nil {
+					log.Error().Err(err).Msg("digest webhook failed")
+				}
+				if err := sendSlack(ctx, httpc, cfg, digestSummary); err != nil {
+					log.Error().Err(err).Msg("digest slack failed")
+				}
+			}
+
 			// Check if context was cancelled during execution
 			if ctx.Err() != nil {
 				log.Warn().Err(ctx.Err()).Msg("operation cancelled during execution")
@@ -4305,6 +4532,8 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	cmd.Flags().Int("gen-test-agg", 0, "Generate a test index.html with N clusters for scalability testing (no API calls)")
 	cmd.Flags().String("prom-dir", "promfiles", "Directory for Prometheus metrics")
 	cmd.Flags().Bool("email-enabled", false, "Enable email notifications")
+	cmd.Flags().Bool("email-attach-html", false, "Attach per-cluster (or digest) HTML report to notification email")
+	cmd.Flags().Bool("notify-digest", false, "Send one email/webhook/slack per run with run overview (and optional index.html attach) instead of per-cluster")
 	cmd.Flags().String("smtp-server", "", "SMTP server (smtp.gmail.com)")
 	cmd.Flags().String("smtp-port", "587", "SMTP port (587=STARTTLS, 465=SSL)")
 	cmd.Flags().String("smtp-user", "", "SMTP username")
@@ -4313,6 +4542,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	cmd.Flags().String("email-to", "", "Comma-separated recipient emails")
 	cmd.Flags().Bool("email-use-tls", true, "Use STARTTLS (recommended)")
 	cmd.Flags().Bool("webhook-enabled", false, "Enable webhook notifications")
+	cmd.Flags().Bool("webhook-include-html", false, "Include per-cluster HTML report as base64 in webhook JSON payload")
 	cmd.Flags().String("webhook-url", "", "Webhook endpoint URL")
 	cmd.Flags().StringToString("webhook-headers", map[string]string{}, "Webhook headers (key=value)")
 	cmd.Flags().Bool("slack-enabled", false, "Enable Slack notifications")
@@ -4343,6 +4573,8 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	_ = viper.BindPFlag("replay", cmd.Flags().Lookup("replay"))
 	_ = viper.BindPFlag("prom-dir", cmd.Flags().Lookup("prom-dir"))
 	_ = viper.BindPFlag("email-enabled", cmd.Flags().Lookup("email-enabled"))
+	_ = viper.BindPFlag("email-attach-html", cmd.Flags().Lookup("email-attach-html"))
+	_ = viper.BindPFlag("notify-digest", cmd.Flags().Lookup("notify-digest"))
 	_ = viper.BindPFlag("smtp-server", cmd.Flags().Lookup("smtp-server"))
 	_ = viper.BindPFlag("smtp-port", cmd.Flags().Lookup("smtp-port"))
 	_ = viper.BindPFlag("smtp-user", cmd.Flags().Lookup("smtp-user"))
@@ -4351,6 +4583,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	_ = viper.BindPFlag("email-to", cmd.Flags().Lookup("email-to"))
 	_ = viper.BindPFlag("email-use-tls", cmd.Flags().Lookup("email-use-tls"))
 	_ = viper.BindPFlag("webhook-enabled", cmd.Flags().Lookup("webhook-enabled"))
+	_ = viper.BindPFlag("webhook-include-html", cmd.Flags().Lookup("webhook-include-html"))
 	_ = viper.BindPFlag("webhook-url", cmd.Flags().Lookup("webhook-url"))
 	_ = viper.BindPFlag("webhook-headers", cmd.Flags().Lookup("webhook-headers"))
 	_ = viper.BindPFlag("severity-filter", cmd.Flags().Lookup("severity-filter"))

@@ -640,10 +640,11 @@ func TestSplitLines(t *testing.T) {
 
 func TestParseSummary(t *testing.T) {
 	tests := []struct {
-		name      string
-		input     string
-		wantErr   bool
-		minBlocks int
+		name       string
+		input      string
+		wantErr    bool
+		minBlocks  int
+		checkNames []string // optional: exact check names for first blocks
 	}{
 		{
 			name: "Valid summary",
@@ -654,8 +655,9 @@ Refer to something
 Detailed information for Check2
 More details
 Refer to something else`,
-			wantErr:   false,
-			minBlocks: 2,
+			wantErr:    false,
+			minBlocks:  2,
+			checkNames: []string{"Detailed information for Check1", "Detailed information for Check2"},
 		},
 		{
 			name:      "Empty summary",
@@ -668,8 +670,25 @@ Refer to something else`,
 			input: `Detailed information for Check1
 Detail
 Refer to something`,
+			wantErr:    false,
+			minBlocks:  1,
+			checkNames: []string{"Detailed information for Check1"},
+		},
+		{
+			name: "No blocks (no block start line)",
+			input: `Refer to documentation
+Some other line`,
 			wantErr:   false,
-			minBlocks: 1,
+			minBlocks: 0,
+		},
+		{
+			name: "Invalid / no Refer to line still captures block",
+			input: `Detailed information for MyCheck
+FAIL: something wrong
+No Refer line`,
+			wantErr:    false,
+			minBlocks:  1,
+			checkNames: []string{"Detailed information for MyCheck"},
 		},
 	}
 
@@ -683,7 +702,32 @@ Refer to something`,
 			if len(blocks) < tt.minBlocks {
 				t.Errorf("Expected at least %d blocks, got %d", tt.minBlocks, len(blocks))
 			}
+			for i, wantName := range tt.checkNames {
+				if i >= len(blocks) {
+					break
+				}
+				if blocks[i].CheckName != wantName {
+					t.Errorf("Block %d CheckName = %q, want %q", i, blocks[i].CheckName, wantName)
+				}
+			}
 		})
+	}
+}
+
+func TestDigestOverviewFormat(t *testing.T) {
+	// Digest overview format: "Run completed in %s. Clusters OK: %d, Failed: %d."
+	runDuration := 2*time.Minute + 30*time.Second
+	clustersOK, clustersFailed := 3, 1
+	overview := fmt.Sprintf("Run completed in %s. Clusters OK: %d, Failed: %d.",
+		runDuration.Round(time.Second), clustersOK, clustersFailed)
+	if !strings.Contains(overview, "Run completed") {
+		t.Error("overview should contain 'Run completed'")
+	}
+	if !strings.Contains(overview, "Clusters OK") {
+		t.Error("overview should contain 'Clusters OK'")
+	}
+	if !strings.Contains(overview, "3") || !strings.Contains(overview, "1") {
+		t.Error("overview should contain cluster counts")
 	}
 }
 
@@ -1852,38 +1896,94 @@ func TestValidateEmailAddress(t *testing.T) {
 }
 
 func TestValidateConfig(t *testing.T) {
-	t.Run("Valid minimal", func(t *testing.T) {
-		cfg := Config{
-			Clusters:         []string{"10.0.1.1"},
-			Username:         "admin",
-			Timeout:          15 * time.Minute,
-			RequestTimeout:   20 * time.Second,
-			MaxParallel:      4,
-			RetryMaxAttempts: 6,
-			RetryBaseDelay:   400 * time.Millisecond,
-			RetryMaxDelay:    8 * time.Second,
-			OutputFormats:    []string{"html"},
+	validPaths := func() Config {
+		return Config{
+			Clusters:          []string{"10.0.1.1"},
+			Username:          "admin",
+			Timeout:           15 * time.Minute,
+			RequestTimeout:    20 * time.Second,
+			MaxParallel:       4,
+			RetryMaxAttempts:  6,
+			RetryBaseDelay:    400 * time.Millisecond,
+			RetryMaxDelay:     8 * time.Second,
+			OutputFormats:     []string{"html"},
+			OutputDirLogs:     "nccfiles",
+			OutputDirFiltered: "outputfiles",
+			LogFile:           "logs/ncc-runner.log",
+			PromDir:           "promfiles",
 		}
+	}
+	t.Run("Valid minimal", func(t *testing.T) {
+		cfg := validPaths()
 		if err := validateConfig(cfg); err != nil {
 			t.Errorf("validateConfig: %v", err)
 		}
 	})
 	t.Run("Empty clusters", func(t *testing.T) {
-		cfg := Config{Username: "admin", Timeout: time.Minute, RequestTimeout: time.Second, MaxParallel: 1, RetryMaxAttempts: 1}
+		cfg := validPaths()
+		cfg.Clusters = nil
 		if err := validateConfig(cfg); err == nil {
 			t.Error("expected error for empty clusters")
 		}
 	})
 	t.Run("Empty username", func(t *testing.T) {
-		cfg := Config{Clusters: []string{"10.0.1.1"}, Timeout: time.Minute, RequestTimeout: time.Second, MaxParallel: 1, RetryMaxAttempts: 1}
+		cfg := validPaths()
+		cfg.Username = ""
 		if err := validateConfig(cfg); err == nil {
 			t.Error("expected error for empty username")
 		}
 	})
 	t.Run("Zero timeout", func(t *testing.T) {
-		cfg := Config{Clusters: []string{"10.0.1.1"}, Username: "u", Timeout: 0, RequestTimeout: time.Second, MaxParallel: 1, RetryMaxAttempts: 1}
+		cfg := validPaths()
+		cfg.Timeout = 0
 		if err := validateConfig(cfg); err == nil {
 			t.Error("expected error for zero timeout")
+		}
+	})
+	t.Run("Empty output-dir-logs", func(t *testing.T) {
+		cfg := validPaths()
+		cfg.OutputDirLogs = ""
+		if err := validateConfig(cfg); err == nil {
+			t.Error("expected error for empty output-dir-logs")
+		}
+		if err := validateConfig(cfg); err != nil && !strings.Contains(err.Error(), "output-dir-logs") {
+			t.Errorf("expected output-dir-logs in error, got %v", err)
+		}
+	})
+	t.Run("Whitespace output-dir-filtered", func(t *testing.T) {
+		cfg := validPaths()
+		cfg.OutputDirFiltered = "   "
+		if err := validateConfig(cfg); err == nil {
+			t.Error("expected error for whitespace output-dir-filtered")
+		}
+	})
+	t.Run("Empty log-file", func(t *testing.T) {
+		cfg := validPaths()
+		cfg.LogFile = ""
+		if err := validateConfig(cfg); err == nil {
+			t.Error("expected error for empty log-file")
+		}
+	})
+	t.Run("Empty prom-dir", func(t *testing.T) {
+		cfg := validPaths()
+		cfg.PromDir = ""
+		if err := validateConfig(cfg); err == nil {
+			t.Error("expected error for empty prom-dir")
+		}
+	})
+}
+
+func TestCheckOutputPermissions(t *testing.T) {
+	t.Run("Success with temp dir", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := &Config{
+			LogFile:           filepath.Join(dir, "ncc-runner.log"),
+			OutputDirLogs:     filepath.Join(dir, "nccfiles"),
+			OutputDirFiltered: filepath.Join(dir, "outputfiles"),
+			PromDir:           filepath.Join(dir, "promfiles"),
+		}
+		if err := checkOutputPermissions(cfg); err != nil {
+			t.Errorf("checkOutputPermissions: %v", err)
 		}
 	})
 }

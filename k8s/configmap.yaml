@@ -40,6 +40,8 @@ data:
     idle-conn-timeout: "90s"
     # Email notifications (optional)
     email-enabled: false
+    email-attach-html: false   # Attach per-cluster or digest HTML report to email
+    notify-digest: false       # If true: one email/webhook/slack per run (overview + optional index.html) instead of per-cluster
     smtp-server: "smtp.example.com"
     smtp-port: 587
     smtp-user: "ncc@example.com"
@@ -49,6 +51,7 @@ data:
     email-use-tls: true
     # Webhook notifications (optional)
     webhook-enabled: false
+    webhook-include-html: false   # Include per-cluster HTML report as base64 in webhook JSON (overview always included)
     webhook-url: "https://hooks.example.com/ncc"
     webhook-headers:
       X-Auth-Token: "changeme"
