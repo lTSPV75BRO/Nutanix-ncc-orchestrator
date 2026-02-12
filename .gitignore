@@ -6,6 +6,7 @@
 *.dylib
 .DS_Store
 temp* 
+Changelog*
 config.yaml
 
 # Logs and outputs from your tool
@@ -18,3 +19,6 @@ k8s/secret.yaml
 
 # Prometheus metrics
 promfiles/
+
+# Binaries
+ncc-orchestrator*

@@ -136,6 +136,44 @@ When webhook is enabled, the app sends a JSON POST with a structure like:
 
 In **digest mode** (`notify-digest: true`), one payload per run is sent; `Cluster` is `"run"` and counts reflect clusters OK/failed and total checks.
 
+### Testing email and webhook
+
+**Webhook (no real NCC run):**
+
+1. Get a request-inspection URL, e.g. [webhook.site](https://webhook.site) — open it and copy your unique URL.
+2. Ensure you have at least one filtered log so replay can send a payload (e.g. from a previous run: `outputfiles/<cluster>.log` and optionally `nccfiles/<cluster>.log`).
+3. Run in **replay** mode with webhook enabled and your URL:
+
+   ```bash
+   ./ncc-orchestrator --config config.yaml --replay \
+     --webhook-enabled --webhook-url "https://webhook.site/your-unique-id"
+   ```
+
+   Or with a config file that has `webhook-enabled: true` and `webhook-url: "https://..."`.  
+   On webhook.site you’ll see the POST body (JSON with `Cluster`, `Overview`, `FailCount`, etc.). Use `--webhook-include-html` to also send the report as base64.
+
+**Email:**
+
+1. Use a test SMTP endpoint so you don’t send to real mailboxes:
+   - **[Mailtrap](https://mailtrap.io)** or similar: create an inbox, use their SMTP host/port/user/pass in config.
+   - **Local MailHog** (Docker): `docker run -d -p 1025:1025 -p 8025:8025 mailhog/mailhog` then SMTP host `localhost`, port `1025`; open http://localhost:8025 to read caught emails.
+2. In your config (or flags): `email-enabled: true`, `smtp-server`, `smtp-port`, `smtp-user`, `smtp-password`, `email-from`, `email-to`.
+3. Trigger a notification:
+   - **Replay** (no NCC API): `./ncc-orchestrator --config config.yaml --replay` (with email settings in config).
+   - **Real run**: run against one cluster; when the run finishes, email is sent (or one digest email if `notify-digest: true`).
+
+**Quick webhook test with replay:**
+
+```bash
+# 1) One cluster in config, and existing log at outputfiles/<that-cluster>.log (or nccfiles/<cluster>.log so replay can build filtered)
+# 2) Set webhook URL (env or config)
+export NCC_WEBHOOK_ENABLED=true
+export NCC_WEBHOOK_URL="https://webhook.site/your-unique-id"
+./ncc-orchestrator --config config.yaml --replay
+```
+
+Check the webhook URL page for the POST. Use `--log-level debug` if you need more detail in logs.
+
 ## Kubernetes deployment
 
 Run the NCC Orchestrator on Kubernetes with a **CronJob** (e.g. every 4 hours), a shared **PVC** (e.g. NFS RWX) for logs and reports, and a **Deployment** (Nginx) serving the HTML report. Optional LoadBalancer Service (e.g. MetalLB) for external access.
@@ -174,6 +212,7 @@ export KUBECONFIG=~/kubecon/mycluster.conf
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## See also
+- [CHANGELOG.md](CHANGELOG.md) — Version history and release notes.
 - [Prometheus.md](Prometheus.md) — Prometheus/Grafana monitoring using NCC Orchestrator `.prom` output.
 - [k8s/README.md](k8s/README.md) — Full Kubernetes deployment and troubleshooting.
 
