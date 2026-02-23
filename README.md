@@ -50,7 +50,7 @@ The [GitHub Action](.github/workflows/docker-publish.yml) builds and pushes the 
 Basic command:
 - `ncc-orchestrator --clusters "10.0.1.1,10.0.2.1" --username admin --password yourpassword`
 
-Full options: Run `ncc-orchestrator --help` for all flags. To see current env values: `ncc-orchestrator --env-info`. Run `ncc-orchestrator --version` to print version, stream, build date, and Go version, then exit.
+Full options: Run `ncc-orchestrator --help` for all flags. To see current env values: `ncc-orchestrator --env-info`. Run `ncc-orchestrator --version` to print version, stream, build date, and Go version, then exit. Run **`ncc-orchestrator -u`** or **`--update`** to fetch the latest release from GitHub and update the binary in place if a matching OS/arch asset is available.
 
 ### Configuration
 Config file (YAML/JSON), CLI flags, and **environment variables** (prefix `NCC_`) are supported. Env overrides config file; flags override both.

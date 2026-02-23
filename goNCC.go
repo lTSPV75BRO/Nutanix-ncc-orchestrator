@@ -24,6 +24,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -3844,6 +3845,9 @@ func promptPasswordIfEmpty(p string, Username string) (string, error) {
 	return strings.TrimSpace(string(bytePw)), nil
 }
 
+// githubRepo is used by --update to fetch latest release (format: owner/repo).
+const githubRepo = "lTSPV75BRO/Nutanix-ncc-orchestrator"
+
 var (
 	Version   string
 	BuildDate string
@@ -3854,7 +3858,7 @@ var (
 func init() {
 	// Defaults
 	if Version == "" {
-		Version = "0.1.12"
+		Version = "1.0.0"
 	}
 	if BuildDate == "" {
 		BuildDate = "unknown"
@@ -3884,6 +3888,147 @@ func init() {
 	if GoVersion == "" {
 		GoVersion = "unknown"
 	}
+}
+
+// githubRelease represents the minimal GitHub releases/latest API response.
+type githubRelease struct {
+	TagName string        `json:"tag_name"`
+	Assets  []githubAsset `json:"assets"`
+	HTMLURL string        `json:"html_url"`
+}
+
+type githubAsset struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+}
+
+// runUpdate fetches the latest release from GitHub, downloads the binary for the current OS/arch if available, and replaces the running executable.
+func runUpdate() error {
+	apiURL := "https://api.github.com/repos/" + githubRepo + "/releases/latest"
+	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("fetch latest release: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("GitHub API returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var rel githubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return fmt.Errorf("parse release: %w", err)
+	}
+
+	// Normalize tag (e.g. v0.1.12 -> 0.1.12) for display
+	latestVer := strings.TrimPrefix(rel.TagName, "v")
+	fmt.Fprintf(os.Stderr, "Latest release: %s\n", rel.TagName)
+
+	// Compare with current version (strip optional git revision suffix)
+	currentVer := Version
+	if idx := strings.Index(currentVer, "-"); idx > 0 {
+		currentVer = currentVer[:idx]
+	}
+	if latestVer == currentVer {
+		fmt.Fprintln(os.Stderr, "You are already on the latest version.")
+		return nil
+	}
+
+	goos := runtime.GOOS
+	goarch := runtime.GOARCH
+	// Match asset names like ncc-orchestrator-linux-amd64 or ncc-orchestrator_0.1.12_linux_amd64 (raw binary only for self-replace)
+	wantOS := goos
+	wantArch := goarch
+
+	var downloadURL string
+	for _, a := range rel.Assets {
+		name := strings.ToLower(a.Name)
+		if strings.Contains(name, wantOS) && strings.Contains(name, wantArch) {
+			// Prefer raw binary (no archive) so we can replace self
+			if strings.HasSuffix(name, ".tar.gz") || strings.HasSuffix(name, ".zip") {
+				if downloadURL == "" {
+					downloadURL = a.BrowserDownloadURL
+				}
+				continue
+			}
+			downloadURL = a.BrowserDownloadURL
+			break
+		}
+	}
+	if downloadURL == "" {
+		// No raw binary; use archive if present so we can at least point to it
+		for _, a := range rel.Assets {
+			name := strings.ToLower(a.Name)
+			if strings.Contains(name, wantOS) && strings.Contains(name, wantArch) {
+				downloadURL = a.BrowserDownloadURL
+				break
+			}
+		}
+	}
+
+	if downloadURL == "" {
+		fmt.Fprintf(os.Stderr, "No binary found for %s/%s. Download manually: %s\n", goos, goarch, rel.HTMLURL)
+		return nil
+	}
+
+	// If only an archive is available, we cannot replace self; tell user to download and extract
+	if strings.HasSuffix(strings.ToLower(downloadURL), ".tar.gz") || strings.HasSuffix(strings.ToLower(downloadURL), ".zip") {
+		fmt.Fprintf(os.Stderr, "Binary for %s/%s is only available as archive. Download and extract: %s\n", goos, goarch, downloadURL)
+		return nil
+	}
+
+	// Download
+	fmt.Fprintf(os.Stderr, "Downloading %s ...\n", downloadURL)
+	dlReq, err := http.NewRequest(http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return fmt.Errorf("create download request: %w", err)
+	}
+	dlResp, err := client.Do(dlReq)
+	if err != nil {
+		return fmt.Errorf("download: %w", err)
+	}
+	defer dlResp.Body.Close()
+	if dlResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download returned %d", dlResp.StatusCode)
+	}
+
+	body, err := io.ReadAll(dlResp.Body)
+	if err != nil {
+		return fmt.Errorf("read download: %w", err)
+	}
+
+	selfPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("get executable path: %w", err)
+	}
+	dir := filepath.Dir(selfPath)
+	tmpPath := filepath.Join(dir, ".ncc-orchestrator-update."+strconv.Itoa(os.Getpid()))
+
+	if err := os.WriteFile(tmpPath, body, 0755); err != nil {
+		return fmt.Errorf("write temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, selfPath); err != nil {
+		_ = os.Remove(tmpPath)
+		// Fallback: write to cwd so user can replace manually
+		fallback := filepath.Join(".", "ncc-orchestrator-"+latestVer)
+		if wErr := os.WriteFile(fallback, body, 0755); wErr != nil {
+			return fmt.Errorf("replace binary failed (%v); write to %s failed: %w", err, fallback, wErr)
+		}
+		fmt.Fprintf(os.Stderr, "Could not replace running binary. New binary saved as %s — move it to replace the current one.\n", fallback)
+		return nil
+	}
+
+	fmt.Fprintln(os.Stderr, "Update complete. Run the binary again to use the new version.")
+	return nil
 }
 
 func newRootCmd() *cobra.Command {
@@ -3917,6 +4062,15 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 			consoleWriter := zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}
 			consoleLogger := zerolog.New(consoleWriter).With().Timestamp().Logger()
 			zerolog.SetGlobalLevel(zerolog.InfoLevel)
+
+			// Check for latest release and optionally update binary
+			if update, _ := cmd.Flags().GetBool("update"); update {
+				if err := runUpdate(); err != nil {
+					consoleLogger.Error().Err(err).Msg("update failed")
+					return fmt.Errorf("update: %w", err)
+				}
+				return nil
+			}
 
 			// Generate test aggregated report (no config required)
 			if genN, _ := cmd.Flags().GetInt("gen-test-agg"); genN > 0 {
@@ -4505,6 +4659,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	cmd.SilenceUsage = true
 
 	// flags
+	cmd.Flags().BoolP("update", "u", false, "Fetch latest release from GitHub and update this binary if a matching asset exists")
 	cmd.Flags().Bool("env-info", false, "Display possible environment variables and their current values")
 	cmd.Flags().Bool("tc", false, "Display terms and conditions")
 	cmd.Flags().String("config", "", "Config file path (yaml/json)")
@@ -4550,6 +4705,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	cmd.Flags().String("slack-channel", "", "Slack channel (optional, uses webhook default if empty)")
 
 	// viper bindings
+	_ = viper.BindPFlag("update", cmd.Flags().Lookup("update"))
 	_ = viper.BindPFlag("config", cmd.Flags().Lookup("config"))
 	_ = viper.BindPFlag("clusters", cmd.Flags().Lookup("clusters"))
 	_ = viper.BindPFlag("username", cmd.Flags().Lookup("username"))
