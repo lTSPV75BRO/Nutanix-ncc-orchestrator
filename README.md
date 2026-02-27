@@ -50,7 +50,7 @@ The [GitHub Action](.github/workflows/docker-publish.yml) builds and pushes the 
 Basic command:
 - `ncc-orchestrator --clusters "10.0.1.1,10.0.2.1" --username admin --password yourpassword`
 
-Full options: Run `ncc-orchestrator --help` for all flags. To see current env values: `ncc-orchestrator --env-info`. Run `ncc-orchestrator --version` to print version, stream, build date, and Go version, then exit. Run **`ncc-orchestrator -u`** or **`--update`** to fetch the latest release from GitHub and update the binary in place if a matching OS/arch asset is available.
+Full options: Run `ncc-orchestrator --help` for all flags. To see current env values: `ncc-orchestrator --env-info`. Run `ncc-orchestrator --version` to print version, stream, build date, and Go version, then exit. Run **`ncc-orchestrator -u`** or **`--update`** to fetch the latest release from GitHub and update the binary if a matching OS/arch asset is available. Set **`GITHUB_TOKEN`** for higher API rate limits. If the release includes a checksum file (e.g. `checksums.txt`), the download is verified before replace. On Windows the new binary is written as `ncc-orchestrator.new.exe`; replace the old exe and run again. **Release maintainers:** see [docs/RELEASE_CHECKSUMS.md](docs/RELEASE_CHECKSUMS.md) for how to generate and upload checksums so `-u` can verify downloads.
 
 ### Configuration
 Config file (YAML/JSON), CLI flags, and **environment variables** (prefix `NCC_`) are supported. Env overrides config file; flags override both.
@@ -60,6 +60,7 @@ Create a `config.yaml` with any of the options below. Run with: `ncc-orchestrato
 | Option | Default | Description |
 |--------|---------|-------------|
 | `clusters` | — | Comma-separated Prism cluster IPs or FQDNs |
+| `clusters-file` | — | Path to file with one cluster per line (overrides `clusters` when set); use with **discover-clusters** to populate |
 | `username` | `admin` | Prism Gateway username |
 | `password` | — | Prism password (prefer env `NCC_PASSWORD`) |
 | `insecure-skip-verify` | `false` | Skip TLS verify (lab/self-signed only) |
@@ -68,7 +69,7 @@ Create a `config.yaml` with any of the options below. Run with: `ncc-orchestrato
 | `poll-interval` | `15s` | Polling interval for NCC task status |
 | `poll-jitter` | `2s` | Jitter added to poll interval |
 | `max-parallel` | `4` | Max concurrent clusters |
-| `outputs` | `html,csv` | Comma-separated: html, csv, json |
+| `outputs` | `html,csv` | Comma-separated: html, csv, json, markdown |
 | `output-dir-logs` | `nccfiles` | Directory for raw NCC summary logs |
 | `output-dir-filtered` | `outputfiles` | Directory for filtered HTML/CSV |
 | `log-file` | `logs/ncc-runner.log` | Rotated JSON log path |
@@ -99,7 +100,8 @@ Create a `config.yaml` with any of the options below. Run with: `ncc-orchestrato
 Any config key can be set via env: **`NCC_`** + key in UPPER_SNAKE (hyphens become underscores). Examples:
 
 - `NCC_CONFIG` — Config file path  
-- `NCC_CLUSTERS` — Comma-separated cluster list  
+- `NCC_CLUSTERS`, `NCC_CLUSTERS_FILE` — Cluster list or path to file (one per line)  
+- `NCC_PRISM_CENTRAL_URL` — Prism Central URL for **discover-clusters**  
 - `NCC_USERNAME`, `NCC_PASSWORD` — Prism credentials  
 - `NCC_INSECURE_SKIP_VERIFY` — true/false  
 - `NCC_TIMEOUT`, `NCC_REQUEST_TIMEOUT`, `NCC_POLL_INTERVAL`, `NCC_POLL_JITTER`  
@@ -113,6 +115,19 @@ Any config key can be set via env: **`NCC_`** + key in UPPER_SNAKE (hyphens beco
 - `NCC_SLACK_ENABLED`, `NCC_SLACK_WEBHOOK_URL`, `NCC_SLACK_CHANNEL`  
 
 Run **`ncc-orchestrator --env-info`** to print all possible env vars and their current values.
+
+### Exit codes
+- **0** — Success  
+- **1** — Run or execution error (e.g. cluster failure, timeout)  
+- **2** — Config or validation error (e.g. missing clusters, invalid config file, permission check failed)  
+
+Scripts can branch on exit code to distinguish configuration issues from run failures.
+
+### Run summary and discover-clusters
+- After each run, **`outputfiles/run-summary.json`** is written with machine-readable run result: `timestamp`, `duration_s`, `clusters_ok`, `clusters_failed`, `failed_clusters`, `index_html`, `total_checks`.
+- **`ncc-orchestrator discover-clusters`** — Lists clusters from **Prism Central** (v3 API). Requires `--prism-central-url` (or config). Use `--output clusters.txt` to write a file for `--clusters-file`. Example:  
+  `ncc-orchestrator --config config.yaml discover-clusters --output clusters.txt`  
+  then set `clusters-file: clusters.txt` in config for the main run.
 
 ### Example webhook payload
 

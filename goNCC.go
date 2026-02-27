@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,6 +49,7 @@ import (
 
 type Config struct {
 	Clusters           []string
+	ClustersFile       string // Optional: path to file with one cluster per line (overrides/supplements clusters when set)
 	Username           string
 	Password           string
 	InsecureSkipVerify bool
@@ -252,6 +255,19 @@ const (
 	prismGatewayPort = 9440
 )
 
+// ==================== Exit Codes ====================
+// Exit code 0 = success, 1 = run/execution error, 2 = config/validation error (see README).
+
+type exitCodeError struct {
+	code int
+	err  error
+}
+
+func (e *exitCodeError) Error() string { return e.err.Error() }
+func (e *exitCodeError) Unwrap() error { return e.err }
+
+func exitConfig(err error) error { return &exitCodeError{code: 2, err: err} }
+
 // ==================== Utility Functions ====================
 
 func splitCSV(s string) []string {
@@ -267,6 +283,23 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+// readClusterFile reads a file with one cluster address per line (blank and # lines ignored).
+func readClusterFile(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out, nil
 }
 
 func mustParseDur(s string, def time.Duration) time.Duration {
@@ -415,10 +448,10 @@ func validateConfig(cfg Config) error {
 	}
 
 	// Validate output formats
-	validFormats := map[string]bool{"html": true, "csv": true, "json": true}
+	validFormats := map[string]bool{"html": true, "csv": true, "json": true, "markdown": true}
 	for _, format := range cfg.OutputFormats {
 		if !validFormats[strings.ToLower(format)] {
-			return fmt.Errorf("invalid output format: %s (valid: html, csv, json)", format)
+			return fmt.Errorf("invalid output format: %s (valid: html, csv, json, markdown)", format)
 		}
 	}
 
@@ -704,8 +737,20 @@ func bindConfig() (Config, error) {
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	viper.AutomaticEnv()
 
+	clustersFromFlag := splitCSV(viper.GetString("clusters"))
+	clustersFile := strings.TrimSpace(viper.GetString("clusters-file"))
+	if clustersFile != "" {
+		lines, err := readClusterFile(clustersFile)
+		if err != nil {
+			return Config{}, fmt.Errorf("clusters-file %s: %w", clustersFile, err)
+		}
+		if len(lines) > 0 {
+			clustersFromFlag = lines
+		}
+	}
 	cfg := Config{
-		Clusters:            splitCSV(viper.GetString("clusters")),
+		Clusters:            clustersFromFlag,
+		ClustersFile:        clustersFile,
 		Username:            viper.GetString("username"),
 		Password:            viper.GetString("password"),
 		InsecureSkipVerify:  viper.GetBool("insecure-skip-verify"),
@@ -1548,6 +1593,25 @@ func sendSlack(ctx context.Context, client HTTPClient, cfg Config, summary Notif
 	return fmt.Errorf("slack exhausted retries")
 }
 
+func sendSlackWithRetry(ctx context.Context, client HTTPClient, cfg Config, summary NotificationSummary) error {
+	var lastErr error
+	for attempt := 1; attempt <= notificationRetryAttempts; attempt++ {
+		lastErr = sendSlack(ctx, client, cfg, summary)
+		if lastErr == nil {
+			return nil
+		}
+		if attempt < notificationRetryAttempts {
+			backoff := jitteredBackoff(cfg.RetryBaseDelay, cfg.RetryMaxDelay, attempt)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+	}
+	return lastErr
+}
+
 // ==================== Report Renderers ====================
 
 // func generateHTMLNoMeta(fs FS, rows []Row, filename string) error {
@@ -1710,6 +1774,43 @@ func generateCSV(fs FS, blocks []ParsedBlock, filename string) error {
 	return w.Error()
 }
 
+func generateMarkdown(fs FS, blocks []ParsedBlock, filename string, meta HTMLMeta) error {
+	if err := fs.MkdirAll(filepath.Dir(filename), 0755); err != nil {
+		return err
+	}
+	var b strings.Builder
+	b.WriteString("# NCC Report\n\n")
+	if meta.ClusterName != "" || meta.ClusterVersion != "" || meta.NCCVersion != "" {
+		b.WriteString("| Field | Value |\n|-------|-------|\n")
+		if meta.ClusterName != "" {
+			b.WriteString(fmt.Sprintf("| Cluster | %s |\n", escapeMarkdown(meta.ClusterName)))
+		}
+		if meta.ClusterVersion != "" {
+			b.WriteString(fmt.Sprintf("| Version | %s |\n", escapeMarkdown(meta.ClusterVersion)))
+		}
+		if meta.NCCVersion != "" {
+			b.WriteString(fmt.Sprintf("| NCC Version | %s |\n", escapeMarkdown(meta.NCCVersion)))
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("| Severity | Check | Detail |\n|----------|-------|--------|\n")
+	for _, block := range blocks {
+		sev := block.Severity
+		if sev == "" {
+			sev = "INFO"
+		}
+		b.WriteString(fmt.Sprintf("| %s | %s | %s |\n",
+			escapeMarkdown(sev),
+			escapeMarkdown(block.CheckName),
+			escapeMarkdown(strings.ReplaceAll(block.DetailRaw, "\n", " "))))
+	}
+	return fs.WriteFile(filename, []byte(b.String()), 0644)
+}
+
+func escapeMarkdown(s string) string {
+	return strings.NewReplacer("|", "\\|", "\n", " ").Replace(s)
+}
+
 type JSONOutput struct {
 	GeneratedAt string      `json:"generated_at"`
 	Checks      []JSONCheck `json:"checks"`
@@ -1725,6 +1826,26 @@ type JSONCheck struct {
 type JSONSummary struct {
 	Total int            `json:"total"`
 	Count map[string]int `json:"count"`
+}
+
+// RunSummaryJSON is the machine-readable run result written to run-summary.json.
+type RunSummaryJSON struct {
+	Timestamp      string   `json:"timestamp"`
+	DurationS      float64  `json:"duration_s"`
+	ClustersOK     int      `json:"clusters_ok"`
+	ClustersFailed int      `json:"clusters_failed"`
+	FailedClusters []string `json:"failed_clusters,omitempty"`
+	IndexHTML      string   `json:"index_html"`
+	TotalChecks    int      `json:"total_checks,omitempty"`
+}
+
+func writeRunSummaryJSON(fs FS, outDir string, summary RunSummaryJSON) error {
+	path := filepath.Join(outDir, "run-summary.json")
+	data, err := json.MarshalIndent(summary, "", "  ")
+	if err != nil {
+		return err
+	}
+	return fs.WriteFile(path, data, 0644)
 }
 
 func generateJSON(fs FS, blocks []ParsedBlock, filename string, meta HTMLMeta) error {
@@ -3765,6 +3886,15 @@ SUMMARY:
 				return nil, err
 			}
 			l.Info().Str("file", jsonFile).Msg("JSON generated")
+		case "markdown":
+			mdFile := base + ".md"
+			rawPath := filepath.Join(cfg.OutputDirLogs, fmt.Sprintf("%s.log", cluster))
+			meta, _ := parseNCCHeader(rawPath)
+			if err := generateMarkdown(fs, blocks, mdFile, meta); err != nil {
+				l.Error().Err(err).Str("file", mdFile).Msg("write Markdown failed")
+				return nil, err
+			}
+			l.Info().Str("file", mdFile).Msg("Markdown generated")
 		default:
 			l.Warn().Str("format", f).Msg("unknown output format")
 		}
@@ -3807,7 +3937,7 @@ SUMMARY:
 		if err := sendWebhookWithRetry(ctx, httpc, cfg, summaryNotify); err != nil {
 			l.Error().Err(err).Msg("webhook failed")
 		}
-		if err := sendSlack(ctx, httpc, cfg, summaryNotify); err != nil {
+		if err := sendSlackWithRetry(ctx, httpc, cfg, summaryNotify); err != nil {
 			l.Error().Err(err).Msg("slack notification failed")
 		}
 		l.Info().Int("fail", summaryNotify.FailCount).Int("warn", summaryNotify.WarnCount).Msg("notifications sent")
@@ -3848,6 +3978,33 @@ func promptPasswordIfEmpty(p string, Username string) (string, error) {
 // githubRepo is used by --update to fetch latest release (format: owner/repo).
 const githubRepo = "lTSPV75BRO/Nutanix-ncc-orchestrator"
 
+// versionLess returns true if a is semantically less than b (e.g. "0.1.12" < "0.1.13").
+func versionLess(a, b string) bool {
+	parse := func(s string) (major, minor, patch int) {
+		s = strings.TrimPrefix(s, "v")
+		parts := strings.SplitN(s, ".", 4)
+		if len(parts) >= 1 {
+			major, _ = strconv.Atoi(parts[0])
+		}
+		if len(parts) >= 2 {
+			minor, _ = strconv.Atoi(parts[1])
+		}
+		if len(parts) >= 3 {
+			patch, _ = strconv.Atoi(strings.SplitN(parts[2], "-", 2)[0])
+		}
+		return major, minor, patch
+	}
+	ma, mia, pa := parse(a)
+	mb, mib, pb := parse(b)
+	if ma != mb {
+		return ma < mb
+	}
+	if mia != mib {
+		return mia < mib
+	}
+	return pa < pb
+}
+
 var (
 	Version   string
 	BuildDate string
@@ -3858,7 +4015,7 @@ var (
 func init() {
 	// Defaults
 	if Version == "" {
-		Version = "1.0.0"
+		Version = "0.1.13"
 	}
 	if BuildDate == "" {
 		BuildDate = "unknown"
@@ -3910,6 +4067,9 @@ func runUpdate() error {
 		return fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
@@ -3918,6 +4078,11 @@ func runUpdate() error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == 403 {
+		if remaining := resp.Header.Get("X-RateLimit-Remaining"); remaining == "0" {
+			fmt.Fprintln(os.Stderr, "GitHub API rate limited. Set GITHUB_TOKEN for higher limits or try again later.")
+		}
+	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return fmt.Errorf("GitHub API returned %d: %s", resp.StatusCode, string(body))
@@ -3932,13 +4097,17 @@ func runUpdate() error {
 	latestVer := strings.TrimPrefix(rel.TagName, "v")
 	fmt.Fprintf(os.Stderr, "Latest release: %s\n", rel.TagName)
 
-	// Compare with current version (strip optional git revision suffix)
+	// Compare with current version (strip optional git revision suffix) using semver
 	currentVer := Version
 	if idx := strings.Index(currentVer, "-"); idx > 0 {
 		currentVer = currentVer[:idx]
 	}
-	if latestVer == currentVer {
-		fmt.Fprintln(os.Stderr, "You are already on the latest version.")
+	if !versionLess(currentVer, latestVer) {
+		if versionLess(latestVer, currentVer) {
+			fmt.Fprintln(os.Stderr, "You have a newer version than the latest release (dev build).")
+		} else {
+			fmt.Fprintln(os.Stderr, "You are already on the latest version.")
+		}
 		return nil
 	}
 
@@ -3949,6 +4118,7 @@ func runUpdate() error {
 	wantArch := goarch
 
 	var downloadURL string
+	var chosenAssetName string
 	for _, a := range rel.Assets {
 		name := strings.ToLower(a.Name)
 		if strings.Contains(name, wantOS) && strings.Contains(name, wantArch) {
@@ -3956,10 +4126,12 @@ func runUpdate() error {
 			if strings.HasSuffix(name, ".tar.gz") || strings.HasSuffix(name, ".zip") {
 				if downloadURL == "" {
 					downloadURL = a.BrowserDownloadURL
+					chosenAssetName = a.Name
 				}
 				continue
 			}
 			downloadURL = a.BrowserDownloadURL
+			chosenAssetName = a.Name
 			break
 		}
 	}
@@ -3969,6 +4141,7 @@ func runUpdate() error {
 			name := strings.ToLower(a.Name)
 			if strings.Contains(name, wantOS) && strings.Contains(name, wantArch) {
 				downloadURL = a.BrowserDownloadURL
+				chosenAssetName = a.Name
 				break
 			}
 		}
@@ -3991,6 +4164,9 @@ func runUpdate() error {
 	if err != nil {
 		return fmt.Errorf("create download request: %w", err)
 	}
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" && (strings.Contains(downloadURL, "github.com") || strings.Contains(downloadURL, "githubusercontent.com")) {
+		dlReq.Header.Set("Authorization", "Bearer "+token)
+	}
 	dlResp, err := client.Do(dlReq)
 	if err != nil {
 		return fmt.Errorf("download: %w", err)
@@ -4000,9 +4176,33 @@ func runUpdate() error {
 		return fmt.Errorf("download returned %d", dlResp.StatusCode)
 	}
 
-	body, err := io.ReadAll(dlResp.Body)
+	body, err := io.ReadAll(io.LimitReader(dlResp.Body, 200*1024*1024)) // 200 MiB cap
 	if err != nil {
 		return fmt.Errorf("read download: %w", err)
+	}
+
+	// Optional checksum verification: look for checksums.txt or *.sha256 asset
+	if chosenAssetName != "" {
+		for _, a := range rel.Assets {
+			an := strings.ToLower(a.Name)
+			if strings.Contains(an, "checksum") || strings.Contains(an, "sha256") || strings.HasSuffix(an, ".sha256") {
+				csBody, err := fetchURL(a.BrowserDownloadURL, client)
+				if err != nil {
+					log.Debug().Err(err).Str("asset", a.Name).Msg("skip checksum verification")
+					break
+				}
+				expectedHash := parseChecksumFile(csBody, chosenAssetName)
+				if expectedHash != "" {
+					sum := sha256.Sum256(body)
+					got := hex.EncodeToString(sum[:])
+					if !strings.EqualFold(got, expectedHash) {
+						return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedHash, got)
+					}
+					fmt.Fprintln(os.Stderr, "Checksum verified.")
+				}
+				break
+			}
+		}
 	}
 
 	selfPath, err := os.Executable()
@@ -4010,8 +4210,18 @@ func runUpdate() error {
 		return fmt.Errorf("get executable path: %w", err)
 	}
 	dir := filepath.Dir(selfPath)
-	tmpPath := filepath.Join(dir, ".ncc-orchestrator-update."+strconv.Itoa(os.Getpid()))
 
+	// On Windows, overwriting the running exe often fails; write to .new.exe and instruct user
+	if runtime.GOOS == "windows" {
+		newPath := selfPath + ".new.exe"
+		if err := os.WriteFile(newPath, body, 0755); err != nil {
+			return fmt.Errorf("write %s: %w", newPath, err)
+		}
+		fmt.Fprintf(os.Stderr, "Update saved as %s. Exit this program, then replace %s with it and run again.\n", newPath, selfPath)
+		return nil
+	}
+
+	tmpPath := filepath.Join(dir, ".ncc-orchestrator-update."+strconv.Itoa(os.Getpid()))
 	if err := os.WriteFile(tmpPath, body, 0755); err != nil {
 		return fmt.Errorf("write temp file: %w", err)
 	}
@@ -4029,6 +4239,174 @@ func runUpdate() error {
 
 	fmt.Fprintln(os.Stderr, "Update complete. Run the binary again to use the new version.")
 	return nil
+}
+
+func fetchURL(url string, client *http.Client) ([]byte, error) {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" && strings.Contains(url, "github") {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status %d", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+}
+
+// parseChecksumFile finds a line in checksum body that matches filename (or *filename) and returns the hex hash.
+func parseChecksumFile(body []byte, filename string) string {
+	lines := strings.Split(string(body), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Format: "hash  filename" or "hash *filename"
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		hashStr := fields[0]
+		name := fields[1]
+		if strings.TrimPrefix(name, "*") == filename || name == filename {
+			hashStr = strings.TrimPrefix(hashStr, "0x")
+			if len(hashStr) == 64 {
+				return hashStr
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
+// pcListClustersResponse represents a minimal Prism Central v3 clusters/list response.
+type pcListClustersResponse struct {
+	Entities []map[string]interface{} `json:"entities"`
+}
+
+// runDiscoverClusters lists clusters from Prism Central v3 API and prints one address per line.
+func runDiscoverClusters(cmd *cobra.Command, args []string) error {
+	// Load config file if set (so prism-central-url, username, etc. can come from config)
+	if cfgFile := viper.GetString("config"); cfgFile != "" {
+		viper.SetConfigFile(cfgFile)
+		_ = viper.ReadInConfig()
+	}
+	pcURL := strings.TrimSuffix(strings.TrimSpace(viper.GetString("prism-central-url")), "/")
+	if pcURL == "" {
+		return exitConfig(errors.New("prism-central-url is required (flag or config)"))
+	}
+	if !strings.HasPrefix(pcURL, "https://") && !strings.HasPrefix(pcURL, "http://") {
+		pcURL = "https://" + pcURL
+	}
+	username := viper.GetString("username")
+	if username == "" {
+		username = "admin"
+	}
+	password := viper.GetString("password")
+	if password == "" {
+		password = os.Getenv("NCC_PASSWORD")
+	}
+	if password == "" {
+		var err error
+		password, err = promptPasswordIfEmpty("", username)
+		if err != nil {
+			return err
+		}
+	}
+	insecure := viper.GetBool("insecure-skip-verify")
+
+	u := pcURL + "/api/nutanix/v3/clusters/list"
+	body := []byte(`{}`)
+	req, err := http.NewRequest(http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth(username, password)
+
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure},
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("request to Prism Central: %w", err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("Prism Central returned %d: %s", resp.StatusCode, string(bytes.TrimSpace(data)))
+	}
+
+	var list pcListClustersResponse
+	if err := json.Unmarshal(data, &list); err != nil {
+		return fmt.Errorf("parse response: %w", err)
+	}
+
+	var addresses []string
+	for _, e := range list.Entities {
+		addr := extractClusterAddress(e)
+		if addr != "" {
+			addresses = append(addresses, addr)
+		}
+	}
+
+	outPath, _ := cmd.Flags().GetString("output")
+	if outPath != "" {
+		content := strings.Join(addresses, "\n") + "\n"
+		if err := os.WriteFile(outPath, []byte(content), 0644); err != nil {
+			return fmt.Errorf("write %s: %w", outPath, err)
+		}
+		fmt.Fprintf(os.Stderr, "Wrote %d cluster(s) to %s\n", len(addresses), outPath)
+	} else {
+		for _, a := range addresses {
+			fmt.Println(a)
+		}
+	}
+	return nil
+}
+
+// extractClusterAddress extracts external IP or name from a Prism Central cluster entity (v3).
+func extractClusterAddress(entity map[string]interface{}) string {
+	// spec.resources.network.external_ip or external_ip_address
+	if spec, _ := entity["spec"].(map[string]interface{}); spec != nil {
+		if res, _ := spec["resources"].(map[string]interface{}); res != nil {
+			if netw, _ := res["network"].(map[string]interface{}); netw != nil {
+				if ip, _ := netw["external_ip"].(string); ip != "" {
+					return ip
+				}
+				if ip, _ := netw["external_ip_address"].(string); ip != "" {
+					return ip
+				}
+			}
+		}
+	}
+	// status.resources.network.external_ip
+	if status, _ := entity["status"].(map[string]interface{}); status != nil {
+		if res, _ := status["resources"].(map[string]interface{}); res != nil {
+			if netw, _ := res["network"].(map[string]interface{}); netw != nil {
+				if ip, _ := netw["external_ip"].(string); ip != "" {
+					return ip
+				}
+			}
+		}
+		if name, _ := status["name"].(string); name != "" {
+			return name
+		}
+	}
+	return ""
 }
 
 func newRootCmd() *cobra.Command {
@@ -4089,7 +4467,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 			cfg, err := bindConfig()
 			if err != nil {
 				consoleLogger.Error().Err(err).Msg("configuration error")
-				return fmt.Errorf("configuration error: %w", err)
+				return exitConfig(fmt.Errorf("configuration: %w", err))
 			}
 
 			lvl := parseLogLevel(cfg.LogLevel)
@@ -4101,12 +4479,12 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 
 			if err := checkOutputPermissions(&cfg); err != nil {
 				consoleLogger.Error().Err(err).Msg("output permissions check failed (cannot open/create required files)")
-				return fmt.Errorf("output permissions check: %w", err)
+				return exitConfig(fmt.Errorf("output permissions: %w", err))
 			}
 
 			if err := setupFileLogger(cfg.LogFile, lvl); err != nil {
 				consoleLogger.Error().Err(err).Str("logFile", cfg.LogFile).Msg("failed to setup file logger")
-				return fmt.Errorf("setup logger: %w", err)
+				return exitConfig(fmt.Errorf("setup logger: %w", err))
 			}
 
 			// Set global log level after file logger is set up
@@ -4138,14 +4516,14 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 			}
 			// Validate required fields first
 			if len(cfg.Clusters) == 0 {
-				err := errors.New("no clusters provided (--clusters, env, or config)")
+				err := errors.New("no clusters provided (--clusters, --clusters-file, env, or config)")
 				log.Error().Msg(err.Error())
-				return err
+				return exitConfig(err)
 			}
 			if cfg.Username == "" {
 				err := errors.New("missing --username or config username")
 				log.Error().Msg(err.Error())
-				return err
+				return exitConfig(err)
 			}
 
 			// Dry-run mode: perform full validation and exit
@@ -4175,6 +4553,8 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				envKeys := []string{
 					"CONFIG",
 					"CLUSTERS",
+					"CLUSTERS_FILE",
+					"PRISM_CENTRAL_URL",
 					"USERNAME",
 					"PASSWORD",
 					"INSECURE_SKIP_VERIFY",
@@ -4202,6 +4582,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 					"IDLE_CONN_TIMEOUT",
 					"EMAIL_ENABLED",
 					"EMAIL_ATTACH_HTML",
+					"NOTIFY_DIGEST",
 					"SMTP_SERVER",
 					"SMTP_PORT",
 					"SMTP_USER",
@@ -4216,6 +4597,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 					"SLACK_ENABLED",
 					"SLACK_WEBHOOK_URL",
 					"SLACK_CHANNEL",
+					"UPDATE",
 				}
 				for _, key := range envKeys {
 					envVar := "NCC_" + key
@@ -4333,6 +4715,14 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 							}
 						case "csv":
 							_ = generateCSV(OSFS{}, blocks, base+".csv")
+						case "json":
+							rawPath := filepath.Join(cfg.OutputDirLogs, fmt.Sprintf("%s.log", cluster))
+							meta, _ := parseNCCHeader(rawPath)
+							_ = generateJSON(OSFS{}, blocks, base+".json", meta)
+						case "markdown":
+							rawPath := filepath.Join(cfg.OutputDirLogs, fmt.Sprintf("%s.log", cluster))
+							meta, _ := parseNCCHeader(rawPath)
+							_ = generateMarkdown(OSFS{}, blocks, base+".md", meta)
 						}
 						if err := writePrometheusFile(OSFS{}, cfg.PromDir, cluster, blocks); err != nil {
 							log.Error().Str("cluster", cluster).Err(err).Msg("replay write Prometheus .prom failed")
@@ -4591,6 +4981,19 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				Str("index_html", indexPath).
 				Msg("run summary")
 
+			runSummary := RunSummaryJSON{
+				Timestamp:      time.Now().UTC().Format(time.RFC3339),
+				DurationS:      runDuration.Seconds(),
+				ClustersOK:     len(clusterFiles),
+				ClustersFailed: len(failed),
+				FailedClusters: failed,
+				IndexHTML:      indexPath,
+				TotalChecks:    len(agg),
+			}
+			if err := writeRunSummaryJSON(fs, cfg.OutputDirFiltered, runSummary); err != nil {
+				log.Error().Err(err).Msg("write run-summary.json failed (non-fatal)")
+			}
+
 			if cfg.NotifyDigest {
 				overview := fmt.Sprintf("Run completed in %s. Clusters OK: %d, Failed: %d.",
 					runDuration.Round(time.Second), len(clusterFiles), len(failed))
@@ -4625,7 +5028,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				if err := sendWebhookWithRetry(ctx, httpc, cfg, digestSummary); err != nil {
 					log.Error().Err(err).Msg("digest webhook failed")
 				}
-				if err := sendSlack(ctx, httpc, cfg, digestSummary); err != nil {
+				if err := sendSlackWithRetry(ctx, httpc, cfg, digestSummary); err != nil {
 					log.Error().Err(err).Msg("digest slack failed")
 				}
 			}
@@ -4664,6 +5067,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	cmd.Flags().Bool("tc", false, "Display terms and conditions")
 	cmd.Flags().String("config", "", "Config file path (yaml/json)")
 	cmd.Flags().String("clusters", "", "Comma-separated cluster IPs or FQDNs")
+	cmd.Flags().String("clusters-file", "", "Path to file with one cluster per line (overrides clusters when set)")
 	cmd.Flags().String("username", "admin", "Username for Prism Gateway")
 	cmd.Flags().String("password", "", "Password (omit to be prompted)")
 	cmd.Flags().Bool("insecure-skip-verify", false, "Skip TLS verify (only for trusted labs)")
@@ -4672,7 +5076,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	cmd.Flags().String("poll-interval", "15s", "Polling interval for task status")
 	cmd.Flags().String("poll-jitter", "2s", "Additive jitter to polling interval")
 	cmd.Flags().Int("max-parallel", 4, "Max concurrent clusters")
-	cmd.Flags().String("outputs", "html,csv", "Comma-separated outputs: html,csv,json for per-cluster files")
+	cmd.Flags().String("outputs", "html,csv", "Comma-separated outputs: html,csv,json,markdown for per-cluster files")
 	cmd.Flags().String("output-dir-logs", "nccfiles", "Directory for raw logs")
 	cmd.Flags().String("output-dir-filtered", "outputfiles", "Directory for filtered and aggregated results")
 	cmd.Flags().String("severity-filter", "", "Comma-separated severities to include (FAIL,WARN,ERR,INFO). Empty = all")
@@ -4708,6 +5112,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	_ = viper.BindPFlag("update", cmd.Flags().Lookup("update"))
 	_ = viper.BindPFlag("config", cmd.Flags().Lookup("config"))
 	_ = viper.BindPFlag("clusters", cmd.Flags().Lookup("clusters"))
+	_ = viper.BindPFlag("clusters-file", cmd.Flags().Lookup("clusters-file"))
 	_ = viper.BindPFlag("username", cmd.Flags().Lookup("username"))
 	_ = viper.BindPFlag("password", cmd.Flags().Lookup("password"))
 	_ = viper.BindPFlag("insecure-skip-verify", cmd.Flags().Lookup("insecure-skip-verify"))
@@ -4748,6 +5153,24 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	_ = viper.BindPFlag("slack-webhook-url", cmd.Flags().Lookup("slack-webhook-url"))
 	_ = viper.BindPFlag("slack-channel", cmd.Flags().Lookup("slack-channel"))
 
+	// discover-clusters subcommand: list clusters from Prism Central v3 API
+	discoverCmd := &cobra.Command{
+		Use:   "discover-clusters",
+		Short: "List clusters from Prism Central (v3 API)",
+		Long:  "Calls Prism Central POST /api/nutanix/v3/clusters/list and prints one cluster address per line. Use --output to write to a file (e.g. for --clusters-file).",
+		RunE:  runDiscoverClusters,
+	}
+	discoverCmd.Flags().String("prism-central-url", "", "Prism Central URL (e.g. https://10.0.0.1:9440)")
+	discoverCmd.Flags().String("username", "admin", "Prism username")
+	discoverCmd.Flags().String("password", "", "Prism password (or NCC_PASSWORD)")
+	discoverCmd.Flags().String("output", "", "Write cluster list to file (one per line)")
+	discoverCmd.Flags().Bool("insecure-skip-verify", false, "Skip TLS verify for Prism Central")
+	_ = viper.BindPFlag("prism-central-url", discoverCmd.Flags().Lookup("prism-central-url"))
+	_ = viper.BindPFlag("username", discoverCmd.Flags().Lookup("username"))
+	_ = viper.BindPFlag("password", discoverCmd.Flags().Lookup("password"))
+	_ = viper.BindPFlag("insecure-skip-verify", discoverCmd.Flags().Lookup("insecure-skip-verify"))
+	cmd.AddCommand(discoverCmd)
+
 	return cmd
 }
 
@@ -4760,9 +5183,13 @@ func main() {
 
 	if err := newRootCmd().Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		// Try to log the error if logger is available
 		log.Error().Err(err).Msg("application error")
-		os.Exit(1)
+		code := 1
+		var exitErr *exitCodeError
+		if errors.As(err, &exitErr) {
+			code = exitErr.code
+		}
+		os.Exit(code)
 	}
 	os.Exit(0)
 }
