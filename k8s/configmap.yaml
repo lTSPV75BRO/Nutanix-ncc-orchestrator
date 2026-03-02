@@ -16,7 +16,7 @@ data:
     password: ""
     insecure-skip-verify: false   # Set true for lab/self-signed Prism certs
     timeout: "15m"
-    request-timeout: "30s"
+    request-timeout: "30s"    # Code default 20s; increase if needed for slow clusters
     poll-interval: "15s"
     poll-jitter: "2s"
     max-parallel: 4
