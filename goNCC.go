@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/csv"
 	"encoding/hex"
@@ -1090,6 +1091,15 @@ func NewHTTPClient(cfg Config) *http.Client {
 		idleConnTimeout = defaultIdleConnTimeout
 	}
 
+	tlsCfg := &tls.Config{
+		InsecureSkipVerify: cfg.InsecureSkipVerify,
+		MinVersion:         cfg.TLSMinVersion,
+	}
+	// When insecure mode is on, use a custom verifier that accepts any cert so we bypass
+	// strict x509 "not standards compliant" checks that some Prism certs trigger.
+	if cfg.InsecureSkipVerify {
+		tlsCfg.VerifyPeerCertificate = func([][]byte, [][]*x509.Certificate) error { return nil }
+	}
 	tr := &http.Transport{
 		DialContext: (&net.Dialer{
 			Timeout:   5 * time.Second,
@@ -1098,10 +1108,7 @@ func NewHTTPClient(cfg Config) *http.Client {
 		TLSHandshakeTimeout:   5 * time.Second,
 		ResponseHeaderTimeout: 10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: cfg.InsecureSkipVerify,
-			MinVersion:         cfg.TLSMinVersion,
-		},
+		TLSClientConfig:       tlsCfg,
 		// Production-ready connection pooling
 		MaxIdleConns:        maxIdleConns,
 		MaxIdleConnsPerHost: maxIdleConnsPerHost,

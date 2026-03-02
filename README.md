@@ -41,7 +41,7 @@ Download pre-built binaries for Linux/Windows/macOS from the [Releases](https://
 ### Docker image and CI
 The [GitHub Action](.github/workflows/docker-publish.yml) builds and pushes the image to Docker Hub on push to `main` (and on release). The **image tag is the same as the code version**:
 
-- **Version source**: the [`VERSION`](VERSION) file (e.g. `0.1.12`). Update this file when you want to release a new image version.
+- **Version source**: the [`VERSION`](VERSION) file (e.g. `0.1.13`). Update this file when you want to release a new image version.
 - **Triggers**: push to `main` (when Go code, Dockerfile, or VERSION change) and on GitHub release.
 - **Image**: `prajwalnutant/nutanix-ncc-orchestrator:<version>` and `:latest`.
 - **Secrets**: In the repo settings, add `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (Docker Hub → Account → Security → New Access Token) so the workflow can push.
@@ -225,6 +225,10 @@ export KUBECONFIG=~/kubecon/mycluster.conf
 
 ## Building and Contributing
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## MCP server (AI assistants)
+
+An **MCP server** is provided so AI tools (e.g. Cursor, Claude Desktop) can run NCC, discover clusters, and read run summaries via the [Model Context Protocol](https://modelcontextprotocol.io/). Build with `go build -o ncc-mcp-server ./cmd/ncc-mcp-server/` and add it in your MCP client config. See **[docs/MCP_SERVER.md](docs/MCP_SERVER.md)** for setup and Cursor configuration.
 
 ## See also
 - [CHANGELOG.md](CHANGELOG.md) — Version history and release notes.
