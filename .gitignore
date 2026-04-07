@@ -5,8 +5,9 @@
 *.so
 *.dylib
 .DS_Store
-temp* 
+temp/
 Changelog*
+!CHANGELOG.md
 config.yaml
 
 # Logs and outputs from your tool
@@ -20,5 +21,7 @@ k8s/secret.yaml
 # Prometheus metrics
 promfiles/
 
-# Binaries
-ncc-orchestrator*
+# Binaries (repo root only; do not use ncc-orchestrator* — it would ignore helm/ncc-orchestrator/)
+/ncc-orchestrator
+/ncc-orchestrator.exe
+ncc-mcp-server

@@ -60,7 +60,7 @@ The tool downloads the **first** such asset and uses it to verify the binary it 
 
 ## 4. Upload to the GitHub release
 
-When you create the release (e.g. v0.1.13):
+When you create the release (e.g. v1.0.0):
 
 1. Upload each **binary** (e.g. `ncc-orchestrator-linux-amd64`, …).
 2. Upload the **checksum file** (e.g. `checksums.txt`).

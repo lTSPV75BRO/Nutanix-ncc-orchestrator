@@ -1,0 +1,6 @@
+apiVersion: v2
+name: ncc-orchestrator
+description: Nutanix NCC Orchestrator CronJob (scheduled NCC checks, HTML reports on PVC)
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

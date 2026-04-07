@@ -24,13 +24,14 @@ Prajwal Vernekar (prajwal.vernekar@nutanix.com)
 ## Installation
 
 ### Prerequisites
-- **Go 1.24+** (for building from source; see [go.mod](go.mod)).
+- **Go 1.26+** (for building from source; see [go.mod](go.mod)).
 - **Nutanix Prism** API access (username, password, cluster IPs).
 
 ### From Source
 1. Clone the repo: `git clone https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator.git`
 2. Navigate to the directory: `cd Nutanix-ncc-orchestrator`
-3. Build: `go build -ldflags "-w -s -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -X main.Stream=Beta -X main.GoVersion=$(go version | cut -d ' ' -f 3)" -o ncc-orchestrator`
+3. Build (release-style metadata): `go build -ldflags "-w -s -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -X main.Stream=Release -X main.GoVersion=$(go version | cut -d ' ' -f 3)" -o ncc-orchestrator`  
+   Official Docker images from CI use `Stream=Release` and set `Version` from the [VERSION](VERSION) file.
 4. Run: `./ncc-orchestrator --help` Or `./ncc-orchestrator --version`
    
   > Add .exe for windows binary.
@@ -41,7 +42,7 @@ Download pre-built binaries for Linux/Windows/macOS from the [Releases](https://
 ### Docker image and CI
 The [GitHub Action](.github/workflows/docker-publish.yml) builds and pushes the image to Docker Hub on push to `main` (and on release). The **image tag is the same as the code version**:
 
-- **Version source**: the [`VERSION`](VERSION) file (e.g. `0.1.13`). Update this file when you want to release a new image version.
+- **Version source**: the [`VERSION`](VERSION) file (e.g. `1.0.0`). Update this file when you want to release a new image version.
 - **Triggers**: push to `main` (when Go code, Dockerfile, or VERSION change) and on GitHub release.
 - **Image**: `prajwalnutant/nutanix-ncc-orchestrator:<version>` and `:latest`.
 - **Secrets**: In the repo settings, add `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (Docker Hub → Account → Security → New Access Token) so the workflow can push.
@@ -51,6 +52,17 @@ Basic command:
 - `ncc-orchestrator --clusters "10.0.1.1,10.0.2.1" --username admin --password yourpassword`
 
 Full options: Run `ncc-orchestrator --help` for all flags. To see current env values: `ncc-orchestrator --env-info`. Run `ncc-orchestrator --version` to print version, stream, build date, and Go version, then exit. Run **`ncc-orchestrator -u`** or **`--update`** to fetch the latest release from GitHub and update the binary if a matching OS/arch asset is available. Set **`GITHUB_TOKEN`** for higher API rate limits. If the release includes a checksum file (e.g. `checksums.txt`), the download is verified before replace. On Windows the new binary is written as `ncc-orchestrator.new.exe`; replace the old exe and run again. **Release maintainers:** see [docs/RELEASE_CHECKSUMS.md](docs/RELEASE_CHECKSUMS.md) for how to generate and upload checksums so `-u` can verify downloads.
+
+### Exit codes
+
+| Code | Meaning |
+|------|--------|
+| **0** | Success — every cluster ran to completion without a runner-level failure |
+| **1** | Error — e.g. all clusters failed, or another fatal error |
+| **2** | **Configuration** — invalid or missing config (same as `--dry-run` validation failures) |
+| **3** | **Partial success** — at least one cluster succeeded and at least one failed (reports written for successful clusters) |
+
+After each run, **`outputfiles/run-summary.json`** includes `exit_code` and per-cluster `clusters` (address, `ok`, severity counts, `error` if failed). **`outputfiles/ncc-run-record.json`** adds `schema_version` and orchestrator metadata around the same run payload. See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for TLS, Prism Central, and API issues.
 
 ### Configuration
 Config file (YAML/JSON), CLI flags, and **environment variables** (prefix `NCC_`) are supported. Env overrides config file; flags override both.
@@ -63,6 +75,8 @@ Create a `config.yaml` with any of the options below. Run with: `ncc-orchestrato
 | `clusters-file` | — | Path to file with one cluster per line (overrides `clusters` when set); use with **discover-clusters** to populate |
 | `username` | `admin` | Prism Gateway username |
 | `password` | — | Prism password (prefer env `NCC_PASSWORD`) |
+| `ncc-api-version` | `v4` | **`v4`** (current Nutanix v4 APIs; see README) or **`Legacy`** (Prism Gateway v1 start-checks only). **`v1`** is accepted as an alias for Legacy. |
+| `nutanix-v4-api-version` | `v4.2` | Path revision for `/api/clustermgmt/{ver}/` and `/api/monitoring/{ver}/` (e.g. `v4.2`, `v4.1`, `v4.0.a1`); CLI: `--nutanix-v4-api-version` |
 | `insecure-skip-verify` | `false` | Skip TLS verify (lab/self-signed only) |
 | `timeout` | `15m` | Per-cluster overall timeout |
 | `request-timeout` | `20s` | Per HTTP request timeout |
@@ -102,7 +116,10 @@ Any config key can be set via env: **`NCC_`** + key in UPPER_SNAKE (hyphens beco
 - `NCC_CONFIG` — Config file path  
 - `NCC_CLUSTERS`, `NCC_CLUSTERS_FILE` — Cluster list or path to file (one per line)  
 - `NCC_PRISM_CENTRAL_URL` — Prism Central URL for **discover-clusters**  
+- `NCC_DISCOVER_API_VERSION` — `v4` (default) or `v3` for **discover-clusters**  
 - `NCC_USERNAME`, `NCC_PASSWORD` — Prism credentials  
+- `NCC_NCC_API_VERSION` — Same as `ncc-api-version` (`v4` default, or `Legacy` / `v1`)  
+- `NCC_NUTANIX_V4_API_VERSION` — Same as `nutanix-v4-api-version` (default `v4.2`; e.g. `v4.1`, `v4.0.a1`)  
 - `NCC_INSECURE_SKIP_VERIFY` — true/false  
 - `NCC_TIMEOUT`, `NCC_REQUEST_TIMEOUT`, `NCC_POLL_INTERVAL`, `NCC_POLL_JITTER`  
 - `NCC_MAX_PARALLEL`, `NCC_OUTPUTS`  
@@ -116,18 +133,12 @@ Any config key can be set via env: **`NCC_`** + key in UPPER_SNAKE (hyphens beco
 
 Run **`ncc-orchestrator --env-info`** to print all possible env vars and their current values.
 
-### Exit codes
-- **0** — Success  
-- **1** — Run or execution error (e.g. cluster failure, timeout)  
-- **2** — Config or validation error (e.g. missing clusters, invalid config file, permission check failed)  
-
-Scripts can branch on exit code to distinguish configuration issues from run failures.
-
 ### Run summary and discover-clusters
-- After each run, **`outputfiles/run-summary.json`** is written with machine-readable run result: `timestamp`, `duration_s`, `clusters_ok`, `clusters_failed`, `failed_clusters`, `index_html`, `total_checks`.
-- **`ncc-orchestrator discover-clusters`** — Lists clusters from **Prism Central** (v3 API). Requires `--prism-central-url` (or config). Use `--output clusters.txt` to write a file for `--clusters-file`. Example:  
-  `ncc-orchestrator --config config.yaml discover-clusters --output clusters.txt`  
-  then set `clusters-file: clusters.txt` in config for the main run.
+- After each run, **`outputfiles/run-summary.json`** and **`outputfiles/ncc-run-record.json`** are written (machine-readable run result; the latter includes `schema_version` and orchestrator version).
+- **`ncc-orchestrator discover-clusters`** — Lists clusters from **Prism Central**. **Default:** `GET /api/clustermgmt/{ver}/config/clusters` where `{ver}` is **`nutanix-v4-api-version`** (default **`v4.2`**; set e.g. `v4.0.a1` to match your environment), with `$page` / `$limit` pagination; addresses are taken from `network.externalAddress` (IPv4, then IPv6), then node CVM IP, then `name`. Use **`--discover-api-version v3`** for legacy `POST /api/nutanix/v3/clusters/list`. If v4 returns **404**, the command **falls back to v3** automatically. Requires `--prism-central-url` (or config). Use **`--format table`** for columns (NAME, EXT_ID, ADDRESS, API) or **`--format json`** for automation. Example:
+  `ncc-orchestrator --config config.yaml discover-clusters --output clusters.txt`
+  `ncc-orchestrator discover-clusters --prism-central-url https://pc:9440 --format table`
+  then set `clusters-file: clusters.txt` in config for the main run. Env: **`NCC_DISCOVER_API_VERSION`** (`v4` or `v3`).
 
 ### Example webhook payload
 
@@ -193,7 +204,8 @@ Check the webhook URL page for the POST. Use `--log-level debug` if you need mor
 
 Run the NCC Orchestrator on Kubernetes with a **CronJob** (e.g. every 4 hours), a shared **PVC** (e.g. NFS RWX) for logs and reports, and a **Deployment** (Nginx) serving the HTML report. Optional LoadBalancer Service (e.g. MetalLB) for external access.
 
-- **Manifests**: [`k8s/`](k8s/) — namespace, ConfigMap, Secret, PVC, CronJob, Deployment, Service. **One-off / replay**: [`k8s/job-debug.yaml`](k8s/job-debug.yaml) runs with `--replay` for debugging or regenerating from existing logs.
+- **Manifests**: [`k8s/`](k8s/) — namespace, ConfigMap, Secret, PVC, CronJob, Deployment, Service. Apply everything at once with **`kubectl apply -k k8s/`** (see [`k8s/kustomization.yaml`](k8s/kustomization.yaml)). **One-off / replay**: [`k8s/job-debug.yaml`](k8s/job-debug.yaml) runs with `--replay` for debugging or regenerating from existing logs.
+- **Helm (CronJob only):** [`helm/ncc-orchestrator`](helm/ncc-orchestrator/README.md) — templated image tag and schedule; pair with ConfigMap/Secret/PVC from `k8s/` or your own.
 - **Full guide**: **[k8s/README.md](k8s/README.md)** — architecture, prerequisites (e.g. StorageClass, MetalLB), deployment steps, troubleshooting (permissions, TLS, logs, getting job logs).
 
 **Quick start (set config and secret first):**

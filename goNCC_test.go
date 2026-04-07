@@ -2134,3 +2134,228 @@ func TestRetryAfterDelay(t *testing.T) {
 		t.Errorf("Retry-After 30: want 30s, true; got %v, %v", dur, ok)
 	}
 }
+
+func TestNormalizeNCCAPIVersion(t *testing.T) {
+	for _, tc := range []struct {
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"", "v4", false},
+		{"v4", "v4", false},
+		{"Legacy", "v1", false},
+		{"legacy", "v1", false},
+		{"v1", "v1", false},
+		{"bogus", "", true},
+	} {
+		got, err := normalizeNCCAPIVersion(tc.in)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("%q: want error", tc.in)
+			}
+			continue
+		}
+		if err != nil || got != tc.want {
+			t.Errorf("%q: got %q, %v; want %q", tc.in, got, err, tc.want)
+		}
+	}
+}
+
+func TestMapPrismTaskJSONToTaskStatus(t *testing.T) {
+	raw := []byte(`{
+  "data": {
+    "status": "QUEUED",
+    "progressPercentage": 36
+  }
+}`)
+	st, err := mapPrismTaskJSONToTaskStatus(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.PercentageComplete != 36 || st.ProgressStatus != "Running" {
+		t.Fatalf("QUEUED: got pct=%d ps=%q", st.PercentageComplete, st.ProgressStatus)
+	}
+	raw2 := []byte(`{"data":{"status":"SUCCEEDED","progressPercentage":100}}`)
+	st2, err := mapPrismTaskJSONToTaskStatus(raw2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st2.PercentageComplete != 100 || st2.ProgressStatus != "Succeeded" {
+		t.Fatalf("SUCCEEDED: got pct=%d ps=%q", st2.PercentageComplete, st2.ProgressStatus)
+	}
+	raw3 := []byte(`{"data":{"status":"FAILED","progressPercentage":50}}`)
+	st3, err := mapPrismTaskJSONToTaskStatus(raw3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st3.ProgressStatus != "Failed" {
+		t.Fatalf("FAILED: got ps=%q", st3.ProgressStatus)
+	}
+}
+
+func TestValidateNutanixV4APIVersion(t *testing.T) {
+	for _, tc := range []struct {
+		in string
+		ok bool
+	}{
+		{"v4.2", true},
+		{"v4.0.a1", true},
+		{"v4.1", true},
+		{"v4", true},
+		{"bad/path", false},
+		{"v4..2", false},
+	} {
+		err := validateNutanixV4APIVersion(tc.in)
+		if tc.ok && err != nil {
+			t.Errorf("%q: want ok, got %v", tc.in, err)
+		}
+		if !tc.ok && err == nil {
+			t.Errorf("%q: want error, got nil", tc.in)
+		}
+	}
+}
+
+func TestExtractClusterAddressV4(t *testing.T) {
+	const sample = `{
+  "name": "test_cluster_name",
+  "network": {
+    "externalAddress": {
+      "ipv4": { "value": "10.0.0.50", "prefixLength": 32 }
+    }
+  }
+}`
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(sample), &m); err != nil {
+		t.Fatal(err)
+	}
+	if got := extractClusterAddressV4(m); got != "10.0.0.50" {
+		t.Errorf("extractClusterAddressV4 = %q, want 10.0.0.50", got)
+	}
+}
+
+func TestClusterEntityMatchesUserRef(t *testing.T) {
+	pcJSON := `{
+  "extId": "pc-uuid",
+  "name": "Tiamut-PC",
+  "nodes": {
+    "nodeList": [
+      {
+        "controllerVmIp": {
+          "ipv4": { "value": "10.48.52.75", "prefixLength": 32 }
+        }
+      }
+    ]
+  }
+}`
+	var pc map[string]interface{}
+	if err := json.Unmarshal([]byte(pcJSON), &pc); err != nil {
+		t.Fatal(err)
+	}
+	if !clusterEntityMatchesUserRef("10.48.52.75", pc) {
+		t.Error("expected match on PC CVM IP")
+	}
+	if !clusterEntityMatchesUserRef("Tiamut-PC", pc) {
+		t.Error("expected match on name")
+	}
+	if !clusterEntityMatchesUserRef("pc-uuid", pc) {
+		t.Error("expected match on extId")
+	}
+
+	aosJSON := `{
+  "extId": "aos-uuid",
+  "name": "Tiamut",
+  "network": {
+    "externalAddress": {
+      "ipv4": { "value": "10.48.52.74", "prefixLength": 32 }
+    }
+  },
+  "nodes": {
+    "nodeList": [
+      {
+        "controllerVmIp": {
+          "ipv4": { "value": "10.48.52.65", "prefixLength": 32 }
+        }
+      }
+    ]
+  }
+}`
+	var aos map[string]interface{}
+	if err := json.Unmarshal([]byte(aosJSON), &aos); err != nil {
+		t.Fatal(err)
+	}
+	if clusterEntityMatchesUserRef("10.48.52.75", aos) {
+		t.Error("did not expect AOS cluster to match PC IP")
+	}
+	if !clusterEntityMatchesUserRef("10.48.52.74", aos) {
+		t.Error("expected match on external address")
+	}
+	if !clusterEntityMatchesUserRef("10.48.52.65", aos) {
+		t.Error("expected match on CVM IP")
+	}
+}
+
+func TestVersionLessSemver(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want bool // a < b
+	}{
+		{"0.1.12", "0.1.13", true},
+		{"0.9.0", "1.0.0", true},
+		{"1.0.0", "1.0.0", false},
+		{"1.0.0-rc1", "1.0.0", true},
+		{"v1.0.0", "v1.0.1", true},
+	}
+	for _, tc := range tests {
+		got := versionLess(tc.a, tc.b)
+		if got != tc.want {
+			t.Errorf("versionLess(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+func TestBuildRunClusterSummary(t *testing.T) {
+	ok := ClusterResult{
+		Cluster: "10.0.0.1",
+		Blocks: []ParsedBlock{
+			{Severity: "FAIL", CheckName: "c1"},
+			{Severity: "WARN", CheckName: "c2"},
+			{Severity: "", CheckName: "c3"},
+		},
+	}
+	s := buildRunClusterSummary(ok)
+	if !s.OK || s.FailCount != 1 || s.WarnCount != 1 || s.InfoCount != 1 || s.ChecksTotal != 3 {
+		t.Fatalf("unexpected summary: %+v", s)
+	}
+	fail := ClusterResult{Cluster: "10.0.0.2", Err: fmt.Errorf("boom")}
+	s2 := buildRunClusterSummary(fail)
+	if s2.OK || s2.Error != "boom" {
+		t.Fatalf("unexpected failed summary: %+v", s2)
+	}
+}
+
+func TestExtractCVMIPv4sFromClusterEntity(t *testing.T) {
+	const sample = `{
+  "nodes": {
+    "nodeList": [
+      {
+        "controllerVmIp": {
+          "ipv4": { "value": "10.0.0.1", "prefixLength": 32 }
+        }
+      },
+      {
+        "controllerVmIp": {
+          "ipv4": { "value": "10.0.0.2", "prefixLength": 32 }
+        }
+      }
+    ]
+  }
+}`
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(sample), &m); err != nil {
+		t.Fatal(err)
+	}
+	got := extractCVMIPv4sFromClusterEntity(m)
+	if len(got) != 2 || got[0] != "10.0.0.1" || got[1] != "10.0.0.2" {
+		t.Fatalf("extractCVMIPv4sFromClusterEntity = %#v", got)
+	}
+}

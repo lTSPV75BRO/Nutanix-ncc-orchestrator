@@ -14,6 +14,8 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"goncc/internal/kblinks"
 )
 
 const (
@@ -58,7 +60,7 @@ func main() {
 	// Tool: get_run_summary — read last run summary from output directory
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_run_summary",
-		Description: "Read the run-summary.json from a previous NCC run (output directory). Returns timestamp, duration, clusters_ok, clusters_failed, failed_clusters, index_html path.",
+		Description: "Read run-summary.json from a previous NCC run (output directory). Includes timestamp, duration, clusters_ok/failed, per-cluster clusters[] (severity counts, errors), exit_code (0/1/3), index_html path.",
 	}, getRunSummary)
 
 	// Tool: replay_reports — regenerate reports from existing logs without calling NCC API
@@ -70,13 +72,13 @@ func main() {
 	// Tool: list_run_artifacts — list files in an NCC run output directory
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_run_artifacts",
-		Description: "List files in an NCC run output directory (run-summary.json, index.html, per-cluster .log/.html/.csv). Use to discover what reports exist from a previous run.",
+		Description: "List files in an NCC run output directory (run-summary.json, ncc-run-record.json, index.html, per-cluster .log/.html/.csv). Use to discover what reports exist from a previous run.",
 	}, listRunArtifacts)
 
 	// Tool: get_report — read aggregated or per-cluster report content (HTML/text)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_report",
-		Description: "Read the aggregated index.html or a specific cluster report file from an output directory. Returns report content for the AI to summarize or analyze.",
+		Description: "Read the aggregated index.html or a specific cluster report file from an output directory. For *.log files, KB references (e.g. KB 5582) are expanded to markdown links to portal.nutanix.com. Returns report content for the AI to summarize or analyze.",
 	}, getReport)
 
 	// Resources: latest run-summary and report (from default output dir relative to cwd)
@@ -165,12 +167,14 @@ func runNCC(ctx context.Context, req *mcp.CallToolRequest, input RunNCCInput) (*
 // --- discover_clusters ---
 
 type DiscoverClustersInput struct {
-	ConfigPath         string `json:"config_path,omitempty" jsonschema:"Path to config file (may contain prism-central-url, username, password)."`
-	PrismCentralURL    string `json:"prism_central_url" jsonschema:"Prism Central URL (e.g. https://10.0.0.1:9440)."`
-	Username           string `json:"username,omitempty" jsonschema:"Prism username (default admin)."`
-	Password           string `json:"password,omitempty" jsonschema:"Prism password (or set NCC_PASSWORD)."`
-	InsecureSkipVerify bool   `json:"insecure_skip_verify,omitempty" jsonschema:"Skip TLS verification (lab only)."`
-	OutputPath         string `json:"output_path,omitempty" jsonschema:"Optional file path to write cluster list (one per line)."`
+	ConfigPath          string `json:"config_path,omitempty" jsonschema:"Path to config file (may contain prism-central-url, username, password)."`
+	PrismCentralURL     string `json:"prism_central_url" jsonschema:"Prism Central URL (e.g. https://10.0.0.1:9440)."`
+	Username            string `json:"username,omitempty" jsonschema:"Prism username (default admin)."`
+	Password            string `json:"password,omitempty" jsonschema:"Prism password (or set NCC_PASSWORD)."`
+	InsecureSkipVerify  bool   `json:"insecure_skip_verify,omitempty" jsonschema:"Skip TLS verification (lab only)."`
+	DiscoverAPIVersion  string `json:"discover_api_version,omitempty" jsonschema:"Cluster list API: v4 (default) or v3 (legacy POST)."`
+	NutanixV4APIVersion string `json:"nutanix_v4_api_version,omitempty" jsonschema:"Nutanix v4 path revision for clustermgmt/monitoring (default v4.2; e.g. v4.0.a1)."`
+	OutputPath          string `json:"output_path,omitempty" jsonschema:"Optional file path to write cluster list (one per line)."`
 }
 
 func discoverClusters(ctx context.Context, req *mcp.CallToolRequest, input DiscoverClustersInput) (*mcp.CallToolResult, any, error) {
@@ -195,6 +199,12 @@ func discoverClusters(ctx context.Context, req *mcp.CallToolRequest, input Disco
 	}
 	if input.InsecureSkipVerify {
 		args = append(args, "--insecure-skip-verify")
+	}
+	if strings.TrimSpace(input.DiscoverAPIVersion) != "" {
+		args = append(args, "--discover-api-version", strings.TrimSpace(input.DiscoverAPIVersion))
+	}
+	if strings.TrimSpace(input.NutanixV4APIVersion) != "" {
+		args = append(args, "--nutanix-v4-api-version", strings.TrimSpace(input.NutanixV4APIVersion))
 	}
 	if input.OutputPath != "" {
 		args = append(args, "--output", input.OutputPath)
@@ -351,6 +361,10 @@ func getReport(ctx context.Context, req *mcp.CallToolRequest, input GetReportInp
 	const maxLen = 150000
 	if len(text) > maxLen {
 		text = text[:maxLen] + "\n\n... [truncated for length]"
+	}
+	// Markdown KB links for Cursor/IDE on filtered NCC text logs
+	if strings.HasSuffix(strings.ToLower(file), ".log") {
+		text = kblinks.AnnotateMarkdown(text)
 	}
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: text}},

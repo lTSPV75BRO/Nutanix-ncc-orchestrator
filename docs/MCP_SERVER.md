@@ -4,7 +4,7 @@ The **NCC MCP server** exposes the Nutanix NCC Orchestrator to AI assistants (Cu
 
 ## Prerequisites
 
-- **Go 1.24+** (same as the main orchestrator)
+- **Go 1.26+** (same as the main orchestrator; see `go.mod`)
 - **ncc-orchestrator** binary on your `PATH`, or set `NCC_ORCHESTRATOR_BIN` to its path
 
 ## Build
@@ -26,11 +26,11 @@ go install ./cmd/ncc-mcp-server/
 | Tool | Description |
 |------|-------------|
 | **run_ncc** | Run NCC across clusters. Options: `config_path`, `clusters`, `username`, `password`, `insecure_skip_verify` (skip TLS verify for lab/self-signed certs), `dry_run`. Returns CLI output and run summary when available. |
-| **discover_clusters** | List cluster IPs from Prism Central. Requires `prism_central_url`; optional `config_path`, `username`, `password`, `insecure_skip_verify`, `output_path`. |
-| **get_run_summary** | Read `run-summary.json` from a previous run. Optional `output_dir` (default `outputfiles`). |
+| **discover_clusters** | List cluster IPs from Prism Central (default v4 `clustermgmt` API; optional `discover_api_version`: `v4` or `v3`; optional `nutanix_v4_api_version` e.g. `v4.2`, `v4.0.a1`). Requires `prism_central_url`; optional `config_path`, `username`, `password`, `insecure_skip_verify`, `output_path`. |
+| **get_run_summary** | Read `run-summary.json` from a previous run (per-cluster `clusters[]`, `exit_code`). Optional `output_dir` (default `outputfiles`). |
 | **replay_reports** | Regenerate HTML/CSV from existing logs (no NCC API). Requires `config_path`. |
 | **list_run_artifacts** | List files in an NCC run output directory (run-summary.json, index.html, per-cluster .log/.html/.csv). Optional `output_dir` (default `outputfiles`). |
-| **get_report** | Read the aggregated index.html or a specific cluster report file. Optional `output_dir` (default `outputfiles`), `file` (`index` or a filename like `10.0.0.1.html`). Large reports are truncated for context. |
+| **get_report** | Read the aggregated index.html or a specific cluster report file. Optional `output_dir` (default `outputfiles`), `file` (`index` or a filename like `10.0.0.1.html`). For `*.log` files, `KB NNNN` references are turned into markdown links to `portal.nutanix.com/kb/NNNN` for Cursor/IDE. Large reports are truncated for context. |
 
 ## Resources (read-only)
 

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	crand "crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -29,12 +30,14 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"text/tabwriter"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/rs/zerolog/pkgerrors"
@@ -111,6 +114,12 @@ type Config struct {
 	SlackEnabled    bool
 	SlackWebhookURL string `mapstructure:"slack-webhook-url"`
 	SlackChannel    string `mapstructure:"slack-channel"`
+
+	// NCCAPIVersion is normalized to "v4" or "v1" (Legacy). Config accepts v4, Legacy, or v1 (alias for Legacy).
+	NCCAPIVersion string `mapstructure:"ncc-api-version"`
+
+	// NutanixV4APIVersion is the v4 REST API path revision (e.g. v4.2, v4.1, v4.0.a1) for /api/clustermgmt/{ver}/ and /api/monitoring/{ver}/.
+	NutanixV4APIVersion string `mapstructure:"nutanix-v4-api-version"`
 }
 
 type NotificationSummary struct {
@@ -167,6 +176,8 @@ Create a config.yaml with keys like:
 clusters: "10.0.XX.XX,10.1.XX.XX"      	  # Comma-separated list of Prism cluster IPs/hosts  
 username: "admin"                         # Prism username  
 password: ""                              # Prefer env NCC_PASSWORD in CI; leave empty here if using env  
+ncc-api-version: v4                       # v4 (default) or Legacy (Prism Gateway v1 start-checks only)
+nutanix-v4-api-version: v4.2              # v4 path revision: v4.2 (default), v4.1, v4.0.a1, etc.
 
 # TLS and timeouts
 insecure-skip-verify: false               # Set true only for lab/self-signed  
@@ -211,9 +222,11 @@ Use --config to specify file path.
 
 Nutanix APIs used:
 
-1. POST https://{cluster_IP}:9440/PrismGateway/services/rest/v1/ncc/checks        -> Initiates NCC checks on the cluster. Returns a task UUID for polling.
-2. GET  https://{cluster_IP}:9440/PrismGateway/services/rest/v2.0/tasks/{taskID}  -> Polls the status of the NCC task. Returns progress (percentage complete and status).
-3. GET  https://{cluster_IP}:9440/PrismGateway/services/rest/v1/ncc/{taskID}      -> Fetches the NCC run summary once the task is complete. Returns the raw summary text.
+With ncc-api-version v4 (default): start checks via POST .../api/monitoring/{nutanix-v4-api-version}/serviceability/clusters/{uuid}/$actions/run-system-defined-checks (cluster UUID from GET .../api/clustermgmt/{nutanix-v4-api-version}/config/clusters, with fallback to Prism Gateway v1 cluster). Poll task via GET .../api/prism/{nutanix-v4-api-version}/config/tasks/{extId} when extId is returned, else v2.0/tasks. Configure nutanix-v4-api-version (default v4.2) for API revisions such as v4.1 or v4.0.a1. If v4 start-checks is unavailable (404), the tool falls back to Legacy start-checks.
+
+With ncc-api-version Legacy: POST https://{cluster_IP}:9440/PrismGateway/services/rest/v1/ncc/checks only.
+
+Task polling: with ncc-api-version v4 and a task extId from start-checks, GET https://{cluster_IP}:9440/api/prism/{nutanix-v4-api-version}/config/tasks/{extId} (extId URL-encoded); on HTTP 404, falls back to Prism Gateway GET .../v2.0/tasks/{uuid}. Summary: GET https://{cluster_IP}:9440/PrismGateway/services/rest/v1/ncc/{uuid}.
 
 Disclaimer:
      Use at your own risk. Running this program implies acceptance of associated risks.
@@ -254,6 +267,9 @@ const (
 
 	// Prism Gateway port
 	prismGatewayPort = 9440
+
+	// defaultNutanixV4APIVersion is the default Nutanix v4 API path segment (clustermgmt / monitoring).
+	defaultNutanixV4APIVersion = "v4.2"
 )
 
 // ==================== Exit Codes ====================
@@ -268,6 +284,9 @@ func (e *exitCodeError) Error() string { return e.err.Error() }
 func (e *exitCodeError) Unwrap() error { return e.err }
 
 func exitConfig(err error) error { return &exitCodeError{code: 2, err: err} }
+
+// exitPartial indicates some clusters succeeded and some failed (exit code 3).
+func exitPartial(err error) error { return &exitCodeError{code: 3, err: err} }
 
 // ==================== Utility Functions ====================
 
@@ -414,6 +433,56 @@ func validateEmailAddress(email string) error {
 	return nil
 }
 
+// nutanixV4PathSegment returns the API path segment for Nutanix v4 routes (clustermgmt / monitoring), defaulting to v4.2.
+func nutanixV4PathSegment(s string) string {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if s == "" {
+		return defaultNutanixV4APIVersion
+	}
+	return s
+}
+
+// normalizeNCCAPIVersion maps config values to internal "v4" or "v1" (Legacy). Accepts v4, Legacy (any case), or v1 as alias for Legacy.
+func normalizeNCCAPIVersion(s string) (string, error) {
+	t := strings.ToLower(strings.TrimSpace(s))
+	if t == "" {
+		return "v4", nil
+	}
+	switch t {
+	case "v4":
+		return "v4", nil
+	case "v1", "legacy":
+		return "v1", nil
+	default:
+		return "", fmt.Errorf("must be v4 or Legacy (v1 is accepted as an alias for Legacy), got %q", s)
+	}
+}
+
+// validateNutanixV4APIVersion checks the path revision string (e.g. v4.2, v4.0.a1) used in /api/clustermgmt/{ver}/ and /api/monitoring/{ver}/.
+func validateNutanixV4APIVersion(s string) error {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	s = strings.ToLower(s)
+	if len(s) > 48 {
+		return errors.New("nutanix-v4-api-version must be at most 48 characters")
+	}
+	if strings.ContainsAny(s, `/\`) || strings.Contains(s, "..") {
+		return errors.New("nutanix-v4-api-version must not contain path separators or '..'")
+	}
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_' {
+			continue
+		}
+		return fmt.Errorf("nutanix-v4-api-version: invalid character %q (examples: v4.2, v4.1, v4.0.a1)", r)
+	}
+	if !strings.HasPrefix(s, "v") {
+		return errors.New("nutanix-v4-api-version must start with v (e.g. v4.2, v4.1, v4.0.a1)")
+	}
+	return nil
+}
+
 // validateConfig performs comprehensive configuration validation
 func validateConfig(cfg Config) error {
 	// Validate clusters
@@ -427,6 +496,13 @@ func validateConfig(cfg Config) error {
 	}
 	if len(cfg.Username) > 255 {
 		return errors.New("username too long (max 255 characters)")
+	}
+
+	if _, err := normalizeNCCAPIVersion(cfg.NCCAPIVersion); err != nil {
+		return fmt.Errorf("ncc-api-version: %w", err)
+	}
+	if err := validateNutanixV4APIVersion(cfg.NutanixV4APIVersion); err != nil {
+		return fmt.Errorf("nutanix-v4-api-version: %w", err)
 	}
 
 	// Validate timeouts
@@ -564,6 +640,8 @@ func writeDummyConfig(path string) error {
 clusters: "10.2.XX.XX,10.0.XX.XX"      	  # Comma-separated list of Prism Element cluster IPs/cluster FQDNs
 username: "admin"                         # Prism element username
 password: ""                              # Prefer env NCC_PASSWORD in CLI; leave empty here if using env
+ncc-api-version: v4                       # v4 (default) or Legacy (Prism Gateway v1 start-checks only; v1 accepted as alias)
+nutanix-v4-api-version: v4.2              # v4 path revision (v4.2 default; e.g. v4.1, v4.0.a1)
 
 # TLS and timeouts
 insecure-skip-verify: false               # Set true only for lab/self-signed
@@ -610,6 +688,8 @@ webhook-headers:
   "clusters": ["10.0.0.1", "10.0.0.2"],
   "username": "admin",
   "password": "",
+  "ncc-api-version": "v4",
+  "nutanix-v4-api-version": "v4.2",
   "insecure-skip-verify": false,
   "timeout": "15m",
   "request-timeout": "30s",
@@ -749,6 +829,10 @@ func bindConfig() (Config, error) {
 			clustersFromFlag = lines
 		}
 	}
+	nccAPIVer, err := normalizeNCCAPIVersion(viper.GetString("ncc-api-version"))
+	if err != nil {
+		return Config{}, fmt.Errorf("ncc-api-version: %w", err)
+	}
 	cfg := Config{
 		Clusters:            clustersFromFlag,
 		ClustersFile:        clustersFile,
@@ -793,8 +877,13 @@ func bindConfig() (Config, error) {
 		SlackEnabled:        viper.GetBool("slack-enabled"),
 		SlackWebhookURL:     viper.GetString("slack-webhook-url"),
 		SlackChannel:        viper.GetString("slack-channel"),
+		NCCAPIVersion:       nccAPIVer,
+		NutanixV4APIVersion: strings.ToLower(strings.TrimSpace(viper.GetString("nutanix-v4-api-version"))),
 	}
 	// Apply defaults
+	if cfg.NutanixV4APIVersion == "" {
+		cfg.NutanixV4APIVersion = defaultNutanixV4APIVersion
+	}
 	if cfg.OutputDirLogs == "" {
 		cfg.OutputDirLogs = defaultOutputDirLogs
 	}
@@ -936,6 +1025,30 @@ func isRetryableStatus(code int) bool {
 	default:
 		return false
 	}
+}
+
+// maxRateLimitBackoff caps Retry-After / computed backoff for HTTP 429 so a misbehaving server cannot sleep unbounded.
+const maxRateLimitBackoff = 2 * time.Minute
+
+func capRateLimitWait(d time.Duration) time.Duration {
+	if d > maxRateLimitBackoff {
+		return maxRateLimitBackoff
+	}
+	return d
+}
+
+func logRateLimitHeaders(op string, resp *http.Response) {
+	if resp == nil {
+		return
+	}
+	rem := resp.Header.Get("X-RateLimit-Remaining")
+	reset := resp.Header.Get("X-RateLimit-Reset")
+	apiRem := resp.Header.Get("X-Api-Ratelimit-Remaining")
+	if rem == "" && reset == "" && apiRem == "" {
+		return
+	}
+	log.Warn().Str("op", op).Str("X-RateLimit-Remaining", rem).Str("X-RateLimit-Reset", reset).
+		Str("X-Api-Ratelimit-Remaining", apiRem).Msg("rate limit headers")
 }
 
 func retryAfterDelay(resp *http.Response) (time.Duration, bool) {
@@ -1625,6 +1738,10 @@ func sendSlackWithRetry(ctx context.Context, client HTTPClient, cfg Config, summ
 // 	return generateHTML(fs, rows, filename, HTMLMeta{})
 // }
 
+// htmlNowForReport supplies the "Generated" timestamp for per-cluster HTML reports.
+// Tests may replace it with a fixed clock for golden-file stability.
+var htmlNowForReport = func() time.Time { return time.Now() }
+
 func generateHTML(fs FS, rows []Row, filename string, meta HTMLMeta) error {
 	if err := fs.MkdirAll(filepath.Dir(filename), 0755); err != nil {
 		return err
@@ -1754,7 +1871,7 @@ func generateHTML(fs FS, rows []Row, filename string, meta HTMLMeta) error {
 	}
 	data := HTMLData{
 		Rows:    rows,
-		Now:     time.Now().Format(time.RFC3339),
+		Now:     htmlNowForReport().Format(time.RFC3339),
 		Meta:    meta,
 		Summary: sum,
 	}
@@ -1837,13 +1954,27 @@ type JSONSummary struct {
 
 // RunSummaryJSON is the machine-readable run result written to run-summary.json.
 type RunSummaryJSON struct {
-	Timestamp      string   `json:"timestamp"`
-	DurationS      float64  `json:"duration_s"`
-	ClustersOK     int      `json:"clusters_ok"`
-	ClustersFailed int      `json:"clusters_failed"`
-	FailedClusters []string `json:"failed_clusters,omitempty"`
-	IndexHTML      string   `json:"index_html"`
-	TotalChecks    int      `json:"total_checks,omitempty"`
+	Timestamp      string              `json:"timestamp"`
+	DurationS      float64             `json:"duration_s"`
+	ClustersOK     int                 `json:"clusters_ok"`
+	ClustersFailed int                 `json:"clusters_failed"`
+	FailedClusters []string            `json:"failed_clusters,omitempty"`
+	Clusters       []RunClusterSummary `json:"clusters,omitempty"`
+	ExitCode       int                 `json:"exit_code,omitempty"`
+	IndexHTML      string              `json:"index_html"`
+	TotalChecks    int                 `json:"total_checks,omitempty"`
+}
+
+// RunClusterSummary is per-cluster stats for automation (run-summary.json).
+type RunClusterSummary struct {
+	Address      string `json:"address"`
+	OK           bool   `json:"ok"`
+	Error        string `json:"error,omitempty"`
+	FailCount    int    `json:"fail_count,omitempty"`
+	WarnCount    int    `json:"warn_count,omitempty"`
+	ErrCount     int    `json:"err_count,omitempty"`
+	InfoCount    int    `json:"info_count,omitempty"`
+	ChecksTotal  int    `json:"checks_total,omitempty"`
 }
 
 func writeRunSummaryJSON(fs FS, outDir string, summary RunSummaryJSON) error {
@@ -1853,6 +1984,55 @@ func writeRunSummaryJSON(fs FS, outDir string, summary RunSummaryJSON) error {
 		return err
 	}
 	return fs.WriteFile(path, data, 0644)
+}
+
+// NCCRunRecord is a versioned machine-readable bundle (ncc-run-record.json) for automation pipelines.
+type NCCRunRecord struct {
+	SchemaVersion       string         `json:"schema_version"`
+	OrchestratorVersion string         `json:"orchestrator_version"`
+	Stream              string         `json:"stream,omitempty"`
+	Run                 RunSummaryJSON `json:"run"`
+}
+
+func writeNCCRunRecordJSON(fs FS, outDir string, summary RunSummaryJSON) error {
+	path := filepath.Join(outDir, "ncc-run-record.json")
+	rec := NCCRunRecord{
+		SchemaVersion:       "1.0",
+		OrchestratorVersion: Version,
+		Stream:              Stream,
+		Run:                 summary,
+	}
+	data, err := json.MarshalIndent(rec, "", "  ")
+	if err != nil {
+		return err
+	}
+	return fs.WriteFile(path, data, 0644)
+}
+
+func buildRunClusterSummary(r ClusterResult) RunClusterSummary {
+	s := RunClusterSummary{Address: r.Cluster, OK: r.Err == nil}
+	if r.Err != nil {
+		s.Error = r.Err.Error()
+		return s
+	}
+	counts := map[string]int{"FAIL": 0, "WARN": 0, "ERR": 0, "INFO": 0}
+	for _, b := range r.Blocks {
+		sev := b.Severity
+		if sev == "" {
+			sev = "INFO"
+		}
+		if _, ok := counts[sev]; ok {
+			counts[sev]++
+		} else {
+			counts["INFO"]++
+		}
+	}
+	s.FailCount = counts["FAIL"]
+	s.WarnCount = counts["WARN"]
+	s.ErrCount = counts["ERR"]
+	s.InfoCount = counts["INFO"]
+	s.ChecksTotal = len(r.Blocks)
+	return s
 }
 
 func generateJSON(fs FS, blocks []ParsedBlock, filename string, meta HTMLMeta) error {
@@ -3577,8 +3757,12 @@ func doWithRetry(ctx context.Context, client HTTPClient, req *http.Request, cfg 
 		retryable := isRetryableStatus(status)
 		var back time.Duration
 		if status == 429 {
+			logRateLimitHeaders(op, resp)
 			if ra, ok := retryAfterDelay(resp); ok {
-				back = ra
+				back = capRateLimitWait(ra)
+				if ra > maxRateLimitBackoff {
+					log.Warn().Str("op", op).Dur("requested", ra).Dur("capped", back).Msg("rate limit wait capped")
+				}
 			}
 		}
 		if back == 0 {
@@ -3608,24 +3792,186 @@ func doWithRetry(ctx context.Context, client HTTPClient, req *http.Request, cfg 
 // ==================== NCC Client ====================
 
 type NCCClient struct {
-	baseURL string
-	user    string
-	pass    string
-	http    HTTPClient
-	cfg     Config
+	baseURL    string
+	cluster    string // host:port or IP for building v4 API URL
+	user       string
+	pass       string
+	http       HTTPClient
+	cfg        Config
+	apiVersion string // "v1" or "v4"
+	// taskExtID is the full Nutanix extId from start-checks v4 (e.g. "base:uuid"); used for GET /api/prism/{ver}/config/tasks/{extId}.
+	taskExtID string
 }
 
 func NewNCCClient(cluster, user, pass string, httpc HTTPClient, cfg Config) *NCCClient {
+	apiVer := strings.ToLower(strings.TrimSpace(cfg.NCCAPIVersion))
+	if apiVer == "" {
+		apiVer = "v4"
+	}
 	return &NCCClient{
-		baseURL: fmt.Sprintf("https://%s:9440/PrismGateway/services/rest", cluster),
-		user:    user,
-		pass:    pass,
-		http:    httpc,
-		cfg:     cfg,
+		baseURL:    fmt.Sprintf("https://%s:9440/PrismGateway/services/rest", cluster),
+		cluster:    cluster,
+		user:       user,
+		pass:       pass,
+		http:       httpc,
+		cfg:        cfg,
+		apiVersion: apiVer,
 	}
 }
 
+// generateRequestID returns a UUID v4-style string for NTNX-Request-Id header.
+func generateRequestID() (string, error) {
+	var b [16]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		return "", err
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%12x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
+}
+
+// getClusterUUID fetches the cluster UUID from Prism (v1 cluster endpoint or v4 clustermgmt list).
+func (c *NCCClient) getClusterUUID(ctx context.Context) (string, error) {
+	if c.apiVersion == "v4" {
+		uuid, err := c.getClusterUUIDV4(ctx)
+		if err != nil && strings.Contains(err.Error(), "404") {
+			log.Info().Str("cluster", c.cluster).Msg("v4 cluster list not available (404), using v1 cluster for uuid")
+			return c.getClusterUUIDV1(ctx)
+		}
+		return uuid, err
+	}
+	return c.getClusterUUIDV1(ctx)
+}
+
+func (c *NCCClient) getClusterUUIDV1(ctx context.Context) (string, error) {
+	url := c.baseURL + "/v1/cluster"
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.SetBasicAuth(c.user, c.pass)
+	resp, body, err := doWithRetry(ctx, c.http, req, c.cfg, "get cluster uuid")
+	if err != nil {
+		log.Error().Err(err).Str("url", url).Msg("get cluster uuid failed")
+		return "", fmt.Errorf("get cluster uuid: %w", err)
+	}
+	_ = resp
+	var data map[string]interface{}
+	if err := json.Unmarshal(body, &data); err != nil {
+		return "", fmt.Errorf("parse cluster response: %w", err)
+	}
+	uuid, _ := data["uuid"].(string)
+	if uuid == "" {
+		if id, ok := data["id"].(string); ok && id != "" {
+			uuid = id
+		}
+	}
+	if uuid == "" {
+		return "", errors.New("cluster response missing uuid")
+	}
+	return uuid, nil
+}
+
+func (c *NCCClient) getClusterUUIDV4(ctx context.Context) (string, error) {
+	extID, _, err := c.resolveClusterV4ForNCC(ctx)
+	return extID, err
+}
+
+// resolveClusterV4ForNCC finds the clustermgmt entity matching c.cluster (IP, name, extId, or CVM IP),
+// returns its extId and CVM IPv4s for run-system-defined-checks. Prism Central often registers multiple
+// clusters (e.g. AOS + PC); using only data[0] paired with nodeIps={c.cluster} caused NCC-40023 when
+// the first cluster was not the one the user addressed.
+func (c *NCCClient) resolveClusterV4ForNCC(ctx context.Context) (clusterExtID string, nodeIPv4s []string, err error) {
+	ref := strings.TrimSpace(c.cluster)
+	if ref == "" {
+		return "", nil, errors.New("cluster address is empty")
+	}
+	ver := nutanixV4PathSegment(c.cfg.NutanixV4APIVersion)
+	base := fmt.Sprintf("https://%s:9440/api/clustermgmt/%s/config/clusters", c.cluster, ver)
+	const pageSize = 100
+	var scanned int
+
+	for page := 0; page < 1000; page++ {
+		u, err := url.Parse(base)
+		if err != nil {
+			return "", nil, fmt.Errorf("parse URL: %w", err)
+		}
+		q := url.Values{}
+		q.Set("$limit", strconv.Itoa(pageSize))
+		q.Set("$page", strconv.Itoa(page))
+		u.RawQuery = q.Encode()
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+		if err != nil {
+			return "", nil, err
+		}
+		req.Header.Set("Accept", "application/json")
+		req.SetBasicAuth(c.user, c.pass)
+		resp, body, err := doWithRetry(ctx, c.http, req, c.cfg, "get cluster uuid v4")
+		if err != nil {
+			log.Error().Err(err).Str("url", u.String()).Msg("get cluster uuid v4 failed")
+			return "", nil, fmt.Errorf("get cluster uuid v4: %w", err)
+		}
+		_ = resp
+
+		var payload struct {
+			Metadata struct {
+				TotalAvailableResults int `json:"totalAvailableResults"`
+			} `json:"metadata"`
+			Data []map[string]interface{} `json:"data"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return "", nil, fmt.Errorf("parse cluster list response: %w", err)
+		}
+		if len(payload.Data) == 0 {
+			break
+		}
+		for _, entity := range payload.Data {
+			scanned++
+			if entity == nil {
+				continue
+			}
+			if !clusterEntityMatchesUserRef(ref, entity) {
+				continue
+			}
+			extID := extractClusterExtIDV4(entity)
+			if extID == "" {
+				return "", nil, errors.New("matched cluster entity missing extId")
+			}
+			nodeIPs := extractCVMIPv4sFromClusterEntity(entity)
+			if len(nodeIPs) == 0 {
+				if a := extractClusterAddressV4(entity); a != "" {
+					nodeIPs = []string{a}
+				}
+			}
+			return extID, dedupeStringsKeepOrder(nodeIPs), nil
+		}
+		total := payload.Metadata.TotalAvailableResults
+		if total > 0 && scanned >= total {
+			break
+		}
+	}
+
+	return "", nil, fmt.Errorf("no cluster registered in Prism matches %q (use an IP, name, or extId from discover-clusters)", ref)
+}
+
 func (c *NCCClient) StartChecks(ctx context.Context) (string, []byte, error) {
+	if c.apiVersion == "v4" {
+		taskID, body, err := c.startChecksV4(ctx)
+		if err != nil && strings.Contains(err.Error(), "404") {
+			log.Info().Str("cluster", c.cluster).Msg("v4 endpoint not available (404), falling back to v1")
+			return c.startChecksV1(ctx)
+		}
+		if err != nil {
+			return "", body, err
+		}
+		return taskID, body, nil
+	}
+	return c.startChecksV1(ctx)
+}
+
+func (c *NCCClient) startChecksV1(ctx context.Context) (string, []byte, error) {
 	url := c.baseURL + "/v1/ncc/checks"
 	payload := []byte(`{"sendEmail":false}`)
 
@@ -3661,7 +4007,163 @@ func (c *NCCClient) StartChecks(ctx context.Context) (string, []byte, error) {
 	return uuid, body, nil
 }
 
-func (c *NCCClient) GetTask(ctx context.Context, taskID string) (TaskStatus, []byte, error) {
+// v4RunChecksRequest is the body for monitoring v4 run-system-defined-checks.
+type v4RunChecksRequest struct {
+	ShouldAnonymize                        bool       `json:"shouldAnonymize"`
+	ShouldSendReportToConfiguredRecipients bool       `json:"shouldSendReportToConfiguredRecipients"`
+	AdditionalRecipients                   []string   `json:"additionalRecipients"`
+	NodeIps                                []v4NodeIP `json:"nodeIps"`
+	ShouldRunAllChecks                     bool       `json:"shouldRunAllChecks"`
+}
+
+type v4NodeIP struct {
+	Value        string `json:"value"`
+	PrefixLength int    `json:"prefixLength"`
+}
+
+func (c *NCCClient) startChecksV4(ctx context.Context) (string, []byte, error) {
+	clusterUUID, nodeIPs, err := c.resolveClusterV4ForNCC(ctx)
+	if err != nil {
+		return "", nil, fmt.Errorf("get cluster uuid for v4: %w", err)
+	}
+	if len(nodeIPs) == 0 {
+		nodeIPs = []string{c.cluster}
+	}
+	var nodeIpsReq []v4NodeIP
+	for _, ip := range nodeIPs {
+		nodeIpsReq = append(nodeIpsReq, v4NodeIP{Value: ip, PrefixLength: 32})
+	}
+	requestID, err := generateRequestID()
+	if err != nil {
+		return "", nil, fmt.Errorf("generate request id: %w", err)
+	}
+	ver := nutanixV4PathSegment(c.cfg.NutanixV4APIVersion)
+	v4Base := fmt.Sprintf("https://%s:9440/api/monitoring/%s/serviceability/clusters/%s/$actions/run-system-defined-checks", c.cluster, ver, clusterUUID)
+	// Prism Central v4 requires additionalRecipients to have at least one element matching email regex (user@domain.tld); use placeholder when not sending report
+	additionalRecipients := []string{"noreply@example.com"}
+	body := v4RunChecksRequest{
+		ShouldAnonymize:                        false,
+		ShouldSendReportToConfiguredRecipients: false,
+		AdditionalRecipients:                   additionalRecipients,
+		NodeIps:                                nodeIpsReq,
+		ShouldRunAllChecks:                     true,
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return "", nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", v4Base, bytes.NewReader(payload))
+	if err != nil {
+		return "", nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("NTNX-Request-Id", requestID)
+	req.SetBasicAuth(c.user, c.pass)
+
+	resp, respBody, err := doWithRetry(ctx, c.http, req, c.cfg, "start checks v4")
+	if err != nil {
+		log.Error().Err(err).Str("url", v4Base).Str("method", "POST").Msg("http do error")
+		return "", respBody, fmt.Errorf("start checks v4: %w", err)
+	}
+	_ = resp
+	log.Debug().Str("url", v4Base).RawJSON("body", respBody).Msg("start checks v4 response")
+
+	var data map[string]interface{}
+	if err := json.Unmarshal(respBody, &data); err != nil {
+		return "", respBody, err
+	}
+	c.taskExtID = ""
+	var taskID string
+	if dataObj, _ := data["data"].(map[string]interface{}); dataObj != nil {
+		if extID, _ := dataObj["extId"].(string); extID != "" {
+			c.taskExtID = extID
+			if idx := strings.LastIndex(extID, ":"); idx >= 0 && idx+1 < len(extID) {
+				taskID = extID[idx+1:]
+			} else {
+				taskID = extID
+			}
+		}
+	}
+	if taskID == "" {
+		taskID, _ = data["taskUuid"].(string)
+	}
+	if taskID == "" {
+		if alt, ok := data["task_uuid"].(string); ok && alt != "" {
+			taskID = alt
+		}
+	}
+	if taskID == "" {
+		if extID, ok := data["executionId"].(string); ok && extID != "" {
+			taskID = extID
+		}
+	}
+	if taskID == "" {
+		return "", respBody, errors.New("v4 response missing taskUuid or executionId")
+	}
+	return taskID, respBody, nil
+}
+
+// mapPrismTaskJSONToTaskStatus maps Prism v4 GET .../api/prism/{ver}/config/tasks/{extId} JSON to legacy TaskStatus for the poll loop.
+func mapPrismTaskJSONToTaskStatus(raw []byte) (TaskStatus, error) {
+	var wrap struct {
+		Data struct {
+			Status             string `json:"status"`
+			ProgressPercentage int    `json:"progressPercentage"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &wrap); err != nil {
+		return TaskStatus{}, err
+	}
+	st := strings.ToUpper(strings.TrimSpace(wrap.Data.Status))
+	pct := wrap.Data.ProgressPercentage
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	var ps string
+	switch st {
+	case "SUCCEEDED", "SUCCESS", "COMPLETED", "DONE", "COMPLETE", "SUCCEED":
+		ps = "Succeeded"
+		if pct < 100 {
+			pct = 100
+		}
+	case "FAILED", "FAILURE", "ABORTED", "CANCELED", "CANCELLED", "ERROR":
+		ps = "Failed"
+	default:
+		ps = "Running"
+	}
+	return TaskStatus{PercentageComplete: pct, ProgressStatus: ps}, nil
+}
+
+func (c *NCCClient) getTaskPrismV4(ctx context.Context, extID string) (TaskStatus, []byte, error) {
+	ver := nutanixV4PathSegment(c.cfg.NutanixV4APIVersion)
+	u := fmt.Sprintf("https://%s:9440/api/prism/%s/config/tasks/%s", c.cluster, ver, url.PathEscape(extID))
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return TaskStatus{}, nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.SetBasicAuth(c.user, c.pass)
+
+	resp, body, err := doWithRetry(ctx, c.http, req, c.cfg, "get task prism v4")
+	if err != nil {
+		log.Error().Err(err).Str("url", u).Msg("http do error")
+		return TaskStatus{}, body, fmt.Errorf("get task prism v4: %w", err)
+	}
+	_ = resp
+	log.Debug().Str("url", u).RawJSON("body", body).Msg("get task prism v4 response")
+
+	st, err := mapPrismTaskJSONToTaskStatus(body)
+	if err != nil {
+		return TaskStatus{}, body, fmt.Errorf("parse prism task response: %w", err)
+	}
+	return st, body, nil
+}
+
+func (c *NCCClient) getTaskV2Legacy(ctx context.Context, taskID string) (TaskStatus, []byte, error) {
 	url := c.baseURL + "/v2.0/tasks/" + taskID
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -3683,6 +4185,21 @@ func (c *NCCClient) GetTask(ctx context.Context, taskID string) (TaskStatus, []b
 		return TaskStatus{}, body, err
 	}
 	return status, body, nil
+}
+
+func (c *NCCClient) GetTask(ctx context.Context, taskID string) (TaskStatus, []byte, error) {
+	if c.apiVersion == "v4" && c.taskExtID != "" {
+		st, body, err := c.getTaskPrismV4(ctx, c.taskExtID)
+		if err == nil {
+			return st, body, nil
+		}
+		if strings.Contains(err.Error(), "404") {
+			log.Info().Str("cluster", c.cluster).Msg("prism v4 task API unavailable (404), falling back to Prism Gateway v2.0/tasks")
+			return c.getTaskV2Legacy(ctx, taskID)
+		}
+		return TaskStatus{}, body, err
+	}
+	return c.getTaskV2Legacy(ctx, taskID)
 }
 
 func (c *NCCClient) GetRunSummary(ctx context.Context, taskID string) (NCCSummary, []byte, error) {
@@ -3985,10 +4502,48 @@ func promptPasswordIfEmpty(p string, Username string) (string, error) {
 // githubRepo is used by --update to fetch latest release (format: owner/repo).
 const githubRepo = "lTSPV75BRO/Nutanix-ncc-orchestrator"
 
-// versionLess returns true if a is semantically less than b (e.g. "0.1.12" < "0.1.13").
+// stripGoBuildGitSuffix removes a trailing -<hex> from ldflags/git injection (e.g. 1.0.0-deadbeef...).
+// Does not strip semver prereleases like 1.0.0-rc1 (suffix is not all hex).
+func stripGoBuildGitSuffix(s string) string {
+	i := strings.LastIndex(s, "-")
+	if i <= 0 {
+		return s
+	}
+	tail := s[i+1:]
+	if len(tail) < 7 || len(tail) > 64 {
+		return s
+	}
+	for _, c := range tail {
+		if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') {
+			continue
+		}
+		return s
+	}
+	return s[:i]
+}
+
+// versionLess returns true if a is semantically less than b (e.g. "0.9.0" < "1.0.0").
+// Uses semver when both strings parse; otherwise falls back to simple numeric parsing.
 func versionLess(a, b string) bool {
+	a = strings.TrimPrefix(strings.TrimSpace(a), "v")
+	b = strings.TrimPrefix(strings.TrimSpace(b), "v")
+	if va, ea := semver.NewVersion(a); ea == nil {
+		if vb, eb := semver.NewVersion(b); eb == nil {
+			return va.LessThan(vb)
+		}
+	}
+	a2 := stripGoBuildGitSuffix(a)
+	b2 := stripGoBuildGitSuffix(b)
+	if va, ea := semver.NewVersion(a2); ea == nil {
+		if vb, eb := semver.NewVersion(b2); eb == nil {
+			return va.LessThan(vb)
+		}
+	}
+	return versionLessLegacy(a2, b2)
+}
+
+func versionLessLegacy(a, b string) bool {
 	parse := func(s string) (major, minor, patch int) {
-		s = strings.TrimPrefix(s, "v")
 		parts := strings.SplitN(s, ".", 4)
 		if len(parts) >= 1 {
 			major, _ = strconv.Atoi(parts[0])
@@ -4022,7 +4577,7 @@ var (
 func init() {
 	// Defaults
 	if Version == "" {
-		Version = "0.1.13"
+		Version = "1.0.0"
 	}
 	if BuildDate == "" {
 		BuildDate = "unknown"
@@ -4104,11 +4659,8 @@ func runUpdate() error {
 	latestVer := strings.TrimPrefix(rel.TagName, "v")
 	fmt.Fprintf(os.Stderr, "Latest release: %s\n", rel.TagName)
 
-	// Compare with current version (strip optional git revision suffix) using semver
-	currentVer := Version
-	if idx := strings.Index(currentVer, "-"); idx > 0 {
-		currentVer = currentVer[:idx]
-	}
+	// Compare with current version (strip optional git revision suffix from ldflags) using semver
+	currentVer := stripGoBuildGitSuffix(Version)
 	if !versionLess(currentVer, latestVer) {
 		if versionLess(latestVer, currentVer) {
 			fmt.Fprintln(os.Stderr, "You have a newer version than the latest release (dev build).")
@@ -4298,7 +4850,303 @@ type pcListClustersResponse struct {
 	Entities []map[string]interface{} `json:"entities"`
 }
 
-// runDiscoverClusters lists clusters from Prism Central v3 API and prints one address per line.
+// errDiscoverV4Unavailable signals that the v4 clustermgmt API is not available (e.g. HTTP 404).
+type errDiscoverV4Unavailable struct {
+	status int
+	body   string
+}
+
+func (e errDiscoverV4Unavailable) Error() string {
+	return fmt.Sprintf("Prism Central clustermgmt v4 returned HTTP %d", e.status)
+}
+
+func discoverHTTPClient(insecure bool) *http.Client {
+	return &http.Client{
+		Timeout: 60 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure},
+		},
+	}
+}
+
+// fetchPCClustersV3 lists clusters via legacy POST /api/nutanix/v3/clusters/list.
+func fetchPCClustersV3(pcURL, username, password string, insecure bool) ([]string, error) {
+	u := pcURL + "/api/nutanix/v3/clusters/list"
+	body := []byte(`{}`)
+	req, err := http.NewRequest(http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.SetBasicAuth(username, password)
+
+	client := discoverHTTPClient(insecure)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request to Prism Central: %w", err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Prism Central returned %d: %s", resp.StatusCode, string(bytes.TrimSpace(data)))
+	}
+
+	var list pcListClustersResponse
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, fmt.Errorf("parse response: %w", err)
+	}
+
+	var addresses []string
+	for _, e := range list.Entities {
+		addr := extractClusterAddressV3(e)
+		if addr != "" {
+			addresses = append(addresses, addr)
+		}
+	}
+	return addresses, nil
+}
+
+// fetchPCClustersV4 lists clusters via GET /api/clustermgmt/{ver}/config/clusters with $page / $limit pagination.
+func fetchPCClustersV4(pcURL, username, password string, insecure bool, v4APIVer string) ([]string, error) {
+	ver := nutanixV4PathSegment(v4APIVer)
+	base := strings.TrimSuffix(pcURL, "/") + "/api/clustermgmt/" + ver + "/config/clusters"
+	client := discoverHTTPClient(insecure)
+	const pageSize = 100
+	seen := make(map[string]bool)
+	var out []string
+
+	for page := 0; page < 1000; page++ {
+		u, err := url.Parse(base)
+		if err != nil {
+			return nil, fmt.Errorf("parse URL: %w", err)
+		}
+		q := url.Values{}
+		q.Set("$limit", strconv.Itoa(pageSize))
+		q.Set("$page", strconv.Itoa(page))
+		u.RawQuery = q.Encode()
+
+		req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("Accept", "application/json")
+		req.SetBasicAuth(username, password)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("request to Prism Central: %w", err)
+		}
+		data, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read response: %w", err)
+		}
+		if resp.StatusCode == http.StatusNotFound {
+			return nil, errDiscoverV4Unavailable{status: resp.StatusCode, body: string(data)}
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("Prism Central returned %d: %s", resp.StatusCode, string(bytes.TrimSpace(data)))
+		}
+
+		var payload struct {
+			Metadata struct {
+				TotalAvailableResults int `json:"totalAvailableResults"`
+			} `json:"metadata"`
+			Data []map[string]interface{} `json:"data"`
+		}
+		if err := json.Unmarshal(data, &payload); err != nil {
+			return nil, fmt.Errorf("parse response: %w", err)
+		}
+		if len(payload.Data) == 0 {
+			break
+		}
+		for _, e := range payload.Data {
+			addr := extractClusterAddressV4(e)
+			if addr != "" && !seen[addr] {
+				seen[addr] = true
+				out = append(out, addr)
+			}
+		}
+		total := payload.Metadata.TotalAvailableResults
+		if total > 0 && len(out) >= total {
+			break
+		}
+		// Next page until empty; do not stop on len(data) < $limit (server may cap below our limit).
+	}
+	return out, nil
+}
+
+// DiscoverClusterRow is one registered cluster from discover-clusters (table/json output).
+type DiscoverClusterRow struct {
+	Name    string `json:"name"`
+	ExtID   string `json:"ext_id"`
+	Address string `json:"address"`
+	API     string `json:"api"`
+}
+
+func discoverRowFromV4Entity(e map[string]interface{}) DiscoverClusterRow {
+	if e == nil {
+		return DiscoverClusterRow{}
+	}
+	name, _ := e["name"].(string)
+	return DiscoverClusterRow{
+		Name:    strings.TrimSpace(name),
+		ExtID:   extractClusterExtIDV4(e),
+		Address: extractClusterAddressV4(e),
+		API:     "v4",
+	}
+}
+
+func extractClusterExtIDV3(e map[string]interface{}) string {
+	if m, _ := e["metadata"].(map[string]interface{}); m != nil {
+		if u, _ := m["uuid"].(string); strings.TrimSpace(u) != "" {
+			return strings.TrimSpace(u)
+		}
+	}
+	return ""
+}
+
+func discoverRowFromV3Entity(e map[string]interface{}) DiscoverClusterRow {
+	if e == nil {
+		return DiscoverClusterRow{}
+	}
+	name := ""
+	if m, _ := e["metadata"].(map[string]interface{}); m != nil {
+		if n, _ := m["name"].(string); strings.TrimSpace(n) != "" {
+			name = strings.TrimSpace(n)
+		}
+	}
+	if name == "" {
+		if spec, _ := e["spec"].(map[string]interface{}); spec != nil {
+			if n, _ := spec["name"].(string); strings.TrimSpace(n) != "" {
+				name = strings.TrimSpace(n)
+			}
+		}
+	}
+	return DiscoverClusterRow{
+		Name:    name,
+		ExtID:   extractClusterExtIDV3(e),
+		Address: extractClusterAddressV3(e),
+		API:     "v3",
+	}
+}
+
+// fetchDiscoverClusterRowsV4 returns cluster rows from GET clustermgmt v4 (paginated).
+func fetchDiscoverClusterRowsV4(pcURL, username, password string, insecure bool, v4APIVer string) ([]DiscoverClusterRow, error) {
+	ver := nutanixV4PathSegment(v4APIVer)
+	base := strings.TrimSuffix(pcURL, "/") + "/api/clustermgmt/" + ver + "/config/clusters"
+	client := discoverHTTPClient(insecure)
+	const pageSize = 100
+	seen := make(map[string]bool)
+	var out []DiscoverClusterRow
+
+	for page := 0; page < 1000; page++ {
+		u, err := url.Parse(base)
+		if err != nil {
+			return nil, fmt.Errorf("parse URL: %w", err)
+		}
+		q := url.Values{}
+		q.Set("$limit", strconv.Itoa(pageSize))
+		q.Set("$page", strconv.Itoa(page))
+		u.RawQuery = q.Encode()
+
+		req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("Accept", "application/json")
+		req.SetBasicAuth(username, password)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("request to Prism Central: %w", err)
+		}
+		data, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read response: %w", err)
+		}
+		if resp.StatusCode == http.StatusNotFound {
+			return nil, errDiscoverV4Unavailable{status: resp.StatusCode, body: string(data)}
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("Prism Central returned %d: %s", resp.StatusCode, string(bytes.TrimSpace(data)))
+		}
+
+		var payload struct {
+			Metadata struct {
+				TotalAvailableResults int `json:"totalAvailableResults"`
+			} `json:"metadata"`
+			Data []map[string]interface{} `json:"data"`
+		}
+		if err := json.Unmarshal(data, &payload); err != nil {
+			return nil, fmt.Errorf("parse response: %w", err)
+		}
+		if len(payload.Data) == 0 {
+			break
+		}
+		for _, e := range payload.Data {
+			row := discoverRowFromV4Entity(e)
+			key := row.ExtID
+			if key == "" {
+				key = row.Address + row.Name
+			}
+			if key != "" && !seen[key] {
+				seen[key] = true
+				out = append(out, row)
+			}
+		}
+		total := payload.Metadata.TotalAvailableResults
+		if total > 0 && len(out) >= total {
+			break
+		}
+	}
+	return out, nil
+}
+
+// fetchDiscoverClusterRowsV3 returns cluster rows from POST v3 clusters/list.
+func fetchDiscoverClusterRowsV3(pcURL, username, password string, insecure bool) ([]DiscoverClusterRow, error) {
+	u := pcURL + "/api/nutanix/v3/clusters/list"
+	body := []byte(`{}`)
+	req, err := http.NewRequest(http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.SetBasicAuth(username, password)
+
+	client := discoverHTTPClient(insecure)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request to Prism Central: %w", err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Prism Central returned %d: %s", resp.StatusCode, string(bytes.TrimSpace(data)))
+	}
+
+	var list pcListClustersResponse
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, fmt.Errorf("parse response: %w", err)
+	}
+
+	var out []DiscoverClusterRow
+	for _, e := range list.Entities {
+		out = append(out, discoverRowFromV3Entity(e))
+	}
+	return out, nil
+}
+
+// runDiscoverClusters lists clusters from Prism Central (default v4 GET clustermgmt; optional v3 or v4→v3 fallback).
 func runDiscoverClusters(cmd *cobra.Command, args []string) error {
 	// Load config file if set (so prism-central-url, username, etc. can come from config)
 	if cfgFile := viper.GetString("config"); cfgFile != "" {
@@ -4312,11 +5160,20 @@ func runDiscoverClusters(cmd *cobra.Command, args []string) error {
 	if !strings.HasPrefix(pcURL, "https://") && !strings.HasPrefix(pcURL, "http://") {
 		pcURL = "https://" + pcURL
 	}
+	// Discover defines its own username/password/insecure flags; those must NOT be
+	// viper.BindPFlag'd to the same keys as the root command (the last bind wins and
+	// breaks the main ncc-orchestrator run). Merge: flag when set, else viper/config.
 	username := viper.GetString("username")
-	if username == "" {
+	if cmd.Flags().Changed("username") {
+		username, _ = cmd.Flags().GetString("username")
+	}
+	if strings.TrimSpace(username) == "" {
 		username = "admin"
 	}
 	password := viper.GetString("password")
+	if cmd.Flags().Changed("password") {
+		password, _ = cmd.Flags().GetString("password")
+	}
 	if password == "" {
 		password = os.Getenv("NCC_PASSWORD")
 	}
@@ -4328,65 +5185,214 @@ func runDiscoverClusters(cmd *cobra.Command, args []string) error {
 		}
 	}
 	insecure := viper.GetBool("insecure-skip-verify")
-
-	u := pcURL + "/api/nutanix/v3/clusters/list"
-	body := []byte(`{}`)
-	req, err := http.NewRequest(http.MethodPost, u, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(username, password)
-
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure},
-		},
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("request to Prism Central: %w", err)
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("read response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Prism Central returned %d: %s", resp.StatusCode, string(bytes.TrimSpace(data)))
+	if cmd.Flags().Changed("insecure-skip-verify") {
+		insecure, _ = cmd.Flags().GetBool("insecure-skip-verify")
 	}
 
-	var list pcListClustersResponse
-	if err := json.Unmarshal(data, &list); err != nil {
-		return fmt.Errorf("parse response: %w", err)
+	discoverVer, _ := cmd.Flags().GetString("discover-api-version")
+	discoverVer = strings.ToLower(strings.TrimSpace(discoverVer))
+	if discoverVer == "" {
+		discoverVer = strings.ToLower(strings.TrimSpace(viper.GetString("discover-api-version")))
 	}
-
-	var addresses []string
-	for _, e := range list.Entities {
-		addr := extractClusterAddress(e)
-		if addr != "" {
-			addresses = append(addresses, addr)
+	if discoverVer == "" {
+		discoverVer = "v4"
+	}
+	if discoverVer != "v3" && discoverVer != "v4" {
+		return exitConfig(fmt.Errorf("discover-api-version must be v3 or v4, got %q", discoverVer))
+	}
+	if discoverVer == "v4" {
+		if err := validateNutanixV4APIVersion(viper.GetString("nutanix-v4-api-version")); err != nil {
+			return exitConfig(fmt.Errorf("nutanix-v4-api-version: %w", err))
 		}
+	}
+
+	format, _ := cmd.Flags().GetString("format")
+	format = strings.ToLower(strings.TrimSpace(format))
+	if format == "" {
+		format = "lines"
+	}
+	switch format {
+	case "lines", "table", "json":
+	default:
+		return exitConfig(fmt.Errorf("format must be lines, table, or json, got %q", format))
+	}
+
+	var rows []DiscoverClusterRow
+	var err error
+	if discoverVer == "v4" {
+		rows, err = fetchDiscoverClusterRowsV4(pcURL, username, password, insecure, viper.GetString("nutanix-v4-api-version"))
+		if err != nil {
+			var v4un errDiscoverV4Unavailable
+			if errors.As(err, &v4un) && v4un.status == http.StatusNotFound {
+				fmt.Fprintf(os.Stderr, "discover-clusters: v4 API not found (%d), falling back to v3\n", v4un.status)
+				rows, err = fetchDiscoverClusterRowsV3(pcURL, username, password, insecure)
+			}
+		}
+	} else {
+		rows, err = fetchDiscoverClusterRowsV3(pcURL, username, password, insecure)
+	}
+	if err != nil {
+		return err
 	}
 
 	outPath, _ := cmd.Flags().GetString("output")
-	if outPath != "" {
-		content := strings.Join(addresses, "\n") + "\n"
-		if err := os.WriteFile(outPath, []byte(content), 0644); err != nil {
-			return fmt.Errorf("write %s: %w", outPath, err)
+	writeOut := func(content string) error {
+		if outPath != "" {
+			if err := os.WriteFile(outPath, []byte(content), 0644); err != nil {
+				return fmt.Errorf("write %s: %w", outPath, err)
+			}
+			fmt.Fprintf(os.Stderr, "Wrote %d cluster(s) to %s\n", len(rows), outPath)
+			return nil
 		}
-		fmt.Fprintf(os.Stderr, "Wrote %d cluster(s) to %s\n", len(addresses), outPath)
-	} else {
-		for _, a := range addresses {
-			fmt.Println(a)
-		}
+		fmt.Print(content)
+		return nil
 	}
-	return nil
+
+	switch format {
+	case "json":
+		b, err := json.MarshalIndent(rows, "", "  ")
+		if err != nil {
+			return err
+		}
+		return writeOut(string(b) + "\n")
+	case "table":
+		var buf strings.Builder
+		tw := tabwriter.NewWriter(&buf, 0, 4, 2, ' ', 0)
+		_, _ = fmt.Fprintln(tw, "NAME\tEXT_ID\tADDRESS\tAPI")
+		for _, r := range rows {
+			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.Name, r.ExtID, r.Address, r.API)
+		}
+		_ = tw.Flush()
+		return writeOut(buf.String())
+	default: // lines
+		var lines []string
+		for _, r := range rows {
+			if r.Address != "" {
+				lines = append(lines, r.Address)
+			} else if r.Name != "" {
+				lines = append(lines, r.Name)
+			}
+		}
+		return writeOut(strings.Join(lines, "\n") + "\n")
+	}
 }
 
-// extractClusterAddress extracts external IP or name from a Prism Central cluster entity (v3).
-func extractClusterAddress(entity map[string]interface{}) string {
+// extractClusterAddressV4 returns a reachable cluster address from clustermgmt v4 config cluster JSON.
+func extractClusterAddressV4(entity map[string]interface{}) string {
+	if netw, _ := entity["network"].(map[string]interface{}); netw != nil {
+		if ext, _ := netw["externalAddress"].(map[string]interface{}); ext != nil {
+			if ipv4, _ := ext["ipv4"].(map[string]interface{}); ipv4 != nil {
+				if v, _ := ipv4["value"].(string); strings.TrimSpace(v) != "" {
+					return strings.TrimSpace(v)
+				}
+			}
+			if ipv6, _ := ext["ipv6"].(map[string]interface{}); ipv6 != nil {
+				if v, _ := ipv6["value"].(string); strings.TrimSpace(v) != "" {
+					return strings.TrimSpace(v)
+				}
+			}
+		}
+	}
+	if nodes, _ := entity["nodes"].(map[string]interface{}); nodes != nil {
+		if list, _ := nodes["nodeList"].([]interface{}); len(list) > 0 {
+			if first, _ := list[0].(map[string]interface{}); first != nil {
+				if cvm, _ := first["controllerVmIp"].(map[string]interface{}); cvm != nil {
+					if ipv4, _ := cvm["ipv4"].(map[string]interface{}); ipv4 != nil {
+						if v, _ := ipv4["value"].(string); strings.TrimSpace(v) != "" {
+							return strings.TrimSpace(v)
+						}
+					}
+				}
+				if host, _ := first["hostIp"].(map[string]interface{}); host != nil {
+					if ipv4, _ := host["ipv4"].(map[string]interface{}); ipv4 != nil {
+						if v, _ := ipv4["value"].(string); strings.TrimSpace(v) != "" {
+							return strings.TrimSpace(v)
+						}
+					}
+				}
+			}
+		}
+	}
+	if name, _ := entity["name"].(string); strings.TrimSpace(name) != "" {
+		return strings.TrimSpace(name)
+	}
+	return ""
+}
+
+// extractCVMIPv4sFromClusterEntity returns controller VM IPv4 addresses from a clustermgmt v4 cluster entity.
+func extractCVMIPv4sFromClusterEntity(entity map[string]interface{}) []string {
+	nodes, _ := entity["nodes"].(map[string]interface{})
+	if nodes == nil {
+		return nil
+	}
+	list, _ := nodes["nodeList"].([]interface{})
+	var out []string
+	for _, raw := range list {
+		node, _ := raw.(map[string]interface{})
+		if node == nil {
+			continue
+		}
+		cvm, _ := node["controllerVmIp"].(map[string]interface{})
+		if cvm == nil {
+			continue
+		}
+		if ipv4, _ := cvm["ipv4"].(map[string]interface{}); ipv4 != nil {
+			if v, _ := ipv4["value"].(string); strings.TrimSpace(v) != "" {
+				out = append(out, strings.TrimSpace(v))
+			}
+		}
+	}
+	return out
+}
+
+func extractClusterExtIDV4(entity map[string]interface{}) string {
+	if extID, _ := entity["extId"].(string); strings.TrimSpace(extID) != "" {
+		return strings.TrimSpace(extID)
+	}
+	return ""
+}
+
+func dedupeStringsKeepOrder(in []string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
+}
+
+// clusterEntityMatchesUserRef reports whether the user's --clusters value refers to this
+// registered cluster (name, extId, external address, or any CVM IP). Used so Prism Central
+// does not always use data[0] (wrong cluster when multiple are registered).
+func clusterEntityMatchesUserRef(ref string, entity map[string]interface{}) bool {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return false
+	}
+	if name, _ := entity["name"].(string); strings.TrimSpace(name) != "" && strings.EqualFold(strings.TrimSpace(name), ref) {
+		return true
+	}
+	if extID, _ := entity["extId"].(string); strings.TrimSpace(extID) != "" && strings.EqualFold(strings.TrimSpace(extID), ref) {
+		return true
+	}
+	if a := extractClusterAddressV4(entity); a != "" && strings.EqualFold(a, ref) {
+		return true
+	}
+	for _, ip := range extractCVMIPv4sFromClusterEntity(entity) {
+		if strings.EqualFold(ip, ref) {
+			return true
+		}
+	}
+	return false
+}
+
+// extractClusterAddressV3 extracts external IP or name from a Prism Central cluster entity (v3).
+func extractClusterAddressV3(entity map[string]interface{}) string {
 	// spec.resources.network.external_ip or external_ip_address
 	if spec, _ := entity["spec"].(map[string]interface{}); spec != nil {
 		if res, _ := spec["resources"].(map[string]interface{}); res != nil {
@@ -4936,8 +5942,10 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 			var failed []string
 			var agg []AggBlock
 			var clusterFiles []struct{ Cluster, HTML, CSV string }
+			var allResults []ClusterResult
 
 			for r := range results {
+				allResults = append(allResults, r)
 				if r.Err != nil {
 					failed = append(failed, r.Cluster)
 					continue
@@ -4988,17 +5996,35 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				Str("index_html", indexPath).
 				Msg("run summary")
 
+			exitCode := 0
+			if len(failed) > 0 {
+				if len(clusterFiles) > 0 {
+					exitCode = 3
+				} else {
+					exitCode = 1
+				}
+			}
+			perCluster := make([]RunClusterSummary, 0, len(allResults))
+			for _, r := range allResults {
+				perCluster = append(perCluster, buildRunClusterSummary(r))
+			}
+
 			runSummary := RunSummaryJSON{
 				Timestamp:      time.Now().UTC().Format(time.RFC3339),
 				DurationS:      runDuration.Seconds(),
 				ClustersOK:     len(clusterFiles),
 				ClustersFailed: len(failed),
 				FailedClusters: failed,
+				Clusters:       perCluster,
+				ExitCode:       exitCode,
 				IndexHTML:      indexPath,
 				TotalChecks:    len(agg),
 			}
 			if err := writeRunSummaryJSON(fs, cfg.OutputDirFiltered, runSummary); err != nil {
 				log.Error().Err(err).Msg("write run-summary.json failed (non-fatal)")
+			}
+			if err := writeNCCRunRecordJSON(fs, cfg.OutputDirFiltered, runSummary); err != nil {
+				log.Error().Err(err).Msg("write ncc-run-record.json failed (non-fatal)")
 			}
 
 			if cfg.NotifyDigest {
@@ -5052,9 +6078,8 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 			if len(failed) > 0 {
 				if len(clusterFiles) > 0 {
 					log.Warn().Strs("failedClusters", failed).Int("succeeded", len(clusterFiles)).Msg("some clusters failed; aggregated report written for successful clusters")
-					fmt.Printf("Some clusters failed: %v (report written for %d successful cluster(s))\n", failed, len(clusterFiles))
-					// Job succeeds so the partial report is the final output
-					return nil
+					fmt.Fprintf(os.Stderr, "Some clusters failed: %v (report written for %d successful cluster(s)). Exit code 3.\n", failed, len(clusterFiles))
+					return exitPartial(fmt.Errorf("some clusters failed: %v", failed))
 				}
 				log.Error().Strs("failedClusters", failed).Msg("all clusters failed")
 				return fmt.Errorf("all clusters failed: %v", failed)
@@ -5068,6 +6093,9 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 
 	cmd.SilenceUsage = true
 
+	cmd.PersistentFlags().String("nutanix-v4-api-version", defaultNutanixV4APIVersion, "Nutanix v4 REST API path revision for clustermgmt and monitoring (e.g. v4.2, v4.1, v4.0.a1)")
+	_ = viper.BindPFlag("nutanix-v4-api-version", cmd.PersistentFlags().Lookup("nutanix-v4-api-version"))
+
 	// flags
 	cmd.Flags().BoolP("update", "u", false, "Fetch latest release from GitHub and update this binary if a matching asset exists")
 	cmd.Flags().Bool("env-info", false, "Display possible environment variables and their current values")
@@ -5077,6 +6105,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	cmd.Flags().String("clusters-file", "", "Path to file with one cluster per line (overrides clusters when set)")
 	cmd.Flags().String("username", "admin", "Username for Prism Gateway")
 	cmd.Flags().String("password", "", "Password (omit to be prompted)")
+	cmd.Flags().String("ncc-api-version", "v4", "NCC API mode: v4 (default) or Legacy (Prism Gateway v1 start-checks only; v1 accepted as alias); use --nutanix-v4-api-version for v4.2 vs v4.0.a1 etc.")
 	cmd.Flags().Bool("insecure-skip-verify", false, "Skip TLS verify (only for trusted labs)")
 	cmd.Flags().String("timeout", "15m", "Overall per-cluster timeout")
 	cmd.Flags().String("request-timeout", "20s", "Per-request timeout")
@@ -5122,6 +6151,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	_ = viper.BindPFlag("clusters-file", cmd.Flags().Lookup("clusters-file"))
 	_ = viper.BindPFlag("username", cmd.Flags().Lookup("username"))
 	_ = viper.BindPFlag("password", cmd.Flags().Lookup("password"))
+	_ = viper.BindPFlag("ncc-api-version", cmd.Flags().Lookup("ncc-api-version"))
 	_ = viper.BindPFlag("insecure-skip-verify", cmd.Flags().Lookup("insecure-skip-verify"))
 	_ = viper.BindPFlag("timeout", cmd.Flags().Lookup("timeout"))
 	_ = viper.BindPFlag("request-timeout", cmd.Flags().Lookup("request-timeout"))
@@ -5160,22 +6190,33 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	_ = viper.BindPFlag("slack-webhook-url", cmd.Flags().Lookup("slack-webhook-url"))
 	_ = viper.BindPFlag("slack-channel", cmd.Flags().Lookup("slack-channel"))
 
-	// discover-clusters subcommand: list clusters from Prism Central v3 API
+	// discover-clusters subcommand: Prism Central cluster list (default v4 clustermgmt API)
 	discoverCmd := &cobra.Command{
 		Use:   "discover-clusters",
-		Short: "List clusters from Prism Central (v3 API)",
-		Long:  "Calls Prism Central POST /api/nutanix/v3/clusters/list and prints one cluster address per line. Use --output to write to a file (e.g. for --clusters-file).",
-		RunE:  runDiscoverClusters,
+		Short: "List clusters from Prism Central (v4 API by default)",
+		Long: `Lists registered clusters from Prism Central. Default output is one address per line (IPv4 preferred).
+
+Use --format table for NAME, EXT_ID, ADDRESS, API columns; --format json for machine-readable rows.
+
+Default: GET /api/clustermgmt/{nutanix-v4-api-version}/config/clusters with pagination ($page, $limit); use global --nutanix-v4-api-version (default v4.2) to match your PC API (e.g. v4.1, v4.0.a1).
+Use --discover-api-version v3 for legacy POST /api/nutanix/v3/clusters/list.
+
+If v4 returns HTTP 404, the command falls back to v3 automatically.
+
+Use --output to write to a file (e.g. for --clusters-file).`,
+		RunE: runDiscoverClusters,
 	}
 	discoverCmd.Flags().String("prism-central-url", "", "Prism Central URL (e.g. https://10.0.0.1:9440)")
 	discoverCmd.Flags().String("username", "admin", "Prism username")
 	discoverCmd.Flags().String("password", "", "Prism password (or NCC_PASSWORD)")
 	discoverCmd.Flags().String("output", "", "Write cluster list to file (one per line)")
+	discoverCmd.Flags().String("format", "lines", "Output format: lines (address per line), table (NAME EXT_ID ADDRESS API), or json")
 	discoverCmd.Flags().Bool("insecure-skip-verify", false, "Skip TLS verify for Prism Central")
+	discoverCmd.Flags().String("discover-api-version", "v4", "Cluster list API: v4 (GET clustermgmt) or v3 (legacy POST); v4 path uses --nutanix-v4-api-version")
 	_ = viper.BindPFlag("prism-central-url", discoverCmd.Flags().Lookup("prism-central-url"))
-	_ = viper.BindPFlag("username", discoverCmd.Flags().Lookup("username"))
-	_ = viper.BindPFlag("password", discoverCmd.Flags().Lookup("password"))
-	_ = viper.BindPFlag("insecure-skip-verify", discoverCmd.Flags().Lookup("insecure-skip-verify"))
+	// Do not BindPFlag username, password, or insecure-skip-verify here — they share keys
+	// with the root command; the second bind would override viper and break the main run.
+	_ = viper.BindPFlag("discover-api-version", discoverCmd.Flags().Lookup("discover-api-version"))
 	cmd.AddCommand(discoverCmd)
 
 	return cmd

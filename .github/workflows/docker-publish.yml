@@ -16,7 +16,7 @@ on:
       - '.github/workflows/docker-publish.yml'
   release:
     types: [published]
-  # Optional: uncomment to also run on version tags (e.g. v0.1.13)
+  # Optional: uncomment to also run on version tags (e.g. v1.0.0)
   # push:
   #   tags:
   #     - 'v*'
@@ -62,7 +62,7 @@ jobs:
           GOOS=linux GOARCH=amd64 go build -ldflags "-w -s \
             -X main.Version=${VERSION} \
             -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
-            -X main.Stream=Beta \
+            -X main.Stream=Release \
             -X main.GoVersion=$(go version | cut -d ' ' -f 3)" \
             -o dist/ncc-orchestrator-linux-amd64 .
 

@@ -14,6 +14,8 @@ data:
     clusters: "10.48.XX.XX,10.48.XX.XX"
     username: "admin"
     password: ""
+    ncc-api-version: v4         # v4 (default) or Legacy (Prism Gateway v1 start-checks); v1 is an alias for Legacy
+    nutanix-v4-api-version: v4.2  # clustermgmt/monitoring path revision (v4.2 default; e.g. v4.0.a1)
     insecure-skip-verify: false   # Set true for lab/self-signed Prism certs
     timeout: "15m"
     request-timeout: "30s"    # Code default 20s; increase if needed for slow clusters

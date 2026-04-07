@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NCC Report - golden-cluster</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3QgeD0iNCIgeT0iNCIgd2lkdGg9IjI0IiBoZWlnaHQ9IjI0IiByeD0iOCIgZmlsbD0iIzBmMTcyYSIvPgo8Y2lyY2xlIGN4PSI5IiBjeT0iMTMiIHI9IjMiIGZpbGw9IiNlZjQ0NDQiLz4KPGNpcmNsZSBjeD0iMjMiIGN5PSIxOSIgcj0iMyIgZmlsbD0iI2Y1OWUwYiIvPgo8cGF0aCBkPSJNOSAyNCBMMTYgMjQgTTE2IDI0IEwyMyAyNCIgc3Ryb2tlPSIjMjU2M2ViIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgo8L3N2Zz4K">
+  <style>
+    :root {
+      --fail: #ef4444;
+      --warn: #f59e0b;
+      --info: #3b82f6;
+      --err:  #374151;
+      --border: #d1d5db;
+      --thead: #f3f4f6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      color: #111827;
+      background: #f9fafb;
+    }
+    .page { max-width: 1100px; margin: 24px auto; padding: 0 16px 24px; }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 16px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    h1 { margin: 0; font-size: 22px; }
+    .subtitle { margin-top: 4px; font-size: 13px; color: #6b7280; }
+    .summary-line { font-size: 13px; color: #6b7280; margin-top: 6px; }
+    .summary-line strong { color: #111827; }
+    .tags { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+    .tag {
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 11px;
+      display: inline-flex;
+      gap: 4px;
+    }
+    .tag .label { color: #6b7280; }
+    .tag .value { font-weight: 600; color: #111827; }
+    table { border-collapse: collapse; width: 100%; border: 1px solid var(--border); }
+    thead th {
+      position: sticky; top: 0; background: var(--thead);
+      border-bottom: 1px solid var(--border);
+      padding: 10px; text-align: left; font-size: 13px;
+    }
+    tbody td { border-bottom: 1px solid var(--border); padding: 10px; vertical-align: top; }
+    tbody tr:nth-child(odd) { background: #fafafa; }
+    .sev { display: inline-block; padding: 2px 8px; border-radius: 999px; font-weight: 600; font-size: 12px; }
+    .sev.FAIL { color: #fff; background: var(--fail); }
+    .sev.WARN { color: #111827; background: #fde68a; }
+    .sev.INFO { color: #fff; background: var(--info); }
+    .sev.ERR  { color: #111827; background: #e5e7eb; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="header">
+      <div>
+        <h1>NCC Report</h1>
+        <div class="subtitle">golden-cluster</div>
+        <div class="summary-line">
+          1 FAIL, 0 WARN, 0 ERR, 0 INFO
+        </div>
+      </div>
+      <div class="tags">
+        <div class="tag"><span class="label">Cluster</span><span class="value">golden-cluster</span></div>
+        <div class="tag"><span class="label">Cluster Version</span><span class="value">6.8</span></div>
+        <div class="tag"><span class="label">NCC Version</span><span class="value">ncc-4.0.0</span></div>
+        <div class="tag"><span class="label">Generated</span><span class="value">2020-01-02T15:04:05Z</span></div>
+      </div>
+    </header>
+    <main>
+      <table>
+        <thead>
+          <tr>
+            <th style="width:110px">Severity</th>
+            <th style="width:320px">NCC Check Name</th>
+            <th>Detail Information</th>
+          </tr>
+        </thead>
+        <tbody>
+        
+          <tr>
+            <td><span class="sev FAIL">FAIL</span></td>
+            <td class="mono">sample_check</td>
+            <td class="mono">Sample detail line</td>
+          </tr>
+        
+        </tbody>
+      </table>
+    </main>
+  </div>
+</body>
+</html>

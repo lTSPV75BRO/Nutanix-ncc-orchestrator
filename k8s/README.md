@@ -4,6 +4,11 @@ Deploy the Nutanix NCC Orchestrator on Kubernetes so that NCC checks run on a sc
 
 ---
 
+## Kustomize and Helm
+
+- **Kustomize:** `kubectl apply -k k8s/` uses [`kustomization.yaml`](kustomization.yaml) in this directory (same manifests, shared namespace/labels).
+- **Helm (CronJob only):** [`helm/ncc-orchestrator/README.md`](../helm/ncc-orchestrator/README.md).
+
 ## Table of contents
 
 - [Architecture](#architecture)
@@ -76,7 +81,7 @@ Deploy the Nutanix NCC Orchestrator on Kubernetes so that NCC checks run on a sc
    - **MetalLB** and an **IPAddressPool** (or legacy address pool). The web Service is `type: LoadBalancer`; set the annotation `metallb.io/address-pool` (or `metallb.universe.tf/address-pool`) in `service.yaml` to your pool name.
    - **StorageClass `nfs-storage`** that supports **ReadWriteMany**. The PVC uses this class; change `storageClassName` in `pvc.yaml` if your class has a different name.
 
-2. **Docker image**: The CronJob uses `prajwalnutant/nutanix-ncc-orchestrator:0.1.13` from Docker Hub. To use another tag or a private image, edit the `image` field in `cronjob.yaml`.
+2. **Docker image**: The CronJob uses `prajwalnutant/nutanix-ncc-orchestrator:1.0.0` from Docker Hub. To use another tag or a private image, edit the `image` field in `cronjob.yaml`.
 
 3. **Prism**: At least one Prism cluster reachable from the cluster (IP or FQDN), and credentials (username + password).
 
