@@ -33,3 +33,7 @@ First **stable** release (semver **1.0.0**).
 ## MCP server
 
 - **ncc-mcp-server** remains a separate binary; see [docs/MCP_SERVER.md](docs/MCP_SERVER.md). Align orchestrator binary with this release for consistent behavior.
+
+## Next release candidate
+
+- **CronJob creation option** — Planned: add a CLI/MCP-assisted option to generate/apply the Kubernetes CronJob (schedule/image/config refs) so users can bootstrap scheduling faster.

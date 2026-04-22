@@ -56,7 +56,8 @@ import (
 
 type Config struct {
 	Clusters           []string
-	ClustersFile       string // Optional: path to file with one cluster per line (overrides/supplements clusters when set)
+	ClustersFile       string // Optional: cluster file; lines are cluster or cluster,username[,password] (overrides/supplements clusters when set)
+	ClusterCredentials map[string]ClusterCredential `mapstructure:"-"`
 	Username           string
 	Password           string
 	InsecureSkipVerify bool
@@ -142,6 +143,11 @@ type Config struct {
 
 	// NutanixV4APIVersion is the v4 REST API path revision (e.g. v4.2, v4.1, v4.0.a1) for /api/clustermgmt/{ver}/ and /api/monitoring/{ver}/.
 	NutanixV4APIVersion string `mapstructure:"nutanix-v4-api-version"`
+}
+
+type ClusterCredential struct {
+	Username string
+	Password string
 }
 
 type NotificationSummary struct {
@@ -528,24 +534,130 @@ func applySecretsToConfig(cfg *Config) error {
 	if err != nil {
 		return fmt.Errorf("slack-webhook-url: %w", err)
 	}
+	for cluster, cred := range cfg.ClusterCredentials {
+		if strings.TrimSpace(cred.Username) != "" {
+			cred.Username, err = resolveSecretRef(cred.Username, provider, fileSecrets)
+			if err != nil {
+				return fmt.Errorf("clusters-file username for cluster %s: %w", cluster, err)
+			}
+		}
+		if strings.TrimSpace(cred.Password) != "" {
+			cred.Password, err = resolveSecretRef(cred.Password, provider, fileSecrets)
+			if err != nil {
+				return fmt.Errorf("clusters-file password for cluster %s: %w", cluster, err)
+			}
+		}
+		cfg.ClusterCredentials[cluster] = cred
+	}
 	return nil
 }
 
-// readClusterFile reads a file with one cluster address per line (blank and # lines ignored).
-func readClusterFile(path string) ([]string, error) {
+// readClusterFile reads cluster targets from file.
+// Supported formats per non-comment line:
+//   1) cluster
+//   2) cluster,username
+//   3) cluster,username,password
+// Blank and # lines are ignored.
+func readClusterFile(path string) ([]string, map[string]ClusterCredential, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var out []string
-	for _, line := range strings.Split(string(data), "\n") {
+	creds := make(map[string]ClusterCredential)
+	for i, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		out = append(out, line)
+		cluster, user, pass, err := parseClusterFileLine(line)
+		if err != nil {
+			return nil, nil, fmt.Errorf("line %d: %w", i+1, err)
+		}
+		out = append(out, cluster)
+		if user != "" || pass != "" {
+			creds[cluster] = ClusterCredential{Username: user, Password: pass}
+		}
 	}
-	return out, nil
+	return out, creds, nil
+}
+
+func parseClusterFileLine(line string) (cluster string, username string, password string, err error) {
+	r := csv.NewReader(strings.NewReader(line))
+	r.TrimLeadingSpace = true
+	r.FieldsPerRecord = -1
+	rec, err := r.Read()
+	if err != nil {
+		return "", "", "", fmt.Errorf("invalid cluster entry: %w", err)
+	}
+	for i := range rec {
+		rec[i] = strings.TrimSpace(rec[i])
+	}
+	switch len(rec) {
+	case 1:
+		if rec[0] == "" {
+			return "", "", "", errors.New("cluster value is empty")
+		}
+		return rec[0], "", "", nil
+	case 2:
+		if rec[0] == "" {
+			return "", "", "", errors.New("cluster value is empty")
+		}
+		if rec[1] == "" {
+			return "", "", "", errors.New("username is empty")
+		}
+		return rec[0], rec[1], "", nil
+	case 3:
+		if rec[0] == "" {
+			return "", "", "", errors.New("cluster value is empty")
+		}
+		if rec[1] == "" {
+			return "", "", "", errors.New("username is empty")
+		}
+		return rec[0], rec[1], rec[2], nil
+	default:
+		return "", "", "", fmt.Errorf("expected 1, 2, or 3 CSV fields (cluster[,username[,password]]), got %d", len(rec))
+	}
+}
+
+func credentialsForCluster(cfg Config, cluster string) (string, string) {
+	user := strings.TrimSpace(cfg.Username)
+	pass := cfg.Password
+	if cred, ok := cfg.ClusterCredentials[cluster]; ok {
+		if strings.TrimSpace(cred.Username) != "" {
+			user = strings.TrimSpace(cred.Username)
+		}
+		if strings.TrimSpace(cred.Password) != "" {
+			pass = cred.Password
+		}
+	}
+	return user, pass
+}
+
+func validateClusterCredentialCoverage(cfg Config) error {
+	for _, cluster := range cfg.Clusters {
+		user, _ := credentialsForCluster(cfg, cluster)
+		if strings.TrimSpace(user) == "" {
+			return fmt.Errorf("missing username for cluster %s (set global username or provide cluster,username[,password] in clusters-file)", cluster)
+		}
+		if len(user) > 255 {
+			return fmt.Errorf("username too long for cluster %s (max 255 characters)", cluster)
+		}
+	}
+	return nil
+}
+
+func needsPasswordPrompt(cfg Config) (bool, string) {
+	if strings.TrimSpace(cfg.Password) != "" {
+		return false, ""
+	}
+	for _, cluster := range cfg.Clusters {
+		user, pass := credentialsForCluster(cfg, cluster)
+		if strings.TrimSpace(pass) == "" {
+			return true, user
+		}
+	}
+	return false, ""
 }
 
 func mustParseDur(s string, def time.Duration) time.Duration {
@@ -716,12 +828,9 @@ func validateConfig(cfg Config) error {
 		return fmt.Errorf("cluster validation failed: %w", err)
 	}
 
-	// Validate username
-	if cfg.Username == "" {
-		return errors.New("username cannot be empty")
-	}
-	if len(cfg.Username) > 255 {
-		return errors.New("username too long (max 255 characters)")
+	// Validate effective credentials (global or per-cluster from clusters-file)
+	if err := validateClusterCredentialCoverage(cfg); err != nil {
+		return err
 	}
 
 	if _, err := normalizeNCCAPIVersion(cfg.NCCAPIVersion); err != nil {
@@ -908,7 +1017,7 @@ func writeDummyConfig(path string) error {
 
 # Required
 clusters: "10.2.XX.XX,10.0.XX.XX"      	  # Comma-separated list of Prism Element cluster IPs/cluster FQDNs
-# clusters-file: ""                        # Optional: one cluster per line; overrides clusters when set
+# clusters-file: ""                        # Optional: cluster or cluster,username[,password] per line; overrides clusters when set
 username: "admin"                         # Prism element username
 password: ""                              # Prefer env NCC_PASSWORD in CLI; leave empty here if using env
 ncc-api-version: v4                       # v4 (default) or Legacy (Prism Gateway v1 start-checks only; v1 accepted as alias)
@@ -1039,7 +1148,7 @@ secrets-file: ""                          # YAML/JSON key-value map when secrets
 
 # Required
 clusters: "10.2.XX.XX,10.0.XX.XX"      	  # Comma-separated list of Prism Element cluster IPs/cluster FQDNs
-# clusters-file: ""                        # Optional: one cluster per line; overrides clusters when set
+# clusters-file: ""                        # Optional: cluster or cluster,username[,password] per line; overrides clusters when set
 username: "admin"                         # Prism element username
 password: ""                              # Prefer env NCC_PASSWORD in CLI; leave empty here if using env
 ncc-api-version: v4                       # v4 (default) or Legacy (Prism Gateway v1 start-checks only; v1 accepted as alias)
@@ -1361,14 +1470,16 @@ func bindConfig() (Config, error) {
 
 	clustersFromFlag := splitCSV(viper.GetString("clusters"))
 	clustersFile := strings.TrimSpace(viper.GetString("clusters-file"))
+	clusterCreds := map[string]ClusterCredential{}
 	if clustersFile != "" {
-		lines, err := readClusterFile(clustersFile)
+		lines, fileCreds, err := readClusterFile(clustersFile)
 		if err != nil {
 			return Config{}, fmt.Errorf("clusters-file %s: %w", clustersFile, err)
 		}
 		if len(lines) > 0 {
 			clustersFromFlag = lines
 		}
+		clusterCreds = fileCreds
 	}
 	nccAPIVer, err := normalizeNCCAPIVersion(viper.GetString("ncc-api-version"))
 	if err != nil {
@@ -1377,6 +1488,7 @@ func bindConfig() (Config, error) {
 	cfg := Config{
 		Clusters:            clustersFromFlag,
 		ClustersFile:        clustersFile,
+		ClusterCredentials:  clusterCreds,
 		Username:            viper.GetString("username"),
 		Password:            viper.GetString("password"),
 		InsecureSkipVerify:  viper.GetBool("insecure-skip-verify"),
@@ -6447,11 +6559,13 @@ func runClusterWithBars(
 	fs FS,
 	httpc HTTPClient,
 	cluster string,
+	username string,
+	password string,
 	onPct func(int),
 	setPhase func(string),
 ) ([]ParsedBlock, error) {
 	l := log.With().Str("cluster", cluster).Logger()
-	client := NewNCCClient(cluster, cfg.Username, cfg.Password, httpc, cfg)
+	client := NewNCCClient(cluster, username, password, httpc, cfg)
 	var clusterStart = time.Now()
 	setPhase("starting")
 	l.Info().Msg("starting NCC checks")
@@ -8196,8 +8310,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				log.Error().Msg(err.Error())
 				return exitConfig(err)
 			}
-			if cfg.Username == "" {
-				err := errors.New("missing --username or config username")
+			if err := validateClusterCredentialCoverage(cfg); err != nil {
 				log.Error().Msg(err.Error())
 				return exitConfig(err)
 			}
@@ -8212,7 +8325,11 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				log.Info().Msg("DRY-RUN MODE: Configuration validated, no checks will be executed")
 				fmt.Println("✓ Configuration is valid")
 				fmt.Printf("  Clusters: %d configured\n", len(cfg.Clusters))
-				fmt.Printf("  Username: %s\n", cfg.Username)
+				if strings.TrimSpace(cfg.Username) != "" {
+					fmt.Printf("  Username: %s\n", cfg.Username)
+				} else {
+					fmt.Println("  Username: per-cluster (clusters-file)")
+				}
 				fmt.Printf("  Output formats: %v\n", cfg.OutputFormats)
 				if len(cfg.SeverityFilter) > 0 {
 					fmt.Printf("  Severity filter: %v\n", cfg.SeverityFilter)
@@ -8299,9 +8416,11 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				return nil // Exit after printing
 			}
 
-			cfg.Password, err = promptPasswordIfEmpty(cfg.Password, cfg.Username)
-			if err != nil {
-				return err
+			if needPrompt, promptUser := needsPasswordPrompt(cfg); needPrompt {
+				cfg.Password, err = promptPasswordIfEmpty(cfg.Password, promptUser)
+				if err != nil {
+					return err
+				}
 			}
 
 			fs := OSFS{}
@@ -8531,6 +8650,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 			runStart := time.Now()
 
 			for _, cluster := range cfg.Clusters {
+				clusterUser, clusterPass := credentialsForCluster(cfg, cluster)
 				wg.Add(1)
 				for {
 					limit := currentAdaptiveParallel(cfg.MaxParallel)
@@ -8568,7 +8688,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 					mpb.AppendDecorators(phaseProxy),
 				)
 
-				go func(cl string, b *mpb.Bar, phase *proxyDecorator, phaseBar *mpb.Bar) {
+				go func(cl string, user string, pass string, b *mpb.Bar, phase *proxyDecorator, phaseBar *mpb.Bar) {
 					defer wg.Done()
 					defer func() {
 						<-sem
@@ -8594,7 +8714,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 						log.Info().Str("cluster", cl).Str("phase", text).Msg("phase change")
 					}
 
-					blocks, err := runClusterWithBars(reqCtx, cfg, fs, httpc, cl, onPct, setPhase)
+					blocks, err := runClusterWithBars(reqCtx, cfg, fs, httpc, cl, user, pass, onPct, setPhase)
 					if err != nil {
 						b.Abort(false)
 						b.SetTotal(b.Current(), true)
@@ -8620,7 +8740,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 					phaseBar.SetTotal(1, true) // Complete phaseBar on success
 					log.Info().Str("cluster", cl).Msg("cluster run completed")
 					results <- ClusterResult{Cluster: cl, Blocks: blocks, Err: nil}
-				}(cluster, mainBar, phaseProxy, phaseBar) // Pass phaseBar
+				}(cluster, clusterUser, clusterPass, mainBar, phaseProxy, phaseBar) // Pass phaseBar and per-cluster credentials
 			}
 
 			// Wait for workers with context cancellation support
@@ -8918,7 +9038,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	cmd.Flags().Bool("tc", false, "Display terms and conditions")
 	cmd.Flags().String("config", "", "Config file path (yaml/json)")
 	cmd.Flags().String("clusters", "", "Comma-separated cluster IPs or FQDNs")
-	cmd.Flags().String("clusters-file", "", "Path to file with one cluster per line (overrides clusters when set)")
+	cmd.Flags().String("clusters-file", "", "Path to cluster file (cluster or cluster,username[,password] per line; overrides clusters when set)")
 	cmd.Flags().String("username", "admin", "Username for Prism Gateway")
 	cmd.Flags().String("password", "", "Password (omit to be prompted)")
 	cmd.Flags().String("ncc-api-version", "v4", "NCC API mode: v4 (default) or Legacy (Prism Gateway v1 start-checks only; v1 accepted as alias); use --nutanix-v4-api-version for v4.2 vs v4.0.a1 etc.")

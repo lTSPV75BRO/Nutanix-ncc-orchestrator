@@ -2022,6 +2022,47 @@ func TestValidateClusters(t *testing.T) {
 	})
 }
 
+func TestReadClusterFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "clusters.txt")
+	content := `# comment
+10.0.1.1
+10.0.1.2,admin
+10.0.1.3,svc-user,pass123
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("write clusters file: %v", err)
+	}
+	clusters, creds, err := readClusterFile(path)
+	if err != nil {
+		t.Fatalf("readClusterFile: %v", err)
+	}
+	if len(clusters) != 3 {
+		t.Fatalf("len(clusters)=%d, want 3", len(clusters))
+	}
+	if clusters[0] != "10.0.1.1" || clusters[1] != "10.0.1.2" || clusters[2] != "10.0.1.3" {
+		t.Fatalf("unexpected clusters: %#v", clusters)
+	}
+	if creds["10.0.1.2"].Username != "admin" || creds["10.0.1.2"].Password != "" {
+		t.Fatalf("unexpected creds for 10.0.1.2: %#v", creds["10.0.1.2"])
+	}
+	if creds["10.0.1.3"].Username != "svc-user" || creds["10.0.1.3"].Password != "pass123" {
+		t.Fatalf("unexpected creds for 10.0.1.3: %#v", creds["10.0.1.3"])
+	}
+}
+
+func TestReadClusterFileInvalidLine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "clusters.txt")
+	content := `10.0.1.1,admin,pass,extra`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("write clusters file: %v", err)
+	}
+	if _, _, err := readClusterFile(path); err == nil {
+		t.Fatal("expected error for invalid cluster line")
+	}
+}
+
 func TestValidateURL(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -2106,6 +2147,16 @@ func TestValidateConfig(t *testing.T) {
 		cfg.Username = ""
 		if err := validateConfig(cfg); err == nil {
 			t.Error("expected error for empty username")
+		}
+	})
+	t.Run("Per-cluster username in clusters-file map", func(t *testing.T) {
+		cfg := validPaths()
+		cfg.Username = ""
+		cfg.ClusterCredentials = map[string]ClusterCredential{
+			"10.0.1.1": {Username: "admin"},
+		}
+		if err := validateConfig(cfg); err != nil {
+			t.Errorf("validateConfig should accept per-cluster username: %v", err)
 		}
 	})
 	t.Run("Zero timeout", func(t *testing.T) {

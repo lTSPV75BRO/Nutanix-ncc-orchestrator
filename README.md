@@ -4,6 +4,8 @@ A CLI tool to run NCC (Nutanix Cluster Check) across multiple clusters in parall
 
 **Contents:** [Features](#features) · [Installation](#installation) · [Usage](#usage) · [Configuration](#configuration) · [Policy Gates](#policy-gates) · [Kubernetes](#kubernetes-deployment) · [Scripts](#scripts) · [Building](#building-and-contributing)
 
+**Full reference:** [docs/FEATURES_AND_CONFIG_FLAGS.md](docs/FEATURES_AND_CONFIG_FLAGS.md) (all features, config keys, and CLI flags with examples)
+
 ---
 
 ## Release status
@@ -83,7 +85,7 @@ Create a `config.yaml` with any of the options below. Run with: `ncc-orchestrato
 | Option | Default | Description |
 |--------|---------|-------------|
 | `clusters` | — | Comma-separated Prism cluster IPs or FQDNs |
-| `clusters-file` | — | Path to file with one cluster per line (overrides `clusters` when set); use with **discover-clusters** to populate |
+| `clusters-file` | — | Path to cluster file; each line supports `cluster` or `cluster,username[,password]` (overrides `clusters` when set); use with **discover-clusters** to populate |
 | `username` | `admin` | Prism Gateway username |
 | `password` | — | Prism password (prefer env `NCC_PASSWORD`) |
 | `ncc-api-version` | `v4` | **`v4`** (current Nutanix v4 APIs; see README) or **`Legacy`** (Prism Gateway v1 start-checks only). **`v1`** is accepted as an alias for Legacy. |
@@ -165,6 +167,54 @@ Run **`ncc-orchestrator --env-info`** to print all possible env vars and their c
   `ncc-orchestrator --config config.yaml discover-clusters --output clusters.txt`
   `ncc-orchestrator discover-clusters --prism-central-url https://pc:9440 --format table`
   then set `clusters-file: clusters.txt` in config for the main run. Env: **`NCC_DISCOVER_API_VERSION`** (`v4` or `v3`).
+
+### Cluster file (`clusters-file`) format
+
+Use `clusters-file` when you manage many clusters or generate cluster lists dynamically.
+
+- Supported line formats:
+  - `cluster`
+  - `cluster,username`
+  - `cluster,username,password`
+- Blank lines are ignored
+- Lines starting with `#` are treated as comments and ignored
+- `clusters-file` takes precedence over `clusters`
+- Per-line username/password override global `username`/`password` for that cluster
+- Duplicate entries are rejected by validation
+
+Example `clusters.txt`:
+
+```text
+# NCC target clusters
+10.38.66.37
+10.38.66.7,admin
+pc-aos01.example.local,admin,secret://pc_aos01_password
+```
+
+Config example:
+
+```yaml
+clusters-file: "clusters.txt"
+```
+
+CLI example:
+
+```bash
+ncc-orchestrator --clusters-file clusters.txt --username admin --password "$NCC_PASSWORD"
+```
+
+Example with only per-cluster credentials in file:
+
+```bash
+ncc-orchestrator --clusters-file clusters.txt
+```
+
+Validation tip:
+
+```bash
+ncc-orchestrator validate-config --config config.yaml
+```
+
 - **`ncc-orchestrator create-schedule`** — Creates periodic execution for NCC:
   - Actions: `--action create|list|remove|run-now` (default `create`)
   - Linux/macOS: cron entry (`--type cron`) using `--cron "15 */4 * * *"` or derived from `--every 4h`
@@ -317,6 +367,7 @@ An **MCP server** is provided so AI tools (e.g. Cursor, Claude Desktop) can run 
 
 ## See also
 - [CHANGELOG.md](CHANGELOG.md) — Version history and release notes.
+- [docs/FEATURES_AND_CONFIG_FLAGS.md](docs/FEATURES_AND_CONFIG_FLAGS.md) — Full feature and flag reference with examples.
 - [Prometheus.md](Prometheus.md) — Prometheus/Grafana monitoring using NCC Orchestrator `.prom` output.
 - [k8s/README.md](k8s/README.md) — Full Kubernetes deployment and troubleshooting.
 
