@@ -25,16 +25,19 @@ import (
 	"net/smtp"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"runtime/debug"
-	"text/tabwriter"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -78,6 +81,21 @@ type Config struct {
 	// Dry-run mode
 	DryRun bool // Don't actually run checks, just validate config
 
+	// History + regression
+	RunHistoryEnabled        bool
+	RunHistoryDir            string
+	RetainLastRuns           int
+	RetainDays               int
+	SingleReport             bool
+	NotifyOnRegression       bool
+	AdaptiveParallelism      bool
+	PreviousClusterFailCount map[string]int `mapstructure:"-"`
+	PolicyGates              []string
+	QuietHours               string
+	MaintenanceWindows       []string
+	FlakyLookbackRuns        int
+	FlakyMinTransitions      int
+
 	// Retry tuning
 	RetryMaxAttempts int
 	RetryBaseDelay   time.Duration
@@ -114,6 +132,10 @@ type Config struct {
 	SlackEnabled    bool
 	SlackWebhookURL string `mapstructure:"slack-webhook-url"`
 	SlackChannel    string `mapstructure:"slack-channel"`
+
+	// Secrets
+	SecretsProvider string
+	SecretsFile     string
 
 	// NCCAPIVersion is normalized to "v4" or "v1" (Legacy). Config accepts v4, Legacy, or v1 (alias for Legacy).
 	NCCAPIVersion string `mapstructure:"ncc-api-version"`
@@ -188,9 +210,21 @@ poll-jitter: "2s"                         # Random jitter to avoid herd behavior
 
 # Concurrency and outputs
 max-parallel: 4                           # Parallel clusters processed  
-outputs: "html,csv"                       # One or more: html,csv  
+outputs: "html,csv"                       # One or more: html,csv,json,markdown,sarif
 output-dir-logs: "nccfiles"               # Directory for raw NCC summary text  
 output-dir-filtered: "outputfiles"        # Directory for generated HTML/CSV  
+single-report: false                      # Also write ncc-report-single.html
+run-history: false                        # Save each run snapshot under run-history-dir
+run-history-dir: "outputfiles/runs"       # History base directory
+retain-last: 0                            # Keep last N snapshots (0 = unlimited)
+retain-days: 0                            # Keep snapshots newer than N days (0 = unlimited)
+notify-on-regression: false               # Notify only when FAIL count increases
+adaptive-parallelism: true                # Reduce/increase effective concurrency on 429s
+policy-gates: ""                          # e.g. new-fails>0,fail-rate>2,min-health-score<90,flaky-checks>0
+quiet-hours: ""                           # Local HH:MM-HH:MM notification quiet window
+maintenance-windows: ""                   # RFC3339 windows start/end[,start/end...]
+flaky-lookback-runs: 6                    # Runs to inspect for flaky checks
+flaky-min-transitions: 2                  # Minimum severity transitions to mark flaky
 
 # Logging
 log-file: "logs/ncc-runner.log"           # Rotated JSON logs path  
@@ -204,6 +238,8 @@ retry-max-delay: "8s"                     # Max jittered backoff delay
 
 # Email notifications
 email-enabled: false
+email-attach-html: false
+notify-digest: false
 smtp-server: "smtp.example.com"
 smtp-port: 587
 smtp-user: "ncc@example.com"
@@ -214,9 +250,17 @@ email-use-tls: true
 
 # Webhook notifications
 webhook-enabled: false
+webhook-include-html: false
 webhook-url: "https://hooks.example.com/ncc"
 webhook-headers:
   X-Auth-Token: "changeme"
+
+# Slack notifications
+slack-enabled: false
+slack-webhook-url: ""
+slack-channel: ""
+secrets-provider: ""                      # env or file
+secrets-file: ""                          # YAML/JSON key-value map when secrets-provider=file
 
 Use --config to specify file path.
 
@@ -270,6 +314,8 @@ const (
 
 	// defaultNutanixV4APIVersion is the default Nutanix v4 API path segment (clustermgmt / monitoring).
 	defaultNutanixV4APIVersion = "v4.2"
+	defaultFlakyLookbackRuns   = 6
+	defaultFlakyTransitions    = 2
 )
 
 // ==================== Exit Codes ====================
@@ -303,6 +349,186 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+func splitCSVTrimLower(s string) []string {
+	in := splitCSV(s)
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		out = append(out, strings.ToLower(strings.TrimSpace(v)))
+	}
+	return out
+}
+
+func parseHHMM(s string) (int, int, error) {
+	parts := strings.Split(strings.TrimSpace(s), ":")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("expected HH:MM")
+	}
+	h, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, err
+	}
+	m, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, err
+	}
+	if h < 0 || h > 23 || m < 0 || m > 59 {
+		return 0, 0, fmt.Errorf("time out of range")
+	}
+	return h, m, nil
+}
+
+func inQuietHours(now time.Time, quietHours string) (bool, error) {
+	q := strings.TrimSpace(quietHours)
+	if q == "" {
+		return false, nil
+	}
+	parts := strings.Split(q, "-")
+	if len(parts) != 2 {
+		return false, fmt.Errorf("quiet-hours must be HH:MM-HH:MM")
+	}
+	sh, sm, err := parseHHMM(parts[0])
+	if err != nil {
+		return false, fmt.Errorf("quiet-hours start: %w", err)
+	}
+	eh, em, err := parseHHMM(parts[1])
+	if err != nil {
+		return false, fmt.Errorf("quiet-hours end: %w", err)
+	}
+	curMins := now.Hour()*60 + now.Minute()
+	startMins := sh*60 + sm
+	endMins := eh*60 + em
+	if startMins == endMins {
+		return true, nil // full-day quiet window
+	}
+	if startMins < endMins {
+		return curMins >= startMins && curMins < endMins, nil
+	}
+	return curMins >= startMins || curMins < endMins, nil
+}
+
+func inMaintenanceWindow(now time.Time, windows []string) (bool, error) {
+	for _, w := range windows {
+		w = strings.TrimSpace(w)
+		if w == "" {
+			continue
+		}
+		parts := strings.Split(w, "/")
+		if len(parts) != 2 {
+			return false, fmt.Errorf("maintenance window %q must be start/end RFC3339", w)
+		}
+		start, err := time.Parse(time.RFC3339, strings.TrimSpace(parts[0]))
+		if err != nil {
+			return false, fmt.Errorf("maintenance window start %q: %w", parts[0], err)
+		}
+		end, err := time.Parse(time.RFC3339, strings.TrimSpace(parts[1]))
+		if err != nil {
+			return false, fmt.Errorf("maintenance window end %q: %w", parts[1], err)
+		}
+		if !end.After(start) {
+			return false, fmt.Errorf("maintenance window %q end must be after start", w)
+		}
+		if (now.Equal(start) || now.After(start)) && now.Before(end) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func notificationsSuppressedNow(cfg Config, now time.Time) (bool, string) {
+	if ok, err := inQuietHours(now, cfg.QuietHours); err == nil && ok {
+		return true, "quiet-hours"
+	}
+	if ok, err := inMaintenanceWindow(now, cfg.MaintenanceWindows); err == nil && ok {
+		return true, "maintenance-window"
+	}
+	return false, ""
+}
+
+func loadSecretMapFile(path string) (map[string]string, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, errors.New("secrets-file is required for provider=file")
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]string
+	if err := json.Unmarshal(b, &out); err == nil {
+		return out, nil
+	}
+	v := viper.New()
+	v.SetConfigFile(path)
+	if err := v.ReadInConfig(); err != nil {
+		return nil, fmt.Errorf("parse secrets-file: %w", err)
+	}
+	raw := v.AllSettings()
+	out = make(map[string]string, len(raw))
+	for k, val := range raw {
+		if s, ok := val.(string); ok {
+			out[k] = s
+		}
+	}
+	return out, nil
+}
+
+func resolveSecretRef(ref string, provider string, fileSecrets map[string]string) (string, error) {
+	v := strings.TrimSpace(ref)
+	if !strings.HasPrefix(v, "secret://") {
+		return v, nil
+	}
+	name := strings.TrimPrefix(v, "secret://")
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", errors.New("empty secret reference")
+	}
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "env":
+		if val := os.Getenv(name); val != "" {
+			return val, nil
+		}
+		if val := os.Getenv("NCC_SECRET_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_"))); val != "" {
+			return val, nil
+		}
+		return "", fmt.Errorf("secret %q not found in env", name)
+	case "file":
+		if val, ok := fileSecrets[name]; ok {
+			return val, nil
+		}
+		return "", fmt.Errorf("secret %q not found in secrets-file", name)
+	default:
+		return "", fmt.Errorf("secrets-provider must be env or file when secret:// refs are used")
+	}
+}
+
+func applySecretsToConfig(cfg *Config) error {
+	provider := strings.ToLower(strings.TrimSpace(cfg.SecretsProvider))
+	var fileSecrets map[string]string
+	var err error
+	if provider == "file" {
+		fileSecrets, err = loadSecretMapFile(cfg.SecretsFile)
+		if err != nil {
+			return fmt.Errorf("load secrets-file: %w", err)
+		}
+	}
+	cfg.Password, err = resolveSecretRef(cfg.Password, provider, fileSecrets)
+	if err != nil {
+		return fmt.Errorf("password: %w", err)
+	}
+	cfg.SMTPPassword, err = resolveSecretRef(cfg.SMTPPassword, provider, fileSecrets)
+	if err != nil {
+		return fmt.Errorf("smtp-password: %w", err)
+	}
+	cfg.WebhookURL, err = resolveSecretRef(cfg.WebhookURL, provider, fileSecrets)
+	if err != nil {
+		return fmt.Errorf("webhook-url: %w", err)
+	}
+	cfg.SlackWebhookURL, err = resolveSecretRef(cfg.SlackWebhookURL, provider, fileSecrets)
+	if err != nil {
+		return fmt.Errorf("slack-webhook-url: %w", err)
+	}
+	return nil
 }
 
 // readClusterFile reads a file with one cluster address per line (blank and # lines ignored).
@@ -525,10 +751,10 @@ func validateConfig(cfg Config) error {
 	}
 
 	// Validate output formats
-	validFormats := map[string]bool{"html": true, "csv": true, "json": true, "markdown": true}
+	validFormats := map[string]bool{"html": true, "csv": true, "json": true, "markdown": true, "sarif": true}
 	for _, format := range cfg.OutputFormats {
 		if !validFormats[strings.ToLower(format)] {
-			return fmt.Errorf("invalid output format: %s (valid: html, csv, json, markdown)", format)
+			return fmt.Errorf("invalid output format: %s (valid: html, csv, json, markdown, sarif)", format)
 		}
 	}
 
@@ -592,6 +818,50 @@ func validateConfig(cfg Config) error {
 	if strings.TrimSpace(cfg.PromDir) == "" {
 		return errors.New("prom-dir cannot be empty")
 	}
+	if cfg.RetainLastRuns < 0 {
+		return errors.New("retain-last must be >= 0")
+	}
+	if cfg.RetainDays < 0 {
+		return errors.New("retain-days must be >= 0")
+	}
+	if cfg.RunHistoryEnabled && strings.TrimSpace(cfg.RunHistoryDir) == "" {
+		return errors.New("run-history-dir cannot be empty when run-history is enabled")
+	}
+	if err := validateLogLevelStrict(cfg.LogLevel); err != nil {
+		return err
+	}
+	if cfg.FlakyLookbackRuns < 0 {
+		return errors.New("flaky-lookback-runs must be >= 0")
+	}
+	if cfg.FlakyLookbackRuns > 0 && cfg.FlakyLookbackRuns < 2 {
+		return errors.New("flaky-lookback-runs must be >= 2")
+	}
+	if cfg.FlakyLookbackRuns > 200 {
+		return errors.New("flaky-lookback-runs must be <= 200")
+	}
+	if cfg.FlakyMinTransitions < 0 {
+		return errors.New("flaky-min-transitions must be >= 0")
+	}
+	if cfg.FlakyMinTransitions > 0 && cfg.FlakyMinTransitions < 1 {
+		return errors.New("flaky-min-transitions must be >= 1")
+	}
+	if cfg.FlakyMinTransitions > 20 {
+		return errors.New("flaky-min-transitions must be <= 20")
+	}
+	if _, err := inQuietHours(time.Now(), cfg.QuietHours); err != nil {
+		return fmt.Errorf("quiet-hours: %w", err)
+	}
+	if _, err := inMaintenanceWindow(time.Now(), cfg.MaintenanceWindows); err != nil {
+		return fmt.Errorf("maintenance-windows: %w", err)
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.SecretsProvider)) {
+	case "", "env", "file":
+	default:
+		return errors.New("secrets-provider must be one of: env, file")
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.SecretsProvider), "file") && strings.TrimSpace(cfg.SecretsFile) == "" {
+		return errors.New("secrets-file is required when secrets-provider=file")
+	}
 
 	// Validate retry settings
 	if cfg.RetryMaxAttempts <= 0 {
@@ -638,6 +908,7 @@ func writeDummyConfig(path string) error {
 
 # Required
 clusters: "10.2.XX.XX,10.0.XX.XX"      	  # Comma-separated list of Prism Element cluster IPs/cluster FQDNs
+# clusters-file: ""                        # Optional: one cluster per line; overrides clusters when set
 username: "admin"                         # Prism element username
 password: ""                              # Prefer env NCC_PASSWORD in CLI; leave empty here if using env
 ncc-api-version: v4                       # v4 (default) or Legacy (Prism Gateway v1 start-checks only; v1 accepted as alias)
@@ -652,9 +923,21 @@ poll-jitter: "2s"                         # Random jitter to avoid herd behavior
 
 # Concurrency and outputs
 max-parallel: 4                           # Parallel clusters processed  
-outputs: "html,csv"                       # One or more: html,csv  
+outputs: "html,csv"                       # One or more: html,csv,json,markdown,sarif
 output-dir-logs: "nccfiles"               # Directory for raw NCC summary text  
 output-dir-filtered: "outputfiles"        # Directory for generated HTML/CSV  
+single-report: false                      # Also write ncc-report-single.html
+run-history: false                        # Save each run snapshot under run-history-dir
+run-history-dir: "outputfiles/runs"       # History base directory
+retain-last: 0                            # Keep last N snapshots (0 = unlimited)
+retain-days: 0                            # Keep snapshots newer than N days (0 = unlimited)
+notify-on-regression: false               # Notify only when FAIL count increases
+adaptive-parallelism: true                # Reduce/increase effective concurrency on 429s
+policy-gates: ""                          # e.g. new-fails>0,fail-rate>2,min-health-score<90,flaky-checks>0
+quiet-hours: ""                           # Local HH:MM-HH:MM notification quiet window
+maintenance-windows: ""                   # RFC3339 windows start/end[,start/end...]
+flaky-lookback-runs: 6                    # Runs to inspect for flaky checks
+flaky-min-transitions: 2                  # Minimum severity transitions to mark flaky
 
 # Logging
 log-file: "logs/ncc-runner.log"           # Rotated JSON logs path  
@@ -668,6 +951,8 @@ retry-max-delay: "8s"                     # Max jittered backoff delay
 
 # Email notifications
 email-enabled: false
+email-attach-html: false
+notify-digest: false
 smtp-server: "smtp.example.com"
 smtp-port: 587
 smtp-user: "ncc@example.com"
@@ -678,14 +963,23 @@ email-use-tls: true
 
 # Webhook notifications
 webhook-enabled: false
+webhook-include-html: false
 webhook-url: "https://hooks.example.com/ncc"
 webhook-headers:
   X-Auth-Token: "changeme"
 
+# Slack notifications
+slack-enabled: false
+slack-webhook-url: ""
+slack-channel: ""
+secrets-provider: ""                      # env or file
+secrets-file: ""                          # YAML/JSON key-value map when secrets-provider=file
+
 `
 	case ".json":
 		dummy = `{
-  "clusters": ["10.0.0.1", "10.0.0.2"],
+  "clusters": "10.0.0.1,10.0.0.2",
+  "clusters-file": "",
   "username": "admin",
   "password": "",
   "ncc-api-version": "v4",
@@ -699,12 +993,45 @@ webhook-headers:
   "outputs": "html,csv",
   "output-dir-logs": "nccfiles",
   "output-dir-filtered": "outputfiles",
+  "single-report": false,
+  "run-history": false,
+  "run-history-dir": "outputfiles/runs",
+  "retain-last": 0,
+  "retain-days": 0,
+  "notify-on-regression": false,
+  "adaptive-parallelism": true,
+  "policy-gates": "",
+  "quiet-hours": "",
+  "maintenance-windows": "",
+  "flaky-lookback-runs": 6,
+  "flaky-min-transitions": 2,
   "log-file": "logs/ncc-runner.log",
   "log-level": "2",
   "log-http": false,
   "retry-max-attempts": 6,
   "retry-base-delay": "400ms",
-  "retry-max-delay": "8s"
+  "retry-max-delay": "8s",
+  "email-enabled": false,
+  "email-attach-html": false,
+  "notify-digest": false,
+  "smtp-server": "smtp.example.com",
+  "smtp-port": 587,
+  "smtp-user": "ncc@example.com",
+  "smtp-password": "",
+  "email-from": "ncc@example.com",
+  "email-to": "ops@example.com,sre@example.com",
+  "email-use-tls": true,
+  "webhook-enabled": false,
+  "webhook-include-html": false,
+  "webhook-url": "https://hooks.example.com/ncc",
+  "webhook-headers": {
+    "X-Auth-Token": "changeme"
+  },
+  "slack-enabled": false,
+  "slack-webhook-url": "",
+  "slack-channel": "",
+  "secrets-provider": "",
+  "secrets-file": ""
 }
 `
 	default:
@@ -712,8 +1039,11 @@ webhook-headers:
 
 # Required
 clusters: "10.2.XX.XX,10.0.XX.XX"      	  # Comma-separated list of Prism Element cluster IPs/cluster FQDNs
+# clusters-file: ""                        # Optional: one cluster per line; overrides clusters when set
 username: "admin"                         # Prism element username
 password: ""                              # Prefer env NCC_PASSWORD in CLI; leave empty here if using env
+ncc-api-version: v4                       # v4 (default) or Legacy (Prism Gateway v1 start-checks only; v1 accepted as alias)
+nutanix-v4-api-version: v4.2              # v4 path revision (v4.2 default; e.g. v4.1, v4.0.a1)
 
 # TLS and timeouts
 insecure-skip-verify: false               # Set true only for lab/self-signed
@@ -724,9 +1054,16 @@ poll-jitter: "2s"                         # Random jitter to avoid herd behavior
 
 # Concurrency and outputs
 max-parallel: 4                           # Parallel clusters processed  
-outputs: "html,csv"                       # One or more: html,csv  
+outputs: "html,csv"                       # One or more: html,csv,json,markdown,sarif
 output-dir-logs: "nccfiles"               # Directory for raw NCC summary text  
 output-dir-filtered: "outputfiles"        # Directory for generated HTML/CSV  
+single-report: false                      # Also write ncc-report-single.html
+run-history: false                        # Save each run snapshot under run-history-dir
+run-history-dir: "outputfiles/runs"       # History base directory
+retain-last: 0                            # Keep last N snapshots (0 = unlimited)
+retain-days: 0                            # Keep snapshots newer than N days (0 = unlimited)
+notify-on-regression: false               # Notify only when FAIL count increases
+adaptive-parallelism: true                # Reduce/increase effective concurrency on 429s
 
 # Logging
 log-file: "logs/ncc-runner.log"           # Rotated JSON logs path  
@@ -740,6 +1077,8 @@ retry-max-delay: "8s"                     # Max jittered backoff delay
 
 # Email notifications
 email-enabled: false
+email-attach-html: false
+notify-digest: false
 smtp-server: "smtp.example.com"
 smtp-port: 587
 smtp-user: "ncc@example.com"
@@ -750,9 +1089,15 @@ email-use-tls: true
 
 # Webhook notifications
 webhook-enabled: false
+webhook-include-html: false
 webhook-url: "https://hooks.example.com/ncc"
 webhook-headers:
   X-Auth-Token: "changeme"
+
+# Slack notifications
+slack-enabled: false
+slack-webhook-url: ""
+slack-channel: ""
 `
 	}
 	dir := filepath.Dir(path)
@@ -795,6 +1140,199 @@ func parseLogLevel(s string) zerolog.Level {
 	}
 }
 
+func parseBoolStrict(v interface{}) (bool, error) {
+	switch b := v.(type) {
+	case bool:
+		return b, nil
+	case string:
+		p, err := strconv.ParseBool(strings.TrimSpace(b))
+		if err != nil {
+			return false, err
+		}
+		return p, nil
+	default:
+		return false, fmt.Errorf("expected bool/string, got %T", v)
+	}
+}
+
+func parseIntStrict(v interface{}) (int, error) {
+	switch n := v.(type) {
+	case int:
+		return n, nil
+	case int64:
+		return int(n), nil
+	case float64:
+		if math.Trunc(n) != n {
+			return 0, fmt.Errorf("expected integer value, got %v", n)
+		}
+		return int(n), nil
+	case string:
+		i, err := strconv.Atoi(strings.TrimSpace(n))
+		if err != nil {
+			return 0, err
+		}
+		return i, nil
+	default:
+		return 0, fmt.Errorf("expected int/string, got %T", v)
+	}
+}
+
+func parseStringStrict(v interface{}) (string, error) {
+	switch s := v.(type) {
+	case string:
+		return s, nil
+	default:
+		return "", fmt.Errorf("expected string, got %T", v)
+	}
+}
+
+func parseMapStringStringStrict(v interface{}) error {
+	switch m := v.(type) {
+	case map[string]interface{}:
+		for k, vv := range m {
+			if _, ok := vv.(string); !ok {
+				return fmt.Errorf("key %q must be string value, got %T", k, vv)
+			}
+		}
+		return nil
+	case map[string]string:
+		return nil
+	default:
+		return fmt.Errorf("expected object/map, got %T", v)
+	}
+}
+
+func validateLogLevelStrict(s string) error {
+	v := strings.ToLower(strings.TrimSpace(s))
+	if v == "" {
+		return nil
+	}
+	switch v {
+	case "trace", "debug", "info", "warn", "warning", "error", "fatal",
+		"0", "1", "2", "3", "4", "5":
+		return nil
+	default:
+		return fmt.Errorf("invalid log-level %q (valid: trace/debug/info/warn/error/fatal or 0..5)", s)
+	}
+}
+
+// validateConfigFileRawTypes validates values as written in the config file (before env/flag overrides)
+// so typos like insecure-skip-verify: flse are surfaced clearly.
+func validateConfigFileRawTypes() error {
+	if viper.ConfigFileUsed() == "" {
+		return nil
+	}
+	allowedTopKeys := map[string]bool{
+		"config": true,
+		"update": true,
+		"clusters": true, "clusters-file": true, "prism-central-url": true, "discover-api-version": true,
+		"username": true, "password": true, "ncc-api-version": true, "nutanix-v4-api-version": true,
+		"insecure-skip-verify": true, "timeout": true, "request-timeout": true, "poll-interval": true, "poll-jitter": true,
+		"max-parallel": true, "outputs": true, "output-dir-logs": true, "output-dir-filtered": true,
+		"single-report": true, "run-history": true, "run-history-dir": true, "retain-last": true, "retain-days": true,
+		"notify-on-regression": true, "adaptive-parallelism": true,
+		"policy-gates": true, "quiet-hours": true, "maintenance-windows": true,
+		"flaky-lookback-runs": true, "flaky-min-transitions": true,
+		"log-file": true, "log-level": true, "log-http": true,
+		"retry-max-attempts": true, "retry-base-delay": true, "retry-max-delay": true,
+		"prom-dir": true, "severity-filter": true, "dry-run": true, "replay": true,
+		"max-idle-conns": true, "max-idle-conns-per-host": true, "max-conns-per-host": true, "idle-conn-timeout": true,
+		"gen-test-agg": true,
+		"email-enabled": true, "email-attach-html": true, "notify-digest": true,
+		"smtp-server": true, "smtp-port": true, "smtp-user": true, "smtp-password": true,
+		"email-from": true, "email-to": true, "email-use-tls": true,
+		"webhook-enabled": true, "webhook-include-html": true, "webhook-url": true, "webhook-headers": true,
+		"slack-enabled": true, "slack-webhook-url": true, "slack-channel": true,
+		"secrets-provider": true, "secrets-file": true,
+	}
+	for key := range viper.AllSettings() {
+		// Only enforce unknown-key checks for keys that actually come from config file.
+		// Viper may contain extra keys set from flags/env/programmatic overrides.
+		if !viper.InConfig(key) {
+			continue
+		}
+		if !allowedTopKeys[key] {
+			return fmt.Errorf("unknown config key %q", key)
+		}
+	}
+
+	stringKeys := []string{
+		"clusters", "clusters-file", "prism-central-url", "discover-api-version",
+		"username", "password", "ncc-api-version", "nutanix-v4-api-version",
+		"timeout", "request-timeout", "poll-interval", "poll-jitter",
+		"outputs", "output-dir-logs", "output-dir-filtered", "run-history-dir",
+		"log-file", "log-level", "retry-base-delay", "retry-max-delay", "prom-dir",
+		"severity-filter", "idle-conn-timeout", "policy-gates", "quiet-hours", "maintenance-windows",
+		"smtp-server", "smtp-user", "smtp-password", "email-from", "email-to",
+		"webhook-url", "slack-webhook-url", "slack-channel", "secrets-provider", "secrets-file",
+	}
+	for _, key := range stringKeys {
+		if !viper.InConfig(key) {
+			continue
+		}
+		if _, err := parseStringStrict(viper.Get(key)); err != nil {
+			return fmt.Errorf("%s: invalid string value (%v)", key, err)
+		}
+	}
+
+	boolKeys := []string{
+		"update",
+		"insecure-skip-verify", "dry-run", "replay", "log-http",
+		"run-history", "single-report", "notify-on-regression", "adaptive-parallelism",
+		"email-enabled", "email-attach-html", "notify-digest", "email-use-tls",
+		"webhook-enabled", "webhook-include-html", "slack-enabled",
+	}
+	for _, key := range boolKeys {
+		if !viper.InConfig(key) {
+			continue
+		}
+		if _, err := parseBoolStrict(viper.Get(key)); err != nil {
+			return fmt.Errorf("%s: invalid boolean value (%v)", key, err)
+		}
+	}
+	intKeys := []string{
+		"max-parallel", "retry-max-attempts", "max-idle-conns", "max-idle-conns-per-host",
+		"max-conns-per-host", "smtp-port", "retain-last", "retain-days", "gen-test-agg",
+		"flaky-lookback-runs", "flaky-min-transitions",
+	}
+	for _, key := range intKeys {
+		if !viper.InConfig(key) {
+			continue
+		}
+		if _, err := parseIntStrict(viper.Get(key)); err != nil {
+			return fmt.Errorf("%s: invalid integer value (%v)", key, err)
+		}
+	}
+	durationKeys := []string{
+		"timeout", "request-timeout", "poll-interval", "poll-jitter",
+		"retry-base-delay", "retry-max-delay", "idle-conn-timeout",
+	}
+	for _, key := range durationKeys {
+		if !viper.InConfig(key) {
+			continue
+		}
+		raw := viper.Get(key)
+		s, ok := raw.(string)
+		if !ok {
+			return fmt.Errorf("%s: expected duration string, got %T", key, raw)
+		}
+		if _, err := time.ParseDuration(strings.TrimSpace(s)); err != nil {
+			return fmt.Errorf("%s: invalid duration %q (%v)", key, s, err)
+		}
+	}
+	if viper.InConfig("webhook-headers") {
+		if err := parseMapStringStringStrict(viper.Get("webhook-headers")); err != nil {
+			return fmt.Errorf("webhook-headers: invalid map value (%v)", err)
+		}
+	}
+	if viper.InConfig("log-level") {
+		if err := validateLogLevelStrict(viper.GetString("log-level")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func bindConfig() (Config, error) {
 	cfgFile := viper.GetString("config")
 	if cfgFile != "" {
@@ -811,6 +1349,9 @@ func bindConfig() (Config, error) {
 			if !errors.As(err, &nf) {
 				return Config{}, fmt.Errorf("read config: %w", err)
 			}
+		}
+		if err := validateConfigFileRawTypes(); err != nil {
+			return Config{}, fmt.Errorf("invalid config file values: %w", err)
 		}
 	}
 
@@ -874,9 +1415,23 @@ func bindConfig() (Config, error) {
 		WebhookHeaders:      viper.GetStringMapString("webhook-headers"),
 		SeverityFilter:      splitCSV(viper.GetString("severity-filter")),
 		DryRun:              viper.GetBool("dry-run"),
+		RunHistoryEnabled:   viper.GetBool("run-history"),
+		RunHistoryDir:       strings.TrimSpace(viper.GetString("run-history-dir")),
+		RetainLastRuns:      viper.GetInt("retain-last"),
+		RetainDays:          viper.GetInt("retain-days"),
+		SingleReport:        viper.GetBool("single-report"),
+		NotifyOnRegression:  viper.GetBool("notify-on-regression"),
+		AdaptiveParallelism: viper.GetBool("adaptive-parallelism"),
+		PolicyGates:         splitCSV(viper.GetString("policy-gates")),
+		QuietHours:          strings.TrimSpace(viper.GetString("quiet-hours")),
+		MaintenanceWindows:  splitCSV(viper.GetString("maintenance-windows")),
+		FlakyLookbackRuns:   viper.GetInt("flaky-lookback-runs"),
+		FlakyMinTransitions: viper.GetInt("flaky-min-transitions"),
 		SlackEnabled:        viper.GetBool("slack-enabled"),
 		SlackWebhookURL:     viper.GetString("slack-webhook-url"),
 		SlackChannel:        viper.GetString("slack-channel"),
+		SecretsProvider:     strings.TrimSpace(viper.GetString("secrets-provider")),
+		SecretsFile:         strings.TrimSpace(viper.GetString("secrets-file")),
 		NCCAPIVersion:       nccAPIVer,
 		NutanixV4APIVersion: strings.ToLower(strings.TrimSpace(viper.GetString("nutanix-v4-api-version"))),
 	}
@@ -903,6 +1458,15 @@ func bindConfig() (Config, error) {
 	if cfg.PromDir == "" {
 		cfg.PromDir = defaultPromDir
 	}
+	if cfg.RunHistoryDir == "" {
+		cfg.RunHistoryDir = filepath.Join(cfg.OutputDirFiltered, "runs")
+	}
+	if cfg.FlakyLookbackRuns <= 0 {
+		cfg.FlakyLookbackRuns = defaultFlakyLookbackRuns
+	}
+	if cfg.FlakyMinTransitions <= 0 {
+		cfg.FlakyMinTransitions = defaultFlakyTransitions
+	}
 	if cfg.RetryMaxAttempts <= 0 {
 		cfg.RetryMaxAttempts = defaultRetryAttempts
 	}
@@ -911,6 +1475,9 @@ func bindConfig() (Config, error) {
 	}
 	if cfg.RetryMaxDelay <= 0 {
 		cfg.RetryMaxDelay = defaultRetryMaxDelay
+	}
+	if err := applySecretsToConfig(&cfg); err != nil {
+		return cfg, fmt.Errorf("secret resolution failed: %w", err)
 	}
 
 	// Validate configuration
@@ -1029,6 +1596,68 @@ func isRetryableStatus(code int) bool {
 
 // maxRateLimitBackoff caps Retry-After / computed backoff for HTTP 429 so a misbehaving server cannot sleep unbounded.
 const maxRateLimitBackoff = 2 * time.Minute
+
+var (
+	adaptiveCurrentParallel int32
+	adaptiveMaxParallel     int32
+)
+
+func resetAdaptiveParallelism(maxParallel int) {
+	if maxParallel < 1 {
+		maxParallel = 1
+	}
+	atomic.StoreInt32(&adaptiveMaxParallel, int32(maxParallel))
+	atomic.StoreInt32(&adaptiveCurrentParallel, int32(maxParallel))
+}
+
+func currentAdaptiveParallel(maxParallel int) int {
+	cur := int(atomic.LoadInt32(&adaptiveCurrentParallel))
+	if cur < 1 {
+		return 1
+	}
+	if cur > maxParallel {
+		return maxParallel
+	}
+	return cur
+}
+
+func noteHTTPStatusForAdaptiveParallelism(status int, cfg Config) {
+	if !cfg.AdaptiveParallelism {
+		return
+	}
+	maxP := int(atomic.LoadInt32(&adaptiveMaxParallel))
+	if maxP <= 1 {
+		return
+	}
+	switch status {
+	case http.StatusTooManyRequests:
+		for {
+			cur := atomic.LoadInt32(&adaptiveCurrentParallel)
+			if cur <= 1 {
+				return
+			}
+			next := cur - 1
+			if atomic.CompareAndSwapInt32(&adaptiveCurrentParallel, cur, next) {
+				log.Warn().Int("adaptive_parallel", int(next)).Int("max_parallel", maxP).Msg("adaptive parallelism reduced after 429")
+				return
+			}
+		}
+	default:
+		if status >= 200 && status < 300 {
+			for {
+				cur := atomic.LoadInt32(&adaptiveCurrentParallel)
+				max := atomic.LoadInt32(&adaptiveMaxParallel)
+				if cur >= max {
+					return
+				}
+				next := cur + 1
+				if atomic.CompareAndSwapInt32(&adaptiveCurrentParallel, cur, next) {
+					return
+				}
+			}
+		}
+	}
+}
 
 func capRateLimitWait(d time.Duration) time.Duration {
 	if d > maxRateLimitBackoff {
@@ -1354,6 +1983,7 @@ var (
 	reBlockStart = regexp.MustCompile(`^Detailed information for .*`)
 	reBlockEnd   = regexp.MustCompile(`^Refer to.*`)
 	reSeverity   = regexp.MustCompile(`\b(FAIL|WARN|INFO|ERR)\s*:`)
+	rePluginSev  = regexp.MustCompile(`\[\s*(FAIL|WARN|ERR|INFO)\s*\]`)
 )
 
 type Row struct {
@@ -1424,6 +2054,53 @@ func ParseSummary(text string) ([]ParsedBlock, error) {
 		}
 	}
 	return blocks, nil
+}
+
+func countParsedSeverities(blocks []ParsedBlock) map[string]int {
+	counts := map[string]int{"FAIL": 0, "WARN": 0, "ERR": 0, "INFO": 0}
+	for _, b := range blocks {
+		sev := strings.ToUpper(strings.TrimSpace(b.Severity))
+		if _, ok := counts[sev]; !ok {
+			continue
+		}
+		counts[sev]++
+	}
+	return counts
+}
+
+func parsePluginResultsSeverities(raw string) map[string]int {
+	counts := map[string]int{"FAIL": 0, "WARN": 0, "ERR": 0, "INFO": 0}
+	for _, ln := range splitLines(raw) {
+		m := rePluginSev.FindStringSubmatch(strings.ToUpper(ln))
+		if len(m) != 2 {
+			continue
+		}
+		sev := m[1]
+		if _, ok := counts[sev]; ok {
+			counts[sev]++
+		}
+	}
+	return counts
+}
+
+// validateParsedAlertsAgainstPluginResults ensures parser output remains
+// aligned with NCC plugin-result severities in raw logs.
+func validateParsedAlertsAgainstPluginResults(raw string, blocks []ParsedBlock) error {
+	plugin := parsePluginResultsSeverities(raw)
+	totalPlugin := plugin["FAIL"] + plugin["WARN"] + plugin["ERR"] + plugin["INFO"]
+	if totalPlugin == 0 {
+		return nil
+	}
+	parsed := countParsedSeverities(blocks)
+	if parsed["FAIL"] != plugin["FAIL"] ||
+		parsed["WARN"] != plugin["WARN"] ||
+		parsed["ERR"] != plugin["ERR"] ||
+		parsed["INFO"] != plugin["INFO"] {
+		return fmt.Errorf("parsed alerts mismatch plugin results: parsed={FAIL:%d WARN:%d ERR:%d INFO:%d} plugin_results={FAIL:%d WARN:%d ERR:%d INFO:%d}",
+			parsed["FAIL"], parsed["WARN"], parsed["ERR"], parsed["INFO"],
+			plugin["FAIL"], plugin["WARN"], plugin["ERR"], plugin["INFO"])
+	}
+	return nil
 }
 
 func parseNCCHeader(path string) (HTMLMeta, error) {
@@ -1752,7 +2429,7 @@ func generateHTML(fs FS, rows []Row, filename string, meta HTMLMeta) error {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>NCC Report - {{.Meta.ClusterName}}</title>
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3QgeD0iNCIgeT0iNCIgd2lkdGg9IjI0IiBoZWlnaHQ9IjI0IiByeD0iOCIgZmlsbD0iIzBmMTcyYSIvPgo8Y2lyY2xlIGN4PSI5IiBjeT0iMTMiIHI9IjMiIGZpbGw9IiNlZjQ0NDQiLz4KPGNpcmNsZSBjeD0iMjMiIGN5PSIxOSIgcj0iMyIgZmlsbD0iI2Y1OWUwYiIvPgo8cGF0aCBkPSJNOSAyNCBMMTYgMjQgTTE2IDI0IEwyMyAyNCIgc3Ryb2tlPSIjMjU2M2ViIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgo8L3N2Zz4K">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3QgeD0iMiIgeT0iMiIgd2lkdGg9IjI4IiBoZWlnaHQ9IjI4IiByeD0iOCIgZmlsbD0iIzBCMTIyMCIvPgo8cGF0aCBkPSJNOSAyM1Y5SDEyTDIwIDE5VjlIMjNWMjNIMjBMMTIgMTNWMjNIOVoiIGZpbGw9IiMyMkM1NUUiLz4KPGNpcmNsZSBjeD0iMjQiIGN5PSI4IiByPSIyIiBmaWxsPSIjMzhCREY4Ii8+CjxjaXJjbGUgY3g9IjgiIGN5PSIyNCIgcj0iMiIgZmlsbD0iI0Y1OUUwQiIvPgo8L3N2Zz4=">
   <style>
     :root {
       --fail: #ef4444;
@@ -1963,18 +2640,100 @@ type RunSummaryJSON struct {
 	ExitCode       int                 `json:"exit_code,omitempty"`
 	IndexHTML      string              `json:"index_html"`
 	TotalChecks    int                 `json:"total_checks,omitempty"`
+	AvgHealthScore int                 `json:"avg_health_score,omitempty"`
+	MinHealthScore int                 `json:"min_health_score,omitempty"`
 }
 
 // RunClusterSummary is per-cluster stats for automation (run-summary.json).
 type RunClusterSummary struct {
-	Address      string `json:"address"`
-	OK           bool   `json:"ok"`
-	Error        string `json:"error,omitempty"`
-	FailCount    int    `json:"fail_count,omitempty"`
-	WarnCount    int    `json:"warn_count,omitempty"`
-	ErrCount     int    `json:"err_count,omitempty"`
-	InfoCount    int    `json:"info_count,omitempty"`
-	ChecksTotal  int    `json:"checks_total,omitempty"`
+	Address     string `json:"address"`
+	OK          bool   `json:"ok"`
+	Error       string `json:"error,omitempty"`
+	FailCount   int    `json:"fail_count,omitempty"`
+	WarnCount   int    `json:"warn_count,omitempty"`
+	ErrCount    int    `json:"err_count,omitempty"`
+	InfoCount   int    `json:"info_count,omitempty"`
+	ChecksTotal int    `json:"checks_total,omitempty"`
+	HealthScore int    `json:"health_score,omitempty"`
+}
+
+type CheckSnapshotEntry struct {
+	CheckName string `json:"check_name"`
+	Severity  string `json:"severity"`
+}
+
+type ClusterChecksSnapshot struct {
+	Address     string               `json:"address"`
+	Checks      []CheckSnapshotEntry `json:"checks,omitempty"`
+	FailCount   int                  `json:"fail_count,omitempty"`
+	WarnCount   int                  `json:"warn_count,omitempty"`
+	ErrCount    int                  `json:"err_count,omitempty"`
+	InfoCount   int                  `json:"info_count,omitempty"`
+	ChecksTotal int                  `json:"checks_total,omitempty"`
+	HealthScore int                  `json:"health_score,omitempty"`
+}
+
+type ChecksSnapshotJSON struct {
+	Timestamp string                  `json:"timestamp"`
+	Clusters  []ClusterChecksSnapshot `json:"clusters,omitempty"`
+}
+
+type SeverityChange struct {
+	CheckName string `json:"check_name"`
+	From      string `json:"from"`
+	To        string `json:"to"`
+}
+
+type ClusterDiffSummary struct {
+	Address         string           `json:"address"`
+	NewFailures     []string         `json:"new_failures,omitempty"`
+	ResolvedFailures []string        `json:"resolved_failures,omitempty"`
+	NewChecks       []string         `json:"new_checks,omitempty"`
+	RemovedChecks   []string         `json:"removed_checks,omitempty"`
+	SeverityChanges []SeverityChange `json:"severity_changes,omitempty"`
+}
+
+type DrillDownDiffJSON struct {
+	Timestamp         string               `json:"timestamp"`
+	PreviousTimestamp string               `json:"previous_timestamp,omitempty"`
+	NewFailCount      int                  `json:"new_fail_count"`
+	ResolvedFailCount int                  `json:"resolved_fail_count"`
+	Clusters          []ClusterDiffSummary `json:"clusters,omitempty"`
+}
+
+type FlakyCheckSummary struct {
+	Cluster      string   `json:"cluster"`
+	CheckName    string   `json:"check_name"`
+	Transitions  int      `json:"transitions"`
+	Observations int      `json:"observations"`
+	States       []string `json:"states,omitempty"`
+	Current      string   `json:"current"`
+}
+
+type FlakyChecksJSON struct {
+	Timestamp         string              `json:"timestamp"`
+	LookbackRuns      int                 `json:"lookback_runs"`
+	MinTransitions    int                 `json:"min_transitions"`
+	TotalFlakyChecks  int                 `json:"total_flaky_checks"`
+	Checks            []FlakyCheckSummary `json:"checks,omitempty"`
+}
+
+type SLOClusterExport struct {
+	Address         string  `json:"address"`
+	ChecksTotal     int     `json:"checks_total"`
+	FailCount       int     `json:"fail_count"`
+	WarnCount       int     `json:"warn_count"`
+	ErrCount        int     `json:"err_count"`
+	InfoCount       int     `json:"info_count"`
+	FailRatePercent float64 `json:"fail_rate_percent"`
+	HealthScore     int     `json:"health_score"`
+	Status          string  `json:"status"`
+}
+
+type SLODashboardJSON struct {
+	Timestamp string           `json:"timestamp"`
+	DurationS float64          `json:"duration_s"`
+	Clusters  []SLOClusterExport `json:"clusters,omitempty"`
 }
 
 func writeRunSummaryJSON(fs FS, outDir string, summary RunSummaryJSON) error {
@@ -1990,15 +2749,35 @@ func writeRunSummaryJSON(fs FS, outDir string, summary RunSummaryJSON) error {
 type NCCRunRecord struct {
 	SchemaVersion       string         `json:"schema_version"`
 	OrchestratorVersion string         `json:"orchestrator_version"`
+	GitRevision         string         `json:"git_revision,omitempty"`
+	Hostname            string         `json:"hostname,omitempty"`
+	SchedulerSource     string         `json:"scheduler_source,omitempty"`
 	Stream              string         `json:"stream,omitempty"`
 	Run                 RunSummaryJSON `json:"run"`
 }
 
 func writeNCCRunRecordJSON(fs FS, outDir string, summary RunSummaryJSON) error {
 	path := filepath.Join(outDir, "ncc-run-record.json")
+	hostname, _ := os.Hostname()
+	schedulerSource := strings.TrimSpace(os.Getenv("NCC_SCHEDULER_SOURCE"))
+	if schedulerSource == "" {
+		schedulerSource = "manual"
+	}
+	gitRevision := ""
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		for _, s := range bi.Settings {
+			if s.Key == "vcs.revision" && s.Value != "" {
+				gitRevision = s.Value
+				break
+			}
+		}
+	}
 	rec := NCCRunRecord{
 		SchemaVersion:       "1.0",
 		OrchestratorVersion: Version,
+		GitRevision:         gitRevision,
+		Hostname:            hostname,
+		SchedulerSource:     schedulerSource,
 		Stream:              Stream,
 		Run:                 summary,
 	}
@@ -2007,6 +2786,597 @@ func writeNCCRunRecordJSON(fs FS, outDir string, summary RunSummaryJSON) error {
 		return err
 	}
 	return fs.WriteFile(path, data, 0644)
+}
+
+// RegressionSummary captures change in FAIL counts vs the previous run-summary.json.
+type RegressionSummary struct {
+	Timestamp         string         `json:"timestamp"`
+	PreviousTimestamp string         `json:"previous_timestamp,omitempty"`
+	Current           RunSummaryJSON `json:"current"`
+	PreviousFailTotal int            `json:"previous_fail_total"`
+	CurrentFailTotal  int            `json:"current_fail_total"`
+	DeltaFailTotal    int            `json:"delta_fail_total"`
+	HasRegression     bool           `json:"has_regression"`
+	IncreasedClusters []string       `json:"increased_clusters,omitempty"`
+	DecreasedClusters []string       `json:"decreased_clusters,omitempty"`
+	UnchangedClusters []string       `json:"unchanged_clusters,omitempty"`
+}
+
+func failCountByCluster(summary RunSummaryJSON) map[string]int {
+	out := make(map[string]int, len(summary.Clusters))
+	for _, c := range summary.Clusters {
+		out[strings.TrimSpace(c.Address)] = c.FailCount
+	}
+	return out
+}
+
+func loadRunSummaryJSON(path string) (RunSummaryJSON, bool, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return RunSummaryJSON{}, false, nil
+		}
+		return RunSummaryJSON{}, false, err
+	}
+	var s RunSummaryJSON
+	if err := json.Unmarshal(b, &s); err != nil {
+		return RunSummaryJSON{}, false, err
+	}
+	return s, true, nil
+}
+
+func computeRegressionSummary(previous RunSummaryJSON, hasPrevious bool, current RunSummaryJSON) RegressionSummary {
+	reg := RegressionSummary{
+		Timestamp:         time.Now().UTC().Format(time.RFC3339),
+		Current:           current,
+		CurrentFailTotal:  0,
+		PreviousFailTotal: 0,
+	}
+	if hasPrevious {
+		reg.PreviousTimestamp = previous.Timestamp
+	}
+
+	prevMap := failCountByCluster(previous)
+	currMap := failCountByCluster(current)
+	seen := make(map[string]bool, len(prevMap)+len(currMap))
+
+	for k := range prevMap {
+		seen[k] = true
+	}
+	for k := range currMap {
+		seen[k] = true
+	}
+
+	for cluster := range seen {
+		prev := prevMap[cluster]
+		curr := currMap[cluster]
+		reg.PreviousFailTotal += prev
+		reg.CurrentFailTotal += curr
+		switch {
+		case curr > prev:
+			reg.IncreasedClusters = append(reg.IncreasedClusters, cluster)
+		case curr < prev:
+			reg.DecreasedClusters = append(reg.DecreasedClusters, cluster)
+		default:
+			reg.UnchangedClusters = append(reg.UnchangedClusters, cluster)
+		}
+	}
+	sort.Strings(reg.IncreasedClusters)
+	sort.Strings(reg.DecreasedClusters)
+	sort.Strings(reg.UnchangedClusters)
+	reg.DeltaFailTotal = reg.CurrentFailTotal - reg.PreviousFailTotal
+	reg.HasRegression = len(reg.IncreasedClusters) > 0
+	return reg
+}
+
+func writeRegressionSummaryJSON(fs FS, outDir string, reg RegressionSummary) error {
+	path := filepath.Join(outDir, "regression-summary.json")
+	data, err := json.MarshalIndent(reg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return fs.WriteFile(path, data, 0644)
+}
+
+func writeChecksSnapshotJSON(fs FS, outDir string, snap ChecksSnapshotJSON) error {
+	path := filepath.Join(outDir, "checks-snapshot.json")
+	data, err := json.MarshalIndent(snap, "", "  ")
+	if err != nil {
+		return err
+	}
+	return fs.WriteFile(path, data, 0644)
+}
+
+func loadChecksSnapshotJSON(path string) (ChecksSnapshotJSON, bool, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ChecksSnapshotJSON{}, false, nil
+		}
+		return ChecksSnapshotJSON{}, false, err
+	}
+	var s ChecksSnapshotJSON
+	if err := json.Unmarshal(b, &s); err != nil {
+		return ChecksSnapshotJSON{}, false, err
+	}
+	return s, true, nil
+}
+
+func writeDrillDownDiffJSON(fs FS, outDir string, diff DrillDownDiffJSON) error {
+	path := filepath.Join(outDir, "drilldown-diff.json")
+	data, err := json.MarshalIndent(diff, "", "  ")
+	if err != nil {
+		return err
+	}
+	return fs.WriteFile(path, data, 0644)
+}
+
+func writeFlakyChecksJSON(fs FS, outDir string, flaky FlakyChecksJSON) error {
+	path := filepath.Join(outDir, "flaky-checks.json")
+	data, err := json.MarshalIndent(flaky, "", "  ")
+	if err != nil {
+		return err
+	}
+	return fs.WriteFile(path, data, 0644)
+}
+
+func writeSLODashboardJSON(fs FS, outDir string, slo SLODashboardJSON) error {
+	path := filepath.Join(outDir, "slo-dashboard.json")
+	data, err := json.MarshalIndent(slo, "", "  ")
+	if err != nil {
+		return err
+	}
+	return fs.WriteFile(path, data, 0644)
+}
+
+func clusterHealthScore(failCount, warnCount, errCount, total int) int {
+	if total <= 0 {
+		return 100
+	}
+	penalty := (float64(failCount)*1.0 + float64(errCount)*0.8 + float64(warnCount)*0.3) / float64(total) * 100.0
+	score := int(math.Round(100.0 - penalty))
+	if score < 0 {
+		return 0
+	}
+	if score > 100 {
+		return 100
+	}
+	return score
+}
+
+func buildChecksSnapshot(results []ClusterResult) ChecksSnapshotJSON {
+	snap := ChecksSnapshotJSON{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Clusters:  make([]ClusterChecksSnapshot, 0, len(results)),
+	}
+	for _, r := range results {
+		cluster := ClusterChecksSnapshot{Address: r.Cluster}
+		if r.Err != nil {
+			snap.Clusters = append(snap.Clusters, cluster)
+			continue
+		}
+		counts := map[string]int{"FAIL": 0, "WARN": 0, "ERR": 0, "INFO": 0}
+		cluster.Checks = make([]CheckSnapshotEntry, 0, len(r.Blocks))
+		for _, b := range r.Blocks {
+			sev := strings.ToUpper(strings.TrimSpace(b.Severity))
+			if sev == "" {
+				sev = "INFO"
+			}
+			if _, ok := counts[sev]; !ok {
+				sev = "INFO"
+			}
+			counts[sev]++
+			cluster.Checks = append(cluster.Checks, CheckSnapshotEntry{
+				CheckName: strings.TrimSpace(b.CheckName),
+				Severity:  sev,
+			})
+		}
+		sort.Slice(cluster.Checks, func(i, j int) bool {
+			if cluster.Checks[i].CheckName == cluster.Checks[j].CheckName {
+				return cluster.Checks[i].Severity < cluster.Checks[j].Severity
+			}
+			return cluster.Checks[i].CheckName < cluster.Checks[j].CheckName
+		})
+		cluster.FailCount = counts["FAIL"]
+		cluster.WarnCount = counts["WARN"]
+		cluster.ErrCount = counts["ERR"]
+		cluster.InfoCount = counts["INFO"]
+		cluster.ChecksTotal = len(r.Blocks)
+		cluster.HealthScore = clusterHealthScore(cluster.FailCount, cluster.WarnCount, cluster.ErrCount, cluster.ChecksTotal)
+		snap.Clusters = append(snap.Clusters, cluster)
+	}
+	sort.Slice(snap.Clusters, func(i, j int) bool { return snap.Clusters[i].Address < snap.Clusters[j].Address })
+	return snap
+}
+
+func checksMapForCluster(c ClusterChecksSnapshot) map[string]string {
+	out := make(map[string]string, len(c.Checks))
+	for _, ch := range c.Checks {
+		name := strings.TrimSpace(ch.CheckName)
+		if name == "" {
+			continue
+		}
+		out[name] = strings.ToUpper(strings.TrimSpace(ch.Severity))
+	}
+	return out
+}
+
+func computeDrillDownDiff(previous ChecksSnapshotJSON, hasPrevious bool, current ChecksSnapshotJSON) DrillDownDiffJSON {
+	diff := DrillDownDiffJSON{
+		Timestamp: current.Timestamp,
+	}
+	if !hasPrevious {
+		return diff
+	}
+	if hasPrevious {
+		diff.PreviousTimestamp = previous.Timestamp
+	}
+	prevClusters := map[string]ClusterChecksSnapshot{}
+	currClusters := map[string]ClusterChecksSnapshot{}
+	for _, c := range previous.Clusters {
+		prevClusters[c.Address] = c
+	}
+	for _, c := range current.Clusters {
+		currClusters[c.Address] = c
+	}
+	allClusters := map[string]bool{}
+	for k := range prevClusters {
+		allClusters[k] = true
+	}
+	for k := range currClusters {
+		allClusters[k] = true
+	}
+	for addr := range allClusters {
+		prevMap := checksMapForCluster(prevClusters[addr])
+		currMap := checksMapForCluster(currClusters[addr])
+		cd := ClusterDiffSummary{Address: addr}
+		for name, currSev := range currMap {
+			prevSev, hadPrev := prevMap[name]
+			if !hadPrev {
+				cd.NewChecks = append(cd.NewChecks, name)
+				if currSev == "FAIL" {
+					cd.NewFailures = append(cd.NewFailures, name)
+					diff.NewFailCount++
+				}
+				continue
+			}
+			if currSev != prevSev {
+				cd.SeverityChanges = append(cd.SeverityChanges, SeverityChange{
+					CheckName: name, From: prevSev, To: currSev,
+				})
+			}
+			if prevSev != "FAIL" && currSev == "FAIL" {
+				cd.NewFailures = append(cd.NewFailures, name)
+				diff.NewFailCount++
+			}
+			if prevSev == "FAIL" && currSev != "FAIL" {
+				cd.ResolvedFailures = append(cd.ResolvedFailures, name)
+				diff.ResolvedFailCount++
+			}
+		}
+		for name := range prevMap {
+			if _, ok := currMap[name]; !ok {
+				cd.RemovedChecks = append(cd.RemovedChecks, name)
+				if prevMap[name] == "FAIL" {
+					cd.ResolvedFailures = append(cd.ResolvedFailures, name)
+					diff.ResolvedFailCount++
+				}
+			}
+		}
+		sort.Strings(cd.NewFailures)
+		sort.Strings(cd.ResolvedFailures)
+		sort.Strings(cd.NewChecks)
+		sort.Strings(cd.RemovedChecks)
+		sort.Slice(cd.SeverityChanges, func(i, j int) bool { return cd.SeverityChanges[i].CheckName < cd.SeverityChanges[j].CheckName })
+		if len(cd.NewFailures) > 0 || len(cd.ResolvedFailures) > 0 || len(cd.NewChecks) > 0 || len(cd.RemovedChecks) > 0 || len(cd.SeverityChanges) > 0 {
+			diff.Clusters = append(diff.Clusters, cd)
+		}
+	}
+	sort.Slice(diff.Clusters, func(i, j int) bool { return diff.Clusters[i].Address < diff.Clusters[j].Address })
+	return diff
+}
+
+func computeFlakyChecks(snapshots []ChecksSnapshotJSON, minTransitions int) FlakyChecksJSON {
+	report := FlakyChecksJSON{
+		Timestamp:        time.Now().UTC().Format(time.RFC3339),
+		LookbackRuns:     len(snapshots),
+		MinTransitions:   minTransitions,
+		Checks:           []FlakyCheckSummary{},
+	}
+	if len(snapshots) < 2 {
+		return report
+	}
+	type key struct{ cluster, check string }
+	series := map[key][]string{}
+	for _, snap := range snapshots {
+		for _, c := range snap.Clusters {
+			for _, ch := range c.Checks {
+				k := key{cluster: c.Address, check: strings.TrimSpace(ch.CheckName)}
+				if k.check == "" {
+					continue
+				}
+				series[k] = append(series[k], strings.ToUpper(strings.TrimSpace(ch.Severity)))
+			}
+		}
+	}
+	for k, states := range series {
+		if len(states) < 2 {
+			continue
+		}
+		transitions := 0
+		uniq := map[string]bool{}
+		prev := states[0]
+		uniq[prev] = true
+		for i := 1; i < len(states); i++ {
+			cur := states[i]
+			uniq[cur] = true
+			if cur != prev {
+				transitions++
+			}
+			prev = cur
+		}
+		if transitions >= minTransitions && len(uniq) > 1 {
+			report.Checks = append(report.Checks, FlakyCheckSummary{
+				Cluster:      k.cluster,
+				CheckName:    k.check,
+				Transitions:  transitions,
+				Observations: len(states),
+				States:       states,
+				Current:      states[len(states)-1],
+			})
+		}
+	}
+	sort.Slice(report.Checks, func(i, j int) bool {
+		if report.Checks[i].Transitions == report.Checks[j].Transitions {
+			if report.Checks[i].Cluster == report.Checks[j].Cluster {
+				return report.Checks[i].CheckName < report.Checks[j].CheckName
+			}
+			return report.Checks[i].Cluster < report.Checks[j].Cluster
+		}
+		return report.Checks[i].Transitions > report.Checks[j].Transitions
+	})
+	report.TotalFlakyChecks = len(report.Checks)
+	return report
+}
+
+func loadRecentCheckSnapshots(historyDir string, maxRuns int) ([]ChecksSnapshotJSON, error) {
+	if maxRuns <= 0 {
+		return nil, nil
+	}
+	dirs, err := listHistoryRunDirs(historyDir)
+	if err != nil {
+		return nil, err
+	}
+	if len(dirs) > maxRuns {
+		dirs = dirs[:maxRuns]
+	}
+	outNewest := make([]ChecksSnapshotJSON, 0, len(dirs))
+	for _, d := range dirs {
+		path := filepath.Join(historyDir, d, "checks-snapshot.json")
+		s, ok, err := loadChecksSnapshotJSON(path)
+		if err != nil {
+			log.Warn().Err(err).Str("path", path).Msg("failed to load checks snapshot from history (ignored)")
+			continue
+		}
+		if ok {
+			outNewest = append(outNewest, s)
+		}
+	}
+	// Return oldest -> newest
+	for i, j := 0, len(outNewest)-1; i < j; i, j = i+1, j-1 {
+		outNewest[i], outNewest[j] = outNewest[j], outNewest[i]
+	}
+	return outNewest, nil
+}
+
+func buildSLODashboard(run RunSummaryJSON) SLODashboardJSON {
+	out := SLODashboardJSON{
+		Timestamp: run.Timestamp,
+		DurationS: run.DurationS,
+		Clusters:  make([]SLOClusterExport, 0, len(run.Clusters)),
+	}
+	for _, c := range run.Clusters {
+		failRate := 0.0
+		if c.ChecksTotal > 0 {
+			failRate = float64(c.FailCount) * 100.0 / float64(c.ChecksTotal)
+		}
+		status := "ok"
+		if !c.OK {
+			status = "error"
+		} else if c.FailCount > 0 {
+			status = "degraded"
+		} else if c.WarnCount > 0 {
+			status = "warn"
+		}
+		out.Clusters = append(out.Clusters, SLOClusterExport{
+			Address:         c.Address,
+			ChecksTotal:     c.ChecksTotal,
+			FailCount:       c.FailCount,
+			WarnCount:       c.WarnCount,
+			ErrCount:        c.ErrCount,
+			InfoCount:       c.InfoCount,
+			FailRatePercent: math.Round(failRate*100) / 100,
+			HealthScore:     c.HealthScore,
+			Status:          status,
+		})
+	}
+	sort.Slice(out.Clusters, func(i, j int) bool { return out.Clusters[i].Address < out.Clusters[j].Address })
+	return out
+}
+
+type parsedPolicyGate struct {
+	Raw       string
+	Metric    string
+	Operator  string
+	Threshold float64
+}
+
+var policyGateRe = regexp.MustCompile(`^\s*([a-zA-Z0-9\-_]+)\s*(>=|<=|==|!=|>|<)\s*([0-9]+(?:\.[0-9]+)?)\s*$`)
+
+func parsePolicyGate(expr string) (parsedPolicyGate, error) {
+	expr = strings.TrimSpace(expr)
+	m := policyGateRe.FindStringSubmatch(expr)
+	if len(m) != 4 {
+		return parsedPolicyGate{}, fmt.Errorf("invalid policy gate %q (expected metric<op>number)", expr)
+	}
+	th, err := strconv.ParseFloat(m[3], 64)
+	if err != nil {
+		return parsedPolicyGate{}, err
+	}
+	return parsedPolicyGate{
+		Raw:       expr,
+		Metric:    strings.ToLower(strings.TrimSpace(m[1])),
+		Operator:  m[2],
+		Threshold: th,
+	}, nil
+}
+
+func compareFloat(lhs float64, op string, rhs float64) bool {
+	switch op {
+	case ">":
+		return lhs > rhs
+	case ">=":
+		return lhs >= rhs
+	case "<":
+		return lhs < rhs
+	case "<=":
+		return lhs <= rhs
+	case "==":
+		return lhs == rhs
+	case "!=":
+		return lhs != rhs
+	default:
+		return false
+	}
+}
+
+func evaluatePolicyGates(gates []string, metrics map[string]float64) ([]string, error) {
+	var violations []string
+	for _, g := range gates {
+		if strings.TrimSpace(g) == "" {
+			continue
+		}
+		p, err := parsePolicyGate(g)
+		if err != nil {
+			return nil, err
+		}
+		val, ok := metrics[p.Metric]
+		if !ok {
+			return nil, fmt.Errorf("unsupported policy gate metric %q", p.Metric)
+		}
+		if compareFloat(val, p.Operator, p.Threshold) {
+			violations = append(violations, fmt.Sprintf("%s violated (actual=%.2f)", p.Raw, val))
+		}
+	}
+	return violations, nil
+}
+
+func copyFile(src, dst string) error {
+	b, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(dst, b, 0644)
+}
+
+func runHistoryTimestamp(now time.Time) string {
+	return now.UTC().Format("20060102T150405Z")
+}
+
+func listHistoryRunDirs(historyDir string) ([]string, error) {
+	ents, err := os.ReadDir(historyDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	type item struct {
+		name string
+		t    time.Time
+	}
+	var items []item
+	for _, e := range ents {
+		if !e.IsDir() {
+			continue
+		}
+		ts, err := time.Parse("20060102T150405Z", e.Name())
+		if err != nil {
+			continue
+		}
+		items = append(items, item{name: e.Name(), t: ts})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].t.After(items[j].t) })
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		out = append(out, it.name)
+	}
+	return out, nil
+}
+
+func applyRunHistoryRetention(historyDir string, retainLast, retainDays int, now time.Time) error {
+	dirs, err := listHistoryRunDirs(historyDir)
+	if err != nil {
+		return err
+	}
+	for i, d := range dirs {
+		remove := false
+		if retainLast > 0 && i >= retainLast {
+			remove = true
+		}
+		if retainDays > 0 {
+			ts, err := time.Parse("20060102T150405Z", d)
+			if err == nil {
+				ageDays := int(now.UTC().Sub(ts).Hours() / 24)
+				if ageDays >= retainDays {
+					remove = true
+				}
+			}
+		}
+		if remove {
+			if err := os.RemoveAll(filepath.Join(historyDir, d)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func writeRunHistorySnapshot(cfg Config) (string, error) {
+	ts := runHistoryTimestamp(time.Now())
+	runDir := filepath.Join(cfg.RunHistoryDir, ts)
+	if err := os.MkdirAll(runDir, 0755); err != nil {
+		return "", err
+	}
+	candidates := []string{
+		"index.html",
+		"run-summary.json",
+		"ncc-run-record.json",
+		"regression-summary.json",
+		"checks-snapshot.json",
+		"drilldown-diff.json",
+		"flaky-checks.json",
+		"slo-dashboard.json",
+	}
+	for _, rel := range candidates {
+		src := filepath.Join(cfg.OutputDirFiltered, rel)
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		if err := copyFile(src, filepath.Join(runDir, rel)); err != nil {
+			return "", err
+		}
+	}
+	if err := os.WriteFile(filepath.Join(cfg.RunHistoryDir, "latest.txt"), []byte(ts+"\n"), 0644); err != nil {
+		return "", err
+	}
+	if err := applyRunHistoryRetention(cfg.RunHistoryDir, cfg.RetainLastRuns, cfg.RetainDays, time.Now()); err != nil {
+		return "", err
+	}
+	return runDir, nil
 }
 
 func buildRunClusterSummary(r ClusterResult) RunClusterSummary {
@@ -2032,6 +3402,7 @@ func buildRunClusterSummary(r ClusterResult) RunClusterSummary {
 	s.ErrCount = counts["ERR"]
 	s.InfoCount = counts["INFO"]
 	s.ChecksTotal = len(r.Blocks)
+	s.HealthScore = clusterHealthScore(s.FailCount, s.WarnCount, s.ErrCount, s.ChecksTotal)
 	return s
 }
 
@@ -2072,6 +3443,102 @@ func generateJSON(fs FS, blocks []ParsedBlock, filename string, meta HTMLMeta) e
 	enc := json.NewEncoder(f)
 	enc.SetIndent("", "  ")
 	return enc.Encode(output)
+}
+
+type sarifLog struct {
+	Version string     `json:"version"`
+	Schema  string     `json:"$schema"`
+	Runs    []sarifRun `json:"runs"`
+}
+type sarifRun struct {
+	Tool    sarifTool     `json:"tool"`
+	Results []sarifResult `json:"results"`
+}
+type sarifTool struct {
+	Driver sarifDriver `json:"driver"`
+}
+type sarifDriver struct {
+	Name           string      `json:"name"`
+	Version        string      `json:"version,omitempty"`
+	InformationURI string      `json:"informationUri,omitempty"`
+	Rules          []sarifRule `json:"rules,omitempty"`
+}
+type sarifRule struct {
+	ID               string `json:"id"`
+	ShortDescription struct {
+		Text string `json:"text"`
+	} `json:"shortDescription"`
+}
+type sarifResult struct {
+	RuleID  string `json:"ruleId"`
+	Level   string `json:"level"`
+	Message struct {
+		Text string `json:"text"`
+	} `json:"message"`
+}
+
+func sarifLevelForSeverity(sev string) string {
+	switch strings.ToUpper(strings.TrimSpace(sev)) {
+	case "FAIL":
+		return "error"
+	case "WARN":
+		return "warning"
+	case "ERR":
+		return "error"
+	default:
+		return "note"
+	}
+}
+
+func generateSARIF(fs FS, blocks []ParsedBlock, filename string) error {
+	if err := fs.MkdirAll(filepath.Dir(filename), 0755); err != nil {
+		return err
+	}
+	ruleMap := map[string]bool{}
+	rules := make([]sarifRule, 0, len(blocks))
+	results := make([]sarifResult, 0, len(blocks))
+	for _, b := range blocks {
+		ruleID := strings.TrimSpace(b.CheckName)
+		if ruleID == "" {
+			ruleID = "NCC_CHECK"
+		}
+		if !ruleMap[ruleID] {
+			ruleMap[ruleID] = true
+			r := sarifRule{ID: ruleID}
+			r.ShortDescription.Text = ruleID
+			rules = append(rules, r)
+		}
+		res := sarifResult{
+			RuleID: ruleID,
+			Level:  sarifLevelForSeverity(b.Severity),
+		}
+		res.Message.Text = strings.TrimSpace(b.DetailRaw)
+		if res.Message.Text == "" {
+			res.Message.Text = "NCC finding"
+		}
+		results = append(results, res)
+	}
+
+	payload := sarifLog{
+		Version: "2.1.0",
+		Schema:  "https://json.schemastore.org/sarif-2.1.0.json",
+		Runs: []sarifRun{{
+			Tool: sarifTool{
+				Driver: sarifDriver{
+					Name:           "ncc-orchestrator",
+					Version:        Version,
+					InformationURI: "https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator",
+					Rules:          rules,
+				},
+			},
+			Results: results,
+		}},
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+	return fs.WriteFile(filename, data, 0644)
 }
 
 func filterBlocksBySeverity(blocks []ParsedBlock, allowedSeverities []string) []ParsedBlock {
@@ -2120,6 +3587,9 @@ func generateTestAgg(n int, outDir string) error {
 	}
 	agg := make([]AggBlock, 0, n*12)
 	clusterFiles := make([]struct{ Cluster, HTML, CSV string }, 0, n)
+	snapshotClusters := make([]ClusterChecksSnapshot, 0, n)
+	runClusters := make([]RunClusterSummary, 0, n)
+	totalChecks := 0
 	for i := 1; i <= n; i++ {
 		cluster := fmt.Sprintf("10.0.%d.%d", (i-1)/255, (i-1)%255+1)
 		clusterName := fmt.Sprintf("cluster-%03d", i)
@@ -2131,6 +3601,8 @@ func generateTestAgg(n int, outDir string) error {
 			CSV:     cluster + ".csv",
 		})
 		numChecks := 8 + (i % 8)
+		clusterChecks := make([]CheckSnapshotEntry, 0, numChecks)
+		counts := map[string]int{"FAIL": 0, "WARN": 0, "ERR": 0, "INFO": 0}
 		for j := 0; j < numChecks; j++ {
 			sev := severities[(i+j)%len(severities)]
 			check := checks[j%len(checks)]
@@ -2143,10 +3615,206 @@ func generateTestAgg(n int, outDir string) error {
 				ClusterVersion: clusterVersion,
 				NCCVersion:     nccVersion,
 			})
+			clusterChecks = append(clusterChecks, CheckSnapshotEntry{
+				CheckName: check,
+				Severity:  sev,
+			})
+			counts[sev]++
 		}
+		sort.Slice(clusterChecks, func(a, b int) bool {
+			if clusterChecks[a].CheckName == clusterChecks[b].CheckName {
+				return clusterChecks[a].Severity < clusterChecks[b].Severity
+			}
+			return clusterChecks[a].CheckName < clusterChecks[b].CheckName
+		})
+		total := len(clusterChecks)
+		health := clusterHealthScore(counts["FAIL"], counts["WARN"], counts["ERR"], total)
+		snapshotClusters = append(snapshotClusters, ClusterChecksSnapshot{
+			Address:     cluster,
+			Checks:      clusterChecks,
+			FailCount:   counts["FAIL"],
+			WarnCount:   counts["WARN"],
+			ErrCount:    counts["ERR"],
+			InfoCount:   counts["INFO"],
+			ChecksTotal: total,
+			HealthScore: health,
+		})
+		runClusters = append(runClusters, RunClusterSummary{
+			Address:     cluster,
+			OK:          true,
+			FailCount:   counts["FAIL"],
+			WarnCount:   counts["WARN"],
+			ErrCount:    counts["ERR"],
+			InfoCount:   counts["INFO"],
+			ChecksTotal: total,
+			HealthScore: health,
+		})
+		totalChecks += total
 	}
 	fs := OSFS{}
-	if err := writeAggregatedHTMLSingle(fs, outDir, agg, clusterFiles); err != nil {
+	if err := fs.MkdirAll(outDir, 0755); err != nil {
+		return err
+	}
+	sort.Slice(snapshotClusters, func(i, j int) bool { return snapshotClusters[i].Address < snapshotClusters[j].Address })
+	sort.Slice(runClusters, func(i, j int) bool { return runClusters[i].Address < runClusters[j].Address })
+
+	now := time.Now().UTC()
+	currTS := now.Format(time.RFC3339)
+	prevTS := now.Add(-4 * time.Hour).Format(time.RFC3339)
+
+	avgHealth := 0
+	minHealth := 100
+	for _, c := range runClusters {
+		avgHealth += c.HealthScore
+		if c.HealthScore < minHealth {
+			minHealth = c.HealthScore
+		}
+	}
+	if len(runClusters) > 0 {
+		avgHealth /= len(runClusters)
+	} else {
+		minHealth = 0
+	}
+
+	runSummary := RunSummaryJSON{
+		Timestamp:      currTS,
+		DurationS:      137.7,
+		ClustersOK:     len(runClusters),
+		ClustersFailed: 0,
+		Clusters:       runClusters,
+		IndexHTML:      filepath.ToSlash(filepath.Join(filepath.Base(outDir), "index.html")),
+		TotalChecks:    totalChecks,
+		AvgHealthScore: avgHealth,
+		MinHealthScore: minHealth,
+	}
+	currentSnapshot := ChecksSnapshotJSON{
+		Timestamp: currTS,
+		Clusters:  snapshotClusters,
+	}
+
+	// Build a previous snapshot with small deterministic differences so
+	// drill-down/regression/flaky artifacts are populated for UI simulation.
+	previousSnapshot := ChecksSnapshotJSON{
+		Timestamp: prevTS,
+		Clusters:  make([]ClusterChecksSnapshot, 0, len(snapshotClusters)),
+	}
+	for idx, c := range snapshotClusters {
+		cp := c
+		cp.Checks = append([]CheckSnapshotEntry(nil), c.Checks...)
+		if len(cp.Checks) > 0 {
+			switch cp.Checks[0].Severity {
+			case "FAIL":
+				cp.Checks[0].Severity = "WARN"
+			case "WARN":
+				cp.Checks[0].Severity = "INFO"
+			case "ERR":
+				cp.Checks[0].Severity = "WARN"
+			default:
+				cp.Checks[0].Severity = "WARN"
+			}
+		}
+		if idx%3 == 0 && len(cp.Checks) > 1 {
+			cp.Checks = cp.Checks[:len(cp.Checks)-1]
+		}
+		if idx%4 == 0 {
+			cp.Checks = append(cp.Checks, CheckSnapshotEntry{
+				CheckName: "Legacy replication guard",
+				Severity:  "FAIL",
+			})
+		}
+		counts := map[string]int{"FAIL": 0, "WARN": 0, "ERR": 0, "INFO": 0}
+		for _, ch := range cp.Checks {
+			sev := strings.ToUpper(strings.TrimSpace(ch.Severity))
+			if _, ok := counts[sev]; !ok {
+				sev = "INFO"
+			}
+			counts[sev]++
+		}
+		cp.FailCount = counts["FAIL"]
+		cp.WarnCount = counts["WARN"]
+		cp.ErrCount = counts["ERR"]
+		cp.InfoCount = counts["INFO"]
+		cp.ChecksTotal = len(cp.Checks)
+		cp.HealthScore = clusterHealthScore(cp.FailCount, cp.WarnCount, cp.ErrCount, cp.ChecksTotal)
+		previousSnapshot.Clusters = append(previousSnapshot.Clusters, cp)
+	}
+
+	prevRunClusters := make([]RunClusterSummary, 0, len(previousSnapshot.Clusters))
+	prevTotalChecks := 0
+	prevAvgHealth := 0
+	prevMinHealth := 100
+	for _, c := range previousSnapshot.Clusters {
+		prevRunClusters = append(prevRunClusters, RunClusterSummary{
+			Address:     c.Address,
+			OK:          true,
+			FailCount:   c.FailCount,
+			WarnCount:   c.WarnCount,
+			ErrCount:    c.ErrCount,
+			InfoCount:   c.InfoCount,
+			ChecksTotal: c.ChecksTotal,
+			HealthScore: c.HealthScore,
+		})
+		prevTotalChecks += c.ChecksTotal
+		prevAvgHealth += c.HealthScore
+		if c.HealthScore < prevMinHealth {
+			prevMinHealth = c.HealthScore
+		}
+	}
+	if len(prevRunClusters) > 0 {
+		prevAvgHealth /= len(prevRunClusters)
+	} else {
+		prevMinHealth = 0
+	}
+	previousSummary := RunSummaryJSON{
+		Timestamp:      prevTS,
+		DurationS:      129.4,
+		ClustersOK:     len(prevRunClusters),
+		ClustersFailed: 0,
+		Clusters:       prevRunClusters,
+		IndexHTML:      filepath.ToSlash(filepath.Join(filepath.Base(outDir), "index.html")),
+		TotalChecks:    prevTotalChecks,
+		AvgHealthScore: prevAvgHealth,
+		MinHealthScore: prevMinHealth,
+	}
+
+	regression := computeRegressionSummary(previousSummary, true, runSummary)
+	drillDown := computeDrillDownDiff(previousSnapshot, true, currentSnapshot)
+
+	// Build synthetic history to ensure flaky-checks.json has representative data.
+	olderA := previousSnapshot
+	olderA.Timestamp = now.Add(-8 * time.Hour).Format(time.RFC3339)
+	olderB := previousSnapshot
+	olderB.Timestamp = now.Add(-6 * time.Hour).Format(time.RFC3339)
+	for i := range olderA.Clusters {
+		if len(olderA.Clusters[i].Checks) > 0 {
+			olderA.Clusters[i].Checks[0].Severity = "WARN"
+		}
+		if len(olderB.Clusters[i].Checks) > 0 {
+			olderB.Clusters[i].Checks[0].Severity = "FAIL"
+		}
+	}
+	flaky := computeFlakyChecks([]ChecksSnapshotJSON{olderA, olderB, currentSnapshot}, 2)
+	slo := buildSLODashboard(runSummary)
+
+	if err := writeRunSummaryJSON(fs, outDir, runSummary); err != nil {
+		return err
+	}
+	if err := writeChecksSnapshotJSON(fs, outDir, currentSnapshot); err != nil {
+		return err
+	}
+	if err := writeDrillDownDiffJSON(fs, outDir, drillDown); err != nil {
+		return err
+	}
+	if err := writeFlakyChecksJSON(fs, outDir, flaky); err != nil {
+		return err
+	}
+	if err := writeRegressionSummaryJSON(fs, outDir, regression); err != nil {
+		return err
+	}
+	if err := writeSLODashboardJSON(fs, outDir, slo); err != nil {
+		return err
+	}
+	if err := writeAggregatedHTMLSingle(fs, outDir, agg, clusterFiles, Config{}); err != nil {
 		return err
 	}
 	return nil
@@ -2195,7 +3863,7 @@ func writeAllClustersFailedHTML(fs FS, outDir string, failedClusters []string) e
 	return t.Execute(f, d)
 }
 
-func writeAggregatedHTMLSingle(fs FS, outDir string, rows []AggBlock, perCluster []struct{ Cluster, HTML, CSV string }) error {
+func writeAggregatedHTMLSingle(fs FS, outDir string, rows []AggBlock, perCluster []struct{ Cluster, HTML, CSV string }, cfg Config) error {
 	if err := fs.MkdirAll(outDir, 0755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", outDir, err)
 	}
@@ -2207,7 +3875,7 @@ func writeAggregatedHTMLSingle(fs FS, outDir string, rows []AggBlock, perCluster
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title>NCC Aggregated Report</title>
-	<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3QgeD0iNCIgeT0iNCIgd2lkdGg9IjI0IiBoZWlnaHQ9IjI0IiByeD0iOCIgZmlsbD0iIzBmMTcyYSIvPgo8Y2lyY2xlIGN4PSI5IiBjeT0iMTMiIHI9IjMiIGZpbGw9IiNlZjQ0NDQiLz4KPGNpcmNsZSBjeD0iMjMiIGN5PSIxOSIgcj0iMyIgZmlsbD0iI2Y1OWUwYiIvPgo8cGF0aCBkPSJNOSAyNCBMMTYgMjQgTTE2IDI0IEwyMyAyNCIgc3Ryb2tlPSIjMjU2M2ViIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgo8L3N2Zz4K">
+	<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3QgeD0iMiIgeT0iMiIgd2lkdGg9IjI4IiBoZWlnaHQ9IjI4IiByeD0iOCIgZmlsbD0iIzBCMTIyMCIvPgo8cGF0aCBkPSJNOSAyM1Y5SDEyTDIwIDE5VjlIMjNWMjNIMjBMMTIgMTNWMjNIOVoiIGZpbGw9IiMyMkM1NUUiLz4KPGNpcmNsZSBjeD0iMjQiIGN5PSI4IiByPSIyIiBmaWxsPSIjMzhCREY4Ii8+CjxjaXJjbGUgY3g9IjgiIGN5PSIyNCIgcj0iMiIgZmlsbD0iI0Y1OUUwQiIvPgo8L3N2Zz4=">
 	<style>
 	:root {
 	  --bg: #0f172a;
@@ -2815,6 +4483,7 @@ button, .cluster-display, .cluster-toggle {
 .skip-link { position: absolute; top: -40px; left: 8px; background: var(--accent); color: #fff; padding: 8px 12px; border-radius: 6px; z-index: 100; text-decoration: none; font-size: 14px; }
 .skip-link:focus { top: 8px; }
 .report-footer { font-size: 0.8125rem; color: var(--muted); margin-top: 16px; padding: 12px 0; border-top: 1px solid var(--border); }
+.report-meta-line { margin-top: 8px; line-height: 1.5; word-break: break-word; }
 .sum-item.clickable { cursor: pointer; transition: background 0.15s, border-color 0.15s; }
 .sum-item.clickable:hover { background: #0d152b; border-color: var(--accent); }
 .sum-item.clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -2822,13 +4491,20 @@ button, .cluster-display, .cluster-toggle {
 .th-sort:hover { color: var(--text); }
 .th-sort .sort-arrow { font-size: 10px; margin-left: 4px; opacity: 0.7; }
 .table-info { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
-.pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 12px; }
-.pagination button { background: #0a1123; border: 1px solid var(--border); color: var(--text); padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+.pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: #0a1123; }
+.pagination button { background: #0f172a; border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 12px; min-width: 38px; transition: border-color 0.15s, background 0.15s; }
 .pagination button:hover:not(:disabled) { border-color: var(--accent); }
 .pagination button:disabled { opacity: 0.5; cursor: not-allowed; }
 .pagination-info { font-size: 12px; color: var(--muted); }
+.pagination-left { display: inline-flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.pagination-right { display: inline-flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: flex-end; }
+.pagination-pages { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.pagination-page.active { border-color: var(--accent); background: rgba(37,99,235,0.18); color: #bfdbfe; }
+.pagination-ellipsis { color: var(--muted); padding: 0 2px; font-size: 12px; }
 .pagination-size { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .pagination-size select { background: #0a1123; border: 1px solid var(--border); color: var(--text); padding: 4px 8px; border-radius: 6px; font-size: 12px; }
+.pagination-jump { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.pagination-jump input { width: 62px; background: #0a1123; border: 1px solid var(--border); color: var(--text); padding: 4px 8px; border-radius: 6px; font-size: 12px; }
 .empty-state { text-align: center; padding: 48px 16px; color: var(--muted); }
 .empty-state p { margin: 0 0 12px 0; font-size: 14px; }
 .per-cluster-btn { font-size: 12px; padding: 8px 14px; background: transparent; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: border-color 0.15s, color 0.15s; }
@@ -2837,12 +4513,46 @@ button, .cluster-display, .cluster-toggle {
 .per-cluster-links { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .per-cluster-links a { font-size: 12px; padding: 4px 10px; background: #0a1123; border: 1px solid var(--border); border-radius: 6px; color: #93c5fd; text-decoration: none; }
 .per-cluster-links a:hover { border-color: var(--accent); background: rgba(37,99,235,0.1); }
+.row-badges { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+.ux-tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); background:#0a1123; color: var(--muted); }
+.ux-tag.tag-new { border-color: #7f1d1d; color: #fecaca; background: #3b1111; }
+.ux-tag.tag-resolved { border-color: #14532d; color: #bbf7d0; background: #0f2d1d; }
+.ux-tag.tag-changed { border-color: #1e3a8a; color: #bfdbfe; background: #10244f; }
+.ux-tag.tag-flaky { border-color: #92400e; color: #fde68a; background: #3a2609; }
+.insights { display:grid; grid-template-columns: repeat(3, 1fr); gap:12px; margin: 0 0 16px 0; }
+.insights .sum-item .meta { font-size: 11px; color: var(--muted); margin-top: 6px; line-height: 1.4; max-height: 84px; overflow: auto; }
+.meta { font-size: 12px; color: var(--muted); margin-top: 6px; line-height: 1.4; }
+.health-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap:10px; margin-top: 10px; }
+.health-card { border: 1px solid var(--border); background: #0a1123; border-radius: 10px; padding: 10px; }
+.health-top { display:flex; justify-content: space-between; align-items: center; gap: 10px; }
+.health-name { font-size: 13px; color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.health-score { font-size: 12px; font-weight: 700; border-radius: 999px; padding: 3px 8px; border: 1px solid transparent; }
+.health-score.good { color: #86efac; border-color: #14532d; background: #0f2d1d; }
+.health-score.warn { color: #fde68a; border-color: #854d0e; background: #36250b; }
+.health-score.bad { color: #fca5a5; border-color: #7f1d1d; background: #3b1111; }
+.health-trend { margin-top: 8px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+.health-bar { margin-top: 8px; height: 6px; background: #111827; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+.health-bar > span { display: block; height: 100%; background: linear-gradient(90deg, #ef4444 0%, #f59e0b 45%, #22c55e 100%); }
+
+@media (max-width: 768px) {
+  .insights { grid-template-columns: 1fr !important; gap: 8px; }
+  .pagination { padding: 8px; }
+  .pagination-left, .pagination-right { width: 100%; }
+  .pagination-right { justify-content: flex-start; }
+}
 
 	</style>
 	<script>
 
 	const AGG = {{.JSON}};
 	var CLUSTER_LINKS = {{.ClusterLinksJSON}};
+	const DIFF_FLAGS = {{.DiffFlagsJSON}};
+	const FLAKY_KEYS = {{.FlakyKeysJSON}};
+	const POLICY_VIOLATIONS = {{.PolicyViolationsJSON}};
+	const RUN_SUMMARY = {{.RunSummaryJSON}};
+	const HEALTH_TRENDS = {{.HealthTrendsJSON}};
+	const ARTIFACT_LINKS = {{.ArtifactLinksJSON}};
+	const REPORT_META = {{.ReportMetaJSON}};
 
 	let state = {
   sortKey: "severity",
@@ -2855,6 +4565,7 @@ button, .cluster-display, .cluster-toggle {
   pageSize: 100,
   currentPage: 0,
   filteredRows: [],
+  compareMode: "all",
   clusterModalSearch: "",
   clusterListVisible: 100,
   showPerClusterModal: false,
@@ -2867,6 +4578,9 @@ button, .cluster-display, .cluster-toggle {
 
 function init() {
   initClusters();
+  renderMetadata();
+  renderHealthWidget();
+  renderArtifactLinks();
   updateAndRender();
   document.addEventListener("keydown", onKey);
   var statusEl = document.getElementById('clusterStatus');
@@ -2876,9 +4590,185 @@ function init() {
   }
 }
 
+function rowKeyFor(cluster, check) {
+  return ((cluster || "").trim().toLowerCase() + "||" + (check || "").trim().toLowerCase());
+}
+
+function renderInsights(rows) {
+  var policyViolations = Array.isArray(POLICY_VIOLATIONS) ? POLICY_VIOLATIONS : [];
+  var changed = 0;
+  var flaky = 0;
+  (rows || []).forEach(function(r) {
+    var k = rowKeyFor(r.cluster, r.check);
+    var d = DIFF_FLAGS[k];
+    if (d && (d.new_fail || d.resolved_fail || d.severity_changed)) changed++;
+    if (FLAKY_KEYS[k]) flaky++;
+  });
+  var changedEl = document.getElementById("changedChecksCount");
+  if (changedEl) changedEl.textContent = String(changed);
+  var flakyEl = document.getElementById("flakyChecksCount");
+  if (flakyEl) flakyEl.textContent = String(flaky);
+  var policyStatus = document.getElementById("policyStatus");
+  var policyMeta = document.getElementById("policyMeta");
+  if (policyStatus) {
+    if (policyViolations.length > 0) {
+      policyStatus.textContent = "FAILED";
+      policyStatus.style.color = "var(--fail)";
+    } else {
+      policyStatus.textContent = "PASS/NOT_CONFIGURED";
+      policyStatus.style.color = "#86efac";
+    }
+  }
+  if (policyMeta) {
+    if (policyViolations.length > 0) {
+      policyMeta.innerHTML = policyViolations.map(function(v) { return "• " + escapeHtml(v); }).join("<br>");
+    } else {
+      policyMeta.textContent = "No policy gate violations file for this run.";
+    }
+  }
+}
+
+function sparkline(values) {
+  if (!values || !values.length) return "";
+  var blocks = ["▁","▂","▃","▄","▅","▆","▇","█"];
+  return values.map(function(v) {
+    var n = Math.max(0, Math.min(100, Number(v) || 0));
+    var idx = Math.round((n / 100) * (blocks.length - 1));
+    return blocks[idx];
+  }).join("");
+}
+
+function renderMetadata() {
+  var meta = document.getElementById("reportMetaFooter");
+  if (!meta) return;
+  var parts = [];
+  if (REPORT_META.version) parts.push("Version: " + REPORT_META.version);
+  if (REPORT_META.git_revision) parts.push("Git: " + REPORT_META.git_revision);
+  if (REPORT_META.stream) parts.push("Stream: " + REPORT_META.stream);
+  if (REPORT_META.build_date) parts.push("Build: " + REPORT_META.build_date);
+  if (RUN_SUMMARY && RUN_SUMMARY.duration_s) parts.push("Run duration: " + Number(RUN_SUMMARY.duration_s).toFixed(1) + "s");
+  if (REPORT_META.quiet_hours || REPORT_META.maintenance_windows) {
+    var q = REPORT_META.quiet_hours ? ("quiet-hours=" + REPORT_META.quiet_hours) : "";
+    var m = REPORT_META.maintenance_windows ? ("maintenance=" + REPORT_META.maintenance_windows) : "";
+    parts.push([q, m].filter(Boolean).join(" "));
+  } else {
+    parts.push("Quiet-hours/maintenance: not configured");
+  }
+  meta.textContent = parts.join(" | ");
+}
+
+function renderHealthWidget() {
+  var root = document.getElementById("healthWidget");
+  if (!root) return;
+  var clusters = (RUN_SUMMARY && RUN_SUMMARY.clusters) ? RUN_SUMMARY.clusters.slice() : [];
+  // Keep health widget aligned with currently selected cluster filters.
+  if (state && state.filterClusters) {
+    var selectedAddresses = new Set();
+    (AGG || []).forEach(function(r) {
+      var clusterLabel = displayClusterName(r);
+      if (state.filterClusters.has(clusterLabel)) {
+        selectedAddresses.add((r.cluster || "").trim());
+      }
+    });
+    clusters = clusters.filter(function(c) {
+      return selectedAddresses.has((c.address || "").trim());
+    });
+  }
+  if (!clusters.length) {
+    root.innerHTML = '<div class="meta">No per-cluster health data available for selected clusters.</div>';
+    return;
+  }
+  clusters.sort(function(a, b) {
+    var sa = Math.max(0, Math.min(100, Number(a.health_score || 0)));
+    var sb = Math.max(0, Math.min(100, Number(b.health_score || 0)));
+    if (sa !== sb) return sa - sb; // worst first
+    return (a.address || "").localeCompare(b.address || "");
+  });
+  var visible = clusters.slice(0, 10);
+  var rows = visible.map(function(c) {
+    var k = (c.address || "").toLowerCase();
+    var trend = HEALTH_TRENDS[k] || [];
+    var score = Math.max(0, Math.min(100, Number(c.health_score || 0)));
+    var cls = score >= 90 ? "good" : (score >= 75 ? "warn" : "bad");
+    var trendText = trend.length ? sparkline(trend) : "n/a";
+    return '<div class="health-card">' +
+      '<div class="health-top">' +
+        '<div class="health-name" title="' + escapeHtml(c.address || "") + '">' + escapeHtml(c.address || "-") + '</div>' +
+        '<div class="health-score ' + cls + '">' + score.toFixed(0) + '/100</div>' +
+      '</div>' +
+      '<div class="health-trend">Trend: ' + escapeHtml(trendText) + '</div>' +
+      '<div class="health-bar"><span style="width:' + score.toFixed(0) + '%"></span></div>' +
+    '</div>';
+  });
+  var note = clusters.length > 10
+    ? '<div class="meta">Showing 10 worst clusters out of ' + clusters.length + '.</div>'
+    : '<div class="meta">Showing all ' + clusters.length + ' clusters.</div>';
+  root.innerHTML = note + '<div class="health-grid">' + rows.join("") + '</div>';
+}
+
+function renderArtifactLinks() {
+  var root = document.getElementById("artifactLinks");
+  if (!root) return;
+  var links = [];
+  Object.keys(ARTIFACT_LINKS || {}).forEach(function(name) {
+    var href = ARTIFACT_LINKS[name];
+    if (!href) return;
+    links.push('<a href="' + escapeHtml(href) + '" target="_blank" rel="noopener">' + escapeHtml(name) + '</a>');
+  });
+  root.innerHTML = links.length ? links.join("") : '<span class="meta">No artifact links available.</span>';
+}
+
+function setCompareMode(v) {
+  state.compareMode = v || "all";
+  updateAndRender();
+}
+
+function parseSearchQuery(raw) {
+  var out = { terms: [], sev: null, cluster: null, changed: null, flaky: null };
+  if (!raw) return out;
+  raw.split(/\s+/).forEach(function(tok) {
+    if (!tok) return;
+    var m = tok.match(/^([^:]+):(.*)$/);
+    if (!m) { out.terms.push(tok.toLowerCase()); return; }
+    var key = m[1].toLowerCase();
+    var val = m[2].toLowerCase();
+    if (key === "sev" || key === "severity") out.sev = val.toUpperCase();
+    else if (key === "cluster") out.cluster = val;
+    else if (key === "changed") out.changed = (val === "true" || val === "1" || val === "yes");
+    else if (key === "flaky") out.flaky = (val === "true" || val === "1" || val === "yes");
+    else out.terms.push(tok.toLowerCase());
+  });
+  return out;
+}
+
+function displayClusterName(r) {
+  var name = (r && r.clusterName ? String(r.clusterName).trim() : "");
+  if (name) return name;
+  var version = (r && r.clusterVersion ? String(r.clusterVersion).trim().toLowerCase() : "");
+  if (version.indexOf("pc.") === 0) return "Prism Central";
+  return (r && r.cluster ? String(r.cluster) : "-");
+}
+
+function getSelectedClusterAddresses() {
+  var selectedAddresses = new Set();
+  (AGG || []).forEach(function(r) {
+    var label = displayClusterName(r);
+    if (state.filterClusters.has(label)) {
+      selectedAddresses.add((r.cluster || "").trim());
+    }
+  });
+  return selectedAddresses;
+}
+
+function getClusterFilteredRows() {
+  return (AGG || []).filter(function(r) {
+    return state.filterClusters.has(displayClusterName(r));
+  });
+}
+
 function initClusters() {
   const clusters = Array.from(new Set(AGG.map(function(r) { 
-    return r.clusterName || r.cluster; 
+    return displayClusterName(r);
   }))).sort();
   console.log("Found clusters:", clusters); 
   state.allClusters = clusters;
@@ -3130,14 +5020,27 @@ function renderClusterList() {
 	}
 	
 function filterData() {
-  const needle = state.search.toLowerCase();
+  const q = parseSearchQuery(state.search);
   return AGG.filter(r => {
     if (!state.filterSev.has(r.severity)) return false;
-    const clusterId = r.clusterName || r.cluster;
+    const clusterId = displayClusterName(r);
     if (!state.filterClusters.has(clusterId)) return false;
-    if (!needle) return true;
+    const k = rowKeyFor(r.cluster, r.check);
+    const d = DIFF_FLAGS[k] || {};
+    const isChanged = !!(d.new_fail || d.resolved_fail || d.severity_changed);
+    const isFlaky = !!FLAKY_KEYS[k];
+
+    if (state.compareMode === "changed" && !isChanged) return false;
+    if (state.compareMode === "flaky" && !isFlaky) return false;
+
+    if (q.sev && r.severity !== q.sev) return false;
+    if (q.cluster && clusterId.toLowerCase().indexOf(q.cluster) === -1) return false;
+    if (q.changed !== null && isChanged !== q.changed) return false;
+    if (q.flaky !== null && isFlaky !== q.flaky) return false;
+
+    if (!q.terms.length) return true;
     const hay = (clusterId + " " + r.severity + " " + r.check + " " + r.detail).toLowerCase();
-    return hay.includes(needle);
+    return q.terms.every(function(t){ return hay.indexOf(t) !== -1; });
   });
 }
 
@@ -3146,7 +5049,11 @@ function filterData() {
 	  const k = state.sortKey, dir = state.sortDir;
 	  const mul = dir === "asc" ? 1 : -1;
 	  rows.sort((a,b) => {
-		let av = a[k], bv = b[k];
+    let av = a[k], bv = b[k];
+    if (k === "clusterName") {
+      av = displayClusterName(a);
+      bv = displayClusterName(b);
+    }
 		if (k === "severity") { av = sevRank[av] || 99; bv = sevRank[bv] || 99; }
 		return (av > bv ? 1 : av < bv ? -1 : 0) * mul;
 	  });
@@ -3174,7 +5081,6 @@ function updateCounts(rows) {
 
   // const pc = document.getElementById("perCluster"); pc.innerHTML = "";
 }
-
 
 	
 	function extractKB(detail) {
@@ -3239,7 +5145,7 @@ function updateCounts(rows) {
     tr.dataset.index = idx.toString();
     
     const detailEsc = (r.detail || "").replaceAll("\\n","<br>");
-    const nameLine = escapeHtml(r.clusterName || "-");
+    const nameLine = escapeHtml(displayClusterName(r));
     const verLine = escapeHtml(r.clusterVersion || "");
     const nccLine = escapeHtml(r.nccVersion || "");
     const checkTitle = formatCheckTitle(r.check || "");
@@ -3268,7 +5174,18 @@ function updateCounts(rows) {
     const titleCell = '<td class="col-title">' +
       '<small class="mono has-tooltip" data-fulltext="' + escapeHtml(checkTitle) + '">' +
       highlight(checkTitle, needle) +
-      '</small></td>';
+      '</small>' +
+      (function() {
+        var k = rowKeyFor(r.cluster, r.check);
+        var d = DIFF_FLAGS[k] || {};
+        var tags = [];
+        if (d.new_fail) tags.push('<span class="ux-tag tag-new">+new FAIL</span>');
+        if (d.resolved_fail) tags.push('<span class="ux-tag tag-resolved">resolved FAIL</span>');
+        if (d.severity_changed) tags.push('<span class="ux-tag tag-changed">severity changed</span>');
+        if (FLAKY_KEYS[k]) tags.push('<span class="ux-tag tag-flaky">flaky</span>');
+        return tags.length ? ('<div class="row-badges">' + tags.join('') + '</div>') : '';
+      })() +
+      '</td>';
     
     const detailCell = '<td class="col-detail">' +
       '<div class="detail-full has-tooltip" data-fulltext="' + jsEscape(r.detail || "") + '"' +
@@ -3416,6 +5333,8 @@ function initTooltips() {
 	
 	function updateAndRender() {
 	  let rows = filterData();
+	  var clusterScopedRows = getClusterFilteredRows();
+	  renderInsights(clusterScopedRows);
 	  
 	  const total = rows.length;
 	  const cnt = { FAIL:0, WARN:0, ERR:0, INFO:0 };
@@ -3434,6 +5353,7 @@ function initTooltips() {
 	
 	  
 	  updateCounts(rows);
+	  renderHealthWidget();
 	  rows = sortData(rows.slice());
 	  state.filteredRows = rows;
 	  var totalRows = rows.length;
@@ -3453,18 +5373,28 @@ function initTooltips() {
 	  }
 	  if (emptyEl && tableEl) {
 	    if (totalRows === 0) { tableEl.style.display = "none"; emptyEl.style.display = "block"; if (paginationEl) paginationEl.style.display = "none"; }
-	    else { tableEl.style.display = ""; emptyEl.style.display = "none"; if (paginationEl) paginationEl.style.display = totalRows > state.pageSize ? "flex" : "none"; }
+	    else { tableEl.style.display = ""; emptyEl.style.display = "none"; if (paginationEl) paginationEl.style.display = "flex"; }
 	  }
-	  if (paginationEl && totalRows > state.pageSize) {
-	    paginationEl.innerHTML = '<button type="button" onclick="goToPage(' + (state.currentPage - 1) + ')" ' + (state.currentPage === 0 ? 'disabled' : '') + ' aria-label="Previous page">Prev</button>' +
-	      '<span class="pagination-info">Page ' + (state.currentPage + 1) + ' of ' + totalPages + '</span>' +
+	  if (paginationEl && totalRows > 0) {
+	    var pageButtons = buildPageButtons(totalPages, state.currentPage);
+	    paginationEl.innerHTML =
+	      '<div class="pagination-left">' +
+	      '<button type="button" onclick="goToPage(0)" ' + (state.currentPage === 0 ? 'disabled' : '') + ' aria-label="First page">First</button>' +
+	      '<button type="button" onclick="goToPage(' + (state.currentPage - 1) + ')" ' + (state.currentPage === 0 ? 'disabled' : '') + ' aria-label="Previous page">Prev</button>' +
+	      '<span class="pagination-pages">' + pageButtons + '</span>' +
 	      '<button type="button" onclick="goToPage(' + (state.currentPage + 1) + ')" ' + (state.currentPage >= totalPages - 1 ? 'disabled' : '') + ' aria-label="Next page">Next</button>' +
+	      '<button type="button" onclick="goToPage(' + (totalPages - 1) + ')" ' + (state.currentPage >= totalPages - 1 ? 'disabled' : '') + ' aria-label="Last page">Last</button>' +
+	      '<span class="pagination-info">Page ' + (state.currentPage + 1) + ' of ' + totalPages + '</span>' +
+	      '</div>' +
+	      '<div class="pagination-right">' +
+	      '<label class="pagination-jump"><span>Go</span><input id="pageJumpInput" type="number" min="1" max="' + totalPages + '" value="' + (state.currentPage + 1) + '" onkeydown="if(event.key===&#39;Enter&#39;){goToPageInput(this.value,' + totalPages + ')}" aria-label="Go to page number"><button type="button" onclick="goToPageInput(document.getElementById(&#39;pageJumpInput&#39;).value,' + totalPages + ')">Go</button></label>' +
 	      '<label class="pagination-size"><span>Rows</span><select id="pageSizeSelect" onchange="setPageSize(parseInt(this.value,10))">' +
 	      (state.pageSize === 50 ? '<option value="50" selected>50</option>' : '<option value="50">50</option>') +
 	      (state.pageSize === 100 ? '<option value="100" selected>100</option>' : '<option value="100">100</option>') +
 	      (state.pageSize === 200 ? '<option value="200" selected>200</option>' : '<option value="200">200</option>') +
 	      (state.pageSize === 500 ? '<option value="500" selected>500</option>' : '<option value="500">500</option>') +
-	      '</select></label>';
+	      '</select></label>' +
+	      '</div>';
 	  }
 	  updateSortIndicators();
 	  var fc = document.getElementById("footerClusterCount");
@@ -3479,6 +5409,33 @@ function initTooltips() {
 	  state.pageSize = n;
 	  state.currentPage = 0;
 	  updateAndRender();
+	}
+	function buildPageButtons(totalPages, currentPage) {
+	  if (totalPages <= 1) return '<button type="button" class="pagination-page active" aria-current="page">1</button>';
+	  var pages = [0];
+	  var start = Math.max(1, currentPage - 1);
+	  var end = Math.min(totalPages - 2, currentPage + 1);
+	  if (start > 1) pages.push("...");
+	  for (var i = start; i <= end; i++) pages.push(i);
+	  if (end < totalPages - 2) pages.push("...");
+	  pages.push(totalPages - 1);
+	  var html = "";
+	  for (var p = 0; p < pages.length; p++) {
+	    var item = pages[p];
+	    if (item === "...") {
+	      html += '<span class="pagination-ellipsis" aria-hidden="true">...</span>';
+	    } else {
+	      html += '<button type="button" class="pagination-page ' + (item === currentPage ? 'active' : '') + '" onclick="goToPage(' + item + ')" ' + (item === currentPage ? 'aria-current="page"' : '') + ' aria-label="Page ' + (item + 1) + '">' + (item + 1) + '</button>';
+	    }
+	  }
+	  return html;
+	}
+	function goToPageInput(raw, totalPages) {
+	  var n = parseInt(raw, 10);
+	  if (isNaN(n)) return;
+	  if (n < 1) n = 1;
+	  if (n > totalPages) n = totalPages;
+	  goToPage(n - 1);
 	}
 	
 	function downloadCSV() {
@@ -3531,7 +5488,7 @@ function initTooltips() {
 	  <div class="controls">
 		<div class="control">
 		  <label for="searchBox">Search</label>
-		  <input id="searchBox" type="text" placeholder="Type to filter..." oninput="onSearchDebounced(this)" aria-label="Filter rows by search text" />
+		  <input id="searchBox" type="text" placeholder="Type to filter... (tokens: sev:FAIL cluster:10.1 changed:true flaky:true)" oninput="onSearchDebounced(this)" aria-label="Filter rows by search text or tokens" />
 		</div>
 		<div class="control">
 		  <label>Severity</label>
@@ -3547,11 +5504,23 @@ function initTooltips() {
   </div>
 </div>
 		<div class="control">
+		  <label for="compareMode">Compare</label>
+		  <select id="compareMode" onchange="setCompareMode(this.value)" aria-label="Comparison mode">
+		    <option value="all">All rows</option>
+		    <option value="changed">Changed only</option>
+		    <option value="flaky">Flaky only</option>
+		  </select>
+		</div>
+		<div class="control">
 		  <button type="button" onclick="downloadCSV()" aria-label="Export filtered rows as CSV">Export CSV</button>
 		  <button type="button" onclick="downloadJSON()" aria-label="Export filtered rows as JSON">Export JSON</button>
 		</div>
+		<div class="control" style="min-width: 280px;">
+		  <label>Artifacts</label>
+		  <div class="per-cluster-links" id="artifactLinks" aria-label="Artifact quick links"></div>
+		</div>
 	  </div>
-	
+
 	  <div class="summary">
 		<div class="sum-item clickable" id="sumTotal" role="button" tabindex="0" onclick="filterBySev(null)" onkeydown="if(event.key==='Enter'||event.key===' ') { event.preventDefault(); filterBySev(null); }" aria-label="Show all severities">
 		  <div class="label">Total</div>
@@ -3578,12 +5547,36 @@ function initTooltips() {
 		  <div class="progress info"><span id="barInfo" style="width:0%"></span></div>
 		</div>
 	  </div>
-	
-	  <div class="table-info" id="tableInfo">Showing 0 rows</div>
+
+	  <div class="insights">
+		<div class="sum-item">
+		  <div class="label">Policy Gates</div>
+		  <div class="count" id="policyStatus">-</div>
+		  <div class="meta" id="policyMeta"></div>
+		</div>
+		<div class="sum-item">
+		  <div class="label">Changed checks</div>
+		  <div class="count" id="changedChecksCount">0</div>
+		  <div class="meta">Rows with diff markers (+new FAIL, resolved FAIL, or severity change).</div>
+		</div>
+		<div class="sum-item">
+		  <div class="label">Flaky checks</div>
+		  <div class="count" id="flakyChecksCount">0</div>
+		  <div class="meta">Rows flagged as severity-oscillating in flaky analysis.</div>
+		</div>
+	  </div>
+
+	  <div class="card" style="margin-bottom: 12px;">
+		<div class="label">Cluster health (score + trend)</div>
+		<div class="meta">Sparkline is built from recent run-history snapshots when available.</div>
+		<div id="healthWidget" style="margin-top:8px;"></div>
+	  </div>
+
+	  <div class="table-info" id="tableInfo" aria-live="polite">Showing 0 rows</div>
 	  <div id="pagination" class="pagination" style="display:none;"></div>
 	  <div class="card">
 		<div class="scroll">
-		  <table id="main-table">
+		  <table id="main-table" aria-label="NCC aggregated findings table">
 			<thead>
 			  <tr>
 			  	<th class="col-cname th-sort" data-sort="clusterName" onclick="sortBy('clusterName')">Cluster Name <span class="sort-arrow" id="arrow-clusterName"></span></th>
@@ -3605,7 +5598,9 @@ function initTooltips() {
 	  </div>
 	
      <footer class="report-footer">
-    <strong>Keyboard:</strong> / focus search · ↑/↓ move row · Esc clear search or close modal. <span id="footerClusterCount"></span>
+    <strong>Keyboard:</strong> / focus search · ↑/↓ move row · Esc clear search or close modal. <span id="footerClusterCount"></span><br>
+    <strong>Search tokens:</strong> <code>sev:FAIL</code> <code>cluster:10.1.1.5</code> <code>changed:true</code> <code>flaky:true</code>
+    <div class="report-meta-line" id="reportMetaFooter" aria-live="polite"></div>
 </footer>
 	</div>
 	</body>
@@ -3644,9 +5639,172 @@ function initTooltips() {
 	if clusterLinksJSON == nil {
 		clusterLinksJSON = []byte("[]")
 	}
+
+	type diffFlags struct {
+		NewFail         bool `json:"new_fail"`
+		ResolvedFail    bool `json:"resolved_fail"`
+		SeverityChanged bool `json:"severity_changed"`
+	}
+	rowKey := func(cluster, check string) string {
+		return strings.ToLower(strings.TrimSpace(cluster)) + "||" + strings.ToLower(strings.TrimSpace(check))
+	}
+	diffFlagMap := map[string]diffFlags{}
+	diffPath := filepath.Join(outDir, "drilldown-diff.json")
+	if b, err := os.ReadFile(diffPath); err == nil {
+		var d DrillDownDiffJSON
+		if err := json.Unmarshal(b, &d); err == nil {
+			for _, c := range d.Clusters {
+				for _, name := range c.NewFailures {
+					k := rowKey(c.Address, name)
+					v := diffFlagMap[k]
+					v.NewFail = true
+					diffFlagMap[k] = v
+				}
+				for _, name := range c.ResolvedFailures {
+					k := rowKey(c.Address, name)
+					v := diffFlagMap[k]
+					v.ResolvedFail = true
+					diffFlagMap[k] = v
+				}
+				for _, ch := range c.SeverityChanges {
+					k := rowKey(c.Address, ch.CheckName)
+					v := diffFlagMap[k]
+					v.SeverityChanged = true
+					diffFlagMap[k] = v
+				}
+			}
+		}
+	}
+	diffFlagsJSON, _ := json.Marshal(diffFlagMap)
+	if diffFlagsJSON == nil {
+		diffFlagsJSON = []byte("{}")
+	}
+
+	flakyKeys := map[string]bool{}
+	flakyPath := filepath.Join(outDir, "flaky-checks.json")
+	if b, err := os.ReadFile(flakyPath); err == nil {
+		var f FlakyChecksJSON
+		if err := json.Unmarshal(b, &f); err == nil {
+			for _, c := range f.Checks {
+				flakyKeys[rowKey(c.Cluster, c.CheckName)] = true
+			}
+		}
+	}
+	flakyKeysJSON, _ := json.Marshal(flakyKeys)
+	if flakyKeysJSON == nil {
+		flakyKeysJSON = []byte("{}")
+	}
+
+	policyViolations := []string{}
+	policyPath := filepath.Join(outDir, "policy-gates.txt")
+	if b, err := os.ReadFile(policyPath); err == nil {
+		for _, ln := range strings.Split(string(b), "\n") {
+			ln = strings.TrimSpace(ln)
+			if ln != "" {
+				policyViolations = append(policyViolations, ln)
+			}
+		}
+	}
+	policyViolationsJSON, _ := json.Marshal(policyViolations)
+	if policyViolationsJSON == nil {
+		policyViolationsJSON = []byte("[]")
+	}
+
+	var runSummary RunSummaryJSON
+	if b, err := os.ReadFile(filepath.Join(outDir, "run-summary.json")); err == nil {
+		_ = json.Unmarshal(b, &runSummary)
+	}
+	runSummaryJSON, _ := json.Marshal(runSummary)
+	if runSummaryJSON == nil {
+		runSummaryJSON = []byte("{}")
+	}
+
+	historyDir := strings.TrimSpace(cfg.RunHistoryDir)
+	if historyDir == "" {
+		historyDir = filepath.Join(outDir, "runs")
+	}
+	healthTrends := map[string][]int{}
+	if dirs, err := listHistoryRunDirs(historyDir); err == nil && len(dirs) > 0 {
+		limit := 20
+		if len(dirs) > limit {
+			dirs = dirs[:limit]
+		}
+		// oldest -> newest
+		for i, j := 0, len(dirs)-1; i < j; i, j = i+1, j-1 {
+			dirs[i], dirs[j] = dirs[j], dirs[i]
+		}
+		for _, d := range dirs {
+			p := filepath.Join(historyDir, d, "run-summary.json")
+			b, err := os.ReadFile(p)
+			if err != nil {
+				continue
+			}
+			var s RunSummaryJSON
+			if err := json.Unmarshal(b, &s); err != nil {
+				continue
+			}
+			for _, c := range s.Clusters {
+				key := strings.ToLower(strings.TrimSpace(c.Address))
+				if key == "" {
+					continue
+				}
+				healthTrends[key] = append(healthTrends[key], c.HealthScore)
+			}
+		}
+	}
+	for _, c := range runSummary.Clusters {
+		key := strings.ToLower(strings.TrimSpace(c.Address))
+		if key == "" {
+			continue
+		}
+		healthTrends[key] = append(healthTrends[key], c.HealthScore)
+	}
+	healthTrendsJSON, _ := json.Marshal(healthTrends)
+	if healthTrendsJSON == nil {
+		healthTrendsJSON = []byte("{}")
+	}
+
+	artifactLinks := map[string]string{}
+	for _, name := range []string{"run-summary.json", "slo-dashboard.json", "drilldown-diff.json", "flaky-checks.json", "checks-snapshot.json", "regression-summary.json"} {
+		if _, err := os.Stat(filepath.Join(outDir, name)); err == nil {
+			artifactLinks[name] = name
+		}
+	}
+	artifactLinksJSON, _ := json.Marshal(artifactLinks)
+	if artifactLinksJSON == nil {
+		artifactLinksJSON = []byte("{}")
+	}
+
+	reportMeta := map[string]string{
+		"version":             Version,
+		"build_date":          BuildDate,
+		"stream":              Stream,
+		"quiet_hours":         strings.TrimSpace(cfg.QuietHours),
+		"maintenance_windows": strings.Join(cfg.MaintenanceWindows, ","),
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		for _, s := range bi.Settings {
+			if s.Key == "vcs.revision" && s.Value != "" {
+				reportMeta["git_revision"] = s.Value
+				break
+			}
+		}
+	}
+	reportMetaJSON, _ := json.Marshal(reportMeta)
+	if reportMetaJSON == nil {
+		reportMetaJSON = []byte("{}")
+	}
+
 	data := struct {
 		JSON             template.JS
 		ClusterLinksJSON template.JS
+		DiffFlagsJSON    template.JS
+		FlakyKeysJSON    template.JS
+		PolicyViolationsJSON template.JS
+		RunSummaryJSON   template.JS
+		HealthTrendsJSON template.JS
+		ArtifactLinksJSON template.JS
+		ReportMetaJSON   template.JS
 		Clusters         []struct{ Cluster, HTML, CSV string }
 		GeneratedAt      string
 		ClusterName      string
@@ -3655,6 +5813,13 @@ function initTooltips() {
 	}{
 		JSON:             template.JS(jsonBytes),
 		ClusterLinksJSON: template.JS(clusterLinksJSON),
+		DiffFlagsJSON:    template.JS(diffFlagsJSON),
+		FlakyKeysJSON:    template.JS(flakyKeysJSON),
+		PolicyViolationsJSON: template.JS(policyViolationsJSON),
+		RunSummaryJSON:   template.JS(runSummaryJSON),
+		HealthTrendsJSON: template.JS(healthTrendsJSON),
+		ArtifactLinksJSON: template.JS(artifactLinksJSON),
+		ReportMetaJSON:   template.JS(reportMetaJSON),
 		Clusters:         perCluster,
 		GeneratedAt:      time.Now().Format(time.RFC3339),
 	}
@@ -3750,9 +5915,11 @@ func doWithRetry(ctx context.Context, client HTTPClient, req *http.Request, cfg 
 
 		status := resp.StatusCode
 		if status >= 200 && status < 300 {
+			noteHTTPStatusForAdaptiveParallelism(status, cfg)
 			log.Debug().Str("op", op).Int("status", status).Msg("request succeeded")
 			return resp, body, nil
 		}
+		noteHTTPStatusForAdaptiveParallelism(status, cfg)
 
 		retryable := isRetryableStatus(status)
 		var back time.Duration
@@ -4254,6 +6421,9 @@ func filterBlocksToFile(fs FS, inputPath, outputPath string) ([]ParsedBlock, err
 	if err != nil {
 		return nil, err
 	}
+	if err := validateParsedAlertsAgainstPluginResults(string(data), blocks); err != nil {
+		log.Warn().Err(err).Str("path", inputPath).Msg("parser validation: mismatch between parsed alerts and NCC plugin results")
+	}
 	if err := fs.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
 		return nil, err
 	}
@@ -4419,6 +6589,13 @@ SUMMARY:
 				return nil, err
 			}
 			l.Info().Str("file", mdFile).Msg("Markdown generated")
+		case "sarif":
+			sarifFile := base + ".sarif"
+			if err := generateSARIF(fs, blocks, sarifFile); err != nil {
+				l.Error().Err(err).Str("file", sarifFile).Msg("write SARIF failed")
+				return nil, err
+			}
+			l.Info().Str("file", sarifFile).Msg("SARIF generated")
 		default:
 			l.Warn().Str("format", f).Msg("unknown output format")
 		}
@@ -4455,6 +6632,22 @@ SUMMARY:
 		summaryNotify.FailCount, summaryNotify.WarnCount, len(blocks), filteredPath)
 
 	if !cfg.NotifyDigest {
+		if suppressed, reason := notificationsSuppressedNow(cfg, time.Now()); suppressed {
+			l.Info().Str("reason", reason).Msg("notifications suppressed by quiet-hours/maintenance-window")
+			setPhase("done")
+			return blocks, nil
+		}
+		if cfg.NotifyOnRegression {
+			prevFail := cfg.PreviousClusterFailCount[cluster]
+			if summaryNotify.FailCount <= prevFail {
+				l.Info().
+					Int("current_fail", summaryNotify.FailCount).
+					Int("previous_fail", prevFail).
+					Msg("notify-on-regression enabled: skipping non-regression cluster notification")
+				setPhase("done")
+				return blocks, nil
+			}
+		}
 		if err := sendEmailWithRetry(cfg, subj, bodyEmail, htmlPathForNotify); err != nil {
 			l.Error().Err(err).Msg("email failed")
 		}
@@ -4577,7 +6770,7 @@ var (
 func init() {
 	// Defaults
 	if Version == "" {
-		Version = "1.0.0"
+		Version = "1.1.0"
 	}
 	if BuildDate == "" {
 		BuildDate = "unknown"
@@ -5277,6 +7470,476 @@ func runDiscoverClusters(cmd *cobra.Command, args []string) error {
 	}
 }
 
+func normalizeScheduleType(s string) (string, error) {
+	v := strings.ToLower(strings.TrimSpace(s))
+	switch v {
+	case "", "auto":
+		if runtime.GOOS == "windows" {
+			return "windows", nil
+		}
+		return "cron", nil
+	case "cron":
+		return "cron", nil
+	case "windows", "windows-task":
+		return "windows", nil
+	default:
+		return "", fmt.Errorf("type must be auto, cron, or windows (got %q)", s)
+	}
+}
+
+func cronExprFromInterval(every time.Duration) (string, error) {
+	if every <= 0 {
+		return "", errors.New("every must be > 0")
+	}
+	if every%time.Minute != 0 {
+		return "", errors.New("every must be a whole number of minutes for cron")
+	}
+	minutes := int(every / time.Minute)
+	switch {
+	case minutes < 60:
+		return fmt.Sprintf("*/%d * * * *", minutes), nil
+	case minutes%60 == 0 && minutes < 24*60:
+		return fmt.Sprintf("0 */%d * * *", minutes/60), nil
+	case minutes%(24*60) == 0:
+		days := minutes / (24 * 60)
+		return fmt.Sprintf("0 0 */%d * *", days), nil
+	default:
+		return "", errors.New("every must be an even minute/hour/day interval for cron (or provide --cron)")
+	}
+}
+
+func shellQuotePOSIX(s string) string {
+	if s == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func scheduleMarker(taskName string) string {
+	name := strings.TrimSpace(taskName)
+	if name == "" {
+		name = "default"
+	}
+	return "ncc-orchestrator:" + name
+}
+
+func defaultScheduleCommand(configPath string) (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("resolve executable: %w", err)
+	}
+	exe = filepath.Clean(exe)
+	if runtime.GOOS == "windows" {
+		if strings.TrimSpace(configPath) == "" {
+			return fmt.Sprintf("cmd /C \"set NCC_SCHEDULER_SOURCE=windows && \\\"%s\\\"\"", exe), nil
+		}
+		return fmt.Sprintf("cmd /C \"set NCC_SCHEDULER_SOURCE=windows && \\\"%s\\\" --config \\\"%s\\\"\"", exe, configPath), nil
+	}
+	if strings.TrimSpace(configPath) == "" {
+		return fmt.Sprintf("NCC_SCHEDULER_SOURCE=cron %s", shellQuotePOSIX(exe)), nil
+	}
+	return fmt.Sprintf("NCC_SCHEDULER_SOURCE=cron %s --config %s", shellQuotePOSIX(exe), shellQuotePOSIX(configPath)), nil
+}
+
+func upsertScheduleLine(content, marker, line string) string {
+	lines := splitLines(content)
+	out := make([]string, 0, len(lines)+1)
+	for _, ln := range lines {
+		trim := strings.TrimSpace(ln)
+		if trim == "" {
+			continue
+		}
+		if strings.Contains(ln, marker) {
+			continue
+		}
+		out = append(out, ln)
+	}
+	out = append(out, line)
+	return strings.Join(out, "\n") + "\n"
+}
+
+func removeScheduleLine(content, marker string) (string, bool) {
+	lines := splitLines(content)
+	out := make([]string, 0, len(lines))
+	removed := false
+	for _, ln := range lines {
+		trim := strings.TrimSpace(ln)
+		if trim == "" {
+			continue
+		}
+		if strings.Contains(ln, marker) {
+			removed = true
+			continue
+		}
+		out = append(out, ln)
+	}
+	if len(out) == 0 {
+		return "", removed
+	}
+	return strings.Join(out, "\n") + "\n", removed
+}
+
+func listCronSchedules(taskName string) error {
+	marker := scheduleMarker(taskName)
+	out, err := exec.Command("crontab", "-l").CombinedOutput()
+	if err != nil {
+		low := strings.ToLower(string(out))
+		if strings.Contains(low, "no crontab") {
+			fmt.Printf("No cron entries found for marker %q\n", marker)
+			return nil
+		}
+		return fmt.Errorf("read current crontab: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	lines := splitLines(string(out))
+	found := false
+	for _, ln := range lines {
+		if strings.Contains(ln, marker) {
+			fmt.Println(ln)
+			found = true
+		}
+	}
+	if !found {
+		fmt.Printf("No cron entries found for marker %q\n", marker)
+	}
+	return nil
+}
+
+func removeCronSchedule(taskName string) error {
+	marker := scheduleMarker(taskName)
+	existingBytes, err := exec.Command("crontab", "-l").CombinedOutput()
+	existing := string(existingBytes)
+	if err != nil {
+		low := strings.ToLower(existing)
+		if strings.Contains(low, "no crontab") {
+			fmt.Printf("No cron entries found for marker %q\n", marker)
+			return nil
+		}
+		return fmt.Errorf("read current crontab: %v (%s)", err, strings.TrimSpace(existing))
+	}
+	updated, removed := removeScheduleLine(existing, marker)
+	if !removed {
+		fmt.Printf("No cron entries found for marker %q\n", marker)
+		return nil
+	}
+	c := exec.Command("crontab", "-")
+	c.Stdin = strings.NewReader(updated)
+	if out, err := c.CombinedOutput(); err != nil {
+		return fmt.Errorf("write updated crontab: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	fmt.Printf("Removed cron entry for marker %q\n", marker)
+	return nil
+}
+
+func listWindowsSchedule(taskName string) error {
+	if runtime.GOOS != "windows" {
+		return errors.New("windows schedule can only be listed on Windows")
+	}
+	out, err := exec.Command("schtasks", "/Query", "/TN", taskName, "/FO", "LIST", "/V").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("query scheduled task: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	fmt.Print(string(out))
+	return nil
+}
+
+func removeWindowsSchedule(taskName string) error {
+	if runtime.GOOS != "windows" {
+		return errors.New("windows schedule can only be removed on Windows")
+	}
+	out, err := exec.Command("schtasks", "/Delete", "/TN", taskName, "/F").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("delete scheduled task: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	fmt.Printf("Removed Windows Scheduled Task %q\n%s\n", taskName, strings.TrimSpace(string(out)))
+	return nil
+}
+
+func runScheduleCommandNow(runCmd string) error {
+	if strings.TrimSpace(runCmd) == "" {
+		return errors.New("command cannot be empty")
+	}
+	var c *exec.Cmd
+	if runtime.GOOS == "windows" {
+		c = exec.Command("cmd", "/C", runCmd)
+	} else {
+		c = exec.Command("/bin/sh", "-lc", runCmd)
+	}
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	c.Stdin = os.Stdin
+	return c.Run()
+}
+
+func installCronSchedule(taskName, cronSpec, runCmd, logPath string) error {
+	marker := scheduleMarker(taskName)
+	line := fmt.Sprintf("%s %s >> %s 2>&1 # %s", cronSpec, runCmd, shellQuotePOSIX(logPath), marker)
+
+	existingBytes, err := exec.Command("crontab", "-l").CombinedOutput()
+	existing := string(existingBytes)
+	if err != nil {
+		// "no crontab for <user>" should be treated as empty content.
+		low := strings.ToLower(existing)
+		if !strings.Contains(low, "no crontab") {
+			return fmt.Errorf("read current crontab: %v (%s)", err, strings.TrimSpace(existing))
+		}
+		existing = ""
+	}
+
+	updated := upsertScheduleLine(existing, marker, line)
+	c := exec.Command("crontab", "-")
+	c.Stdin = strings.NewReader(updated)
+	out, err := c.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("install crontab entry: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	fmt.Printf("Installed cron schedule with marker %q\n", marker)
+	fmt.Printf("%s\n", line)
+	return nil
+}
+
+func installWindowsSchedule(taskName, runCmd string, every time.Duration) error {
+	if runtime.GOOS != "windows" {
+		return errors.New("windows schedule can only be created on Windows")
+	}
+	if every <= 0 {
+		return errors.New("every must be > 0")
+	}
+	if every%time.Minute != 0 {
+		return errors.New("every must be a whole number of minutes")
+	}
+	minutes := int(every / time.Minute)
+	if minutes < 1 {
+		return errors.New("every must be at least 1 minute")
+	}
+
+	args := []string{
+		"/Create",
+		"/TN", taskName,
+		"/TR", runCmd,
+		"/SC", "MINUTE",
+		"/MO", strconv.Itoa(minutes),
+		"/F",
+	}
+	out, err := exec.Command("schtasks", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("create scheduled task: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	fmt.Printf("Created/updated Windows Scheduled Task %q (every %d minute(s))\n", taskName, minutes)
+	return nil
+}
+
+func runCreateSchedule(cmd *cobra.Command, args []string) error {
+	scheduleTypeRaw, _ := cmd.Flags().GetString("type")
+	scheduleType, err := normalizeScheduleType(scheduleTypeRaw)
+	if err != nil {
+		return exitConfig(err)
+	}
+
+	taskName, _ := cmd.Flags().GetString("task-name")
+	if strings.TrimSpace(taskName) == "" {
+		return exitConfig(errors.New("task-name must not be empty"))
+	}
+	logPath, _ := cmd.Flags().GetString("log-path")
+	if strings.TrimSpace(logPath) == "" {
+		logPath = "logs/ncc-scheduler.log"
+	}
+
+	runCmd, _ := cmd.Flags().GetString("command")
+	if strings.TrimSpace(runCmd) == "" {
+		configPath, _ := cmd.Flags().GetString("config")
+		runCmd, err = defaultScheduleCommand(configPath)
+		if err != nil {
+			return fmt.Errorf("build schedule command: %w", err)
+		}
+	}
+
+	printOnly, _ := cmd.Flags().GetBool("print-only")
+	every, _ := cmd.Flags().GetDuration("every")
+	action, _ := cmd.Flags().GetString("action")
+	action = strings.ToLower(strings.TrimSpace(action))
+	if action == "" {
+		action = "create"
+	}
+
+	switch scheduleType {
+	case "cron":
+		switch action {
+		case "list":
+			return listCronSchedules(taskName)
+		case "remove":
+			if printOnly {
+				fmt.Printf("Cron remove preview: marker=%q\n", scheduleMarker(taskName))
+				return nil
+			}
+			return removeCronSchedule(taskName)
+		case "run-now":
+			fmt.Printf("Running now: %s\n", runCmd)
+			return runScheduleCommandNow(runCmd)
+		case "create":
+		default:
+			return exitConfig(fmt.Errorf("action must be create, list, remove, or run-now (got %q)", action))
+		}
+
+		cronSpec, _ := cmd.Flags().GetString("cron")
+		cronSpec = strings.TrimSpace(cronSpec)
+		if cronSpec == "" {
+			cronSpec, err = cronExprFromInterval(every)
+			if err != nil {
+				return exitConfig(fmt.Errorf("derive cron from --every: %w", err))
+			}
+		}
+		line := fmt.Sprintf("%s %s >> %s 2>&1 # %s", cronSpec, runCmd, shellQuotePOSIX(logPath), scheduleMarker(taskName))
+		if printOnly {
+			fmt.Printf("Cron entry preview:\n%s\n", line)
+			return nil
+		}
+		return installCronSchedule(taskName, cronSpec, runCmd, logPath)
+	case "windows":
+		switch action {
+		case "list":
+			return listWindowsSchedule(taskName)
+		case "remove":
+			if printOnly {
+				fmt.Printf("Windows remove preview: schtasks /Delete /TN %q /F\n", taskName)
+				return nil
+			}
+			return removeWindowsSchedule(taskName)
+		case "run-now":
+			fmt.Printf("Running now: %s\n", runCmd)
+			return runScheduleCommandNow(runCmd)
+		case "create":
+		default:
+			return exitConfig(fmt.Errorf("action must be create, list, remove, or run-now (got %q)", action))
+		}
+		if printOnly {
+			if every <= 0 {
+				return exitConfig(errors.New("every must be > 0"))
+			}
+			fmt.Printf("Windows task preview:\nschtasks /Create /TN %q /TR %q /SC MINUTE /MO %d /F\n",
+				taskName, runCmd, int(every/time.Minute))
+			return nil
+		}
+		return installWindowsSchedule(taskName, runCmd, every)
+	default:
+		return exitConfig(fmt.Errorf("unsupported type %q", scheduleType))
+	}
+}
+
+func configJSONSchema() map[string]interface{} {
+	props := map[string]interface{}{
+		"clusters":                map[string]interface{}{"type": "string", "description": "Comma-separated cluster IPs/FQDNs"},
+		"clusters-file":           map[string]interface{}{"type": "string"},
+		"update":                  map[string]interface{}{"type": "boolean"},
+		"username":                map[string]interface{}{"type": "string"},
+		"password":                map[string]interface{}{"type": "string"},
+		"ncc-api-version":         map[string]interface{}{"type": "string", "enum": []string{"v4", "Legacy", "v1"}},
+		"nutanix-v4-api-version":  map[string]interface{}{"type": "string"},
+		"insecure-skip-verify":    map[string]interface{}{"type": "boolean"},
+		"timeout":                 map[string]interface{}{"type": "string"},
+		"request-timeout":         map[string]interface{}{"type": "string"},
+		"poll-interval":           map[string]interface{}{"type": "string"},
+		"poll-jitter":             map[string]interface{}{"type": "string"},
+		"max-parallel":            map[string]interface{}{"type": "integer", "minimum": 1},
+		"outputs":                 map[string]interface{}{"type": "string", "description": "Comma-separated html,csv,json,markdown,sarif"},
+		"output-dir-logs":         map[string]interface{}{"type": "string"},
+		"output-dir-filtered":     map[string]interface{}{"type": "string"},
+		"single-report":           map[string]interface{}{"type": "boolean"},
+		"gen-test-agg":            map[string]interface{}{"type": "integer", "minimum": 0},
+		"severity-filter":         map[string]interface{}{"type": "string"},
+		"dry-run":                 map[string]interface{}{"type": "boolean"},
+		"replay":                  map[string]interface{}{"type": "boolean"},
+		"log-file":                map[string]interface{}{"type": "string"},
+		"log-level":               map[string]interface{}{"type": "string", "enum": []string{"trace", "debug", "info", "warn", "warning", "error", "fatal", "0", "1", "2", "3", "4", "5"}},
+		"log-http":                map[string]interface{}{"type": "boolean"},
+		"retry-max-attempts":      map[string]interface{}{"type": "integer", "minimum": 1},
+		"retry-base-delay":        map[string]interface{}{"type": "string"},
+		"retry-max-delay":         map[string]interface{}{"type": "string"},
+		"prom-dir":                map[string]interface{}{"type": "string"},
+		"run-history":             map[string]interface{}{"type": "boolean"},
+		"run-history-dir":         map[string]interface{}{"type": "string"},
+		"retain-last":             map[string]interface{}{"type": "integer", "minimum": 0},
+		"retain-days":             map[string]interface{}{"type": "integer", "minimum": 0},
+		"notify-on-regression":    map[string]interface{}{"type": "boolean"},
+		"adaptive-parallelism":    map[string]interface{}{"type": "boolean"},
+		"policy-gates":            map[string]interface{}{"type": "string"},
+		"quiet-hours":             map[string]interface{}{"type": "string", "description": "HH:MM-HH:MM local time"},
+		"maintenance-windows":     map[string]interface{}{"type": "string", "description": "comma-separated start/end RFC3339 windows"},
+		"flaky-lookback-runs":     map[string]interface{}{"type": "integer", "minimum": 2},
+		"flaky-min-transitions":   map[string]interface{}{"type": "integer", "minimum": 1},
+		"email-enabled":           map[string]interface{}{"type": "boolean"},
+		"email-attach-html":       map[string]interface{}{"type": "boolean"},
+		"notify-digest":           map[string]interface{}{"type": "boolean"},
+		"smtp-server":             map[string]interface{}{"type": "string"},
+		"smtp-port":               map[string]interface{}{"type": "integer"},
+		"smtp-user":               map[string]interface{}{"type": "string"},
+		"smtp-password":           map[string]interface{}{"type": "string"},
+		"email-from":              map[string]interface{}{"type": "string"},
+		"email-to":                map[string]interface{}{"type": "string"},
+		"email-use-tls":           map[string]interface{}{"type": "boolean"},
+		"webhook-enabled":         map[string]interface{}{"type": "boolean"},
+		"webhook-include-html":    map[string]interface{}{"type": "boolean"},
+		"webhook-url":             map[string]interface{}{"type": "string"},
+		"webhook-headers": map[string]interface{}{
+			"type":                 "object",
+			"additionalProperties": map[string]interface{}{"type": "string"},
+		},
+		"slack-enabled":           map[string]interface{}{"type": "boolean"},
+		"slack-webhook-url":       map[string]interface{}{"type": "string"},
+		"slack-channel":           map[string]interface{}{"type": "string"},
+		"secrets-provider":        map[string]interface{}{"type": "string", "enum": []string{"", "env", "file"}},
+		"secrets-file":            map[string]interface{}{"type": "string"},
+		"prism-central-url":       map[string]interface{}{"type": "string"},
+		"discover-api-version":    map[string]interface{}{"type": "string", "enum": []string{"v3", "v4"}},
+		"max-idle-conns":          map[string]interface{}{"type": "integer"},
+		"max-idle-conns-per-host": map[string]interface{}{"type": "integer"},
+		"max-conns-per-host":      map[string]interface{}{"type": "integer"},
+		"idle-conn-timeout":       map[string]interface{}{"type": "string"},
+	}
+	return map[string]interface{}{
+		"$schema":              "https://json-schema.org/draft/2020-12/schema",
+		"title":                "NCC Orchestrator Config",
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties":           props,
+	}
+}
+
+func runConfigSchema(cmd *cobra.Command, args []string) error {
+	schema := configJSONSchema()
+	data, err := json.MarshalIndent(schema, "", "  ")
+	if err != nil {
+		return err
+	}
+	outPath, _ := cmd.Flags().GetString("output")
+	if strings.TrimSpace(outPath) == "" {
+		fmt.Println(string(data))
+		return nil
+	}
+	return os.WriteFile(outPath, data, 0644)
+}
+
+func runValidateConfigCommand(cmd *cobra.Command, args []string) error {
+	cfgPath, _ := cmd.Flags().GetString("config")
+	if strings.TrimSpace(cfgPath) == "" {
+		return exitConfig(errors.New("--config is required"))
+	}
+	if _, err := os.Stat(cfgPath); err != nil {
+		return exitConfig(fmt.Errorf("config path %s: %w", cfgPath, err))
+	}
+	// validate-config is a standalone subcommand and does not share root --config binding,
+	// so set viper key explicitly before calling bindConfig().
+	viper.Set("config", cfgPath)
+	cfg, err := bindConfig()
+	if err != nil {
+		return exitConfig(fmt.Errorf("configuration: %w", err))
+	}
+	if err := validateConfig(cfg); err != nil {
+		return exitConfig(fmt.Errorf("validation: %w", err))
+	}
+	fmt.Printf("Config is valid: %s\n", cfgPath)
+	return nil
+}
+
 // extractClusterAddressV4 returns a reachable cluster address from clustermgmt v4 config cluster JSON.
 func extractClusterAddressV4(entity map[string]interface{}) string {
 	if netw, _ := entity["network"].(map[string]interface{}); netw != nil {
@@ -5586,6 +8249,13 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 					"RETRY_BASE_DELAY",
 					"RETRY_MAX_DELAY",
 					"PROM_DIR",
+					"RUN_HISTORY",
+					"RUN_HISTORY_DIR",
+					"RETAIN_LAST",
+					"RETAIN_DAYS",
+					"SINGLE_REPORT",
+					"NOTIFY_ON_REGRESSION",
+					"ADAPTIVE_PARALLELISM",
 					"SEVERITY_FILTER",
 					"DRY_RUN",
 					"REPLAY",
@@ -5644,6 +8314,26 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 			}
 			if err := fs.MkdirAll(cfg.PromDir, 0755); err != nil {
 				return err
+			}
+
+			previousSummaryPath := filepath.Join(cfg.OutputDirFiltered, "run-summary.json")
+			previousSummary, hasPreviousSummary, err := loadRunSummaryJSON(previousSummaryPath)
+			if err != nil {
+				log.Warn().Err(err).Str("path", previousSummaryPath).Msg("failed to read previous run-summary; regression baseline disabled")
+			}
+			previousChecksSnapshotPath := filepath.Join(cfg.OutputDirFiltered, "checks-snapshot.json")
+			previousChecksSnapshot, hasPreviousChecksSnapshot, err := loadChecksSnapshotJSON(previousChecksSnapshotPath)
+			if err != nil {
+				log.Warn().Err(err).Str("path", previousChecksSnapshotPath).Msg("failed to read previous checks snapshot; drill-down baseline disabled")
+			}
+			if hasPreviousSummary {
+				cfg.PreviousClusterFailCount = failCountByCluster(previousSummary)
+				log.Info().
+					Str("previous_timestamp", previousSummary.Timestamp).
+					Int("previous_clusters", len(previousSummary.Clusters)).
+					Msg("loaded previous run-summary baseline")
+			} else {
+				cfg.PreviousClusterFailCount = map[string]int{}
 			}
 
 			// Fast replay mode: skip API, parse existing logs and render everything
@@ -5736,6 +8426,8 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 							rawPath := filepath.Join(cfg.OutputDirLogs, fmt.Sprintf("%s.log", cluster))
 							meta, _ := parseNCCHeader(rawPath)
 							_ = generateMarkdown(OSFS{}, blocks, base+".md", meta)
+						case "sarif":
+							_ = generateSARIF(OSFS{}, blocks, base+".sarif")
 						}
 						if err := writePrometheusFile(OSFS{}, cfg.PromDir, cluster, blocks); err != nil {
 							log.Error().Str("cluster", cluster).Err(err).Msg("replay write Prometheus .prom failed")
@@ -5754,14 +8446,18 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 					}
 					ctx := context.Background()
 					httpc := NewHTTPClient(cfg)
-					if err := sendEmailWithRetry(cfg, subj, body, attachPath); err != nil {
-						log.Error().Err(err).Str("cluster", cluster).Msg("replay email failed")
+					if suppressed, reason := notificationsSuppressedNow(cfg, time.Now()); suppressed {
+						log.Info().Str("cluster", cluster).Str("reason", reason).Msg("replay notifications suppressed")
+					} else {
+						if err := sendEmailWithRetry(cfg, subj, body, attachPath); err != nil {
+							log.Error().Err(err).Str("cluster", cluster).Msg("replay email failed")
+						}
+						if err := sendWebhookWithRetry(ctx, httpc, cfg, replaySummary); err != nil {
+							log.Error().Err(err).Str("cluster", cluster).Msg("replay webhook failed")
+						}
+						log.Info().Int("fail", replaySummary.FailCount).Int("warn", replaySummary.WarnCount).
+							Str("cluster", cluster).Msg("replay notifications sent")
 					}
-					if err := sendWebhookWithRetry(ctx, httpc, cfg, replaySummary); err != nil {
-						log.Error().Err(err).Str("cluster", cluster).Msg("replay webhook failed")
-					}
-					log.Info().Int("fail", replaySummary.FailCount).Int("warn", replaySummary.WarnCount).
-						Str("cluster", cluster).Msg("replay notifications sent")
 
 					clusterFiles = append(clusterFiles, struct{ Cluster, HTML, CSV string }{
 						Cluster: cluster,
@@ -5784,7 +8480,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 					}
 				}
 
-				if err := writeAggregatedHTMLSingle(OSFS{}, cfg.OutputDirFiltered, agg, clusterFiles); err != nil {
+				if err := writeAggregatedHTMLSingle(OSFS{}, cfg.OutputDirFiltered, agg, clusterFiles, cfg); err != nil {
 					log.Error().Err(err).Msg("replay: write aggregated HTML failed")
 					return err
 				}
@@ -5827,14 +8523,28 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				// Ensure progress bars are cleaned up on exit
 				p.Wait()
 			}()
+			resetAdaptiveParallelism(cfg.MaxParallel)
 			sem := make(chan struct{}, cfg.MaxParallel)
+			var activeWorkers int32
 			var wg sync.WaitGroup
 			results := make(chan ClusterResult, len(cfg.Clusters))
 			runStart := time.Now()
 
 			for _, cluster := range cfg.Clusters {
 				wg.Add(1)
+				for {
+					limit := currentAdaptiveParallel(cfg.MaxParallel)
+					curActive := int(atomic.LoadInt32(&activeWorkers))
+					if curActive < limit {
+						break
+					}
+					if ctx.Err() != nil {
+						break
+					}
+					time.Sleep(250 * time.Millisecond)
+				}
 				sem <- struct{}{}
+				atomic.AddInt32(&activeWorkers, 1)
 
 				mainBar := p.New(
 					100,
@@ -5860,7 +8570,10 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 
 				go func(cl string, b *mpb.Bar, phase *proxyDecorator, phaseBar *mpb.Bar) {
 					defer wg.Done()
-					defer func() { <-sem }()
+					defer func() {
+						<-sem
+						atomic.AddInt32(&activeWorkers, -1)
+					}()
 					defer func() {
 						if r := recover(); r != nil {
 							b.Abort(false)
@@ -5977,13 +8690,22 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 
 			// Always write final HTML so the report exists even when some or all clusters fail
 			if len(agg) > 0 {
-				if err := writeAggregatedHTMLSingle(fs, cfg.OutputDirFiltered, agg, clusterFiles); err != nil {
+				if err := writeAggregatedHTMLSingle(fs, cfg.OutputDirFiltered, agg, clusterFiles, cfg); err != nil {
 					log.Error().Err(err).Msg("write aggregated HTML failed")
 					return fmt.Errorf("write aggregated HTML: %w", err)
 				}
 			} else if len(failed) > 0 {
 				if err := writeAllClustersFailedHTML(fs, cfg.OutputDirFiltered, failed); err != nil {
 					log.Error().Err(err).Msg("write all-failed HTML failed (non-fatal)")
+				}
+			}
+			if cfg.SingleReport {
+				src := filepath.Join(cfg.OutputDirFiltered, "index.html")
+				dst := filepath.Join(cfg.OutputDirFiltered, "ncc-report-single.html")
+				if err := copyFile(src, dst); err != nil {
+					log.Error().Err(err).Str("src", src).Str("dst", dst).Msg("single-report copy failed (non-fatal)")
+				} else {
+					log.Info().Str("file", dst).Msg("single-file report generated")
 				}
 			}
 
@@ -6008,6 +8730,24 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 			for _, r := range allResults {
 				perCluster = append(perCluster, buildRunClusterSummary(r))
 			}
+			avgHealth := 0
+			minHealth := 100
+			healthClusters := 0
+			for _, c := range perCluster {
+				if !c.OK {
+					continue
+				}
+				avgHealth += c.HealthScore
+				healthClusters++
+				if c.HealthScore < minHealth {
+					minHealth = c.HealthScore
+				}
+			}
+			if healthClusters > 0 {
+				avgHealth = int(math.Round(float64(avgHealth) / float64(healthClusters)))
+			} else {
+				minHealth = 0
+			}
 
 			runSummary := RunSummaryJSON{
 				Timestamp:      time.Now().UTC().Format(time.RFC3339),
@@ -6019,50 +8759,100 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				ExitCode:       exitCode,
 				IndexHTML:      indexPath,
 				TotalChecks:    len(agg),
+				AvgHealthScore: avgHealth,
+				MinHealthScore: minHealth,
 			}
 			if err := writeRunSummaryJSON(fs, cfg.OutputDirFiltered, runSummary); err != nil {
 				log.Error().Err(err).Msg("write run-summary.json failed (non-fatal)")
 			}
+			checksSnapshot := buildChecksSnapshot(allResults)
+			if err := writeChecksSnapshotJSON(fs, cfg.OutputDirFiltered, checksSnapshot); err != nil {
+				log.Error().Err(err).Msg("write checks-snapshot.json failed (non-fatal)")
+			}
 			if err := writeNCCRunRecordJSON(fs, cfg.OutputDirFiltered, runSummary); err != nil {
 				log.Error().Err(err).Msg("write ncc-run-record.json failed (non-fatal)")
 			}
+			regression := computeRegressionSummary(previousSummary, hasPreviousSummary, runSummary)
+			if err := writeRegressionSummaryJSON(fs, cfg.OutputDirFiltered, regression); err != nil {
+				log.Error().Err(err).Msg("write regression-summary.json failed (non-fatal)")
+			} else {
+				log.Info().
+					Bool("has_regression", regression.HasRegression).
+					Int("delta_fail_total", regression.DeltaFailTotal).
+					Msg("regression summary generated")
+			}
+			drillDownDiff := computeDrillDownDiff(previousChecksSnapshot, hasPreviousChecksSnapshot, checksSnapshot)
+			if err := writeDrillDownDiffJSON(fs, cfg.OutputDirFiltered, drillDownDiff); err != nil {
+				log.Error().Err(err).Msg("write drilldown-diff.json failed (non-fatal)")
+			}
+			historySnapshots, err := loadRecentCheckSnapshots(cfg.RunHistoryDir, cfg.FlakyLookbackRuns-1)
+			if err != nil {
+				log.Warn().Err(err).Str("history_dir", cfg.RunHistoryDir).Msg("load check snapshot history failed (non-fatal)")
+				historySnapshots = nil
+			}
+			historySnapshots = append(historySnapshots, checksSnapshot)
+			flaky := computeFlakyChecks(historySnapshots, cfg.FlakyMinTransitions)
+			if err := writeFlakyChecksJSON(fs, cfg.OutputDirFiltered, flaky); err != nil {
+				log.Error().Err(err).Msg("write flaky-checks.json failed (non-fatal)")
+			}
+			slo := buildSLODashboard(runSummary)
+			if err := writeSLODashboardJSON(fs, cfg.OutputDirFiltered, slo); err != nil {
+				log.Error().Err(err).Msg("write slo-dashboard.json failed (non-fatal)")
+			}
+			if cfg.RunHistoryEnabled {
+				if runDir, err := writeRunHistorySnapshot(cfg); err != nil {
+					log.Error().Err(err).Str("history_dir", cfg.RunHistoryDir).Msg("write run history snapshot failed (non-fatal)")
+				} else {
+					log.Info().
+						Str("history_dir", runDir).
+						Int("retain_last", cfg.RetainLastRuns).
+						Int("retain_days", cfg.RetainDays).
+						Msg("run history snapshot created")
+				}
+			}
 
 			if cfg.NotifyDigest {
-				overview := fmt.Sprintf("Run completed in %s. Clusters OK: %d, Failed: %d.",
-					runDuration.Round(time.Second), len(clusterFiles), len(failed))
-				if len(failed) > 0 {
-					overview += fmt.Sprintf(" Failed: %v.", failed)
-				}
-				subj := fmt.Sprintf("NCC Run: OK=%d FAIL=%d", len(clusterFiles), len(failed))
-				bodyEmail := overview + "\n\nIndex report: " + indexPath
-				attachPath := ""
-				if cfg.EmailAttachHTML {
-					if _, err := os.Stat(indexPath); err == nil {
-						attachPath = indexPath
+				if cfg.NotifyOnRegression && !regression.HasRegression {
+					log.Info().Msg("notify-on-regression enabled: skipping digest notification (no regression detected)")
+				} else if suppressed, reason := notificationsSuppressedNow(cfg, time.Now()); suppressed {
+					log.Info().Str("reason", reason).Msg("digest notifications suppressed by quiet-hours/maintenance-window")
+				} else {
+					overview := fmt.Sprintf("Run completed in %s. Clusters OK: %d, Failed: %d.",
+						runDuration.Round(time.Second), len(clusterFiles), len(failed))
+					if len(failed) > 0 {
+						overview += fmt.Sprintf(" Failed: %v.", failed)
 					}
-				}
-				if err := sendEmailWithRetry(cfg, subj, bodyEmail, attachPath); err != nil {
-					log.Error().Err(err).Msg("digest email failed")
-				}
-				digestSummary := NotificationSummary{
-					Cluster:     "run",
-					StartedAt:   runStart,
-					FinishedAt:  time.Now(),
-					FailCount:   len(failed),
-					WarnCount:   len(clusterFiles),
-					TotalChecks: len(agg),
-					Overview:    overview,
-				}
-				if cfg.WebhookIncludeHTML {
-					if b, err := os.ReadFile(indexPath); err == nil {
-						digestSummary.ReportHTMLBase64 = base64.StdEncoding.EncodeToString(b)
+					subj := fmt.Sprintf("NCC Run: OK=%d FAIL=%d", len(clusterFiles), len(failed))
+					bodyEmail := overview + "\n\nIndex report: " + indexPath
+					attachPath := ""
+					if cfg.EmailAttachHTML {
+						if _, err := os.Stat(indexPath); err == nil {
+							attachPath = indexPath
+						}
 					}
-				}
-				if err := sendWebhookWithRetry(ctx, httpc, cfg, digestSummary); err != nil {
-					log.Error().Err(err).Msg("digest webhook failed")
-				}
-				if err := sendSlackWithRetry(ctx, httpc, cfg, digestSummary); err != nil {
-					log.Error().Err(err).Msg("digest slack failed")
+					if err := sendEmailWithRetry(cfg, subj, bodyEmail, attachPath); err != nil {
+						log.Error().Err(err).Msg("digest email failed")
+					}
+					digestSummary := NotificationSummary{
+						Cluster:     "run",
+						StartedAt:   runStart,
+						FinishedAt:  time.Now(),
+						FailCount:   len(failed),
+						WarnCount:   len(clusterFiles),
+						TotalChecks: len(agg),
+						Overview:    overview,
+					}
+					if cfg.WebhookIncludeHTML {
+						if b, err := os.ReadFile(indexPath); err == nil {
+							digestSummary.ReportHTMLBase64 = base64.StdEncoding.EncodeToString(b)
+						}
+					}
+					if err := sendWebhookWithRetry(ctx, httpc, cfg, digestSummary); err != nil {
+						log.Error().Err(err).Msg("digest webhook failed")
+					}
+					if err := sendSlackWithRetry(ctx, httpc, cfg, digestSummary); err != nil {
+						log.Error().Err(err).Msg("digest slack failed")
+					}
 				}
 			}
 
@@ -6073,6 +8863,32 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 					return fmt.Errorf("operation cancelled: %d clusters failed: %v", len(failed), failed)
 				}
 				return fmt.Errorf("operation cancelled: %w", ctx.Err())
+			}
+			policyMetrics := map[string]float64{
+				"new-fails":       float64(drillDownDiff.NewFailCount),
+				"resolved-fails":  float64(drillDownDiff.ResolvedFailCount),
+				"fail-rate":       0,
+				"clusters-failed": float64(len(failed)),
+				"regressions":     0,
+				"flaky-checks":    float64(flaky.TotalFlakyChecks),
+				"min-health-score": float64(runSummary.MinHealthScore),
+				"avg-health-score": float64(runSummary.AvgHealthScore),
+			}
+			if regression.HasRegression {
+				policyMetrics["regressions"] = 1
+			}
+			if runSummary.TotalChecks > 0 {
+				policyMetrics["fail-rate"] = (float64(regression.CurrentFailTotal) * 100.0) / float64(runSummary.TotalChecks)
+			}
+			if len(cfg.PolicyGates) > 0 {
+				violations, err := evaluatePolicyGates(cfg.PolicyGates, policyMetrics)
+				if err != nil {
+					return exitConfig(fmt.Errorf("policy-gates: %w", err))
+				}
+				if len(violations) > 0 {
+					_ = fs.WriteFile(filepath.Join(cfg.OutputDirFiltered, "policy-gates.txt"), []byte(strings.Join(violations, "\n")+"\n"), 0644)
+					return fmt.Errorf("policy gate violations: %s", strings.Join(violations, "; "))
+				}
 			}
 
 			if len(failed) > 0 {
@@ -6112,9 +8928,10 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	cmd.Flags().String("poll-interval", "15s", "Polling interval for task status")
 	cmd.Flags().String("poll-jitter", "2s", "Additive jitter to polling interval")
 	cmd.Flags().Int("max-parallel", 4, "Max concurrent clusters")
-	cmd.Flags().String("outputs", "html,csv", "Comma-separated outputs: html,csv,json,markdown for per-cluster files")
+	cmd.Flags().String("outputs", "html,csv", "Comma-separated outputs: html,csv,json,markdown,sarif for per-cluster files")
 	cmd.Flags().String("output-dir-logs", "nccfiles", "Directory for raw logs")
 	cmd.Flags().String("output-dir-filtered", "outputfiles", "Directory for filtered and aggregated results")
+	cmd.Flags().Bool("single-report", false, "Also write a single-file report copy at output-dir-filtered/ncc-report-single.html")
 	cmd.Flags().String("severity-filter", "", "Comma-separated severities to include (FAIL,WARN,ERR,INFO). Empty = all")
 	cmd.Flags().Bool("dry-run", false, "Validate configuration without running checks")
 	cmd.Flags().String("log-file", "logs/ncc-runner.log", "Path to log file (rotated)")
@@ -6126,6 +8943,17 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	cmd.Flags().Bool("replay", false, "Replay from existing logs without running NCC")
 	cmd.Flags().Int("gen-test-agg", 0, "Generate a test index.html with N clusters for scalability testing (no API calls)")
 	cmd.Flags().String("prom-dir", "promfiles", "Directory for Prometheus metrics")
+	cmd.Flags().Bool("run-history", false, "Store each run snapshot in run-history-dir")
+	cmd.Flags().String("run-history-dir", "", "Run history directory (default: <output-dir-filtered>/runs)")
+	cmd.Flags().Int("retain-last", 0, "When run-history is enabled, keep only the last N runs (0 = unlimited)")
+	cmd.Flags().Int("retain-days", 0, "When run-history is enabled, keep runs newer than N days (0 = unlimited)")
+	cmd.Flags().Bool("notify-on-regression", false, "Only send notifications when FAIL count increases vs previous run-summary")
+	cmd.Flags().Bool("adaptive-parallelism", true, "Dynamically reduce/increase effective concurrency based on HTTP 429 responses")
+	cmd.Flags().String("policy-gates", "", "Comma-separated policy gates (e.g. new-fails>0,fail-rate>2,min-health-score<90,flaky-checks>0)")
+	cmd.Flags().String("quiet-hours", "", "Suppress notifications during local quiet hours, format HH:MM-HH:MM")
+	cmd.Flags().String("maintenance-windows", "", "Suppress notifications during RFC3339 windows: start/end[,start/end...]")
+	cmd.Flags().Int("flaky-lookback-runs", defaultFlakyLookbackRuns, "Number of recent runs to inspect for flaky check detection")
+	cmd.Flags().Int("flaky-min-transitions", defaultFlakyTransitions, "Minimum severity transitions to mark a check as flaky")
 	cmd.Flags().Bool("email-enabled", false, "Enable email notifications")
 	cmd.Flags().Bool("email-attach-html", false, "Attach per-cluster (or digest) HTML report to notification email")
 	cmd.Flags().Bool("notify-digest", false, "Send one email/webhook/slack per run with run overview (and optional index.html attach) instead of per-cluster")
@@ -6143,6 +8971,8 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	cmd.Flags().Bool("slack-enabled", false, "Enable Slack notifications")
 	cmd.Flags().String("slack-webhook-url", "", "Slack webhook URL")
 	cmd.Flags().String("slack-channel", "", "Slack channel (optional, uses webhook default if empty)")
+	cmd.Flags().String("secrets-provider", "", "Secret source for secret:// refs: env or file")
+	cmd.Flags().String("secrets-file", "", "Path to YAML/JSON secrets map when secrets-provider=file")
 
 	// viper bindings
 	_ = viper.BindPFlag("update", cmd.Flags().Lookup("update"))
@@ -6161,6 +8991,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	_ = viper.BindPFlag("outputs", cmd.Flags().Lookup("outputs"))
 	_ = viper.BindPFlag("output-dir-logs", cmd.Flags().Lookup("output-dir-logs"))
 	_ = viper.BindPFlag("output-dir-filtered", cmd.Flags().Lookup("output-dir-filtered"))
+	_ = viper.BindPFlag("single-report", cmd.Flags().Lookup("single-report"))
 	_ = viper.BindPFlag("gen-test-agg", cmd.Flags().Lookup("gen-test-agg"))
 	_ = viper.BindPFlag("log-file", cmd.Flags().Lookup("log-file"))
 	_ = viper.BindPFlag("log-level", cmd.Flags().Lookup("log-level"))
@@ -6170,6 +9001,17 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	_ = viper.BindPFlag("retry-max-delay", cmd.Flags().Lookup("retry-max-delay"))
 	_ = viper.BindPFlag("replay", cmd.Flags().Lookup("replay"))
 	_ = viper.BindPFlag("prom-dir", cmd.Flags().Lookup("prom-dir"))
+	_ = viper.BindPFlag("run-history", cmd.Flags().Lookup("run-history"))
+	_ = viper.BindPFlag("run-history-dir", cmd.Flags().Lookup("run-history-dir"))
+	_ = viper.BindPFlag("retain-last", cmd.Flags().Lookup("retain-last"))
+	_ = viper.BindPFlag("retain-days", cmd.Flags().Lookup("retain-days"))
+	_ = viper.BindPFlag("notify-on-regression", cmd.Flags().Lookup("notify-on-regression"))
+	_ = viper.BindPFlag("adaptive-parallelism", cmd.Flags().Lookup("adaptive-parallelism"))
+	_ = viper.BindPFlag("policy-gates", cmd.Flags().Lookup("policy-gates"))
+	_ = viper.BindPFlag("quiet-hours", cmd.Flags().Lookup("quiet-hours"))
+	_ = viper.BindPFlag("maintenance-windows", cmd.Flags().Lookup("maintenance-windows"))
+	_ = viper.BindPFlag("flaky-lookback-runs", cmd.Flags().Lookup("flaky-lookback-runs"))
+	_ = viper.BindPFlag("flaky-min-transitions", cmd.Flags().Lookup("flaky-min-transitions"))
 	_ = viper.BindPFlag("email-enabled", cmd.Flags().Lookup("email-enabled"))
 	_ = viper.BindPFlag("email-attach-html", cmd.Flags().Lookup("email-attach-html"))
 	_ = viper.BindPFlag("notify-digest", cmd.Flags().Lookup("notify-digest"))
@@ -6189,6 +9031,8 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	_ = viper.BindPFlag("slack-enabled", cmd.Flags().Lookup("slack-enabled"))
 	_ = viper.BindPFlag("slack-webhook-url", cmd.Flags().Lookup("slack-webhook-url"))
 	_ = viper.BindPFlag("slack-channel", cmd.Flags().Lookup("slack-channel"))
+	_ = viper.BindPFlag("secrets-provider", cmd.Flags().Lookup("secrets-provider"))
+	_ = viper.BindPFlag("secrets-file", cmd.Flags().Lookup("secrets-file"))
 
 	// discover-clusters subcommand: Prism Central cluster list (default v4 clustermgmt API)
 	discoverCmd := &cobra.Command{
@@ -6218,6 +9062,49 @@ Use --output to write to a file (e.g. for --clusters-file).`,
 	// with the root command; the second bind would override viper and break the main run.
 	_ = viper.BindPFlag("discover-api-version", discoverCmd.Flags().Lookup("discover-api-version"))
 	cmd.AddCommand(discoverCmd)
+
+	createScheduleCmd := &cobra.Command{
+		Use:   "create-schedule",
+		Short: "Create periodic scheduler for ncc-orchestrator",
+		Long: `Creates a periodic schedule to run ncc-orchestrator.
+
+On Linux/macOS, it installs (or replaces) a crontab entry.
+On Windows, it creates or updates a Scheduled Task.
+
+Examples:
+  ncc-orchestrator create-schedule --type cron --cron "15 */4 * * *" --config config.yaml --print-only
+  ncc-orchestrator create-schedule --type cron --every 4h --config config.yaml
+  ncc-orchestrator create-schedule --type windows --every 4h --config C:\ncc\config.yaml
+  ncc-orchestrator create-schedule --type auto --action list
+  ncc-orchestrator create-schedule --type auto --action remove --print-only=false`,
+		RunE: runCreateSchedule,
+	}
+	createScheduleCmd.Flags().String("type", "auto", "Scheduler type: auto, cron, or windows")
+	createScheduleCmd.Flags().String("action", "create", "Action: create, list, remove, or run-now")
+	createScheduleCmd.Flags().String("task-name", "ncc-orchestrator", "Schedule/task name marker")
+	createScheduleCmd.Flags().String("config", "", "Config file path passed to ncc-orchestrator --config")
+	createScheduleCmd.Flags().String("command", "", "Override full command used by scheduler (advanced)")
+	createScheduleCmd.Flags().String("cron", "", "Cron expression (for --type cron). If empty, derived from --every")
+	createScheduleCmd.Flags().Duration("every", 4*time.Hour, "Periodic interval used for cron derivation or Windows schedule (e.g. 30m, 4h, 24h)")
+	createScheduleCmd.Flags().String("log-path", "logs/ncc-scheduler.log", "Log file path for cron redirect")
+	createScheduleCmd.Flags().Bool("print-only", true, "Preview action without applying changes (used by create/remove)")
+	cmd.AddCommand(createScheduleCmd)
+
+	configSchemaCmd := &cobra.Command{
+		Use:   "config-schema",
+		Short: "Print JSON schema for config.yaml",
+		RunE:  runConfigSchema,
+	}
+	configSchemaCmd.Flags().String("output", "", "Write schema JSON to file (default: stdout)")
+	cmd.AddCommand(configSchemaCmd)
+
+	validateConfigCmd := &cobra.Command{
+		Use:   "validate-config",
+		Short: "Validate configuration file and exit",
+		RunE:  runValidateConfigCommand,
+	}
+	validateConfigCmd.Flags().String("config", "", "Config file path (yaml/json)")
+	cmd.AddCommand(validateConfigCmd)
 
 	return cmd
 }

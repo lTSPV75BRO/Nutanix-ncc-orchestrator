@@ -23,6 +23,18 @@ data:
     poll-jitter: "2s"
     max-parallel: 4
     outputs: "html"
+    single-report: false
+    run-history: false
+    run-history-dir: "/data/outputfiles/runs"
+    retain-last: 0
+    retain-days: 0
+    notify-on-regression: false
+    adaptive-parallelism: true
+    policy-gates: ""
+    quiet-hours: ""
+    maintenance-windows: ""
+    flaky-lookback-runs: 6
+    flaky-min-transitions: 2
     # Paths inside the container; PVC is mounted at /data in the CronJob
     output-dir-logs: "/data/nccfiles"
     output-dir-filtered: "/data/outputfiles"
@@ -61,3 +73,5 @@ data:
     slack-enabled: false
     slack-webhook-url: ""
     slack-channel: ""
+    secrets-provider: ""  # env or file
+    secrets-file: ""      # mounted YAML/JSON map when secrets-provider=file

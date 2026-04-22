@@ -2,11 +2,13 @@
 
 A project-wide list of improvements and new features for the NCC Orchestrator: application, scripts, Kubernetes, CI/CD, and documentation. Use as a backlog; prioritize by impact and effort.
 
+For the concrete next milestone plan, see [docs/MILESTONE_v1.1.0.md](docs/MILESTONE_v1.1.0.md).
+
 ---
 
-## Shipped in v1.0.0 (not exhaustive)
+## Shipped through v1.1.0 (not exhaustive)
 
-The following backlog themes were **partially or fully** addressed in **1.0.0**; see [CHANGELOG.md](CHANGELOG.md) and [RELEASE_NOTES_v1.0.0.md](RELEASE_NOTES_v1.0.0.md) for the canonical list.
+The following backlog themes were partially or fully addressed by **v1.0.0** and **v1.1.0**; see [CHANGELOG.md](CHANGELOG.md), [RELEASE_NOTES_v1.0.0.md](RELEASE_NOTES_v1.0.0.md), and [RELEASE_NOTES_v1.1.0.md](RELEASE_NOTES_v1.1.0.md) for the canonical list.
 
 | Theme | What shipped |
 |--------|----------------|
@@ -65,6 +67,20 @@ The following backlog themes were **partially or fully** addressed in **1.0.0**;
 | **Diff vs previous run** | Optional “diff” output (e.g. new FAILs, resolved FAILs) compared to previous run’s stored summary. |
 | **JSON run summary** | Machine-readable run result (clusters, status, counts, paths) in JSON for automation. |
 | **Markdown report** | Optional Markdown output for easy paste into wikis or tickets. |
+
+### 1.4.1 HTML report UX improvements (v1.1.0+)
+
+| Suggestion | Description |
+|------------|-------------|
+| **Delta badges** | Show `+new FAIL` and `-resolved FAIL` per cluster/check using `drilldown-diff.json` so operators can focus on changes. |
+| **Health score widget** | Display per-cluster health score (`0-100`) with trend sparkline from run history. |
+| **Flaky check marker** | Highlight checks detected in `flaky-checks.json` to reduce noise and false urgency. |
+| **Policy gate panel** | Add a summary card in report header showing gate pass/fail and violated rules (`policy-gates.txt`). |
+| **Run comparison mode** | Add “current vs previous” view with filter for changed checks only. |
+| **Cluster status heatmap** | Add an at-a-glance matrix (cluster x severity counts) before detailed tables. |
+| **Artifact quick links** | Add in-report download links for `run-summary.json`, `drilldown-diff.json`, `flaky-checks.json`, and `slo-dashboard.json`. |
+| **Advanced search tokens** | Support query tokens such as `sev:FAIL`, `cluster:<id>`, `changed:true`, `flaky:true`. |
+| **Accessibility pass** | Improve contrast, keyboard navigation, and ARIA labels for filters, tables, and controls. |
 
 ### 1.5 Security and safety
 
@@ -249,4 +265,4 @@ The following backlog themes were **partially or fully** addressed in **1.0.0**;
 
 ---
 
-*Last updated: 2026-02. Revisit as the project evolves.*
+*Last updated: 2026-04 (post v1.1.0 release prep). Revisit as the project evolves.*

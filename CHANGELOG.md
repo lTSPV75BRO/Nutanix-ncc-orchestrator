@@ -4,7 +4,49 @@ All notable changes to the Nutanix NCC Orchestrator are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-**Release checklist (for maintainers):** Ensure [`VERSION`](VERSION) matches the intended tag; default `main.Version` in code is `1.0.0` when not set via ldflags. Run `go vet ./...`, `go test ./...`, and `go build ./...` (and `go build ./cmd/ncc-mcp-server`). Confirm `k8s/` and `helm/` image tags match `VERSION`. Tag `v1.0.0` and create a GitHub release using [RELEASE_NOTES_v1.0.0.md](RELEASE_NOTES_v1.0.0.md); attach binaries and `checksums.txt` per [docs/RELEASE_CHECKSUMS.md](docs/RELEASE_CHECKSUMS.md) so `--update` can verify downloads.
+**Release checklist (for maintainers):** Ensure [`VERSION`](VERSION) matches the intended tag; default `main.Version` in code is `1.1.0` when not set via ldflags. Run `go vet ./...`, `go test ./...`, and `go build ./...` (and `go build ./cmd/ncc-mcp-server`). Confirm `k8s/` and `helm/` image tags match `VERSION`. Tag `v1.1.0` and create a GitHub release using [RELEASE_NOTES_v1.1.0.md](RELEASE_NOTES_v1.1.0.md); attach binaries and `checksums.txt` per [docs/RELEASE_CHECKSUMS.md](docs/RELEASE_CHECKSUMS.md) so `--update` can verify downloads.
+
+---
+
+## [Unreleased]
+
+### Added
+
+- None yet.
+
+### Changed
+
+- None yet.
+
+---
+
+## [1.1.0] - 2026-04-21
+
+### Added
+
+- **`create-schedule` command** — New `ncc-orchestrator create-schedule` subcommand to create recurring NCC runs:
+  - **Linux/macOS:** creates or updates a cron entry (`--type cron`, `--cron` or `--every`)
+  - **Windows:** creates or updates a Scheduled Task (`--type windows`, `--every`)
+  - Supports safe preview mode with `--print-only` (default true).
+  - New scheduler actions: `--action list|remove|run-now`.
+- **MCP scheduler tools** — New MCP tools `create_schedule`, `list_schedules`, and `delete_schedule` for schedule lifecycle operations from AI clients.
+- **Run history snapshots** — Optional `--run-history` writes timestamped snapshots under `--run-history-dir` with retention controls (`--retain-last`, `--retain-days`).
+- **Regression awareness** — New `regression-summary.json` compares current FAIL counts to previous `run-summary.json`; `--notify-on-regression` only sends notifications when FAIL count increases.
+- **Drill-down diff and snapshots** — Added `checks-snapshot.json` and `drilldown-diff.json` with per-check change tracking (new/resolved FAILs, severity changes).
+- **Flaky check detection** — Added `flaky-checks.json` with lookback-based severity transition analysis (`flaky-lookback-runs`, `flaky-min-transitions`).
+- **Health and SLO exports** — Added per-cluster `health_score` plus `avg_health_score` / `min_health_score` in `run-summary.json`, and `slo-dashboard.json` for dashboards.
+- **SARIF export** — New per-cluster output format `sarif` in `--outputs`.
+- **Config schema + validation mode** — New `config-schema` and `validate-config` commands for config ergonomics in CI/CD.
+- **Policy gates** — Added `policy-gates` support for release/CI rules such as `new-fails>0` or `min-health-score<90`, with violations written to `policy-gates.txt`.
+- **Secrets provider** — Added `secret://` resolution for sensitive fields using `secrets-provider=env|file` and optional `secrets-file`.
+- **Quiet hours and maintenance windows** — Added notification suppression via `quiet-hours` and `maintenance-windows`.
+
+### Changed
+
+- **ncc-run-record metadata** — Added `git_revision`, `hostname`, and `scheduler_source` for better traceability.
+- **Adaptive resilience on 429** — Effective cluster concurrency now adapts down/up based on HTTP 429 pressure (`--adaptive-parallelism`).
+- **Single-file report option** — `--single-report` writes `ncc-report-single.html` alongside `index.html`.
+- **Strict validation by default** — Config validation now rejects unknown keys and enforces strict value typing by default.
 
 ---
 
@@ -113,6 +155,7 @@ See git history and [Releases](https://github.com/lTSPV75BRO/Nutanix-ncc-orchest
 
 ---
 
+[1.1.0]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v1.1.0
 [1.0.0]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v1.0.0
 [0.1.13]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v0.1.13
 [0.1.12]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v0.1.12

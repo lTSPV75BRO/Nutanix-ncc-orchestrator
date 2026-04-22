@@ -1,6 +1,6 @@
 # For Linux x86_64
 GOOS=linux GOARCH=amd64 go build -ldflags "-w -s \
-  -X main.Version=1.0.0_LINUX_AMD64 \
+  -X main.Version=1.1.0_LINUX_AMD64 \
   -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
   -X main.Stream=Prod \
   -X main.GoVersion=$(go version | cut -d ' ' -f 3)" \
@@ -8,7 +8,7 @@ GOOS=linux GOARCH=amd64 go build -ldflags "-w -s \
 
 # For Linux ARM64
 GOOS=linux GOARCH=arm64 go build -ldflags "-w -s \
-  -X main.Version=1.0.0_LINUX_ARM64 \
+  -X main.Version=1.1.0_LINUX_ARM64 \
   -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
   -X main.Stream=Prod \
   -X main.GoVersion=$(go version | cut -d ' ' -f 3)" \
@@ -16,7 +16,7 @@ GOOS=linux GOARCH=arm64 go build -ldflags "-w -s \
 
 # For Windows x86_64
 GOOS=windows GOARCH=amd64 go build -ldflags "-w -s \
-  -X main.Version=1.0.0_WIN_AMD64 \
+  -X main.Version=1.1.0_WIN_AMD64 \
   -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
   -X main.Stream=Prod \
   -X main.GoVersion=$(go version | cut -d ' ' -f 3)" \
@@ -24,7 +24,7 @@ GOOS=windows GOARCH=amd64 go build -ldflags "-w -s \
 
 # For Windows ARM64
 GOOS=windows GOARCH=arm64 go build -ldflags "-w -s \
-  -X main.Version=1.0.0_WIN_ARM64 \
+  -X main.Version=1.1.0_WIN_ARM64 \
   -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
   -X main.Stream=Prod \
   -X main.GoVersion=$(go version | cut -d ' ' -f 3)" \
@@ -32,7 +32,7 @@ GOOS=windows GOARCH=arm64 go build -ldflags "-w -s \
 
 # For darwin ARM64
 GOOS=darwin GOARCH=arm64 go build -ldflags "-w -s \
-  -X main.Version=1.0.0_darwin_ARM64 \
+  -X main.Version=1.1.0_darwin_ARM64 \
   -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
   -X main.Stream=Prod \
   -X main.GoVersion=$(go version | cut -d ' ' -f 3)" \
@@ -40,7 +40,7 @@ GOOS=darwin GOARCH=arm64 go build -ldflags "-w -s \
 
 # For darwin x86_64
 GOOS=darwin GOARCH=amd64 go build -ldflags "-w -s \
-  -X main.Version=1.0.0_darwin_AMD64 \
+  -X main.Version=1.1.0_darwin_AMD64 \
   -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
   -X main.Stream=Prod \
   -X main.GoVersion=$(go version | cut -d ' ' -f 3)" \

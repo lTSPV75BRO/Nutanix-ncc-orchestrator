@@ -16,7 +16,7 @@ on:
       - '.github/workflows/docker-publish.yml'
   release:
     types: [published]
-  # Optional: uncomment to also run on version tags (e.g. v1.0.0)
+  # Optional: uncomment to also run on version tags (e.g. v1.1.0)
   # push:
   #   tags:
   #     - 'v*'

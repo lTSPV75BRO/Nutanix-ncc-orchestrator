@@ -20,7 +20,7 @@ import (
 
 const (
 	serverName    = "ncc-orchestrator"
-	serverVersion = "1.0.0"
+	serverVersion = "1.1.0"
 )
 
 // orchestratorBin returns the path to the ncc-orchestrator binary (env, same-dir, or PATH).
@@ -72,7 +72,7 @@ func main() {
 	// Tool: list_run_artifacts — list files in an NCC run output directory
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_run_artifacts",
-		Description: "List files in an NCC run output directory (run-summary.json, ncc-run-record.json, index.html, per-cluster .log/.html/.csv). Use to discover what reports exist from a previous run.",
+		Description: "List files in an NCC run output directory (run-summary.json, ncc-run-record.json, regression-summary.json, index.html, per-cluster .log/.html/.csv/.sarif). Use to discover what reports exist from a previous run.",
 	}, listRunArtifacts)
 
 	// Tool: get_report — read aggregated or per-cluster report content (HTML/text)
@@ -80,6 +80,22 @@ func main() {
 		Name:        "get_report",
 		Description: "Read the aggregated index.html or a specific cluster report file from an output directory. For *.log files, KB references (e.g. KB 5582) are expanded to markdown links to portal.nutanix.com. Returns report content for the AI to summarize or analyze.",
 	}, getReport)
+
+	// Tool: create_schedule — create/update scheduler entry
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "create_schedule",
+		Description: "Create or update a periodic schedule for ncc-orchestrator. Supports cron (Linux/macOS) and Windows Scheduled Task.",
+	}, createSchedule)
+	// Tool: list_schedules — list scheduler entries for task marker/name
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "list_schedules",
+		Description: "List existing schedule entries for ncc-orchestrator task marker/name.",
+	}, listSchedules)
+	// Tool: delete_schedule — remove scheduler entry/task
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "delete_schedule",
+		Description: "Remove existing ncc-orchestrator schedule entry/task by task name.",
+	}, deleteSchedule)
 
 	// Resources: latest run-summary and report (from default output dir relative to cwd)
 	server.AddResource(&mcp.Resource{
@@ -368,6 +384,124 @@ func getReport(ctx context.Context, req *mcp.CallToolRequest, input GetReportInp
 	}
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: text}},
+	}, nil, nil
+}
+
+// --- schedule tools ---
+
+type CreateScheduleInput struct {
+	Type      string `json:"type,omitempty" jsonschema:"Scheduler type: auto, cron, windows"`
+	TaskName  string `json:"task_name,omitempty" jsonschema:"Schedule/task name (default ncc-orchestrator)"`
+	Config    string `json:"config,omitempty" jsonschema:"Config file path passed to orchestrator --config"`
+	Command   string `json:"command,omitempty" jsonschema:"Custom command for scheduler"`
+	Cron      string `json:"cron,omitempty" jsonschema:"Cron expression for cron scheduler"`
+	Every     string `json:"every,omitempty" jsonschema:"Interval duration like 30m, 4h"`
+	LogPath   string `json:"log_path,omitempty" jsonschema:"Log path for cron redirection"`
+	PrintOnly bool   `json:"print_only,omitempty" jsonschema:"Preview only; do not apply changes"`
+}
+
+func createSchedule(ctx context.Context, req *mcp.CallToolRequest, input CreateScheduleInput) (*mcp.CallToolResult, any, error) {
+	bin := orchestratorBin()
+	args := []string{"create-schedule", "--action", "create"}
+	if strings.TrimSpace(input.Type) != "" {
+		args = append(args, "--type", strings.TrimSpace(input.Type))
+	}
+	if strings.TrimSpace(input.TaskName) != "" {
+		args = append(args, "--task-name", strings.TrimSpace(input.TaskName))
+	}
+	if strings.TrimSpace(input.Config) != "" {
+		args = append(args, "--config", strings.TrimSpace(input.Config))
+	}
+	if strings.TrimSpace(input.Command) != "" {
+		args = append(args, "--command", input.Command)
+	}
+	if strings.TrimSpace(input.Cron) != "" {
+		args = append(args, "--cron", strings.TrimSpace(input.Cron))
+	}
+	if strings.TrimSpace(input.Every) != "" {
+		args = append(args, "--every", strings.TrimSpace(input.Every))
+	}
+	if strings.TrimSpace(input.LogPath) != "" {
+		args = append(args, "--log-path", strings.TrimSpace(input.LogPath))
+	}
+	if input.PrintOnly {
+		args = append(args, "--print-only=true")
+	} else {
+		args = append(args, "--print-only=false")
+	}
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Env = os.Environ()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "Error: " + err.Error() + "\nOutput:\n" + string(out)}},
+			IsError: true,
+		}, nil, nil
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: string(out)}},
+	}, nil, nil
+}
+
+type ListSchedulesInput struct {
+	Type     string `json:"type,omitempty" jsonschema:"Scheduler type: auto, cron, windows"`
+	TaskName string `json:"task_name,omitempty" jsonschema:"Schedule/task name (default ncc-orchestrator)"`
+}
+
+func listSchedules(ctx context.Context, req *mcp.CallToolRequest, input ListSchedulesInput) (*mcp.CallToolResult, any, error) {
+	bin := orchestratorBin()
+	args := []string{"create-schedule", "--action", "list"}
+	if strings.TrimSpace(input.Type) != "" {
+		args = append(args, "--type", strings.TrimSpace(input.Type))
+	}
+	if strings.TrimSpace(input.TaskName) != "" {
+		args = append(args, "--task-name", strings.TrimSpace(input.TaskName))
+	}
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Env = os.Environ()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "Error: " + err.Error() + "\nOutput:\n" + string(out)}},
+			IsError: true,
+		}, nil, nil
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: string(out)}},
+	}, nil, nil
+}
+
+type DeleteScheduleInput struct {
+	Type      string `json:"type,omitempty" jsonschema:"Scheduler type: auto, cron, windows"`
+	TaskName  string `json:"task_name,omitempty" jsonschema:"Schedule/task name (default ncc-orchestrator)"`
+	PrintOnly bool   `json:"print_only,omitempty" jsonschema:"Preview removal only"`
+}
+
+func deleteSchedule(ctx context.Context, req *mcp.CallToolRequest, input DeleteScheduleInput) (*mcp.CallToolResult, any, error) {
+	bin := orchestratorBin()
+	args := []string{"create-schedule", "--action", "remove"}
+	if strings.TrimSpace(input.Type) != "" {
+		args = append(args, "--type", strings.TrimSpace(input.Type))
+	}
+	if strings.TrimSpace(input.TaskName) != "" {
+		args = append(args, "--task-name", strings.TrimSpace(input.TaskName))
+	}
+	if input.PrintOnly {
+		args = append(args, "--print-only=true")
+	} else {
+		args = append(args, "--print-only=false")
+	}
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Env = os.Environ()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "Error: " + err.Error() + "\nOutput:\n" + string(out)}},
+			IsError: true,
+		}, nil, nil
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: string(out)}},
 	}, nil, nil
 }
 

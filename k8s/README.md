@@ -69,7 +69,7 @@ Deploy the Nutanix NCC Orchestrator on Kubernetes so that NCC checks run on a sc
 | `nginx-configmap.yaml` | Nginx server config: serve from `/usr/share/nginx/html/outputfiles`. |
 | `secret.yaml` | Prism password (key `password`), used as env `NCC_PASSWORD` in the CronJob. Use a placeholder in the file and set the real value via `kubectl create secret` or by editing before applying. |
 | `pvc.yaml` | PersistentVolumeClaim (e.g. 5Gi, `nfs-storage`, RWX). Holds `/data/logs`, `/data/nccfiles`, `/data/outputfiles`, `/data/promfiles`. |
-| `cronjob.yaml` | CronJob schedule `0 */4 * * *`, pod spec with init container (create dirs), main container (ncc-orchestrator image), `fsGroup: 1000` for NFS. |
+| `cronjob.yaml` | CronJob schedule `15 */4 * * *`, pod spec with init container (create dirs), main container (ncc-orchestrator image), `fsGroup: 1000` for NFS. |
 | `deployment.yaml` | Nginx deployment, same PVC and `fsGroup: 1000`, nginx config from ConfigMap. |
 | `service.yaml` | LoadBalancer Service for the web deployment; annotate with your MetalLB pool name. |
 
@@ -81,7 +81,7 @@ Deploy the Nutanix NCC Orchestrator on Kubernetes so that NCC checks run on a sc
    - **MetalLB** and an **IPAddressPool** (or legacy address pool). The web Service is `type: LoadBalancer`; set the annotation `metallb.io/address-pool` (or `metallb.universe.tf/address-pool`) in `service.yaml` to your pool name.
    - **StorageClass `nfs-storage`** that supports **ReadWriteMany**. The PVC uses this class; change `storageClassName` in `pvc.yaml` if your class has a different name.
 
-2. **Docker image**: The CronJob uses `prajwalnutant/nutanix-ncc-orchestrator:1.0.0` from Docker Hub. To use another tag or a private image, edit the `image` field in `cronjob.yaml`.
+2. **Docker image**: The CronJob uses `prajwalnutant/nutanix-ncc-orchestrator:1.1.0` from Docker Hub. To use another tag or a private image, edit the `image` field in `cronjob.yaml`.
 
 3. **Prism**: At least one Prism cluster reachable from the cluster (IP or FQDN), and credentials (username + password).
 
@@ -197,7 +197,7 @@ Email and webhook sections in the sample config are optional; leave disabled or 
 kubectl get cronjob -n ncc-orchestrator
 ```
 
-Default schedule: **every 4 hours** at minute 0 (`0 */4 * * *`). To run once immediately:
+Default schedule: **every 4 hours** at minute 15 (`15 */4 * * *`). To run once immediately:
 
 ```bash
 kubectl create job -n ncc-orchestrator ncc-manual-1 --from=cronjob/ncc-orchestrator

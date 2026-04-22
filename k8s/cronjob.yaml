@@ -7,7 +7,7 @@ metadata:
   labels:
     app.kubernetes.io/name: ncc-orchestrator
 spec:
-  schedule: "0 */4 * * *"   # Every 4 hours at minute 0
+  schedule: "15 */4 * * *"   # Every 4 hours at minute 15
   concurrencyPolicy: Forbid  # Skip next run if previous is still running
   successfulJobsHistoryLimit: 2
   failedJobsHistoryLimit: 2
@@ -33,7 +33,7 @@ spec:
                   mountPath: /data
           containers:
             - name: ncc-orchestrator
-              image: docker.io/prajwalnutant/nutanix-ncc-orchestrator:1.0.0
+              image: docker.io/prajwalnutant/nutanix-ncc-orchestrator:1.1.0
               imagePullPolicy: IfNotPresent
               # Run as root so NFS root_squash maps us to same anon user as init; then we can create/rotate log and write outputs
               args:

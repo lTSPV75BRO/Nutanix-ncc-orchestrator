@@ -2,11 +2,11 @@ namespace: ncc-orchestrator
 
 image:
   repository: docker.io/prajwalnutant/nutanix-ncc-orchestrator
-  tag: "1.0.0"
+  tag: "1.1.0"
   pullPolicy: IfNotPresent
 
 cronjob:
-  schedule: "0 */4 * * *"
+  schedule: "15 */4 * * *"
   successfulJobsHistoryLimit: 2
   failedJobsHistoryLimit: 2
   backoffLimit: 1

@@ -1,5 +1,8 @@
 # Production readiness – v1.0.0
 
+> Historical reference for the `v1.0.0` release.
+> For the current release train, use [docs/PRODUCTION_READINESS_v1.1.0.md](./PRODUCTION_READINESS_v1.1.0.md).
+
 Checklist and status for releasing **Nutanix NCC Orchestrator** v1.0.0 to production.
 
 **Date:** 2026-04-07  
@@ -33,7 +36,7 @@ Checklist and status for releasing **Nutanix NCC Orchestrator** v1.0.0 to produc
 | `go build ./...` | ✅ | Passes |
 | `go test ./...` | ✅ | Passes (main package tests; MCP server has no tests) |
 | MCP server build | ✅ | `go build -o ncc-mcp-server ./cmd/ncc-mcp-server/` succeeds |
-| Go version | ✅ | go.mod specifies **1.26.1** |
+| Go version | ✅ | go.mod specifies **1.26.2** |
 
 **Optional:** Add unit tests for MCP server handlers (e.g. `list_run_artifacts`, `get_report`, resource handlers) in a follow-up.
 

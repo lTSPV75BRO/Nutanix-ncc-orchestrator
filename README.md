@@ -2,7 +2,16 @@
 
 A CLI tool to run NCC (Nutanix Cluster Check) across multiple clusters in parallel, aggregate results, and generate HTML/CSV reports. Built in Go for efficiency and cross-platform support.
 
-**Contents:** [Features](#features) · [Installation](#installation) · [Usage](#usage) · [Configuration](#configuration) · [Kubernetes](#kubernetes-deployment) · [Scripts](#scripts) · [Building](#building-and-contributing)
+**Contents:** [Features](#features) · [Installation](#installation) · [Usage](#usage) · [Configuration](#configuration) · [Policy Gates](#policy-gates) · [Kubernetes](#kubernetes-deployment) · [Scripts](#scripts) · [Building](#building-and-contributing)
+
+---
+
+## Release status
+
+- **Current target release:** `v1.1.0`
+- **Release notes:** [RELEASE_NOTES_v1.1.0.md](RELEASE_NOTES_v1.1.0.md)
+- **Production readiness checklist:** [docs/PRODUCTION_READINESS_v1.1.0.md](docs/PRODUCTION_READINESS_v1.1.0.md)
+- **Checksums + update verification:** [docs/RELEASE_CHECKSUMS.md](docs/RELEASE_CHECKSUMS.md)
 
 ---
 
@@ -15,10 +24,12 @@ Prajwal Vernekar (prajwal.vernekar@nutanix.com)
 ## Features
 - **Parallel execution** on multiple Nutanix clusters via Prism Gateway API (start checks, poll status, fetch summaries).
 - **Configurable** via YAML/JSON config file, environment variables (`NCC_*`), or CLI flags.
-- **Outputs**: HTML reports (styled), CSV, and optional JSON; aggregated `index.html` plus per-cluster pages.
-- **Reliability**: Retry logic, progress bars, rotated JSON logging, and a **preflight check** that verifies output paths are writable before running.
+- **Outputs**: HTML/CSV/JSON/Markdown/SARIF, aggregated `index.html`, drill-down diff, flaky-check report, and SLO dashboard exports.
+- **Reliability**: Retry logic, adaptive parallelism on 429, progress bars, rotated JSON logging, and a preflight write-permission check.
 - **Replay mode** (`--replay`): Regenerate reports from existing logs without calling the NCC API.
-- **Notifications**: Optional email, webhook, and Slack notifications.
+- **Notifications**: Optional email, webhook, and Slack notifications with quiet-hours / maintenance-window suppression.
+- **Policy gates**: Fail runs based on automation rules (`policy-gates`) such as `new-fails>0`, `fail-rate>2`, `min-health-score<90`.
+- **Secrets support**: `secret://` references resolved from env or file-backed secret map.
 - **Prometheus**: Writes `.prom` files for scraping; see [Prometheus.md](Prometheus.md) for monitoring setup.
 
 ## Installation
@@ -42,7 +53,7 @@ Download pre-built binaries for Linux/Windows/macOS from the [Releases](https://
 ### Docker image and CI
 The [GitHub Action](.github/workflows/docker-publish.yml) builds and pushes the image to Docker Hub on push to `main` (and on release). The **image tag is the same as the code version**:
 
-- **Version source**: the [`VERSION`](VERSION) file (e.g. `1.0.0`). Update this file when you want to release a new image version.
+- **Version source**: the [`VERSION`](VERSION) file (e.g. `1.1.0`). Update this file when you want to release a new image version.
 - **Triggers**: push to `main` (when Go code, Dockerfile, or VERSION change) and on GitHub release.
 - **Image**: `prajwalnutant/nutanix-ncc-orchestrator:<version>` and `:latest`.
 - **Secrets**: In the repo settings, add `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (Docker Hub → Account → Security → New Access Token) so the workflow can push.
@@ -83,9 +94,10 @@ Create a `config.yaml` with any of the options below. Run with: `ncc-orchestrato
 | `poll-interval` | `15s` | Polling interval for NCC task status |
 | `poll-jitter` | `2s` | Jitter added to poll interval |
 | `max-parallel` | `4` | Max concurrent clusters |
-| `outputs` | `html,csv` | Comma-separated: html, csv, json, markdown |
+| `outputs` | `html,csv` | Comma-separated: html, csv, json, markdown, sarif |
 | `output-dir-logs` | `nccfiles` | Directory for raw NCC summary logs |
 | `output-dir-filtered` | `outputfiles` | Directory for filtered HTML/CSV |
+| `single-report` | `false` | Also write a single-file report copy (`ncc-report-single.html`) |
 | `log-file` | `logs/ncc-runner.log` | Rotated JSON log path |
 | `log-level` | — | 0–5 or trace/debug/info/warn/error |
 | `log-http` | `false` | Dump HTTP request/response (debug) |
@@ -93,6 +105,17 @@ Create a `config.yaml` with any of the options below. Run with: `ncc-orchestrato
 | `retry-base-delay` | `400ms` | Base backoff delay |
 | `retry-max-delay` | `8s` | Max backoff cap |
 | `prom-dir` | `promfiles` | Directory for Prometheus .prom files |
+| `run-history` | `false` | Save each run snapshot (`index.html`, summaries) into `run-history-dir` |
+| `run-history-dir` | `<output-dir-filtered>/runs` | Base directory for timestamped run snapshots |
+| `retain-last` | `0` | Keep only last N history snapshots when run-history is enabled (`0` = unlimited) |
+| `retain-days` | `0` | Keep history snapshots newer than N days (`0` = unlimited) |
+| `notify-on-regression` | `false` | Send notifications only when FAIL count increases vs previous run-summary |
+| `adaptive-parallelism` | `true` | Dynamically reduce/increase effective concurrency based on HTTP 429 |
+| `policy-gates` | — | Comma-separated policy rules (e.g. `new-fails>0,fail-rate>2,min-health-score<90`) |
+| `quiet-hours` | — | Suppress notifications during local window `HH:MM-HH:MM` |
+| `maintenance-windows` | — | Suppress notifications during RFC3339 windows `start/end[,start/end...]` |
+| `flaky-lookback-runs` | `6` | Number of recent snapshots to inspect for flaky checks |
+| `flaky-min-transitions` | `2` | Minimum severity transitions to classify a check as flaky |
 | `severity-filter` | — | Comma-separated FAIL,WARN,ERR,INFO; empty = all |
 | `dry-run` | `false` | Validate config only, no checks |
 | `replay` | `false` | Replay from existing logs (no NCC API) |
@@ -109,6 +132,8 @@ Create a `config.yaml` with any of the options below. Run with: `ncc-orchestrato
 | `webhook-url`, `webhook-headers` | — | Webhook endpoint and headers |
 | `slack-enabled` | `false` | Enable Slack notifications |
 | `slack-webhook-url`, `slack-channel` | — | Slack webhook and channel |
+| `secrets-provider` | — | Secret source for `secret://` refs: `env` or `file` |
+| `secrets-file` | — | YAML/JSON key-value secret map path when `secrets-provider=file` |
 
 ### Environment variables (NCC_ prefix)
 Any config key can be set via env: **`NCC_`** + key in UPPER_SNAKE (hyphens become underscores). Examples:
@@ -125,20 +150,68 @@ Any config key can be set via env: **`NCC_`** + key in UPPER_SNAKE (hyphens beco
 - `NCC_MAX_PARALLEL`, `NCC_OUTPUTS`  
 - `NCC_OUTPUT_DIR_LOGS`, `NCC_OUTPUT_DIR_FILTERED`, `NCC_LOG_FILE`, `NCC_LOG_LEVEL`, `NCC_LOG_HTTP`  
 - `NCC_RETRY_MAX_ATTEMPTS`, `NCC_RETRY_BASE_DELAY`, `NCC_RETRY_MAX_DELAY`  
-- `NCC_PROM_DIR`, `NCC_SEVERITY_FILTER`, `NCC_DRY_RUN`, `NCC_REPLAY`  
+- `NCC_PROM_DIR`, `NCC_SINGLE_REPORT`, `NCC_RUN_HISTORY`, `NCC_RUN_HISTORY_DIR`, `NCC_RETAIN_LAST`, `NCC_RETAIN_DAYS`, `NCC_NOTIFY_ON_REGRESSION`, `NCC_ADAPTIVE_PARALLELISM`, `NCC_POLICY_GATES`, `NCC_QUIET_HOURS`, `NCC_MAINTENANCE_WINDOWS`, `NCC_FLAKY_LOOKBACK_RUNS`, `NCC_FLAKY_MIN_TRANSITIONS`, `NCC_SEVERITY_FILTER`, `NCC_DRY_RUN`, `NCC_REPLAY`  
 - `NCC_MAX_IDLE_CONNS`, `NCC_MAX_IDLE_CONNS_PER_HOST`, `NCC_MAX_CONNS_PER_HOST`, `NCC_IDLE_CONN_TIMEOUT`  
 - `NCC_EMAIL_ENABLED`, `NCC_EMAIL_ATTACH_HTML`, `NCC_NOTIFY_DIGEST`, `NCC_SMTP_SERVER`, `NCC_SMTP_PORT`, `NCC_SMTP_USER`, `NCC_SMTP_PASSWORD`, `NCC_EMAIL_FROM`, `NCC_EMAIL_TO`, `NCC_EMAIL_USE_TLS`  
 - `NCC_WEBHOOK_ENABLED`, `NCC_WEBHOOK_INCLUDE_HTML`, `NCC_WEBHOOK_URL`, `NCC_WEBHOOK_HEADERS`  
-- `NCC_SLACK_ENABLED`, `NCC_SLACK_WEBHOOK_URL`, `NCC_SLACK_CHANNEL`  
+- `NCC_SLACK_ENABLED`, `NCC_SLACK_WEBHOOK_URL`, `NCC_SLACK_CHANNEL`, `NCC_SECRETS_PROVIDER`, `NCC_SECRETS_FILE`  
 
 Run **`ncc-orchestrator --env-info`** to print all possible env vars and their current values.
 
 ### Run summary and discover-clusters
 - After each run, **`outputfiles/run-summary.json`** and **`outputfiles/ncc-run-record.json`** are written (machine-readable run result; the latter includes `schema_version` and orchestrator version).
+- Additional automation artifacts are written to `outputfiles/`: **`checks-snapshot.json`**, **`drilldown-diff.json`**, **`flaky-checks.json`**, **`slo-dashboard.json`**, and **`policy-gates.txt`** (when policy violations occur).
 - **`ncc-orchestrator discover-clusters`** — Lists clusters from **Prism Central**. **Default:** `GET /api/clustermgmt/{ver}/config/clusters` where `{ver}` is **`nutanix-v4-api-version`** (default **`v4.2`**; set e.g. `v4.0.a1` to match your environment), with `$page` / `$limit` pagination; addresses are taken from `network.externalAddress` (IPv4, then IPv6), then node CVM IP, then `name`. Use **`--discover-api-version v3`** for legacy `POST /api/nutanix/v3/clusters/list`. If v4 returns **404**, the command **falls back to v3** automatically. Requires `--prism-central-url` (or config). Use **`--format table`** for columns (NAME, EXT_ID, ADDRESS, API) or **`--format json`** for automation. Example:
   `ncc-orchestrator --config config.yaml discover-clusters --output clusters.txt`
   `ncc-orchestrator discover-clusters --prism-central-url https://pc:9440 --format table`
   then set `clusters-file: clusters.txt` in config for the main run. Env: **`NCC_DISCOVER_API_VERSION`** (`v4` or `v3`).
+- **`ncc-orchestrator create-schedule`** — Creates periodic execution for NCC:
+  - Actions: `--action create|list|remove|run-now` (default `create`)
+  - Linux/macOS: cron entry (`--type cron`) using `--cron "15 */4 * * *"` or derived from `--every 4h`
+  - Windows: Scheduled Task (`--type windows`) using `--every` interval
+  - Preview first with `--print-only` (default `true`), then set `--print-only=false` to apply create/remove.
+  - `--action run-now` executes the configured command immediately for validation.
+- **`ncc-orchestrator config-schema`** — Prints JSON schema for config keys (use `--output` to write file).
+- **`ncc-orchestrator validate-config --config <path>`** — Validates config and exits (automation-friendly).
+
+### Policy Gates
+
+`policy-gates` turns run metrics into enforceable pass/fail rules for CI/CD and release checks.
+
+- **Syntax**: comma-separated expressions in the form `<metric><operator><number>`
+  - Example: `new-fails>0,fail-rate>2,min-health-score<90`
+- **Operators**: `>`, `>=`, `<`, `<=`, `==`, `!=`
+- **Behavior**:
+  - Each rule is evaluated at end-of-run.
+  - If one or more rules are violated, the run fails and writes `outputfiles/policy-gates.txt`.
+  - If no rules are violated, run completion behavior is unchanged.
+
+Supported metrics:
+
+- `new-fails` — count of newly introduced FAIL checks vs previous snapshot
+- `resolved-fails` — count of checks that were FAIL before and are now resolved
+- `fail-rate` — current FAIL percentage (0..100)
+- `clusters-failed` — number of clusters with runner-level failure
+- `regressions` — `1` when regression is detected, else `0`
+- `flaky-checks` — number of flaky checks detected
+- `min-health-score` — lowest cluster health score in the run
+- `avg-health-score` — average health score across successful clusters
+
+Examples:
+
+```yaml
+policy-gates: "new-fails>0,fail-rate>2,min-health-score<90,flaky-checks>5"
+```
+
+```bash
+ncc-orchestrator --policy-gates "new-fails>0,regressions>0"
+```
+
+Recommended usage:
+
+- Start with one or two gates (`new-fails>0`, `fail-rate>2`) and tighten gradually.
+- Keep thresholds aligned with environment (prod vs lab) to avoid noisy blocking.
+- Pair with `notify-on-regression` if you want both alert suppression and hard policy enforcement.
 
 ### Example webhook payload
 

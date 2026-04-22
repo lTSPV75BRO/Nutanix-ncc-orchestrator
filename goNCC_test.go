@@ -1638,6 +1638,181 @@ func TestBindConfigInvalidDuration(t *testing.T) {
 	}
 }
 
+func TestBindConfigInvalidBoolInConfigFile(t *testing.T) {
+	viper.Reset()
+	viper.SetEnvPrefix("ncc")
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+	viper.AutomaticEnv()
+
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "bad-bool.yaml")
+	content := `clusters: "10.0.1.1"
+username: "admin"
+insecure-skip-verify: flse
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+	viper.Set("config", cfgPath)
+
+	_, err := bindConfig()
+	if err == nil {
+		t.Fatal("bindConfig() expected to fail for invalid bool in config file")
+	}
+	if !strings.Contains(err.Error(), "insecure-skip-verify") {
+		t.Fatalf("expected insecure-skip-verify error, got: %v", err)
+	}
+}
+
+func TestBindConfigInvalidDurationInConfigFile(t *testing.T) {
+	viper.Reset()
+	viper.SetEnvPrefix("ncc")
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+	viper.AutomaticEnv()
+
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "bad-duration.yaml")
+	content := `clusters: "10.0.1.1"
+username: "admin"
+request-timeout: "30seconds"
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+	viper.Set("config", cfgPath)
+
+	_, err := bindConfig()
+	if err == nil {
+		t.Fatal("bindConfig() expected to fail for invalid duration in config file")
+	}
+	if !strings.Contains(err.Error(), "request-timeout") {
+		t.Fatalf("expected request-timeout error, got: %v", err)
+	}
+}
+
+func TestBindConfigUnknownKeyInConfigFile(t *testing.T) {
+	viper.Reset()
+	viper.SetEnvPrefix("ncc")
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+	viper.AutomaticEnv()
+
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "unknown-key.yaml")
+	content := `clusters: "10.0.1.1"
+username: "admin"
+strict-mode: true
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+	viper.Set("config", cfgPath)
+
+	_, err := bindConfig()
+	if err == nil {
+		t.Fatal("bindConfig() expected to fail for unknown config key")
+	}
+	if !strings.Contains(err.Error(), "unknown config key") {
+		t.Fatalf("expected unknown config key error, got: %v", err)
+	}
+}
+
+func TestBindConfigInvalidLogLevelInConfigFile(t *testing.T) {
+	viper.Reset()
+	viper.SetEnvPrefix("ncc")
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+	viper.AutomaticEnv()
+
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "bad-log-level.yaml")
+	content := `clusters: "10.0.1.1"
+username: "admin"
+log-level: "verbose"
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+	viper.Set("config", cfgPath)
+
+	_, err := bindConfig()
+	if err == nil {
+		t.Fatal("bindConfig() expected to fail for invalid log-level in config file")
+	}
+	if !strings.Contains(err.Error(), "invalid log-level") {
+		t.Fatalf("expected invalid log-level error, got: %v", err)
+	}
+}
+
+func TestBindConfigInvalidWebhookHeadersTypeInConfigFile(t *testing.T) {
+	viper.Reset()
+	viper.SetEnvPrefix("ncc")
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+	viper.AutomaticEnv()
+
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "bad-webhook-headers.yaml")
+	content := `clusters: "10.0.1.1"
+username: "admin"
+webhook-headers:
+  Authorization: 42
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+	viper.Set("config", cfgPath)
+
+	_, err := bindConfig()
+	if err == nil {
+		t.Fatal("bindConfig() expected to fail for invalid webhook-headers value type")
+	}
+	if !strings.Contains(err.Error(), "webhook-headers") {
+		t.Fatalf("expected webhook-headers error, got: %v", err)
+	}
+}
+
+func TestBindConfigAllowsGenTestAggInConfigFile(t *testing.T) {
+	viper.Reset()
+	viper.SetEnvPrefix("ncc")
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+	viper.AutomaticEnv()
+
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "gen-test-agg.yaml")
+	content := `clusters: "10.0.1.1"
+username: "admin"
+gen-test-agg: 10
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+	viper.Set("config", cfgPath)
+
+	if _, err := bindConfig(); err != nil {
+		t.Fatalf("bindConfig() expected to accept gen-test-agg key, got: %v", err)
+	}
+}
+
+func TestBindConfigAllowsUpdateInConfigFile(t *testing.T) {
+	viper.Reset()
+	viper.SetEnvPrefix("ncc")
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+	viper.AutomaticEnv()
+
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "update.yaml")
+	content := `clusters: "10.0.1.1"
+username: "admin"
+update: false
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+	viper.Set("config", cfgPath)
+
+	if _, err := bindConfig(); err != nil {
+		t.Fatalf("bindConfig() expected to accept update key, got: %v", err)
+	}
+}
+
 func TestBindConfigMaxParallel(t *testing.T) {
 	tests := []struct {
 		name     string
