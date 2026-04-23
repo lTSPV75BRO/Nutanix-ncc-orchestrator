@@ -8808,27 +8808,6 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				})
 			}
 
-			// Always write final HTML so the report exists even when some or all clusters fail
-			if len(agg) > 0 {
-				if err := writeAggregatedHTMLSingle(fs, cfg.OutputDirFiltered, agg, clusterFiles, cfg); err != nil {
-					log.Error().Err(err).Msg("write aggregated HTML failed")
-					return fmt.Errorf("write aggregated HTML: %w", err)
-				}
-			} else if len(failed) > 0 {
-				if err := writeAllClustersFailedHTML(fs, cfg.OutputDirFiltered, failed); err != nil {
-					log.Error().Err(err).Msg("write all-failed HTML failed (non-fatal)")
-				}
-			}
-			if cfg.SingleReport {
-				src := filepath.Join(cfg.OutputDirFiltered, "index.html")
-				dst := filepath.Join(cfg.OutputDirFiltered, "ncc-report-single.html")
-				if err := copyFile(src, dst); err != nil {
-					log.Error().Err(err).Str("src", src).Str("dst", dst).Msg("single-report copy failed (non-fatal)")
-				} else {
-					log.Info().Str("file", dst).Msg("single-file report generated")
-				}
-			}
-
 			runDuration := time.Since(runStart)
 			indexPath := filepath.Join(cfg.OutputDirFiltered, "index.html")
 			log.Info().
@@ -8918,6 +8897,27 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 			slo := buildSLODashboard(runSummary)
 			if err := writeSLODashboardJSON(fs, cfg.OutputDirFiltered, slo); err != nil {
 				log.Error().Err(err).Msg("write slo-dashboard.json failed (non-fatal)")
+			}
+			// Write index.html after run-summary/artifacts are written, so embedded RUN_SUMMARY
+			// and artifact links in the page always represent the current run.
+			if len(agg) > 0 {
+				if err := writeAggregatedHTMLSingle(fs, cfg.OutputDirFiltered, agg, clusterFiles, cfg); err != nil {
+					log.Error().Err(err).Msg("write aggregated HTML failed")
+					return fmt.Errorf("write aggregated HTML: %w", err)
+				}
+			} else if len(failed) > 0 {
+				if err := writeAllClustersFailedHTML(fs, cfg.OutputDirFiltered, failed); err != nil {
+					log.Error().Err(err).Msg("write all-failed HTML failed (non-fatal)")
+				}
+			}
+			if cfg.SingleReport {
+				src := filepath.Join(cfg.OutputDirFiltered, "index.html")
+				dst := filepath.Join(cfg.OutputDirFiltered, "ncc-report-single.html")
+				if err := copyFile(src, dst); err != nil {
+					log.Error().Err(err).Str("src", src).Str("dst", dst).Msg("single-report copy failed (non-fatal)")
+				} else {
+					log.Info().Str("file", dst).Msg("single-file report generated")
+				}
 			}
 			if cfg.RunHistoryEnabled {
 				if runDir, err := writeRunHistorySnapshot(cfg); err != nil {
