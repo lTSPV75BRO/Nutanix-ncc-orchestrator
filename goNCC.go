@@ -56,7 +56,7 @@ import (
 
 type Config struct {
 	Clusters           []string
-	ClustersFile       string // Optional: cluster file; lines are cluster or cluster,username[,password] (overrides/supplements clusters when set)
+	ClustersFile       string                       // Optional: cluster file; lines are cluster or cluster,username[,password] (overrides/supplements clusters when set)
 	ClusterCredentials map[string]ClusterCredential `mapstructure:"-"`
 	Username           string
 	Password           string
@@ -554,9 +554,10 @@ func applySecretsToConfig(cfg *Config) error {
 
 // readClusterFile reads cluster targets from file.
 // Supported formats per non-comment line:
-//   1) cluster
-//   2) cluster,username
-//   3) cluster,username,password
+//  1. cluster
+//  2. cluster,username
+//  3. cluster,username,password
+//
 // Blank and # lines are ignored.
 func readClusterFile(path string) ([]string, map[string]ClusterCredential, error) {
 	data, err := os.ReadFile(path)
@@ -1332,8 +1333,8 @@ func validateConfigFileRawTypes() error {
 		return nil
 	}
 	allowedTopKeys := map[string]bool{
-		"config": true,
-		"update": true,
+		"config":   true,
+		"update":   true,
 		"clusters": true, "clusters-file": true, "prism-central-url": true, "discover-api-version": true,
 		"username": true, "password": true, "ncc-api-version": true, "nutanix-v4-api-version": true,
 		"insecure-skip-verify": true, "timeout": true, "request-timeout": true, "poll-interval": true, "poll-jitter": true,
@@ -1346,7 +1347,7 @@ func validateConfigFileRawTypes() error {
 		"retry-max-attempts": true, "retry-base-delay": true, "retry-max-delay": true,
 		"prom-dir": true, "severity-filter": true, "dry-run": true, "replay": true,
 		"max-idle-conns": true, "max-idle-conns-per-host": true, "max-conns-per-host": true, "idle-conn-timeout": true,
-		"gen-test-agg": true,
+		"gen-test-agg":  true,
 		"email-enabled": true, "email-attach-html": true, "notify-digest": true,
 		"smtp-server": true, "smtp-port": true, "smtp-user": true, "smtp-password": true,
 		"email-from": true, "email-to": true, "email-use-tls": true,
@@ -2797,12 +2798,12 @@ type SeverityChange struct {
 }
 
 type ClusterDiffSummary struct {
-	Address         string           `json:"address"`
-	NewFailures     []string         `json:"new_failures,omitempty"`
-	ResolvedFailures []string        `json:"resolved_failures,omitempty"`
-	NewChecks       []string         `json:"new_checks,omitempty"`
-	RemovedChecks   []string         `json:"removed_checks,omitempty"`
-	SeverityChanges []SeverityChange `json:"severity_changes,omitempty"`
+	Address          string           `json:"address"`
+	NewFailures      []string         `json:"new_failures,omitempty"`
+	ResolvedFailures []string         `json:"resolved_failures,omitempty"`
+	NewChecks        []string         `json:"new_checks,omitempty"`
+	RemovedChecks    []string         `json:"removed_checks,omitempty"`
+	SeverityChanges  []SeverityChange `json:"severity_changes,omitempty"`
 }
 
 type DrillDownDiffJSON struct {
@@ -2823,11 +2824,11 @@ type FlakyCheckSummary struct {
 }
 
 type FlakyChecksJSON struct {
-	Timestamp         string              `json:"timestamp"`
-	LookbackRuns      int                 `json:"lookback_runs"`
-	MinTransitions    int                 `json:"min_transitions"`
-	TotalFlakyChecks  int                 `json:"total_flaky_checks"`
-	Checks            []FlakyCheckSummary `json:"checks,omitempty"`
+	Timestamp        string              `json:"timestamp"`
+	LookbackRuns     int                 `json:"lookback_runs"`
+	MinTransitions   int                 `json:"min_transitions"`
+	TotalFlakyChecks int                 `json:"total_flaky_checks"`
+	Checks           []FlakyCheckSummary `json:"checks,omitempty"`
 }
 
 type SLOClusterExport struct {
@@ -2843,8 +2844,8 @@ type SLOClusterExport struct {
 }
 
 type SLODashboardJSON struct {
-	Timestamp string           `json:"timestamp"`
-	DurationS float64          `json:"duration_s"`
+	Timestamp string             `json:"timestamp"`
+	DurationS float64            `json:"duration_s"`
 	Clusters  []SLOClusterExport `json:"clusters,omitempty"`
 }
 
@@ -3190,10 +3191,10 @@ func computeDrillDownDiff(previous ChecksSnapshotJSON, hasPrevious bool, current
 
 func computeFlakyChecks(snapshots []ChecksSnapshotJSON, minTransitions int) FlakyChecksJSON {
 	report := FlakyChecksJSON{
-		Timestamp:        time.Now().UTC().Format(time.RFC3339),
-		LookbackRuns:     len(snapshots),
-		MinTransitions:   minTransitions,
-		Checks:           []FlakyCheckSummary{},
+		Timestamp:      time.Now().UTC().Format(time.RFC3339),
+		LookbackRuns:   len(snapshots),
+		MinTransitions: minTransitions,
+		Checks:         []FlakyCheckSummary{},
 	}
 	if len(snapshots) < 2 {
 		return report
@@ -5908,32 +5909,32 @@ function initTooltips() {
 	}
 
 	data := struct {
-		JSON             template.JS
-		ClusterLinksJSON template.JS
-		DiffFlagsJSON    template.JS
-		FlakyKeysJSON    template.JS
+		JSON                 template.JS
+		ClusterLinksJSON     template.JS
+		DiffFlagsJSON        template.JS
+		FlakyKeysJSON        template.JS
 		PolicyViolationsJSON template.JS
-		RunSummaryJSON   template.JS
-		HealthTrendsJSON template.JS
-		ArtifactLinksJSON template.JS
-		ReportMetaJSON   template.JS
-		Clusters         []struct{ Cluster, HTML, CSV string }
-		GeneratedAt      string
-		ClusterName      string
-		ClusterVersion   string
-		NCCVersion       string
+		RunSummaryJSON       template.JS
+		HealthTrendsJSON     template.JS
+		ArtifactLinksJSON    template.JS
+		ReportMetaJSON       template.JS
+		Clusters             []struct{ Cluster, HTML, CSV string }
+		GeneratedAt          string
+		ClusterName          string
+		ClusterVersion       string
+		NCCVersion           string
 	}{
-		JSON:             template.JS(jsonBytes),
-		ClusterLinksJSON: template.JS(clusterLinksJSON),
-		DiffFlagsJSON:    template.JS(diffFlagsJSON),
-		FlakyKeysJSON:    template.JS(flakyKeysJSON),
+		JSON:                 template.JS(jsonBytes),
+		ClusterLinksJSON:     template.JS(clusterLinksJSON),
+		DiffFlagsJSON:        template.JS(diffFlagsJSON),
+		FlakyKeysJSON:        template.JS(flakyKeysJSON),
 		PolicyViolationsJSON: template.JS(policyViolationsJSON),
-		RunSummaryJSON:   template.JS(runSummaryJSON),
-		HealthTrendsJSON: template.JS(healthTrendsJSON),
-		ArtifactLinksJSON: template.JS(artifactLinksJSON),
-		ReportMetaJSON:   template.JS(reportMetaJSON),
-		Clusters:         perCluster,
-		GeneratedAt:      time.Now().Format(time.RFC3339),
+		RunSummaryJSON:       template.JS(runSummaryJSON),
+		HealthTrendsJSON:     template.JS(healthTrendsJSON),
+		ArtifactLinksJSON:    template.JS(artifactLinksJSON),
+		ReportMetaJSON:       template.JS(reportMetaJSON),
+		Clusters:             perCluster,
+		GeneratedAt:          time.Now().Format(time.RFC3339),
 	}
 
 	f, err := fs.Create(path)
@@ -7629,6 +7630,86 @@ func shellQuotePOSIX(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+func validateScheduleTaskName(taskName string) error {
+	name := strings.TrimSpace(taskName)
+	if name == "" {
+		return errors.New("task-name must not be empty")
+	}
+	if len(name) > 128 {
+		return errors.New("task-name too long")
+	}
+	for _, ch := range name {
+		if !(ch == '.' || ch == '_' || ch == '-' || ch == ':' ||
+			(ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')) {
+			return errors.New("task-name contains invalid characters")
+		}
+	}
+	return nil
+}
+
+func sanitizeScheduleCommand(runCmd string) (string, error) {
+	v := strings.TrimSpace(runCmd)
+	if v == "" {
+		return "", errors.New("command cannot be empty")
+	}
+	if strings.ContainsAny(v, "&;|`$><\n\r\t") {
+		return "", errors.New("command contains unsafe shell metacharacters")
+	}
+	return v, nil
+}
+
+func parseCommandLineStrict(raw string) (string, []string, error) {
+	clean, err := sanitizeScheduleCommand(raw)
+	if err != nil {
+		return "", nil, err
+	}
+	parts := []string{}
+	var current strings.Builder
+	var quote rune
+	flush := func() {
+		if current.Len() == 0 {
+			return
+		}
+		parts = append(parts, current.String())
+		current.Reset()
+	}
+	for _, ch := range clean {
+		if quote != 0 {
+			if ch == quote {
+				quote = 0
+				continue
+			}
+			current.WriteRune(ch)
+			continue
+		}
+		if ch == '"' || ch == '\'' {
+			quote = ch
+			continue
+		}
+		if ch == ' ' {
+			flush()
+			continue
+		}
+		current.WriteRune(ch)
+	}
+	if quote != 0 {
+		return "", nil, errors.New("unterminated quotes in command")
+	}
+	flush()
+	if len(parts) == 0 {
+		return "", nil, errors.New("command cannot be empty")
+	}
+	name := strings.TrimSpace(parts[0])
+	if name == "" {
+		return "", nil, errors.New("command executable cannot be empty")
+	}
+	args := make([]string, 0, len(parts)-1)
+	for _, p := range parts[1:] {
+		args = append(args, strings.TrimSpace(p))
+	}
+	return name, args, nil
+}
+
 func scheduleMarker(taskName string) string {
 	name := strings.TrimSpace(taskName)
 	if name == "" {
@@ -7645,14 +7726,14 @@ func defaultScheduleCommand(configPath string) (string, error) {
 	exe = filepath.Clean(exe)
 	if runtime.GOOS == "windows" {
 		if strings.TrimSpace(configPath) == "" {
-			return fmt.Sprintf("cmd /C \"set NCC_SCHEDULER_SOURCE=windows && \\\"%s\\\"\"", exe), nil
+			return fmt.Sprintf("\"%s\"", exe), nil
 		}
-		return fmt.Sprintf("cmd /C \"set NCC_SCHEDULER_SOURCE=windows && \\\"%s\\\" --config \\\"%s\\\"\"", exe, configPath), nil
+		return fmt.Sprintf("\"%s\" --config \"%s\"", exe, configPath), nil
 	}
 	if strings.TrimSpace(configPath) == "" {
-		return fmt.Sprintf("NCC_SCHEDULER_SOURCE=cron %s", shellQuotePOSIX(exe)), nil
+		return fmt.Sprintf("%s", shellQuotePOSIX(exe)), nil
 	}
-	return fmt.Sprintf("NCC_SCHEDULER_SOURCE=cron %s --config %s", shellQuotePOSIX(exe), shellQuotePOSIX(configPath)), nil
+	return fmt.Sprintf("%s --config %s", shellQuotePOSIX(exe), shellQuotePOSIX(configPath)), nil
 }
 
 func upsertScheduleLine(content, marker, line string) string {
@@ -7769,15 +7850,11 @@ func removeWindowsSchedule(taskName string) error {
 }
 
 func runScheduleCommandNow(runCmd string) error {
-	if strings.TrimSpace(runCmd) == "" {
-		return errors.New("command cannot be empty")
+	name, args, err := parseCommandLineStrict(runCmd)
+	if err != nil {
+		return err
 	}
-	var c *exec.Cmd
-	if runtime.GOOS == "windows" {
-		c = exec.Command("cmd", "/C", runCmd)
-	} else {
-		c = exec.Command("/bin/sh", "-lc", runCmd)
-	}
+	c := exec.Command(name, args...)
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	c.Stdin = os.Stdin
@@ -7850,8 +7927,8 @@ func runCreateSchedule(cmd *cobra.Command, args []string) error {
 	}
 
 	taskName, _ := cmd.Flags().GetString("task-name")
-	if strings.TrimSpace(taskName) == "" {
-		return exitConfig(errors.New("task-name must not be empty"))
+	if err := validateScheduleTaskName(taskName); err != nil {
+		return exitConfig(err)
 	}
 	logPath, _ := cmd.Flags().GetString("log-path")
 	if strings.TrimSpace(logPath) == "" {
@@ -7865,6 +7942,10 @@ func runCreateSchedule(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("build schedule command: %w", err)
 		}
+	}
+	runCmd, err = sanitizeScheduleCommand(runCmd)
+	if err != nil {
+		return exitConfig(err)
 	}
 
 	printOnly, _ := cmd.Flags().GetBool("print-only")
@@ -7941,58 +8022,58 @@ func runCreateSchedule(cmd *cobra.Command, args []string) error {
 
 func configJSONSchema() map[string]interface{} {
 	props := map[string]interface{}{
-		"clusters":                map[string]interface{}{"type": "string", "description": "Comma-separated cluster IPs/FQDNs"},
-		"clusters-file":           map[string]interface{}{"type": "string"},
-		"update":                  map[string]interface{}{"type": "boolean"},
-		"username":                map[string]interface{}{"type": "string"},
-		"password":                map[string]interface{}{"type": "string"},
-		"ncc-api-version":         map[string]interface{}{"type": "string", "enum": []string{"v4", "Legacy", "v1"}},
-		"nutanix-v4-api-version":  map[string]interface{}{"type": "string"},
-		"insecure-skip-verify":    map[string]interface{}{"type": "boolean"},
-		"timeout":                 map[string]interface{}{"type": "string"},
-		"request-timeout":         map[string]interface{}{"type": "string"},
-		"poll-interval":           map[string]interface{}{"type": "string"},
-		"poll-jitter":             map[string]interface{}{"type": "string"},
-		"max-parallel":            map[string]interface{}{"type": "integer", "minimum": 1},
-		"outputs":                 map[string]interface{}{"type": "string", "description": "Comma-separated html,csv,json,markdown,sarif"},
-		"output-dir-logs":         map[string]interface{}{"type": "string"},
-		"output-dir-filtered":     map[string]interface{}{"type": "string"},
-		"single-report":           map[string]interface{}{"type": "boolean"},
-		"gen-test-agg":            map[string]interface{}{"type": "integer", "minimum": 0},
-		"severity-filter":         map[string]interface{}{"type": "string"},
-		"dry-run":                 map[string]interface{}{"type": "boolean"},
-		"replay":                  map[string]interface{}{"type": "boolean"},
-		"log-file":                map[string]interface{}{"type": "string"},
-		"log-level":               map[string]interface{}{"type": "string", "enum": []string{"trace", "debug", "info", "warn", "warning", "error", "fatal", "0", "1", "2", "3", "4", "5"}},
-		"log-http":                map[string]interface{}{"type": "boolean"},
-		"retry-max-attempts":      map[string]interface{}{"type": "integer", "minimum": 1},
-		"retry-base-delay":        map[string]interface{}{"type": "string"},
-		"retry-max-delay":         map[string]interface{}{"type": "string"},
-		"prom-dir":                map[string]interface{}{"type": "string"},
-		"run-history":             map[string]interface{}{"type": "boolean"},
-		"run-history-dir":         map[string]interface{}{"type": "string"},
-		"retain-last":             map[string]interface{}{"type": "integer", "minimum": 0},
-		"retain-days":             map[string]interface{}{"type": "integer", "minimum": 0},
-		"notify-on-regression":    map[string]interface{}{"type": "boolean"},
-		"adaptive-parallelism":    map[string]interface{}{"type": "boolean"},
-		"policy-gates":            map[string]interface{}{"type": "string"},
-		"quiet-hours":             map[string]interface{}{"type": "string", "description": "HH:MM-HH:MM local time"},
-		"maintenance-windows":     map[string]interface{}{"type": "string", "description": "comma-separated start/end RFC3339 windows"},
-		"flaky-lookback-runs":     map[string]interface{}{"type": "integer", "minimum": 2},
-		"flaky-min-transitions":   map[string]interface{}{"type": "integer", "minimum": 1},
-		"email-enabled":           map[string]interface{}{"type": "boolean"},
-		"email-attach-html":       map[string]interface{}{"type": "boolean"},
-		"notify-digest":           map[string]interface{}{"type": "boolean"},
-		"smtp-server":             map[string]interface{}{"type": "string"},
-		"smtp-port":               map[string]interface{}{"type": "integer"},
-		"smtp-user":               map[string]interface{}{"type": "string"},
-		"smtp-password":           map[string]interface{}{"type": "string"},
-		"email-from":              map[string]interface{}{"type": "string"},
-		"email-to":                map[string]interface{}{"type": "string"},
-		"email-use-tls":           map[string]interface{}{"type": "boolean"},
-		"webhook-enabled":         map[string]interface{}{"type": "boolean"},
-		"webhook-include-html":    map[string]interface{}{"type": "boolean"},
-		"webhook-url":             map[string]interface{}{"type": "string"},
+		"clusters":               map[string]interface{}{"type": "string", "description": "Comma-separated cluster IPs/FQDNs"},
+		"clusters-file":          map[string]interface{}{"type": "string"},
+		"update":                 map[string]interface{}{"type": "boolean"},
+		"username":               map[string]interface{}{"type": "string"},
+		"password":               map[string]interface{}{"type": "string"},
+		"ncc-api-version":        map[string]interface{}{"type": "string", "enum": []string{"v4", "Legacy", "v1"}},
+		"nutanix-v4-api-version": map[string]interface{}{"type": "string"},
+		"insecure-skip-verify":   map[string]interface{}{"type": "boolean"},
+		"timeout":                map[string]interface{}{"type": "string"},
+		"request-timeout":        map[string]interface{}{"type": "string"},
+		"poll-interval":          map[string]interface{}{"type": "string"},
+		"poll-jitter":            map[string]interface{}{"type": "string"},
+		"max-parallel":           map[string]interface{}{"type": "integer", "minimum": 1},
+		"outputs":                map[string]interface{}{"type": "string", "description": "Comma-separated html,csv,json,markdown,sarif"},
+		"output-dir-logs":        map[string]interface{}{"type": "string"},
+		"output-dir-filtered":    map[string]interface{}{"type": "string"},
+		"single-report":          map[string]interface{}{"type": "boolean"},
+		"gen-test-agg":           map[string]interface{}{"type": "integer", "minimum": 0},
+		"severity-filter":        map[string]interface{}{"type": "string"},
+		"dry-run":                map[string]interface{}{"type": "boolean"},
+		"replay":                 map[string]interface{}{"type": "boolean"},
+		"log-file":               map[string]interface{}{"type": "string"},
+		"log-level":              map[string]interface{}{"type": "string", "enum": []string{"trace", "debug", "info", "warn", "warning", "error", "fatal", "0", "1", "2", "3", "4", "5"}},
+		"log-http":               map[string]interface{}{"type": "boolean"},
+		"retry-max-attempts":     map[string]interface{}{"type": "integer", "minimum": 1},
+		"retry-base-delay":       map[string]interface{}{"type": "string"},
+		"retry-max-delay":        map[string]interface{}{"type": "string"},
+		"prom-dir":               map[string]interface{}{"type": "string"},
+		"run-history":            map[string]interface{}{"type": "boolean"},
+		"run-history-dir":        map[string]interface{}{"type": "string"},
+		"retain-last":            map[string]interface{}{"type": "integer", "minimum": 0},
+		"retain-days":            map[string]interface{}{"type": "integer", "minimum": 0},
+		"notify-on-regression":   map[string]interface{}{"type": "boolean"},
+		"adaptive-parallelism":   map[string]interface{}{"type": "boolean"},
+		"policy-gates":           map[string]interface{}{"type": "string"},
+		"quiet-hours":            map[string]interface{}{"type": "string", "description": "HH:MM-HH:MM local time"},
+		"maintenance-windows":    map[string]interface{}{"type": "string", "description": "comma-separated start/end RFC3339 windows"},
+		"flaky-lookback-runs":    map[string]interface{}{"type": "integer", "minimum": 2},
+		"flaky-min-transitions":  map[string]interface{}{"type": "integer", "minimum": 1},
+		"email-enabled":          map[string]interface{}{"type": "boolean"},
+		"email-attach-html":      map[string]interface{}{"type": "boolean"},
+		"notify-digest":          map[string]interface{}{"type": "boolean"},
+		"smtp-server":            map[string]interface{}{"type": "string"},
+		"smtp-port":              map[string]interface{}{"type": "integer"},
+		"smtp-user":              map[string]interface{}{"type": "string"},
+		"smtp-password":          map[string]interface{}{"type": "string"},
+		"email-from":             map[string]interface{}{"type": "string"},
+		"email-to":               map[string]interface{}{"type": "string"},
+		"email-use-tls":          map[string]interface{}{"type": "boolean"},
+		"webhook-enabled":        map[string]interface{}{"type": "boolean"},
+		"webhook-include-html":   map[string]interface{}{"type": "boolean"},
+		"webhook-url":            map[string]interface{}{"type": "string"},
 		"webhook-headers": map[string]interface{}{
 			"type":                 "object",
 			"additionalProperties": map[string]interface{}{"type": "string"},
@@ -8985,12 +9066,12 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				return fmt.Errorf("operation cancelled: %w", ctx.Err())
 			}
 			policyMetrics := map[string]float64{
-				"new-fails":       float64(drillDownDiff.NewFailCount),
-				"resolved-fails":  float64(drillDownDiff.ResolvedFailCount),
-				"fail-rate":       0,
-				"clusters-failed": float64(len(failed)),
-				"regressions":     0,
-				"flaky-checks":    float64(flaky.TotalFlakyChecks),
+				"new-fails":        float64(drillDownDiff.NewFailCount),
+				"resolved-fails":   float64(drillDownDiff.ResolvedFailCount),
+				"fail-rate":        0,
+				"clusters-failed":  float64(len(failed)),
+				"regressions":      0,
+				"flaky-checks":     float64(flaky.TotalFlakyChecks),
 				"min-health-score": float64(runSummary.MinHealthScore),
 				"avg-health-score": float64(runSummary.AvgHealthScore),
 			}

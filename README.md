@@ -371,6 +371,28 @@ An **MCP server** is provided so AI tools (e.g. Cursor, Claude Desktop) can run 
 - [Prometheus.md](Prometheus.md) — Prometheus/Grafana monitoring using NCC Orchestrator `.prom` output.
 - [k8s/README.md](k8s/README.md) — Full Kubernetes deployment and troubleshooting.
 
+## v2 Security Hardening (API/UI)
+
+For `cmd/ncc-api-server` and `cmd/ncc-ui-server`, strict security defaults are enabled:
+
+- Wildcard CORS is rejected; explicit origin allowlists are required.
+- API auth supports `token`, `session`, and `hybrid` modes (`token` default on API server).
+- Session mode uses short-lived signed bearer tokens from `/api/v1/auth/session`.
+- API token rotation is available at `/api/v1/auth/rotate`.
+- Request payloads are strict JSON (unknown fields rejected, body-size bounded, single JSON object only).
+- Mutating APIs require `Content-Type: application/json`.
+- Triggered command execution is hardened:
+  - `extra_args` are allowlisted
+  - shell metacharacters are rejected
+  - runtime is bounded via `--run-timeout`
+- Sensitive runtime internals are hidden unless `--debug-expose=true`.
+
+Recommended deployment:
+
+- Keep `ncc-api-server` on localhost/private network behind `ncc-ui-server` or a trusted gateway.
+- Terminate TLS on API/UI directly (`--tls-cert-file`, `--tls-key-file`) or at ingress.
+- For backend mTLS from UI proxy, use `--backend-ca-file` and optional backend client cert/key flags on `ncc-ui-server`.
+
 ## License
 MIT License. See [LICENSE](LICENSE) for details.
 

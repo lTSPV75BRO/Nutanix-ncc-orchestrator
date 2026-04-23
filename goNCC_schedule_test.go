@@ -109,3 +109,40 @@ func TestRemoveScheduleLine(t *testing.T) {
 		t.Fatal("expected removed=false for missing marker")
 	}
 }
+
+func TestValidateScheduleTaskName(t *testing.T) {
+	if err := validateScheduleTaskName("ncc-orchestrator:nightly_01"); err != nil {
+		t.Fatalf("expected valid task name, got error: %v", err)
+	}
+	if err := validateScheduleTaskName("bad task name with spaces"); err == nil {
+		t.Fatal("expected invalid task name with spaces")
+	}
+	if err := validateScheduleTaskName(""); err == nil {
+		t.Fatal("expected invalid empty task name")
+	}
+}
+
+func TestSanitizeScheduleCommand(t *testing.T) {
+	if _, err := sanitizeScheduleCommand(`"/usr/local/bin/ncc-orchestrator" --config "/tmp/c.yaml"`); err != nil {
+		t.Fatalf("expected safe command, got error: %v", err)
+	}
+	if _, err := sanitizeScheduleCommand("ncc-orchestrator --config c.yaml; rm -rf /"); err == nil {
+		t.Fatal("expected unsafe command to be rejected")
+	}
+}
+
+func TestParseCommandLineStrict(t *testing.T) {
+	name, args, err := parseCommandLineStrict(`"/usr/local/bin/ncc-orchestrator" --config "/tmp/config path.yaml"`)
+	if err != nil {
+		t.Fatalf("parseCommandLineStrict returned error: %v", err)
+	}
+	if name != "/usr/local/bin/ncc-orchestrator" {
+		t.Fatalf("unexpected executable: %q", name)
+	}
+	if len(args) != 2 || args[0] != "--config" || args[1] != "/tmp/config path.yaml" {
+		t.Fatalf("unexpected args: %#v", args)
+	}
+	if _, _, err := parseCommandLineStrict(`bad "unterminated`); err == nil {
+		t.Fatal("expected unterminated quote error")
+	}
+}
