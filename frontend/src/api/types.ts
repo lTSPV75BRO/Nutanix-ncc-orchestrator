@@ -91,3 +91,52 @@ export type ReportData = {
   report_meta?: Record<string, unknown>;
   ncc_logs?: Array<{ name: string; path: string }>;
 };
+
+export type NotificationEvents = {
+  run_success: boolean;
+  run_failure: boolean;
+  policy_violations: boolean;
+};
+
+export type NotificationSlackConfig = {
+  enabled: boolean;
+  webhook_url: string;
+  channel?: string;
+  username?: string;
+};
+
+export type NotificationWebhookConfig = {
+  enabled: boolean;
+  url: string;
+};
+
+export type NotificationEmailConfig = {
+  enabled: boolean;
+  smtp_host: string;
+  smtp_port: number;
+  username?: string;
+  password?: string;
+  from: string;
+  to: string;
+};
+
+export type NotificationSettings = {
+  enabled: boolean;
+  events: NotificationEvents;
+  slack: NotificationSlackConfig;
+  webhook: NotificationWebhookConfig;
+  email: NotificationEmailConfig;
+  last_delivery?: Record<
+    string,
+    {
+      last_attempt_at?: string;
+      last_success_at?: string;
+      last_event?: string;
+      last_error?: string;
+      success?: boolean;
+      total_success?: number;
+      total_failure?: number;
+    }
+  >;
+  updated_at?: string;
+};

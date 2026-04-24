@@ -7,6 +7,7 @@ import { RunsSection } from "../features/runs/RunsSection";
 import { LogsSection } from "../features/settings/LogsSection";
 import { JsonOutputsSection } from "../features/settings/JsonOutputsSection";
 import { RawOutputsSection } from "../features/settings/RawOutputsSection";
+import { NotificationsSection } from "../features/settings/NotificationsSection";
 import { api } from "../api/client";
 import { useLocalStorageState } from "../hooks/useLocalStorageState";
 
@@ -47,6 +48,7 @@ export function SettingsPage() {
           },
           { key: "config", label: "Config", children: <ConfigSection onError={(e) => setErr(String(e))} /> },
           { key: "schedule", label: "Schedule", children: <ScheduleSection backendConfigPath={backendConfigPath} onError={(e) => setErr(String(e))} /> },
+          { key: "notifications", label: "Notifications", children: <NotificationsSection onError={(e) => setErr(String(e))} /> },
           { key: "runs", label: "Runs", children: <RunsSection backendConfigPath={backendConfigPath} onError={(e) => setErr(String(e))} /> },
           { key: "logs", label: "Logs", children: <LogsSection onError={(e) => setErr(String(e))} /> },
           { key: "json", label: "JSON Outputs", children: <JsonOutputsSection onError={(e) => setErr(String(e))} /> },

@@ -3,6 +3,7 @@ import type {
   ConfigData,
   Envelope,
   HealthData,
+  NotificationSettings,
   ReportData,
   RunActiveData,
   RunnerLogData,
@@ -26,7 +27,16 @@ async function callApi<T>(path: string, init?: RequestInit): Promise<T> {
   }).finally(() => clearTimeout(timer));
   const contentType = (response.headers.get("content-type") || "").toLowerCase();
   if (!contentType.includes("application/json")) {
-    throw new Error(`unexpected response content-type: ${contentType || "unknown"}`);
+    const rawText = await response.text().catch(() => "");
+    throw new Error(
+      [
+        `unexpected response content-type: ${contentType || "unknown"}`,
+        `status: ${response.status} ${response.statusText}`.trim(),
+        rawText ? `body: ${rawText}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
   }
   const payload = (await response.json().catch(() => ({}))) as Envelope<T>;
   if (!response.ok || !payload.success) {
@@ -85,6 +95,17 @@ export const api = {
       body: JSON.stringify({ content }),
     }),
   loadSchedule: () => callApi<ScheduleState>("/api/v1/schedule"),
+  loadNotifications: () => callApi<NotificationSettings>("/api/v1/settings/notifications"),
+  saveNotifications: (payload: NotificationSettings) =>
+    callApi<NotificationSettings>("/api/v1/settings/notifications", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  testNotifications: (payload: { channel?: "all" | "slack" | "webhook" | "email" }) =>
+    callApi<{ channel: string; last_delivery?: NotificationSettings["last_delivery"] }>("/api/v1/settings/notifications/test", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   saveSchedule: (payload: Partial<ScheduleState> & { apply: boolean }) =>
     callApi("/api/v1/schedule", {
       method: "PUT",

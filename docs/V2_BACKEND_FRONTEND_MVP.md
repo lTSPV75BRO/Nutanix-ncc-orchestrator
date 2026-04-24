@@ -24,6 +24,9 @@ Base path: `/api/v1`
 - `POST /auth/rotate` (rotate API token)
 - `GET /settings/config`
 - `PUT /settings/config`
+- `GET /settings/notifications`
+- `PUT /settings/notifications`
+- `POST /settings/notifications/test`
 - `GET /schedule`
 - `PUT /schedule`
 - `GET /runs/summary`
@@ -108,6 +111,14 @@ Open: `http://localhost:8080`
 - `PUT /settings/config` always runs strict validation and then writes config:
   - `ncc-orchestrator validate-config --config <tmp-file>`
 - Schedule API persists state in file-backed `.ncc-api-schedule.json`.
+- Notifications API persists state in file-backed `.ncc-api-notifications.json`.
+- `PUT /settings/notifications` supports optional integrations:
+  - Slack incoming webhook
+  - generic webhook
+  - SMTP email
+- Notification events: run success, run failure, and policy violations (`policy-gates.txt`).
+- Notification responses include per-channel delivery status (`last_delivery`) for Slack/webhook/email.
+- `POST /settings/notifications/test` can send manual channel tests (`all|slack|webhook|email`).
 - `PUT /schedule` supports `apply=true` to invoke:
   - `ncc-orchestrator create-schedule ...`
 - `POST /runs/trigger` starts orchestrator process asynchronously.
