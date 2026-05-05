@@ -2,7 +2,7 @@
 
 Checklist and status for releasing **Nutanix NCC Orchestrator** v1.1.0 to production.
 
-**Date:** 2026-04-21  
+**Date:** 2026-05-05  
 **Version:** 1.1.0
 
 ---
@@ -27,6 +27,7 @@ Checklist and status for releasing **Nutanix NCC Orchestrator** v1.1.0 to produc
 | Item | Status | Notes |
 |------|--------|--------|
 | `go test ./...` | ✅ | Passes for orchestrator and internal packages |
+| `go vet ./...` | ✅ | Passes |
 | `go build ./...` | ✅ | Passes |
 | `go build ./cmd/ncc-mcp-server` | ✅ | Passes |
 | `validate-config --config config.yaml` | ✅ | Strict validation passes with updated keys |
@@ -39,6 +40,7 @@ Checklist and status for releasing **Nutanix NCC Orchestrator** v1.1.0 to produc
 |------|--------|--------|
 | Secret redaction in logs | ✅ | Existing HTTP/header/password redaction retained |
 | Secrets provider support | ✅ | `secret://` refs via `secrets-provider=env|file` and optional `secrets-file` |
+| Secrets file hardening | ✅ | Requires regular non-symlink file, owner-only perms, and bounded size |
 | Strict config validation | ✅ | Unknown keys and type mismatches fail fast |
 | TLS guardrails | ✅ | Existing TLS warnings and validation retained |
 
@@ -56,6 +58,11 @@ Checklist and status for releasing **Nutanix NCC Orchestrator** v1.1.0 to produc
 | SLO export | ✅ | `slo-dashboard.json` added |
 | Quiet hours/windows | ✅ | Notification suppression during planned windows |
 | Run history retention | ✅ | Retention controls retained (`retain-last`, `retain-days`) |
+| Artifact retention | ✅ | New controls (`artifact-retain-days`, `artifact-retain-max-files`) |
+| Retry circuit breaker | ✅ | New `retry-circuit-breaker` fails fast on consecutive retryable failures |
+| Failure classifications | ✅ | `error_class` per cluster + run-level `failure_classes` in `run-summary.json` |
+| Exclusion audit artifact | ✅ | `excluded-alerts.json` with `schema_version` and per-cluster details |
+| Trends API | ✅ | `GET /api/v1/report/trends?limit=N` plus inline trends in report data API |
 
 ---
 
@@ -70,6 +77,7 @@ Checklist and status for releasing **Nutanix NCC Orchestrator** v1.1.0 to produc
 | Root `config.yaml` | ✅ | New options included |
 | K8s ConfigMap embedded config | ✅ | New options included |
 | Dummy config generation | ✅ | New options included in YAML/JSON templates |
+| New validate command | ✅ | `validate-secrets --config <path>` added for safer secret preflight |
 
 ---
 
@@ -106,5 +114,19 @@ Checklist and status for releasing **Nutanix NCC Orchestrator** v1.1.0 to produc
 | Operational reporting and gates | ✅ |
 | Documentation and configs | ✅ |
 | Kubernetes and Helm alignment | ✅ |
+| Edge-case and hardening checks | ✅ |
 
 **Verdict:** v1.1.0 is production-ready for release.
+
+---
+
+## Edge-case checks executed (2026-05-05)
+
+| Scenario | Result | Evidence |
+|------|--------|--------|
+| Retry circuit breaker opens on repeated 5xx/retryable failures | ✅ | Unit test `TestDoWithRetryCircuitBreaker` |
+| Secrets-file with loose perms rejected | ✅ | Unit test `TestValidateSecretsFileHardening` |
+| Alert exclusion match modes (`exact|contains|regex`) | ✅ | Unit test `TestFilterBlocksByTitle` |
+| Invalid exclusion regex rejected | ✅ | Unit test `TestFilterBlocksByTitle` (invalid regex case) |
+| Artifact retention keeps protected files and prunes old files | ✅ | Unit test `TestApplyArtifactRetentionPolicies` |
+| Trend parsing and limit capping | ✅ | API tests `TestCollectTrendPoints`, `TestParseTrendLimit` |

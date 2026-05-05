@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -79,6 +81,109 @@ func TestSplitCSV(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestValidateSecretsFileHardening(t *testing.T) {
+	tmpDir := t.TempDir()
+	okPath := filepath.Join(tmpDir, "secrets.yaml")
+	if err := os.WriteFile(okPath, []byte("password: secret\n"), 0o600); err != nil {
+		t.Fatalf("write secrets file: %v", err)
+	}
+	if err := validateSecretsFileHardening(okPath); err != nil {
+		t.Fatalf("expected secure file to pass, got: %v", err)
+	}
+	loosePath := filepath.Join(tmpDir, "secrets-loose.yaml")
+	if err := os.WriteFile(loosePath, []byte("password: secret\n"), 0o644); err != nil {
+		t.Fatalf("write loose secrets file: %v", err)
+	}
+	if err := validateSecretsFileHardening(loosePath); err == nil {
+		t.Fatal("expected loose permissions to fail hardening check")
+	}
+}
+
+func TestApplyArtifactRetentionPolicies(t *testing.T) {
+	tmpDir := t.TempDir()
+	protected := filepath.Join(tmpDir, "index.html")
+	if err := os.WriteFile(protected, []byte("index"), 0o644); err != nil {
+		t.Fatalf("write protected file: %v", err)
+	}
+	oldFile := filepath.Join(tmpDir, "old.log")
+	if err := os.WriteFile(oldFile, []byte("old"), 0o644); err != nil {
+		t.Fatalf("write old file: %v", err)
+	}
+	newFile := filepath.Join(tmpDir, "new.log")
+	if err := os.WriteFile(newFile, []byte("new"), 0o644); err != nil {
+		t.Fatalf("write new file: %v", err)
+	}
+	now := time.Now()
+	oldTime := now.Add(-72 * time.Hour)
+	if err := os.Chtimes(oldFile, oldTime, oldTime); err != nil {
+		t.Fatalf("chtimes old file: %v", err)
+	}
+	if _, err := applyArtifactRetentionPolicies(tmpDir, 2, 1, now); err != nil {
+		t.Fatalf("applyArtifactRetentionPolicies failed: %v", err)
+	}
+	if _, err := os.Stat(protected); err != nil {
+		t.Fatalf("protected file should remain: %v", err)
+	}
+	if _, err := os.Stat(oldFile); err == nil {
+		t.Fatal("old file should have been deleted by retention")
+	}
+}
+
+func TestClassifyClusterError(t *testing.T) {
+	tests := []struct {
+		msg  string
+		want string
+	}{
+		{"context deadline exceeded", "timeout"},
+		{"start checks failed: get summary failed: HTTP 401", "auth"},
+		{"retry circuit breaker opened after 3 consecutive retryable failures (last HTTP 429)", "rate_limit"},
+		{"parse filtered failed", "parser"},
+		{"dial tcp 10.0.0.1:9440: connect: connection refused", "network"},
+		{"start checks failed: get summary failed: HTTP 500", "api"},
+	}
+	for _, tt := range tests {
+		got := classifyClusterError(errors.New(tt.msg))
+		if got != tt.want {
+			t.Fatalf("classifyClusterError(%q)=%q want %q", tt.msg, got, tt.want)
+		}
+	}
+}
+
+func TestDoWithRetryCircuitBreaker(t *testing.T) {
+	attempts := 0
+	client := &mockHTTPClient{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			attempts++
+			return &http.Response{
+				StatusCode: 503,
+				Body:       io.NopCloser(strings.NewReader("service unavailable")),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+	cfg := Config{
+		RetryMaxAttempts:    6,
+		RetryBaseDelay:      1 * time.Millisecond,
+		RetryMaxDelay:       2 * time.Millisecond,
+		RetryCircuitBreaker: 2,
+		RequestTimeout:      2 * time.Second,
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://example.test", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	_, _, err = doWithRetry(context.Background(), client, req, cfg, "test-op")
+	if err == nil {
+		t.Fatal("expected circuit breaker error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "circuit breaker") {
+		t.Fatalf("expected circuit breaker error, got %v", err)
+	}
+	if attempts != cfg.RetryCircuitBreaker {
+		t.Fatalf("expected %d attempts before breaker, got %d", cfg.RetryCircuitBreaker, attempts)
 	}
 }
 
@@ -313,6 +418,108 @@ func TestFilterBlocksBySeverity(t *testing.T) {
 				}
 				if !found && len(tt.allowed) > 0 {
 					t.Errorf("Block %d has severity %s which is not in allowed list", i, sev)
+				}
+			}
+		})
+	}
+}
+
+func TestFilterBlocksByTitle(t *testing.T) {
+	blocks := []ParsedBlock{
+		{Severity: "FAIL", CheckName: "AOS service health", DetailRaw: "Detail1"},
+		{Severity: "WARN", CheckName: "Disk health", DetailRaw: "Detail2"},
+		{Severity: "INFO", CheckName: "Prism connectivity", DetailRaw: "Detail3"},
+		{Severity: "ERR", CheckName: "AOS service health degraded", DetailRaw: "Detail4"},
+	}
+
+	tests := []struct {
+		name          string
+		excluded      []string
+		mode          string
+		expectedCount int
+		excludedCount int
+		expectTitles  []string
+		wantErr       bool
+	}{
+		{
+			name:          "Exclude single title",
+			excluded:      []string{"AOS service health"},
+			mode:          "exact",
+			expectedCount: 3,
+			excludedCount: 1,
+			expectTitles:  []string{"Disk health", "Prism connectivity", "AOS service health degraded"},
+		},
+		{
+			name:          "Exclude contains mode",
+			excluded:      []string{"service health"},
+			mode:          "contains",
+			expectedCount: 2,
+			excludedCount: 2,
+			expectTitles:  []string{"Disk health", "Prism connectivity"},
+		},
+		{
+			name:          "Exclude regex mode",
+			excluded:      []string{"AOS\\s+service\\s+health.*"},
+			mode:          "regex",
+			expectedCount: 2,
+			excludedCount: 2,
+			expectTitles:  []string{"Disk health", "Prism connectivity"},
+		},
+		{
+			name:          "Exclude multiple titles exact",
+			excluded:      []string{"AOS service health", "Disk health"},
+			mode:          "exact",
+			expectedCount: 2,
+			excludedCount: 2,
+			expectTitles:  []string{"Prism connectivity", "AOS service health degraded"},
+		},
+		{
+			name:          "Exclude with case-insensitive exact match",
+			excluded:      []string{"aos SERVICE health"},
+			mode:          "exact",
+			expectedCount: 3,
+			excludedCount: 1,
+			expectTitles:  []string{"Disk health", "Prism connectivity", "AOS service health degraded"},
+		},
+		{
+			name:          "No exclusions",
+			excluded:      []string{},
+			mode:          "exact",
+			expectedCount: 4,
+			excludedCount: 0,
+			expectTitles:  []string{"AOS service health", "Disk health", "Prism connectivity", "AOS service health degraded"},
+		},
+		{
+			name:          "Invalid regex",
+			excluded:      []string{"[unclosed"},
+			mode:          "regex",
+			expectedCount: 4,
+			excludedCount: 0,
+			wantErr:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, excluded, err := filterBlocksByTitle(blocks, tt.excluded, tt.mode)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error but got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(result) != tt.expectedCount {
+				t.Fatalf("expected %d blocks, got %d", tt.expectedCount, len(result))
+			}
+			if len(excluded) != tt.excludedCount {
+				t.Fatalf("expected %d excluded blocks, got %d", tt.excludedCount, len(excluded))
+			}
+			for i, b := range result {
+				if !contains(tt.expectTitles, b.CheckName) {
+					t.Errorf("row %d has unexpected title %q", i, b.CheckName)
 				}
 			}
 		})
@@ -1349,6 +1556,129 @@ func TestBindConfigSeverityFilter(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBindConfigExcludeAlertTitles(t *testing.T) {
+	tests := []struct {
+		name          string
+		excludes      string
+		expectedCount int
+		expected      []string
+	}{
+		{"Single title", "AOS service health", 1, []string{"AOS service health"}},
+		{"Multiple titles", "AOS service health,Disk health", 2, []string{"AOS service health", "Disk health"}},
+		{"With spaces", "AOS service health, Disk health , Prism connectivity", 3, []string{"AOS service health", "Disk health", "Prism connectivity"}},
+		{"Empty excludes", "", 0, []string{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			viper.Reset()
+			viper.SetEnvPrefix("ncc")
+			viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+			viper.AutomaticEnv()
+
+			if tt.excludes != "" {
+				viper.Set("exclude-alert-titles", tt.excludes)
+			}
+			setMinimalValidConfig()
+
+			cfg, err := bindConfig()
+			if err != nil {
+				t.Fatalf("bindConfig() failed: %v", err)
+			}
+
+			if len(cfg.ExcludeAlertTitles) != tt.expectedCount {
+				t.Errorf("Expected %d excluded titles, got %d", tt.expectedCount, len(cfg.ExcludeAlertTitles))
+			}
+
+			for _, expected := range tt.expected {
+				if !contains(cfg.ExcludeAlertTitles, expected) {
+					t.Errorf("Expected excluded title %q not found in %v", expected, cfg.ExcludeAlertTitles)
+				}
+			}
+		})
+	}
+}
+
+func TestBindConfigExcludeAlertTitlesFileMergeAndMode(t *testing.T) {
+	viper.Reset()
+	viper.SetEnvPrefix("ncc")
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+	viper.AutomaticEnv()
+
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "exclude-titles.txt")
+	content := "# comment line\nAOS service health\nDisk health\n"
+	if err := os.WriteFile(filePath, []byte(content), 0o600); err != nil {
+		t.Fatalf("write exclude titles file: %v", err)
+	}
+
+	viper.Set("exclude-alert-titles", "Prism connectivity,Disk health")
+	viper.Set("exclude-alert-titles-file", filePath)
+	viper.Set("exclude-alert-match-mode", "contains")
+	setMinimalValidConfig()
+
+	cfg, err := bindConfig()
+	if err != nil {
+		t.Fatalf("bindConfig() failed: %v", err)
+	}
+	if cfg.ExcludeAlertMatchMode != "contains" {
+		t.Fatalf("expected contains mode, got %q", cfg.ExcludeAlertMatchMode)
+	}
+	for _, want := range []string{"AOS service health", "Disk health", "Prism connectivity"} {
+		if !contains(cfg.ExcludeAlertTitles, want) {
+			t.Errorf("expected merged title %q in %v", want, cfg.ExcludeAlertTitles)
+		}
+	}
+}
+
+func TestBindConfigExcludeAlertMatchModeInvalid(t *testing.T) {
+	viper.Reset()
+	viper.SetEnvPrefix("ncc")
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+	viper.AutomaticEnv()
+
+	viper.Set("exclude-alert-match-mode", "wildcard")
+	setMinimalValidConfig()
+
+	_, err := bindConfig()
+	if err == nil {
+		t.Fatal("expected bindConfig to fail for invalid exclude-alert-match-mode")
+	}
+	if !strings.Contains(err.Error(), "exclude-alert-match-mode") {
+		t.Fatalf("expected exclude-alert-match-mode error, got: %v", err)
+	}
+}
+
+func TestWriteExcludedAlertsAuditJSONSchemaVersion(t *testing.T) {
+	tmpDir := t.TempDir()
+	perCluster := map[string][]ExcludedAlert{
+		"10.0.0.1": {
+			{
+				Severity:   "FAIL",
+				CheckName:  "AOS service health",
+				Detail:     "detail",
+				MatchMode:  "exact",
+				MatchValue: "AOS service health",
+			},
+		},
+	}
+	if err := writeExcludedAlertsAuditJSON(OSFS{}, tmpDir, "exact", []string{"AOS service health"}, perCluster); err != nil {
+		t.Fatalf("writeExcludedAlertsAuditJSON failed: %v", err)
+	}
+	path := filepath.Join(tmpDir, "excluded-alerts.json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read excluded-alerts.json failed: %v", err)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(b, &payload); err != nil {
+		t.Fatalf("unmarshal excluded-alerts.json failed: %v", err)
+	}
+	if got, _ := payload["schema_version"].(string); got != "1.0" {
+		t.Fatalf("expected schema_version 1.0, got %q", got)
 	}
 }
 

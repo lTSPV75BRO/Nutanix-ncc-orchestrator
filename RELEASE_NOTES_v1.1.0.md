@@ -1,11 +1,18 @@
 # Release notes – v1.1.0
 
-**Date:** 2026-04-21
+**Date:** 2026-05-05
 
 This release focuses on automation quality, regression intelligence, and production operations hardening.
 
 ## Highlights
 
+- **Alert exclusion framework**: added `exclude-alert-titles`, `exclude-alert-titles-file`, and `exclude-alert-match-mode` (`exact|contains|regex`) for report/notification filtering.
+- **Exclusion audit trail**: new `excluded-alerts.json` artifact with `schema_version`, totals, and per-cluster excluded entries.
+- **Secrets hardening**: file-based secrets now enforce hardening checks (regular file, non-symlink, owner-only permissions, size cap).
+- **Retry circuit breaker**: new `retry-circuit-breaker` fails fast after consecutive retryable failures to prevent long noisy retries.
+- **Failure classifications**: run summaries now include per-cluster `error_class` and run-level `failure_classes` aggregation.
+- **Historical trends API**: backend endpoint `GET /api/v1/report/trends?limit=N` and inline `trends` in `GET /api/v1/report/data`.
+- **Artifact retention policies**: new `artifact-retain-days` and `artifact-retain-max-files` cleanups for generated outputs.
 - **Policy gates for CI/CD**: new `policy-gates` can fail runs using explicit thresholds (`new-fails>0`, `fail-rate>2`, `min-health-score<90`, `flaky-checks>0`).
 - **Drill-down diff reports**: new `drilldown-diff.json` shows per-cluster new FAILs, resolved FAILs, new/removed checks, and severity changes versus previous run snapshot.
 - **Flaky check detection**: new `flaky-checks.json` detects check severity oscillation across recent runs (`flaky-lookback-runs`, `flaky-min-transitions`).
@@ -24,6 +31,7 @@ Runs now emit these additional artifacts in `outputfiles/`:
 - `flaky-checks.json`
 - `slo-dashboard.json`
 - `policy-gates.txt` (only when policy violations occur)
+- `excluded-alerts.json`
 
 ## Upgrade notes from v1.0.0
 
@@ -36,8 +44,26 @@ Runs now emit these additional artifacts in `outputfiles/`:
   - `flaky-min-transitions`
   - `secrets-provider`
   - `secrets-file`
+  - `exclude-alert-titles`
+  - `exclude-alert-titles-file`
+  - `exclude-alert-match-mode`
+  - `retry-circuit-breaker`
+  - `artifact-retain-days`
+  - `artifact-retain-max-files`
 - If you use strict config validation in CI (`validate-config`), ensure custom keys are removed or migrated.
 - If using secret references (`secret://...`), configure `secrets-provider` first.
+
+## Production verification snapshot (2026-05-05)
+
+- `go test ./...` passed
+- `go vet ./...` passed
+- `go build ./...` passed
+- Edge-case coverage added for:
+  - retry circuit breaker trip behavior
+  - secrets-file hardening failures
+  - alert exclusion match mode behavior (`exact|contains|regex`) and invalid regex handling
+  - trend endpoint data collection and limit capping
+  - artifact retention policy behavior and protected artifact preservation
 
 ## Artifacts and deployment
 

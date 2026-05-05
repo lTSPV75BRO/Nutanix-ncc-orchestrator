@@ -73,7 +73,10 @@ type Config struct {
 	LogFile            string
 
 	// Filtering
-	SeverityFilter []string // Only include these severities (FAIL, WARN, ERR, INFO)
+	SeverityFilter         []string // Only include these severities (FAIL, WARN, ERR, INFO)
+	ExcludeAlertTitles     []string // Exclude findings whose alert title matches one of these values
+	ExcludeAlertTitlesFile string   // Optional file with one alert title per line to exclude
+	ExcludeAlertMatchMode  string   // exact (default), contains, regex
 
 	// Logging options
 	LogLevel string // 0..5 or names
@@ -87,6 +90,8 @@ type Config struct {
 	RunHistoryDir            string
 	RetainLastRuns           int
 	RetainDays               int
+	ArtifactRetainDays       int
+	ArtifactRetainMaxFiles   int
 	SingleReport             bool
 	NotifyOnRegression       bool
 	AdaptiveParallelism      bool
@@ -98,9 +103,10 @@ type Config struct {
 	FlakyMinTransitions      int
 
 	// Retry tuning
-	RetryMaxAttempts int
-	RetryBaseDelay   time.Duration
-	RetryMaxDelay    time.Duration
+	RetryMaxAttempts    int
+	RetryBaseDelay      time.Duration
+	RetryMaxDelay       time.Duration
+	RetryCircuitBreaker int // Fail fast after N consecutive retryable failures
 
 	// HTTP connection pooling
 	MaxIdleConns        int           // Max idle connections per host
@@ -224,13 +230,18 @@ run-history: false                        # Save each run snapshot under run-his
 run-history-dir: "outputfiles/runs"       # History base directory
 retain-last: 0                            # Keep last N snapshots (0 = unlimited)
 retain-days: 0                            # Keep snapshots newer than N days (0 = unlimited)
+artifact-retain-days: 0                   # Remove generated artifacts older than N days (0 = unlimited)
+artifact-retain-max-files: 0              # Keep only N newest generated artifacts (0 = unlimited)
 notify-on-regression: false               # Notify only when FAIL count increases
 adaptive-parallelism: true                # Reduce/increase effective concurrency on 429s
-policy-gates: ""                          # e.g. new-fails>0,fail-rate>2,min-health-score<90,flaky-checks>0
+policy-gates: ""                          # e.g. new-fails>0,fail-rate>2,min-health-score<90,flaky-checks>0,timeout-clusters>0,auth-failures>0
 quiet-hours: ""                           # Local HH:MM-HH:MM notification quiet window
 maintenance-windows: ""                   # RFC3339 windows start/end[,start/end...]
 flaky-lookback-runs: 6                    # Runs to inspect for flaky checks
 flaky-min-transitions: 2                  # Minimum severity transitions to mark flaky
+exclude-alert-titles: ""                  # Comma-separated NCC alert titles to exclude from final reports/HTML
+exclude-alert-titles-file: ""             # Optional file with one alert title per line
+exclude-alert-match-mode: "exact"         # exact (default), contains, regex
 
 # Logging
 log-file: "logs/ncc-runner.log"           # Rotated JSON logs path  
@@ -241,6 +252,7 @@ log-http: false                           # Set true only for debugging; logs re
 retry-max-attempts: 6                     # Max attempts per request  
 retry-base-delay: "400ms"                 # Base backoff delay  
 retry-max-delay: "8s"                     # Max jittered backoff delay  
+retry-circuit-breaker: 3                  # Fail fast after N consecutive retryable failures
 
 # Email notifications
 email-enabled: false
@@ -287,19 +299,22 @@ Disclaimer:
 
 const (
 	// Default values
-	defaultTimeout           = 15 * time.Minute
-	defaultRequestTimeout    = 20 * time.Second
-	defaultPollInterval      = 15 * time.Second
-	defaultPollJitter        = 2 * time.Second
-	defaultMaxParallel       = 4
-	defaultRetryAttempts     = 6
-	defaultRetryBaseDelay    = 400 * time.Millisecond
-	defaultRetryMaxDelay     = 8 * time.Second
-	defaultOutputDirLogs     = "nccfiles"
-	defaultOutputDirFiltered = "outputfiles"
-	defaultPromDir           = "promfiles"
-	defaultLogFile           = "logs/ncc-runner.log"
-	defaultOutputFormat      = "html"
+	defaultTimeout             = 15 * time.Minute
+	defaultRequestTimeout      = 20 * time.Second
+	defaultPollInterval        = 15 * time.Second
+	defaultPollJitter          = 2 * time.Second
+	defaultMaxParallel         = 4
+	defaultRetryAttempts       = 6
+	defaultRetryBaseDelay      = 400 * time.Millisecond
+	defaultRetryMaxDelay       = 8 * time.Second
+	defaultRetryCircuitBreaker = 3
+	defaultOutputDirLogs       = "nccfiles"
+	defaultOutputDirFiltered   = "outputfiles"
+	defaultPromDir             = "promfiles"
+	defaultLogFile             = "logs/ncc-runner.log"
+	defaultOutputFormat        = "html"
+	defaultExcludeMatchMode    = "exact"
+	maxSecretsFileBytes        = 1 << 20 // 1 MiB
 
 	// HTTP connection pooling defaults
 	defaultMaxIdleConns        = 100
@@ -362,6 +377,46 @@ func splitCSVTrimLower(s string) []string {
 	out := make([]string, 0, len(in))
 	for _, v := range in {
 		out = append(out, strings.ToLower(strings.TrimSpace(v)))
+	}
+	return out
+}
+
+func loadExcludeAlertTitlesFromFile(path string) ([]string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(string(b), "\n")
+	out := make([]string, 0, len(lines))
+	for _, ln := range lines {
+		v := strings.TrimSpace(ln)
+		if v == "" || strings.HasPrefix(v, "#") {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+func mergeUniqueStrings(items ...[]string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0)
+	for _, arr := range items {
+		for _, raw := range arr {
+			v := strings.TrimSpace(raw)
+			if v == "" {
+				continue
+			}
+			k := strings.ToLower(v)
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			out = append(out, v)
+		}
 	}
 	return out
 }
@@ -452,9 +507,32 @@ func notificationsSuppressedNow(cfg Config, now time.Time) (bool, string) {
 	return false, ""
 }
 
+func validateSecretsFileHardening(path string) error {
+	st, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if st.Mode()&os.ModeSymlink != 0 {
+		return errors.New("secrets-file must not be a symlink")
+	}
+	if !st.Mode().IsRegular() {
+		return errors.New("secrets-file must be a regular file")
+	}
+	if st.Size() > maxSecretsFileBytes {
+		return fmt.Errorf("secrets-file exceeds max size (%d bytes)", maxSecretsFileBytes)
+	}
+	if st.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("secrets-file permissions are too open (%#o); expected owner-only (e.g. 0600)", st.Mode().Perm())
+	}
+	return nil
+}
+
 func loadSecretMapFile(path string) (map[string]string, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, errors.New("secrets-file is required for provider=file")
+	}
+	if err := validateSecretsFileHardening(path); err != nil {
+		return nil, fmt.Errorf("secrets-file hardening check failed: %w", err)
 	}
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -822,6 +900,19 @@ func validateNutanixV4APIVersion(s string) error {
 	return nil
 }
 
+func normalizeExcludeAlertMatchMode(s string) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(s))
+	if mode == "" {
+		return defaultExcludeMatchMode, nil
+	}
+	switch mode {
+	case "exact", "contains", "regex":
+		return mode, nil
+	default:
+		return "", fmt.Errorf("exclude-alert-match-mode must be one of exact, contains, regex")
+	}
+}
+
 // validateConfig performs comprehensive configuration validation
 func validateConfig(cfg Config) error {
 	// Validate clusters
@@ -839,6 +930,21 @@ func validateConfig(cfg Config) error {
 	}
 	if err := validateNutanixV4APIVersion(cfg.NutanixV4APIVersion); err != nil {
 		return fmt.Errorf("nutanix-v4-api-version: %w", err)
+	}
+	mode, err := normalizeExcludeAlertMatchMode(cfg.ExcludeAlertMatchMode)
+	if err != nil {
+		return err
+	}
+	if mode == "regex" {
+		for _, pattern := range cfg.ExcludeAlertTitles {
+			p := strings.TrimSpace(pattern)
+			if p == "" {
+				continue
+			}
+			if _, err := regexp.Compile(p); err != nil {
+				return fmt.Errorf("exclude-alert-titles regex %q: %w", p, err)
+			}
+		}
 	}
 
 	// Validate timeouts
@@ -934,6 +1040,12 @@ func validateConfig(cfg Config) error {
 	if cfg.RetainDays < 0 {
 		return errors.New("retain-days must be >= 0")
 	}
+	if cfg.ArtifactRetainDays < 0 {
+		return errors.New("artifact-retain-days must be >= 0")
+	}
+	if cfg.ArtifactRetainMaxFiles < 0 {
+		return errors.New("artifact-retain-max-files must be >= 0")
+	}
 	if cfg.RunHistoryEnabled && strings.TrimSpace(cfg.RunHistoryDir) == "" {
 		return errors.New("run-history-dir cannot be empty when run-history is enabled")
 	}
@@ -989,6 +1101,12 @@ func validateConfig(cfg Config) error {
 	if cfg.RetryBaseDelay > cfg.RetryMaxDelay {
 		return errors.New("retry-base-delay cannot be greater than retry-max-delay")
 	}
+	if cfg.RetryCircuitBreaker < 0 {
+		return errors.New("retry-circuit-breaker must be >= 0")
+	}
+	if cfg.RetryCircuitBreaker > 0 && cfg.RetryCircuitBreaker > cfg.RetryMaxAttempts {
+		return errors.New("retry-circuit-breaker cannot exceed retry-max-attempts")
+	}
 
 	// Security warning for insecure skip verify
 	if cfg.InsecureSkipVerify {
@@ -1041,13 +1159,18 @@ run-history: false                        # Save each run snapshot under run-his
 run-history-dir: "outputfiles/runs"       # History base directory
 retain-last: 0                            # Keep last N snapshots (0 = unlimited)
 retain-days: 0                            # Keep snapshots newer than N days (0 = unlimited)
+artifact-retain-days: 0                   # Remove generated artifacts older than N days (0 = unlimited)
+artifact-retain-max-files: 0              # Keep only N newest generated artifacts (0 = unlimited)
 notify-on-regression: false               # Notify only when FAIL count increases
 adaptive-parallelism: true                # Reduce/increase effective concurrency on 429s
-policy-gates: ""                          # e.g. new-fails>0,fail-rate>2,min-health-score<90,flaky-checks>0
+policy-gates: ""                          # e.g. new-fails>0,fail-rate>2,min-health-score<90,flaky-checks>0,timeout-clusters>0,auth-failures>0
 quiet-hours: ""                           # Local HH:MM-HH:MM notification quiet window
 maintenance-windows: ""                   # RFC3339 windows start/end[,start/end...]
 flaky-lookback-runs: 6                    # Runs to inspect for flaky checks
 flaky-min-transitions: 2                  # Minimum severity transitions to mark flaky
+exclude-alert-titles: ""                  # Comma-separated NCC alert titles to exclude from final reports/HTML
+exclude-alert-titles-file: ""             # Optional file with one alert title per line
+exclude-alert-match-mode: "exact"         # exact (default), contains, regex
 
 # Logging
 log-file: "logs/ncc-runner.log"           # Rotated JSON logs path  
@@ -1058,6 +1181,7 @@ log-http: false                           # Set true only for debugging; logs re
 retry-max-attempts: 6                     # Max attempts per request  
 retry-base-delay: "400ms"                 # Base backoff delay  
 retry-max-delay: "8s"                     # Max jittered backoff delay  
+retry-circuit-breaker: 3                  # Fail fast after N consecutive retryable failures
 
 # Email notifications
 email-enabled: false
@@ -1108,6 +1232,8 @@ secrets-file: ""                          # YAML/JSON key-value map when secrets
   "run-history-dir": "outputfiles/runs",
   "retain-last": 0,
   "retain-days": 0,
+  "artifact-retain-days": 0,
+  "artifact-retain-max-files": 0,
   "notify-on-regression": false,
   "adaptive-parallelism": true,
   "policy-gates": "",
@@ -1115,12 +1241,16 @@ secrets-file: ""                          # YAML/JSON key-value map when secrets
   "maintenance-windows": "",
   "flaky-lookback-runs": 6,
   "flaky-min-transitions": 2,
+  "exclude-alert-titles": "",
+  "exclude-alert-titles-file": "",
+  "exclude-alert-match-mode": "exact",
   "log-file": "logs/ncc-runner.log",
   "log-level": "2",
   "log-http": false,
   "retry-max-attempts": 6,
   "retry-base-delay": "400ms",
   "retry-max-delay": "8s",
+  "retry-circuit-breaker": 3,
   "email-enabled": false,
   "email-attach-html": false,
   "notify-digest": false,
@@ -1184,6 +1314,7 @@ log-http: false                           # Set true only for debugging; logs re
 retry-max-attempts: 6                     # Max attempts per request  
 retry-base-delay: "400ms"                 # Base backoff delay  
 retry-max-delay: "8s"                     # Max jittered backoff delay  
+retry-circuit-breaker: 3                  # Fail fast after N consecutive retryable failures
 
 # Email notifications
 email-enabled: false
@@ -1339,13 +1470,13 @@ func validateConfigFileRawTypes() error {
 		"username": true, "password": true, "ncc-api-version": true, "nutanix-v4-api-version": true,
 		"insecure-skip-verify": true, "timeout": true, "request-timeout": true, "poll-interval": true, "poll-jitter": true,
 		"max-parallel": true, "outputs": true, "output-dir-logs": true, "output-dir-filtered": true,
-		"single-report": true, "run-history": true, "run-history-dir": true, "retain-last": true, "retain-days": true,
+		"single-report": true, "run-history": true, "run-history-dir": true, "retain-last": true, "retain-days": true, "artifact-retain-days": true, "artifact-retain-max-files": true,
 		"notify-on-regression": true, "adaptive-parallelism": true,
 		"policy-gates": true, "quiet-hours": true, "maintenance-windows": true,
 		"flaky-lookback-runs": true, "flaky-min-transitions": true,
 		"log-file": true, "log-level": true, "log-http": true,
-		"retry-max-attempts": true, "retry-base-delay": true, "retry-max-delay": true,
-		"prom-dir": true, "severity-filter": true, "dry-run": true, "replay": true,
+		"retry-max-attempts": true, "retry-base-delay": true, "retry-max-delay": true, "retry-circuit-breaker": true,
+		"prom-dir": true, "severity-filter": true, "exclude-alert-titles": true, "exclude-alert-titles-file": true, "exclude-alert-match-mode": true, "dry-run": true, "replay": true,
 		"max-idle-conns": true, "max-idle-conns-per-host": true, "max-conns-per-host": true, "idle-conn-timeout": true,
 		"gen-test-agg":  true,
 		"email-enabled": true, "email-attach-html": true, "notify-digest": true,
@@ -1372,7 +1503,7 @@ func validateConfigFileRawTypes() error {
 		"timeout", "request-timeout", "poll-interval", "poll-jitter",
 		"outputs", "output-dir-logs", "output-dir-filtered", "run-history-dir",
 		"log-file", "log-level", "retry-base-delay", "retry-max-delay", "prom-dir",
-		"severity-filter", "idle-conn-timeout", "policy-gates", "quiet-hours", "maintenance-windows",
+		"severity-filter", "exclude-alert-titles", "exclude-alert-titles-file", "exclude-alert-match-mode", "idle-conn-timeout", "policy-gates", "quiet-hours", "maintenance-windows",
 		"smtp-server", "smtp-user", "smtp-password", "email-from", "email-to",
 		"webhook-url", "slack-webhook-url", "slack-channel", "secrets-provider", "secrets-file",
 	}
@@ -1401,8 +1532,8 @@ func validateConfigFileRawTypes() error {
 		}
 	}
 	intKeys := []string{
-		"max-parallel", "retry-max-attempts", "max-idle-conns", "max-idle-conns-per-host",
-		"max-conns-per-host", "smtp-port", "retain-last", "retain-days", "gen-test-agg",
+		"max-parallel", "retry-max-attempts", "retry-circuit-breaker", "max-idle-conns", "max-idle-conns-per-host",
+		"max-conns-per-host", "smtp-port", "retain-last", "retain-days", "artifact-retain-days", "artifact-retain-max-files", "gen-test-agg",
 		"flaky-lookback-runs", "flaky-min-transitions",
 	}
 	for _, key := range intKeys {
@@ -1487,66 +1618,72 @@ func bindConfig() (Config, error) {
 		return Config{}, fmt.Errorf("ncc-api-version: %w", err)
 	}
 	cfg := Config{
-		Clusters:            clustersFromFlag,
-		ClustersFile:        clustersFile,
-		ClusterCredentials:  clusterCreds,
-		Username:            viper.GetString("username"),
-		Password:            viper.GetString("password"),
-		InsecureSkipVerify:  viper.GetBool("insecure-skip-verify"),
-		Timeout:             mustParseDur(viper.GetString("timeout"), defaultTimeout),
-		RequestTimeout:      mustParseDur(viper.GetString("request-timeout"), defaultRequestTimeout),
-		PollInterval:        mustParseDur(viper.GetString("poll-interval"), defaultPollInterval),
-		PollJitter:          mustParseDur(viper.GetString("poll-jitter"), defaultPollJitter),
-		OutputDirLogs:       viper.GetString("output-dir-logs"),
-		OutputDirFiltered:   viper.GetString("output-dir-filtered"),
-		OutputFormats:       splitCSV(viper.GetString("outputs")),
-		MaxParallel:         viper.GetInt("max-parallel"),
-		TLSMinVersion:       tls.VersionTLS12,
-		LogFile:             viper.GetString("log-file"),
-		LogLevel:            viper.GetString("log-level"),
-		LogHTTP:             viper.GetBool("log-http"),
-		RetryMaxAttempts:    viper.GetInt("retry-max-attempts"),
-		RetryBaseDelay:      mustParseDur(viper.GetString("retry-base-delay"), defaultRetryBaseDelay),
-		RetryMaxDelay:       mustParseDur(viper.GetString("retry-max-delay"), defaultRetryMaxDelay),
-		MaxIdleConns:        viper.GetInt("max-idle-conns"),
-		MaxIdleConnsPerHost: viper.GetInt("max-idle-conns-per-host"),
-		MaxConnsPerHost:     viper.GetInt("max-conns-per-host"),
-		IdleConnTimeout:     mustParseDur(viper.GetString("idle-conn-timeout"), defaultIdleConnTimeout),
-		EmailEnabled:        viper.GetBool("email-enabled"),
-		EmailAttachHTML:     viper.GetBool("email-attach-html"),
-		NotifyDigest:        viper.GetBool("notify-digest"),
-		SMTPServer:          viper.GetString("smtp-server"),
-		SMTPPort:            viper.GetInt("smtp-port"),
-		SMTPUser:            viper.GetString("smtp-user"),
-		SMTPPassword:        viper.GetString("smtp-password"),
-		EmailFrom:           viper.GetString("email-from"),
-		EmailTo:             splitCSV(viper.GetString("email-to")),
-		EmailUseTLS:         viper.GetBool("email-use-tls"),
-		WebhookEnabled:      viper.GetBool("webhook-enabled"),
-		WebhookIncludeHTML:  viper.GetBool("webhook-include-html"),
-		WebhookURL:          viper.GetString("webhook-url"),
-		WebhookHeaders:      viper.GetStringMapString("webhook-headers"),
-		SeverityFilter:      splitCSV(viper.GetString("severity-filter")),
-		DryRun:              viper.GetBool("dry-run"),
-		RunHistoryEnabled:   viper.GetBool("run-history"),
-		RunHistoryDir:       strings.TrimSpace(viper.GetString("run-history-dir")),
-		RetainLastRuns:      viper.GetInt("retain-last"),
-		RetainDays:          viper.GetInt("retain-days"),
-		SingleReport:        viper.GetBool("single-report"),
-		NotifyOnRegression:  viper.GetBool("notify-on-regression"),
-		AdaptiveParallelism: viper.GetBool("adaptive-parallelism"),
-		PolicyGates:         splitCSV(viper.GetString("policy-gates")),
-		QuietHours:          strings.TrimSpace(viper.GetString("quiet-hours")),
-		MaintenanceWindows:  splitCSV(viper.GetString("maintenance-windows")),
-		FlakyLookbackRuns:   viper.GetInt("flaky-lookback-runs"),
-		FlakyMinTransitions: viper.GetInt("flaky-min-transitions"),
-		SlackEnabled:        viper.GetBool("slack-enabled"),
-		SlackWebhookURL:     viper.GetString("slack-webhook-url"),
-		SlackChannel:        viper.GetString("slack-channel"),
-		SecretsProvider:     strings.TrimSpace(viper.GetString("secrets-provider")),
-		SecretsFile:         strings.TrimSpace(viper.GetString("secrets-file")),
-		NCCAPIVersion:       nccAPIVer,
-		NutanixV4APIVersion: strings.ToLower(strings.TrimSpace(viper.GetString("nutanix-v4-api-version"))),
+		Clusters:               clustersFromFlag,
+		ClustersFile:           clustersFile,
+		ClusterCredentials:     clusterCreds,
+		Username:               viper.GetString("username"),
+		Password:               viper.GetString("password"),
+		InsecureSkipVerify:     viper.GetBool("insecure-skip-verify"),
+		Timeout:                mustParseDur(viper.GetString("timeout"), defaultTimeout),
+		RequestTimeout:         mustParseDur(viper.GetString("request-timeout"), defaultRequestTimeout),
+		PollInterval:           mustParseDur(viper.GetString("poll-interval"), defaultPollInterval),
+		PollJitter:             mustParseDur(viper.GetString("poll-jitter"), defaultPollJitter),
+		OutputDirLogs:          viper.GetString("output-dir-logs"),
+		OutputDirFiltered:      viper.GetString("output-dir-filtered"),
+		OutputFormats:          splitCSV(viper.GetString("outputs")),
+		MaxParallel:            viper.GetInt("max-parallel"),
+		TLSMinVersion:          tls.VersionTLS12,
+		LogFile:                viper.GetString("log-file"),
+		LogLevel:               viper.GetString("log-level"),
+		LogHTTP:                viper.GetBool("log-http"),
+		RetryMaxAttempts:       viper.GetInt("retry-max-attempts"),
+		RetryBaseDelay:         mustParseDur(viper.GetString("retry-base-delay"), defaultRetryBaseDelay),
+		RetryMaxDelay:          mustParseDur(viper.GetString("retry-max-delay"), defaultRetryMaxDelay),
+		RetryCircuitBreaker:    viper.GetInt("retry-circuit-breaker"),
+		MaxIdleConns:           viper.GetInt("max-idle-conns"),
+		MaxIdleConnsPerHost:    viper.GetInt("max-idle-conns-per-host"),
+		MaxConnsPerHost:        viper.GetInt("max-conns-per-host"),
+		IdleConnTimeout:        mustParseDur(viper.GetString("idle-conn-timeout"), defaultIdleConnTimeout),
+		EmailEnabled:           viper.GetBool("email-enabled"),
+		EmailAttachHTML:        viper.GetBool("email-attach-html"),
+		NotifyDigest:           viper.GetBool("notify-digest"),
+		SMTPServer:             viper.GetString("smtp-server"),
+		SMTPPort:               viper.GetInt("smtp-port"),
+		SMTPUser:               viper.GetString("smtp-user"),
+		SMTPPassword:           viper.GetString("smtp-password"),
+		EmailFrom:              viper.GetString("email-from"),
+		EmailTo:                splitCSV(viper.GetString("email-to")),
+		EmailUseTLS:            viper.GetBool("email-use-tls"),
+		WebhookEnabled:         viper.GetBool("webhook-enabled"),
+		WebhookIncludeHTML:     viper.GetBool("webhook-include-html"),
+		WebhookURL:             viper.GetString("webhook-url"),
+		WebhookHeaders:         viper.GetStringMapString("webhook-headers"),
+		SeverityFilter:         splitCSV(viper.GetString("severity-filter")),
+		ExcludeAlertTitles:     splitCSV(viper.GetString("exclude-alert-titles")),
+		ExcludeAlertTitlesFile: strings.TrimSpace(viper.GetString("exclude-alert-titles-file")),
+		ExcludeAlertMatchMode:  strings.TrimSpace(viper.GetString("exclude-alert-match-mode")),
+		DryRun:                 viper.GetBool("dry-run"),
+		RunHistoryEnabled:      viper.GetBool("run-history"),
+		RunHistoryDir:          strings.TrimSpace(viper.GetString("run-history-dir")),
+		RetainLastRuns:         viper.GetInt("retain-last"),
+		RetainDays:             viper.GetInt("retain-days"),
+		ArtifactRetainDays:     viper.GetInt("artifact-retain-days"),
+		ArtifactRetainMaxFiles: viper.GetInt("artifact-retain-max-files"),
+		SingleReport:           viper.GetBool("single-report"),
+		NotifyOnRegression:     viper.GetBool("notify-on-regression"),
+		AdaptiveParallelism:    viper.GetBool("adaptive-parallelism"),
+		PolicyGates:            splitCSV(viper.GetString("policy-gates")),
+		QuietHours:             strings.TrimSpace(viper.GetString("quiet-hours")),
+		MaintenanceWindows:     splitCSV(viper.GetString("maintenance-windows")),
+		FlakyLookbackRuns:      viper.GetInt("flaky-lookback-runs"),
+		FlakyMinTransitions:    viper.GetInt("flaky-min-transitions"),
+		SlackEnabled:           viper.GetBool("slack-enabled"),
+		SlackWebhookURL:        viper.GetString("slack-webhook-url"),
+		SlackChannel:           viper.GetString("slack-channel"),
+		SecretsProvider:        strings.TrimSpace(viper.GetString("secrets-provider")),
+		SecretsFile:            strings.TrimSpace(viper.GetString("secrets-file")),
+		NCCAPIVersion:          nccAPIVer,
+		NutanixV4APIVersion:    strings.ToLower(strings.TrimSpace(viper.GetString("nutanix-v4-api-version"))),
 	}
 	// Apply defaults
 	if cfg.NutanixV4APIVersion == "" {
@@ -1571,6 +1708,21 @@ func bindConfig() (Config, error) {
 	if cfg.PromDir == "" {
 		cfg.PromDir = defaultPromDir
 	}
+	if cfg.ExcludeAlertMatchMode == "" {
+		cfg.ExcludeAlertMatchMode = defaultExcludeMatchMode
+	}
+	if cfg.ExcludeAlertTitlesFile != "" {
+		fileTitles, err := loadExcludeAlertTitlesFromFile(cfg.ExcludeAlertTitlesFile)
+		if err != nil {
+			return cfg, fmt.Errorf("exclude-alert-titles-file: %w", err)
+		}
+		cfg.ExcludeAlertTitles = mergeUniqueStrings(cfg.ExcludeAlertTitles, fileTitles)
+	}
+	mode, err := normalizeExcludeAlertMatchMode(cfg.ExcludeAlertMatchMode)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.ExcludeAlertMatchMode = mode
 	if cfg.RunHistoryDir == "" {
 		cfg.RunHistoryDir = filepath.Join(cfg.OutputDirFiltered, "runs")
 	}
@@ -1588,6 +1740,9 @@ func bindConfig() (Config, error) {
 	}
 	if cfg.RetryMaxDelay <= 0 {
 		cfg.RetryMaxDelay = defaultRetryMaxDelay
+	}
+	if cfg.RetryCircuitBreaker <= 0 {
+		cfg.RetryCircuitBreaker = defaultRetryCircuitBreaker
 	}
 	if err := applySecretsToConfig(&cfg); err != nil {
 		return cfg, fmt.Errorf("secret resolution failed: %w", err)
@@ -2755,6 +2910,7 @@ type RunSummaryJSON struct {
 	TotalChecks    int                 `json:"total_checks,omitempty"`
 	AvgHealthScore int                 `json:"avg_health_score,omitempty"`
 	MinHealthScore int                 `json:"min_health_score,omitempty"`
+	FailureClasses map[string]int      `json:"failure_classes,omitempty"`
 }
 
 // RunClusterSummary is per-cluster stats for automation (run-summary.json).
@@ -2762,6 +2918,7 @@ type RunClusterSummary struct {
 	Address     string `json:"address"`
 	OK          bool   `json:"ok"`
 	Error       string `json:"error,omitempty"`
+	ErrorClass  string `json:"error_class,omitempty"`
 	FailCount   int    `json:"fail_count,omitempty"`
 	WarnCount   int    `json:"warn_count,omitempty"`
 	ErrCount    int    `json:"err_count,omitempty"`
@@ -3036,6 +3193,51 @@ func writeFlakyChecksJSON(fs FS, outDir string, flaky FlakyChecksJSON) error {
 func writeSLODashboardJSON(fs FS, outDir string, slo SLODashboardJSON) error {
 	path := filepath.Join(outDir, "slo-dashboard.json")
 	data, err := json.MarshalIndent(slo, "", "  ")
+	if err != nil {
+		return err
+	}
+	return fs.WriteFile(path, data, 0644)
+}
+
+type ExcludedAlertsClusterAudit struct {
+	Cluster       string          `json:"cluster"`
+	ExcludedCount int             `json:"excluded_count"`
+	Alerts        []ExcludedAlert `json:"alerts,omitempty"`
+}
+
+type ExcludedAlertsAudit struct {
+	SchemaVersion      string                       `json:"schema_version"`
+	Timestamp          string                       `json:"timestamp"`
+	MatchMode          string                       `json:"match_mode"`
+	ExcludeAlertTitles []string                     `json:"exclude_alert_titles"`
+	TotalExcluded      int                          `json:"total_excluded"`
+	Clusters           []ExcludedAlertsClusterAudit `json:"clusters"`
+}
+
+func writeExcludedAlertsAuditJSON(fs FS, outDir string, matchMode string, titles []string, perCluster map[string][]ExcludedAlert) error {
+	path := filepath.Join(outDir, "excluded-alerts.json")
+	clusters := make([]ExcludedAlertsClusterAudit, 0, len(perCluster))
+	total := 0
+	for cluster, alerts := range perCluster {
+		cp := make([]ExcludedAlert, len(alerts))
+		copy(cp, alerts)
+		clusters = append(clusters, ExcludedAlertsClusterAudit{
+			Cluster:       cluster,
+			ExcludedCount: len(cp),
+			Alerts:        cp,
+		})
+		total += len(cp)
+	}
+	sort.Slice(clusters, func(i, j int) bool { return clusters[i].Cluster < clusters[j].Cluster })
+	payload := ExcludedAlertsAudit{
+		SchemaVersion:      "1.0",
+		Timestamp:          time.Now().UTC().Format(time.RFC3339),
+		MatchMode:          matchMode,
+		ExcludeAlertTitles: append([]string{}, titles...),
+		TotalExcluded:      total,
+		Clusters:           clusters,
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -3458,6 +3660,76 @@ func applyRunHistoryRetention(historyDir string, retainLast, retainDays int, now
 	return nil
 }
 
+func applyArtifactRetentionPolicies(outputDir string, retainDays, retainMaxFiles int, now time.Time) (int, error) {
+	if retainDays <= 0 && retainMaxFiles <= 0 {
+		return 0, nil
+	}
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	protected := map[string]bool{
+		"index.html":              true,
+		"ncc-report-single.html":  true,
+		"run-summary.json":        true,
+		"ncc-run-record.json":     true,
+		"regression-summary.json": true,
+		"checks-snapshot.json":    true,
+		"drilldown-diff.json":     true,
+		"flaky-checks.json":       true,
+		"slo-dashboard.json":      true,
+		"policy-gates.txt":        true,
+		"excluded-alerts.json":    true,
+	}
+	type item struct {
+		name string
+		path string
+		mod  time.Time
+	}
+	files := make([]item, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if protected[name] || name == ".ncc-writecheck" {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, item{
+			name: name,
+			path: filepath.Join(outputDir, name),
+			mod:  info.ModTime(),
+		})
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].mod.After(files[j].mod) })
+	deleted := 0
+	retainDuration := time.Duration(retainDays) * 24 * time.Hour
+	for i, f := range files {
+		remove := false
+		if retainDays > 0 && now.Sub(f.mod) >= retainDuration {
+			remove = true
+		}
+		if retainMaxFiles > 0 && i >= retainMaxFiles {
+			remove = true
+		}
+		if !remove {
+			continue
+		}
+		if err := os.Remove(f.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return deleted, err
+		}
+		deleted++
+	}
+	return deleted, nil
+}
+
 func writeRunHistorySnapshot(cfg Config) (string, error) {
 	ts := runHistoryTimestamp(time.Now())
 	runDir := filepath.Join(cfg.RunHistoryDir, ts)
@@ -3492,10 +3764,38 @@ func writeRunHistorySnapshot(cfg Config) (string, error) {
 	return runDir, nil
 }
 
+func classifyClusterError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	switch {
+	case strings.Contains(msg, "context deadline exceeded"), strings.Contains(msg, "timed out"), strings.Contains(msg, "timeout"):
+		return "timeout"
+	case strings.Contains(msg, "http 401"), strings.Contains(msg, "http 403"), strings.Contains(msg, "unauthorized"), strings.Contains(msg, "forbidden"), strings.Contains(msg, "authentication"):
+		return "auth"
+	case strings.Contains(msg, "retry circuit breaker opened"), strings.Contains(msg, "http 429"), strings.Contains(msg, "rate limit"):
+		return "rate_limit"
+	case strings.Contains(msg, "parse filtered"), strings.Contains(msg, "parse summary"), strings.Contains(msg, "parser"):
+		return "parser"
+	case strings.Contains(msg, "transport error"), strings.Contains(msg, "connection refused"), strings.Contains(msg, "no such host"), strings.Contains(msg, "dial tcp"), strings.Contains(msg, "tls"):
+		return "network"
+	case strings.Contains(msg, "http 4"), strings.Contains(msg, "http 5"), strings.Contains(msg, "start checks failed"), strings.Contains(msg, "get summary failed"), strings.Contains(msg, "poll failed"):
+		return "api"
+	default:
+		return "unknown"
+	}
+}
+
 func buildRunClusterSummary(r ClusterResult) RunClusterSummary {
 	s := RunClusterSummary{Address: r.Cluster, OK: r.Err == nil}
 	if r.Err != nil {
 		s.Error = r.Err.Error()
+		if strings.TrimSpace(r.ErrorClass) != "" {
+			s.ErrorClass = r.ErrorClass
+		} else {
+			s.ErrorClass = classifyClusterError(r.Err)
+		}
 		return s
 	}
 	counts := map[string]int{"FAIL": 0, "WARN": 0, "ERR": 0, "INFO": 0}
@@ -3517,6 +3817,32 @@ func buildRunClusterSummary(r ClusterResult) RunClusterSummary {
 	s.ChecksTotal = len(r.Blocks)
 	s.HealthScore = clusterHealthScore(s.FailCount, s.WarnCount, s.ErrCount, s.ChecksTotal)
 	return s
+}
+
+func failureClassCounts(results []ClusterResult) map[string]int {
+	counts := map[string]int{
+		"timeout":    0,
+		"auth":       0,
+		"network":    0,
+		"api":        0,
+		"parser":     0,
+		"rate_limit": 0,
+		"unknown":    0,
+	}
+	for _, r := range results {
+		if r.Err == nil {
+			continue
+		}
+		class := strings.TrimSpace(r.ErrorClass)
+		if class == "" {
+			class = classifyClusterError(r.Err)
+		}
+		if _, ok := counts[class]; !ok {
+			class = "unknown"
+		}
+		counts[class]++
+	}
+	return counts
 }
 
 func generateJSON(fs FS, blocks []ParsedBlock, filename string, meta HTMLMeta) error {
@@ -3673,6 +3999,86 @@ func filterBlocksBySeverity(blocks []ParsedBlock, allowedSeverities []string) []
 		}
 	}
 	return filtered
+}
+
+type ExcludedAlert struct {
+	Severity   string `json:"severity"`
+	CheckName  string `json:"check_name"`
+	Detail     string `json:"detail,omitempty"`
+	MatchMode  string `json:"match_mode"`
+	MatchValue string `json:"match_value"`
+}
+
+func filterBlocksByTitle(blocks []ParsedBlock, excludedTitles []string, matchMode string) ([]ParsedBlock, []ExcludedAlert, error) {
+	if len(excludedTitles) == 0 {
+		return blocks, nil, nil
+	}
+	mode, err := normalizeExcludeAlertMatchMode(matchMode)
+	if err != nil {
+		return blocks, nil, err
+	}
+	cleanedTitles := make([]string, 0, len(excludedTitles))
+	for _, title := range excludedTitles {
+		t := strings.TrimSpace(title)
+		if t == "" {
+			continue
+		}
+		cleanedTitles = append(cleanedTitles, t)
+	}
+	if len(cleanedTitles) == 0 {
+		return blocks, nil, nil
+	}
+	regexPatterns := make([]*regexp.Regexp, 0, len(cleanedTitles))
+	if mode == "regex" {
+		for _, pattern := range cleanedTitles {
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				return blocks, nil, fmt.Errorf("exclude-alert-titles regex %q: %w", pattern, err)
+			}
+			regexPatterns = append(regexPatterns, re)
+		}
+	}
+	match := func(checkName string) (bool, string) {
+		checkLower := strings.ToLower(strings.TrimSpace(checkName))
+		switch mode {
+		case "exact":
+			for _, title := range cleanedTitles {
+				if checkLower == strings.ToLower(title) {
+					return true, title
+				}
+			}
+		case "contains":
+			for _, title := range cleanedTitles {
+				if strings.Contains(checkLower, strings.ToLower(title)) {
+					return true, title
+				}
+			}
+		case "regex":
+			for i, re := range regexPatterns {
+				if re.MatchString(checkName) {
+					return true, cleanedTitles[i]
+				}
+			}
+		}
+		return false, ""
+	}
+
+	filtered := make([]ParsedBlock, 0, len(blocks))
+	excluded := make([]ExcludedAlert, 0)
+	for _, b := range blocks {
+		if ok, matchedBy := match(b.CheckName); ok {
+			excluded = append(excluded, ExcludedAlert{
+				Severity:   b.Severity,
+				CheckName:  b.CheckName,
+				Detail:     b.DetailRaw,
+				MatchMode:  mode,
+				MatchValue: matchedBy,
+			})
+			continue
+		}
+		filtered = append(filtered, b)
+	}
+	return filtered, excluded, nil
 }
 
 func rowsFromBlocks(blocks []ParsedBlock) []Row {
@@ -5957,9 +6363,14 @@ func doWithRetry(ctx context.Context, client HTTPClient, req *http.Request, cfg 
 	if attempts < 1 {
 		attempts = 1
 	}
+	breaker := cfg.RetryCircuitBreaker
+	if breaker <= 0 {
+		breaker = defaultRetryCircuitBreaker
+	}
 	var lastErr error
 	var resp *http.Response
 	var body []byte
+	consecutiveRetryableFailures := 0
 
 	// Snapshot original body if present
 	var origBody []byte
@@ -5984,9 +6395,13 @@ func doWithRetry(ctx context.Context, client HTTPClient, req *http.Request, cfg 
 
 		resp, lastErr = client.Do(reqClone)
 		if lastErr != nil {
+			consecutiveRetryableFailures++
 			cancel()
 			if ctx.Err() != nil {
 				return nil, nil, ctx.Err()
+			}
+			if consecutiveRetryableFailures >= breaker {
+				return nil, nil, fmt.Errorf("%s retry circuit breaker opened after %d consecutive transport failures: %w", op, consecutiveRetryableFailures, lastErr)
 			}
 			if attempt < attempts {
 				back := jitteredBackoff(cfg.RetryBaseDelay, cfg.RetryMaxDelay, attempt)
@@ -6013,6 +6428,10 @@ func doWithRetry(ctx context.Context, client HTTPClient, req *http.Request, cfg 
 			}
 		}()
 		if lastErr != nil {
+			consecutiveRetryableFailures++
+			if consecutiveRetryableFailures >= breaker {
+				return resp, nil, fmt.Errorf("%s retry circuit breaker opened after %d consecutive body read failures: %w", op, consecutiveRetryableFailures, lastErr)
+			}
 			if attempt < attempts {
 				back := jitteredBackoff(cfg.RetryBaseDelay, cfg.RetryMaxDelay, attempt)
 				log.Warn().Str("op", op).Int("attempt", attempt).Err(lastErr).Dur("backoff", back).Msg("read body failed, retrying")
@@ -6028,6 +6447,7 @@ func doWithRetry(ctx context.Context, client HTTPClient, req *http.Request, cfg 
 
 		status := resp.StatusCode
 		if status >= 200 && status < 300 {
+			consecutiveRetryableFailures = 0
 			noteHTTPStatusForAdaptiveParallelism(status, cfg)
 			log.Debug().Str("op", op).Int("status", status).Msg("request succeeded")
 			return resp, body, nil
@@ -6050,6 +6470,10 @@ func doWithRetry(ctx context.Context, client HTTPClient, req *http.Request, cfg 
 		}
 
 		if retryable && attempt < attempts {
+			consecutiveRetryableFailures++
+			if consecutiveRetryableFailures >= breaker {
+				return resp, body, fmt.Errorf("%s retry circuit breaker opened after %d consecutive retryable failures (last HTTP %d)", op, consecutiveRetryableFailures, status)
+			}
 			log.Warn().Str("op", op).Int("attempt", attempt).Int("status", status).Dur("backoff", back).Msg("retryable status, retrying")
 			select {
 			case <-ctx.Done():
@@ -6564,7 +6988,7 @@ func runClusterWithBars(
 	password string,
 	onPct func(int),
 	setPhase func(string),
-) ([]ParsedBlock, error) {
+) (ClusterRunOutput, error) {
 	l := log.With().Str("cluster", cluster).Logger()
 	client := NewNCCClient(cluster, username, password, httpc, cfg)
 	var clusterStart = time.Now()
@@ -6573,7 +6997,7 @@ func runClusterWithBars(
 	taskID, body, err := client.StartChecks(ctx)
 	if err != nil {
 		l.Error().Err(err).RawJSON("response_body", body).Msg("start checks failed")
-		return nil, fmt.Errorf("start checks failed: %w", err)
+		return ClusterRunOutput{}, fmt.Errorf("start checks failed: %w", err)
 	}
 	l.Info().Str("taskID", taskID).Msg("ncc task started")
 	onPct(1)
@@ -6584,7 +7008,7 @@ func runClusterWithBars(
 		select {
 		case <-ctx.Done():
 			l.Warn().Err(ctx.Err()).Msg("context cancelled during polling, stopping gracefully")
-			return nil, fmt.Errorf("operation cancelled: %w", ctx.Err())
+			return ClusterRunOutput{}, fmt.Errorf("operation cancelled: %w", ctx.Err())
 		case <-time.After(cfg.PollInterval + time.Duration(rand.Int63n(int64(cfg.PollJitter)))):
 			if dl, ok := ctx.Deadline(); ok {
 				rem := time.Until(dl)
@@ -6595,7 +7019,7 @@ func runClusterWithBars(
 			status, body, err := client.GetTask(ctx, taskID)
 			if err != nil {
 				l.Error().Err(err).RawJSON("response_body", body).Msg("poll failed")
-				return nil, fmt.Errorf("poll failed: %w", err)
+				return ClusterRunOutput{}, fmt.Errorf("poll failed: %w", err)
 			}
 			pct := status.PercentageComplete
 			if pct < last {
@@ -6609,7 +7033,7 @@ func runClusterWithBars(
 			last = pct
 
 			if status.ProgressStatus == "Failed" {
-				return nil, fmt.Errorf("ncc task failed")
+				return ClusterRunOutput{}, fmt.Errorf("ncc task failed")
 			}
 			if pct >= 100 {
 				goto SUMMARY
@@ -6622,14 +7046,14 @@ SUMMARY:
 	summary, body, err := client.GetRunSummary(ctx, taskID)
 	if err != nil {
 		l.Error().Err(err).RawJSON("response_body", body).Msg("get summary failed")
-		return nil, fmt.Errorf("get summary failed: %w", err)
+		return ClusterRunOutput{}, fmt.Errorf("get summary failed: %w", err)
 	}
 
 	setPhase("writing")
 	logPath, err := writeSummary(fs, cfg.OutputDirLogs, cluster, summary.RunSummary)
 	if err != nil {
 		l.Error().Err(err).Msg("write summary failed")
-		return nil, err
+		return ClusterRunOutput{}, err
 	}
 	l.Info().Str("logPath", logPath).Msg("summary written")
 
@@ -6638,7 +7062,7 @@ SUMMARY:
 	blocks, err := filterBlocksToFile(fs, logPath, filteredPath)
 	if err != nil {
 		l.Error().Err(err).Msg("filter blocks failed")
-		return nil, err
+		return ClusterRunOutput{}, err
 	}
 	l.Info().Str("filteredPath", filteredPath).Msg("filtered written")
 
@@ -6647,6 +7071,23 @@ SUMMARY:
 		originalCount := len(blocks)
 		blocks = filterBlocksBySeverity(blocks, cfg.SeverityFilter)
 		l.Info().Int("original", originalCount).Int("filtered", len(blocks)).Strs("severities", cfg.SeverityFilter).Msg("applied severity filter")
+	}
+	excludedByTitle := make([]ExcludedAlert, 0)
+	if len(cfg.ExcludeAlertTitles) > 0 {
+		originalCount := len(blocks)
+		filteredBlocks, excludedAlerts, err := filterBlocksByTitle(blocks, cfg.ExcludeAlertTitles, cfg.ExcludeAlertMatchMode)
+		if err != nil {
+			return ClusterRunOutput{}, err
+		}
+		blocks = filteredBlocks
+		excludedByTitle = excludedAlerts
+		l.Info().
+			Int("original", originalCount).
+			Int("filtered", len(blocks)).
+			Int("excluded", len(excludedByTitle)).
+			Str("mode", cfg.ExcludeAlertMatchMode).
+			Strs("titles", cfg.ExcludeAlertTitles).
+			Msg("applied alert title exclusion filter")
 	}
 
 	counts := map[string]int{"FAIL": 0, "WARN": 0, "ERR": 0, "INFO": 0}
@@ -6675,7 +7116,7 @@ SUMMARY:
 			rows := rowsFromBlocks(blocks)
 			if err := generateHTML(fs, rows, htmlFile, meta); err != nil {
 				l.Error().Err(err).Str("file", htmlFile).Msg("write HTML failed")
-				return nil, err
+				return ClusterRunOutput{}, err
 			}
 			l.Info().Str("file", htmlFile).Msg("HTML generated")
 			htmlPathForNotify = htmlFile
@@ -6683,7 +7124,7 @@ SUMMARY:
 			csvFile := base + ".csv"
 			if err := generateCSV(fs, blocks, csvFile); err != nil {
 				l.Error().Err(err).Str("file", csvFile).Msg("write CSV failed")
-				return nil, err
+				return ClusterRunOutput{}, err
 			}
 			l.Info().Str("file", csvFile).Msg("CSV generated")
 		case "json":
@@ -6692,7 +7133,7 @@ SUMMARY:
 			meta, _ := parseNCCHeader(rawPath) // ignore error if file missing
 			if err := generateJSON(fs, blocks, jsonFile, meta); err != nil {
 				l.Error().Err(err).Str("file", jsonFile).Msg("write JSON failed")
-				return nil, err
+				return ClusterRunOutput{}, err
 			}
 			l.Info().Str("file", jsonFile).Msg("JSON generated")
 		case "markdown":
@@ -6701,14 +7142,14 @@ SUMMARY:
 			meta, _ := parseNCCHeader(rawPath)
 			if err := generateMarkdown(fs, blocks, mdFile, meta); err != nil {
 				l.Error().Err(err).Str("file", mdFile).Msg("write Markdown failed")
-				return nil, err
+				return ClusterRunOutput{}, err
 			}
 			l.Info().Str("file", mdFile).Msg("Markdown generated")
 		case "sarif":
 			sarifFile := base + ".sarif"
 			if err := generateSARIF(fs, blocks, sarifFile); err != nil {
 				l.Error().Err(err).Str("file", sarifFile).Msg("write SARIF failed")
-				return nil, err
+				return ClusterRunOutput{}, err
 			}
 			l.Info().Str("file", sarifFile).Msg("SARIF generated")
 		default:
@@ -6750,7 +7191,7 @@ SUMMARY:
 		if suppressed, reason := notificationsSuppressedNow(cfg, time.Now()); suppressed {
 			l.Info().Str("reason", reason).Msg("notifications suppressed by quiet-hours/maintenance-window")
 			setPhase("done")
-			return blocks, nil
+			return ClusterRunOutput{Blocks: blocks, ExcludedByTitle: excludedByTitle}, nil
 		}
 		if cfg.NotifyOnRegression {
 			prevFail := cfg.PreviousClusterFailCount[cluster]
@@ -6760,7 +7201,7 @@ SUMMARY:
 					Int("previous_fail", prevFail).
 					Msg("notify-on-regression enabled: skipping non-regression cluster notification")
 				setPhase("done")
-				return blocks, nil
+				return ClusterRunOutput{Blocks: blocks, ExcludedByTitle: excludedByTitle}, nil
 			}
 		}
 		if err := sendEmailWithRetry(cfg, subj, bodyEmail, htmlPathForNotify); err != nil {
@@ -6776,15 +7217,25 @@ SUMMARY:
 	}
 
 	setPhase("done")
-	return blocks, nil
+	if len(excludedByTitle) > 0 {
+		l.Info().Int("excluded_alerts", len(excludedByTitle)).Msg("alerts excluded by title filters")
+	}
+	return ClusterRunOutput{Blocks: blocks, ExcludedByTitle: excludedByTitle}, nil
 }
 
 // ==================== CLI ====================
 
 type ClusterResult struct {
-	Cluster string
-	Blocks  []ParsedBlock
-	Err     error
+	Cluster         string
+	Blocks          []ParsedBlock
+	ExcludedByTitle []ExcludedAlert
+	Err             error
+	ErrorClass      string
+}
+
+type ClusterRunOutput struct {
+	Blocks          []ParsedBlock
+	ExcludedByTitle []ExcludedAlert
 }
 
 type proxyDecorator struct{ text string }
@@ -8022,58 +8473,64 @@ func runCreateSchedule(cmd *cobra.Command, args []string) error {
 
 func configJSONSchema() map[string]interface{} {
 	props := map[string]interface{}{
-		"clusters":               map[string]interface{}{"type": "string", "description": "Comma-separated cluster IPs/FQDNs"},
-		"clusters-file":          map[string]interface{}{"type": "string"},
-		"update":                 map[string]interface{}{"type": "boolean"},
-		"username":               map[string]interface{}{"type": "string"},
-		"password":               map[string]interface{}{"type": "string"},
-		"ncc-api-version":        map[string]interface{}{"type": "string", "enum": []string{"v4", "Legacy", "v1"}},
-		"nutanix-v4-api-version": map[string]interface{}{"type": "string"},
-		"insecure-skip-verify":   map[string]interface{}{"type": "boolean"},
-		"timeout":                map[string]interface{}{"type": "string"},
-		"request-timeout":        map[string]interface{}{"type": "string"},
-		"poll-interval":          map[string]interface{}{"type": "string"},
-		"poll-jitter":            map[string]interface{}{"type": "string"},
-		"max-parallel":           map[string]interface{}{"type": "integer", "minimum": 1},
-		"outputs":                map[string]interface{}{"type": "string", "description": "Comma-separated html,csv,json,markdown,sarif"},
-		"output-dir-logs":        map[string]interface{}{"type": "string"},
-		"output-dir-filtered":    map[string]interface{}{"type": "string"},
-		"single-report":          map[string]interface{}{"type": "boolean"},
-		"gen-test-agg":           map[string]interface{}{"type": "integer", "minimum": 0},
-		"severity-filter":        map[string]interface{}{"type": "string"},
-		"dry-run":                map[string]interface{}{"type": "boolean"},
-		"replay":                 map[string]interface{}{"type": "boolean"},
-		"log-file":               map[string]interface{}{"type": "string"},
-		"log-level":              map[string]interface{}{"type": "string", "enum": []string{"trace", "debug", "info", "warn", "warning", "error", "fatal", "0", "1", "2", "3", "4", "5"}},
-		"log-http":               map[string]interface{}{"type": "boolean"},
-		"retry-max-attempts":     map[string]interface{}{"type": "integer", "minimum": 1},
-		"retry-base-delay":       map[string]interface{}{"type": "string"},
-		"retry-max-delay":        map[string]interface{}{"type": "string"},
-		"prom-dir":               map[string]interface{}{"type": "string"},
-		"run-history":            map[string]interface{}{"type": "boolean"},
-		"run-history-dir":        map[string]interface{}{"type": "string"},
-		"retain-last":            map[string]interface{}{"type": "integer", "minimum": 0},
-		"retain-days":            map[string]interface{}{"type": "integer", "minimum": 0},
-		"notify-on-regression":   map[string]interface{}{"type": "boolean"},
-		"adaptive-parallelism":   map[string]interface{}{"type": "boolean"},
-		"policy-gates":           map[string]interface{}{"type": "string"},
-		"quiet-hours":            map[string]interface{}{"type": "string", "description": "HH:MM-HH:MM local time"},
-		"maintenance-windows":    map[string]interface{}{"type": "string", "description": "comma-separated start/end RFC3339 windows"},
-		"flaky-lookback-runs":    map[string]interface{}{"type": "integer", "minimum": 2},
-		"flaky-min-transitions":  map[string]interface{}{"type": "integer", "minimum": 1},
-		"email-enabled":          map[string]interface{}{"type": "boolean"},
-		"email-attach-html":      map[string]interface{}{"type": "boolean"},
-		"notify-digest":          map[string]interface{}{"type": "boolean"},
-		"smtp-server":            map[string]interface{}{"type": "string"},
-		"smtp-port":              map[string]interface{}{"type": "integer"},
-		"smtp-user":              map[string]interface{}{"type": "string"},
-		"smtp-password":          map[string]interface{}{"type": "string"},
-		"email-from":             map[string]interface{}{"type": "string"},
-		"email-to":               map[string]interface{}{"type": "string"},
-		"email-use-tls":          map[string]interface{}{"type": "boolean"},
-		"webhook-enabled":        map[string]interface{}{"type": "boolean"},
-		"webhook-include-html":   map[string]interface{}{"type": "boolean"},
-		"webhook-url":            map[string]interface{}{"type": "string"},
+		"clusters":                  map[string]interface{}{"type": "string", "description": "Comma-separated cluster IPs/FQDNs"},
+		"clusters-file":             map[string]interface{}{"type": "string"},
+		"update":                    map[string]interface{}{"type": "boolean"},
+		"username":                  map[string]interface{}{"type": "string"},
+		"password":                  map[string]interface{}{"type": "string"},
+		"ncc-api-version":           map[string]interface{}{"type": "string", "enum": []string{"v4", "Legacy", "v1"}},
+		"nutanix-v4-api-version":    map[string]interface{}{"type": "string"},
+		"insecure-skip-verify":      map[string]interface{}{"type": "boolean"},
+		"timeout":                   map[string]interface{}{"type": "string"},
+		"request-timeout":           map[string]interface{}{"type": "string"},
+		"poll-interval":             map[string]interface{}{"type": "string"},
+		"poll-jitter":               map[string]interface{}{"type": "string"},
+		"max-parallel":              map[string]interface{}{"type": "integer", "minimum": 1},
+		"outputs":                   map[string]interface{}{"type": "string", "description": "Comma-separated html,csv,json,markdown,sarif"},
+		"output-dir-logs":           map[string]interface{}{"type": "string"},
+		"output-dir-filtered":       map[string]interface{}{"type": "string"},
+		"single-report":             map[string]interface{}{"type": "boolean"},
+		"gen-test-agg":              map[string]interface{}{"type": "integer", "minimum": 0},
+		"severity-filter":           map[string]interface{}{"type": "string"},
+		"exclude-alert-titles":      map[string]interface{}{"type": "string"},
+		"exclude-alert-titles-file": map[string]interface{}{"type": "string"},
+		"exclude-alert-match-mode":  map[string]interface{}{"type": "string", "enum": []string{"exact", "contains", "regex"}},
+		"dry-run":                   map[string]interface{}{"type": "boolean"},
+		"replay":                    map[string]interface{}{"type": "boolean"},
+		"log-file":                  map[string]interface{}{"type": "string"},
+		"log-level":                 map[string]interface{}{"type": "string", "enum": []string{"trace", "debug", "info", "warn", "warning", "error", "fatal", "0", "1", "2", "3", "4", "5"}},
+		"log-http":                  map[string]interface{}{"type": "boolean"},
+		"retry-max-attempts":        map[string]interface{}{"type": "integer", "minimum": 1},
+		"retry-base-delay":          map[string]interface{}{"type": "string"},
+		"retry-max-delay":           map[string]interface{}{"type": "string"},
+		"retry-circuit-breaker":     map[string]interface{}{"type": "integer", "minimum": 1},
+		"prom-dir":                  map[string]interface{}{"type": "string"},
+		"run-history":               map[string]interface{}{"type": "boolean"},
+		"run-history-dir":           map[string]interface{}{"type": "string"},
+		"retain-last":               map[string]interface{}{"type": "integer", "minimum": 0},
+		"retain-days":               map[string]interface{}{"type": "integer", "minimum": 0},
+		"artifact-retain-days":      map[string]interface{}{"type": "integer", "minimum": 0},
+		"artifact-retain-max-files": map[string]interface{}{"type": "integer", "minimum": 0},
+		"notify-on-regression":      map[string]interface{}{"type": "boolean"},
+		"adaptive-parallelism":      map[string]interface{}{"type": "boolean"},
+		"policy-gates":              map[string]interface{}{"type": "string"},
+		"quiet-hours":               map[string]interface{}{"type": "string", "description": "HH:MM-HH:MM local time"},
+		"maintenance-windows":       map[string]interface{}{"type": "string", "description": "comma-separated start/end RFC3339 windows"},
+		"flaky-lookback-runs":       map[string]interface{}{"type": "integer", "minimum": 2},
+		"flaky-min-transitions":     map[string]interface{}{"type": "integer", "minimum": 1},
+		"email-enabled":             map[string]interface{}{"type": "boolean"},
+		"email-attach-html":         map[string]interface{}{"type": "boolean"},
+		"notify-digest":             map[string]interface{}{"type": "boolean"},
+		"smtp-server":               map[string]interface{}{"type": "string"},
+		"smtp-port":                 map[string]interface{}{"type": "integer"},
+		"smtp-user":                 map[string]interface{}{"type": "string"},
+		"smtp-password":             map[string]interface{}{"type": "string"},
+		"email-from":                map[string]interface{}{"type": "string"},
+		"email-to":                  map[string]interface{}{"type": "string"},
+		"email-use-tls":             map[string]interface{}{"type": "boolean"},
+		"webhook-enabled":           map[string]interface{}{"type": "boolean"},
+		"webhook-include-html":      map[string]interface{}{"type": "boolean"},
+		"webhook-url":               map[string]interface{}{"type": "string"},
 		"webhook-headers": map[string]interface{}{
 			"type":                 "object",
 			"additionalProperties": map[string]interface{}{"type": "string"},
@@ -8132,6 +8589,33 @@ func runValidateConfigCommand(cmd *cobra.Command, args []string) error {
 		return exitConfig(fmt.Errorf("validation: %w", err))
 	}
 	fmt.Printf("Config is valid: %s\n", cfgPath)
+	return nil
+}
+
+func runValidateSecretsCommand(cmd *cobra.Command, args []string) error {
+	cfgPath, _ := cmd.Flags().GetString("config")
+	if strings.TrimSpace(cfgPath) == "" {
+		return exitConfig(errors.New("--config is required"))
+	}
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return exitConfig(fmt.Errorf("config path %s: %w", cfgPath, err))
+	}
+	secretRefs := strings.Count(string(raw), "secret://")
+	viper.Set("config", cfgPath)
+	cfg, err := bindConfig()
+	if err != nil {
+		return exitConfig(fmt.Errorf("secret validation failed: %w", err))
+	}
+	provider := strings.TrimSpace(cfg.SecretsProvider)
+	if secretRefs == 0 {
+		fmt.Printf("No secret:// references found in config: %s\n", cfgPath)
+		return nil
+	}
+	if provider == "" {
+		return exitConfig(errors.New("secret:// references found but secrets-provider is empty"))
+	}
+	fmt.Printf("Secrets validation passed: refs=%d provider=%s config=%s\n", secretRefs, provider, cfgPath)
 	return nil
 }
 
@@ -8415,6 +8899,16 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				if len(cfg.SeverityFilter) > 0 {
 					fmt.Printf("  Severity filter: %v\n", cfg.SeverityFilter)
 				}
+				if len(cfg.ExcludeAlertTitles) > 0 {
+					fmt.Printf("  Excluded alert titles: %v\n", cfg.ExcludeAlertTitles)
+				}
+				fmt.Printf("  Exclude alert match mode: %s\n", cfg.ExcludeAlertMatchMode)
+				if cfg.ExcludeAlertTitlesFile != "" {
+					fmt.Printf("  Exclude alert titles file: %s\n", cfg.ExcludeAlertTitlesFile)
+				}
+				if cfg.ArtifactRetainDays > 0 || cfg.ArtifactRetainMaxFiles > 0 {
+					fmt.Printf("  Artifact retention: days=%d max_files=%d\n", cfg.ArtifactRetainDays, cfg.ArtifactRetainMaxFiles)
+				}
 				if cfg.InsecureSkipVerify {
 					fmt.Println("  ⚠️  WARNING: TLS verification is disabled")
 				}
@@ -8446,15 +8940,21 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 					"RETRY_MAX_ATTEMPTS",
 					"RETRY_BASE_DELAY",
 					"RETRY_MAX_DELAY",
+					"RETRY_CIRCUIT_BREAKER",
 					"PROM_DIR",
 					"RUN_HISTORY",
 					"RUN_HISTORY_DIR",
 					"RETAIN_LAST",
 					"RETAIN_DAYS",
+					"ARTIFACT_RETAIN_DAYS",
+					"ARTIFACT_RETAIN_MAX_FILES",
 					"SINGLE_REPORT",
 					"NOTIFY_ON_REGRESSION",
 					"ADAPTIVE_PARALLELISM",
 					"SEVERITY_FILTER",
+					"EXCLUDE_ALERT_TITLES",
+					"EXCLUDE_ALERT_TITLES_FILE",
+					"EXCLUDE_ALERT_MATCH_MODE",
 					"DRY_RUN",
 					"REPLAY",
 					"MAX_IDLE_CONNS",
@@ -8540,6 +9040,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 			if cmd.Flags().Changed("replay") && viper.GetBool("replay") {
 				var agg []AggBlock
 				var clusterFiles []struct{ Cluster, HTML, CSV string }
+				excludedByCluster := make(map[string][]ExcludedAlert)
 
 				for _, cluster := range cfg.Clusters {
 					// Ensure filtered log exists
@@ -8568,6 +9069,34 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 					if err != nil {
 						log.Error().Str("cluster", cluster).Err(err).Msg("replay: parse filtered failed")
 						continue
+					}
+					if len(cfg.SeverityFilter) > 0 {
+						originalCount := len(blocks)
+						blocks = filterBlocksBySeverity(blocks, cfg.SeverityFilter)
+						log.Info().
+							Str("cluster", cluster).
+							Int("original", originalCount).
+							Int("filtered", len(blocks)).
+							Strs("severities", cfg.SeverityFilter).
+							Msg("replay: applied severity filter")
+					}
+					if len(cfg.ExcludeAlertTitles) > 0 {
+						originalCount := len(blocks)
+						filteredBlocks, excludedAlerts, err := filterBlocksByTitle(blocks, cfg.ExcludeAlertTitles, cfg.ExcludeAlertMatchMode)
+						if err != nil {
+							log.Error().Str("cluster", cluster).Err(err).Msg("replay: apply alert title exclusion filter failed")
+							continue
+						}
+						blocks = filteredBlocks
+						excludedByCluster[cluster] = excludedAlerts
+						log.Info().
+							Str("cluster", cluster).
+							Int("original", originalCount).
+							Int("filtered", len(blocks)).
+							Int("excluded", len(excludedAlerts)).
+							Str("mode", cfg.ExcludeAlertMatchMode).
+							Strs("titles", cfg.ExcludeAlertTitles).
+							Msg("replay: applied alert title exclusion filter")
 					}
 
 					counts := map[string]int{"FAIL": 0, "WARN": 0, "ERR": 0, "INFO": 0}
@@ -8684,6 +9213,16 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 					log.Error().Err(err).Msg("replay: write aggregated HTML failed")
 					return err
 				}
+				if len(cfg.ExcludeAlertTitles) > 0 {
+					if err := writeExcludedAlertsAuditJSON(OSFS{}, cfg.OutputDirFiltered, cfg.ExcludeAlertMatchMode, cfg.ExcludeAlertTitles, excludedByCluster); err != nil {
+						log.Error().Err(err).Msg("replay: write excluded-alerts.json failed (non-fatal)")
+					}
+				}
+				if deleted, err := applyArtifactRetentionPolicies(cfg.OutputDirFiltered, cfg.ArtifactRetainDays, cfg.ArtifactRetainMaxFiles, time.Now()); err != nil {
+					log.Error().Err(err).Msg("replay: artifact retention failed (non-fatal)")
+				} else if deleted > 0 {
+					log.Info().Int("deleted", deleted).Int("retain_days", cfg.ArtifactRetainDays).Int("retain_max_files", cfg.ArtifactRetainMaxFiles).Msg("replay: artifact retention applied")
+				}
 				log.Info().Int("clusters", len(clusterFiles)).Int("rows", len(agg)).Msg("replay: aggregated page generated")
 				return nil
 			}
@@ -8782,7 +9321,8 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 							phaseBar.SetCurrent(1)     // Set current to match total
 							phaseBar.SetTotal(1, true) // Complete phaseBar on panic
 							log.Error().Interface("panic", r).Stack().Str("cluster", cl).Msg("cluster goroutine panic")
-							results <- ClusterResult{Cluster: cl, Blocks: nil, Err: fmt.Errorf("panic: %v", r)}
+							panicErr := fmt.Errorf("panic: %v", r)
+							results <- ClusterResult{Cluster: cl, Blocks: nil, Err: panicErr, ErrorClass: classifyClusterError(panicErr)}
 						}
 					}()
 
@@ -8795,7 +9335,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 						log.Info().Str("cluster", cl).Str("phase", text).Msg("phase change")
 					}
 
-					blocks, err := runClusterWithBars(reqCtx, cfg, fs, httpc, cl, user, pass, onPct, setPhase)
+					runOut, err := runClusterWithBars(reqCtx, cfg, fs, httpc, cl, user, pass, onPct, setPhase)
 					if err != nil {
 						b.Abort(false)
 						b.SetTotal(b.Current(), true)
@@ -8810,7 +9350,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 							Msg("cluster run failed")
 						// Also print to console for visibility
 						fmt.Fprintf(os.Stderr, "\n❌ Cluster %s failed: %v\n", cl, err)
-						results <- ClusterResult{Cluster: cl, Blocks: nil, Err: err}
+						results <- ClusterResult{Cluster: cl, Blocks: nil, Err: err, ErrorClass: classifyClusterError(err)}
 						return
 					}
 
@@ -8820,7 +9360,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 					phaseBar.SetCurrent(1)     // Set current to match total
 					phaseBar.SetTotal(1, true) // Complete phaseBar on success
 					log.Info().Str("cluster", cl).Msg("cluster run completed")
-					results <- ClusterResult{Cluster: cl, Blocks: blocks, Err: nil}
+					results <- ClusterResult{Cluster: cl, Blocks: runOut.Blocks, ExcludedByTitle: runOut.ExcludedByTitle, Err: nil, ErrorClass: ""}
 				}(cluster, clusterUser, clusterPass, mainBar, phaseProxy, phaseBar) // Pass phaseBar and per-cluster credentials
 			}
 
@@ -8857,12 +9397,16 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 			var agg []AggBlock
 			var clusterFiles []struct{ Cluster, HTML, CSV string }
 			var allResults []ClusterResult
+			excludedByCluster := make(map[string][]ExcludedAlert)
 
 			for r := range results {
 				allResults = append(allResults, r)
 				if r.Err != nil {
 					failed = append(failed, r.Cluster)
 					continue
+				}
+				if len(r.ExcludedByTitle) > 0 {
+					excludedByCluster[r.Cluster] = append(excludedByCluster[r.Cluster], r.ExcludedByTitle...)
 				}
 
 				rawPath := filepath.Join(cfg.OutputDirLogs, fmt.Sprintf("%s.log", r.Cluster))
@@ -8941,6 +9485,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				TotalChecks:    len(agg),
 				AvgHealthScore: avgHealth,
 				MinHealthScore: minHealth,
+				FailureClasses: failureClassCounts(allResults),
 			}
 			if err := writeRunSummaryJSON(fs, cfg.OutputDirFiltered, runSummary); err != nil {
 				log.Error().Err(err).Msg("write run-summary.json failed (non-fatal)")
@@ -8991,6 +9536,11 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 					log.Error().Err(err).Msg("write all-failed HTML failed (non-fatal)")
 				}
 			}
+			if len(cfg.ExcludeAlertTitles) > 0 {
+				if err := writeExcludedAlertsAuditJSON(fs, cfg.OutputDirFiltered, cfg.ExcludeAlertMatchMode, cfg.ExcludeAlertTitles, excludedByCluster); err != nil {
+					log.Error().Err(err).Msg("write excluded-alerts.json failed (non-fatal)")
+				}
+			}
 			if cfg.SingleReport {
 				src := filepath.Join(cfg.OutputDirFiltered, "index.html")
 				dst := filepath.Join(cfg.OutputDirFiltered, "ncc-report-single.html")
@@ -9011,6 +9561,11 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 						Msg("run history snapshot created")
 				}
 			}
+			if deleted, err := applyArtifactRetentionPolicies(cfg.OutputDirFiltered, cfg.ArtifactRetainDays, cfg.ArtifactRetainMaxFiles, time.Now()); err != nil {
+				log.Error().Err(err).Msg("artifact retention failed (non-fatal)")
+			} else if deleted > 0 {
+				log.Info().Int("deleted", deleted).Int("retain_days", cfg.ArtifactRetainDays).Int("retain_max_files", cfg.ArtifactRetainMaxFiles).Msg("artifact retention applied")
+			}
 
 			if cfg.NotifyDigest {
 				if cfg.NotifyOnRegression && !regression.HasRegression {
@@ -9018,8 +9573,21 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				} else if suppressed, reason := notificationsSuppressedNow(cfg, time.Now()); suppressed {
 					log.Info().Str("reason", reason).Msg("digest notifications suppressed by quiet-hours/maintenance-window")
 				} else {
-					overview := fmt.Sprintf("Run completed in %s. Clusters OK: %d, Failed: %d.",
-						runDuration.Round(time.Second), len(clusterFiles), len(failed))
+					digestCounts := map[string]int{"FAIL": 0, "WARN": 0, "ERR": 0, "INFO": 0}
+					for _, row := range agg {
+						sev := strings.ToUpper(strings.TrimSpace(row.Severity))
+						if sev == "" {
+							sev = "INFO"
+						}
+						if _, ok := digestCounts[sev]; ok {
+							digestCounts[sev]++
+						} else {
+							digestCounts["INFO"]++
+						}
+					}
+					overview := fmt.Sprintf("Run completed in %s. Clusters OK: %d, Failed: %d. Alerts (filtered): FAIL=%d WARN=%d ERR=%d INFO=%d Total=%d.",
+						runDuration.Round(time.Second), len(clusterFiles), len(failed),
+						digestCounts["FAIL"], digestCounts["WARN"], digestCounts["ERR"], digestCounts["INFO"], len(agg))
 					if len(failed) > 0 {
 						overview += fmt.Sprintf(" Failed: %v.", failed)
 					}
@@ -9038,8 +9606,10 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 						Cluster:     "run",
 						StartedAt:   runStart,
 						FinishedAt:  time.Now(),
-						FailCount:   len(failed),
-						WarnCount:   len(clusterFiles),
+						FailCount:   digestCounts["FAIL"],
+						WarnCount:   digestCounts["WARN"],
+						ErrCount:    digestCounts["ERR"],
+						InfoCount:   digestCounts["INFO"],
 						TotalChecks: len(agg),
 						Overview:    overview,
 					}
@@ -9065,15 +9635,24 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				}
 				return fmt.Errorf("operation cancelled: %w", ctx.Err())
 			}
+			failureCounts := failureClassCounts(allResults)
 			policyMetrics := map[string]float64{
-				"new-fails":        float64(drillDownDiff.NewFailCount),
-				"resolved-fails":   float64(drillDownDiff.ResolvedFailCount),
-				"fail-rate":        0,
-				"clusters-failed":  float64(len(failed)),
-				"regressions":      0,
-				"flaky-checks":     float64(flaky.TotalFlakyChecks),
-				"min-health-score": float64(runSummary.MinHealthScore),
-				"avg-health-score": float64(runSummary.AvgHealthScore),
+				"new-fails":            float64(drillDownDiff.NewFailCount),
+				"resolved-fails":       float64(drillDownDiff.ResolvedFailCount),
+				"fail-rate":            0,
+				"clusters-failed":      float64(len(failed)),
+				"max-cluster-failures": float64(len(failed)),
+				"regressions":          0,
+				"flaky-checks":         float64(flaky.TotalFlakyChecks),
+				"min-health-score":     float64(runSummary.MinHealthScore),
+				"avg-health-score":     float64(runSummary.AvgHealthScore),
+				"timeout-clusters":     float64(failureCounts["timeout"]),
+				"auth-failures":        float64(failureCounts["auth"]),
+				"network-failures":     float64(failureCounts["network"]),
+				"api-failures":         float64(failureCounts["api"]),
+				"parser-failures":      float64(failureCounts["parser"]),
+				"rate-limit-failures":  float64(failureCounts["rate_limit"]),
+				"unknown-failures":     float64(failureCounts["unknown"]),
 			}
 			if regression.HasRegression {
 				policyMetrics["regressions"] = 1
@@ -9134,6 +9713,9 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	cmd.Flags().String("output-dir-filtered", "outputfiles", "Directory for filtered and aggregated results")
 	cmd.Flags().Bool("single-report", false, "Also write a single-file report copy at output-dir-filtered/ncc-report-single.html")
 	cmd.Flags().String("severity-filter", "", "Comma-separated severities to include (FAIL,WARN,ERR,INFO). Empty = all")
+	cmd.Flags().String("exclude-alert-titles", "", "Comma-separated NCC alert titles to exclude from generated reports/HTML")
+	cmd.Flags().String("exclude-alert-titles-file", "", "Path to file containing alert titles to exclude (one title per line)")
+	cmd.Flags().String("exclude-alert-match-mode", defaultExcludeMatchMode, "Alert title exclusion match mode: exact, contains, regex")
 	cmd.Flags().Bool("dry-run", false, "Validate configuration without running checks")
 	cmd.Flags().String("log-file", "logs/ncc-runner.log", "Path to log file (rotated)")
 	cmd.Flags().String("log-level", "", "Log level (trace/debug/info/warn/error or 0..5)")
@@ -9141,6 +9723,7 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	cmd.Flags().Int("retry-max-attempts", 6, "Max retry attempts for HTTP calls")
 	cmd.Flags().String("retry-base-delay", "400ms", "Base retry delay (with jitter, exponential)")
 	cmd.Flags().String("retry-max-delay", "8s", "Max retry delay cap")
+	cmd.Flags().Int("retry-circuit-breaker", defaultRetryCircuitBreaker, "Fail fast after N consecutive retryable failures")
 	cmd.Flags().Bool("replay", false, "Replay from existing logs without running NCC")
 	cmd.Flags().Int("gen-test-agg", 0, "Generate a test index.html with N clusters for scalability testing (no API calls)")
 	cmd.Flags().String("prom-dir", "promfiles", "Directory for Prometheus metrics")
@@ -9148,9 +9731,11 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	cmd.Flags().String("run-history-dir", "", "Run history directory (default: <output-dir-filtered>/runs)")
 	cmd.Flags().Int("retain-last", 0, "When run-history is enabled, keep only the last N runs (0 = unlimited)")
 	cmd.Flags().Int("retain-days", 0, "When run-history is enabled, keep runs newer than N days (0 = unlimited)")
+	cmd.Flags().Int("artifact-retain-days", 0, "Remove generated artifacts older than N days from output-dir-filtered (0 = unlimited)")
+	cmd.Flags().Int("artifact-retain-max-files", 0, "Keep only N newest generated artifacts in output-dir-filtered (0 = unlimited)")
 	cmd.Flags().Bool("notify-on-regression", false, "Only send notifications when FAIL count increases vs previous run-summary")
 	cmd.Flags().Bool("adaptive-parallelism", true, "Dynamically reduce/increase effective concurrency based on HTTP 429 responses")
-	cmd.Flags().String("policy-gates", "", "Comma-separated policy gates (e.g. new-fails>0,fail-rate>2,min-health-score<90,flaky-checks>0)")
+	cmd.Flags().String("policy-gates", "", "Comma-separated policy gates (e.g. new-fails>0,fail-rate>2,min-health-score<90,flaky-checks>0,timeout-clusters>0,auth-failures>0)")
 	cmd.Flags().String("quiet-hours", "", "Suppress notifications during local quiet hours, format HH:MM-HH:MM")
 	cmd.Flags().String("maintenance-windows", "", "Suppress notifications during RFC3339 windows: start/end[,start/end...]")
 	cmd.Flags().Int("flaky-lookback-runs", defaultFlakyLookbackRuns, "Number of recent runs to inspect for flaky check detection")
@@ -9200,12 +9785,15 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	_ = viper.BindPFlag("retry-max-attempts", cmd.Flags().Lookup("retry-max-attempts"))
 	_ = viper.BindPFlag("retry-base-delay", cmd.Flags().Lookup("retry-base-delay"))
 	_ = viper.BindPFlag("retry-max-delay", cmd.Flags().Lookup("retry-max-delay"))
+	_ = viper.BindPFlag("retry-circuit-breaker", cmd.Flags().Lookup("retry-circuit-breaker"))
 	_ = viper.BindPFlag("replay", cmd.Flags().Lookup("replay"))
 	_ = viper.BindPFlag("prom-dir", cmd.Flags().Lookup("prom-dir"))
 	_ = viper.BindPFlag("run-history", cmd.Flags().Lookup("run-history"))
 	_ = viper.BindPFlag("run-history-dir", cmd.Flags().Lookup("run-history-dir"))
 	_ = viper.BindPFlag("retain-last", cmd.Flags().Lookup("retain-last"))
 	_ = viper.BindPFlag("retain-days", cmd.Flags().Lookup("retain-days"))
+	_ = viper.BindPFlag("artifact-retain-days", cmd.Flags().Lookup("artifact-retain-days"))
+	_ = viper.BindPFlag("artifact-retain-max-files", cmd.Flags().Lookup("artifact-retain-max-files"))
 	_ = viper.BindPFlag("notify-on-regression", cmd.Flags().Lookup("notify-on-regression"))
 	_ = viper.BindPFlag("adaptive-parallelism", cmd.Flags().Lookup("adaptive-parallelism"))
 	_ = viper.BindPFlag("policy-gates", cmd.Flags().Lookup("policy-gates"))
@@ -9228,6 +9816,9 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	_ = viper.BindPFlag("webhook-url", cmd.Flags().Lookup("webhook-url"))
 	_ = viper.BindPFlag("webhook-headers", cmd.Flags().Lookup("webhook-headers"))
 	_ = viper.BindPFlag("severity-filter", cmd.Flags().Lookup("severity-filter"))
+	_ = viper.BindPFlag("exclude-alert-titles", cmd.Flags().Lookup("exclude-alert-titles"))
+	_ = viper.BindPFlag("exclude-alert-titles-file", cmd.Flags().Lookup("exclude-alert-titles-file"))
+	_ = viper.BindPFlag("exclude-alert-match-mode", cmd.Flags().Lookup("exclude-alert-match-mode"))
 	_ = viper.BindPFlag("dry-run", cmd.Flags().Lookup("dry-run"))
 	_ = viper.BindPFlag("slack-enabled", cmd.Flags().Lookup("slack-enabled"))
 	_ = viper.BindPFlag("slack-webhook-url", cmd.Flags().Lookup("slack-webhook-url"))
@@ -9306,6 +9897,14 @@ Examples:
 	}
 	validateConfigCmd.Flags().String("config", "", "Config file path (yaml/json)")
 	cmd.AddCommand(validateConfigCmd)
+
+	validateSecretsCmd := &cobra.Command{
+		Use:   "validate-secrets",
+		Short: "Validate secret:// references and secret source accessibility",
+		RunE:  runValidateSecretsCommand,
+	}
+	validateSecretsCmd.Flags().String("config", "", "Config file path (yaml/json)")
+	cmd.AddCommand(validateSecretsCmd)
 
 	return cmd
 }

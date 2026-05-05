@@ -1,6 +1,6 @@
 # Milestone plan - v1.1.0
 
-> Status: implemented in release prep for `v1.1.0` (see `CHANGELOG.md` and `RELEASE_NOTES_v1.1.0.md`).
+> Status: implemented in release prep for `v1.1.0` with additional production hardening and API enhancements validated on 2026-05-05.
 
 This document defines a practical implementation plan for `v1.1.0`.
 It prioritizes user-facing impact, operational reliability, and low-risk delivery.
@@ -74,3 +74,16 @@ It prioritizes user-facing impact, operational reliability, and low-risk deliver
 - Add migration notes for output retention/history layout.
 - Include at least one regression-diff example in `README.md`.
 - Add MCP docs section for schedule management tools.
+
+## Post-milestone hardening completed
+
+The following hardening/operational items were completed during final release readiness:
+
+- Alert exclusion controls with file input and match modes (`exact|contains|regex`)
+- Exclusion audit artifact (`excluded-alerts.json`) with schema versioning
+- Secrets file hardening checks (permissions/symlink/size)
+- Retry circuit breaker (`retry-circuit-breaker`) to fail fast on repeated retryable failures
+- Failure classification in run summaries for machine-readable triage
+- Extended policy gate metrics for auth/network/timeout and cluster-failure classes
+- Artifact retention controls for generated outputs
+- Historical trend API for run history (`/api/v1/report/trends`)
