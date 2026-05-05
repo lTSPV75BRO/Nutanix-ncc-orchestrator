@@ -371,9 +371,14 @@ An **MCP server** is provided so AI tools (e.g. Cursor, Claude Desktop) can run 
 - [Prometheus.md](Prometheus.md) — Prometheus/Grafana monitoring using NCC Orchestrator `.prom` output.
 - [k8s/README.md](k8s/README.md) — Full Kubernetes deployment and troubleshooting.
 
-## v2.0.0 scope note
+## v2.0.0 components
 
-`v2.0.0` in this branch focuses on the Go-based orchestrator runtime (CLI + MCP + artifacts + scheduling/deployment manifests). Legacy API/UI server folders are intentionally out of scope here.
+`v2.0.0` includes the full stack in this branch:
+
+- CLI orchestrator runtime (`goNCC.go`)
+- API server (`cmd/ncc-api-server`)
+- UI proxy/server (`cmd/ncc-ui-server`)
+- React frontend (`frontend`)
 
 ## License
 MIT License. See [LICENSE](LICENSE) for details.

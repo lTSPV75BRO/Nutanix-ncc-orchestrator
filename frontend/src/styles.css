@@ -1,0 +1,335 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(1200px 700px at 5% -10%, rgba(139, 92, 246, 0.35), transparent 55%),
+    radial-gradient(1000px 600px at 95% 0%, rgba(56, 189, 248, 0.24), transparent 52%),
+    linear-gradient(180deg, #070b1b 0%, #0b1224 100%);
+  color: #e5e7eb;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+h1 {
+  margin: 0 0 8px 0;
+}
+
+h2 {
+  margin: 0 0 8px 0;
+}
+
+h3 {
+  margin: 10px 0 6px 0;
+}
+
+.sub {
+  color: #9ca3af;
+  margin: 0 0 12px;
+}
+
+.card {
+  border: 1px solid #1f2937;
+  background: #111827;
+  border-radius: 10px;
+  padding: 14px;
+  margin-bottom: 12px;
+}
+
+.note,
+.muted {
+  color: #93c5fd;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.inline input {
+  width: auto;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.disabled-block {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+pre {
+  background: #020617;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.live-log {
+  max-height: 420px;
+}
+
+.insights-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.metric {
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 10px;
+  background: #0b1326;
+}
+
+.metric-label {
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.metric-value {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.text-fail {
+  color: #f87171;
+  font-weight: 700;
+}
+
+.text-pass {
+  color: #86efac;
+  font-weight: 700;
+}
+
+.cluster-cards {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.cluster-card {
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.cluster-title {
+  color: #cbd5e1;
+  margin-bottom: 4px;
+}
+
+.cluster-score {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.table-wrap {
+  overflow: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  border-bottom: 1px solid #1e293b;
+  padding: 8px;
+}
+
+.btn-active {
+  border-color: #93c5fd;
+}
+
+a {
+  color: #93c5fd;
+}
+
+.ant-card {
+  background: linear-gradient(180deg, rgba(17, 24, 39, 0.94) 0%, rgba(15, 23, 42, 0.94) 100%);
+  border-color: rgba(139, 92, 246, 0.35);
+  box-shadow: 0 8px 26px rgba(5, 10, 25, 0.36);
+  backdrop-filter: blur(3px);
+}
+
+.ant-card .ant-card-body {
+  padding: 16px !important;
+}
+
+.ant-card:hover {
+  border-color: rgba(56, 189, 248, 0.55);
+}
+
+.ant-layout {
+  background: #0b1224;
+}
+
+.ant-table-wrapper .ant-table {
+  background: transparent;
+}
+
+.app-shell {
+  min-height: 100vh;
+}
+
+.app-header {
+  border-bottom: 1px solid rgba(139, 92, 246, 0.35);
+  background: linear-gradient(90deg, rgba(17, 24, 39, 0.93), rgba(30, 41, 59, 0.92), rgba(15, 23, 42, 0.93));
+  backdrop-filter: blur(8px);
+}
+
+.app-content {
+  position: relative;
+}
+
+.page-card {
+  margin-bottom: 16px;
+}
+
+.section-title.ant-typography {
+  margin-top: 0 !important;
+  margin-bottom: 12px !important;
+  font-size: 20px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.1px;
+}
+
+.section-subtitle.ant-typography {
+  display: block;
+  margin-bottom: 10px !important;
+  color: rgba(226, 232, 240, 0.78) !important;
+}
+
+.ant-menu-dark.ant-menu-horizontal > .ant-menu-item-selected {
+  background: linear-gradient(90deg, rgba(139, 92, 246, 0.45), rgba(56, 189, 248, 0.35));
+  border-bottom-color: #8b5cf6 !important;
+  color: #fff;
+}
+
+.ant-menu-dark.ant-menu-horizontal > .ant-menu-item:hover {
+  color: #c4b5fd !important;
+}
+
+.ant-btn-primary {
+  background: linear-gradient(90deg, #8b5cf6, #06b6d4);
+  border-color: transparent;
+}
+
+.ant-btn-primary:hover,
+.ant-btn-primary:focus {
+  background: linear-gradient(90deg, #a78bfa, #22d3ee) !important;
+  border-color: transparent !important;
+}
+
+.ant-tag-checkable {
+  border: 1px solid #334155;
+  color: #cbd5e1;
+  background: #111827;
+}
+
+.ant-tag-checkable-checked {
+  border-color: transparent !important;
+  background: linear-gradient(90deg, #8b5cf6, #3b82f6) !important;
+  color: #ffffff !important;
+}
+
+.ant-checkbox-checked .ant-checkbox-inner {
+  background-color: #8b5cf6;
+  border-color: #8b5cf6;
+}
+
+.ant-select-selector,
+.ant-input,
+.ant-input-number,
+.ant-input-affix-wrapper,
+.ant-input-outlined,
+.ant-input-number-outlined {
+  border-color: #334155 !important;
+  background: rgba(15, 23, 42, 0.8) !important;
+}
+
+.ant-table-thead > tr > th {
+  background: rgba(30, 41, 59, 0.95) !important;
+  color: #e2e8f0 !important;
+  border-bottom: 1px solid rgba(71, 85, 105, 0.75) !important;
+}
+
+.ant-table-tbody > tr > td {
+  border-bottom: 1px solid rgba(51, 65, 85, 0.45) !important;
+  transition: background-color 120ms ease;
+}
+
+.ant-table-tbody > tr.ant-table-row:hover > td {
+  background: rgba(71, 85, 105, 0.3) !important;
+}
+
+.alerts-card {
+  border-color: rgba(71, 85, 105, 0.6);
+  background: rgba(17, 24, 39, 0.94);
+}
+
+.sev-row-fail > td {
+  background: transparent;
+}
+
+.sev-row-warn > td {
+  background: transparent;
+}
+
+.sev-row-err > td {
+  background: transparent;
+}
+
+.sev-row-info > td {
+  background: transparent;
+}
+
+.alerts-table .alerts-row-even > td {
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.alerts-table .alerts-row-odd > td {
+  background: rgba(30, 41, 59, 0.35);
+}
+
+.severity-pill {
+  border-radius: 999px;
+  padding-inline: 8px !important;
+  font-weight: 700;
+}
+
+pre {
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  background: linear-gradient(180deg, rgba(2, 6, 23, 0.95), rgba(15, 23, 42, 0.95));
+}
+

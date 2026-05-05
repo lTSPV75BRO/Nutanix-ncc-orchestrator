@@ -14,7 +14,11 @@ This release finalizes the v2.0.0 production baseline for the Go orchestrator ru
 
 ## Scope note for v2.0.0
 
-This branch/release train is scoped to the Go orchestrator runtime (CLI + MCP + artifacts + scheduling/deployment assets). API/UI server folders are intentionally out of scope in this line.
+This release line includes the orchestrator runtime plus the v2 API/UI and frontend components:
+
+- `cmd/ncc-api-server`
+- `cmd/ncc-ui-server`
+- `frontend`
 
 ## Validation snapshot (2026-05-05)
 
