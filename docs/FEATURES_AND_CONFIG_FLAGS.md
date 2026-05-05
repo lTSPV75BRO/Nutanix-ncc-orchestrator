@@ -2,6 +2,8 @@
 
 Comprehensive reference for NCC Orchestrator features, configuration keys, and CLI flags.
 
+> Scope note (v1): this repository branch is Go-only for runtime components. The v2 API/UI servers and React frontend are intentionally not part of this scope.
+
 ## 1) What this tool does
 
 `ncc-orchestrator` runs Nutanix NCC checks across one or more clusters, collects and parses results, and generates automation-friendly artifacts plus human-readable reports.
@@ -165,13 +167,37 @@ Validate config files in automation pipelines:
 ncc-orchestrator validate-config --config config.yaml
 ```
 
-### 2.15 Config JSON schema generation
+### 2.15 Secrets preflight validation
+
+Validate `secret://` references and secret source accessibility before a run:
+
+```bash
+ncc-orchestrator validate-secrets --config config.yaml
+```
+
+### 2.16 Alert exclusion controls
+
+Exclude selected alert titles from generated outputs/notifications:
+
+```bash
+ncc-orchestrator \
+  --exclude-alert-titles "Disk health,Prism connectivity" \
+  --exclude-alert-match-mode contains
+```
+
+Or load from file:
+
+```bash
+ncc-orchestrator --exclude-alert-titles-file exclude-alerts.txt
+```
+
+### 2.17 Config JSON schema generation
 
 ```bash
 ncc-orchestrator config-schema --output config.schema.json
 ```
 
-### 2.16 Update mode
+### 2.18 Update mode
 
 Download and replace local binary from GitHub release assets:
 
@@ -179,7 +205,7 @@ Download and replace local binary from GitHub release assets:
 ncc-orchestrator --update
 ```
 
-### 2.17 Test dashboard generation (no API calls)
+### 2.19 Test dashboard generation (no API calls)
 
 Generate synthetic aggregate dashboard and artifacts:
 
@@ -221,11 +247,14 @@ Highest to lowest precedence:
 | `retry-max-attempts` | int | `6` | `8` |
 | `retry-base-delay` | duration | `400ms` | `"500ms"` |
 | `retry-max-delay` | duration | `8s` | `"12s"` |
+| `retry-circuit-breaker` | int | `3` | `2` |
 | `prom-dir` | string | `promfiles` | `"metrics"` |
 | `run-history` | bool | `false` | `true` |
 | `run-history-dir` | string | `<output-dir-filtered>/runs` | `"outputfiles/runs"` |
 | `retain-last` | int | `0` | `20` |
 | `retain-days` | int | `0` | `14` |
+| `artifact-retain-days` | int | `0` | `14` |
+| `artifact-retain-max-files` | int | `0` | `200` |
 | `notify-on-regression` | bool | `false` | `true` |
 | `adaptive-parallelism` | bool | `true` | `false` |
 | `policy-gates` | csv string | — | `"new-fails>0,fail-rate>2"` |
@@ -234,6 +263,9 @@ Highest to lowest precedence:
 | `flaky-lookback-runs` | int | `6` | `10` |
 | `flaky-min-transitions` | int | `2` | `3` |
 | `severity-filter` | csv string | — | `"FAIL,WARN"` |
+| `exclude-alert-titles` | csv string | — | `"Disk health,Prism connectivity"` |
+| `exclude-alert-titles-file` | string | — | `"exclude-alerts.txt"` |
+| `exclude-alert-match-mode` | string | `exact` | `"contains"` |
 | `dry-run` | bool | `false` | `true` |
 | `replay` | bool | `false` | `true` |
 | `max-idle-conns` | int | `100` | `200` |
@@ -310,11 +342,17 @@ ncc-orchestrator [flags]
 | `--retry-base-delay` | duration string | Go duration (`100ms`, `500ms`, `1s`) | `400ms` | Base backoff delay for retryable HTTP errors. Used with jitter and exponential growth. |
 | `--retry-max-attempts` | int | Integer `>= 1` | `6` | Maximum HTTP retry attempts for retryable errors/statuses. |
 | `--retry-max-delay` | duration string | Go duration (`1s`, `8s`, `30s`) | `8s` | Upper bound on retry backoff delay. Prevents unbounded wait times under prolonged failures. |
+| `--retry-circuit-breaker` | int | Integer `>= 1` | `3` | Opens retry circuit and fails fast after N consecutive retryable failures. Helps avoid long noisy retry loops on unhealthy endpoints. |
 | `--run-history` | bool | `true`, `false` | `false` | Persists timestamped run snapshots for trend and regression analysis across runs. |
 | `--run-history-dir` | string | Writable directory path | `<output-dir-filtered>/runs` | Base path for saved run snapshots when run-history is enabled. |
+| `--artifact-retain-days` | int | Integer `>= 0` | `0` | Deletes generated artifacts older than N days from `output-dir-filtered` (`0` disables age-based deletion). |
+| `--artifact-retain-max-files` | int | Integer `>= 0` | `0` | Keeps only the N newest generated artifacts in `output-dir-filtered` (`0` disables count-based deletion). |
 | `--secrets-file` | string | Path to YAML/JSON key-value map | none | Secret map source when `--secrets-provider=file` is selected. |
 | `--secrets-provider` | string | `env`, `file` | none | Enables `secret://` value resolution from process environment or file-backed key map. |
 | `--severity-filter` | string | CSV subset of `FAIL,WARN,ERR,INFO` | empty (all) | Limits output rows/artifacts to selected severities. Useful for alert-focused reports but can hide context. |
+| `--exclude-alert-titles` | string | CSV list of alert titles | empty | Excludes matching alert titles from generated outputs/notifications. |
+| `--exclude-alert-titles-file` | string | Path to line-delimited title file | empty | Loads exclusion titles from file (`#` comments and blank lines are ignored). |
+| `--exclude-alert-match-mode` | string | `exact`, `contains`, `regex` | `exact` | Controls how exclusion titles are matched against alert names. |
 | `--single-report` | bool | `true`, `false` | `false` | Writes a single-file report copy (`ncc-report-single.html`) in addition to regular outputs. |
 | `--slack-channel` | string | Channel name (for example `#ops-alerts`) | none | Optional channel override in Slack notification payloads when webhook supports channel routing. |
 | `--slack-enabled` | bool | `true`, `false` | `false` | Enables Slack notifications through incoming webhook integration. |
@@ -392,6 +430,17 @@ ncc-orchestrator config-schema --output config.schema.json
 | Flag | Type | Possible values | Default | Detailed explanation |
 |---|---|---|---|---|
 | `--output` | string | File path | stdout | Writes generated JSON schema to file; when omitted schema is printed to stdout. |
+| `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
+
+### 6.5 `validate-secrets`
+
+```bash
+ncc-orchestrator validate-secrets --config config.yaml
+```
+
+| Flag | Type | Possible values | Default | Detailed explanation |
+|---|---|---|---|---|
+| `--config` | string | Path to YAML/JSON config | none | Validates `secret://` references and secret-source accessibility (`env`/`file`) without running NCC checks. |
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
 
 ## 7) Full config example
