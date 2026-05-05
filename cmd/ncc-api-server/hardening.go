@@ -248,6 +248,7 @@ func (s *apiServer) validatePathConfig() error {
 		s.logDir,
 		s.runnerLogPath,
 		s.scheduleStatePath,
+		s.notificationStatePath,
 		s.tokenFilePath,
 	}
 	for _, p := range candidates {

@@ -26,25 +26,26 @@ import (
 )
 
 type apiServer struct {
-	repoRoot          string
-	configPath        string
-	outputDir         string
-	logDir            string
-	runnerLogPath     string
-	scheduleStatePath string
-	orchestratorBin   string
-	authToken         string
-	tokenFilePath     string
-	corsOrigin        string
-	authMode          string
-	sessionSecret     string
-	sessionTTL        time.Duration
-	sessionIssuer     string
-	runTimeout        time.Duration
-	debugExpose       bool
-	tlsCertFile       string
-	tlsKeyFile        string
-	tlsClientCAFile   string
+	repoRoot              string
+	configPath            string
+	outputDir             string
+	logDir                string
+	runnerLogPath         string
+	scheduleStatePath     string
+	notificationStatePath string
+	orchestratorBin       string
+	authToken             string
+	tokenFilePath         string
+	corsOrigin            string
+	authMode              string
+	sessionSecret         string
+	sessionTTL            time.Duration
+	sessionIssuer         string
+	runTimeout            time.Duration
+	debugExpose           bool
+	tlsCertFile           string
+	tlsKeyFile            string
+	tlsClientCAFile       string
 
 	mu      sync.Mutex
 	active  bool
@@ -147,6 +148,7 @@ func main() {
 	flag.StringVar(&s.logDir, "log-dir", "nccfiles", "Raw logs directory")
 	flag.StringVar(&s.runnerLogPath, "runner-log-path", "logs/ncc-runner.log", "Runner log file path")
 	flag.StringVar(&s.scheduleStatePath, "schedule-state-path", ".ncc-api-schedule.json", "Schedule state file path")
+	flag.StringVar(&s.notificationStatePath, "notifications-state-path", ".ncc-api-notifications.json", "Notifications state file path")
 	flag.StringVar(&s.orchestratorBin, "orchestrator-bin", "./ncc-orchestrator", "Path to ncc-orchestrator binary")
 	flag.StringVar(&s.tokenFilePath, "token-file-path", ".ncc-api-token", "Token file path for UI proxy/frontend use")
 	flag.StringVar(&s.corsOrigin, "cors-origin", "http://localhost:8080", "CORS allowed origin(s), comma-separated")
@@ -190,6 +192,8 @@ func main() {
 	mux.HandleFunc("/api/v1/auth/session", s.handleAuthSession)
 	mux.HandleFunc("/api/v1/auth/rotate", s.handleAuthRotate)
 	mux.HandleFunc("/api/v1/settings/config", s.handleConfig)
+	mux.HandleFunc("/api/v1/settings/notifications", s.handleNotifications)
+	mux.HandleFunc("/api/v1/settings/notifications/test", s.handleNotificationsTest)
 	mux.HandleFunc("/api/v1/schedule", s.handleSchedule)
 	mux.HandleFunc("/api/v1/artifacts", s.handleArtifacts)
 	mux.HandleFunc("/api/v1/artifacts/", s.handleArtifactByName)
@@ -757,6 +761,7 @@ func (s *apiServer) handleRunTrigger(w http.ResponseWriter, r *http.Request) {
 			err = fmt.Errorf("run timed out after %s", s.runTimeout)
 		}
 		s.setRunDone(err, runOut.String())
+		go s.notifyRunFinished(err)
 	}()
 	s.audit(r, "runs.trigger", true, map[string]interface{}{"config_path": resolvedCfgPath, "extra_args_count": len(cleanExtraArgs)})
 	writeJSON(w, http.StatusAccepted, envelope{Success: true, Message: "run triggered", Data: map[string]interface{}{
