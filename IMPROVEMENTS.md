@@ -2,7 +2,7 @@
 
 A project-wide list of improvements and new features for the NCC Orchestrator: application, scripts, Kubernetes, CI/CD, and documentation. Use as a backlog; prioritize by impact and effort.
 
-For the concrete next milestone plan, see [docs/MILESTONE_v1.1.0.md](docs/MILESTONE_v1.1.0.md).
+For the latest completed milestone summary, see [docs/MILESTONE_v2.0.0.md](docs/MILESTONE_v2.0.0.md).
 
 ---
 

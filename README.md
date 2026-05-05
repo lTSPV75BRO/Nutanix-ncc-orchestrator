@@ -10,9 +10,9 @@ A CLI tool to run NCC (Nutanix Cluster Check) across multiple clusters in parall
 
 ## Release status
 
-- **Current target release:** `v1.1.0`
-- **Release notes:** [RELEASE_NOTES_v1.1.0.md](RELEASE_NOTES_v1.1.0.md)
-- **Production readiness checklist:** [docs/PRODUCTION_READINESS_v1.1.0.md](docs/PRODUCTION_READINESS_v1.1.0.md)
+- **Current target release:** `v2.0.0`
+- **Release notes:** [RELEASE_NOTES_v2.0.0.md](RELEASE_NOTES_v2.0.0.md)
+- **Production readiness checklist:** [docs/PRODUCTION_READINESS_v2.0.0.md](docs/PRODUCTION_READINESS_v2.0.0.md)
 - **Checksums + update verification:** [docs/RELEASE_CHECKSUMS.md](docs/RELEASE_CHECKSUMS.md)
 
 ---
@@ -55,7 +55,7 @@ Download pre-built binaries for Linux/Windows/macOS from the [Releases](https://
 ### Docker image and CI
 The [GitHub Action](.github/workflows/docker-publish.yml) builds and pushes the image to Docker Hub on push to `main` (and on release). The **image tag is the same as the code version**:
 
-- **Version source**: the [`VERSION`](VERSION) file (e.g. `1.1.0`). Update this file when you want to release a new image version.
+- **Version source**: the [`VERSION`](VERSION) file (e.g. `2.0.0`). Update this file when you want to release a new image version.
 - **Triggers**: push to `main` (when Go code, Dockerfile, or VERSION change) and on GitHub release.
 - **Image**: `prajwalnutant/nutanix-ncc-orchestrator:<version>` and `:latest`.
 - **Secrets**: In the repo settings, add `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (Docker Hub → Account → Security → New Access Token) so the workflow can push.
@@ -371,27 +371,9 @@ An **MCP server** is provided so AI tools (e.g. Cursor, Claude Desktop) can run 
 - [Prometheus.md](Prometheus.md) — Prometheus/Grafana monitoring using NCC Orchestrator `.prom` output.
 - [k8s/README.md](k8s/README.md) — Full Kubernetes deployment and troubleshooting.
 
-## v2 Security Hardening (API/UI)
+## v2.0.0 scope note
 
-For `cmd/ncc-api-server` and `cmd/ncc-ui-server`, strict security defaults are enabled:
-
-- Wildcard CORS is rejected; explicit origin allowlists are required.
-- API auth supports `token`, `session`, and `hybrid` modes (`token` default on API server).
-- Session mode uses short-lived signed bearer tokens from `/api/v1/auth/session`.
-- API token rotation is available at `/api/v1/auth/rotate`.
-- Request payloads are strict JSON (unknown fields rejected, body-size bounded, single JSON object only).
-- Mutating APIs require `Content-Type: application/json`.
-- Triggered command execution is hardened:
-  - `extra_args` are allowlisted
-  - shell metacharacters are rejected
-  - runtime is bounded via `--run-timeout`
-- Sensitive runtime internals are hidden unless `--debug-expose=true`.
-
-Recommended deployment:
-
-- Keep `ncc-api-server` on localhost/private network behind `ncc-ui-server` or a trusted gateway.
-- Terminate TLS on API/UI directly (`--tls-cert-file`, `--tls-key-file`) or at ingress.
-- For backend mTLS from UI proxy, use `--backend-ca-file` and optional backend client cert/key flags on `ncc-ui-server`.
+`v2.0.0` in this branch focuses on the Go-based orchestrator runtime (CLI + MCP + artifacts + scheduling/deployment manifests). Legacy API/UI server folders are intentionally out of scope here.
 
 ## License
 MIT License. See [LICENSE](LICENSE) for details.

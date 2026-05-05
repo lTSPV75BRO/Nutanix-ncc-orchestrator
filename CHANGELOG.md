@@ -4,7 +4,7 @@ All notable changes to the Nutanix NCC Orchestrator are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-**Release checklist (for maintainers):** Ensure [`VERSION`](VERSION) matches the intended tag; default `main.Version` in code is `1.1.0` when not set via ldflags. Run `go vet ./...`, `go test ./...`, and `go build ./...` (and `go build ./cmd/ncc-mcp-server`). Confirm `k8s/` and `helm/` image tags match `VERSION`. Tag `v1.1.0` and create a GitHub release using [RELEASE_NOTES_v1.1.0.md](RELEASE_NOTES_v1.1.0.md); attach binaries and `checksums.txt` per [docs/RELEASE_CHECKSUMS.md](docs/RELEASE_CHECKSUMS.md) so `--update` can verify downloads.
+**Release checklist (for maintainers):** Ensure [`VERSION`](VERSION) matches the intended tag; default `main.Version` in code is `2.0.0` when not set via ldflags. Run `go vet ./...`, `go test ./...`, and `go build ./...` (and `go build ./cmd/ncc-mcp-server`). Confirm `k8s/` and `helm/` image tags match `VERSION`. Tag `v2.0.0` and create a GitHub release using [RELEASE_NOTES_v2.0.0.md](RELEASE_NOTES_v2.0.0.md); attach binaries and `checksums.txt` per [docs/RELEASE_CHECKSUMS.md](docs/RELEASE_CHECKSUMS.md) so `--update` can verify downloads.
 
 ---
 
@@ -17,6 +17,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - None yet.
+
+---
+
+## [2.0.0] - 2026-05-05
+
+### Added
+
+- **Release validation suite for v2.0.0** — Production checks and edge-case verification documented with reproducible command evidence.
+- **CodeQL workflow alignment** — Added repository workflow that analyzes only `go` and `actions`, preventing JS/TS language-detection failures in this branch scope.
+- **v2.0.0 release documentation set** — Added release notes, production-readiness checklist, and milestone summary documents for the v2 train.
+
+### Changed
+
+- **Version baselines** — `VERSION`, default `main.Version`, Helm chart/appVersion, Helm values image tag, and Kubernetes manifest image tags aligned to `2.0.0`.
+- **README release pointers** — Updated current release status links to `v2.0.0` documents and clarified current branch scope.
 
 ---
 
@@ -155,6 +170,7 @@ See git history and [Releases](https://github.com/lTSPV75BRO/Nutanix-ncc-orchest
 
 ---
 
+[2.0.0]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.0.0
 [1.1.0]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v1.1.0
 [1.0.0]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v1.0.0
 [0.1.13]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v0.1.13

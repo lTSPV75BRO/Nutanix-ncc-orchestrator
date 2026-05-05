@@ -1,4 +1,4 @@
-# Features and Config Flags (v1.1.0)
+# Features and Config Flags (v2.0.0)
 
 Comprehensive reference for NCC Orchestrator features, configuration keys, and CLI flags.
 
