@@ -20,7 +20,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -203,7 +202,6 @@ func main() {
 	mux.HandleFunc("/api/v1/runs/active", s.handleRunActive)
 	mux.HandleFunc("/api/v1/runs/trigger", s.handleRunTrigger)
 	mux.HandleFunc("/api/v1/report/data", s.handleReportData)
-	mux.HandleFunc("/api/v1/report/trends", s.handleReportTrends)
 	mux.HandleFunc("/api/v1/logs/runner", s.handleRunnerLogs)
 
 	handler := s.withCORS(s.withAuth(mux))
@@ -838,137 +836,7 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 		"artifact_links":     readInlineJSONVar(filepath.Join(outDir, "index.html"), "ARTIFACT_LINKS", map[string]interface{}{}),
 		"report_meta":        readInlineJSONVar(filepath.Join(outDir, "index.html"), "REPORT_META", map[string]interface{}{}),
 		"ncc_logs":           listNCCLogs(s.absPath(s.logDir)),
-		"trends":             collectTrendPoints(outDir, 30),
 		"report_source_dir":  outDir,
-	}})
-}
-
-type trendClusterSummary struct {
-	FailCount int `json:"fail_count"`
-	WarnCount int `json:"warn_count"`
-	ErrCount  int `json:"err_count"`
-	InfoCount int `json:"info_count"`
-}
-
-type trendRunSummary struct {
-	Timestamp      string                `json:"timestamp"`
-	DurationS      float64               `json:"duration_s"`
-	ClustersOK     int                   `json:"clusters_ok"`
-	ClustersFailed int                   `json:"clusters_failed"`
-	TotalChecks    int                   `json:"total_checks"`
-	AvgHealthScore int                   `json:"avg_health_score"`
-	MinHealthScore int                   `json:"min_health_score"`
-	Clusters       []trendClusterSummary `json:"clusters"`
-}
-
-type trendPoint struct {
-	Timestamp      string  `json:"timestamp"`
-	DurationS      float64 `json:"duration_s"`
-	ClustersOK     int     `json:"clusters_ok"`
-	ClustersFailed int     `json:"clusters_failed"`
-	TotalChecks    int     `json:"total_checks"`
-	AvgHealthScore int     `json:"avg_health_score"`
-	MinHealthScore int     `json:"min_health_score"`
-	FailTotal      int     `json:"fail_total"`
-	WarnTotal      int     `json:"warn_total"`
-	ErrTotal       int     `json:"err_total"`
-	InfoTotal      int     `json:"info_total"`
-}
-
-func parseTrendLimit(raw string) int {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return 30
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n <= 0 {
-		return 30
-	}
-	if n > 365 {
-		return 365
-	}
-	return n
-}
-
-func readTrendRunSummary(path string) (trendPoint, bool) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return trendPoint{}, false
-	}
-	var s trendRunSummary
-	if err := json.Unmarshal(b, &s); err != nil {
-		return trendPoint{}, false
-	}
-	failTotal, warnTotal, errTotal, infoTotal := 0, 0, 0, 0
-	for _, c := range s.Clusters {
-		failTotal += c.FailCount
-		warnTotal += c.WarnCount
-		errTotal += c.ErrCount
-		infoTotal += c.InfoCount
-	}
-	return trendPoint{
-		Timestamp:      s.Timestamp,
-		DurationS:      s.DurationS,
-		ClustersOK:     s.ClustersOK,
-		ClustersFailed: s.ClustersFailed,
-		TotalChecks:    s.TotalChecks,
-		AvgHealthScore: s.AvgHealthScore,
-		MinHealthScore: s.MinHealthScore,
-		FailTotal:      failTotal,
-		WarnTotal:      warnTotal,
-		ErrTotal:       errTotal,
-		InfoTotal:      infoTotal,
-	}, true
-}
-
-func collectTrendPoints(outDir string, limit int) []trendPoint {
-	points := make([]trendPoint, 0)
-	seenTs := map[string]bool{}
-	addPoint := func(p trendPoint) {
-		if strings.TrimSpace(p.Timestamp) == "" {
-			return
-		}
-		if seenTs[p.Timestamp] {
-			return
-		}
-		seenTs[p.Timestamp] = true
-		points = append(points, p)
-	}
-	if p, ok := readTrendRunSummary(filepath.Join(outDir, "run-summary.json")); ok {
-		addPoint(p)
-	}
-	runsDir := filepath.Join(outDir, "runs")
-	entries, err := os.ReadDir(runsDir)
-	if err == nil {
-		for _, e := range entries {
-			if !e.IsDir() {
-				continue
-			}
-			if p, ok := readTrendRunSummary(filepath.Join(runsDir, e.Name(), "run-summary.json")); ok {
-				addPoint(p)
-			}
-		}
-	}
-	sort.Slice(points, func(i, j int) bool { return points[i].Timestamp < points[j].Timestamp })
-	if limit > 0 && len(points) > limit {
-		points = points[len(points)-limit:]
-	}
-	return points
-}
-
-func (s *apiServer) handleReportTrends(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
-		return
-	}
-	outDir := s.selectBestReportOutDir()
-	limit := parseTrendLimit(r.URL.Query().Get("limit"))
-	points := collectTrendPoints(outDir, limit)
-	writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
-		"points":            points,
-		"count":             len(points),
-		"limit":             limit,
-		"report_source_dir": outDir,
 	}})
 }
 

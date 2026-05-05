@@ -11,7 +11,6 @@ This release focuses on automation quality, regression intelligence, and product
 - **Secrets hardening**: file-based secrets now enforce hardening checks (regular file, non-symlink, owner-only permissions, size cap).
 - **Retry circuit breaker**: new `retry-circuit-breaker` fails fast after consecutive retryable failures to prevent long noisy retries.
 - **Failure classifications**: run summaries now include per-cluster `error_class` and run-level `failure_classes` aggregation.
-- **Historical trends API**: backend endpoint `GET /api/v1/report/trends?limit=N` and inline `trends` in `GET /api/v1/report/data`.
 - **Artifact retention policies**: new `artifact-retain-days` and `artifact-retain-max-files` cleanups for generated outputs.
 - **Policy gates for CI/CD**: new `policy-gates` can fail runs using explicit thresholds (`new-fails>0`, `fail-rate>2`, `min-health-score<90`, `flaky-checks>0`).
 - **Drill-down diff reports**: new `drilldown-diff.json` shows per-cluster new FAILs, resolved FAILs, new/removed checks, and severity changes versus previous run snapshot.
@@ -62,7 +61,6 @@ Runs now emit these additional artifacts in `outputfiles/`:
   - retry circuit breaker trip behavior
   - secrets-file hardening failures
   - alert exclusion match mode behavior (`exact|contains|regex`) and invalid regex handling
-  - trend endpoint data collection and limit capping
   - artifact retention policy behavior and protected artifact preservation
 
 ## Artifacts and deployment

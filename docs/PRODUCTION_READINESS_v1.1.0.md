@@ -62,7 +62,6 @@ Checklist and status for releasing **Nutanix NCC Orchestrator** v1.1.0 to produc
 | Retry circuit breaker | ✅ | New `retry-circuit-breaker` fails fast on consecutive retryable failures |
 | Failure classifications | ✅ | `error_class` per cluster + run-level `failure_classes` in `run-summary.json` |
 | Exclusion audit artifact | ✅ | `excluded-alerts.json` with `schema_version` and per-cluster details |
-| Trends API | ✅ | `GET /api/v1/report/trends?limit=N` plus inline trends in report data API |
 
 ---
 

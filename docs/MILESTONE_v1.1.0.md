@@ -86,4 +86,3 @@ The following hardening/operational items were completed during final release re
 - Failure classification in run summaries for machine-readable triage
 - Extended policy gate metrics for auth/network/timeout and cluster-failure classes
 - Artifact retention controls for generated outputs
-- Historical trend API for run history (`/api/v1/report/trends`)
