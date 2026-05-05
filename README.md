@@ -34,6 +34,171 @@ Prajwal Vernekar (prajwal.vernekar@nutanix.com)
 - **Secrets support**: `secret://` references resolved from env or file-backed secret map.
 - **Prometheus**: Writes `.prom` files for scraping; see [Prometheus.md](Prometheus.md) for monitoring setup.
 
+## v2 Backend + Frontend
+
+`v2.0.0` ships as a split stack:
+
+- **Runner binary**: `ncc-orchestrator` (core NCC execution + artifacts)
+- **Backend API**: `cmd/ncc-api-server` (run control, config/schedule APIs, artifact reads)
+- **UI proxy/static server**: `cmd/ncc-ui-server` (serves built frontend, proxies `/api/v1/*`)
+- **Frontend app**: `frontend/` (React + Vite + TypeScript)
+
+### How it works
+
+1. The frontend calls `/api/v1/*` on the UI server.
+2. The UI server proxies those calls to `ncc-api-server` and injects auth (token/session).
+3. The API server triggers `ncc-orchestrator` with `--config <file>` (plus allowlisted extra args).
+4. `ncc-orchestrator` writes artifacts under `outputfiles/` and raw logs under `nccfiles/`.
+5. API endpoints expose run state and artifacts for dashboard/report views.
+
+### API endpoints (major)
+
+- `GET /api/v1/health`
+- `GET|PUT /api/v1/settings/config`
+- `GET|PUT /api/v1/settings/notifications`
+- `POST /api/v1/settings/notifications/test`
+- `GET|PUT /api/v1/schedule`
+- `GET /api/v1/runs`, `GET /api/v1/runs/summary`, `GET /api/v1/runs/active`
+- `POST /api/v1/runs/trigger`
+- `GET /api/v1/report/data`
+- `GET /api/v1/report/trends?limit=30`
+- `GET /api/v1/artifacts`, `GET /api/v1/artifacts/{name}`
+- `GET /api/v1/logs/runner`
+
+### Run backend API server
+
+```bash
+go run ./cmd/ncc-api-server \
+  --listen :8081 \
+  --repo-root . \
+  --config-path config.yaml \
+  --output-dir outputfiles \
+  --log-dir nccfiles \
+  --orchestrator-bin ./ncc-orchestrator \
+  --auth-mode token \
+  --cors-origin http://localhost:8080
+```
+
+### Backend path requirements (important)
+
+`ncc-api-server` must know where your repository data and runner binary are located. These flags are required for a reliable setup:
+
+- `--repo-root`: base directory used to confine and resolve file paths
+- `--orchestrator-bin`: path to the `ncc-orchestrator` executable the API server launches
+- `--config-path`: config file used for trigger runs (`--config <path>`)
+- `--output-dir`: generated report/artifact directory (for `/api/v1/report/data`, `/api/v1/artifacts`)
+- `--log-dir`: raw NCC logs directory
+- `--runner-log-path`: orchestrator runtime log file path (for `/api/v1/logs/runner`)
+
+If you run from repository root with local binaries:
+
+```bash
+go run ./cmd/ncc-api-server \
+  --repo-root . \
+  --orchestrator-bin ./ncc-orchestrator \
+  --config-path ./config.yaml \
+  --output-dir ./outputfiles \
+  --log-dir ./nccfiles \
+  --runner-log-path ./logs/ncc-runner.log
+```
+
+If backend and binary are installed in different locations:
+
+```bash
+/opt/ncc/bin/ncc-api-server \
+  --listen :8081 \
+  --repo-root /srv/ncc \
+  --orchestrator-bin /opt/ncc/bin/ncc-orchestrator \
+  --config-path /srv/ncc/config/prod.yaml \
+  --output-dir /srv/ncc/outputfiles \
+  --log-dir /srv/ncc/nccfiles \
+  --runner-log-path /srv/ncc/logs/ncc-runner.log
+```
+
+Quick verification:
+
+```bash
+curl -sS http://localhost:8081/api/v1/health
+curl -sS -H "Authorization: Bearer $(cat .ncc-api-token)" http://localhost:8081/api/v1/artifacts
+```
+
+### Run frontend
+
+Dev mode:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Built mode via UI server:
+
+```bash
+cd frontend
+npm install
+npm run build
+
+go run ../cmd/ncc-ui-server \
+  --listen :8080 \
+  --dir ./dist \
+  --backend-url http://localhost:8081 \
+  --api-token-file ../.ncc-api-token \
+  --api-auth-mode token
+```
+
+### `ncc-orchestrator` binary examples (flags)
+
+Direct run:
+
+```bash
+./ncc-orchestrator \
+  --config config.yaml \
+  --clusters "10.38.66.37,10.38.66.7" \
+  --username admin \
+  --password "$NCC_PASSWORD" \
+  --outputs html,csv,json,markdown,sarif \
+  --max-parallel 4 \
+  --policy-gates "new-fails>0,fail-rate>2,min-health-score<90"
+```
+
+Replay artifacts without calling NCC APIs:
+
+```bash
+./ncc-orchestrator --config config.yaml --replay --outputs html,csv,json
+```
+
+Config/secret preflight:
+
+```bash
+./ncc-orchestrator validate-config --config config.yaml
+NCC_SECRETS_PROVIDER=env ./ncc-orchestrator validate-secrets --config config.yaml
+```
+
+### Trigger run through backend API (with extra flags)
+
+```bash
+curl -sS -X POST "http://localhost:8081/api/v1/runs/trigger" \
+  -H "Authorization: Bearer $(cat .ncc-api-token)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "config_path": "config.yaml",
+    "password": "REDACTED_OR_EMPTY",
+    "extra_args": ["--output-dir","outputfiles","--prom-dir","promfiles","--no-html"]
+  }'
+```
+
+`extra_args` are restricted by backend hardening (allowlist + value sanitization), so only specific flags are accepted.
+
+### Trend API example
+
+```bash
+curl -sS "http://localhost:8081/api/v1/report/trends?limit=30" \
+  -H "Authorization: Bearer $(cat .ncc-api-token)"
+```
+
+This returns chronological points built from `run-summary.json` (current + run-history snapshots) with totals for FAIL/WARN/ERR/INFO and health/check aggregates.
+
 ## Installation
 
 ### Prerequisites
