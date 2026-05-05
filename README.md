@@ -62,6 +62,7 @@ Prajwal Vernekar (prajwal.vernekar@nutanix.com)
 - `POST /api/v1/runs/trigger`
 - `GET /api/v1/report/data`
 - `GET /api/v1/report/trends?limit=30`
+- `GET /api/v1/openapi.json`
 - `GET /api/v1/artifacts`, `GET /api/v1/artifacts/{name}`
 - `GET /api/v1/logs/runner`
 

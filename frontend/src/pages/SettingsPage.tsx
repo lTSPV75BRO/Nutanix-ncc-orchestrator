@@ -7,6 +7,7 @@ import { RunsSection } from "../features/runs/RunsSection";
 import { LogsSection } from "../features/settings/LogsSection";
 import { JsonOutputsSection } from "../features/settings/JsonOutputsSection";
 import { RawOutputsSection } from "../features/settings/RawOutputsSection";
+import { ApiExplorerSection } from "../features/settings/ApiExplorerSection";
 import { api } from "../api/client";
 import { useLocalStorageState } from "../hooks/useLocalStorageState";
 
@@ -48,6 +49,7 @@ export function SettingsPage() {
           { key: "config", label: "Config", children: <ConfigSection onError={(e) => setErr(String(e))} /> },
           { key: "schedule", label: "Schedule", children: <ScheduleSection backendConfigPath={backendConfigPath} onError={(e) => setErr(String(e))} /> },
           { key: "runs", label: "Runs", children: <RunsSection backendConfigPath={backendConfigPath} onError={(e) => setErr(String(e))} /> },
+          { key: "api", label: "API Explorer", children: <ApiExplorerSection onError={(e) => setErr(String(e))} /> },
           { key: "logs", label: "Logs", children: <LogsSection onError={(e) => setErr(String(e))} /> },
           { key: "json", label: "JSON Outputs", children: <JsonOutputsSection onError={(e) => setErr(String(e))} /> },
           { key: "raw", label: "Raw Outputs", children: <RawOutputsSection onError={(e) => setErr(String(e))} /> },

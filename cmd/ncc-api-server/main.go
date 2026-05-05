@@ -67,6 +67,13 @@ type envelope struct {
 	Error   string      `json:"error,omitempty"`
 }
 
+type routeMeta struct {
+	Path        string   `json:"path"`
+	Methods     []string `json:"methods"`
+	Description string   `json:"description,omitempty"`
+	SampleBody  string   `json:"sample_body,omitempty"`
+}
+
 type configUpdateRequest struct {
 	Content string `json:"content"`
 }
@@ -205,6 +212,8 @@ func main() {
 	mux.HandleFunc("/api/v1/report/data", s.handleReportData)
 	mux.HandleFunc("/api/v1/report/trends", s.handleReportTrends)
 	mux.HandleFunc("/api/v1/logs/runner", s.handleRunnerLogs)
+	mux.HandleFunc("/api/v1/openapi.json", s.handleOpenAPI)
+	mux.HandleFunc("/api/v1/meta/routes", s.handleMetaRoutes)
 
 	handler := s.withCORS(s.withAuth(mux))
 	srv := &http.Server{
@@ -970,6 +979,189 @@ func (s *apiServer) handleReportTrends(w http.ResponseWriter, r *http.Request) {
 		"limit":             limit,
 		"report_source_dir": outDir,
 	}})
+}
+
+func (s *apiServer) handleMetaRoutes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	routes := []routeMeta{
+		{Path: "/api/v1/health", Methods: []string{http.MethodGet}, Description: "Backend health and resolved paths"},
+		{Path: "/api/v1/auth/session", Methods: []string{http.MethodPost}, Description: "Issue short-lived session token"},
+		{Path: "/api/v1/auth/rotate", Methods: []string{http.MethodPost}, Description: "Rotate API token"},
+		{Path: "/api/v1/settings/config", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write runtime config", SampleBody: "{\n  \"content\": \"clusters: \\\"10.0.0.1\\\"\\nusername: \\\"admin\\\"\\n\"\n}"},
+		{Path: "/api/v1/settings/notifications", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write notifications state", SampleBody: "{\n  \"enabled\": true,\n  \"channel\": \"webhook\"\n}"},
+		{Path: "/api/v1/settings/notifications/test", Methods: []string{http.MethodPost}, Description: "Send test notification(s)", SampleBody: "{\n  \"channel\": \"all\"\n}"},
+		{Path: "/api/v1/schedule", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write scheduler state", SampleBody: "{\n  \"type\": \"cron\",\n  \"action\": \"create\",\n  \"cron\": \"15 */4 * * *\",\n  \"config\": \"config.yaml\",\n  \"print_only\": true,\n  \"apply\": false\n}"},
+		{Path: "/api/v1/artifacts", Methods: []string{http.MethodGet}, Description: "List available artifacts"},
+		{Path: "/api/v1/artifacts/{name}", Methods: []string{http.MethodGet}, Description: "Read artifact by name"},
+		{Path: "/api/v1/runs", Methods: []string{http.MethodGet}, Description: "List historical runs"},
+		{Path: "/api/v1/runs/summary", Methods: []string{http.MethodGet}, Description: "Read latest run summary"},
+		{Path: "/api/v1/runs/active", Methods: []string{http.MethodGet}, Description: "Read active run state"},
+		{Path: "/api/v1/runs/trigger", Methods: []string{http.MethodPost}, Description: "Trigger orchestrator run", SampleBody: "{\n  \"config_path\": \"config.yaml\",\n  \"password\": \"\",\n  \"extra_args\": [\"--no-html\"]\n}"},
+		{Path: "/api/v1/report/data", Methods: []string{http.MethodGet}, Description: "Aggregated report payload"},
+		{Path: "/api/v1/report/trends", Methods: []string{http.MethodGet}, Description: "Historical trends from run summaries"},
+		{Path: "/api/v1/logs/runner", Methods: []string{http.MethodGet}, Description: "Read tail of runner log"},
+		{Path: "/api/v1/openapi.json", Methods: []string{http.MethodGet}, Description: "OpenAPI 3.0 specification"},
+		{Path: "/api/v1/meta/routes", Methods: []string{http.MethodGet}, Description: "List available REST routes for API explorer"},
+	}
+	writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
+		"routes": routes,
+		"count":  len(routes),
+	}})
+}
+
+func (s *apiServer) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	spec := s.buildOpenAPISpec()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(spec)
+}
+
+func (s *apiServer) buildOpenAPISpec() map[string]interface{} {
+	return map[string]interface{}{
+		"openapi": "3.0.3",
+		"info": map[string]interface{}{
+			"title":       "NCC Orchestrator API",
+			"version":     "2.0.0",
+			"description": "REST API for NCC orchestrator run control, artifacts, settings, and analytics.",
+		},
+		"servers": []map[string]interface{}{
+			{"url": "/"},
+		},
+		"paths": map[string]interface{}{
+			"/api/v1/health": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Backend health and resolved paths"},
+			},
+			"/api/v1/auth/session": map[string]interface{}{
+				"post": map[string]interface{}{"summary": "Issue short-lived session token"},
+			},
+			"/api/v1/auth/rotate": map[string]interface{}{
+				"post": map[string]interface{}{"summary": "Rotate API token"},
+			},
+			"/api/v1/settings/config": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Read runtime config"},
+				"put": map[string]interface{}{
+					"summary": "Write runtime config",
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"example": map[string]interface{}{
+									"content": "clusters: \"10.0.0.1\"\nusername: \"admin\"\n",
+								},
+							},
+						},
+					},
+				},
+			},
+			"/api/v1/settings/notifications": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Read notifications state"},
+				"put": map[string]interface{}{
+					"summary": "Write notifications state",
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"example": map[string]interface{}{
+									"enabled": true,
+									"channel": "webhook",
+								},
+							},
+						},
+					},
+				},
+			},
+			"/api/v1/settings/notifications/test": map[string]interface{}{
+				"post": map[string]interface{}{
+					"summary": "Send test notification(s)",
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"example": map[string]interface{}{
+									"channel": "all",
+								},
+							},
+						},
+					},
+				},
+			},
+			"/api/v1/schedule": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Read scheduler state"},
+				"put": map[string]interface{}{
+					"summary": "Write scheduler state",
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"example": map[string]interface{}{
+									"type":       "cron",
+									"action":     "create",
+									"cron":       "15 */4 * * *",
+									"config":     "config.yaml",
+									"print_only": true,
+									"apply":      false,
+								},
+							},
+						},
+					},
+				},
+			},
+			"/api/v1/artifacts": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "List available artifacts"},
+			},
+			"/api/v1/artifacts/{name}": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Read artifact by name"},
+			},
+			"/api/v1/runs": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "List historical runs"},
+			},
+			"/api/v1/runs/summary": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Read latest run summary"},
+			},
+			"/api/v1/runs/active": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Read active run state"},
+			},
+			"/api/v1/runs/trigger": map[string]interface{}{
+				"post": map[string]interface{}{
+					"summary": "Trigger orchestrator run",
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"example": map[string]interface{}{
+									"config_path": "config.yaml",
+									"password":    "",
+									"extra_args":  []string{"--no-html"},
+								},
+							},
+						},
+					},
+				},
+			},
+			"/api/v1/report/data": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Aggregated report payload"},
+			},
+			"/api/v1/report/trends": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Historical trends from run summaries"},
+			},
+			"/api/v1/logs/runner": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Read tail of runner log"},
+			},
+			"/api/v1/openapi.json": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "OpenAPI 3.0 specification"},
+			},
+			"/api/v1/meta/routes": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "List available REST routes for API explorer"},
+			},
+		},
+	}
 }
 
 func (s *apiServer) setRunDone(err error, output string) {
