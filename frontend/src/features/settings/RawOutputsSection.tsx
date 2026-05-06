@@ -3,6 +3,7 @@ import { Button, Card, Col, List, Row, Typography } from "antd";
 import { api } from "../../api/client";
 import type { ArtifactInfo } from "../../api/types";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
+import { CodeEditor, inferEditorLanguage } from "../../components/CodeEditor";
 
 type Props = {
   onError: (e: unknown) => void;
@@ -73,7 +74,7 @@ export function RawOutputsSection({ onError }: Props) {
           </Col>
           <Col xs={24} md={16}>
             <Typography.Text type="secondary">{selected || "Select artifact"}</Typography.Text>
-            <pre>{raw}</pre>
+            <CodeEditor value={raw} language={inferEditorLanguage(selected || "")} readOnly height={360} />
           </Col>
         </Row>
     </Card>

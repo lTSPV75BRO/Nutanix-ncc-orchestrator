@@ -210,7 +210,7 @@ export function ClusterTable({ checksSnapshot, aggRows, diffFlags, flakyKeys, nc
           <div className="mono">
             <div style={{ fontWeight: 600 }}>{row.clusterName}</div>
             {(clusterVersion || nccVersion) && (
-              <div style={{ color: "rgba(255,255,255,0.65)", fontSize: 12 }}>
+              <div className="table-meta-text" style={{ fontSize: 12 }}>
                 {clusterVersion ? <div>{`Version: ${clusterVersion}`}</div> : null}
                 {nccVersion ? <div>{`NCC: ${nccVersion}`}</div> : null}
               </div>

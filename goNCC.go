@@ -58,6 +58,11 @@ type Config struct {
 	Clusters           []string
 	ClustersFile       string                       // Optional: cluster file; lines are cluster or cluster,username[,password] (overrides/supplements clusters when set)
 	ClusterCredentials map[string]ClusterCredential `mapstructure:"-"`
+	ClusterSourceMode  string                       `mapstructure:"cluster-source-mode"` // clusters (default) or pc
+	PCs                []string                     `mapstructure:"-"`
+	PCsFile            string                       `mapstructure:"pcs-file"` // Optional: one Prism Central IP/FQDN/URL per line
+	PrismCentralURL    string                       `mapstructure:"prism-central-url"`
+	DiscoverAPIVersion string                       `mapstructure:"discover-api-version"` // v4 (default) or v3 for PC cluster discovery
 	Username           string
 	Password           string
 	InsecureSkipVerify bool
@@ -335,6 +340,8 @@ const (
 
 	// defaultNutanixV4APIVersion is the default Nutanix v4 API path segment (clustermgmt / monitoring).
 	defaultNutanixV4APIVersion = "v4.2"
+	defaultDiscoverAPIVersion  = "v4"
+	defaultClusterSourceMode   = "clusters"
 	defaultFlakyLookbackRuns   = 6
 	defaultFlakyTransitions    = 2
 )
@@ -372,6 +379,19 @@ func splitCSV(s string) []string {
 	return out
 }
 
+func normalizeClusterSourceMode(s string) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(s))
+	if mode == "" {
+		return defaultClusterSourceMode, nil
+	}
+	switch mode {
+	case "clusters", "pc":
+		return mode, nil
+	default:
+		return "", fmt.Errorf("cluster-source-mode must be one of clusters or pc")
+	}
+}
+
 func splitCSVTrimLower(s string) []string {
 	in := splitCSV(s)
 	out := make([]string, 0, len(in))
@@ -379,6 +399,30 @@ func splitCSVTrimLower(s string) []string {
 		out = append(out, strings.ToLower(strings.TrimSpace(v)))
 	}
 	return out
+}
+
+func readLineValuesFile(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	seen := make(map[string]bool)
+	for i, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if err := validateClusterAddress(trimmed); err != nil {
+			return nil, fmt.Errorf("line %d: %w", i+1, err)
+		}
+		if seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		out = append(out, trimmed)
+	}
+	return out, nil
 }
 
 func loadExcludeAlertTitlesFromFile(path string) ([]string, error) {
@@ -915,14 +959,31 @@ func normalizeExcludeAlertMatchMode(s string) (string, error) {
 
 // validateConfig performs comprehensive configuration validation
 func validateConfig(cfg Config) error {
-	// Validate clusters
-	if err := validateClusters(cfg.Clusters); err != nil {
-		return fmt.Errorf("cluster validation failed: %w", err)
-	}
-
-	// Validate effective credentials (global or per-cluster from clusters-file)
-	if err := validateClusterCredentialCoverage(cfg); err != nil {
+	sourceMode, err := normalizeClusterSourceMode(cfg.ClusterSourceMode)
+	if err != nil {
 		return err
+	}
+	if sourceMode == "pc" {
+		if len(cfg.PCs) == 0 && strings.TrimSpace(cfg.PrismCentralURL) == "" {
+			return errors.New("pc mode requires pcs, pcs-file, or prism-central-url")
+		}
+		if strings.TrimSpace(cfg.Username) == "" {
+			return errors.New("username is required in pc mode")
+		}
+		for i, pc := range cfg.PCs {
+			if _, err := normalizePCBaseURL(pc); err != nil {
+				return fmt.Errorf("pc target %d (%s): %w", i+1, pc, err)
+			}
+		}
+	} else {
+		// Validate direct clusters input.
+		if err := validateClusters(cfg.Clusters); err != nil {
+			return fmt.Errorf("cluster validation failed: %w", err)
+		}
+		// Validate effective credentials (global or per-cluster from clusters-file).
+		if err := validateClusterCredentialCoverage(cfg); err != nil {
+			return err
+		}
 	}
 
 	if _, err := normalizeNCCAPIVersion(cfg.NCCAPIVersion); err != nil {
@@ -1466,7 +1527,7 @@ func validateConfigFileRawTypes() error {
 	allowedTopKeys := map[string]bool{
 		"config":   true,
 		"update":   true,
-		"clusters": true, "clusters-file": true, "prism-central-url": true, "discover-api-version": true,
+		"clusters": true, "clusters-file": true, "cluster-source-mode": true, "pcs": true, "pcs-file": true, "prism-central-url": true, "discover-api-version": true,
 		"username": true, "password": true, "ncc-api-version": true, "nutanix-v4-api-version": true,
 		"insecure-skip-verify": true, "timeout": true, "request-timeout": true, "poll-interval": true, "poll-jitter": true,
 		"max-parallel": true, "outputs": true, "output-dir-logs": true, "output-dir-filtered": true,
@@ -1498,7 +1559,7 @@ func validateConfigFileRawTypes() error {
 	}
 
 	stringKeys := []string{
-		"clusters", "clusters-file", "prism-central-url", "discover-api-version",
+		"clusters", "clusters-file", "cluster-source-mode", "pcs", "pcs-file", "prism-central-url", "discover-api-version",
 		"username", "password", "ncc-api-version", "nutanix-v4-api-version",
 		"timeout", "request-timeout", "poll-interval", "poll-jitter",
 		"outputs", "output-dir-logs", "output-dir-filtered", "run-history-dir",
@@ -1602,6 +1663,9 @@ func bindConfig() (Config, error) {
 
 	clustersFromFlag := splitCSV(viper.GetString("clusters"))
 	clustersFile := strings.TrimSpace(viper.GetString("clusters-file"))
+	pcsFromFlag := splitCSV(viper.GetString("pcs"))
+	pcsFile := strings.TrimSpace(viper.GetString("pcs-file"))
+	clusterSourceMode := strings.TrimSpace(viper.GetString("cluster-source-mode"))
 	clusterCreds := map[string]ClusterCredential{}
 	if clustersFile != "" {
 		lines, fileCreds, err := readClusterFile(clustersFile)
@@ -1613,6 +1677,15 @@ func bindConfig() (Config, error) {
 		}
 		clusterCreds = fileCreds
 	}
+	if pcsFile != "" {
+		lines, err := readLineValuesFile(pcsFile)
+		if err != nil {
+			return Config{}, fmt.Errorf("pcs-file %s: %w", pcsFile, err)
+		}
+		if len(lines) > 0 {
+			pcsFromFlag = lines
+		}
+	}
 	nccAPIVer, err := normalizeNCCAPIVersion(viper.GetString("ncc-api-version"))
 	if err != nil {
 		return Config{}, fmt.Errorf("ncc-api-version: %w", err)
@@ -1621,6 +1694,11 @@ func bindConfig() (Config, error) {
 		Clusters:               clustersFromFlag,
 		ClustersFile:           clustersFile,
 		ClusterCredentials:     clusterCreds,
+		ClusterSourceMode:      clusterSourceMode,
+		PCs:                    pcsFromFlag,
+		PCsFile:                pcsFile,
+		PrismCentralURL:        strings.TrimSpace(viper.GetString("prism-central-url")),
+		DiscoverAPIVersion:     strings.TrimSpace(viper.GetString("discover-api-version")),
 		Username:               viper.GetString("username"),
 		Password:               viper.GetString("password"),
 		InsecureSkipVerify:     viper.GetBool("insecure-skip-verify"),
@@ -1711,6 +1789,23 @@ func bindConfig() (Config, error) {
 	if cfg.ExcludeAlertMatchMode == "" {
 		cfg.ExcludeAlertMatchMode = defaultExcludeMatchMode
 	}
+	mode, err := normalizeClusterSourceMode(cfg.ClusterSourceMode)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.ClusterSourceMode = mode
+	if cfg.DiscoverAPIVersion == "" {
+		cfg.DiscoverAPIVersion = defaultDiscoverAPIVersion
+	}
+	cfg.DiscoverAPIVersion = strings.ToLower(strings.TrimSpace(cfg.DiscoverAPIVersion))
+	if cfg.DiscoverAPIVersion != "v3" && cfg.DiscoverAPIVersion != "v4" {
+		return cfg, fmt.Errorf("discover-api-version must be v3 or v4, got %q", cfg.DiscoverAPIVersion)
+	}
+	if cfg.ClusterSourceMode == "pc" {
+		if len(cfg.PCs) == 0 && strings.TrimSpace(cfg.PrismCentralURL) != "" {
+			cfg.PCs = []string{cfg.PrismCentralURL}
+		}
+	}
 	if cfg.ExcludeAlertTitlesFile != "" {
 		fileTitles, err := loadExcludeAlertTitlesFromFile(cfg.ExcludeAlertTitlesFile)
 		if err != nil {
@@ -1718,11 +1813,11 @@ func bindConfig() (Config, error) {
 		}
 		cfg.ExcludeAlertTitles = mergeUniqueStrings(cfg.ExcludeAlertTitles, fileTitles)
 	}
-	mode, err := normalizeExcludeAlertMatchMode(cfg.ExcludeAlertMatchMode)
+	excludeMode, err := normalizeExcludeAlertMatchMode(cfg.ExcludeAlertMatchMode)
 	if err != nil {
 		return cfg, err
 	}
-	cfg.ExcludeAlertMatchMode = mode
+	cfg.ExcludeAlertMatchMode = excludeMode
 	if cfg.RunHistoryDir == "" {
 		cfg.RunHistoryDir = filepath.Join(cfg.OutputDirFiltered, "runs")
 	}
@@ -7628,6 +7723,85 @@ func discoverHTTPClient(insecure bool) *http.Client {
 	}
 }
 
+func normalizePCBaseURL(raw string) (string, error) {
+	target := strings.TrimSpace(raw)
+	if target == "" {
+		return "", errors.New("pc target is empty")
+	}
+	if !strings.HasPrefix(target, "https://") && !strings.HasPrefix(target, "http://") {
+		target = "https://" + target
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return "", fmt.Errorf("parse PC target %q: %w", raw, err)
+	}
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return "", fmt.Errorf("PC target must use http or https scheme, got %q", u.Scheme)
+	}
+	if strings.TrimSpace(u.Host) == "" {
+		return "", fmt.Errorf("PC target %q has no host", raw)
+	}
+	hostname := u.Hostname()
+	if err := validateClusterAddress(hostname); err != nil {
+		return "", fmt.Errorf("PC host %q: %w", hostname, err)
+	}
+	port := u.Port()
+	if strings.TrimSpace(port) == "" {
+		port = strconv.Itoa(prismGatewayPort)
+	}
+	clean := url.URL{
+		Scheme: u.Scheme,
+		Host:   net.JoinHostPort(hostname, port),
+	}
+	return strings.TrimSuffix(clean.String(), "/"), nil
+}
+
+func discoverClustersFromPCTargets(cfg Config) ([]string, error) {
+	apiVersion := strings.ToLower(strings.TrimSpace(cfg.DiscoverAPIVersion))
+	if apiVersion == "" {
+		apiVersion = defaultDiscoverAPIVersion
+	}
+	if apiVersion != "v3" && apiVersion != "v4" {
+		return nil, fmt.Errorf("discover-api-version must be v3 or v4, got %q", apiVersion)
+	}
+
+	seen := make(map[string]bool)
+	out := make([]string, 0)
+	for _, pc := range cfg.PCs {
+		pcURL, err := normalizePCBaseURL(pc)
+		if err != nil {
+			return nil, err
+		}
+		var discovered []string
+		if apiVersion == "v4" {
+			discovered, err = fetchPCClustersV4(pcURL, cfg.Username, cfg.Password, cfg.InsecureSkipVerify, cfg.NutanixV4APIVersion)
+			if err != nil {
+				var v4Unavailable errDiscoverV4Unavailable
+				if errors.As(err, &v4Unavailable) {
+					discovered, err = fetchPCClustersV3(pcURL, cfg.Username, cfg.Password, cfg.InsecureSkipVerify)
+				}
+			}
+		} else {
+			discovered, err = fetchPCClustersV3(pcURL, cfg.Username, cfg.Password, cfg.InsecureSkipVerify)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("discover clusters from PC %s: %w", pcURL, err)
+		}
+		for _, addr := range discovered {
+			addr = strings.TrimSpace(addr)
+			if addr == "" || seen[addr] {
+				continue
+			}
+			seen[addr] = true
+			out = append(out, addr)
+		}
+	}
+	if len(out) == 0 {
+		return nil, errors.New("no clusters discovered from provided PCs")
+	}
+	return out, nil
+}
+
 // fetchPCClustersV3 lists clusters via legacy POST /api/nutanix/v3/clusters/list.
 func fetchPCClustersV3(pcURL, username, password string, insecure bool) ([]string, error) {
 	u := pcURL + "/api/nutanix/v3/clusters/list"
@@ -8473,8 +8647,11 @@ func runCreateSchedule(cmd *cobra.Command, args []string) error {
 
 func configJSONSchema() map[string]interface{} {
 	props := map[string]interface{}{
+		"cluster-source-mode":       map[string]interface{}{"type": "string", "enum": []string{"clusters", "pc"}},
 		"clusters":                  map[string]interface{}{"type": "string", "description": "Comma-separated cluster IPs/FQDNs"},
 		"clusters-file":             map[string]interface{}{"type": "string"},
+		"pcs":                       map[string]interface{}{"type": "string", "description": "Comma-separated Prism Central IPs/FQDNs/URLs for pc mode"},
+		"pcs-file":                  map[string]interface{}{"type": "string"},
 		"update":                    map[string]interface{}{"type": "boolean"},
 		"username":                  map[string]interface{}{"type": "string"},
 		"password":                  map[string]interface{}{"type": "string"},
@@ -8845,7 +9022,9 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 			// Set global log level after file logger is set up
 			zerolog.SetGlobalLevel(lvl)
 			log.Info().
+				Str("clusterSourceMode", cfg.ClusterSourceMode).
 				Strs("clusters", cfg.Clusters).
+				Strs("pcs", cfg.PCs).
 				Str("username", cfg.Username).
 				Str("password", maskPassword(cfg.Password)).
 				Bool("insecureSkipVerify", cfg.InsecureSkipVerify).
@@ -8869,7 +9048,29 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				fmt.Print(termsText)
 				return nil
 			}
-			// Validate required fields first
+			// Resolve targets by source mode.
+			if cfg.ClusterSourceMode == "pc" {
+				if strings.TrimSpace(cfg.Password) == "" {
+					cfg.Password, err = promptPasswordIfEmpty("", cfg.Username)
+					if err != nil {
+						return err
+					}
+				}
+				resolvedClusters, discoverErr := discoverClustersFromPCTargets(cfg)
+				if discoverErr != nil {
+					log.Error().Err(discoverErr).Msg("failed to discover clusters from PC targets")
+					return exitConfig(discoverErr)
+				}
+				cfg.Clusters = resolvedClusters
+				cfg.ClusterCredentials = map[string]ClusterCredential{}
+				log.Info().
+					Int("pcs", len(cfg.PCs)).
+					Int("discovered_clusters", len(cfg.Clusters)).
+					Str("discover_api_version", cfg.DiscoverAPIVersion).
+					Msg("resolved clusters from pc mode")
+			}
+
+			// Validate required fields after target resolution.
 			if len(cfg.Clusters) == 0 {
 				err := errors.New("no clusters provided (--clusters, --clusters-file, env, or config)")
 				log.Error().Msg(err.Error())
@@ -8890,6 +9091,10 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				log.Info().Msg("DRY-RUN MODE: Configuration validated, no checks will be executed")
 				fmt.Println("✓ Configuration is valid")
 				fmt.Printf("  Clusters: %d configured\n", len(cfg.Clusters))
+				fmt.Printf("  Cluster source mode: %s\n", cfg.ClusterSourceMode)
+				if cfg.ClusterSourceMode == "pc" {
+					fmt.Printf("  Prism Central targets: %d\n", len(cfg.PCs))
+				}
 				if strings.TrimSpace(cfg.Username) != "" {
 					fmt.Printf("  Username: %s\n", cfg.Username)
 				} else {
@@ -8920,9 +9125,13 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				fmt.Println("Possible Environment Variables (prefix: NCC_) and Current Values:")
 				envKeys := []string{
 					"CONFIG",
+					"CLUSTER_SOURCE_MODE",
 					"CLUSTERS",
 					"CLUSTERS_FILE",
+					"PCS",
+					"PCS_FILE",
 					"PRISM_CENTRAL_URL",
+					"DISCOVER_API_VERSION",
 					"USERNAME",
 					"PASSWORD",
 					"INSECURE_SKIP_VERIFY",
@@ -9697,8 +9906,13 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	cmd.Flags().Bool("env-info", false, "Display possible environment variables and their current values")
 	cmd.Flags().Bool("tc", false, "Display terms and conditions")
 	cmd.Flags().String("config", "", "Config file path (yaml/json)")
+	cmd.Flags().String("cluster-source-mode", defaultClusterSourceMode, "Cluster source mode: clusters (direct PE list) or pc (discover PEs from Prism Central targets)")
 	cmd.Flags().String("clusters", "", "Comma-separated cluster IPs or FQDNs")
 	cmd.Flags().String("clusters-file", "", "Path to cluster file (cluster or cluster,username[,password] per line; overrides clusters when set)")
+	cmd.Flags().String("pcs", "", "Comma-separated Prism Central IPs/FQDNs/URLs (used when --cluster-source-mode=pc)")
+	cmd.Flags().String("pcs-file", "", "Path to file with one Prism Central IP/FQDN/URL per line (used when --cluster-source-mode=pc)")
+	cmd.Flags().String("prism-central-url", "", "Single Prism Central URL/IP/FQDN fallback target (used when --cluster-source-mode=pc and no pcs/pcs-file)")
+	cmd.Flags().String("discover-api-version", defaultDiscoverAPIVersion, "Cluster discovery API for pc mode: v4 (GET clustermgmt) or v3 (legacy POST)")
 	cmd.Flags().String("username", "admin", "Username for Prism Gateway")
 	cmd.Flags().String("password", "", "Password (omit to be prompted)")
 	cmd.Flags().String("ncc-api-version", "v4", "NCC API mode: v4 (default) or Legacy (Prism Gateway v1 start-checks only; v1 accepted as alias); use --nutanix-v4-api-version for v4.2 vs v4.0.a1 etc.")
@@ -9763,8 +9977,13 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	// viper bindings
 	_ = viper.BindPFlag("update", cmd.Flags().Lookup("update"))
 	_ = viper.BindPFlag("config", cmd.Flags().Lookup("config"))
+	_ = viper.BindPFlag("cluster-source-mode", cmd.Flags().Lookup("cluster-source-mode"))
 	_ = viper.BindPFlag("clusters", cmd.Flags().Lookup("clusters"))
 	_ = viper.BindPFlag("clusters-file", cmd.Flags().Lookup("clusters-file"))
+	_ = viper.BindPFlag("pcs", cmd.Flags().Lookup("pcs"))
+	_ = viper.BindPFlag("pcs-file", cmd.Flags().Lookup("pcs-file"))
+	_ = viper.BindPFlag("prism-central-url", cmd.Flags().Lookup("prism-central-url"))
+	_ = viper.BindPFlag("discover-api-version", cmd.Flags().Lookup("discover-api-version"))
 	_ = viper.BindPFlag("username", cmd.Flags().Lookup("username"))
 	_ = viper.BindPFlag("password", cmd.Flags().Lookup("password"))
 	_ = viper.BindPFlag("ncc-api-version", cmd.Flags().Lookup("ncc-api-version"))

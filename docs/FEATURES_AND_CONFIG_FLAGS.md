@@ -225,8 +225,13 @@ Highest to lowest precedence:
 
 | Key | Type | Default | Example |
 |---|---|---|---|
+| `cluster-source-mode` | string | `clusters` | `"pc"` |
 | `clusters` | string | — | `"10.38.66.37,10.38.66.7"` |
 | `clusters-file` | string | — | `"clusters.txt"` |
+| `pcs` | string | — | `"10.10.10.10,10.10.10.11"` |
+| `pcs-file` | string | — | `"pcs.txt"` |
+| `prism-central-url` | string | — | `"https://10.10.10.10:9440"` |
+| `discover-api-version` | string | `v4` | `"v3"` |
 | `username` | string | `admin` | `"admin"` |
 | `password` | string | — | `"secret://NCC_PRISM_PASSWORD"` |
 | `ncc-api-version` | string | `v4` | `"Legacy"` |
@@ -303,6 +308,7 @@ ncc-orchestrator [flags]
 | Flag | Type | Possible values | Default | Detailed explanation |
 |---|---|---|---|---|
 | `--adaptive-parallelism` | bool | `true`, `false` | `true` | When enabled, orchestration dynamically scales effective worker concurrency down/up based on observed HTTP 429 behavior, reducing sustained rate-limit pressure without fully stopping progress. |
+| `--cluster-source-mode` | string | `clusters`, `pc` | `clusters` | Selects target source behavior. `clusters` uses direct PE entries. `pc` uses Prism Central targets (`--pcs`, `--pcs-file`, or `--prism-central-url`) and auto-discovers clusters before run. |
 | `--clusters` | string | CSV of cluster IP/FQDN values | none | Primary target list when `clusters-file` is not used. Each entry is validated, duplicates are rejected, and values must be resolvable/valid cluster addresses. |
 | `--clusters-file` | string | Path to text file | none | Alternate target source. Supported line formats: `cluster`, `cluster,username`, `cluster,username,password`. If provided and non-empty, it overrides/supersedes `--clusters`. |
 | `--config` | string | Path to `.yaml`, `.yml`, or `.json` | none | Loads persistent config values from file before env/flag overrides are applied. Use this for production runs and scheduler jobs. |
@@ -333,6 +339,10 @@ ncc-orchestrator [flags]
 | `--policy-gates` | string | CSV of expressions `<metric><op><number>` | none | Defines run-fail thresholds for automation control. Example: `new-fails>0,fail-rate>2,min-health-score<90`. |
 | `--poll-interval` | duration string | Go duration (`5s`, `10s`, `1m`) | `15s` | Base interval between task-status polls. Shorter intervals improve responsiveness but increase API load. |
 | `--poll-jitter` | duration string | Go duration (`0s` and above) | `2s` | Random additive delay on top of poll interval to reduce herd effects across concurrent cluster workers. |
+| `--pcs` | string | CSV of Prism Central IP/FQDN/URL values | none | PC target list used in `pc` mode. Each PC is queried and all discovered clusters are added to the run target set (deduplicated). |
+| `--pcs-file` | string | Path to text file | none | Alternate PC target source for `pc` mode (one PC per line; `#` comments allowed). |
+| `--prism-central-url` | string | URL/IP/FQDN | none | Single-PC fallback target for `pc` mode when `--pcs`/`--pcs-file` are not set. |
+| `--discover-api-version` | string | `v4`, `v3` | `v4` | API used for PC cluster discovery in `pc` mode. `v4` uses clustermgmt API and auto-falls back to `v3` on 404. |
 | `--prom-dir` | string | Writable directory path | `promfiles` | Directory for Prometheus `.prom` metric files used by pull-based monitoring stacks. |
 | `--quiet-hours` | string | `HH:MM-HH:MM` local-time range | none | Recurring daily notification suppression window. Ideal for predictable off-hours operations. |
 | `--replay` | bool | `true`, `false` | `false` | Rebuilds reports/artifacts from existing logs without invoking NCC APIs. Useful for debugging and template iterations. |

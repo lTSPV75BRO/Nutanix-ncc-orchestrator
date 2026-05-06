@@ -1,6 +1,8 @@
 import type {
   ArtifactInfo,
   ConfigData,
+  ConfigRelatedFileData,
+  ConfigRelatedFilesData,
   Envelope,
   HealthData,
   ReportData,
@@ -83,6 +85,14 @@ export const api = {
     callApi<ConfigData>("/api/v1/settings/config", {
       method: "PUT",
       body: JSON.stringify({ content }),
+    }),
+  listConfigFiles: () => callApi<ConfigRelatedFilesData>("/api/v1/settings/config-files"),
+  loadConfigFile: (path: string) =>
+    callApi<ConfigRelatedFileData>(`/api/v1/settings/config-file?path=${encodeURIComponent(path)}`),
+  saveConfigFile: (path: string, content: string) =>
+    callApi<ConfigRelatedFileData>("/api/v1/settings/config-file", {
+      method: "PUT",
+      body: JSON.stringify({ path, content }),
     }),
   loadSchedule: () => callApi<ScheduleState>("/api/v1/schedule"),
   saveSchedule: (payload: Partial<ScheduleState> & { apply: boolean }) =>

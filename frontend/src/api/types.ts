@@ -23,6 +23,26 @@ export type ConfigData = {
   content: string;
 };
 
+export type ConfigRelatedFileInfo = {
+  key: string;
+  path: string;
+  resolved_path: string;
+  exists: boolean;
+  size?: number;
+};
+
+export type ConfigRelatedFilesData = {
+  items: ConfigRelatedFileInfo[];
+};
+
+export type ConfigRelatedFileData = {
+  key: string;
+  path: string;
+  resolved: string;
+  exists: boolean;
+  content: string;
+};
+
 export type ScheduleState = {
   type: string;
   action: string;

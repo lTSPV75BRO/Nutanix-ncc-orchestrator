@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Button, Card, Space, Switch, Typography } from "antd";
 import { api } from "../../api/client";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
+import { CodeEditor } from "../../components/CodeEditor";
 
 type Props = {
   onError: (e: unknown) => void;
@@ -11,7 +12,6 @@ export function LogsSection({ onError }: Props) {
   const [content, setContent] = useState("");
   const [path, setPath] = useState("");
   const [auto, setAuto] = useLocalStorageState("settings.logs.autoRefresh", true);
-  const logRef = useRef<HTMLPreElement | null>(null);
 
   const load = async () => {
     try {
@@ -33,12 +33,6 @@ export function LogsSection({ onError }: Props) {
     return () => clearInterval(timer);
   }, [auto]);
 
-  useEffect(() => {
-    const el = logRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [content]);
-
   return (
     <Card className="page-card">
         <Typography.Title level={4} className="section-title">
@@ -50,9 +44,7 @@ export function LogsSection({ onError }: Props) {
           <Typography.Text>Auto refresh every 3s</Typography.Text>
           <Button onClick={load}>Refresh</Button>
         </Space>
-        <div>
-          <pre ref={logRef} className="live-log">{content}</pre>
-        </div>
+        <CodeEditor value={content} language="plaintext" readOnly height={420} autoRevealLastLine />
     </Card>
   );
 }

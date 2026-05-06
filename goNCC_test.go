@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1427,6 +1428,78 @@ func TestBindConfigWithFlags(t *testing.T) {
 	}
 }
 
+func TestBindConfigPCModeWithPcsFile(t *testing.T) {
+	viper.Reset()
+	viper.SetEnvPrefix("ncc")
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+	viper.AutomaticEnv()
+
+	tmpDir := t.TempDir()
+	pcsFile := filepath.Join(tmpDir, "pcs.txt")
+	content := "# pcs list\n10.10.10.10\npc-lab.local\n"
+	if err := os.WriteFile(pcsFile, []byte(content), 0o600); err != nil {
+		t.Fatalf("write pcs file: %v", err)
+	}
+
+	viper.Set("cluster-source-mode", "pc")
+	viper.Set("pcs-file", pcsFile)
+	viper.Set("username", "admin")
+
+	cfg, err := bindConfig()
+	if err != nil {
+		t.Fatalf("bindConfig() failed: %v", err)
+	}
+	if cfg.ClusterSourceMode != "pc" {
+		t.Fatalf("expected cluster-source-mode pc, got %q", cfg.ClusterSourceMode)
+	}
+	if len(cfg.PCs) != 2 {
+		t.Fatalf("expected 2 pc targets, got %d (%v)", len(cfg.PCs), cfg.PCs)
+	}
+	if cfg.PCs[0] != "10.10.10.10" || cfg.PCs[1] != "pc-lab.local" {
+		t.Fatalf("unexpected pcs list: %v", cfg.PCs)
+	}
+}
+
+func TestDiscoverClustersFromPCTargetsV3(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/nutanix/v3/clusters/list" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != "admin" || pass != "secret" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"entities":[{"spec":{"resources":{"network":{"external_ip":"10.20.30.40"}}}},{"spec":{"resources":{"network":{"external_ip":"10.20.30.41"}}}}]}`))
+	}))
+	defer srv.Close()
+
+	cfg := Config{
+		ClusterSourceMode:   "pc",
+		PCs:                 []string{srv.URL},
+		Username:            "admin",
+		Password:            "secret",
+		DiscoverAPIVersion:  "v3",
+		NutanixV4APIVersion: defaultNutanixV4APIVersion,
+	}
+	clusters, err := discoverClustersFromPCTargets(cfg)
+	if err != nil {
+		t.Fatalf("discoverClustersFromPCTargets() failed: %v", err)
+	}
+	if len(clusters) != 2 {
+		t.Fatalf("expected 2 discovered clusters, got %d (%v)", len(clusters), clusters)
+	}
+	if clusters[0] != "10.20.30.40" || clusters[1] != "10.20.30.41" {
+		t.Fatalf("unexpected discovered clusters: %v", clusters)
+	}
+}
+
 func contains(slice []string, item string) bool {
 	for _, s := range slice {
 		if s == item {
@@ -2477,6 +2550,27 @@ func TestValidateConfig(t *testing.T) {
 		cfg.Username = ""
 		if err := validateConfig(cfg); err == nil {
 			t.Error("expected error for empty username")
+		}
+	})
+	t.Run("PC mode valid", func(t *testing.T) {
+		cfg := validPaths()
+		cfg.ClusterSourceMode = "pc"
+		cfg.Clusters = nil
+		cfg.PCs = []string{"10.10.10.10"}
+		cfg.DiscoverAPIVersion = "v4"
+		if err := validateConfig(cfg); err != nil {
+			t.Errorf("validateConfig should accept pc mode: %v", err)
+		}
+	})
+	t.Run("PC mode requires targets", func(t *testing.T) {
+		cfg := validPaths()
+		cfg.ClusterSourceMode = "pc"
+		cfg.Clusters = nil
+		cfg.PCs = nil
+		cfg.PrismCentralURL = ""
+		cfg.DiscoverAPIVersion = "v4"
+		if err := validateConfig(cfg); err == nil {
+			t.Error("expected error for pc mode without targets")
 		}
 	})
 	t.Run("Per-cluster username in clusters-file map", func(t *testing.T) {

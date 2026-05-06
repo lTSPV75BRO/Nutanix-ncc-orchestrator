@@ -3,6 +3,7 @@ import { Card, Col, Row, Select, Typography } from "antd";
 import { api } from "../../api/client";
 import type { ReportData } from "../../api/types";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
+import { CodeEditor } from "../../components/CodeEditor";
 
 type Props = {
   onError: (e: unknown) => void;
@@ -42,7 +43,7 @@ export function JsonOutputsSection({ onError }: Props) {
             />
           </Col>
         </Row>
-        <pre>{JSON.stringify(selectedData ?? {}, null, 2)}</pre>
+        <CodeEditor value={JSON.stringify(selectedData ?? {}, null, 2)} language="json" readOnly height={360} />
     </Card>
   );
 }
