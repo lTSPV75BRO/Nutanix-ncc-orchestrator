@@ -1,8 +1,11 @@
 package main
 
 import (
+	"archive/tar"
+	"archive/zip"
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	crand "crypto/rand"
 	"crypto/sha256"
@@ -58,6 +61,11 @@ type Config struct {
 	Clusters           []string
 	ClustersFile       string                       // Optional: cluster file; lines are cluster or cluster,username[,password] (overrides/supplements clusters when set)
 	ClusterCredentials map[string]ClusterCredential `mapstructure:"-"`
+	ClusterSourceMode  string                       `mapstructure:"cluster-source-mode"` // clusters (default) or pc
+	PCs                []string                     `mapstructure:"-"`
+	PCsFile            string                       `mapstructure:"pcs-file"` // Optional: one Prism Central IP/FQDN/URL per line
+	PrismCentralURL    string                       `mapstructure:"prism-central-url"`
+	DiscoverAPIVersion string                       `mapstructure:"discover-api-version"` // v4 (default) or v3 for PC cluster discovery
 	Username           string
 	Password           string
 	InsecureSkipVerify bool
@@ -189,110 +197,40 @@ type SummaryCounts struct {
 }
 
 const termsText = `
-This script is created by Prajwal Vernekar (prajwal.vernekar@nutanix.com).
+Nutanix NCC Orchestrator - Terms, Support, and Usage Notice
 
-Script Description:
-Nutanix NCC Orchestrator is a CLI tool to run NCC checks across multiple clusters in parallel, aggregate results, and generate HTML/CSV reports.
+Project:
+- Repository: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator
+- Maintainer: Prajwal Vernekar
 
-How the Script Works:
-- Reads configuration from config file, environment variables, or CLI flags.
-- Starts NCC checks on each cluster via API.
-- Polls for completion and fetches summaries.
-- Generates per-cluster and aggregated reports in specified formats.
+What this tool does:
+- Runs NCC checks across multiple clusters.
+- Aggregates and filters results.
+- Produces reports and automation artifacts.
+- Optionally exposes v2 API and UI services.
 
-Usage:
-./ncc-orchestrator [flags]
-./ncc-orchestrator --help for more details.
+Your responsibilities:
+- Review and validate configuration before production use.
+- Protect credentials, API tokens, and generated artifacts.
+- Use secure defaults (TLS verification, least privilege, explicit allowlists).
+- Test changes in non-production first, especially update and scheduling workflows.
 
-Instructions for config.yaml File:
-Create a config.yaml with keys like:
-# Required
-clusters: "10.0.XX.XX,10.1.XX.XX"      	  # Comma-separated list of Prism cluster IPs/hosts  
-username: "admin"                         # Prism username  
-password: ""                              # Prefer env NCC_PASSWORD in CI; leave empty here if using env  
-ncc-api-version: v4                       # v4 (default) or Legacy (Prism Gateway v1 start-checks only)
-nutanix-v4-api-version: v4.2              # v4 path revision: v4.2 (default), v4.1, v4.0.a1, etc.
+Update and version policy:
+- Use "ncc-orchestrator update --check" to check availability before replacing binaries.
+- By default, updates stay on your current major track (v1.x stays on v1.x).
+- Major upgrades (for example v1 -> v2) require explicit opt-in via "--allow-major-upgrade".
+- Review v1 to v2 migration guidance before major upgrades:
+  https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/blob/main/docs/V2_BACKEND_FRONTEND_MVP.md
 
-# TLS and timeouts
-insecure-skip-verify: false               # Set true only for lab/self-signed  
-timeout: "15m"                            # Per-cluster overall timeout  
-request-timeout: "30s"                    # Per HTTP request timeout  
-poll-interval: "15s"                      # Polling interval for task status  
-poll-jitter: "2s"                         # Random jitter to avoid herd behavior  
-
-# Concurrency and outputs
-max-parallel: 4                           # Parallel clusters processed  
-outputs: "html,csv"                       # One or more: html,csv,json,markdown,sarif
-output-dir-logs: "nccfiles"               # Directory for raw NCC summary text  
-output-dir-filtered: "outputfiles"        # Directory for generated HTML/CSV  
-single-report: false                      # Also write ncc-report-single.html
-run-history: false                        # Save each run snapshot under run-history-dir
-run-history-dir: "outputfiles/runs"       # History base directory
-retain-last: 0                            # Keep last N snapshots (0 = unlimited)
-retain-days: 0                            # Keep snapshots newer than N days (0 = unlimited)
-artifact-retain-days: 0                   # Remove generated artifacts older than N days (0 = unlimited)
-artifact-retain-max-files: 0              # Keep only N newest generated artifacts (0 = unlimited)
-notify-on-regression: false               # Notify only when FAIL count increases
-adaptive-parallelism: true                # Reduce/increase effective concurrency on 429s
-policy-gates: ""                          # e.g. new-fails>0,fail-rate>2,min-health-score<90,flaky-checks>0,timeout-clusters>0,auth-failures>0
-quiet-hours: ""                           # Local HH:MM-HH:MM notification quiet window
-maintenance-windows: ""                   # RFC3339 windows start/end[,start/end...]
-flaky-lookback-runs: 6                    # Runs to inspect for flaky checks
-flaky-min-transitions: 2                  # Minimum severity transitions to mark flaky
-exclude-alert-titles: ""                  # Comma-separated NCC alert titles to exclude from final reports/HTML
-exclude-alert-titles-file: ""             # Optional file with one alert title per line
-exclude-alert-match-mode: "exact"         # exact (default), contains, regex
-
-# Logging
-log-file: "logs/ncc-runner.log"           # Rotated JSON logs path  
-log-level: "2"                            # 0 trace, 1 debug, 2 info, 3 warn, 4 error  
-log-http: false                           # Set true only for debugging; logs request/response dumps  
- 
-# Retry behavior
-retry-max-attempts: 6                     # Max attempts per request  
-retry-base-delay: "400ms"                 # Base backoff delay  
-retry-max-delay: "8s"                     # Max jittered backoff delay  
-retry-circuit-breaker: 3                  # Fail fast after N consecutive retryable failures
-
-# Email notifications
-email-enabled: false
-email-attach-html: false
-notify-digest: false
-smtp-server: "smtp.example.com"
-smtp-port: 587
-smtp-user: "ncc@example.com"
-smtp-password: ""
-email-from: "ncc@example.com"
-email-to: "ops@example.com,sre@example.com"
-email-use-tls: true
-
-# Webhook notifications
-webhook-enabled: false
-webhook-include-html: false
-webhook-url: "https://hooks.example.com/ncc"
-webhook-headers:
-  X-Auth-Token: "changeme"
-
-# Slack notifications
-slack-enabled: false
-slack-webhook-url: ""
-slack-channel: ""
-secrets-provider: ""                      # env or file
-secrets-file: ""                          # YAML/JSON key-value map when secrets-provider=file
-
-Use --config to specify file path.
-
-Nutanix APIs used:
-
-With ncc-api-version v4 (default): start checks via POST .../api/monitoring/{nutanix-v4-api-version}/serviceability/clusters/{uuid}/$actions/run-system-defined-checks (cluster UUID from GET .../api/clustermgmt/{nutanix-v4-api-version}/config/clusters, with fallback to Prism Gateway v1 cluster). Poll task via GET .../api/prism/{nutanix-v4-api-version}/config/tasks/{extId} when extId is returned, else v2.0/tasks. Configure nutanix-v4-api-version (default v4.2) for API revisions such as v4.1 or v4.0.a1. If v4 start-checks is unavailable (404), the tool falls back to Legacy start-checks.
-
-With ncc-api-version Legacy: POST https://{cluster_IP}:9440/PrismGateway/services/rest/v1/ncc/checks only.
-
-Task polling: with ncc-api-version v4 and a task extId from start-checks, GET https://{cluster_IP}:9440/api/prism/{nutanix-v4-api-version}/config/tasks/{extId} (extId URL-encoded); on HTTP 404, falls back to Prism Gateway GET .../v2.0/tasks/{uuid}. Summary: GET https://{cluster_IP}:9440/PrismGateway/services/rest/v1/ncc/{uuid}.
+Support and documentation:
+- Start with: ncc-orchestrator --help
+- Full usage and flags: README.md and docs/FEATURES_AND_CONFIG_FLAGS.md
+- MVP backend/frontend design: docs/V2_BACKEND_FRONTEND_MVP.md
 
 Disclaimer:
-     Use at your own risk. Running this program implies acceptance of associated risks.
-     The developer or Nutanix shall not be held liable for any consequences resulting from its use.
+- This software is provided "as is", without warranties of any kind.
+- Use at your own risk; you are responsible for operational, security, and compliance outcomes.
+- Contributors and affiliated organizations are not liable for direct or indirect damages.
 `
 
 // ==================== Constants ====================
@@ -335,6 +273,8 @@ const (
 
 	// defaultNutanixV4APIVersion is the default Nutanix v4 API path segment (clustermgmt / monitoring).
 	defaultNutanixV4APIVersion = "v4.2"
+	defaultDiscoverAPIVersion  = "v4"
+	defaultClusterSourceMode   = "clusters"
 	defaultFlakyLookbackRuns   = 6
 	defaultFlakyTransitions    = 2
 )
@@ -372,6 +312,19 @@ func splitCSV(s string) []string {
 	return out
 }
 
+func normalizeClusterSourceMode(s string) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(s))
+	if mode == "" {
+		return defaultClusterSourceMode, nil
+	}
+	switch mode {
+	case "clusters", "pc":
+		return mode, nil
+	default:
+		return "", fmt.Errorf("cluster-source-mode must be one of clusters or pc")
+	}
+}
+
 func splitCSVTrimLower(s string) []string {
 	in := splitCSV(s)
 	out := make([]string, 0, len(in))
@@ -379,6 +332,30 @@ func splitCSVTrimLower(s string) []string {
 		out = append(out, strings.ToLower(strings.TrimSpace(v)))
 	}
 	return out
+}
+
+func readLineValuesFile(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	seen := make(map[string]bool)
+	for i, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if err := validateClusterAddress(trimmed); err != nil {
+			return nil, fmt.Errorf("line %d: %w", i+1, err)
+		}
+		if seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		out = append(out, trimmed)
+	}
+	return out, nil
 }
 
 func loadExcludeAlertTitlesFromFile(path string) ([]string, error) {
@@ -915,14 +892,31 @@ func normalizeExcludeAlertMatchMode(s string) (string, error) {
 
 // validateConfig performs comprehensive configuration validation
 func validateConfig(cfg Config) error {
-	// Validate clusters
-	if err := validateClusters(cfg.Clusters); err != nil {
-		return fmt.Errorf("cluster validation failed: %w", err)
-	}
-
-	// Validate effective credentials (global or per-cluster from clusters-file)
-	if err := validateClusterCredentialCoverage(cfg); err != nil {
+	sourceMode, err := normalizeClusterSourceMode(cfg.ClusterSourceMode)
+	if err != nil {
 		return err
+	}
+	if sourceMode == "pc" {
+		if len(cfg.PCs) == 0 && strings.TrimSpace(cfg.PrismCentralURL) == "" {
+			return errors.New("pc mode requires pcs, pcs-file, or prism-central-url")
+		}
+		if strings.TrimSpace(cfg.Username) == "" {
+			return errors.New("username is required in pc mode")
+		}
+		for i, pc := range cfg.PCs {
+			if _, err := normalizePCBaseURL(pc); err != nil {
+				return fmt.Errorf("pc target %d (%s): %w", i+1, pc, err)
+			}
+		}
+	} else {
+		// Validate direct clusters input.
+		if err := validateClusters(cfg.Clusters); err != nil {
+			return fmt.Errorf("cluster validation failed: %w", err)
+		}
+		// Validate effective credentials (global or per-cluster from clusters-file).
+		if err := validateClusterCredentialCoverage(cfg); err != nil {
+			return err
+		}
 	}
 
 	if _, err := normalizeNCCAPIVersion(cfg.NCCAPIVersion); err != nil {
@@ -1464,9 +1458,10 @@ func validateConfigFileRawTypes() error {
 		return nil
 	}
 	allowedTopKeys := map[string]bool{
-		"config":   true,
-		"update":   true,
-		"clusters": true, "clusters-file": true, "prism-central-url": true, "discover-api-version": true,
+		"config":               true,
+		"update":               true,
+		"skip-preflight-check": true,
+		"clusters":             true, "clusters-file": true, "cluster-source-mode": true, "pcs": true, "pcs-file": true, "prism-central-url": true, "discover-api-version": true,
 		"username": true, "password": true, "ncc-api-version": true, "nutanix-v4-api-version": true,
 		"insecure-skip-verify": true, "timeout": true, "request-timeout": true, "poll-interval": true, "poll-jitter": true,
 		"max-parallel": true, "outputs": true, "output-dir-logs": true, "output-dir-filtered": true,
@@ -1498,7 +1493,7 @@ func validateConfigFileRawTypes() error {
 	}
 
 	stringKeys := []string{
-		"clusters", "clusters-file", "prism-central-url", "discover-api-version",
+		"clusters", "clusters-file", "cluster-source-mode", "pcs", "pcs-file", "prism-central-url", "discover-api-version",
 		"username", "password", "ncc-api-version", "nutanix-v4-api-version",
 		"timeout", "request-timeout", "poll-interval", "poll-jitter",
 		"outputs", "output-dir-logs", "output-dir-filtered", "run-history-dir",
@@ -1518,6 +1513,7 @@ func validateConfigFileRawTypes() error {
 
 	boolKeys := []string{
 		"update",
+		"skip-preflight-check",
 		"insecure-skip-verify", "dry-run", "replay", "log-http",
 		"run-history", "single-report", "notify-on-regression", "adaptive-parallelism",
 		"email-enabled", "email-attach-html", "notify-digest", "email-use-tls",
@@ -1602,6 +1598,9 @@ func bindConfig() (Config, error) {
 
 	clustersFromFlag := splitCSV(viper.GetString("clusters"))
 	clustersFile := strings.TrimSpace(viper.GetString("clusters-file"))
+	pcsFromFlag := splitCSV(viper.GetString("pcs"))
+	pcsFile := strings.TrimSpace(viper.GetString("pcs-file"))
+	clusterSourceMode := strings.TrimSpace(viper.GetString("cluster-source-mode"))
 	clusterCreds := map[string]ClusterCredential{}
 	if clustersFile != "" {
 		lines, fileCreds, err := readClusterFile(clustersFile)
@@ -1613,6 +1612,15 @@ func bindConfig() (Config, error) {
 		}
 		clusterCreds = fileCreds
 	}
+	if pcsFile != "" {
+		lines, err := readLineValuesFile(pcsFile)
+		if err != nil {
+			return Config{}, fmt.Errorf("pcs-file %s: %w", pcsFile, err)
+		}
+		if len(lines) > 0 {
+			pcsFromFlag = lines
+		}
+	}
 	nccAPIVer, err := normalizeNCCAPIVersion(viper.GetString("ncc-api-version"))
 	if err != nil {
 		return Config{}, fmt.Errorf("ncc-api-version: %w", err)
@@ -1621,6 +1629,11 @@ func bindConfig() (Config, error) {
 		Clusters:               clustersFromFlag,
 		ClustersFile:           clustersFile,
 		ClusterCredentials:     clusterCreds,
+		ClusterSourceMode:      clusterSourceMode,
+		PCs:                    pcsFromFlag,
+		PCsFile:                pcsFile,
+		PrismCentralURL:        strings.TrimSpace(viper.GetString("prism-central-url")),
+		DiscoverAPIVersion:     strings.TrimSpace(viper.GetString("discover-api-version")),
 		Username:               viper.GetString("username"),
 		Password:               viper.GetString("password"),
 		InsecureSkipVerify:     viper.GetBool("insecure-skip-verify"),
@@ -1711,6 +1724,23 @@ func bindConfig() (Config, error) {
 	if cfg.ExcludeAlertMatchMode == "" {
 		cfg.ExcludeAlertMatchMode = defaultExcludeMatchMode
 	}
+	mode, err := normalizeClusterSourceMode(cfg.ClusterSourceMode)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.ClusterSourceMode = mode
+	if cfg.DiscoverAPIVersion == "" {
+		cfg.DiscoverAPIVersion = defaultDiscoverAPIVersion
+	}
+	cfg.DiscoverAPIVersion = strings.ToLower(strings.TrimSpace(cfg.DiscoverAPIVersion))
+	if cfg.DiscoverAPIVersion != "v3" && cfg.DiscoverAPIVersion != "v4" {
+		return cfg, fmt.Errorf("discover-api-version must be v3 or v4, got %q", cfg.DiscoverAPIVersion)
+	}
+	if cfg.ClusterSourceMode == "pc" {
+		if len(cfg.PCs) == 0 && strings.TrimSpace(cfg.PrismCentralURL) != "" {
+			cfg.PCs = []string{cfg.PrismCentralURL}
+		}
+	}
 	if cfg.ExcludeAlertTitlesFile != "" {
 		fileTitles, err := loadExcludeAlertTitlesFromFile(cfg.ExcludeAlertTitlesFile)
 		if err != nil {
@@ -1718,11 +1748,11 @@ func bindConfig() (Config, error) {
 		}
 		cfg.ExcludeAlertTitles = mergeUniqueStrings(cfg.ExcludeAlertTitles, fileTitles)
 	}
-	mode, err := normalizeExcludeAlertMatchMode(cfg.ExcludeAlertMatchMode)
+	excludeMode, err := normalizeExcludeAlertMatchMode(cfg.ExcludeAlertMatchMode)
 	if err != nil {
 		return cfg, err
 	}
-	cfg.ExcludeAlertMatchMode = mode
+	cfg.ExcludeAlertMatchMode = excludeMode
 	if cfg.RunHistoryDir == "" {
 		cfg.RunHistoryDir = filepath.Join(cfg.OutputDirFiltered, "runs")
 	}
@@ -7258,8 +7288,10 @@ func promptPasswordIfEmpty(p string, Username string) (string, error) {
 	return strings.TrimSpace(string(bytePw)), nil
 }
 
-// githubRepo is used by --update to fetch latest release (format: owner/repo).
-const githubRepo = "lTSPV75BRO/Nutanix-ncc-orchestrator"
+// defaultGitHubRepo is used by update to fetch releases (format: owner/repo).
+const defaultGitHubRepo = "lTSPV75BRO/Nutanix-ncc-orchestrator"
+
+const v1ToV2MigrationDocURL = "https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/blob/main/docs/V2_BACKEND_FRONTEND_MVP.md"
 
 // stripGoBuildGitSuffix removes a trailing -<hex> from ldflags/git injection (e.g. 1.0.0-deadbeef...).
 // Does not strip semver prereleases like 1.0.0-rc1 (suffix is not all hex).
@@ -7370,9 +7402,11 @@ func init() {
 
 // githubRelease represents the minimal GitHub releases/latest API response.
 type githubRelease struct {
-	TagName string        `json:"tag_name"`
-	Assets  []githubAsset `json:"assets"`
-	HTMLURL string        `json:"html_url"`
+	TagName    string        `json:"tag_name"`
+	Assets     []githubAsset `json:"assets"`
+	HTMLURL    string        `json:"html_url"`
+	Draft      bool          `json:"draft"`
+	Prerelease bool          `json:"prerelease"`
 }
 
 type githubAsset struct {
@@ -7380,128 +7414,933 @@ type githubAsset struct {
 	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
-// runUpdate fetches the latest release from GitHub, downloads the binary for the current OS/arch if available, and replaces the running executable.
-func runUpdate() error {
-	apiURL := "https://api.github.com/repos/" + githubRepo + "/releases/latest"
+type updateOptions struct {
+	CheckOnly         bool
+	AllowMajorUpgrade bool
+	Repo              string
+	BinaryURL         string
+	TargetVersion     string
+}
+
+func parseVersionMajor(raw string) (int64, error) {
+	clean := strings.TrimPrefix(stripGoBuildGitSuffix(strings.TrimSpace(raw)), "v")
+	if v, err := semver.NewVersion(clean); err == nil {
+		return int64(v.Major()), nil
+	}
+	parts := strings.SplitN(clean, ".", 2)
+	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
+		return 0, fmt.Errorf("invalid version %q", raw)
+	}
+	major, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid version %q", raw)
+	}
+	return major, nil
+}
+
+func normalizeGitHubRepo(repo string) (string, error) {
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return "", errors.New("repo cannot be empty")
+	}
+	if strings.HasPrefix(repo, "http://") || strings.HasPrefix(repo, "https://") {
+		u, err := url.Parse(repo)
+		if err != nil {
+			return "", fmt.Errorf("parse repo URL: %w", err)
+		}
+		if !strings.Contains(strings.ToLower(u.Host), "github.com") {
+			return "", fmt.Errorf("repo URL host %q is not github.com", u.Host)
+		}
+		p := strings.Trim(strings.TrimSuffix(u.Path, ".git"), "/")
+		parts := strings.Split(p, "/")
+		if len(parts) < 2 {
+			return "", fmt.Errorf("repo URL must include owner/repo path, got %q", repo)
+		}
+		return parts[0] + "/" + parts[1], nil
+	}
+	parts := strings.Split(strings.Trim(repo, "/"), "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", fmt.Errorf("repo must be in owner/repo format, got %q", repo)
+	}
+	return parts[0] + "/" + parts[1], nil
+}
+
+func isArchiveAssetURL(raw string) bool {
+	u := strings.ToLower(strings.TrimSpace(raw))
+	return strings.HasSuffix(u, ".tar.gz") || strings.HasSuffix(u, ".zip")
+}
+
+func printV1ToV2MigrationSteps() {
+	fmt.Fprintln(os.Stderr, "To upgrade from v1.x to v2.x, review migration steps first:")
+	fmt.Fprintln(os.Stderr, "1) Deploy/enable v2 services (ncc-api-server and ncc-ui-server).")
+	fmt.Fprintln(os.Stderr, "2) Update automation to use API/UI endpoints where needed.")
+	fmt.Fprintln(os.Stderr, "3) Validate config compatibility and run preflight checks.")
+	fmt.Fprintf(os.Stderr, "Migration guide: %s\n", v1ToV2MigrationDocURL)
+}
+
+func enforceMajorUpgradePolicy(currentVer, targetVer string, allowMajorUpgrade bool) error {
+	currentMajor, currentErr := parseVersionMajor(currentVer)
+	targetMajor, targetErr := parseVersionMajor(targetVer)
+	if currentErr != nil || targetErr != nil {
+		return nil
+	}
+	if currentMajor < targetMajor && !allowMajorUpgrade {
+		if currentMajor == 1 && targetMajor >= 2 {
+			fmt.Fprintln(os.Stderr, "Major upgrade blocked: current binary is v1.x and target release is v2.x.")
+			fmt.Fprintln(os.Stderr, "Use --allow-major-upgrade to proceed after migration review.")
+			printV1ToV2MigrationSteps()
+			return errors.New("major upgrade requires explicit opt-in")
+		}
+		return fmt.Errorf("major upgrade from v%d to v%d requires --allow-major-upgrade", currentMajor, targetMajor)
+	}
+	return nil
+}
+
+func pickLatestSemverRelease(releases []githubRelease, majorFilter int64) *githubRelease {
+	var best *githubRelease
+	for i := range releases {
+		rel := &releases[i]
+		if rel.Draft || rel.Prerelease {
+			continue
+		}
+		tag := strings.TrimSpace(rel.TagName)
+		if tag == "" {
+			continue
+		}
+		if majorFilter > 0 {
+			maj, err := parseVersionMajor(tag)
+			if err != nil || maj != majorFilter {
+				continue
+			}
+		}
+		if best == nil || versionLess(best.TagName, rel.TagName) {
+			best = rel
+		}
+	}
+	return best
+}
+
+func fetchGitHubReleases(repo string, client *http.Client) ([]githubRelease, error) {
+	apiURL := "https://api.github.com/repos/" + repo + "/releases?per_page=100"
 	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-
-	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("fetch latest release: %w", err)
+		return nil, fmt.Errorf("fetch releases: %w", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode == 403 {
-		if remaining := resp.Header.Get("X-RateLimit-Remaining"); remaining == "0" {
-			fmt.Fprintln(os.Stderr, "GitHub API rate limited. Set GITHUB_TOKEN for higher limits or try again later.")
-		}
+	if resp.StatusCode == 403 && resp.Header.Get("X-RateLimit-Remaining") == "0" {
+		fmt.Fprintln(os.Stderr, "GitHub API rate limited. Set GITHUB_TOKEN for higher limits or try again later.")
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("GitHub API returned %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("GitHub API returned %d: %s", resp.StatusCode, string(body))
 	}
-
-	var rel githubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
-		return fmt.Errorf("parse release: %w", err)
+	var releases []githubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+		return nil, fmt.Errorf("parse releases: %w", err)
 	}
+	return releases, nil
+}
 
-	// Normalize tag (e.g. v0.1.12 -> 0.1.12) for display
-	latestVer := strings.TrimPrefix(rel.TagName, "v")
-	fmt.Fprintf(os.Stderr, "Latest release: %s\n", rel.TagName)
-
-	// Compare with current version (strip optional git revision suffix from ldflags) using semver
-	currentVer := stripGoBuildGitSuffix(Version)
-	if !versionLess(currentVer, latestVer) {
-		if versionLess(latestVer, currentVer) {
-			fmt.Fprintln(os.Stderr, "You have a newer version than the latest release (dev build).")
-		} else {
-			fmt.Fprintln(os.Stderr, "You are already on the latest version.")
-		}
-		return nil
-	}
-
+func pickAssetForCurrentPlatform(rel githubRelease) (downloadURL string, assetName string) {
 	goos := runtime.GOOS
 	goarch := runtime.GOARCH
-	// Match asset names like ncc-orchestrator-linux-amd64 or ncc-orchestrator_0.1.12_linux_amd64 (raw binary only for self-replace)
-	wantOS := goos
-	wantArch := goarch
-
-	var downloadURL string
-	var chosenAssetName string
 	for _, a := range rel.Assets {
 		name := strings.ToLower(a.Name)
-		if strings.Contains(name, wantOS) && strings.Contains(name, wantArch) {
-			// Prefer raw binary (no archive) so we can replace self
-			if strings.HasSuffix(name, ".tar.gz") || strings.HasSuffix(name, ".zip") {
+		if strings.Contains(name, goos) && strings.Contains(name, goarch) {
+			if isArchiveAssetURL(a.BrowserDownloadURL) {
 				if downloadURL == "" {
 					downloadURL = a.BrowserDownloadURL
-					chosenAssetName = a.Name
+					assetName = a.Name
 				}
 				continue
 			}
-			downloadURL = a.BrowserDownloadURL
-			chosenAssetName = a.Name
-			break
+			return a.BrowserDownloadURL, a.Name
 		}
 	}
-	if downloadURL == "" {
-		// No raw binary; use archive if present so we can at least point to it
-		for _, a := range rel.Assets {
-			name := strings.ToLower(a.Name)
-			if strings.Contains(name, wantOS) && strings.Contains(name, wantArch) {
-				downloadURL = a.BrowserDownloadURL
-				chosenAssetName = a.Name
-				break
-			}
-		}
-	}
+	return downloadURL, assetName
+}
 
-	if downloadURL == "" {
-		fmt.Fprintf(os.Stderr, "No binary found for %s/%s. Download manually: %s\n", goos, goarch, rel.HTMLURL)
-		return nil
-	}
-
-	// If only an archive is available, we cannot replace self; tell user to download and extract
-	if strings.HasSuffix(strings.ToLower(downloadURL), ".tar.gz") || strings.HasSuffix(strings.ToLower(downloadURL), ".zip") {
-		fmt.Fprintf(os.Stderr, "Binary for %s/%s is only available as archive. Download and extract: %s\n", goos, goarch, downloadURL)
-		return nil
-	}
-
-	// Download
-	fmt.Fprintf(os.Stderr, "Downloading %s ...\n", downloadURL)
+func downloadBinaryURL(client *http.Client, downloadURL string) ([]byte, error) {
 	dlReq, err := http.NewRequest(http.MethodGet, downloadURL, nil)
 	if err != nil {
-		return fmt.Errorf("create download request: %w", err)
+		return nil, fmt.Errorf("create download request: %w", err)
 	}
 	if token := os.Getenv("GITHUB_TOKEN"); token != "" && (strings.Contains(downloadURL, "github.com") || strings.Contains(downloadURL, "githubusercontent.com")) {
 		dlReq.Header.Set("Authorization", "Bearer "+token)
 	}
 	dlResp, err := client.Do(dlReq)
 	if err != nil {
-		return fmt.Errorf("download: %w", err)
+		return nil, fmt.Errorf("download: %w", err)
 	}
 	defer dlResp.Body.Close()
 	if dlResp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download returned %d", dlResp.StatusCode)
+		return nil, fmt.Errorf("download returned %d", dlResp.StatusCode)
 	}
-
-	body, err := io.ReadAll(io.LimitReader(dlResp.Body, 200*1024*1024)) // 200 MiB cap
+	body, err := io.ReadAll(io.LimitReader(dlResp.Body, 200*1024*1024))
 	if err != nil {
-		return fmt.Errorf("read download: %w", err)
+		return nil, fmt.Errorf("read download: %w", err)
+	}
+	return body, nil
+}
+
+func installDownloadedBinary(body []byte, targetVer string) error {
+	selfPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("get executable path: %w", err)
+	}
+	dir := filepath.Dir(selfPath)
+	if runtime.GOOS == "windows" {
+		newPath := selfPath + ".new.exe"
+		if err := os.WriteFile(newPath, body, 0755); err != nil {
+			return fmt.Errorf("write %s: %w", newPath, err)
+		}
+		fmt.Fprintf(os.Stderr, "Update saved as %s. Exit this program, then replace %s with it and run again.\n", newPath, selfPath)
+		return nil
+	}
+	tmpPath := filepath.Join(dir, ".ncc-orchestrator-update."+strconv.Itoa(os.Getpid()))
+	if err := os.WriteFile(tmpPath, body, 0755); err != nil {
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, selfPath); err != nil {
+		_ = os.Remove(tmpPath)
+		fallback := filepath.Join(".", "ncc-orchestrator-"+strings.TrimPrefix(strings.TrimSpace(targetVer), "v"))
+		if wErr := os.WriteFile(fallback, body, 0755); wErr != nil {
+			return fmt.Errorf("replace binary failed (%v); write to %s failed: %w", err, fallback, wErr)
+		}
+		fmt.Fprintf(os.Stderr, "Could not replace running binary. New binary saved as %s — move it to replace the current one.\n", fallback)
+		return nil
+	}
+	fmt.Fprintln(os.Stderr, "Update complete. Run the binary again to use the new version.")
+	return nil
+}
+
+type v2BootstrapOptions struct {
+	Repo            string
+	Version         string
+	InstallDir      string
+	ConfigPath      string
+	OutputDir       string
+	LogDir          string
+	OrchestratorBin string
+	APIListen       string
+	UIListen        string
+	TokenFile       string
+	CheckOnly       bool
+}
+
+type v2StartOptions struct {
+	InstallDir      string
+	ConfigPath      string
+	OutputDir       string
+	LogDir          string
+	OrchestratorBin string
+	APIListen       string
+	UIListen        string
+	TokenFile       string
+}
+
+func findAsset(rel githubRelease, pred func(name string) bool) (githubAsset, bool) {
+	for _, a := range rel.Assets {
+		if pred(strings.ToLower(strings.TrimSpace(a.Name))) {
+			return a, true
+		}
+	}
+	return githubAsset{}, false
+}
+
+func writeExecutable(path string, body []byte) error {
+	return os.WriteFile(path, body, 0755)
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+}
+
+func binaryPathInInstallDir(installDir, base string) string {
+	path := filepath.Join(installDir, "bin", base)
+	if runtime.GOOS == "windows" {
+		return path + ".exe"
+	}
+	return path
+}
+
+func localHTTPURLFromListen(listenAddr, defaultPort string) string {
+	addr := strings.TrimSpace(listenAddr)
+	if addr == "" {
+		addr = ":" + defaultPort
+	}
+	if strings.HasPrefix(addr, ":") {
+		return "http://localhost" + addr
+	}
+	if host, port, err := net.SplitHostPort(addr); err == nil {
+		_ = host
+		return "http://localhost:" + port
+	}
+	return "http://" + addr
+}
+
+func waitForFile(path string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return true
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return false
+}
+
+func signalProcessStop(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	if runtime.GOOS == "windows" {
+		_ = cmd.Process.Kill()
+		return
+	}
+	_ = cmd.Process.Signal(syscall.SIGTERM)
+}
+
+func runV2Start(opts v2StartOptions) error {
+	installDir := strings.TrimSpace(opts.InstallDir)
+	if installDir == "" {
+		installDir = ".ncc-v2"
+	}
+	apiBin := binaryPathInInstallDir(installDir, "ncc-api-server")
+	uiBin := binaryPathInInstallDir(installDir, "ncc-ui-server")
+	frontendDir := filepath.Join(installDir, "frontend-dist")
+	if _, err := os.Stat(apiBin); err != nil {
+		return fmt.Errorf("missing API binary %s (run `ncc-orchestrator v2-bootstrap` first)", apiBin)
+	}
+	if _, err := os.Stat(uiBin); err != nil {
+		return fmt.Errorf("missing UI binary %s (run `ncc-orchestrator v2-bootstrap` first)", uiBin)
+	}
+	if st, err := os.Stat(frontendDir); err != nil || !st.IsDir() {
+		return fmt.Errorf("missing frontend bundle directory %s (run `ncc-orchestrator v2-bootstrap` first)", frontendDir)
 	}
 
-	// Optional checksum verification: look for checksums.txt or *.sha256 asset
+	if strings.TrimSpace(opts.ConfigPath) == "" {
+		opts.ConfigPath = "config.yaml"
+	}
+	if strings.TrimSpace(opts.OutputDir) == "" {
+		opts.OutputDir = "outputfiles"
+	}
+	if strings.TrimSpace(opts.LogDir) == "" {
+		opts.LogDir = "nccfiles"
+	}
+	if strings.TrimSpace(opts.OrchestratorBin) == "" {
+		opts.OrchestratorBin = "./ncc-orchestrator"
+	}
+	if strings.TrimSpace(opts.APIListen) == "" {
+		opts.APIListen = ":8081"
+	}
+	if strings.TrimSpace(opts.UIListen) == "" {
+		opts.UIListen = ":8080"
+	}
+	if strings.TrimSpace(opts.TokenFile) == "" {
+		opts.TokenFile = ".ncc-api-token"
+	}
+	repoRoot, _ := os.Getwd()
+	backendURL := localHTTPURLFromListen(opts.APIListen, "8081")
+	uiOrigin := localHTTPURLFromListen(opts.UIListen, "8080")
+
+	apiArgs := []string{
+		"--listen", opts.APIListen,
+		"--repo-root", repoRoot,
+		"--config-path", opts.ConfigPath,
+		"--output-dir", opts.OutputDir,
+		"--log-dir", opts.LogDir,
+		"--orchestrator-bin", opts.OrchestratorBin,
+	}
+	uiArgs := []string{
+		"--listen", opts.UIListen,
+		"--dir", frontendDir,
+		"--backend-url", backendURL,
+		"--api-token-file", opts.TokenFile,
+		"--api-auth-mode", "token",
+		"--allowed-origins", uiOrigin,
+	}
+
+	apiCmd := exec.Command(apiBin, apiArgs...)
+	apiCmd.Stdout = os.Stdout
+	apiCmd.Stderr = os.Stderr
+	if err := apiCmd.Start(); err != nil {
+		return fmt.Errorf("start api server: %w", err)
+	}
+
+	if strings.TrimSpace(opts.TokenFile) != "" {
+		waitForFile(opts.TokenFile, 5*time.Second)
+	}
+
+	uiCmd := exec.Command(uiBin, uiArgs...)
+	uiCmd.Stdout = os.Stdout
+	uiCmd.Stderr = os.Stderr
+	if err := uiCmd.Start(); err != nil {
+		signalProcessStop(apiCmd)
+		return fmt.Errorf("start ui server: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "v2 services started (api pid=%d, ui pid=%d)\n", apiCmd.Process.Pid, uiCmd.Process.Pid)
+	fmt.Fprintf(os.Stderr, "API: %s\n", backendURL)
+	fmt.Fprintf(os.Stderr, "UI : %s\n", uiOrigin)
+	fmt.Fprintln(os.Stderr, "Press Ctrl+C to stop both services.")
+
+	type procExit struct {
+		name string
+		err  error
+	}
+	exitCh := make(chan procExit, 2)
+	go func() { exitCh <- procExit{name: "api", err: apiCmd.Wait()} }()
+	go func() { exitCh <- procExit{name: "ui", err: uiCmd.Wait()} }()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	select {
+	case sig := <-sigCh:
+		fmt.Fprintf(os.Stderr, "received %s, stopping services...\n", sig.String())
+		signalProcessStop(apiCmd)
+		signalProcessStop(uiCmd)
+		<-exitCh
+		<-exitCh
+		return nil
+	case first := <-exitCh:
+		signalProcessStop(apiCmd)
+		signalProcessStop(uiCmd)
+		second := <-exitCh
+		if first.err != nil {
+			return fmt.Errorf("%s server exited with error: %w", first.name, first.err)
+		}
+		if second.err != nil {
+			return fmt.Errorf("%s server exited with error: %w", second.name, second.err)
+		}
+		return fmt.Errorf("%s server exited", first.name)
+	}
+}
+
+func extractZipArchive(archive []byte, destDir string) error {
+	r, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		return fmt.Errorf("open zip: %w", err)
+	}
+	destClean := filepath.Clean(destDir) + string(os.PathSeparator)
+	for _, f := range r.File {
+		name := filepath.Clean(f.Name)
+		target := filepath.Join(destDir, name)
+		if !strings.HasPrefix(target, destClean) {
+			return fmt.Errorf("zip contains unsafe path %q", f.Name)
+		}
+		if f.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			return err
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return err
+		}
+		data, err := io.ReadAll(io.LimitReader(rc, 200*1024*1024))
+		_ = rc.Close()
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(target, data, 0644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func extractTarGzArchive(archive []byte, destDir string) error {
+	gzr, err := gzip.NewReader(bytes.NewReader(archive))
+	if err != nil {
+		return fmt.Errorf("open gzip: %w", err)
+	}
+	defer gzr.Close()
+	tr := tar.NewReader(gzr)
+	destClean := filepath.Clean(destDir) + string(os.PathSeparator)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		name := filepath.Clean(hdr.Name)
+		target := filepath.Join(destDir, name)
+		if !strings.HasPrefix(target, destClean) {
+			return fmt.Errorf("tar contains unsafe path %q", hdr.Name)
+		}
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return err
+			}
+		case tar.TypeReg, tar.TypeRegA:
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
+			data, err := io.ReadAll(io.LimitReader(tr, 200*1024*1024))
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(target, data, 0644); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func listAssetNames(rel githubRelease) []string {
+	out := make([]string, 0, len(rel.Assets))
+	for _, a := range rel.Assets {
+		out = append(out, a.Name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func extractArchiveByAssetName(archive []byte, assetName string, destDir string) error {
+	lower := strings.ToLower(strings.TrimSpace(assetName))
+	switch {
+	case strings.HasSuffix(lower, ".zip"):
+		return extractZipArchive(archive, destDir)
+	case strings.HasSuffix(lower, ".tar.gz"):
+		return extractTarGzArchive(archive, destDir)
+	default:
+		return fmt.Errorf("unsupported archive format for %s", assetName)
+	}
+}
+
+func hasBootstrappedV2Layout(installDir string) bool {
+	apiBin := binaryPathInInstallDir(installDir, "ncc-api-server")
+	uiBin := binaryPathInInstallDir(installDir, "ncc-ui-server")
+	frontendDir := filepath.Join(installDir, "frontend-dist")
+	apiInfo, apiErr := os.Stat(apiBin)
+	uiInfo, uiErr := os.Stat(uiBin)
+	frontInfo, frontErr := os.Stat(frontendDir)
+	return apiErr == nil && !apiInfo.IsDir() && uiErr == nil && !uiInfo.IsDir() && frontErr == nil && frontInfo.IsDir()
+}
+
+func releaseHasRequiredV2Assets(rel githubRelease, goos, goarch string) bool {
+	_, okStack := findAsset(rel, func(n string) bool {
+		if !(strings.HasSuffix(n, ".zip") || strings.HasSuffix(n, ".tar.gz")) {
+			return false
+		}
+		return strings.Contains(n, "ncc-v2-stack") && strings.Contains(n, goos) && strings.Contains(n, goarch)
+	})
+	if okStack {
+		return true
+	}
+	_, okAPI := findAsset(rel, func(n string) bool {
+		return strings.Contains(n, "ncc-api-server") && strings.Contains(n, goos) && strings.Contains(n, goarch) && !strings.HasSuffix(n, ".zip") && !strings.HasSuffix(n, ".tar.gz")
+	})
+	_, okUI := findAsset(rel, func(n string) bool {
+		return strings.Contains(n, "ncc-ui-server") && strings.Contains(n, goos) && strings.Contains(n, goarch) && !strings.HasSuffix(n, ".zip") && !strings.HasSuffix(n, ".tar.gz")
+	})
+	_, okFrontend := findAsset(rel, func(n string) bool {
+		if !(strings.HasSuffix(n, ".zip") || strings.HasSuffix(n, ".tar.gz")) {
+			return false
+		}
+		return strings.Contains(n, "frontend") || strings.Contains(n, "ui-dist")
+	})
+	return okAPI && okUI && okFrontend
+}
+
+func pickBestReleaseWithV2Assets(releases []githubRelease, goos, goarch string, majorFilter int64) *githubRelease {
+	var best *githubRelease
+	for i := range releases {
+		rel := &releases[i]
+		if rel.Draft || rel.Prerelease {
+			continue
+		}
+		if !releaseHasRequiredV2Assets(*rel, goos, goarch) {
+			continue
+		}
+		if majorFilter > 0 {
+			maj, err := parseVersionMajor(rel.TagName)
+			if err != nil || maj != majorFilter {
+				continue
+			}
+		}
+		if best == nil || versionLess(best.TagName, rel.TagName) {
+			best = rel
+		}
+	}
+	return best
+}
+
+func runV2Bootstrap(opts v2BootstrapOptions) error {
+	repo := strings.TrimSpace(opts.Repo)
+	if repo == "" {
+		repo = defaultGitHubRepo
+	}
+	repo, err := normalizeGitHubRepo(repo)
+	if err != nil {
+		return err
+	}
+	client := &http.Client{Timeout: 30 * time.Second}
+	releases, err := fetchGitHubReleases(repo, client)
+	if err != nil {
+		return err
+	}
+	if len(releases) == 0 {
+		return fmt.Errorf("no releases found for %s", repo)
+	}
+
+	goos := runtime.GOOS
+	goarch := runtime.GOARCH
+
+	var rel *githubRelease
+	if strings.TrimSpace(opts.Version) != "" {
+		want := strings.TrimPrefix(strings.TrimSpace(opts.Version), "v")
+		for i := range releases {
+			tag := strings.TrimPrefix(strings.TrimSpace(releases[i].TagName), "v")
+			if strings.EqualFold(tag, want) {
+				rel = &releases[i]
+				break
+			}
+		}
+		if rel == nil {
+			return fmt.Errorf("release version %q not found", opts.Version)
+		}
+		if !releaseHasRequiredV2Assets(*rel, goos, goarch) {
+			return fmt.Errorf("release %s does not contain required v2 assets for %s/%s. available assets: %s", rel.TagName, goos, goarch, strings.Join(listAssetNames(*rel), ", "))
+		}
+	} else {
+		rel = pickBestReleaseWithV2Assets(releases, goos, goarch, 2)
+		if rel == nil {
+			rel = pickBestReleaseWithV2Assets(releases, goos, goarch, 0)
+		}
+		if rel == nil {
+			latestOverall := pickLatestSemverRelease(releases, 0)
+			if latestOverall != nil {
+				return fmt.Errorf("no stable release in %s contains required v2 assets for %s/%s. latest release is %s with assets: %s", repo, goos, goarch, latestOverall.TagName, strings.Join(listAssetNames(*latestOverall), ", "))
+			}
+			return errors.New("no stable releases available")
+		}
+	}
+	stackAsset, okStack := findAsset(*rel, func(n string) bool {
+		if !(strings.HasSuffix(n, ".zip") || strings.HasSuffix(n, ".tar.gz")) {
+			return false
+		}
+		return strings.Contains(n, "ncc-v2-stack") && strings.Contains(n, goos) && strings.Contains(n, goarch)
+	})
+	apiAsset, okAPI := findAsset(*rel, func(n string) bool {
+		return strings.Contains(n, "ncc-api-server") && strings.Contains(n, goos) && strings.Contains(n, goarch) && !strings.HasSuffix(n, ".zip") && !strings.HasSuffix(n, ".tar.gz")
+	})
+	uiAsset, okUI := findAsset(*rel, func(n string) bool {
+		return strings.Contains(n, "ncc-ui-server") && strings.Contains(n, goos) && strings.Contains(n, goarch) && !strings.HasSuffix(n, ".zip") && !strings.HasSuffix(n, ".tar.gz")
+	})
+	frontendAsset, okFrontend := findAsset(*rel, func(n string) bool {
+		if !(strings.HasSuffix(n, ".zip") || strings.HasSuffix(n, ".tar.gz")) {
+			return false
+		}
+		return strings.Contains(n, "frontend") || strings.Contains(n, "ui-dist")
+	})
+	if !okStack && (!okAPI || !okUI || !okFrontend) {
+		return fmt.Errorf("release %s does not contain all required v2 assets for %s/%s (need api binary, ui binary, frontend archive). available assets: %s",
+			rel.TagName, goos, goarch, strings.Join(listAssetNames(*rel), ", "))
+	}
+
+	fmt.Fprintf(os.Stderr, "Selected release: %s\n", rel.TagName)
+	if okStack {
+		fmt.Fprintf(os.Stderr, "v2 stack bundle: %s\n", stackAsset.Name)
+	} else {
+		fmt.Fprintf(os.Stderr, "API binary: %s\n", apiAsset.Name)
+		fmt.Fprintf(os.Stderr, "UI binary: %s\n", uiAsset.Name)
+		fmt.Fprintf(os.Stderr, "Frontend bundle: %s\n", frontendAsset.Name)
+	}
+	if opts.CheckOnly {
+		fmt.Fprintln(os.Stderr, "Check-only mode: no files downloaded.")
+		return nil
+	}
+
+	installDir := strings.TrimSpace(opts.InstallDir)
+	if installDir == "" {
+		installDir = ".ncc-v2"
+	}
+	binDir := filepath.Join(installDir, "bin")
+	frontendDir := filepath.Join(installDir, "frontend-dist")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(frontendDir, 0755); err != nil {
+		return err
+	}
+
+	apiBin := filepath.Join(binDir, "ncc-api-server")
+	uiBin := filepath.Join(binDir, "ncc-ui-server")
+	if runtime.GOOS == "windows" {
+		apiBin += ".exe"
+		uiBin += ".exe"
+	}
+
+	if okStack {
+		fmt.Fprintf(os.Stderr, "Downloading %s\n", stackAsset.BrowserDownloadURL)
+		stackArchive, err := downloadBinaryURL(client, stackAsset.BrowserDownloadURL)
+		if err != nil {
+			return fmt.Errorf("download v2 stack bundle: %w", err)
+		}
+		if err := extractArchiveByAssetName(stackArchive, stackAsset.Name, installDir); err != nil {
+			return fmt.Errorf("extract v2 stack bundle: %w", err)
+		}
+		if !hasBootstrappedV2Layout(installDir) {
+			return fmt.Errorf("v2 stack bundle %s extracted but required layout was not found in %s (expected bin/ncc-api-server, bin/ncc-ui-server, frontend-dist/)", stackAsset.Name, installDir)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "Downloading %s\n", apiAsset.BrowserDownloadURL)
+		apiBody, err := downloadBinaryURL(client, apiAsset.BrowserDownloadURL)
+		if err != nil {
+			return fmt.Errorf("download api binary: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "Downloading %s\n", uiAsset.BrowserDownloadURL)
+		uiBody, err := downloadBinaryURL(client, uiAsset.BrowserDownloadURL)
+		if err != nil {
+			return fmt.Errorf("download ui binary: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "Downloading %s\n", frontendAsset.BrowserDownloadURL)
+		frontendArchive, err := downloadBinaryURL(client, frontendAsset.BrowserDownloadURL)
+		if err != nil {
+			return fmt.Errorf("download frontend archive: %w", err)
+		}
+
+		if err := writeExecutable(apiBin, apiBody); err != nil {
+			return fmt.Errorf("write api binary: %w", err)
+		}
+		if err := writeExecutable(uiBin, uiBody); err != nil {
+			return fmt.Errorf("write ui binary: %w", err)
+		}
+		if err := extractArchiveByAssetName(frontendArchive, frontendAsset.Name, frontendDir); err != nil {
+			return fmt.Errorf("extract frontend bundle: %w", err)
+		}
+	}
+
+	repoRoot, _ := os.Getwd()
+	if strings.TrimSpace(opts.OrchestratorBin) == "" {
+		opts.OrchestratorBin = "./ncc-orchestrator"
+	}
+	if strings.TrimSpace(opts.ConfigPath) == "" {
+		opts.ConfigPath = "config.yaml"
+	}
+	if strings.TrimSpace(opts.OutputDir) == "" {
+		opts.OutputDir = "outputfiles"
+	}
+	if strings.TrimSpace(opts.LogDir) == "" {
+		opts.LogDir = "nccfiles"
+	}
+	if strings.TrimSpace(opts.APIListen) == "" {
+		opts.APIListen = ":8081"
+	}
+	if strings.TrimSpace(opts.UIListen) == "" {
+		opts.UIListen = ":8080"
+	}
+	if strings.TrimSpace(opts.TokenFile) == "" {
+		opts.TokenFile = ".ncc-api-token"
+	}
+	backendURL := "http://localhost:8081"
+	if strings.HasPrefix(opts.APIListen, ":") {
+		backendURL = "http://localhost" + opts.APIListen
+	}
+	uiOrigin := "http://localhost:8080"
+	if strings.HasPrefix(opts.UIListen, ":") {
+		uiOrigin = "http://localhost" + opts.UIListen
+	}
+
+	apiScript := fmt.Sprintf(`#!/usr/bin/env sh
+set -eu
+DIR="$(cd "$(dirname "$0")" && pwd)"
+"%s" --listen %s --repo-root %s --config-path %s --output-dir %s --log-dir %s --orchestrator-bin %s
+`, apiBin, shellQuote(opts.APIListen), shellQuote(repoRoot), shellQuote(opts.ConfigPath), shellQuote(opts.OutputDir), shellQuote(opts.LogDir), shellQuote(opts.OrchestratorBin))
+	uiScript := fmt.Sprintf(`#!/usr/bin/env sh
+set -eu
+DIR="$(cd "$(dirname "$0")" && pwd)"
+"%s" --listen %s --dir %s --backend-url %s --api-token-file %s --api-auth-mode token --allowed-origins %s
+`, uiBin, shellQuote(opts.UIListen), shellQuote(frontendDir), shellQuote(backendURL), shellQuote(opts.TokenFile), shellQuote(uiOrigin))
+
+	apiScriptPath := filepath.Join(installDir, "start-api.sh")
+	uiScriptPath := filepath.Join(installDir, "start-ui.sh")
+	if runtime.GOOS == "windows" {
+		apiScriptPath = filepath.Join(installDir, "start-api.cmd")
+		uiScriptPath = filepath.Join(installDir, "start-ui.cmd")
+		apiScript = fmt.Sprintf("@echo off\r\n\"%s\" --listen %s --repo-root %s --config-path %s --output-dir %s --log-dir %s --orchestrator-bin %s\r\n",
+			apiBin, opts.APIListen, repoRoot, opts.ConfigPath, opts.OutputDir, opts.LogDir, opts.OrchestratorBin)
+		uiScript = fmt.Sprintf("@echo off\r\n\"%s\" --listen %s --dir %s --backend-url %s --api-token-file %s --api-auth-mode token --allowed-origins %s\r\n",
+			uiBin, opts.UIListen, frontendDir, backendURL, opts.TokenFile, uiOrigin)
+	}
+	if err := os.WriteFile(apiScriptPath, []byte(apiScript), 0755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(uiScriptPath, []byte(uiScript), 0755); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "v2 bootstrap completed in %s\n", installDir)
+	fmt.Fprintf(os.Stderr, "Start API: %s\n", apiScriptPath)
+	fmt.Fprintf(os.Stderr, "Start UI : %s\n", uiScriptPath)
+	fmt.Fprintf(os.Stderr, "Open UI  : %s\n", uiOrigin)
+	return nil
+}
+
+// runUpdate fetches release metadata and updates or checks binary availability.
+func runUpdate(opts updateOptions) error {
+	currentVer := stripGoBuildGitSuffix(Version)
+	client := &http.Client{Timeout: 20 * time.Second}
+
+	if strings.TrimSpace(opts.BinaryURL) != "" {
+		if isArchiveAssetURL(opts.BinaryURL) {
+			return fmt.Errorf("binary URL points to archive; provide direct binary URL: %s", opts.BinaryURL)
+		}
+		if strings.TrimSpace(opts.TargetVersion) != "" {
+			if err := enforceMajorUpgradePolicy(currentVer, opts.TargetVersion, opts.AllowMajorUpgrade); err != nil {
+				return err
+			}
+		}
+		if opts.CheckOnly {
+			req, err := http.NewRequest(http.MethodHead, opts.BinaryURL, nil)
+			if err != nil {
+				return fmt.Errorf("create HEAD request: %w", err)
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				return fmt.Errorf("check binary URL: %w", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				return fmt.Errorf("binary URL check failed: HTTP %d", resp.StatusCode)
+			}
+			fmt.Fprintf(os.Stderr, "Binary URL is reachable: %s (status %d)\n", opts.BinaryURL, resp.StatusCode)
+			if strings.TrimSpace(opts.TargetVersion) != "" {
+				if versionLess(currentVer, opts.TargetVersion) {
+					fmt.Fprintf(os.Stderr, "Update available: current=%s target=%s\n", currentVer, opts.TargetVersion)
+				} else {
+					fmt.Fprintf(os.Stderr, "No upgrade needed: current=%s target=%s\n", currentVer, opts.TargetVersion)
+				}
+			}
+			return nil
+		}
+		fmt.Fprintf(os.Stderr, "Downloading %s ...\n", opts.BinaryURL)
+		body, err := downloadBinaryURL(client, opts.BinaryURL)
+		if err != nil {
+			return err
+		}
+		targetVer := strings.TrimSpace(opts.TargetVersion)
+		if targetVer == "" {
+			targetVer = "custom"
+		}
+		return installDownloadedBinary(body, targetVer)
+	}
+
+	repo := strings.TrimSpace(opts.Repo)
+	if repo == "" {
+		repo = defaultGitHubRepo
+	}
+	repo, err := normalizeGitHubRepo(repo)
+	if err != nil {
+		return err
+	}
+	releases, err := fetchGitHubReleases(repo, client)
+	if err != nil {
+		return err
+	}
+	if len(releases) == 0 {
+		return fmt.Errorf("no releases found for %s", repo)
+	}
+
+	currentMajor, _ := parseVersionMajor(currentVer)
+	latestOverall := pickLatestSemverRelease(releases, 0)
+	if latestOverall == nil {
+		return fmt.Errorf("no stable releases found for %s", repo)
+	}
+	targetRelease := latestOverall
+	if !opts.AllowMajorUpgrade && currentMajor > 0 {
+		if sameMajor := pickLatestSemverRelease(releases, currentMajor); sameMajor != nil {
+			targetRelease = sameMajor
+		}
+	}
+	if strings.TrimSpace(opts.TargetVersion) != "" {
+		want := strings.TrimPrefix(strings.TrimSpace(opts.TargetVersion), "v")
+		var match *githubRelease
+		for i := range releases {
+			tag := strings.TrimPrefix(strings.TrimSpace(releases[i].TagName), "v")
+			if strings.EqualFold(tag, want) {
+				match = &releases[i]
+				break
+			}
+		}
+		if match == nil {
+			return fmt.Errorf("target version %q not found in repo %s", opts.TargetVersion, repo)
+		}
+		targetRelease = match
+	}
+	targetVer := strings.TrimPrefix(strings.TrimSpace(targetRelease.TagName), "v")
+	if err := enforceMajorUpgradePolicy(currentVer, targetVer, opts.AllowMajorUpgrade); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "Current version: %s\n", currentVer)
+	fmt.Fprintf(os.Stderr, "Selected release: %s\n", targetRelease.TagName)
+	if targetRelease.TagName != latestOverall.TagName {
+		fmt.Fprintf(os.Stderr, "Latest overall release: %s (major upgrade not auto-applied)\n", latestOverall.TagName)
+		if currentMajor == 1 {
+			fmt.Fprintln(os.Stderr, "Use --allow-major-upgrade to move from v1.x to v2.x after migration review.")
+		}
+	}
+	if opts.CheckOnly {
+		if versionLess(currentVer, targetVer) {
+			fmt.Fprintf(os.Stderr, "Update available in track: %s -> %s\n", currentVer, targetVer)
+		} else if versionLess(targetVer, currentVer) {
+			fmt.Fprintln(os.Stderr, "You have a newer version than the selected release track (dev build).")
+		} else {
+			fmt.Fprintln(os.Stderr, "You are already on the latest version for the selected track.")
+		}
+		downloadURL, assetName := pickAssetForCurrentPlatform(*targetRelease)
+		if downloadURL != "" {
+			fmt.Fprintf(os.Stderr, "Binary candidate for %s/%s: %s (%s)\n", runtime.GOOS, runtime.GOARCH, assetName, downloadURL)
+		}
+		return nil
+	}
+	if !versionLess(currentVer, targetVer) {
+		if versionLess(targetVer, currentVer) {
+			fmt.Fprintln(os.Stderr, "You have a newer version than the selected release (dev build).")
+		} else {
+			fmt.Fprintln(os.Stderr, "You are already on the latest version for the selected track.")
+		}
+		return nil
+	}
+
+	downloadURL, chosenAssetName := pickAssetForCurrentPlatform(*targetRelease)
+	if downloadURL == "" {
+		fmt.Fprintf(os.Stderr, "No binary found for %s/%s. Download manually: %s\n", runtime.GOOS, runtime.GOARCH, targetRelease.HTMLURL)
+		return nil
+	}
+	if isArchiveAssetURL(downloadURL) {
+		fmt.Fprintf(os.Stderr, "Binary for %s/%s is only available as archive. Download and extract: %s\n", runtime.GOOS, runtime.GOARCH, downloadURL)
+		return nil
+	}
+
+	fmt.Fprintf(os.Stderr, "Downloading %s ...\n", downloadURL)
+	body, err := downloadBinaryURL(client, downloadURL)
+	if err != nil {
+		return err
+	}
 	if chosenAssetName != "" {
-		for _, a := range rel.Assets {
+		for _, a := range targetRelease.Assets {
 			an := strings.ToLower(a.Name)
 			if strings.Contains(an, "checksum") || strings.Contains(an, "sha256") || strings.HasSuffix(an, ".sha256") {
 				csBody, err := fetchURL(a.BrowserDownloadURL, client)
@@ -7522,41 +8361,7 @@ func runUpdate() error {
 			}
 		}
 	}
-
-	selfPath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("get executable path: %w", err)
-	}
-	dir := filepath.Dir(selfPath)
-
-	// On Windows, overwriting the running exe often fails; write to .new.exe and instruct user
-	if runtime.GOOS == "windows" {
-		newPath := selfPath + ".new.exe"
-		if err := os.WriteFile(newPath, body, 0755); err != nil {
-			return fmt.Errorf("write %s: %w", newPath, err)
-		}
-		fmt.Fprintf(os.Stderr, "Update saved as %s. Exit this program, then replace %s with it and run again.\n", newPath, selfPath)
-		return nil
-	}
-
-	tmpPath := filepath.Join(dir, ".ncc-orchestrator-update."+strconv.Itoa(os.Getpid()))
-	if err := os.WriteFile(tmpPath, body, 0755); err != nil {
-		return fmt.Errorf("write temp file: %w", err)
-	}
-
-	if err := os.Rename(tmpPath, selfPath); err != nil {
-		_ = os.Remove(tmpPath)
-		// Fallback: write to cwd so user can replace manually
-		fallback := filepath.Join(".", "ncc-orchestrator-"+latestVer)
-		if wErr := os.WriteFile(fallback, body, 0755); wErr != nil {
-			return fmt.Errorf("replace binary failed (%v); write to %s failed: %w", err, fallback, wErr)
-		}
-		fmt.Fprintf(os.Stderr, "Could not replace running binary. New binary saved as %s — move it to replace the current one.\n", fallback)
-		return nil
-	}
-
-	fmt.Fprintln(os.Stderr, "Update complete. Run the binary again to use the new version.")
-	return nil
+	return installDownloadedBinary(body, targetVer)
 }
 
 func fetchURL(url string, client *http.Client) ([]byte, error) {
@@ -7626,6 +8431,85 @@ func discoverHTTPClient(insecure bool) *http.Client {
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure},
 		},
 	}
+}
+
+func normalizePCBaseURL(raw string) (string, error) {
+	target := strings.TrimSpace(raw)
+	if target == "" {
+		return "", errors.New("pc target is empty")
+	}
+	if !strings.HasPrefix(target, "https://") && !strings.HasPrefix(target, "http://") {
+		target = "https://" + target
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return "", fmt.Errorf("parse PC target %q: %w", raw, err)
+	}
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return "", fmt.Errorf("PC target must use http or https scheme, got %q", u.Scheme)
+	}
+	if strings.TrimSpace(u.Host) == "" {
+		return "", fmt.Errorf("PC target %q has no host", raw)
+	}
+	hostname := u.Hostname()
+	if err := validateClusterAddress(hostname); err != nil {
+		return "", fmt.Errorf("PC host %q: %w", hostname, err)
+	}
+	port := u.Port()
+	if strings.TrimSpace(port) == "" {
+		port = strconv.Itoa(prismGatewayPort)
+	}
+	clean := url.URL{
+		Scheme: u.Scheme,
+		Host:   net.JoinHostPort(hostname, port),
+	}
+	return strings.TrimSuffix(clean.String(), "/"), nil
+}
+
+func discoverClustersFromPCTargets(cfg Config) ([]string, error) {
+	apiVersion := strings.ToLower(strings.TrimSpace(cfg.DiscoverAPIVersion))
+	if apiVersion == "" {
+		apiVersion = defaultDiscoverAPIVersion
+	}
+	if apiVersion != "v3" && apiVersion != "v4" {
+		return nil, fmt.Errorf("discover-api-version must be v3 or v4, got %q", apiVersion)
+	}
+
+	seen := make(map[string]bool)
+	out := make([]string, 0)
+	for _, pc := range cfg.PCs {
+		pcURL, err := normalizePCBaseURL(pc)
+		if err != nil {
+			return nil, err
+		}
+		var discovered []string
+		if apiVersion == "v4" {
+			discovered, err = fetchPCClustersV4(pcURL, cfg.Username, cfg.Password, cfg.InsecureSkipVerify, cfg.NutanixV4APIVersion)
+			if err != nil {
+				var v4Unavailable errDiscoverV4Unavailable
+				if errors.As(err, &v4Unavailable) {
+					discovered, err = fetchPCClustersV3(pcURL, cfg.Username, cfg.Password, cfg.InsecureSkipVerify)
+				}
+			}
+		} else {
+			discovered, err = fetchPCClustersV3(pcURL, cfg.Username, cfg.Password, cfg.InsecureSkipVerify)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("discover clusters from PC %s: %w", pcURL, err)
+		}
+		for _, addr := range discovered {
+			addr = strings.TrimSpace(addr)
+			if addr == "" || seen[addr] {
+				continue
+			}
+			seen[addr] = true
+			out = append(out, addr)
+		}
+	}
+	if len(out) == 0 {
+		return nil, errors.New("no clusters discovered from provided PCs")
+	}
+	return out, nil
 }
 
 // fetchPCClustersV3 lists clusters via legacy POST /api/nutanix/v3/clusters/list.
@@ -8473,8 +9357,12 @@ func runCreateSchedule(cmd *cobra.Command, args []string) error {
 
 func configJSONSchema() map[string]interface{} {
 	props := map[string]interface{}{
+		"cluster-source-mode":       map[string]interface{}{"type": "string", "enum": []string{"clusters", "pc"}},
+		"skip-preflight-check":      map[string]interface{}{"type": "boolean"},
 		"clusters":                  map[string]interface{}{"type": "string", "description": "Comma-separated cluster IPs/FQDNs"},
 		"clusters-file":             map[string]interface{}{"type": "string"},
+		"pcs":                       map[string]interface{}{"type": "string", "description": "Comma-separated Prism Central IPs/FQDNs/URLs for pc mode"},
+		"pcs-file":                  map[string]interface{}{"type": "string"},
 		"update":                    map[string]interface{}{"type": "boolean"},
 		"username":                  map[string]interface{}{"type": "string"},
 		"password":                  map[string]interface{}{"type": "string"},
@@ -8575,18 +9463,8 @@ func runValidateConfigCommand(cmd *cobra.Command, args []string) error {
 	if strings.TrimSpace(cfgPath) == "" {
 		return exitConfig(errors.New("--config is required"))
 	}
-	if _, err := os.Stat(cfgPath); err != nil {
-		return exitConfig(fmt.Errorf("config path %s: %w", cfgPath, err))
-	}
-	// validate-config is a standalone subcommand and does not share root --config binding,
-	// so set viper key explicitly before calling bindConfig().
-	viper.Set("config", cfgPath)
-	cfg, err := bindConfig()
-	if err != nil {
-		return exitConfig(fmt.Errorf("configuration: %w", err))
-	}
-	if err := validateConfig(cfg); err != nil {
-		return exitConfig(fmt.Errorf("validation: %w", err))
+	if _, err := loadConfigForValidation(cfgPath); err != nil {
+		return exitConfig(err)
 	}
 	fmt.Printf("Config is valid: %s\n", cfgPath)
 	return nil
@@ -8597,26 +9475,258 @@ func runValidateSecretsCommand(cmd *cobra.Command, args []string) error {
 	if strings.TrimSpace(cfgPath) == "" {
 		return exitConfig(errors.New("--config is required"))
 	}
+	secretRefs, provider, err := validateSecretsForPath(cfgPath)
+	if err != nil {
+		return exitConfig(err)
+	}
+	if secretRefs == 0 {
+		fmt.Printf("No secret:// references found in config: %s\n", cfgPath)
+		return nil
+	}
+	fmt.Printf("Secrets validation passed: refs=%d provider=%s config=%s\n", secretRefs, provider, cfgPath)
+	return nil
+}
+
+func loadConfigForValidation(cfgPath string) (Config, error) {
+	if _, err := os.Stat(cfgPath); err != nil {
+		return Config{}, fmt.Errorf("config path %s: %w", cfgPath, err)
+	}
+	// validate-* commands are standalone subcommands and do not share root --config binding.
+	viper.Set("config", cfgPath)
+	cfg, err := bindConfig()
+	if err != nil {
+		return Config{}, fmt.Errorf("configuration: %w", err)
+	}
+	if err := validateConfig(cfg); err != nil {
+		return Config{}, fmt.Errorf("validation: %w", err)
+	}
+	return cfg, nil
+}
+
+func validateSecretsForPath(cfgPath string) (int, string, error) {
 	raw, err := os.ReadFile(cfgPath)
 	if err != nil {
-		return exitConfig(fmt.Errorf("config path %s: %w", cfgPath, err))
+		return 0, "", fmt.Errorf("config path %s: %w", cfgPath, err)
 	}
 	secretRefs := strings.Count(string(raw), "secret://")
 	viper.Set("config", cfgPath)
 	cfg, err := bindConfig()
 	if err != nil {
-		return exitConfig(fmt.Errorf("secret validation failed: %w", err))
+		return secretRefs, "", fmt.Errorf("secret validation failed: %w", err)
 	}
 	provider := strings.TrimSpace(cfg.SecretsProvider)
-	if secretRefs == 0 {
-		fmt.Printf("No secret:// references found in config: %s\n", cfgPath)
+	if secretRefs > 0 && provider == "" {
+		return secretRefs, provider, errors.New("secret:// references found but secrets-provider is empty")
+	}
+	return secretRefs, provider, nil
+}
+
+type preflightCheck struct {
+	ID      string `json:"id"`
+	Status  string `json:"status"`
+	Title   string `json:"title"`
+	Message string `json:"message"`
+	Hint    string `json:"hint,omitempty"`
+	Output  string `json:"output,omitempty"`
+}
+
+type preflightReport struct {
+	OK              bool             `json:"ok"`
+	Failed          int              `json:"failed"`
+	Warn            int              `json:"warn"`
+	ConfigPath      string           `json:"config_path"`
+	Checks          []preflightCheck `json:"checks"`
+	ActionableHints []string         `json:"actionableHints"`
+}
+
+func preflightProbePath(path string) error {
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return err
+	}
+	probe := filepath.Join(path, ".ncc-prefight-check")
+	if err := os.WriteFile(probe, []byte(time.Now().UTC().Format(time.RFC3339)), 0o600); err != nil {
+		return err
+	}
+	return os.Remove(probe)
+}
+
+func buildPreflightReport(cfgPath string) preflightReport {
+	report := preflightReport{
+		OK:         true,
+		ConfigPath: cfgPath,
+		Checks:     []preflightCheck{},
+	}
+	hints := []string{}
+	add := func(c preflightCheck) {
+		report.Checks = append(report.Checks, c)
+		switch c.Status {
+		case "fail":
+			report.Failed++
+			report.OK = false
+			if strings.TrimSpace(c.Hint) != "" {
+				hints = append(hints, c.Hint)
+			}
+		case "warn":
+			report.Warn++
+		}
+	}
+
+	if strings.TrimSpace(cfgPath) == "" {
+		add(preflightCheck{
+			ID:      "validate-config",
+			Status:  "warn",
+			Title:   "validate-config",
+			Message: "config path not provided; file-based preflight checks skipped",
+			Hint:    "Run with --config to enable full preflight checks.",
+		})
+		report.ActionableHints = dedupeStringsKeepOrder(hints)
+		return report
+	}
+
+	if cfg, err := loadConfigForValidation(cfgPath); err != nil {
+		add(preflightCheck{
+			ID:      "validate-config",
+			Status:  "fail",
+			Title:   "validate-config",
+			Message: err.Error(),
+			Hint:    "Fix configuration schema/values and rerun preflight.",
+		})
+	} else {
+		add(preflightCheck{ID: "validate-config", Status: "pass", Title: "validate-config", Message: "config is valid"})
+		dirs := []struct {
+			id    string
+			path  string
+			title string
+			hint  string
+		}{
+			{"path.output-dir-logs", cfg.OutputDirLogs, "Output logs path permission", "Grant write permission to output-dir-logs."},
+			{"path.output-dir-filtered", cfg.OutputDirFiltered, "Output filtered path permission", "Grant write permission to output-dir-filtered."},
+			{"path.log-file-dir", filepath.Dir(cfg.LogFile), "Log file directory permission", "Grant write permission to log-file directory."},
+			{"path.prom-dir", cfg.PromDir, "Prometheus path permission", "Grant write permission to prom-dir."},
+		}
+		if cfg.RunHistoryEnabled {
+			dirs = append(dirs, struct {
+				id    string
+				path  string
+				title string
+				hint  string
+			}{"path.run-history-dir", cfg.RunHistoryDir, "Run history path permission", "Grant write permission to run-history-dir."})
+		}
+		for _, d := range dirs {
+			if err := preflightProbePath(d.path); err != nil {
+				add(preflightCheck{ID: d.id, Status: "fail", Title: d.title, Message: err.Error(), Hint: d.hint})
+			} else {
+				add(preflightCheck{ID: d.id, Status: "pass", Title: d.title, Message: d.path})
+			}
+		}
+		// Additional file-level checks for optional inputs when configured.
+		checkFile := func(id string, title string, p string, required bool) {
+			path := strings.TrimSpace(p)
+			if path == "" {
+				if required {
+					add(preflightCheck{
+						ID:      id,
+						Status:  "fail",
+						Title:   title,
+						Message: "required file path is empty",
+						Hint:    "Set this file path in config.",
+					})
+				} else {
+					add(preflightCheck{ID: id, Status: "warn", Title: title, Message: "not set"})
+				}
+				return
+			}
+			st, err := os.Stat(path)
+			if err != nil {
+				add(preflightCheck{
+					ID:      id,
+					Status:  "fail",
+					Title:   title,
+					Message: err.Error(),
+					Hint:    "Create the file or fix the configured path.",
+				})
+				return
+			}
+			if st.IsDir() {
+				add(preflightCheck{
+					ID:      id,
+					Status:  "fail",
+					Title:   title,
+					Message: "path points to a directory",
+					Hint:    "Use a regular file path.",
+				})
+				return
+			}
+			add(preflightCheck{ID: id, Status: "pass", Title: title, Message: path})
+		}
+		checkFile("file.clusters-file", "Clusters file", cfg.ClustersFile, false)
+		checkFile("file.exclude-alert-titles-file", "Exclude alert titles file", cfg.ExcludeAlertTitlesFile, false)
+		checkFile("file.secrets-file", "Secrets file", cfg.SecretsFile, strings.EqualFold(strings.TrimSpace(cfg.SecretsProvider), "file"))
+		// Security posture advisories.
+		if cfg.InsecureSkipVerify {
+			add(preflightCheck{
+				ID:      "safety.insecure-skip-verify",
+				Status:  "warn",
+				Title:   "TLS verification disabled",
+				Message: "insecure-skip-verify=true",
+				Hint:    "Use false in production and install valid certificates.",
+			})
+		}
+		if cfg.LogHTTP {
+			add(preflightCheck{
+				ID:      "safety.log-http",
+				Status:  "warn",
+				Title:   "HTTP request/response logging enabled",
+				Message: "log-http=true",
+				Hint:    "Disable log-http for production runs to reduce sensitive output exposure.",
+			})
+		}
+		if cfg.MaxParallel > 20 {
+			add(preflightCheck{
+				ID:      "safety.max-parallel",
+				Status:  "warn",
+				Title:   "High max-parallel setting",
+				Message: fmt.Sprintf("max-parallel=%d", cfg.MaxParallel),
+				Hint:    "Lower max-parallel if you hit API rate limits or network instability.",
+			})
+		}
+	}
+
+	secretRefs, provider, secErr := validateSecretsForPath(cfgPath)
+	if secErr != nil {
+		add(preflightCheck{
+			ID:      "validate-secrets",
+			Status:  "fail",
+			Title:   "validate-secrets",
+			Message: secErr.Error(),
+			Hint:    "Set secrets-provider and ensure secret sources are accessible.",
+		})
+	} else if secretRefs == 0 {
+		add(preflightCheck{ID: "validate-secrets", Status: "warn", Title: "validate-secrets", Message: "no secret:// references found"})
+	} else {
+		add(preflightCheck{ID: "validate-secrets", Status: "pass", Title: "validate-secrets", Message: fmt.Sprintf("refs=%d provider=%s", secretRefs, provider)})
+	}
+
+	report.ActionableHints = dedupeStringsKeepOrder(hints)
+	return report
+}
+
+func runPreflightCheckCommand(cmd *cobra.Command, args []string) error {
+	zerolog.SetGlobalLevel(zerolog.ErrorLevel)
+	cfgPath, _ := cmd.Flags().GetString("config")
+	format, _ := cmd.Flags().GetString("format")
+	format = strings.ToLower(strings.TrimSpace(format))
+	if format == "" {
+		format = "json"
+	}
+
+	report := buildPreflightReport(cfgPath)
+	data, _ := json.MarshalIndent(report, "", "  ")
+	if format == "json" {
+		fmt.Println(string(data))
 		return nil
 	}
-	if provider == "" {
-		return exitConfig(errors.New("secret:// references found but secrets-provider is empty"))
-	}
-	fmt.Printf("Secrets validation passed: refs=%d provider=%s config=%s\n", secretRefs, provider, cfgPath)
-	return nil
+	return exitConfig(fmt.Errorf("unsupported format: %s (supported: json)", format))
 }
 
 // extractClusterAddressV4 returns a reachable cluster address from clustermgmt v4 config cluster JSON.
@@ -8764,6 +9874,93 @@ func extractClusterAddressV3(entity map[string]interface{}) string {
 	return ""
 }
 
+func versionInfoString() string {
+	return fmt.Sprintf("Version: %s\nStream: %s\nBuild Date: %s\nGo Version: %s", Version, Stream, BuildDate, GoVersion)
+}
+
+func printEnvInfo() {
+	fmt.Println("Possible Environment Variables (prefix: NCC_) and Current Values:")
+	envKeys := []string{
+		"CONFIG",
+		"SKIP_PREFLIGHT_CHECK",
+		"CLUSTER_SOURCE_MODE",
+		"CLUSTERS",
+		"CLUSTERS_FILE",
+		"PCS",
+		"PCS_FILE",
+		"PRISM_CENTRAL_URL",
+		"DISCOVER_API_VERSION",
+		"USERNAME",
+		"PASSWORD",
+		"INSECURE_SKIP_VERIFY",
+		"TIMEOUT",
+		"REQUEST_TIMEOUT",
+		"POLL_INTERVAL",
+		"POLL_JITTER",
+		"MAX_PARALLEL",
+		"OUTPUTS",
+		"OUTPUT_DIR_LOGS",
+		"OUTPUT_DIR_FILTERED",
+		"LOG_FILE",
+		"LOG_LEVEL",
+		"LOG_HTTP",
+		"RETRY_MAX_ATTEMPTS",
+		"RETRY_BASE_DELAY",
+		"RETRY_MAX_DELAY",
+		"RETRY_CIRCUIT_BREAKER",
+		"PROM_DIR",
+		"RUN_HISTORY",
+		"RUN_HISTORY_DIR",
+		"RETAIN_LAST",
+		"RETAIN_DAYS",
+		"ARTIFACT_RETAIN_DAYS",
+		"ARTIFACT_RETAIN_MAX_FILES",
+		"SINGLE_REPORT",
+		"NOTIFY_ON_REGRESSION",
+		"ADAPTIVE_PARALLELISM",
+		"SEVERITY_FILTER",
+		"EXCLUDE_ALERT_TITLES",
+		"EXCLUDE_ALERT_TITLES_FILE",
+		"EXCLUDE_ALERT_MATCH_MODE",
+		"DRY_RUN",
+		"REPLAY",
+		"MAX_IDLE_CONNS",
+		"MAX_IDLE_CONNS_PER_HOST",
+		"MAX_CONNS_PER_HOST",
+		"IDLE_CONN_TIMEOUT",
+		"EMAIL_ENABLED",
+		"EMAIL_ATTACH_HTML",
+		"NOTIFY_DIGEST",
+		"SMTP_SERVER",
+		"SMTP_PORT",
+		"SMTP_USER",
+		"SMTP_PASSWORD",
+		"EMAIL_FROM",
+		"EMAIL_TO",
+		"EMAIL_USE_TLS",
+		"WEBHOOK_ENABLED",
+		"WEBHOOK_INCLUDE_HTML",
+		"WEBHOOK_URL",
+		"WEBHOOK_HEADERS",
+		"SLACK_ENABLED",
+		"SLACK_WEBHOOK_URL",
+		"SLACK_CHANNEL",
+	}
+	for _, key := range envKeys {
+		envVar := "NCC_" + key
+		val := os.Getenv(envVar)
+		if val != "" {
+			if key == "PASSWORD" || key == "SMTP_PASSWORD" {
+				fmt.Printf("%s = %s\n", envVar, maskPassword(val))
+			} else {
+				fmt.Printf("%s = %s\n", envVar, val)
+			}
+		} else {
+			fmt.Printf("%s = (not set)\n", envVar)
+		}
+	}
+}
+
 func newRootCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
@@ -8781,31 +9978,24 @@ Examples:
   ncc-orchestrator --clusters 10.0.1.1,10.0.2.1 --username admin
 
   # Show all available environment variables
-  ncc-orchestrator --env-info
+  ncc-orchestrator env-info
 
 Run 'ncc-orchestrator --help' for a full list of options.
 `,
-		Version: fmt.Sprintf(`
-Version: %s
-Stream: %s
-Build Date: %s
-Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Setup console logger first for early error visibility
 			consoleWriter := zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}
 			consoleLogger := zerolog.New(consoleWriter).With().Timestamp().Logger()
 			zerolog.SetGlobalLevel(zerolog.InfoLevel)
 
-			// Check for latest release and optionally update binary
+			// Backward-compatible aliases for old root flags.
 			if update, _ := cmd.Flags().GetBool("update"); update {
-				if err := runUpdate(); err != nil {
+				if err := runUpdate(updateOptions{Repo: defaultGitHubRepo}); err != nil {
 					consoleLogger.Error().Err(err).Msg("update failed")
 					return fmt.Errorf("update: %w", err)
 				}
 				return nil
 			}
-
-			// Generate test aggregated report (no config required)
 			if genN, _ := cmd.Flags().GetInt("gen-test-agg"); genN > 0 {
 				outDir := viper.GetString("output-dir-filtered")
 				if outDir == "" {
@@ -8816,6 +10006,18 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 					return fmt.Errorf("gen-test-agg: %w", err)
 				}
 				fmt.Printf("Generated test aggregated report: %d clusters, output in %s/index.html\n", genN, outDir)
+				return nil
+			}
+			if showTC, _ := cmd.Flags().GetBool("tc"); showTC {
+				fmt.Print(termsText)
+				return nil
+			}
+			if showEnvInfo, _ := cmd.Flags().GetBool("env-info"); showEnvInfo {
+				printEnvInfo()
+				return nil
+			}
+			if showVersion, _ := cmd.Flags().GetBool("version"); showVersion {
+				fmt.Println(versionInfoString())
 				return nil
 			}
 
@@ -8845,7 +10047,9 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 			// Set global log level after file logger is set up
 			zerolog.SetGlobalLevel(lvl)
 			log.Info().
+				Str("clusterSourceMode", cfg.ClusterSourceMode).
 				Strs("clusters", cfg.Clusters).
+				Strs("pcs", cfg.PCs).
 				Str("username", cfg.Username).
 				Str("password", maskPassword(cfg.Password)).
 				Bool("insecureSkipVerify", cfg.InsecureSkipVerify).
@@ -8865,11 +10069,45 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				Dur("retryMaxDelay", cfg.RetryMaxDelay).
 				Msg("starting NCC orchestrator")
 
-			if tc, _ := cmd.Flags().GetBool("tc"); tc {
-				fmt.Print(termsText)
-				return nil
+			skipPreflight, _ := cmd.Flags().GetBool("skip-preflight-check")
+			if !skipPreflight {
+				preflightCfgPath := strings.TrimSpace(viper.GetString("config"))
+				report := buildPreflightReport(preflightCfgPath)
+				if report.Failed > 0 {
+					hintMsg := ""
+					if len(report.ActionableHints) > 0 {
+						hintMsg = " hints: " + strings.Join(report.ActionableHints, "; ")
+					}
+					return exitConfig(fmt.Errorf("preflight-check failed (%d failures, %d warnings).%s", report.Failed, report.Warn, hintMsg))
+				}
+				log.Info().Int("preflight_failed", report.Failed).Int("preflight_warn", report.Warn).Msg("preflight-check passed")
+			} else {
+				log.Warn().Msg("preflight-check skipped by flag")
 			}
-			// Validate required fields first
+
+			// Resolve targets by source mode.
+			if cfg.ClusterSourceMode == "pc" {
+				if strings.TrimSpace(cfg.Password) == "" {
+					cfg.Password, err = promptPasswordIfEmpty("", cfg.Username)
+					if err != nil {
+						return err
+					}
+				}
+				resolvedClusters, discoverErr := discoverClustersFromPCTargets(cfg)
+				if discoverErr != nil {
+					log.Error().Err(discoverErr).Msg("failed to discover clusters from PC targets")
+					return exitConfig(discoverErr)
+				}
+				cfg.Clusters = resolvedClusters
+				cfg.ClusterCredentials = map[string]ClusterCredential{}
+				log.Info().
+					Int("pcs", len(cfg.PCs)).
+					Int("discovered_clusters", len(cfg.Clusters)).
+					Str("discover_api_version", cfg.DiscoverAPIVersion).
+					Msg("resolved clusters from pc mode")
+			}
+
+			// Validate required fields after target resolution.
 			if len(cfg.Clusters) == 0 {
 				err := errors.New("no clusters provided (--clusters, --clusters-file, env, or config)")
 				log.Error().Msg(err.Error())
@@ -8890,6 +10128,10 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				log.Info().Msg("DRY-RUN MODE: Configuration validated, no checks will be executed")
 				fmt.Println("✓ Configuration is valid")
 				fmt.Printf("  Clusters: %d configured\n", len(cfg.Clusters))
+				fmt.Printf("  Cluster source mode: %s\n", cfg.ClusterSourceMode)
+				if cfg.ClusterSourceMode == "pc" {
+					fmt.Printf("  Prism Central targets: %d\n", len(cfg.PCs))
+				}
 				if strings.TrimSpace(cfg.Username) != "" {
 					fmt.Printf("  Username: %s\n", cfg.Username)
 				} else {
@@ -8914,87 +10156,6 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 				}
 				fmt.Println("  All settings validated successfully")
 				return nil
-			}
-
-			if envInfo, err := cmd.Flags().GetBool("env-info"); err == nil && envInfo {
-				fmt.Println("Possible Environment Variables (prefix: NCC_) and Current Values:")
-				envKeys := []string{
-					"CONFIG",
-					"CLUSTERS",
-					"CLUSTERS_FILE",
-					"PRISM_CENTRAL_URL",
-					"USERNAME",
-					"PASSWORD",
-					"INSECURE_SKIP_VERIFY",
-					"TIMEOUT",
-					"REQUEST_TIMEOUT",
-					"POLL_INTERVAL",
-					"POLL_JITTER",
-					"MAX_PARALLEL",
-					"OUTPUTS",
-					"OUTPUT_DIR_LOGS",
-					"OUTPUT_DIR_FILTERED",
-					"LOG_FILE",
-					"LOG_LEVEL",
-					"LOG_HTTP",
-					"RETRY_MAX_ATTEMPTS",
-					"RETRY_BASE_DELAY",
-					"RETRY_MAX_DELAY",
-					"RETRY_CIRCUIT_BREAKER",
-					"PROM_DIR",
-					"RUN_HISTORY",
-					"RUN_HISTORY_DIR",
-					"RETAIN_LAST",
-					"RETAIN_DAYS",
-					"ARTIFACT_RETAIN_DAYS",
-					"ARTIFACT_RETAIN_MAX_FILES",
-					"SINGLE_REPORT",
-					"NOTIFY_ON_REGRESSION",
-					"ADAPTIVE_PARALLELISM",
-					"SEVERITY_FILTER",
-					"EXCLUDE_ALERT_TITLES",
-					"EXCLUDE_ALERT_TITLES_FILE",
-					"EXCLUDE_ALERT_MATCH_MODE",
-					"DRY_RUN",
-					"REPLAY",
-					"MAX_IDLE_CONNS",
-					"MAX_IDLE_CONNS_PER_HOST",
-					"MAX_CONNS_PER_HOST",
-					"IDLE_CONN_TIMEOUT",
-					"EMAIL_ENABLED",
-					"EMAIL_ATTACH_HTML",
-					"NOTIFY_DIGEST",
-					"SMTP_SERVER",
-					"SMTP_PORT",
-					"SMTP_USER",
-					"SMTP_PASSWORD",
-					"EMAIL_FROM",
-					"EMAIL_TO",
-					"EMAIL_USE_TLS",
-					"WEBHOOK_ENABLED",
-					"WEBHOOK_INCLUDE_HTML",
-					"WEBHOOK_URL",
-					"WEBHOOK_HEADERS",
-					"SLACK_ENABLED",
-					"SLACK_WEBHOOK_URL",
-					"SLACK_CHANNEL",
-					"UPDATE",
-				}
-				for _, key := range envKeys {
-					envVar := "NCC_" + key
-					val := os.Getenv(envVar)
-					if val != "" {
-						// Mask sensitive values
-						if key == "PASSWORD" || key == "SMTP_PASSWORD" {
-							fmt.Printf("%s = %s\n", envVar, maskPassword(val))
-						} else {
-							fmt.Printf("%s = %s\n", envVar, val)
-						}
-					} else {
-						fmt.Printf("%s = (not set)\n", envVar)
-					}
-				}
-				return nil // Exit after printing
 			}
 
 			if needPrompt, promptUser := needsPasswordPrompt(cfg); needPrompt {
@@ -9692,13 +10853,30 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	cmd.PersistentFlags().String("nutanix-v4-api-version", defaultNutanixV4APIVersion, "Nutanix v4 REST API path revision for clustermgmt and monitoring (e.g. v4.2, v4.1, v4.0.a1)")
 	_ = viper.BindPFlag("nutanix-v4-api-version", cmd.PersistentFlags().Lookup("nutanix-v4-api-version"))
 
-	// flags
+	// Deprecated root aliases (kept hidden for backward compatibility).
 	cmd.Flags().BoolP("update", "u", false, "Fetch latest release from GitHub and update this binary if a matching asset exists")
 	cmd.Flags().Bool("env-info", false, "Display possible environment variables and their current values")
 	cmd.Flags().Bool("tc", false, "Display terms and conditions")
+	cmd.Flags().BoolP("version", "v", false, "Display version/build metadata")
+	_ = cmd.Flags().MarkDeprecated("update", "use `ncc-orchestrator update`")
+	_ = cmd.Flags().MarkDeprecated("env-info", "use `ncc-orchestrator env-info`")
+	_ = cmd.Flags().MarkDeprecated("tc", "use `ncc-orchestrator terms`")
+	_ = cmd.Flags().MarkDeprecated("version", "use `ncc-orchestrator version`")
+	_ = cmd.Flags().MarkHidden("update")
+	_ = cmd.Flags().MarkHidden("env-info")
+	_ = cmd.Flags().MarkHidden("tc")
+	_ = cmd.Flags().MarkHidden("version")
+
+	// flags
+	cmd.Flags().Bool("skip-preflight-check", false, "Skip default preflight-check before run (not recommended)")
 	cmd.Flags().String("config", "", "Config file path (yaml/json)")
+	cmd.Flags().String("cluster-source-mode", defaultClusterSourceMode, "Cluster source mode: clusters (direct PE list) or pc (discover PEs from Prism Central targets)")
 	cmd.Flags().String("clusters", "", "Comma-separated cluster IPs or FQDNs")
 	cmd.Flags().String("clusters-file", "", "Path to cluster file (cluster or cluster,username[,password] per line; overrides clusters when set)")
+	cmd.Flags().String("pcs", "", "Comma-separated Prism Central IPs/FQDNs/URLs (used when --cluster-source-mode=pc)")
+	cmd.Flags().String("pcs-file", "", "Path to file with one Prism Central IP/FQDN/URL per line (used when --cluster-source-mode=pc)")
+	cmd.Flags().String("prism-central-url", "", "Single Prism Central URL/IP/FQDN fallback target (used when --cluster-source-mode=pc and no pcs/pcs-file)")
+	cmd.Flags().String("discover-api-version", defaultDiscoverAPIVersion, "Cluster discovery API for pc mode: v4 (GET clustermgmt) or v3 (legacy POST)")
 	cmd.Flags().String("username", "admin", "Username for Prism Gateway")
 	cmd.Flags().String("password", "", "Password (omit to be prompted)")
 	cmd.Flags().String("ncc-api-version", "v4", "NCC API mode: v4 (default) or Legacy (Prism Gateway v1 start-checks only; v1 accepted as alias); use --nutanix-v4-api-version for v4.2 vs v4.0.a1 etc.")
@@ -9726,6 +10904,8 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	cmd.Flags().Int("retry-circuit-breaker", defaultRetryCircuitBreaker, "Fail fast after N consecutive retryable failures")
 	cmd.Flags().Bool("replay", false, "Replay from existing logs without running NCC")
 	cmd.Flags().Int("gen-test-agg", 0, "Generate a test index.html with N clusters for scalability testing (no API calls)")
+	_ = cmd.Flags().MarkDeprecated("gen-test-agg", "use `ncc-orchestrator gen-test-agg --clusters <N>`")
+	_ = cmd.Flags().MarkHidden("gen-test-agg")
 	cmd.Flags().String("prom-dir", "promfiles", "Directory for Prometheus metrics")
 	cmd.Flags().Bool("run-history", false, "Store each run snapshot in run-history-dir")
 	cmd.Flags().String("run-history-dir", "", "Run history directory (default: <output-dir-filtered>/runs)")
@@ -9761,10 +10941,15 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	cmd.Flags().String("secrets-file", "", "Path to YAML/JSON secrets map when secrets-provider=file")
 
 	// viper bindings
-	_ = viper.BindPFlag("update", cmd.Flags().Lookup("update"))
+	_ = viper.BindPFlag("skip-preflight-check", cmd.Flags().Lookup("skip-preflight-check"))
 	_ = viper.BindPFlag("config", cmd.Flags().Lookup("config"))
+	_ = viper.BindPFlag("cluster-source-mode", cmd.Flags().Lookup("cluster-source-mode"))
 	_ = viper.BindPFlag("clusters", cmd.Flags().Lookup("clusters"))
 	_ = viper.BindPFlag("clusters-file", cmd.Flags().Lookup("clusters-file"))
+	_ = viper.BindPFlag("pcs", cmd.Flags().Lookup("pcs"))
+	_ = viper.BindPFlag("pcs-file", cmd.Flags().Lookup("pcs-file"))
+	_ = viper.BindPFlag("prism-central-url", cmd.Flags().Lookup("prism-central-url"))
+	_ = viper.BindPFlag("discover-api-version", cmd.Flags().Lookup("discover-api-version"))
 	_ = viper.BindPFlag("username", cmd.Flags().Lookup("username"))
 	_ = viper.BindPFlag("password", cmd.Flags().Lookup("password"))
 	_ = viper.BindPFlag("ncc-api-version", cmd.Flags().Lookup("ncc-api-version"))
@@ -9778,7 +10963,6 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	_ = viper.BindPFlag("output-dir-logs", cmd.Flags().Lookup("output-dir-logs"))
 	_ = viper.BindPFlag("output-dir-filtered", cmd.Flags().Lookup("output-dir-filtered"))
 	_ = viper.BindPFlag("single-report", cmd.Flags().Lookup("single-report"))
-	_ = viper.BindPFlag("gen-test-agg", cmd.Flags().Lookup("gen-test-agg"))
 	_ = viper.BindPFlag("log-file", cmd.Flags().Lookup("log-file"))
 	_ = viper.BindPFlag("log-level", cmd.Flags().Lookup("log-level"))
 	_ = viper.BindPFlag("log-http", cmd.Flags().Lookup("log-http"))
@@ -9825,6 +11009,182 @@ Go Version: %s`, Version, Stream, BuildDate, GoVersion),
 	_ = viper.BindPFlag("slack-channel", cmd.Flags().Lookup("slack-channel"))
 	_ = viper.BindPFlag("secrets-provider", cmd.Flags().Lookup("secrets-provider"))
 	_ = viper.BindPFlag("secrets-file", cmd.Flags().Lookup("secrets-file"))
+
+	termsCmd := &cobra.Command{
+		Use:   "terms",
+		Short: "Display terms and conditions",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			fmt.Print(termsText)
+			return nil
+		},
+	}
+	cmd.AddCommand(termsCmd)
+
+	envInfoCmd := &cobra.Command{
+		Use:   "env-info",
+		Short: "Display supported NCC environment variables and current values",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			printEnvInfo()
+			return nil
+		},
+	}
+	cmd.AddCommand(envInfoCmd)
+
+	updateCmd := &cobra.Command{
+		Use:   "update",
+		Short: "Check or update binary (track-aware, source configurable)",
+		Long: `Checks or updates ncc-orchestrator binaries.
+
+Default behavior follows the current major track (v1.x stays on latest v1.x).
+To cross major versions (for example v1 -> v2), pass --allow-major-upgrade.
+
+Use --check to only validate availability/version without downloading.
+Use --binary-url to work with non-GitHub/custom binary repositories.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			checkOnly, _ := cmd.Flags().GetBool("check")
+			allowMajorUpgrade, _ := cmd.Flags().GetBool("allow-major-upgrade")
+			repo, _ := cmd.Flags().GetString("repo")
+			binaryURL, _ := cmd.Flags().GetString("binary-url")
+			targetVersion, _ := cmd.Flags().GetString("target-version")
+			return runUpdate(updateOptions{
+				CheckOnly:         checkOnly,
+				AllowMajorUpgrade: allowMajorUpgrade,
+				Repo:              repo,
+				BinaryURL:         binaryURL,
+				TargetVersion:     targetVersion,
+			})
+		},
+	}
+	updateCmd.Flags().Bool("check", false, "Check update availability without downloading or replacing")
+	updateCmd.Flags().Bool("allow-major-upgrade", false, "Allow major upgrades (for example v1.x to v2.x)")
+	updateCmd.Flags().String("repo", defaultGitHubRepo, "GitHub repo in owner/repo or GitHub URL format")
+	updateCmd.Flags().String("binary-url", "", "Direct binary URL for non-GitHub/custom repositories")
+	updateCmd.Flags().String("target-version", "", "Target version hint (recommended with --binary-url)")
+	cmd.AddCommand(updateCmd)
+
+	v2BootstrapCmd := &cobra.Command{
+		Use:   "v2-bootstrap",
+		Short: "Download and prepare v2 API/UI/frontend binaries",
+		Long: `Automates v2 stack setup using release artifacts (binary-first workflow).
+
+Preferred artifact:
+- ncc-v2-stack-<os>-<arch>.zip|tar.gz (single bundle)
+
+Fallback (legacy layout):
+- ncc-api-server binary (for current OS/arch)
+- ncc-ui-server binary (for current OS/arch)
+- frontend bundle archive
+
+Then it writes startup scripts under --install-dir.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repo, _ := cmd.Flags().GetString("repo")
+			version, _ := cmd.Flags().GetString("version")
+			installDir, _ := cmd.Flags().GetString("install-dir")
+			configPath, _ := cmd.Flags().GetString("config-path")
+			outputDir, _ := cmd.Flags().GetString("output-dir")
+			logDir, _ := cmd.Flags().GetString("log-dir")
+			orchestratorBin, _ := cmd.Flags().GetString("orchestrator-bin")
+			apiListen, _ := cmd.Flags().GetString("api-listen")
+			uiListen, _ := cmd.Flags().GetString("ui-listen")
+			tokenFile, _ := cmd.Flags().GetString("token-file")
+			checkOnly, _ := cmd.Flags().GetBool("check")
+			return runV2Bootstrap(v2BootstrapOptions{
+				Repo:            repo,
+				Version:         version,
+				InstallDir:      installDir,
+				ConfigPath:      configPath,
+				OutputDir:       outputDir,
+				LogDir:          logDir,
+				OrchestratorBin: orchestratorBin,
+				APIListen:       apiListen,
+				UIListen:        uiListen,
+				TokenFile:       tokenFile,
+				CheckOnly:       checkOnly,
+			})
+		},
+	}
+	v2BootstrapCmd.Flags().String("repo", defaultGitHubRepo, "GitHub repo in owner/repo or URL format")
+	v2BootstrapCmd.Flags().String("version", "", "Release version (default: latest v2 stable)")
+	v2BootstrapCmd.Flags().String("install-dir", ".ncc-v2", "Installation directory for downloaded binaries and scripts")
+	v2BootstrapCmd.Flags().String("config-path", "config.yaml", "Config file path passed to API server")
+	v2BootstrapCmd.Flags().String("output-dir", "outputfiles", "Output directory passed to API server")
+	v2BootstrapCmd.Flags().String("log-dir", "nccfiles", "Log directory passed to API server")
+	v2BootstrapCmd.Flags().String("orchestrator-bin", "./ncc-orchestrator", "Path to ncc-orchestrator binary used by API server")
+	v2BootstrapCmd.Flags().String("api-listen", ":8081", "Listen address for API server")
+	v2BootstrapCmd.Flags().String("ui-listen", ":8080", "Listen address for UI server")
+	v2BootstrapCmd.Flags().String("token-file", ".ncc-api-token", "Token file path used by UI/API servers")
+	v2BootstrapCmd.Flags().Bool("check", false, "Check required assets only; do not download")
+	cmd.AddCommand(v2BootstrapCmd)
+
+	v2StartCmd := &cobra.Command{
+		Use:   "v2-start",
+		Short: "Start v2 API and UI services together",
+		Long: `Starts both ncc-api-server and ncc-ui-server from bootstrapped binaries.
+
+Run "ncc-orchestrator v2-bootstrap" once before using this command.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			installDir, _ := cmd.Flags().GetString("install-dir")
+			configPath, _ := cmd.Flags().GetString("config-path")
+			outputDir, _ := cmd.Flags().GetString("output-dir")
+			logDir, _ := cmd.Flags().GetString("log-dir")
+			orchestratorBin, _ := cmd.Flags().GetString("orchestrator-bin")
+			apiListen, _ := cmd.Flags().GetString("api-listen")
+			uiListen, _ := cmd.Flags().GetString("ui-listen")
+			tokenFile, _ := cmd.Flags().GetString("token-file")
+			return runV2Start(v2StartOptions{
+				InstallDir:      installDir,
+				ConfigPath:      configPath,
+				OutputDir:       outputDir,
+				LogDir:          logDir,
+				OrchestratorBin: orchestratorBin,
+				APIListen:       apiListen,
+				UIListen:        uiListen,
+				TokenFile:       tokenFile,
+			})
+		},
+	}
+	v2StartCmd.Flags().String("install-dir", ".ncc-v2", "Installation directory used by v2-bootstrap")
+	v2StartCmd.Flags().String("config-path", "config.yaml", "Config file path passed to API server")
+	v2StartCmd.Flags().String("output-dir", "outputfiles", "Output directory passed to API server")
+	v2StartCmd.Flags().String("log-dir", "nccfiles", "Log directory passed to API server")
+	v2StartCmd.Flags().String("orchestrator-bin", "./ncc-orchestrator", "Path to ncc-orchestrator binary used by API server")
+	v2StartCmd.Flags().String("api-listen", ":8081", "Listen address for API server")
+	v2StartCmd.Flags().String("ui-listen", ":8080", "Listen address for UI server")
+	v2StartCmd.Flags().String("token-file", ".ncc-api-token", "Token file path used by UI/API servers")
+	cmd.AddCommand(v2StartCmd)
+
+	genTestAggCmd := &cobra.Command{
+		Use:   "gen-test-agg",
+		Short: "Generate synthetic aggregated index.html for load testing",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			genN, _ := cmd.Flags().GetInt("clusters")
+			if genN <= 0 {
+				return errors.New("--clusters must be greater than 0")
+			}
+			outDir, _ := cmd.Flags().GetString("output-dir")
+			if strings.TrimSpace(outDir) == "" {
+				outDir = "outputfiles"
+			}
+			if err := generateTestAgg(genN, outDir); err != nil {
+				return fmt.Errorf("gen-test-agg: %w", err)
+			}
+			fmt.Printf("Generated test aggregated report: %d clusters, output in %s/index.html\n", genN, outDir)
+			return nil
+		},
+	}
+	genTestAggCmd.Flags().Int("clusters", 0, "Number of synthetic clusters to generate")
+	genTestAggCmd.Flags().String("output-dir", "outputfiles", "Directory for generated index.html")
+	cmd.AddCommand(genTestAggCmd)
+
+	versionCmd := &cobra.Command{
+		Use:   "version",
+		Short: "Display version information",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			fmt.Println(versionInfoString())
+			return nil
+		},
+	}
+	cmd.AddCommand(versionCmd)
 
 	// discover-clusters subcommand: Prism Central cluster list (default v4 clustermgmt API)
 	discoverCmd := &cobra.Command{
@@ -9905,6 +11265,15 @@ Examples:
 	}
 	validateSecretsCmd.Flags().String("config", "", "Config file path (yaml/json)")
 	cmd.AddCommand(validateSecretsCmd)
+
+	preflightCmd := &cobra.Command{
+		Use:   "preflight-check",
+		Short: "Run preflight checks before trigger-run",
+		RunE:  runPreflightCheckCommand,
+	}
+	preflightCmd.Flags().String("config", "", "Config file path (yaml/json)")
+	preflightCmd.Flags().String("format", "json", "Output format (json)")
+	cmd.AddCommand(preflightCmd)
 
 	return cmd
 }

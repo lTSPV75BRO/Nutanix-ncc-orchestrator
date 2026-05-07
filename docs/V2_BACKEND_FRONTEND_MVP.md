@@ -134,3 +134,132 @@ Open: `http://localhost:8080`
   - `regression-summary.json`
   - `slo-dashboard.json`
   - `policy-gates.txt` (as `policy_violations`)
+
+## API discoverability and explorer
+
+`v2` is designed to be self-discoverable for UI and automation clients:
+
+- OpenAPI spec endpoint: `GET /api/v1/openapi.json`
+- Route metadata endpoint: `GET /api/v1/meta/routes`
+- Frontend API Explorer consumes OpenAPI first and falls back to route metadata.
+
+Recommended integration order for external clients:
+
+1. Fetch `/api/v1/openapi.json` and generate/validate client contracts.
+2. Use `/api/v1/meta/routes` for lightweight route-health checks.
+3. Validate auth mode (`token`, `session`, or `hybrid`) before invoking mutations.
+
+## Config-referenced file lifecycle
+
+`v2` allows editing selected config-referenced files through API + UI:
+
+- clusters source files (for `clusters-file`)
+- alert exclusion list files (for `exclude-alert-titles-file`)
+- secrets map files (for `secrets-file`, when provider is `file`)
+
+Guardrails:
+
+- Content is validated before save (format + semantic checks).
+- `log-file` is intentionally excluded from editable config-referenced files.
+- Path handling is repo-root constrained to reduce accidental path traversal.
+
+## Preflight and execution model
+
+Preflight checks are executed by the `ncc-orchestrator` binary, not by backend-native cluster logic.
+
+- UI action: `Preflight Check` button calls backend endpoint.
+- Backend delegates to: `ncc-orchestrator preflight-check`.
+- CLI default run path performs preflight unless `--skip-preflight-check` is set.
+
+Preflight includes:
+
+- `validate-config`
+- `validate-secrets`
+- output/log/prom directory write probes via `.ncc-prefight-check`
+- safety advisories (for example insecure TLS, HTTP payload logging, high parallelism)
+
+## Upgrade path: v1 to v2
+
+By design, updater behavior is major-track aware:
+
+- `v1.x` binaries update to latest `v1.x` by default.
+- To move from `v1` to `v2`, user must explicitly enable major upgrade.
+
+### Important: what `ncc-orchestrator update` does (and does not do)
+
+- `ncc-orchestrator update` updates only the `ncc-orchestrator` CLI binary.
+- It does **not** auto-install or auto-start:
+  - `cmd/ncc-api-server`
+  - `cmd/ncc-ui-server`
+  - `frontend` dependencies/build output
+- For `v2` UI/API usage, you must install/run backend and UI components separately.
+
+### Easy install paths for users
+
+#### Path A: CLI-only user (keep using v1-style flow)
+
+If you only need CLI runs and reports:
+
+1. Check updates:
+   `ncc-orchestrator update --check`
+2. Stay on same major track by default (`v1.x` -> latest `v1.x`).
+3. Apply update:
+   `ncc-orchestrator update`
+
+No backend/frontend installation is required for this path.
+
+#### Path B: Move to full v2 stack (API + UI + frontend)
+
+Use this when you want web UI, API endpoints, API explorer, and settings management.
+
+1. Upgrade CLI with explicit major opt-in:
+   `ncc-orchestrator update --check --allow-major-upgrade`
+   `ncc-orchestrator update --allow-major-upgrade`
+2. Bootstrap v2 binaries/artifacts (no `go run`, no `npm build`):
+   `ncc-orchestrator v2-bootstrap --check`
+   `ncc-orchestrator v2-bootstrap`
+   - Preferred release asset style is a single `ncc-v2-stack-<os>-<arch>` bundle.
+3. Start both services together:
+   `ncc-orchestrator v2-start`
+4. Open:
+   `http://localhost:8080`
+
+Optional flags for customized bootstrap:
+
+- `--version 2.0.0` to pin release version
+- `--install-dir /opt/ncc-v2` to install in custom location
+- `--api-listen :18081` and `--ui-listen :18080` for custom ports
+- `--orchestrator-bin /usr/local/bin/ncc-orchestrator` for explicit CLI binary path
+- `--repo owner/repo` or `--repo https://github.com/owner/repo` for alternate release source
+
+`v2-start` can also be customized with similar flags:
+
+- `ncc-orchestrator v2-start --install-dir /opt/ncc-v2`
+- `ncc-orchestrator v2-start --api-listen :18081 --ui-listen :18080`
+- `ncc-orchestrator v2-start --config-path /etc/ncc/config.yaml`
+
+Fallback (manual source workflow):
+
+If release assets for your OS/arch are missing, use the source workflow documented in `Run backend` and `Run frontend` sections above.
+
+### One-line answer for migration question
+
+If you are migrating from `v1` to `v2`: the updater can upgrade the CLI binary, but you still need to install/run backend + frontend services manually.
+
+Migration checklist:
+
+1. Stand up `cmd/ncc-api-server` and `cmd/ncc-ui-server`.
+2. Validate token/session auth mode, CORS allowlist, and reverse proxy wiring.
+3. Confirm config compatibility with `validate-config` and `preflight-check`.
+4. Verify report/artifact/log endpoints on `/api/v1/*`.
+5. Update automation from CLI-only workflows to API/UI-assisted workflows as needed.
+6. Keep rollback-ready `v1` binary and config snapshots until cutover is complete.
+
+## Operational hardening checklist (recommended)
+
+- Use explicit `--cors-origin` values; do not rely on permissive defaults.
+- Keep `--debug-expose=false` in production.
+- Rotate API tokens regularly (`POST /auth/rotate`).
+- Restrict filesystem access to minimum required `--repo-root`.
+- Enable retention controls for run-history and generated artifacts.
+- Run preflight checks in CI/CD before applying schedule or release changes.

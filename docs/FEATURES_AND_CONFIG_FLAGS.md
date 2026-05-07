@@ -199,10 +199,13 @@ ncc-orchestrator config-schema --output config.schema.json
 
 ### 2.18 Update mode
 
-Download and replace local binary from GitHub release assets:
+Check/update local binary from GitHub or custom binary URLs:
 
 ```bash
-ncc-orchestrator --update
+ncc-orchestrator update
+ncc-orchestrator update --check
+ncc-orchestrator update --check --binary-url https://artifacts.example.com/ncc-orchestrator-linux-amd64 --target-version 1.2.4
+ncc-orchestrator update --allow-major-upgrade
 ```
 
 ### 2.19 Test dashboard generation (no API calls)
@@ -210,7 +213,7 @@ ncc-orchestrator --update
 Generate synthetic aggregate dashboard and artifacts:
 
 ```bash
-ncc-orchestrator --gen-test-agg 25 --output-dir-filtered dist/test/outputfiles
+ncc-orchestrator gen-test-agg --clusters 25 --output-dir dist/test/outputfiles
 ```
 
 ## 3) Configuration precedence
@@ -225,8 +228,13 @@ Highest to lowest precedence:
 
 | Key | Type | Default | Example |
 |---|---|---|---|
+| `cluster-source-mode` | string | `clusters` | `"pc"` |
 | `clusters` | string | — | `"10.38.66.37,10.38.66.7"` |
 | `clusters-file` | string | — | `"clusters.txt"` |
+| `pcs` | string | — | `"10.10.10.10,10.10.10.11"` |
+| `pcs-file` | string | — | `"pcs.txt"` |
+| `prism-central-url` | string | — | `"https://10.10.10.10:9440"` |
+| `discover-api-version` | string | `v4` | `"v3"` |
 | `username` | string | `admin` | `"admin"` |
 | `password` | string | — | `"secret://NCC_PRISM_PASSWORD"` |
 | `ncc-api-version` | string | `v4` | `"Legacy"` |
@@ -303,6 +311,7 @@ ncc-orchestrator [flags]
 | Flag | Type | Possible values | Default | Detailed explanation |
 |---|---|---|---|---|
 | `--adaptive-parallelism` | bool | `true`, `false` | `true` | When enabled, orchestration dynamically scales effective worker concurrency down/up based on observed HTTP 429 behavior, reducing sustained rate-limit pressure without fully stopping progress. |
+| `--cluster-source-mode` | string | `clusters`, `pc` | `clusters` | Selects target source behavior. `clusters` uses direct PE entries. `pc` uses Prism Central targets (`--pcs`, `--pcs-file`, or `--prism-central-url`) and auto-discovers clusters before run. |
 | `--clusters` | string | CSV of cluster IP/FQDN values | none | Primary target list when `clusters-file` is not used. Each entry is validated, duplicates are rejected, and values must be resolvable/valid cluster addresses. |
 | `--clusters-file` | string | Path to text file | none | Alternate target source. Supported line formats: `cluster`, `cluster,username`, `cluster,username,password`. If provided and non-empty, it overrides/supersedes `--clusters`. |
 | `--config` | string | Path to `.yaml`, `.yml`, or `.json` | none | Loads persistent config values from file before env/flag overrides are applied. Use this for production runs and scheduler jobs. |
@@ -312,10 +321,8 @@ ncc-orchestrator [flags]
 | `--email-from` | string | Valid email address | none | Sender address used in email notifications; should align with SMTP relay policy/domain requirements. |
 | `--email-to` | string | Comma-separated email addresses | none | Recipient list for email notifications. Supports one or more addresses separated by commas. |
 | `--email-use-tls` | bool | `true`, `false` | `true` | Enables STARTTLS for SMTP sessions. Keep enabled for production unless your SMTP endpoint explicitly requires plain mode in trusted networks. |
-| `--env-info` | bool | `true`, `false` | `false` | Prints all supported `NCC_*` environment variables with current values (sensitive values masked), then exits. |
 | `--flaky-lookback-runs` | int | Integer `>= 1` | `6` | Number of historical snapshots used for flaky-check detection. Higher values improve long-range sensitivity but may increase noise in unstable labs. |
 | `--flaky-min-transitions` | int | Integer `>= 1` | `2` | Minimum severity transitions required before a check is marked flaky. Raise this to reduce false positives. |
-| `--gen-test-agg` | int | Integer `>= 1` | none | Generates synthetic aggregated dashboard + artifacts for UI/performance testing without API calls. Value controls number of synthetic clusters. |
 | `--insecure-skip-verify` | bool | `true`, `false` | `false` | Disables TLS certificate verification. Use only in trusted lab/self-signed environments. Avoid in production. |
 | `--log-file` | string | Writable file path | `logs/ncc-runner.log` | Rotated JSON log output file. Use a persistent location for post-incident analysis. |
 | `--log-http` | bool | `true`, `false` | `false` | Enables HTTP request/response logging for deep debugging. Can expose operationally sensitive payloads; keep off in normal production usage. |
@@ -333,6 +340,10 @@ ncc-orchestrator [flags]
 | `--policy-gates` | string | CSV of expressions `<metric><op><number>` | none | Defines run-fail thresholds for automation control. Example: `new-fails>0,fail-rate>2,min-health-score<90`. |
 | `--poll-interval` | duration string | Go duration (`5s`, `10s`, `1m`) | `15s` | Base interval between task-status polls. Shorter intervals improve responsiveness but increase API load. |
 | `--poll-jitter` | duration string | Go duration (`0s` and above) | `2s` | Random additive delay on top of poll interval to reduce herd effects across concurrent cluster workers. |
+| `--pcs` | string | CSV of Prism Central IP/FQDN/URL values | none | PC target list used in `pc` mode. Each PC is queried and all discovered clusters are added to the run target set (deduplicated). |
+| `--pcs-file` | string | Path to text file | none | Alternate PC target source for `pc` mode (one PC per line; `#` comments allowed). |
+| `--prism-central-url` | string | URL/IP/FQDN | none | Single-PC fallback target for `pc` mode when `--pcs`/`--pcs-file` are not set. |
+| `--discover-api-version` | string | `v4`, `v3` | `v4` | API used for PC cluster discovery in `pc` mode. `v4` uses clustermgmt API and auto-falls back to `v3` on 404. |
 | `--prom-dir` | string | Writable directory path | `promfiles` | Directory for Prometheus `.prom` metric files used by pull-based monitoring stacks. |
 | `--quiet-hours` | string | `HH:MM-HH:MM` local-time range | none | Recurring daily notification suppression window. Ideal for predictable off-hours operations. |
 | `--replay` | bool | `true`, `false` | `false` | Rebuilds reports/artifacts from existing logs without invoking NCC APIs. Useful for debugging and template iterations. |
@@ -361,11 +372,8 @@ ncc-orchestrator [flags]
 | `--smtp-port` | string | Numeric port string (commonly `587` or `465`) | `587` | SMTP server port. `587` is typical for STARTTLS; `465` is typical for implicit TLS. |
 | `--smtp-server` | string | Hostname or IP | none | SMTP relay host used for email delivery. |
 | `--smtp-user` | string | Username/login string | none | SMTP authentication username. |
-| `--tc` | bool | `true`, `false` | `false` | Prints terms and conditions text and exits. |
 | `--timeout` | duration string | Go duration (`5m`, `15m`, `30m`) | `15m` | Per-cluster overall timeout budget (start + poll + summary + write). |
-| `--update` / `-u` | bool | `true`, `false` | `false` | Attempts self-update from latest GitHub release asset matching local OS/arch; verifies checksums when available. |
 | `--username` | string | Prism username | `admin` | Global Prism username fallback. Can be overridden per cluster by `clusters-file` entries. |
-| `--version` / `-v` | bool | `true`, `false` | `false` | Prints version/build/Go metadata and exits. |
 | `--webhook-enabled` | bool | `true`, `false` | `false` | Enables generic webhook notifications for each event or digest summary. |
 | `--webhook-headers` | map | `key=value` pairs (comma-separated) | empty map | Adds custom headers to webhook HTTP requests (tokens, tenant IDs, routing hints). |
 | `--webhook-include-html` | bool | `true`, `false` | `false` | Embeds HTML report content as base64 in webhook payloads. Increases payload size. |
@@ -373,6 +381,8 @@ ncc-orchestrator [flags]
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints command usage and flag help. |
 
 ## 6) Subcommand flags
+
+Note: legacy root flags `--env-info`, `--tc`, `--update`/`-u`, `--gen-test-agg`, and `--version`/`-v` are still accepted as deprecated aliases.
 
 ### 6.1 `discover-clusters`
 
@@ -391,7 +401,60 @@ ncc-orchestrator discover-clusters [flags]
 | `--username` | string | Username string | `admin` | Prism Central username for discovery API calls. |
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
 
-### 6.2 `create-schedule`
+### 6.2 `env-info`
+
+```bash
+ncc-orchestrator env-info
+```
+
+Prints all supported `NCC_*` environment variables with current values (sensitive values masked).
+
+### 6.3 `terms`
+
+```bash
+ncc-orchestrator terms
+```
+
+Prints terms and conditions text and exits.
+
+### 6.4 `update`
+
+```bash
+ncc-orchestrator update
+```
+
+By default, updates remain in the current major track (for example `v1.x` -> latest `v1.x`). Use `--allow-major-upgrade` to move across major versions (for example `v1` to `v2`) after migration review.
+
+| Flag | Type | Possible values | Default | Detailed explanation |
+|---|---|---|---|---|
+| `--check` | bool | `true`, `false` | `false` | Check-only mode. Reports selected release/binary availability without downloading or replacing. |
+| `--allow-major-upgrade` | bool | `true`, `false` | `false` | Explicitly permits major-version upgrades. Required for `v1.x` -> `v2.x` transitions. |
+| `--repo` | string | `owner/repo` or GitHub repo URL | `lTSPV75BRO/Nutanix-ncc-orchestrator` | GitHub source repo used for release discovery/check/update. |
+| `--binary-url` | string | Direct binary URL | empty | Use a non-GitHub/custom artifact URL for check/update operations. |
+| `--target-version` | string | Semver-like value | empty | Target version hint, recommended with `--binary-url` for track comparisons/safety checks. |
+| `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
+
+### 6.5 `gen-test-agg`
+
+```bash
+ncc-orchestrator gen-test-agg --clusters 25 --output-dir dist/test/outputfiles
+```
+
+| Flag | Type | Possible values | Default | Detailed explanation |
+|---|---|---|---|---|
+| `--clusters` | int | Integer `>= 1` | none | Number of synthetic clusters to generate in aggregated artifacts. |
+| `--output-dir` | string | Writable directory path | `outputfiles` | Destination directory for generated synthetic artifacts. |
+| `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
+
+### 6.6 `version`
+
+```bash
+ncc-orchestrator version
+```
+
+Prints version/build/Go metadata and exits.
+
+### 6.7 `create-schedule`
 
 ```bash
 ncc-orchestrator create-schedule [flags]
@@ -410,7 +473,7 @@ ncc-orchestrator create-schedule [flags]
 | `--type` | string | `auto`, `cron`, `windows` | `auto` | Scheduler backend. `auto` picks platform-appropriate implementation. |
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
 
-### 6.3 `validate-config`
+### 6.8 `validate-config`
 
 ```bash
 ncc-orchestrator validate-config --config config.yaml
@@ -421,7 +484,7 @@ ncc-orchestrator validate-config --config config.yaml
 | `--config` | string | Path to YAML/JSON config | none | Validates config keys/types/constraints and exits without running NCC checks. |
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
 
-### 6.4 `config-schema`
+### 6.9 `config-schema`
 
 ```bash
 ncc-orchestrator config-schema --output config.schema.json
@@ -432,7 +495,7 @@ ncc-orchestrator config-schema --output config.schema.json
 | `--output` | string | File path | stdout | Writes generated JSON schema to file; when omitted schema is printed to stdout. |
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
 
-### 6.5 `validate-secrets`
+### 6.10 `validate-secrets`
 
 ```bash
 ncc-orchestrator validate-secrets --config config.yaml
@@ -538,7 +601,7 @@ Examples:
 Print current values:
 
 ```bash
-ncc-orchestrator --env-info
+ncc-orchestrator env-info
 ```
 
 ## 9) Execution lifecycle (detailed)
