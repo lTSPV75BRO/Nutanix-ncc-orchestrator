@@ -356,6 +356,7 @@ ncc-orchestrator [flags]
 | `--retry-circuit-breaker` | int | Integer `>= 1` | `3` | Opens retry circuit and fails fast after N consecutive retryable failures. Helps avoid long noisy retry loops on unhealthy endpoints. |
 | `--run-history` | bool | `true`, `false` | `false` | Persists timestamped run snapshots for trend and regression analysis across runs. |
 | `--run-history-dir` | string | Writable directory path | `<output-dir-filtered>/runs` | Base path for saved run snapshots when run-history is enabled. |
+| `--skip-preflight-check` | bool | `true`, `false` | `false` | Skips default preflight validation before run. Useful only for controlled/debug scenarios; not recommended for production runs. |
 | `--artifact-retain-days` | int | Integer `>= 0` | `0` | Deletes generated artifacts older than N days from `output-dir-filtered` (`0` disables age-based deletion). |
 | `--artifact-retain-max-files` | int | Integer `>= 0` | `0` | Keeps only the N newest generated artifacts in `output-dir-filtered` (`0` disables count-based deletion). |
 | `--secrets-file` | string | Path to YAML/JSON key-value map | none | Secret map source when `--secrets-provider=file` is selected. |
@@ -454,7 +455,52 @@ ncc-orchestrator version
 
 Prints version/build/Go metadata and exits.
 
-### 6.7 `create-schedule`
+### 6.7 `v2-bootstrap`
+
+```bash
+ncc-orchestrator v2-bootstrap --check
+ncc-orchestrator v2-bootstrap --install-dir .ncc-v2
+```
+
+Automates v2 stack setup using release assets. It prefers a single `ncc-v2-stack-<os>-<arch>` archive and falls back to legacy split assets when needed.
+
+| Flag | Type | Possible values | Default | Detailed explanation |
+|---|---|---|---|---|
+| `--check` | bool | `true`, `false` | `false` | Verifies required assets exist for the target platform without downloading. |
+| `--repo` | string | `owner/repo` or GitHub URL | `lTSPV75BRO/Nutanix-ncc-orchestrator` | Source release repository used for asset discovery. |
+| `--version` | string | Version tag or semver-like value | latest stable `v2` | Pins a specific release version for bootstrap. |
+| `--install-dir` | string | Writable directory path | `.ncc-v2` | Destination where binaries, frontend bundle, and helper scripts are created. |
+| `--config-path` | string | Config file path | `config.yaml` | Config path passed to generated API startup workflow. |
+| `--output-dir` | string | Writable directory path | `outputfiles` | Output artifact directory passed to API server. |
+| `--log-dir` | string | Writable directory path | `nccfiles` | Raw runner log directory passed to API server. |
+| `--orchestrator-bin` | string | Executable path | `./ncc-orchestrator` | Runner binary path used by API server for trigger/preflight operations. |
+| `--api-listen` | string | Listen address | `:8081` | API server bind address prepared by bootstrap scripts. |
+| `--ui-listen` | string | Listen address | `:8080` | UI server bind address prepared by bootstrap scripts. |
+| `--token-file` | string | File path | `.ncc-api-token` | Token file path shared between API and UI services. |
+| `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
+
+### 6.8 `v2-start`
+
+```bash
+ncc-orchestrator v2-start
+ncc-orchestrator v2-start --install-dir .ncc-v2 --api-listen :18081 --ui-listen :18080
+```
+
+Starts bootstrapped v2 API and UI services together, streams logs, and stops both on Ctrl+C.
+
+| Flag | Type | Possible values | Default | Detailed explanation |
+|---|---|---|---|---|
+| `--install-dir` | string | Existing bootstrap directory path | `.ncc-v2` | Directory containing bootstrapped `bin/` and `frontend-dist/` assets. |
+| `--config-path` | string | Config file path | `config.yaml` | Config file passed to API server startup. |
+| `--output-dir` | string | Writable directory path | `outputfiles` | Output artifact directory passed to API server. |
+| `--log-dir` | string | Writable directory path | `nccfiles` | Raw runner log directory passed to API server. |
+| `--orchestrator-bin` | string | Executable path | `./ncc-orchestrator` | Runner binary path used by API server. |
+| `--api-listen` | string | Listen address | `:8081` | API server bind address. |
+| `--ui-listen` | string | Listen address | `:8080` | UI server bind address. |
+| `--token-file` | string | File path | `.ncc-api-token` | Token file path used for API/UI auth bridging. |
+| `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
+
+### 6.9 `create-schedule`
 
 ```bash
 ncc-orchestrator create-schedule [flags]
@@ -473,7 +519,7 @@ ncc-orchestrator create-schedule [flags]
 | `--type` | string | `auto`, `cron`, `windows` | `auto` | Scheduler backend. `auto` picks platform-appropriate implementation. |
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
 
-### 6.8 `validate-config`
+### 6.10 `validate-config`
 
 ```bash
 ncc-orchestrator validate-config --config config.yaml
@@ -484,7 +530,7 @@ ncc-orchestrator validate-config --config config.yaml
 | `--config` | string | Path to YAML/JSON config | none | Validates config keys/types/constraints and exits without running NCC checks. |
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
 
-### 6.9 `config-schema`
+### 6.11 `config-schema`
 
 ```bash
 ncc-orchestrator config-schema --output config.schema.json
@@ -495,7 +541,7 @@ ncc-orchestrator config-schema --output config.schema.json
 | `--output` | string | File path | stdout | Writes generated JSON schema to file; when omitted schema is printed to stdout. |
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
 
-### 6.10 `validate-secrets`
+### 6.12 `validate-secrets`
 
 ```bash
 ncc-orchestrator validate-secrets --config config.yaml
@@ -504,6 +550,20 @@ ncc-orchestrator validate-secrets --config config.yaml
 | Flag | Type | Possible values | Default | Detailed explanation |
 |---|---|---|---|---|
 | `--config` | string | Path to YAML/JSON config | none | Validates `secret://` references and secret-source accessibility (`env`/`file`) without running NCC checks. |
+| `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
+
+### 6.13 `preflight-check`
+
+```bash
+ncc-orchestrator preflight-check --config config.yaml --format json
+```
+
+Runs preflight checks used before trigger-run execution and returns structured status output.
+
+| Flag | Type | Possible values | Default | Detailed explanation |
+|---|---|---|---|---|
+| `--config` | string | Path to YAML/JSON config | empty | Optional config path to validate; when omitted, command still performs baseline checks and reports warnings. |
+| `--format` | string | `json` | `json` | Output format for automation/UI integration. |
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
 
 ## 7) Full config example
