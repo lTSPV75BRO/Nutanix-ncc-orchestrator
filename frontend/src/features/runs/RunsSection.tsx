@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Card, Col, Input, Row, Space, Typography } from "antd";
+import { Alert, Button, Card, Col, Input, List, Row, Space, Tag, Typography } from "antd";
 import { api } from "../../api/client";
-import type { ArtifactInfo, RunActiveData, RunInfo } from "../../api/types";
+import type { ArtifactInfo, RunActiveData, RunInfo, RunPreflightData } from "../../api/types";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 
 type Props = {
@@ -22,6 +22,7 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
   const [runs, setRuns] = useState<RunInfo[]>([]);
   const [artifacts, setArtifacts] = useState<ArtifactInfo[]>([]);
   const [active, setActive] = useState<RunActiveData | null>(null);
+  const [preflight, setPreflight] = useState<RunPreflightData | null>(null);
 
   useEffect(() => {
     if (backendConfigPath && !runConfigPath) setRunConfigPath(backendConfigPath);
@@ -74,6 +75,16 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
     }
   };
 
+  const runPreflight = async () => {
+    try {
+      const out = await api.runPreflight({ config_path: runConfigPath || undefined });
+      setPreflight(out);
+      setRunsOut(JSON.stringify(out, null, 2));
+    } catch (e) {
+      onError(e);
+    }
+  };
+
   const loadRuns = async () => {
     try {
       const out = await api.runs();
@@ -112,6 +123,7 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
           <Button onClick={loadRunSummary}>Load Run Summary</Button>
           <Button onClick={loadArtifacts}>List Artifacts</Button>
           <Button onClick={loadRunActive}>Active Run Status</Button>
+          <Button onClick={runPreflight}>Preflight Check</Button>
         </Space>
         <Row gutter={8} style={{ marginBottom: 8 }}>
           <Col xs={24} md={12}>
@@ -129,6 +141,35 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
             Trigger Run
           </Button>
         </Space>
+        {preflight ? (
+          <div style={{ marginBottom: 12 }}>
+            <Alert
+              type={preflight.ok ? "success" : "error"}
+              message={preflight.ok ? "Preflight passed" : "Preflight has blocking failures"}
+              description={`config: ${preflight.config_path} | failed: ${preflight.failed} | warnings: ${preflight.warn}`}
+              showIcon
+            />
+            <List
+              style={{ marginTop: 8 }}
+              bordered
+              size="small"
+              dataSource={preflight.checks}
+              renderItem={(item) => (
+                <List.Item>
+                  <Space direction="vertical" size={2} style={{ width: "100%" }}>
+                    <Space size={6} wrap>
+                      <Typography.Text strong>{item.title}</Typography.Text>
+                      <Tag color={item.status === "pass" ? "green" : item.status === "warn" ? "orange" : "red"}>{item.status}</Tag>
+                      <Typography.Text code>{item.id}</Typography.Text>
+                    </Space>
+                    <Typography.Text>{item.message}</Typography.Text>
+                    {item.hint ? <Typography.Text type="secondary">Hint: {item.hint}</Typography.Text> : null}
+                  </Space>
+                </List.Item>
+              )}
+            />
+          </div>
+        ) : null}
         <pre>{JSON.stringify(triggerPayload, null, 2)}</pre>
         <pre>{runsOut}</pre>
         <Typography.Title level={5}>Live Logs</Typography.Title>

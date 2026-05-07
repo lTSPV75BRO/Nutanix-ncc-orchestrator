@@ -199,10 +199,13 @@ ncc-orchestrator config-schema --output config.schema.json
 
 ### 2.18 Update mode
 
-Download and replace local binary from GitHub release assets:
+Check/update local binary from GitHub or custom binary URLs:
 
 ```bash
-ncc-orchestrator --update
+ncc-orchestrator update
+ncc-orchestrator update --check
+ncc-orchestrator update --check --binary-url https://artifacts.example.com/ncc-orchestrator-linux-amd64 --target-version 1.2.4
+ncc-orchestrator update --allow-major-upgrade
 ```
 
 ### 2.19 Test dashboard generation (no API calls)
@@ -210,7 +213,7 @@ ncc-orchestrator --update
 Generate synthetic aggregate dashboard and artifacts:
 
 ```bash
-ncc-orchestrator --gen-test-agg 25 --output-dir-filtered dist/test/outputfiles
+ncc-orchestrator gen-test-agg --clusters 25 --output-dir dist/test/outputfiles
 ```
 
 ## 3) Configuration precedence
@@ -318,10 +321,8 @@ ncc-orchestrator [flags]
 | `--email-from` | string | Valid email address | none | Sender address used in email notifications; should align with SMTP relay policy/domain requirements. |
 | `--email-to` | string | Comma-separated email addresses | none | Recipient list for email notifications. Supports one or more addresses separated by commas. |
 | `--email-use-tls` | bool | `true`, `false` | `true` | Enables STARTTLS for SMTP sessions. Keep enabled for production unless your SMTP endpoint explicitly requires plain mode in trusted networks. |
-| `--env-info` | bool | `true`, `false` | `false` | Prints all supported `NCC_*` environment variables with current values (sensitive values masked), then exits. |
 | `--flaky-lookback-runs` | int | Integer `>= 1` | `6` | Number of historical snapshots used for flaky-check detection. Higher values improve long-range sensitivity but may increase noise in unstable labs. |
 | `--flaky-min-transitions` | int | Integer `>= 1` | `2` | Minimum severity transitions required before a check is marked flaky. Raise this to reduce false positives. |
-| `--gen-test-agg` | int | Integer `>= 1` | none | Generates synthetic aggregated dashboard + artifacts for UI/performance testing without API calls. Value controls number of synthetic clusters. |
 | `--insecure-skip-verify` | bool | `true`, `false` | `false` | Disables TLS certificate verification. Use only in trusted lab/self-signed environments. Avoid in production. |
 | `--log-file` | string | Writable file path | `logs/ncc-runner.log` | Rotated JSON log output file. Use a persistent location for post-incident analysis. |
 | `--log-http` | bool | `true`, `false` | `false` | Enables HTTP request/response logging for deep debugging. Can expose operationally sensitive payloads; keep off in normal production usage. |
@@ -371,11 +372,8 @@ ncc-orchestrator [flags]
 | `--smtp-port` | string | Numeric port string (commonly `587` or `465`) | `587` | SMTP server port. `587` is typical for STARTTLS; `465` is typical for implicit TLS. |
 | `--smtp-server` | string | Hostname or IP | none | SMTP relay host used for email delivery. |
 | `--smtp-user` | string | Username/login string | none | SMTP authentication username. |
-| `--tc` | bool | `true`, `false` | `false` | Prints terms and conditions text and exits. |
 | `--timeout` | duration string | Go duration (`5m`, `15m`, `30m`) | `15m` | Per-cluster overall timeout budget (start + poll + summary + write). |
-| `--update` / `-u` | bool | `true`, `false` | `false` | Attempts self-update from latest GitHub release asset matching local OS/arch; verifies checksums when available. |
 | `--username` | string | Prism username | `admin` | Global Prism username fallback. Can be overridden per cluster by `clusters-file` entries. |
-| `--version` / `-v` | bool | `true`, `false` | `false` | Prints version/build/Go metadata and exits. |
 | `--webhook-enabled` | bool | `true`, `false` | `false` | Enables generic webhook notifications for each event or digest summary. |
 | `--webhook-headers` | map | `key=value` pairs (comma-separated) | empty map | Adds custom headers to webhook HTTP requests (tokens, tenant IDs, routing hints). |
 | `--webhook-include-html` | bool | `true`, `false` | `false` | Embeds HTML report content as base64 in webhook payloads. Increases payload size. |
@@ -383,6 +381,8 @@ ncc-orchestrator [flags]
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints command usage and flag help. |
 
 ## 6) Subcommand flags
+
+Note: legacy root flags `--env-info`, `--tc`, `--update`/`-u`, `--gen-test-agg`, and `--version`/`-v` are still accepted as deprecated aliases.
 
 ### 6.1 `discover-clusters`
 
@@ -401,7 +401,60 @@ ncc-orchestrator discover-clusters [flags]
 | `--username` | string | Username string | `admin` | Prism Central username for discovery API calls. |
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
 
-### 6.2 `create-schedule`
+### 6.2 `env-info`
+
+```bash
+ncc-orchestrator env-info
+```
+
+Prints all supported `NCC_*` environment variables with current values (sensitive values masked).
+
+### 6.3 `terms`
+
+```bash
+ncc-orchestrator terms
+```
+
+Prints terms and conditions text and exits.
+
+### 6.4 `update`
+
+```bash
+ncc-orchestrator update
+```
+
+By default, updates remain in the current major track (for example `v1.x` -> latest `v1.x`). Use `--allow-major-upgrade` to move across major versions (for example `v1` to `v2`) after migration review.
+
+| Flag | Type | Possible values | Default | Detailed explanation |
+|---|---|---|---|---|
+| `--check` | bool | `true`, `false` | `false` | Check-only mode. Reports selected release/binary availability without downloading or replacing. |
+| `--allow-major-upgrade` | bool | `true`, `false` | `false` | Explicitly permits major-version upgrades. Required for `v1.x` -> `v2.x` transitions. |
+| `--repo` | string | `owner/repo` or GitHub repo URL | `lTSPV75BRO/Nutanix-ncc-orchestrator` | GitHub source repo used for release discovery/check/update. |
+| `--binary-url` | string | Direct binary URL | empty | Use a non-GitHub/custom artifact URL for check/update operations. |
+| `--target-version` | string | Semver-like value | empty | Target version hint, recommended with `--binary-url` for track comparisons/safety checks. |
+| `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
+
+### 6.5 `gen-test-agg`
+
+```bash
+ncc-orchestrator gen-test-agg --clusters 25 --output-dir dist/test/outputfiles
+```
+
+| Flag | Type | Possible values | Default | Detailed explanation |
+|---|---|---|---|---|
+| `--clusters` | int | Integer `>= 1` | none | Number of synthetic clusters to generate in aggregated artifacts. |
+| `--output-dir` | string | Writable directory path | `outputfiles` | Destination directory for generated synthetic artifacts. |
+| `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
+
+### 6.6 `version`
+
+```bash
+ncc-orchestrator version
+```
+
+Prints version/build/Go metadata and exits.
+
+### 6.7 `create-schedule`
 
 ```bash
 ncc-orchestrator create-schedule [flags]
@@ -420,7 +473,7 @@ ncc-orchestrator create-schedule [flags]
 | `--type` | string | `auto`, `cron`, `windows` | `auto` | Scheduler backend. `auto` picks platform-appropriate implementation. |
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
 
-### 6.3 `validate-config`
+### 6.8 `validate-config`
 
 ```bash
 ncc-orchestrator validate-config --config config.yaml
@@ -431,7 +484,7 @@ ncc-orchestrator validate-config --config config.yaml
 | `--config` | string | Path to YAML/JSON config | none | Validates config keys/types/constraints and exits without running NCC checks. |
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
 
-### 6.4 `config-schema`
+### 6.9 `config-schema`
 
 ```bash
 ncc-orchestrator config-schema --output config.schema.json
@@ -442,7 +495,7 @@ ncc-orchestrator config-schema --output config.schema.json
 | `--output` | string | File path | stdout | Writes generated JSON schema to file; when omitted schema is printed to stdout. |
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
 
-### 6.5 `validate-secrets`
+### 6.10 `validate-secrets`
 
 ```bash
 ncc-orchestrator validate-secrets --config config.yaml
@@ -548,7 +601,7 @@ Examples:
 Print current values:
 
 ```bash
-ncc-orchestrator --env-info
+ncc-orchestrator env-info
 ```
 
 ## 9) Execution lifecycle (detailed)

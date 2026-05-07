@@ -211,7 +211,7 @@ This returns chronological points built from `run-summary.json` (current + run-h
 2. Navigate to the directory: `cd Nutanix-ncc-orchestrator`
 3. Build (release-style metadata): `go build -ldflags "-w -s -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -X main.Stream=Release -X main.GoVersion=$(go version | cut -d ' ' -f 3)" -o ncc-orchestrator`  
    Official Docker images from CI use `Stream=Release` and set `Version` from the [VERSION](VERSION) file.
-4. Run: `./ncc-orchestrator --help` Or `./ncc-orchestrator --version`
+4. Run: `./ncc-orchestrator --help` or `./ncc-orchestrator version`
    
   > Add .exe for windows binary.
 
@@ -230,7 +230,7 @@ The [GitHub Action](.github/workflows/docker-publish.yml) builds and pushes the 
 Basic command:
 - `ncc-orchestrator --clusters "10.0.1.1,10.0.2.1" --username admin --password yourpassword`
 
-Full options: Run `ncc-orchestrator --help` for all flags. To see current env values: `ncc-orchestrator --env-info`. Run `ncc-orchestrator --version` to print version, stream, build date, and Go version, then exit. Run **`ncc-orchestrator -u`** or **`--update`** to fetch the latest release from GitHub and update the binary if a matching OS/arch asset is available. Set **`GITHUB_TOKEN`** for higher API rate limits. If the release includes a checksum file (e.g. `checksums.txt`), the download is verified before replace. On Windows the new binary is written as `ncc-orchestrator.new.exe`; replace the old exe and run again. **Release maintainers:** see [docs/RELEASE_CHECKSUMS.md](docs/RELEASE_CHECKSUMS.md) for how to generate and upload checksums so `-u` can verify downloads.
+Full options: Run `ncc-orchestrator --help` for all flags and subcommands. To see current env values: `ncc-orchestrator env-info`. Run `ncc-orchestrator version` to print version, stream, build date, and Go version, then exit. Run `ncc-orchestrator update` to fetch and update binaries (or `ncc-orchestrator update --check` for check-only mode). By default, updates stay on the current major track (`v1.x` -> latest `v1.x`); use `--allow-major-upgrade` to move to `v2.x` after reviewing migration steps in [docs/V2_BACKEND_FRONTEND_MVP.md](docs/V2_BACKEND_FRONTEND_MVP.md). You can also check/use non-GitHub binaries with `--binary-url` and optional `--target-version`. Set `GITHUB_TOKEN` for higher GitHub API rate limits. If the release includes a checksum file (for example `checksums.txt`), the download is verified before replace. On Windows the new binary is written as `ncc-orchestrator.new.exe`; replace the old exe and run again. Release maintainers: see [docs/RELEASE_CHECKSUMS.md](docs/RELEASE_CHECKSUMS.md) for checksum publishing guidance.
 
 ### Exit codes
 
@@ -324,7 +324,7 @@ Any config key can be set via env: **`NCC_`** + key in UPPER_SNAKE (hyphens beco
 - `NCC_WEBHOOK_ENABLED`, `NCC_WEBHOOK_INCLUDE_HTML`, `NCC_WEBHOOK_URL`, `NCC_WEBHOOK_HEADERS`  
 - `NCC_SLACK_ENABLED`, `NCC_SLACK_WEBHOOK_URL`, `NCC_SLACK_CHANNEL`, `NCC_SECRETS_PROVIDER`, `NCC_SECRETS_FILE`  
 
-Run **`ncc-orchestrator --env-info`** to print all possible env vars and their current values.
+Run `ncc-orchestrator env-info` to print all possible env vars and their current values.
 
 ### Run summary and discover-clusters
 - After each run, **`outputfiles/run-summary.json`** and **`outputfiles/ncc-run-record.json`** are written (machine-readable run result; the latter includes `schema_version` and orchestrator version).

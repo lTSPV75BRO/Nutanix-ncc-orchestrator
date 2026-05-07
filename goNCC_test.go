@@ -2623,6 +2623,114 @@ func TestValidateConfig(t *testing.T) {
 	})
 }
 
+func getPreflightCheckByID(t *testing.T, checks []preflightCheck, id string) preflightCheck {
+	t.Helper()
+	for _, c := range checks {
+		if c.ID == id {
+			return c
+		}
+	}
+	t.Fatalf("preflight check %q not found in %+v", id, checks)
+	return preflightCheck{}
+}
+
+func TestBuildPreflightReportWithoutConfigPath(t *testing.T) {
+	viper.Reset()
+	report := buildPreflightReport("")
+	if report.Failed != 0 {
+		t.Fatalf("expected no failures without config path, got %d", report.Failed)
+	}
+	c := getPreflightCheckByID(t, report.Checks, "validate-config")
+	if c.Status != "warn" {
+		t.Fatalf("expected validate-config warn, got %q", c.Status)
+	}
+}
+
+func TestBuildPreflightReportPathPermissionFailure(t *testing.T) {
+	viper.Reset()
+	tmpDir := t.TempDir()
+	blockPath := filepath.Join(tmpDir, "not-a-dir")
+	if err := os.WriteFile(blockPath, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write blocker file: %v", err)
+	}
+	cfgPath := filepath.Join(tmpDir, "config.yaml")
+	cfg := fmt.Sprintf(`
+clusters: "10.0.0.1"
+username: "admin"
+output-dir-logs: "%s"
+output-dir-filtered: "%s"
+log-file: "%s"
+prom-dir: "%s"
+`, blockPath, filepath.Join(tmpDir, "out"), filepath.Join(tmpDir, "logs", "ncc-runner.log"), filepath.Join(tmpDir, "prom"))
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	report := buildPreflightReport(cfgPath)
+	c := getPreflightCheckByID(t, report.Checks, "path.output-dir-logs")
+	if c.Status != "fail" {
+		t.Fatalf("expected output-dir-logs permission check to fail, got %q", c.Status)
+	}
+	if report.Failed == 0 {
+		t.Fatal("expected failures in preflight report")
+	}
+}
+
+func TestBuildPreflightReportIncludesSecurityWarnings(t *testing.T) {
+	viper.Reset()
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.yaml")
+	cfg := fmt.Sprintf(`
+clusters: "10.0.0.1"
+username: "admin"
+insecure-skip-verify: true
+log-http: true
+max-parallel: 25
+output-dir-logs: "%s"
+output-dir-filtered: "%s"
+log-file: "%s"
+prom-dir: "%s"
+`, filepath.Join(tmpDir, "raw"), filepath.Join(tmpDir, "out"), filepath.Join(tmpDir, "logs", "ncc-runner.log"), filepath.Join(tmpDir, "prom"))
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	report := buildPreflightReport(cfgPath)
+	if getPreflightCheckByID(t, report.Checks, "safety.insecure-skip-verify").Status != "warn" {
+		t.Fatal("expected safety.insecure-skip-verify warning")
+	}
+	if getPreflightCheckByID(t, report.Checks, "safety.log-http").Status != "warn" {
+		t.Fatal("expected safety.log-http warning")
+	}
+	if getPreflightCheckByID(t, report.Checks, "safety.max-parallel").Status != "warn" {
+		t.Fatal("expected safety.max-parallel warning")
+	}
+}
+
+func TestBuildPreflightReportSecretsFailure(t *testing.T) {
+	viper.Reset()
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.yaml")
+	cfg := fmt.Sprintf(`
+clusters: "10.0.0.1"
+username: "admin"
+password: "secret://MISSING_PASSWORD"
+output-dir-logs: "%s"
+output-dir-filtered: "%s"
+log-file: "%s"
+prom-dir: "%s"
+`, filepath.Join(tmpDir, "raw"), filepath.Join(tmpDir, "out"), filepath.Join(tmpDir, "logs", "ncc-runner.log"), filepath.Join(tmpDir, "prom"))
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	report := buildPreflightReport(cfgPath)
+	sec := getPreflightCheckByID(t, report.Checks, "validate-secrets")
+	if sec.Status != "fail" {
+		t.Fatalf("expected validate-secrets fail, got %q", sec.Status)
+	}
+	if report.Failed == 0 {
+		t.Fatal("expected failures in report")
+	}
+}
+
 func TestCheckOutputPermissions(t *testing.T) {
 	t.Run("Success with temp dir", func(t *testing.T) {
 		dir := t.TempDir()
@@ -2960,6 +3068,64 @@ func TestVersionLessSemver(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("versionLess(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
 		}
+	}
+}
+
+func TestNormalizeGitHubRepo(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{in: "owner/repo", want: "owner/repo"},
+		{in: "https://github.com/owner/repo", want: "owner/repo"},
+		{in: "https://github.com/owner/repo.git", want: "owner/repo"},
+		{in: "https://example.com/owner/repo", wantErr: true},
+		{in: "owner-only", wantErr: true},
+	}
+	for _, tc := range tests {
+		got, err := normalizeGitHubRepo(tc.in)
+		if tc.wantErr {
+			if err == nil {
+				t.Fatalf("normalizeGitHubRepo(%q) expected error", tc.in)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("normalizeGitHubRepo(%q) unexpected err: %v", tc.in, err)
+		}
+		if got != tc.want {
+			t.Fatalf("normalizeGitHubRepo(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestEnforceMajorUpgradePolicy(t *testing.T) {
+	if err := enforceMajorUpgradePolicy("1.1.0", "1.9.0", false); err != nil {
+		t.Fatalf("same-major upgrade should be allowed, got err: %v", err)
+	}
+	if err := enforceMajorUpgradePolicy("1.1.0", "2.0.0", false); err == nil {
+		t.Fatalf("expected major-upgrade block error")
+	}
+	if err := enforceMajorUpgradePolicy("1.1.0", "2.0.0", true); err != nil {
+		t.Fatalf("major-upgrade should pass with explicit opt-in, got err: %v", err)
+	}
+}
+
+func TestPickLatestSemverRelease(t *testing.T) {
+	releases := []githubRelease{
+		{TagName: "v2.0.0"},
+		{TagName: "v1.3.0"},
+		{TagName: "v1.2.9"},
+		{TagName: "v2.1.0-rc1", Prerelease: true},
+	}
+	gotV1 := pickLatestSemverRelease(releases, 1)
+	if gotV1 == nil || gotV1.TagName != "v1.3.0" {
+		t.Fatalf("pickLatestSemverRelease(v1) got %+v", gotV1)
+	}
+	gotAny := pickLatestSemverRelease(releases, 0)
+	if gotAny == nil || gotAny.TagName != "v2.0.0" {
+		t.Fatalf("pickLatestSemverRelease(any) got %+v", gotAny)
 	}
 }
 

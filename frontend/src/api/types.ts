@@ -89,6 +89,24 @@ export type TriggerRunData = {
   used_password?: boolean;
 };
 
+export type PreflightCheck = {
+  id: string;
+  status: "pass" | "fail" | "warn";
+  title: string;
+  message: string;
+  hint?: string;
+  output?: string;
+};
+
+export type RunPreflightData = {
+  ok: boolean;
+  failed: number;
+  warn: number;
+  config_path: string;
+  checks: PreflightCheck[];
+  actionableHints: string[];
+};
+
 export type RunnerLogData = {
   path: string;
   content: string;

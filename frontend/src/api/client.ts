@@ -6,6 +6,7 @@ import type {
   Envelope,
   HealthData,
   ReportData,
+  RunPreflightData,
   RunActiveData,
   RunnerLogData,
   RunInfo,
@@ -103,6 +104,11 @@ export const api = {
   runs: () => callApi<RunInfo[]>("/api/v1/runs"),
   runSummary: () => callApi<unknown>("/api/v1/runs/summary"),
   runActive: () => callApi<RunActiveData>("/api/v1/runs/active"),
+  runPreflight: (payload: { config_path?: string }) =>
+    callApi<RunPreflightData>("/api/v1/runs/preflight", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   runTrigger: (payload: { config_path?: string; password?: string; extra_args: string[] }) =>
     callApi<TriggerRunData>("/api/v1/runs/trigger", {
       method: "POST",

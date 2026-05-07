@@ -123,6 +123,10 @@ type runTriggerRequest struct {
 	ExtraArgs  []string `json:"extra_args,omitempty"`
 }
 
+type runPreflightRequest struct {
+	ConfigPath string `json:"config_path,omitempty"`
+}
+
 type artifactInfo struct {
 	Name    string `json:"name"`
 	Size    int64  `json:"size"`
@@ -227,6 +231,7 @@ func main() {
 	mux.HandleFunc("/api/v1/runs", s.handleRuns)
 	mux.HandleFunc("/api/v1/runs/summary", s.handleRunSummary)
 	mux.HandleFunc("/api/v1/runs/active", s.handleRunActive)
+	mux.HandleFunc("/api/v1/runs/preflight", s.handleRunPreflight)
 	mux.HandleFunc("/api/v1/runs/trigger", s.handleRunTrigger)
 	mux.HandleFunc("/api/v1/report/data", s.handleReportData)
 	mux.HandleFunc("/api/v1/report/trends", s.handleReportTrends)
@@ -1022,6 +1027,53 @@ func (s *apiServer) handleRunActive(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: data})
 }
 
+func (s *apiServer) handleRunPreflight(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	var req runPreflightRequest
+	if r.ContentLength > 0 {
+		if err := requireJSONContentType(r); err != nil {
+			writeJSON(w, http.StatusUnsupportedMediaType, envelope{Success: false, Error: err.Error()})
+			return
+		}
+		if err := decodeJSON(r.Body, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
+			return
+		}
+	}
+	cfgPath := strings.TrimSpace(req.ConfigPath)
+	if cfgPath == "" {
+		cfgPath = s.configPath
+	}
+	resolvedCfgPath, err := s.validateConfigPath(cfgPath)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
+		return
+	}
+	out, err := s.runOrchestrator([]string{"preflight-check", "--config", resolvedCfgPath, "--format", "json"}, 120*time.Second)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, envelope{
+			Success: false,
+			Error:   fmt.Sprintf("preflight-check failed: %v", err),
+			Data:    map[string]string{"output": tailString(strings.TrimSpace(out), 4000)},
+		})
+		return
+	}
+	var payload map[string]interface{}
+	if uerr := json.Unmarshal([]byte(strings.TrimSpace(out)), &payload); uerr != nil {
+		writeJSON(w, http.StatusInternalServerError, envelope{
+			Success: false,
+			Error:   fmt.Sprintf("parse preflight-check output failed: %v", uerr),
+			Data:    map[string]string{"output": tailString(strings.TrimSpace(out), 4000)},
+		})
+		return
+	}
+	s.audit(r, "runs.preflight", true, map[string]interface{}{"config_path": resolvedCfgPath})
+	writeJSON(w, http.StatusOK, envelope{Success: true, Data: payload})
+}
+
 func (s *apiServer) handleRunTrigger(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
@@ -1355,6 +1407,7 @@ func (s *apiServer) handleMetaRoutes(w http.ResponseWriter, r *http.Request) {
 		{Path: "/api/v1/runs", Methods: []string{http.MethodGet}, Description: "List historical runs"},
 		{Path: "/api/v1/runs/summary", Methods: []string{http.MethodGet}, Description: "Read latest run summary"},
 		{Path: "/api/v1/runs/active", Methods: []string{http.MethodGet}, Description: "Read active run state"},
+		{Path: "/api/v1/runs/preflight", Methods: []string{http.MethodPost}, Description: "Run preflight checks (config/secrets/path permissions)", SampleBody: "{\n  \"config_path\": \"config.yaml\"\n}"},
 		{Path: "/api/v1/runs/trigger", Methods: []string{http.MethodPost}, Description: "Trigger orchestrator run", SampleBody: "{\n  \"config_path\": \"config.yaml\",\n  \"password\": \"\",\n  \"extra_args\": [\"--no-html\"]\n}"},
 		{Path: "/api/v1/report/data", Methods: []string{http.MethodGet}, Description: "Aggregated report payload"},
 		{Path: "/api/v1/report/trends", Methods: []string{http.MethodGet}, Description: "Historical trends from run summaries"},
@@ -1503,6 +1556,21 @@ func (s *apiServer) buildOpenAPISpec() map[string]interface{} {
 			},
 			"/api/v1/runs/active": map[string]interface{}{
 				"get": map[string]interface{}{"summary": "Read active run state"},
+			},
+			"/api/v1/runs/preflight": map[string]interface{}{
+				"post": map[string]interface{}{
+					"summary": "Run preflight checks before trigger-run",
+					"requestBody": map[string]interface{}{
+						"required": false,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"example": map[string]interface{}{
+									"config_path": "config.yaml",
+								},
+							},
+						},
+					},
+				},
 			},
 			"/api/v1/runs/trigger": map[string]interface{}{
 				"post": map[string]interface{}{

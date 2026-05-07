@@ -3,10 +3,22 @@ import { Button, Card, Empty, List, Space, Tag, Typography } from "antd";
 import { api } from "../../api/client";
 import { CodeEditor, inferEditorLanguage } from "../../components/CodeEditor";
 import type { ConfigRelatedFileInfo } from "../../api/types";
+import { PolicyGateBuilderSection } from "./PolicyGateBuilderSection";
 
 type Props = {
   onError: (e: unknown) => void;
 };
+
+function applyPolicyGatesToConfigContent(content: string, gatesCsv: string): string {
+  const line = `policy-gates: "${gatesCsv}"`;
+  const pattern = /^\s*policy-gates:\s*.*$/m;
+  if (pattern.test(content)) {
+    return content.replace(pattern, line);
+  }
+  const trimmed = content.trimEnd();
+  if (!trimmed) return `${line}\n`;
+  return `${trimmed}\n${line}\n`;
+}
 
 export function ConfigSection({ onError }: Props) {
   const [content, setContent] = useState("");
@@ -90,6 +102,10 @@ export function ConfigSection({ onError }: Props) {
     }
   };
 
+  const applyPolicyGates = (csv: string) => {
+    setContent((prev) => applyPolicyGatesToConfigContent(prev, csv));
+  };
+
   return (
     <Card className="page-card">
       <Typography.Title level={4} className="section-title">
@@ -102,6 +118,7 @@ export function ConfigSection({ onError }: Props) {
         </Button>
       </Space>
       <CodeEditor value={content} onChange={setContent} language="yaml" height={320} />
+      <PolicyGateBuilderSection configContent={content} onApplyPolicyGates={applyPolicyGates} />
 
       <div style={{ marginTop: 16 }}>
         <Space size={8} style={{ marginBottom: 8 }}>
