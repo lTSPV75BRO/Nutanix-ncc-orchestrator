@@ -1,0 +1,32 @@
+FROM golang:1.26-alpine AS builder
+
+WORKDIR /src
+RUN apk add --no-cache ca-certificates git
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/ncc-api-server ./cmd/ncc-api-server
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/ncc-orchestrator .
+
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates tzdata
+
+WORKDIR /app
+
+COPY --from=builder /out/ncc-api-server /usr/local/bin/ncc-api-server
+COPY --from=builder /out/ncc-orchestrator /usr/local/bin/ncc-orchestrator
+
+RUN chmod 0755 /usr/local/bin/ncc-api-server /usr/local/bin/ncc-orchestrator \
+    && mkdir -p /app/data/auth /app/outputfiles /app/nccfiles /app/logs /app/config \
+    && chown -R 10001:10001 /app
+
+USER 10001:10001
+
+EXPOSE 8081
+
+ENTRYPOINT ["/usr/local/bin/ncc-api-server"]
+CMD ["--listen", ":8081", "--repo-root", "/app", "--config-path", "/app/config/config.yaml", "--output-dir", "/app/outputfiles", "--log-dir", "/app/nccfiles", "--runner-log-path", "/app/logs/ncc-runner.log", "--token-file-path", "/app/data/auth/.ncc-api-token", "--orchestrator-bin", "/usr/local/bin/ncc-orchestrator", "--auth-mode", "token", "--cors-origin", "http://localhost:8080"]

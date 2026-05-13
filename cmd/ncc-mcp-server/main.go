@@ -20,7 +20,7 @@ import (
 
 const (
 	serverName    = "ncc-orchestrator"
-	serverVersion = "1.1.0"
+	serverVersion = "2.0.0"
 )
 
 // orchestratorBin returns the path to the ncc-orchestrator binary (env, same-dir, or PATH).
@@ -54,7 +54,7 @@ func main() {
 	// Tool: discover_clusters — list clusters from Prism Central
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "discover_clusters",
-		Description: "List cluster IPs/hostnames from Prism Central (v3 API). Requires prism_central_url and credentials.",
+		Description: "List cluster IPs/hostnames from Prism Central (default v4 API, optional v3). Requires prism_central_url and credentials.",
 	}, discoverClusters)
 
 	// Tool: get_run_summary — read last run summary from output directory

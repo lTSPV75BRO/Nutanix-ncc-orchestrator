@@ -1,206 +1,171 @@
-# Nutanix NCC Orchestrator + Prometheus Monitoring
+# Nutanix NCC Orchestrator + Prometheus
 
-monitoring for Nutanix clusters using NCC Orchestrator → node_exporter textfile collector → Prometheus → Grafana
-​
+Production-oriented monitoring pattern:
+
+`ncc-orchestrator` -> `.prom` files (`prom-dir`) -> `node_exporter` textfile collector -> Prometheus -> Grafana/Alertmanager
 
 ## Architecture
 
+```text
+Nutanix Prism targets
+        |
+        v
+ncc-orchestrator run (cron/scheduler)
+        |
+        v
+prom-dir/*.prom (textfile metrics)
+        |
+        v
+node_exporter --collector.textfile.directory=...
+        |
+        v
+Prometheus scrape (:9100) -> rules/alerts -> Grafana dashboards
 ```
-Nutanix Clusters (10.48.*) 
-     ↓ NCC API (4h cron)
-NCC Orchestrator (.prom files)
-     ↓ /var/lib/node_exporter/textfile/
-node_exporter (:9100) ✓ 39 metrics
-     ↓ Prometheus (:9090)
-Grafana (:3000) + Alerts
-```
-Metrics Exposed
-| Metric	| Type	| Description | PromQL Example|
-| --------| ---------| ---------------------- | -------------- |
-|`nutanix_ncc_check_result`	| gauge	| Individual NCC checks (1=present)|nutanix_ncc_check_result{severity="FAIL"}
-|`​nutanix_ncc_check_summary_total`	| gauge	| Counts per severity	|sum(nutanix_ncc_check_summary_total{severity="FAIL"}) by (cluster)|
-|`nutanix_ncc_check_total`	| gauge	| Total checks per cluster	|nutanix_ncc_check_total |
 
+## Key metrics
+
+| Metric | Type | Description | Example |
+| --- | --- | --- | --- |
+| `nutanix_ncc_check_result` | gauge | One time-series per check row/severity/cluster | `nutanix_ncc_check_result{severity="FAIL"}` |
+| `nutanix_ncc_check_summary_total` | gauge | Per-cluster counts by severity | `sum by (cluster,severity) (nutanix_ncc_check_summary_total)` |
+| `nutanix_ncc_check_total` | gauge | Total checks per cluster | `nutanix_ncc_check_total` |
 
 ## Prerequisites
-- Linux VM (bastion) with node_exporter running
-- NCC Orchestrator binary (ncc-orchestrator-linux-amd64)
-- Nutanix cluster Prism credentials
 
-## Deployment
-1. Node Exporter + Textfile Collector
+- Linux bastion/runner host
+- `node_exporter` with textfile collector
+- `ncc-orchestrator` binary
+- Valid Nutanix credentials (prefer env/file secrets, not CLI plaintext)
 
-  - Install node_exporter
+## 1) Configure node_exporter textfile collector
+
+Install and run `node_exporter` with:
+
+```bash
+--collector.textfile.directory=/var/lib/node_exporter/textfile
 ```
-wget https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-amd64.tar.gz
-tar xvfz node_exporter-*.tar.gz
-sudo mv node_exporter-*/node_exporter /usr/local/bin/
-sudo useradd --no-create-home --shell /bin/false node_exporter
+
+Create directory and ownership:
+
+```bash
 sudo mkdir -p /var/lib/node_exporter/textfile
-```
-  - Systemd service
-```
-sudo tee /etc/systemd/system/node_exporter.service <<EOF
-[Unit]
-Description=Node Exporter
-Wants=network-online.target
-After=network-online.target
-
-[Service]
-User=node_exporter
-Group=node_exporter
-Type=simple
-ExecStart=/usr/local/bin/node_exporter \\
-  --collector.textfile.directory=/var/lib/node_exporter/textfile \\
-  --web.listen-address=:9100
-Restart=always
-
-[Install]
-WantedBy=default.target
-EOF
-```
-  - Enable Service  
-```
-sudo systemctl daemon-reload
-sudo systemctl enable --now node_exporter
-```  
-  - Verify:  
-```curl localhost:9100/metrics | grep node_textfile_mtime_seconds```
-​
-
-2. NCC Orchestrator Setup
-
-```
-sudo mkdir -p /opt/nutanix-ncc
-sudo cp ncc-orchestrator-linux-amd64 /opt/nutanix-ncc/
-sudo chmod 755 /opt/nutanix-ncc/ncc-orchestrator-linux-amd64
 sudo chown node_exporter:node_exporter /var/lib/node_exporter/textfile
 ```
 
-  - Test run:
+Verify collector is active:
 
-```
-cd /opt/nutanix-ncc
-sudo ./ncc-orchestrator-linux-amd64 \
-  --clusters="10.48.52.74,10.48.52.75,10.48.70.178,10.48.108.245" \
-  --prom-dir=/var/lib/node_exporter/textfile \
-  --insecure-skip-verify \
-  --password=Simps/4u
+```bash
+curl -s localhost:9100/metrics | rg node_textfile_mtime_seconds
 ```
 
-  - Verify:
-    ```ls -la /var/lib/node_exporter/textfile/*.prom → .prom files generated```
+## 2) Configure orchestrator for Prometheus output
 
-3. Fix .prom Format (Critical)
+Use config-driven execution (recommended):
 
-  - Node_exporter requires metric{labels} 1 format:
-
-```
-for f in /var/lib/node_exporter/textfile/*.prom; do
-  sed -i 's/\(nutanix_ncc_check_result{[^}]*}\)\([[:space:]]*\)$/\1 1\2/' "$f"
-done
-```
-Verify metrics: ```curl localhost:9100/metrics | grep -c '^nutanix_ncc_'```
-​
-
-4. Production Cron (Every 4h)
-
-```
-sudo crontab -e
-```
-```
-# NCC Orchestrator - Every 4 hours
-0 */4 * * * cd /opt/nutanix-ncc && \
-  ./ncc-orchestrator-linux-amd64 \
-  --clusters="10.48.52.74,10.48.52.75,10.48.70.178,10.48.108.245" \
-  --prom-dir=/var/lib/node_exporter/textfile \
-  --insecure-skip-verify --password=Simps/4u && \
-  chown node_exporter:node_exporter /var/lib/node_exporter/textfile/*.prom \
-  >> /var/log/ncc-orchestrator.log 2>&1
+```yaml
+# config.yaml (excerpt)
+prom-dir: "/var/lib/node_exporter/textfile"
+output-dir-logs: "/opt/ncc/nccfiles"
+output-dir-filtered: "/opt/ncc/outputfiles"
 ```
 
-5. Prometheus
+Run once:
 
+```bash
+NCC_PASSWORD='***' ./ncc-orchestrator --config /opt/ncc/config.yaml
 ```
-# Config: /etc/prometheus/prometheus.yml
+
+Verify files:
+
+```bash
+ls -la /var/lib/node_exporter/textfile/*.prom
+```
+
+> No manual `sed` fixups should be required for `.prom` format on current versions.
+
+## 3) Schedule production runs
+
+Prefer built-in scheduler helper:
+
+```bash
+./ncc-orchestrator create-schedule --type cron --every 4h --config /opt/ncc/config.yaml --print-only
+./ncc-orchestrator create-schedule --type cron --every 4h --config /opt/ncc/config.yaml --print-only=false
+```
+
+Or use cron directly:
+
+```cron
+0 */4 * * * NCC_PASSWORD='***' /opt/ncc/ncc-orchestrator --config /opt/ncc/config.yaml >> /var/log/ncc-orchestrator.log 2>&1
+```
+
+## 4) Prometheus scrape config
+
+Example `/etc/prometheus/prometheus.yml` excerpt:
+
+```yaml
 global:
   scrape_interval: 5m
 
 scrape_configs:
-  - job_name: 'bastion-node'
+  - job_name: node-exporter
     static_configs:
-      - targets: ['localhost:9100']
-  - job_name: 'nutanix-ncc'
-    static_configs:
-      - targets: ['localhost:9100']
-    scrape_interval: 5m
-  - rule_files:  
-    - /etc/prometheus/ncc.rules.yml
-```
-  - Alerting Rules:  
+      - targets: ["localhost:9100"]
 
+rule_files:
+  - /etc/prometheus/ncc.rules.yml
 ```
-# Rules: /etc/prometheus/ncc.rules.yml
+
+## 5) Alert rules example
+
+`/etc/prometheus/ncc.rules.yml`:
+
+```yaml
 groups:
   - name: ncc
     rules:
       - alert: NCCFailures
-        expr: sum(nutanix_ncc_check_summary_total{severity="FAIL"}) by (cluster) > 0
+        expr: sum by (cluster) (nutanix_ncc_check_summary_total{severity="FAIL"}) > 0
         for: 30m
-        labels: {severity: critical}
+        labels:
+          severity: critical
         annotations:
           summary: "NCC FAIL on {{ $labels.cluster }}"
-      
+
       - alert: NCCWarnings
-        expr: sum(nutanix_ncc_check_summary_total{severity="WARN"}) by (cluster) > 0
+        expr: sum by (cluster) (nutanix_ncc_check_summary_total{severity="WARN"}) > 0
         for: 30m
-        labels: {severity: warning}
-      
+        labels:
+          severity: warning
+
       - alert: NCCStaleData
-        expr: (time() - node_textfile_mtime_seconds{file=~".*prom"}) > 21600
+        expr: (time() - node_textfile_mtime_seconds{file=~".*\\.prom"}) > 21600
         for: 1h
-        labels: {severity: warning}
+        labels:
+          severity: warning
 ```
-Start: ```sudo systemctl enable --now prometheus```
 
-Verify:  
-```curl http://localhost:9090/targets → nutanix-ncc UP```
+Reload Prometheus and verify targets:
 
-6. Grafana Dashboard
-
-
-Install: ```sudo apt install grafana && sudo systemctl enable --now grafana-server```
-
-Access: ```http://bastion:3000 (admin/admin)```
-
-Prometheus datasource: ```http://localhost:9090```
-
-## Dashboard queries:
-
+```bash
+curl -s http://localhost:9090/targets
 ```
-- Critical: sum(nutanix_ncc_check_summary_total{severity=~"FAIL|WARN|ERR"}) by (cluster)
-- Table: nutanix_ncc_check_result{severity!="INFO"}
-- Total: nutanix_ncc_check_total
-```
+
+## 6) Useful Grafana queries
+
+- Fails/warns/errors by cluster: `sum by (cluster, severity) (nutanix_ncc_check_summary_total{severity=~"FAIL|WARN|ERR"})`
+- Active non-INFO checks table: `nutanix_ncc_check_result{severity!="INFO"}`
+- Total checks by cluster: `nutanix_ncc_check_total`
 
 ## Troubleshooting
-|Issue|	Fix|
-|---- | ----| 
-|failed to parse textfile data | 	```sed -i 's/\(nutanix_ncc_check_result{[^}]*}\)$/\1 1/' *.prom```|​
-|No NCC metrics	|```curl localhost:9100/metrics \| grep nutanix_ncc_check_total```|
-|Cron not running	|```sudo tail /var/log/ncc-orchestrator.log```|
-| Prometheus targets DOWN	|Check localhost:9100 accessibility|
 
-### Grafana Panels
+| Issue | Check/Fix |
+| --- | --- |
+| No NCC metrics visible | `ls /var/lib/node_exporter/textfile/*.prom` and `curl -s localhost:9100/metrics \| rg nutanix_ncc_` |
+| Stale metrics alert firing | Verify scheduler/cron last run and file mtimes under `prom-dir` |
+| Prometheus target down | Confirm node_exporter is up and reachable on `:9100` |
+| Permission errors writing `.prom` | Ensure runner user can write to `prom-dir` and directory ownership is correct |
 
-1. **Stat**: sum(nutanix_ncc_check_summary_total{severity=~"FAIL|WARN"}) by (cluster)
-2. **Table**: nutanix_ncc_check_result{severity!="INFO"}
-3. **Bar**: nutanix_ncc_check_total by (cluster)
-4. **Heatmap**: count(nutanix_ncc_check_result) by (severity, cluster)
+## Security notes
 
-## Alerting
-NCCFailures: FAIL > 0 → critical
-
-NCCWarnings: WARN > 0 → warning
-
-NCCStaleData: Files >6h old → warning
+- Use `NCC_PASSWORD` or `secret://` with `secrets-provider`; avoid plaintext passwords in cron/CLI.
+- Keep `insecure-skip-verify=false` in production unless lab-only/self-signed scenarios require override.
