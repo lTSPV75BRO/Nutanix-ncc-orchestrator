@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Col, Input, List, Row, Select, Space, Statistic, Tag, Typography } from "antd";
+import { Alert, Button, Card, Col, Input, List, Row, Select, Space, Statistic, Switch, Tag, Typography } from "antd";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 
 type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
@@ -117,8 +117,9 @@ function parseRoutesFromOpenAPI(spec: OpenAPISpec): RouteMeta[] {
 export function ApiExplorerSection({ onError }: Props) {
   const [method, setMethod] = useLocalStorageState<HttpMethod>("apiExplorer.method", "GET");
   const [path, setPath] = useLocalStorageState("apiExplorer.path", "/api/v1/health");
-  const [headerLines, setHeaderLines] = useLocalStorageState("apiExplorer.headers", "");
-  const [body, setBody] = useLocalStorageState("apiExplorer.body", "");
+  const [headerLines, setHeaderLines] = useState("");
+  const [body, setBody] = useState("");
+  const [allowExternalURL, setAllowExternalURL] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [response, setResponse] = useState<ResponseData | null>(null);
   const [lastError, setLastError] = useState("");
@@ -205,6 +206,9 @@ export function ApiExplorerSection({ onError }: Props) {
       if (!effectiveUrl) {
         throw new Error("path is required");
       }
+      if (!allowExternalURL && /^https?:\/\//i.test(effectiveUrl)) {
+        throw new Error("external URLs are blocked by default. Enable 'Allow External URL' only for trusted endpoints.");
+      }
       setIsLoading(true);
       setLastError("");
       const extraHeaders = parseHeaderLines(headerLines);
@@ -277,10 +281,20 @@ export function ApiExplorerSection({ onError }: Props) {
           options={routes.map((r) => ({ label: `${r.methods.join("|")} ${r.path}`, value: r.path }))}
         />
         <Button onClick={() => void loadRoutes()}>Refresh Routes</Button>
+        <Space>
+          <Typography.Text>Allow External URL</Typography.Text>
+          <Switch checked={allowExternalURL} onChange={setAllowExternalURL} />
+        </Space>
         <Button type="primary" loading={isLoading} onClick={() => void sendRequest()}>
           Send Request
         </Button>
       </Space>
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message="Sensitive request headers/body are not persisted in browser storage."
+      />
       {routesError ? <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={`Route discovery failed: ${routesError}`} /> : null}
 
       <Row gutter={[12, 12]}>

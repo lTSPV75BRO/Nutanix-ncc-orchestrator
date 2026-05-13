@@ -1,0 +1,9 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ncc-v2-default-deny-ingress
+  namespace: ncc-orchestrator-v2
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress

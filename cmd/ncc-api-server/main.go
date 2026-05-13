@@ -51,6 +51,8 @@ type apiServer struct {
 	tlsCertFile           string
 	tlsKeyFile            string
 	tlsClientCAFile       string
+	rateLimitPerMinute    int
+	rateLimiter           *fixedWindowRateLimiter
 
 	mu      sync.Mutex
 	active  bool
@@ -190,6 +192,7 @@ func main() {
 	flag.StringVar(&s.tlsCertFile, "tls-cert-file", "", "TLS certificate file for direct HTTPS")
 	flag.StringVar(&s.tlsKeyFile, "tls-key-file", "", "TLS key file for direct HTTPS")
 	flag.StringVar(&s.tlsClientCAFile, "tls-client-ca-file", "", "Optional client CA file (for mTLS verification)")
+	flag.IntVar(&s.rateLimitPerMinute, "rate-limit-per-minute", 60, "Per-client rate limit for sensitive API routes (0 disables)")
 	flag.Parse()
 
 	s.authToken = strings.TrimSpace(os.Getenv("NCC_API_TOKEN"))
@@ -201,6 +204,9 @@ func main() {
 	}
 	if s.sessionTTL <= 0 || s.sessionTTL > 24*time.Hour {
 		log.Fatal("session-ttl must be > 0 and <= 24h")
+	}
+	if s.rateLimitPerMinute < 0 {
+		log.Fatal("rate-limit-per-minute must be >= 0")
 	}
 	if err := s.ensureAuthToken(); err != nil {
 		log.Fatal(err)
@@ -214,6 +220,9 @@ func main() {
 	}
 	if err := s.validatePathConfig(); err != nil {
 		log.Fatal(err)
+	}
+	if s.rateLimitPerMinute > 0 {
+		s.rateLimiter = newFixedWindowRateLimiter(s.rateLimitPerMinute, time.Minute)
 	}
 
 	mux := http.NewServeMux()
@@ -239,7 +248,7 @@ func main() {
 	mux.HandleFunc("/api/v1/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("/api/v1/meta/routes", s.handleMetaRoutes)
 
-	handler := s.withCORS(s.withAuth(mux))
+	handler := s.withCORS(s.withRateLimit(s.withAuth(mux)))
 	srv := &http.Server{
 		Addr:         listen,
 		Handler:      handler,

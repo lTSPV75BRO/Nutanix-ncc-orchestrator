@@ -94,6 +94,7 @@ export type PreflightCheck = {
   status: "pass" | "fail" | "warn";
   title: string;
   message: string;
+  remediation_code?: string;
   hint?: string;
   output?: string;
 };

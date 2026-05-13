@@ -904,7 +904,7 @@ func validateConfig(cfg Config) error {
 			return errors.New("username is required in pc mode")
 		}
 		for i, pc := range cfg.PCs {
-			if _, err := normalizePCBaseURL(pc); err != nil {
+			if _, err := normalizePCBaseURL(pc, cfg.InsecureSkipVerify); err != nil {
 				return fmt.Errorf("pc target %d (%s): %w", i+1, pc, err)
 			}
 		}
@@ -7419,6 +7419,7 @@ type updateOptions struct {
 	AllowMajorUpgrade bool
 	Repo              string
 	BinaryURL         string
+	BinarySHA256      string
 	TargetVersion     string
 }
 
@@ -7468,6 +7469,20 @@ func normalizeGitHubRepo(repo string) (string, error) {
 func isArchiveAssetURL(raw string) bool {
 	u := strings.ToLower(strings.TrimSpace(raw))
 	return strings.HasSuffix(u, ".tar.gz") || strings.HasSuffix(u, ".zip")
+}
+
+func normalizeSHA256Hex(raw string) (string, error) {
+	sum := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(raw, "sha256:")))
+	if len(sum) != 64 {
+		return "", fmt.Errorf("sha256 must be 64 hex characters, got %d", len(sum))
+	}
+	for _, r := range sum {
+		if (r >= 'a' && r <= 'f') || (r >= '0' && r <= '9') {
+			continue
+		}
+		return "", fmt.Errorf("sha256 contains invalid character %q", r)
+	}
+	return sum, nil
 }
 
 func printV1ToV2MigrationSteps() {
@@ -8201,6 +8216,14 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 func runUpdate(opts updateOptions) error {
 	currentVer := stripGoBuildGitSuffix(Version)
 	client := &http.Client{Timeout: 20 * time.Second}
+	providedSHA256 := strings.TrimSpace(opts.BinarySHA256)
+	if providedSHA256 != "" {
+		normalized, err := normalizeSHA256Hex(providedSHA256)
+		if err != nil {
+			return fmt.Errorf("invalid --binary-sha256: %w", err)
+		}
+		providedSHA256 = normalized
+	}
 
 	if strings.TrimSpace(opts.BinaryURL) != "" {
 		if isArchiveAssetURL(opts.BinaryURL) {
@@ -8234,11 +8257,20 @@ func runUpdate(opts updateOptions) error {
 			}
 			return nil
 		}
+		if providedSHA256 == "" {
+			return errors.New("--binary-sha256 is required when using --binary-url")
+		}
 		fmt.Fprintf(os.Stderr, "Downloading %s ...\n", opts.BinaryURL)
 		body, err := downloadBinaryURL(client, opts.BinaryURL)
 		if err != nil {
 			return err
 		}
+		sum := sha256.Sum256(body)
+		got := hex.EncodeToString(sum[:])
+		if !strings.EqualFold(got, providedSHA256) {
+			return fmt.Errorf("checksum mismatch: expected %s, got %s", providedSHA256, got)
+		}
+		fmt.Fprintln(os.Stderr, "Checksum verified.")
 		targetVer := strings.TrimSpace(opts.TargetVersion)
 		if targetVer == "" {
 			targetVer = "custom"
@@ -8340,25 +8372,35 @@ func runUpdate(opts updateOptions) error {
 		return err
 	}
 	if chosenAssetName != "" {
+		checksumVerified := false
+		checksumAssetFound := false
 		for _, a := range targetRelease.Assets {
 			an := strings.ToLower(a.Name)
 			if strings.Contains(an, "checksum") || strings.Contains(an, "sha256") || strings.HasSuffix(an, ".sha256") {
+				checksumAssetFound = true
 				csBody, err := fetchURL(a.BrowserDownloadURL, client)
 				if err != nil {
-					log.Debug().Err(err).Str("asset", a.Name).Msg("skip checksum verification")
-					break
+					return fmt.Errorf("fetch checksum asset %s: %w", a.Name, err)
 				}
 				expectedHash := parseChecksumFile(csBody, chosenAssetName)
-				if expectedHash != "" {
-					sum := sha256.Sum256(body)
-					got := hex.EncodeToString(sum[:])
-					if !strings.EqualFold(got, expectedHash) {
-						return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedHash, got)
-					}
-					fmt.Fprintln(os.Stderr, "Checksum verified.")
+				if expectedHash == "" {
+					return fmt.Errorf("checksum entry for %s not found in %s", chosenAssetName, a.Name)
 				}
+				sum := sha256.Sum256(body)
+				got := hex.EncodeToString(sum[:])
+				if !strings.EqualFold(got, expectedHash) {
+					return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedHash, got)
+				}
+				checksumVerified = true
+				fmt.Fprintln(os.Stderr, "Checksum verified.")
 				break
 			}
+		}
+		if !checksumAssetFound {
+			return fmt.Errorf("no checksum asset found for release %s", targetRelease.TagName)
+		}
+		if !checksumVerified {
+			return fmt.Errorf("checksum verification did not complete for asset %s", chosenAssetName)
 		}
 	}
 	return installDownloadedBinary(body, targetVer)
@@ -8433,7 +8475,7 @@ func discoverHTTPClient(insecure bool) *http.Client {
 	}
 }
 
-func normalizePCBaseURL(raw string) (string, error) {
+func normalizePCBaseURL(raw string, insecureSkipVerify bool) (string, error) {
 	target := strings.TrimSpace(raw)
 	if target == "" {
 		return "", errors.New("pc target is empty")
@@ -8447,6 +8489,9 @@ func normalizePCBaseURL(raw string) (string, error) {
 	}
 	if u.Scheme != "https" && u.Scheme != "http" {
 		return "", fmt.Errorf("PC target must use http or https scheme, got %q", u.Scheme)
+	}
+	if u.Scheme == "http" && !insecureSkipVerify {
+		return "", errors.New("PC target with http:// requires --insecure-skip-verify")
 	}
 	if strings.TrimSpace(u.Host) == "" {
 		return "", fmt.Errorf("PC target %q has no host", raw)
@@ -8478,7 +8523,7 @@ func discoverClustersFromPCTargets(cfg Config) ([]string, error) {
 	seen := make(map[string]bool)
 	out := make([]string, 0)
 	for _, pc := range cfg.PCs {
-		pcURL, err := normalizePCBaseURL(pc)
+		pcURL, err := normalizePCBaseURL(pc, cfg.InsecureSkipVerify)
 		if err != nil {
 			return nil, err
 		}
@@ -9522,12 +9567,13 @@ func validateSecretsForPath(cfgPath string) (int, string, error) {
 }
 
 type preflightCheck struct {
-	ID      string `json:"id"`
-	Status  string `json:"status"`
-	Title   string `json:"title"`
-	Message string `json:"message"`
-	Hint    string `json:"hint,omitempty"`
-	Output  string `json:"output,omitempty"`
+	ID              string `json:"id"`
+	Status          string `json:"status"`
+	Title           string `json:"title"`
+	Message         string `json:"message"`
+	RemediationCode string `json:"remediation_code,omitempty"`
+	Hint            string `json:"hint,omitempty"`
+	Output          string `json:"output,omitempty"`
 }
 
 type preflightReport struct {
@@ -9537,6 +9583,15 @@ type preflightReport struct {
 	ConfigPath      string           `json:"config_path"`
 	Checks          []preflightCheck `json:"checks"`
 	ActionableHints []string         `json:"actionableHints"`
+}
+
+func defaultPreflightRemediationCode(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "NCC_PREFLIGHT_GENERIC"
+	}
+	replacer := strings.NewReplacer(".", "_", "-", "_", "/", "_", " ", "_")
+	return "NCC_PREFLIGHT_" + strings.ToUpper(replacer.Replace(id))
 }
 
 func preflightProbePath(path string) error {
@@ -9558,6 +9613,9 @@ func buildPreflightReport(cfgPath string) preflightReport {
 	}
 	hints := []string{}
 	add := func(c preflightCheck) {
+		if c.Status != "pass" && strings.TrimSpace(c.RemediationCode) == "" {
+			c.RemediationCode = defaultPreflightRemediationCode(c.ID)
+		}
 		report.Checks = append(report.Checks, c)
 		switch c.Status {
 		case "fail":
@@ -11039,18 +11097,21 @@ Default behavior follows the current major track (v1.x stays on latest v1.x).
 To cross major versions (for example v1 -> v2), pass --allow-major-upgrade.
 
 Use --check to only validate availability/version without downloading.
-Use --binary-url to work with non-GitHub/custom binary repositories.`,
+Use --binary-url to work with non-GitHub/custom binary repositories.
+When using --binary-url for install, --binary-sha256 is required.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			checkOnly, _ := cmd.Flags().GetBool("check")
 			allowMajorUpgrade, _ := cmd.Flags().GetBool("allow-major-upgrade")
 			repo, _ := cmd.Flags().GetString("repo")
 			binaryURL, _ := cmd.Flags().GetString("binary-url")
+			binarySHA256, _ := cmd.Flags().GetString("binary-sha256")
 			targetVersion, _ := cmd.Flags().GetString("target-version")
 			return runUpdate(updateOptions{
 				CheckOnly:         checkOnly,
 				AllowMajorUpgrade: allowMajorUpgrade,
 				Repo:              repo,
 				BinaryURL:         binaryURL,
+				BinarySHA256:      binarySHA256,
 				TargetVersion:     targetVersion,
 			})
 		},
@@ -11059,6 +11120,7 @@ Use --binary-url to work with non-GitHub/custom binary repositories.`,
 	updateCmd.Flags().Bool("allow-major-upgrade", false, "Allow major upgrades (for example v1.x to v2.x)")
 	updateCmd.Flags().String("repo", defaultGitHubRepo, "GitHub repo in owner/repo or GitHub URL format")
 	updateCmd.Flags().String("binary-url", "", "Direct binary URL for non-GitHub/custom repositories")
+	updateCmd.Flags().String("binary-sha256", "", "Expected SHA256 for --binary-url (required for install)")
 	updateCmd.Flags().String("target-version", "", "Target version hint (recommended with --binary-url)")
 	cmd.AddCommand(updateCmd)
 

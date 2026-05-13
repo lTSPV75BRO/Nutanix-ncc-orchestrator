@@ -22,7 +22,11 @@ func TestValidateConfigPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("validateConfigPath failed: %v", err)
 	}
-	if want := filepath.Join(repo, "configs", "test.yaml"); got != want {
+	repoReal, err := filepath.EvalSymlinks(repo)
+	if err != nil {
+		t.Fatalf("resolve temp dir symlink: %v", err)
+	}
+	if want := filepath.Join(repoReal, "configs", "test.yaml"); got != want {
 		t.Fatalf("got %q want %q", got, want)
 	}
 	if _, err := s.validateConfigPath("../outside.yaml"); err == nil {

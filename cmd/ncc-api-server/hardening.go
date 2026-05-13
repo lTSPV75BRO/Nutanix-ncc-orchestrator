@@ -13,9 +13,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -37,6 +40,42 @@ type sessionClaims struct {
 	JTI string `json:"jti"`
 	CIP string `json:"cip"`
 	Iss string `json:"iss"`
+}
+
+type fixedWindowRateLimiter struct {
+	mu      sync.Mutex
+	limit   int
+	window  time.Duration
+	buckets map[string]rateLimitBucket
+}
+
+type rateLimitBucket struct {
+	count   int
+	resetAt time.Time
+}
+
+func newFixedWindowRateLimiter(limit int, window time.Duration) *fixedWindowRateLimiter {
+	return &fixedWindowRateLimiter{
+		limit:   limit,
+		window:  window,
+		buckets: map[string]rateLimitBucket{},
+	}
+}
+
+func (l *fixedWindowRateLimiter) allow(key string, now time.Time) (bool, time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b, ok := l.buckets[key]
+	if !ok || !now.Before(b.resetAt) {
+		l.buckets[key] = rateLimitBucket{count: 1, resetAt: now.Add(l.window)}
+		return true, 0
+	}
+	if b.count >= l.limit {
+		return false, b.resetAt.Sub(now)
+	}
+	b.count++
+	l.buckets[key] = b
+	return true, 0
 }
 
 func parseAllowedOrigins(raw string) map[string]struct{} {
@@ -84,22 +123,43 @@ func requireJSONContentType(r *http.Request) error {
 	return nil
 }
 
-func cleanClientIP(r *http.Request) string {
-	xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For"))
-	if xff != "" {
-		first := strings.TrimSpace(strings.Split(xff, ",")[0])
-		if ip := net.ParseIP(first); ip != nil {
-			return ip.String()
-		}
+func parseRemoteIP(remoteAddr string) net.IP {
+	trimmed := strings.TrimSpace(remoteAddr)
+	if trimmed == "" {
+		return nil
 	}
-	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	host, _, err := net.SplitHostPort(trimmed)
 	if err == nil {
-		if ip := net.ParseIP(host); ip != nil {
-			return ip.String()
+		if ip := net.ParseIP(strings.TrimSpace(host)); ip != nil {
+			return ip
 		}
 	}
-	if ip := net.ParseIP(strings.TrimSpace(r.RemoteAddr)); ip != nil {
-		return ip.String()
+	if ip := net.ParseIP(trimmed); ip != nil {
+		return ip
+	}
+	return nil
+}
+
+func trustForwardedHeaders(remoteIP net.IP) bool {
+	if remoteIP == nil {
+		return false
+	}
+	return remoteIP.IsLoopback() || remoteIP.IsPrivate()
+}
+
+func cleanClientIP(r *http.Request) string {
+	remoteIP := parseRemoteIP(r.RemoteAddr)
+	if trustForwardedHeaders(remoteIP) {
+		xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For"))
+		if xff != "" {
+			first := strings.TrimSpace(strings.Split(xff, ",")[0])
+			if ip := net.ParseIP(first); ip != nil {
+				return ip.String()
+			}
+		}
+	}
+	if remoteIP != nil {
+		return remoteIP.String()
 	}
 	return ""
 }
@@ -109,21 +169,82 @@ func isLoopbackRequest(r *http.Request) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+func isWithinBase(base, target string) bool {
+	rel, err := filepath.Rel(base, target)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func pathContainsSymlink(base, target string) (bool, error) {
+	rel, err := filepath.Rel(base, target)
+	if err != nil {
+		return false, err
+	}
+	if rel == "." {
+		return false, nil
+	}
+	current := base
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		st, err := os.Lstat(current)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return false, nil
+			}
+			return false, err
+		}
+		if st.Mode()&os.ModeSymlink != 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (s *apiServer) normalizeAndConfinePath(p string) (string, error) {
 	rootAbs, err := filepath.Abs(s.repoRoot)
 	if err != nil {
 		return "", fmt.Errorf("resolve repo root: %w", err)
 	}
 	rootAbs = filepath.Clean(rootAbs)
+	rootReal, err := filepath.EvalSymlinks(rootAbs)
+	if err != nil {
+		return "", fmt.Errorf("resolve repo root symlinks: %w", err)
+	}
+	rootReal = filepath.Clean(rootReal)
+
 	var abs string
 	if filepath.IsAbs(p) {
 		abs = filepath.Clean(p)
 	} else {
-		abs = filepath.Clean(filepath.Join(rootAbs, p))
+		abs = filepath.Clean(filepath.Join(rootReal, p))
 	}
-	prefix := rootAbs + string(filepath.Separator)
-	if abs != rootAbs && !strings.HasPrefix(abs, prefix) {
+	if !isWithinBase(rootReal, abs) {
 		return "", fmt.Errorf("path escapes repo root: %s", p)
+	}
+	hasLink, err := pathContainsSymlink(rootReal, abs)
+	if err != nil {
+		return "", fmt.Errorf("inspect path symlinks: %w", err)
+	}
+	if hasLink {
+		return "", fmt.Errorf("path includes symlink and is not allowed: %s", p)
+	}
+	if _, err := os.Lstat(abs); err == nil {
+		realAbs, err := filepath.EvalSymlinks(abs)
+		if err != nil {
+			return "", fmt.Errorf("resolve path symlinks: %w", err)
+		}
+		realAbs = filepath.Clean(realAbs)
+		if !isWithinBase(rootReal, realAbs) {
+			return "", fmt.Errorf("path resolves outside repo root: %s", p)
+		}
 	}
 	return abs, nil
 }
@@ -256,6 +377,24 @@ func (s *apiServer) validatePathConfig() error {
 			return err
 		}
 	}
+
+	// Fail fast for explicit orchestrator binary paths (common in production),
+	// while preserving dev fallback behavior when the default relative path is used.
+	trimmedBin := strings.TrimSpace(s.orchestratorBin)
+	if filepath.IsAbs(trimmedBin) {
+		binPath := s.absPath(trimmedBin)
+		st, err := os.Stat(binPath)
+		if err != nil {
+			return fmt.Errorf("orchestrator binary not found at %s (set --orchestrator-bin to a valid executable path): %w", binPath, err)
+		}
+		if st.IsDir() {
+			return fmt.Errorf("orchestrator binary path is a directory: %s", binPath)
+		}
+		if st.Mode()&0o111 == 0 {
+			return fmt.Errorf("orchestrator binary is not executable: %s", binPath)
+		}
+	}
+
 	return nil
 }
 
@@ -290,6 +429,49 @@ func (s *apiServer) verifySessionToken(token, clientIP string) error {
 		return errors.New("session token client binding mismatch")
 	}
 	return nil
+}
+
+func (s *apiServer) withRateLimit(next http.Handler) http.Handler {
+	limitedPaths := map[string]bool{
+		"/api/v1/auth/session":         true,
+		"/api/v1/auth/rotate":          true,
+		"/api/v1/runs/trigger":         true,
+		"/api/v1/settings/config":      true,
+		"/api/v1/settings/config-file": true,
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.rateLimiter == nil || r.Method == http.MethodOptions || r.URL.Path == "/api/v1/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !limitedPaths[r.URL.Path] {
+			next.ServeHTTP(w, r)
+			return
+		}
+		clientIP := cleanClientIP(r)
+		if clientIP == "" {
+			clientIP = "unknown"
+		}
+		key := r.URL.Path + "|" + clientIP
+		ok, retryAfter := s.rateLimiter.allow(key, time.Now().UTC())
+		if ok {
+			next.ServeHTTP(w, r)
+			return
+		}
+		retrySeconds := int((retryAfter + time.Second - 1) / time.Second)
+		if retrySeconds < 1 {
+			retrySeconds = 1
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(retrySeconds))
+		writeJSON(w, http.StatusTooManyRequests, envelope{
+			Success: false,
+			Error:   "rate limit exceeded",
+			Data: map[string]interface{}{
+				"retry_after_sec": retrySeconds,
+				"path":            r.URL.Path,
+			},
+		})
+	})
 }
 
 func (s *apiServer) audit(r *http.Request, action string, success bool, fields map[string]interface{}) {

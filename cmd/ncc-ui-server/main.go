@@ -117,6 +117,16 @@ func main() {
 
 	proxy := httputil.NewSingleHostReverseProxy(backend)
 	proxy.Transport = transport
+	applyBaseHeaders := func(w http.ResponseWriter, isTLS bool) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; object-src 'none'")
+		if isTLS {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
+	}
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		// Normalize security headers on proxied API responses to avoid duplicate comma-joined values.
 		resp.Header.Set("X-Content-Type-Options", "nosniff")
@@ -132,7 +142,7 @@ func main() {
 		req.Header.Del("Authorization")
 		req.Header.Del("X-API-Token")
 		req.Header.Del("X-Forwarded-Host")
-		req.Header.Set("X-Forwarded-Proto", "http")
+		req.Header.Set("X-Forwarded-Proto", backend.Scheme)
 		if authMode == "session" {
 			if tok := mintSession(); tok != "" {
 				req.Header.Set("Authorization", "Bearer "+tok)
@@ -156,20 +166,10 @@ func main() {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/api/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		applyBaseHeaders := func() {
-			w.Header().Set("X-Content-Type-Options", "nosniff")
-			w.Header().Set("X-Frame-Options", "DENY")
-			w.Header().Set("Referrer-Policy", "no-referrer")
-			w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
-			w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; object-src 'none'")
-			if r.TLS != nil {
-				w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-			}
-		}
+		applyBaseHeaders(w, r.TLS != nil)
 		origin := strings.TrimSpace(r.Header.Get("Origin"))
 		if origin != "" {
 			if _, ok := originSet[origin]; !ok {
-				applyBaseHeaders()
 				http.Error(w, "origin not allowed", http.StatusForbidden)
 				return
 			}
@@ -177,29 +177,30 @@ func main() {
 			w.Header().Set("Vary", "Origin")
 		}
 		if r.Method == http.MethodOptions {
-			applyBaseHeaders()
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		if !(r.Method == http.MethodGet || r.Method == http.MethodPost || r.Method == http.MethodPut) {
-			applyBaseHeaders()
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		if !strings.HasPrefix(r.URL.Path, "/api/v1/") {
-			applyBaseHeaders()
 			http.Error(w, "path not allowed", http.StatusForbidden)
 			return
 		}
 		proxy.ServeHTTP(w, r)
 	}))
 	mux.Handle("/", http.FileServer(http.Dir(dir)))
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		applyBaseHeaders(w, r.TLS != nil)
+		mux.ServeHTTP(w, r)
+	})
 
 	srv := &http.Server{
 		Addr:         listen,
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  60 * time.Second,

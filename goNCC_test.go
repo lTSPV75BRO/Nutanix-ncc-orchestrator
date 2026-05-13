@@ -1485,6 +1485,7 @@ func TestDiscoverClustersFromPCTargetsV3(t *testing.T) {
 		PCs:                 []string{srv.URL},
 		Username:            "admin",
 		Password:            "secret",
+		InsecureSkipVerify:  true,
 		DiscoverAPIVersion:  "v3",
 		NutanixV4APIVersion: defaultNutanixV4APIVersion,
 	}

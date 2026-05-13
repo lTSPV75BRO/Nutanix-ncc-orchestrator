@@ -177,6 +177,22 @@ Preflight includes:
 - `validate-secrets`
 - output/log/prom directory write probes via `.ncc-prefight-check`
 - safety advisories (for example insecure TLS, HTTP payload logging, high parallelism)
+- machine-readable `remediation_code` on non-pass checks for UI/automation fix mapping
+
+Preflight JSON contract (abridged):
+
+```json
+{
+  "ok": false,
+  "checks": [
+    {
+      "id": "validate-secrets",
+      "status": "fail",
+      "remediation_code": "NCC_PREFLIGHT_VALIDATE_SECRETS"
+    }
+  ]
+}
+```
 
 ## Upgrade path: v1 to v2
 
@@ -259,7 +275,39 @@ Migration checklist:
 
 - Use explicit `--cors-origin` values; do not rely on permissive defaults.
 - Keep `--debug-expose=false` in production.
+- Keep API route limiting enabled (`--rate-limit-per-minute`, default `60`) for sensitive auth/mutation routes.
 - Rotate API tokens regularly (`POST /auth/rotate`).
 - Restrict filesystem access to minimum required `--repo-root`.
 - Enable retention controls for run-history and generated artifacts.
 - Run preflight checks in CI/CD before applying schedule or release changes.
+- Keep API Explorer external URL mode disabled by default unless explicitly needed.
+
+## Kubernetes deployment process
+
+For Kubernetes, use `k8s/` as the canonical entrypoint to deploy full v2 components:
+
+```bash
+kubectl apply -k k8s/
+```
+
+`k8s/` (internally sourcing v2 manifests) includes:
+
+- `runner-cronjob.yaml`: scheduled runner execution
+- `api-deployment.yaml` + `api-service.yaml`: backend API
+- `ui-deployment.yaml` + `ui-service.yaml`: UI server + frontend hosting/proxy
+- `configmap.yaml`, `secret.yaml`, `pvc.yaml`: shared config/secrets/state
+- NetworkPolicy set:
+  - default deny ingress
+  - UI ingress allow (port 8080)
+  - API ingress allow only from UI pods (port 8081)
+
+Important:
+
+- Update image names in `api-deployment.yaml` and `ui-deployment.yaml` to your published v2 images.
+- API pod must include `ncc-api-server` + `ncc-orchestrator`.
+- UI pod must include `ncc-ui-server` + built frontend files at `/app/frontend/dist`.
+
+
+## Migration runbook
+
+For operational migration steps, see [MIGRATION_v1_TO_v2.md](./MIGRATION_v1_TO_v2.md).

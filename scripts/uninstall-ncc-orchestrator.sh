@@ -16,7 +16,7 @@
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-NAMESPACE="${NAMESPACE:-ncc-orchestrator}"
+NAMESPACE="${NAMESPACE:-ncc-orchestrator-v2}"
 FORCE=false
 DRY_RUN=false
 PRUNE_IMAGES=false
@@ -36,7 +36,7 @@ fi
 echo "Uninstall NCC Orchestrator"
 echo "  Namespace: $NAMESPACE"
 echo "  This will delete the namespace and ALL resources in it:"
-echo "    CronJob, Jobs, Deployment (nginx), Service, ConfigMap(s), Secret, PVC, etc."
+echo "    CronJob, Jobs, Deployment(s), Service(s), ConfigMap(s), Secret, PVC, etc."
 echo ""
 
 if [[ "$DRY_RUN" == "true" ]]; then

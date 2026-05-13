@@ -11,6 +11,11 @@ This release finalizes the v2.0.0 production baseline for the Go orchestrator ru
 - **Release/documentation alignment**: README release pointers, feature references, changelog, and release docs now target `v2.0.0`.
 - **Version consistency updates**: default binary version, Helm chart/appVersion, Helm values image tag, and Kubernetes image tags now use `2.0.0`.
 - **CodeQL workflow fix**: repository CodeQL scan now targets branch-appropriate languages (`go`, `actions`), avoiding JS/TS "no source found" failures for this scope.
+- **API hardening uplift**: added per-client rate limiting for sensitive auth/mutation routes (`--rate-limit-per-minute`, default `60`).
+- **API/UI/proxy stack hardening**: API and UI server security headers normalized, stricter token/session handling, safer forwarded-header behavior, and route-level proxy restrictions for `/api/v1/*`.
+- **Preflight automation contract**: `preflight-check` JSON now includes machine-readable `remediation_code` on non-pass checks.
+- **Frontend/API Explorer hardening**: sensitive request headers/body are no longer persisted in browser storage; external absolute URLs are blocked by default.
+- **Kubernetes network hardening**: added default-deny ingress NetworkPolicy plus scoped UI/API ingress policies.
 
 ## Scope note for v2.0.0
 
@@ -30,6 +35,10 @@ This release line includes the orchestrator runtime plus the v2 API/UI and front
 - `go run . validate-config --config config.yaml` -> pass
 - `go run . validate-secrets --config config.yaml` -> expected failure when `secret://` refs are present without a configured provider
 - `NCC_SECRETS_PROVIDER=env ... go run . validate-secrets --config config.yaml` -> pass
+- `go test -race ./...` -> pass
+- `npm test` -> pass
+- `npm run build` -> pass
+- `kubectl kustomize k8s` -> pass
 
 ## Upgrade notes from v1.1.0
 
@@ -43,7 +52,7 @@ This release line includes the orchestrator runtime plus the v2 API/UI and front
 - **MCP server version:** `2.0.0`
 - **Docker image:** `prajwalnutant/nutanix-ncc-orchestrator:2.0.0`
 - **Helm chart:** `helm/ncc-orchestrator` chart/appVersion `2.0.0`
-- **Kubernetes manifests:** `k8s/cronjob.yaml` and `k8s/job-debug.yaml` use image tag `2.0.0`
+- **Kubernetes manifests:** full v2 stack under `k8s/` (`runner-cronjob`, `api-deployment`, `ui-deployment`) plus NetworkPolicies.
 
 ## GitHub release checklist (v2.0.0)
 
@@ -55,4 +64,4 @@ This release line includes the orchestrator runtime plus the v2 API/UI and front
 6. After publish, verify:
    - release assets are downloadable
    - Docker tag `prajwalnutant/nutanix-ncc-orchestrator:2.0.0` exists
-   - `ncc-orchestrator --update` can discover and verify assets
+   - `ncc-orchestrator update --check` can discover and verify assets

@@ -163,6 +163,9 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
                       <Typography.Text code>{item.id}</Typography.Text>
                     </Space>
                     <Typography.Text>{item.message}</Typography.Text>
+                    {item.remediation_code ? (
+                      <Typography.Text type="secondary">Remediation code: <Typography.Text code>{item.remediation_code}</Typography.Text></Typography.Text>
+                    ) : null}
                     {item.hint ? <Typography.Text type="secondary">Hint: {item.hint}</Typography.Text> : null}
                   </Space>
                 </List.Item>

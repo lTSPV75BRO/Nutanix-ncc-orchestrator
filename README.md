@@ -28,6 +28,7 @@ Prajwal Vernekar (prajwal.vernekar@nutanix.com)
 - **Configurable** via YAML/JSON config file, environment variables (`NCC_*`), or CLI flags.
 - **Outputs**: HTML/CSV/JSON/Markdown/SARIF, aggregated `index.html`, drill-down diff, flaky-check report, and SLO dashboard exports.
 - **Reliability**: Retry logic, adaptive parallelism on 429, progress bars, rotated JSON logging, and a preflight write-permission check.
+- **Security hardening**: strict path confinement, preflight remediation codes, API rate limiting for sensitive routes, checksum-enforced updater flow, and Kubernetes NetworkPolicy defaults.
 - **Replay mode** (`--replay`): Regenerate reports from existing logs without calling the NCC API.
 - **Notifications**: Optional email, webhook, and Slack notifications with quiet-hours / maintenance-window suppression.
 - **Policy gates**: Fail runs based on automation rules (`policy-gates`) such as `new-fails>0`, `fail-rate>2`, `min-health-score<90`.
@@ -60,6 +61,7 @@ Prajwal Vernekar (prajwal.vernekar@nutanix.com)
 - `GET|PUT /api/v1/schedule`
 - `GET /api/v1/runs`, `GET /api/v1/runs/summary`, `GET /api/v1/runs/active`
 - `POST /api/v1/runs/trigger`
+- `POST /api/v1/runs/preflight`
 - `GET /api/v1/report/data`
 - `GET /api/v1/report/trends?limit=30`
 - `GET /api/v1/openapi.json`
@@ -76,6 +78,7 @@ go run ./cmd/ncc-api-server \
   --output-dir outputfiles \
   --log-dir nccfiles \
   --orchestrator-bin ./ncc-orchestrator \
+  --rate-limit-per-minute 60 \
   --auth-mode token \
   --cors-origin http://localhost:8080
 ```
@@ -121,6 +124,22 @@ Quick verification:
 ```bash
 curl -sS http://localhost:8081/api/v1/health
 curl -sS -H "Authorization: Bearer $(cat .ncc-api-token)" http://localhost:8081/api/v1/artifacts
+```
+
+### Preflight machine-readable remediation
+
+`ncc-orchestrator preflight-check --format json` now emits `remediation_code` for non-pass checks.  
+The same structure is surfaced in `/api/v1/runs/preflight` and consumed by the v2 UI.
+
+Example (truncated):
+
+```json
+{
+  "id": "validate-secrets",
+  "status": "fail",
+  "remediation_code": "NCC_PREFLIGHT_VALIDATE_SECRETS",
+  "hint": "Set secrets-provider and ensure secret sources are accessible."
+}
 ```
 
 ### Run frontend
@@ -230,7 +249,7 @@ The [GitHub Action](.github/workflows/docker-publish.yml) builds and pushes the 
 Basic command:
 - `ncc-orchestrator --clusters "10.0.1.1,10.0.2.1" --username admin --password yourpassword`
 
-Full options: Run `ncc-orchestrator --help` for all flags and subcommands. To see current env values: `ncc-orchestrator env-info`. Run `ncc-orchestrator version` to print version, stream, build date, and Go version, then exit. Run `ncc-orchestrator update` to fetch and update binaries (or `ncc-orchestrator update --check` for check-only mode). By default, updates stay on the current major track (`v1.x` -> latest `v1.x`); use `--allow-major-upgrade` to move to `v2.x` after reviewing migration steps in [docs/V2_BACKEND_FRONTEND_MVP.md](docs/V2_BACKEND_FRONTEND_MVP.md). You can also check/use non-GitHub binaries with `--binary-url` and optional `--target-version`. Set `GITHUB_TOKEN` for higher GitHub API rate limits. If the release includes a checksum file (for example `checksums.txt`), the download is verified before replace. On Windows the new binary is written as `ncc-orchestrator.new.exe`; replace the old exe and run again. Release maintainers: see [docs/RELEASE_CHECKSUMS.md](docs/RELEASE_CHECKSUMS.md) for checksum publishing guidance.
+Full options: Run `ncc-orchestrator --help` for all flags and subcommands. To see current env values: `ncc-orchestrator env-info`. Run `ncc-orchestrator version` to print version, stream, build date, and Go version, then exit. Run `ncc-orchestrator update` to fetch and update binaries (or `ncc-orchestrator update --check` for check-only mode). By default, updates stay on the current major track (`v1.x` -> latest `v1.x`); use `--allow-major-upgrade` to move to `v2.x` after reviewing migration steps in [docs/V2_BACKEND_FRONTEND_MVP.md](docs/V2_BACKEND_FRONTEND_MVP.md). You can also check/use non-GitHub binaries with `--binary-url`; installs from direct URLs require `--binary-sha256` for integrity verification. Set `GITHUB_TOKEN` for higher GitHub API rate limits. Release downloads now require checksum verification before replace. On Windows the new binary is written as `ncc-orchestrator.new.exe`; replace the old exe and run again. Release maintainers: see [docs/RELEASE_CHECKSUMS.md](docs/RELEASE_CHECKSUMS.md) for checksum publishing guidance.
 
 ### Exit codes
 
@@ -329,7 +348,7 @@ Run `ncc-orchestrator env-info` to print all possible env vars and their current
 ### Run summary and discover-clusters
 - After each run, **`outputfiles/run-summary.json`** and **`outputfiles/ncc-run-record.json`** are written (machine-readable run result; the latter includes `schema_version` and orchestrator version).
 - Additional automation artifacts are written to `outputfiles/`: **`checks-snapshot.json`**, **`drilldown-diff.json`**, **`flaky-checks.json`**, **`slo-dashboard.json`**, and **`policy-gates.txt`** (when policy violations occur).
-- **`ncc-orchestrator discover-clusters`** — Lists clusters from **Prism Central**. **Default:** `GET /api/clustermgmt/{ver}/config/clusters` where `{ver}` is **`nutanix-v4-api-version`** (default **`v4.2`**; set e.g. `v4.0.a1` to match your environment), with `$page` / `$limit` pagination; addresses are taken from `network.externalAddress` (IPv4, then IPv6), then node CVM IP, then `name`. Use **`--discover-api-version v3`** for legacy `POST /api/nutanix/v3/clusters/list`. If v4 returns **404**, the command **falls back to v3** automatically. Requires `--prism-central-url` (or config). Use **`--format table`** for columns (NAME, EXT_ID, ADDRESS, API) or **`--format json`** for automation. Example:
+- **`ncc-orchestrator discover-clusters`** — Lists clusters from **Prism Central**. **Default:** `GET /api/clustermgmt/{ver}/config/clusters` where `{ver}` is **`nutanix-v4-api-version`** (default **`v4.2`**; set e.g. `v4.0.a1` to match your environment), with `$page` / `$limit` pagination; addresses are taken from `network.externalAddress` (IPv4, then IPv6), then node CVM IP, then `name`. Use **`--discover-api-version v3`** for legacy `POST /api/nutanix/v3/clusters/list`. If v4 returns **404**, the command **falls back to v3** automatically. Requires `--prism-central-url` (or config). `https://` is required by default; `http://` endpoints are only allowed when `--insecure-skip-verify=true`. Use **`--format table`** for columns (NAME, EXT_ID, ADDRESS, API) or **`--format json`** for automation. Example:
   `ncc-orchestrator --config config.yaml discover-clusters --output clusters.txt`
   `ncc-orchestrator discover-clusters --prism-central-url https://pc:9440 --format table`
   then set `clusters-file: clusters.txt` in config for the main run. Env: **`NCC_DISCOVER_API_VERSION`** (`v4` or `v3`).
@@ -489,20 +508,28 @@ export NCC_WEBHOOK_URL="https://webhook.site/your-unique-id"
 
 Check the webhook URL page for the POST. Use `--log-level debug` if you need more detail in logs.
 
+## Migration (v1 -> v2)
+
+If you are moving from v1 workflows to the v2 full stack, use:
+
+- **Migration guide:** [docs/MIGRATION_v1_TO_v2.md](docs/MIGRATION_v1_TO_v2.md)
+- **Kubernetes guide:** [k8s/README.md](k8s/README.md)
+
+This includes cutover checklist, verification steps, and rollback guidance.
+
 ## Kubernetes deployment
 
-Run the NCC Orchestrator on Kubernetes with a **CronJob** (e.g. every 4 hours), a shared **PVC** (e.g. NFS RWX) for logs and reports, and a **Deployment** (Nginx) serving the HTML report. Optional LoadBalancer Service (e.g. MetalLB) for external access.
+Run the NCC Orchestrator on Kubernetes using **`k8s/`** as the single entrypoint (runner + API + UI + frontend serving).
 
-- **Manifests**: [`k8s/`](k8s/) — namespace, ConfigMap, Secret, PVC, CronJob, Deployment, Service. Apply everything at once with **`kubectl apply -k k8s/`** (see [`k8s/kustomization.yaml`](k8s/kustomization.yaml)). **One-off / replay**: [`k8s/job-debug.yaml`](k8s/job-debug.yaml) runs with `--replay` for debugging or regenerating from existing logs.
-- **Helm (CronJob only):** [`helm/ncc-orchestrator`](helm/ncc-orchestrator/README.md) — templated image tag and schedule; pair with ConfigMap/Secret/PVC from `k8s/` or your own.
-- **Full guide**: **[k8s/README.md](k8s/README.md)** — architecture, prerequisites (e.g. StorageClass, MetalLB), deployment steps, troubleshooting (permissions, TLS, logs, getting job logs).
+- **Manifests (full stack)**: [`k8s/`](k8s/) — apply with **`kubectl apply -k k8s/`**.
+- **Helm (CronJob only):** [`helm/ncc-orchestrator`](helm/ncc-orchestrator/README.md) — templated image tag and schedule.
+- **Full guide**: **[k8s/README.md](k8s/README.md)** — detailed architecture, deployment, runbook, troubleshooting, and rollback.
+- **Network controls**: default-deny ingress + scoped allow policies for UI/API are included in `k8s/`.
 
 **Quick start (set config and secret first):**
 
 ```bash
-kubectl apply -f k8s/namespace.yaml -f k8s/configmap.yaml -f k8s/nginx-configmap.yaml
-kubectl create secret generic ncc-orchestrator-credentials -n ncc-orchestrator --from-literal=password=YOUR_PRISM_PASSWORD
-kubectl apply -f k8s/pvc.yaml -f k8s/cronjob.yaml -f k8s/deployment.yaml -f k8s/service.yaml
+kubectl apply -k k8s/
 ```
 
 Report UI: `http://<LoadBalancer-EXTERNAL-IP>`. To **uninstall** (delete namespace and all resources): see [Scripts](#scripts) below.

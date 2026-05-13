@@ -205,8 +205,14 @@ Check/update local binary from GitHub or custom binary URLs:
 ncc-orchestrator update
 ncc-orchestrator update --check
 ncc-orchestrator update --check --binary-url https://artifacts.example.com/ncc-orchestrator-linux-amd64 --target-version 1.2.4
+ncc-orchestrator update --binary-url https://artifacts.example.com/ncc-orchestrator-linux-amd64 --binary-sha256 <sha256-hex>
 ncc-orchestrator update --allow-major-upgrade
 ```
+
+Notes:
+
+- `--binary-sha256` is required for `--binary-url` install operations.
+- GitHub release updates verify downloaded binaries against release checksum assets before replace.
 
 ### 2.19 Test dashboard generation (no API calls)
 
@@ -215,6 +221,16 @@ Generate synthetic aggregate dashboard and artifacts:
 ```bash
 ncc-orchestrator gen-test-agg --clusters 25 --output-dir dist/test/outputfiles
 ```
+
+### 2.20 Preflight check output (automation-friendly)
+
+Run full preflight with structured JSON output:
+
+```bash
+ncc-orchestrator preflight-check --config config.yaml --format json
+```
+
+Each non-pass check includes a machine-readable `remediation_code` field so UI/automation can map failures to fix playbooks.
 
 ## 3) Configuration precedence
 
@@ -361,6 +377,7 @@ ncc-orchestrator [flags]
 | `--secrets-file` | string | Path to YAML/JSON key-value map | none | Secret map source when `--secrets-provider=file` is selected. |
 | `--secrets-provider` | string | `env`, `file` | none | Enables `secret://` value resolution from process environment or file-backed key map. |
 | `--severity-filter` | string | CSV subset of `FAIL,WARN,ERR,INFO` | empty (all) | Limits output rows/artifacts to selected severities. Useful for alert-focused reports but can hide context. |
+| `--skip-preflight-check` | bool | `true`, `false` | `false` | Skips default preflight execution in run path. Keep `false` for production safety. |
 | `--exclude-alert-titles` | string | CSV list of alert titles | empty | Excludes matching alert titles from generated outputs/notifications. |
 | `--exclude-alert-titles-file` | string | Path to line-delimited title file | empty | Loads exclusion titles from file (`#` comments and blank lines are ignored). |
 | `--exclude-alert-match-mode` | string | `exact`, `contains`, `regex` | `exact` | Controls how exclusion titles are matched against alert names. |
@@ -394,7 +411,7 @@ ncc-orchestrator discover-clusters [flags]
 |---|---|---|---|---|
 | `--discover-api-version` | string | `v4`, `v3` | `v4` | Selects discovery endpoint family. `v4` uses clustermgmt GET with pagination; `v3` uses legacy list API. |
 | `--format` | string | `lines`, `table`, `json` | `lines` | Output renderer: `lines` for direct `clusters-file` usage, `table` for human review, `json` for automation pipelines. |
-| `--insecure-skip-verify` | bool | `true`, `false` | `false` | Disables TLS verification for Prism Central API calls. |
+| `--insecure-skip-verify` | bool | `true`, `false` | `false` | Disables TLS verification for Prism Central API calls. Also required if `--prism-central-url` uses `http://` instead of `https://`. |
 | `--output` | string | File path | none | Writes discovered addresses to file (one per line), useful to bootstrap `clusters-file`. |
 | `--password` | string | Plain string or env-injected value | prompt/none | Prism Central password for discovery operation only. |
 | `--prism-central-url` | string | URL such as `https://pc:9440` | none | Required Prism Central endpoint for cluster list queries. |
@@ -431,6 +448,7 @@ By default, updates remain in the current major track (for example `v1.x` -> lat
 | `--allow-major-upgrade` | bool | `true`, `false` | `false` | Explicitly permits major-version upgrades. Required for `v1.x` -> `v2.x` transitions. |
 | `--repo` | string | `owner/repo` or GitHub repo URL | `lTSPV75BRO/Nutanix-ncc-orchestrator` | GitHub source repo used for release discovery/check/update. |
 | `--binary-url` | string | Direct binary URL | empty | Use a non-GitHub/custom artifact URL for check/update operations. |
+| `--binary-sha256` | string | 64-char SHA256 hex | empty | Required when installing via `--binary-url` (ignored for `--check`). Used to enforce artifact integrity. |
 | `--target-version` | string | Semver-like value | empty | Target version hint, recommended with `--binary-url` for track comparisons/safety checks. |
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
 
@@ -505,6 +523,35 @@ ncc-orchestrator validate-secrets --config config.yaml
 |---|---|---|---|---|
 | `--config` | string | Path to YAML/JSON config | none | Validates `secret://` references and secret-source accessibility (`env`/`file`) without running NCC checks. |
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
+
+### 6.11 `preflight-check`
+
+```bash
+ncc-orchestrator preflight-check --config config.yaml --format json
+```
+
+| Flag | Type | Possible values | Default | Detailed explanation |
+|---|---|---|---|---|
+| `--config` | string | Path to YAML/JSON config | none | Runs preflight checks against this config. If omitted, report includes a warning that file-based checks are skipped. |
+| `--format` | string | `json` | `json` | Structured output for UI/automation. Includes `checks[]`, `actionableHints[]`, and machine-readable `remediation_code` on non-pass checks. |
+| `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
+
+### 6.12 v2 service runtime flags (API/UI)
+
+These are runtime flags for v2 services (`cmd/ncc-api-server`, `cmd/ncc-ui-server`), commonly used in production deployments:
+
+| Service | Flag | Default | Purpose |
+|---|---|---|---|
+| `ncc-api-server` | `--rate-limit-per-minute` | `60` | Per-client rate limit for sensitive mutation/auth routes (`0` disables). |
+| `ncc-api-server` | `--auth-mode` | `token` | API auth mode: `token`, `session`, `hybrid`. |
+| `ncc-api-server` | `--token-file-path` | `.ncc-api-token` | Token file used by UI proxy and local tooling. |
+| `ncc-ui-server` | `--allowed-origins` | `http://localhost:8080` | Browser origin allowlist for proxied API calls. |
+| `ncc-ui-server` | `--api-auth-mode` | `token` | Backend auth forwarding mode (`token` or `session`). |
+
+For complete v2 deployment examples, see:
+- `README.md` (Run backend / Run frontend)
+- `docs/V2_BACKEND_FRONTEND_MVP.md`
+- `k8s/README.md`
 
 ## 7) Full config example
 
