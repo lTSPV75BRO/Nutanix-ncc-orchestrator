@@ -12,6 +12,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -194,7 +195,31 @@ func main() {
 		}
 		proxy.ServeHTTP(w, r)
 	}))
-	mux.Handle("/", http.FileServer(http.Dir(dir)))
+	staticFS := http.Dir(dir)
+	fileServer := http.FileServer(staticFS)
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		cleanPath := pathpkg.Clean("/" + r.URL.Path)
+		if f, err := staticFS.Open(cleanPath); err == nil {
+			if st, statErr := f.Stat(); statErr == nil && !st.IsDir() {
+				_ = f.Close()
+				fileServer.ServeHTTP(w, r)
+				return
+			}
+			_ = f.Close()
+		}
+		// Keep missing asset requests as 404s; only app routes fall back to index.html.
+		if filepath.Ext(pathpkg.Base(cleanPath)) != "" {
+			http.NotFound(w, r)
+			return
+		}
+		clone := r.Clone(r.Context())
+		clone.URL.Path = "/"
+		fileServer.ServeHTTP(w, clone)
+	}))
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		applyBaseHeaders(w, r.TLS != nil)
 		mux.ServeHTTP(w, r)

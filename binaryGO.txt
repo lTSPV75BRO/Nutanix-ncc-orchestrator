@@ -1,23 +1,19 @@
-# Run from repo root. Set release version once:
+# Run from repo root once per release (edit VERSION):
+if [ -n "${ZSH_VERSION:-}" ]; then setopt nonomatch; fi
 VERSION=2.0.0 && BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ') && GO_VER=$(go version | awk '{print $3}') && mkdir -p dist
 
-# Build CLI binaries (all targets):
-VERSION=2.0.0 && BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ') && GO_VER=$(go version | awk '{print $3}') && mkdir -p dist && for goos in linux darwin windows; do for goarch in amd64 arm64; do out="dist/ncc-orchestrator-${goos}-${goarch}"; [ "$goos" = "windows" ] && out="${out}.exe"; GOOS=$goos GOARCH=$goarch go build -ldflags "-w -s -X main.Version=${VERSION} -X main.BuildDate=${BUILD_DATE} -X main.Stream=Release -X main.GoVersion=${GO_VER}" -o "$out" . || exit 1; done; done
+# Build CLI/API/UI binaries for linux/darwin/windows amd64+arm64:
+VERSION=2.0.0 && BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ') && GO_VER=$(go version | awk '{print $3}') && mkdir -p dist && for goos in linux darwin windows; do for goarch in amd64 arm64; do ext=""; [ "$goos" = "windows" ] && ext=".exe"; CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags "-w -s -X main.Version=${VERSION} -X main.BuildDate=${BUILD_DATE} -X main.Stream=Release -X main.GoVersion=${GO_VER}" -o "dist/ncc-orchestrator-${goos}-${goarch}${ext}" . || exit 1; CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags "-w -s -X main.Version=${VERSION} -X main.BuildDate=${BUILD_DATE} -X main.Stream=Release -X main.GoVersion=${GO_VER}" -o "dist/ncc-api-server-${goos}-${goarch}${ext}" ./cmd/ncc-api-server || exit 1; CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags "-w -s -X main.Version=${VERSION} -X main.BuildDate=${BUILD_DATE} -X main.Stream=Release -X main.GoVersion=${GO_VER}" -o "dist/ncc-ui-server-${goos}-${goarch}${ext}" ./cmd/ncc-ui-server || exit 1; done; done
 
-# Build API server binaries (all targets):
-VERSION=2.0.0 && BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ') && GO_VER=$(go version | awk '{print $3}') && mkdir -p dist && for goos in linux darwin windows; do for goarch in amd64 arm64; do out="dist/ncc-api-server-${goos}-${goarch}"; [ "$goos" = "windows" ] && out="${out}.exe"; GOOS=$goos GOARCH=$goarch go build -ldflags "-w -s -X main.Version=${VERSION} -X main.BuildDate=${BUILD_DATE} -X main.Stream=Release -X main.GoVersion=${GO_VER}" -o "$out" ./cmd/ncc-api-server || exit 1; done; done
-
-# Build UI server binaries (all targets):
-VERSION=2.0.0 && BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ') && GO_VER=$(go version | awk '{print $3}') && mkdir -p dist && for goos in linux darwin windows; do for goarch in amd64 arm64; do out="dist/ncc-ui-server-${goos}-${goarch}"; [ "$goos" = "windows" ] && out="${out}.exe"; GOOS=$goos GOARCH=$goarch go build -ldflags "-w -s -X main.Version=${VERSION} -X main.BuildDate=${BUILD_DATE} -X main.Stream=Release -X main.GoVersion=${GO_VER}" -o "$out" ./cmd/ncc-ui-server || exit 1; done; done
-
-# Build frontend dist once:
+# Build frontend bundle and copy to dist/frontend-dist:
 (cd frontend && npm ci && npm run build) && rm -rf dist/frontend-dist && cp -R frontend/dist dist/frontend-dist
 
-# Create v2 stack bundles (tar.gz for linux/darwin, zip for windows):
-rm -rf dist/.stack && mkdir -p dist/.stack && for goos in linux darwin windows; do for goarch in amd64 arm64; do root="dist/.stack/${goos}-${goarch}"; rm -rf "$root"; mkdir -p "$root/bin"; ext=""; [ "$goos" = "windows" ] && ext=".exe"; cp "dist/ncc-api-server-${goos}-${goarch}${ext}" "$root/bin/"; cp "dist/ncc-ui-server-${goos}-${goarch}${ext}" "$root/bin/"; cp -R dist/frontend-dist "$root/frontend-dist"; if [ "$goos" = "windows" ]; then (cd "$root" && zip -qr "../../../ncc-v2-stack-${goos}-${goarch}.zip" .); else (cd "$root" && tar -czf "../../../ncc-v2-stack-${goos}-${goarch}.tar.gz" .); fi; done; done
+# Create v2 stack bundles (linux/darwin tar.gz, windows zip) with layout:
+#   bin/ncc-api-server[.exe], bin/ncc-ui-server[.exe], frontend-dist/
+rm -rf dist/.stack && mkdir -p dist/.stack && for goos in linux darwin windows; do for goarch in amd64 arm64; do root="dist/.stack/${goos}-${goarch}"; rm -rf "$root"; mkdir -p "$root/bin"; ext=""; [ "$goos" = "windows" ] && ext=".exe"; cp "dist/ncc-api-server-${goos}-${goarch}${ext}" "$root/bin/"; cp "dist/ncc-ui-server-${goos}-${goarch}${ext}" "$root/bin/"; cp -R dist/frontend-dist "$root/frontend-dist"; if [ "$goos" = "windows" ]; then (cd "$root" && zip -qr "../../ncc-v2-stack-${goos}-${goarch}.zip" .); else (cd "$root" && tar -czf "../../ncc-v2-stack-${goos}-${goarch}.tar.gz" .); fi; done; done
 
-# Generate checksums for CLI binaries (GNU):
-(cd dist && sha256sum ncc-orchestrator-* > checksums.txt)
+# Generate checksums for all publishable release assets (macOS/BSD + GNU fallback):
+(cd dist && : > checksums.txt && for f in ncc-orchestrator-* ncc-api-server-* ncc-ui-server-* ncc-v2-stack-* example_config.yaml; do [ -e "$f" ] || continue; (shasum -a 256 "$f" 2>/dev/null || sha256sum "$f") >> checksums.txt; done)
 
-# Generate checksums for CLI binaries (macOS/BSD):
-(cd dist && shasum -a 256 ncc-orchestrator-* > checksums.txt)
+# Quick verification (should print 6 files):
+ls -1 dist/ncc-v2-stack-* 2>/dev/null || echo "No ncc-v2-stack archives found in dist/"

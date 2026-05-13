@@ -7660,6 +7660,7 @@ type v2StartOptions struct {
 	APIListen       string
 	UIListen        string
 	TokenFile       string
+	Detach          bool
 }
 
 func findAsset(rel githubRelease, pred func(name string) bool) (githubAsset, bool) {
@@ -7887,8 +7888,45 @@ func runV2Start(opts v2StartOptions) error {
 	}
 
 	apiCmd := exec.Command(apiBin, apiArgs...)
-	apiCmd.Stdout = os.Stdout
-	apiCmd.Stderr = os.Stderr
+	uiCmd := exec.Command(uiBin, uiArgs...)
+	if opts.Detach {
+		runDir := filepath.Join(installDir, "run")
+		logDir := filepath.Join(installDir, "logs")
+		if err := os.MkdirAll(runDir, 0755); err != nil {
+			return fmt.Errorf("prepare detached run dir: %w", err)
+		}
+		if err := os.MkdirAll(logDir, 0755); err != nil {
+			return fmt.Errorf("prepare detached log dir: %w", err)
+		}
+		apiLogPath := filepath.Join(logDir, "v2-api.log")
+		uiLogPath := filepath.Join(logDir, "v2-ui.log")
+		apiLogFile, err := os.OpenFile(apiLogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			return fmt.Errorf("open api detached log: %w", err)
+		}
+		defer apiLogFile.Close()
+		uiLogFile, err := os.OpenFile(uiLogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			return fmt.Errorf("open ui detached log: %w", err)
+		}
+		defer uiLogFile.Close()
+		devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+		if err != nil {
+			return fmt.Errorf("open devnull: %w", err)
+		}
+		defer devNull.Close()
+		apiCmd.Stdin = devNull
+		apiCmd.Stdout = apiLogFile
+		apiCmd.Stderr = apiLogFile
+		uiCmd.Stdin = devNull
+		uiCmd.Stdout = uiLogFile
+		uiCmd.Stderr = uiLogFile
+	} else {
+		apiCmd.Stdout = os.Stdout
+		apiCmd.Stderr = os.Stderr
+		uiCmd.Stdout = os.Stdout
+		uiCmd.Stderr = os.Stderr
+	}
 	if err := apiCmd.Start(); err != nil {
 		return fmt.Errorf("start api server: %w", err)
 	}
@@ -7897,9 +7935,6 @@ func runV2Start(opts v2StartOptions) error {
 		waitForFile(opts.TokenFile, 5*time.Second)
 	}
 
-	uiCmd := exec.Command(uiBin, uiArgs...)
-	uiCmd.Stdout = os.Stdout
-	uiCmd.Stderr = os.Stderr
 	if err := uiCmd.Start(); err != nil {
 		signalProcessStop(apiCmd)
 		return fmt.Errorf("start ui server: %w", err)
@@ -7915,6 +7950,27 @@ func runV2Start(opts v2StartOptions) error {
 	fmt.Fprintf(os.Stderr, "Orchestrator binary for API runs: %s\n", opts.OrchestratorBin)
 	fmt.Fprintf(os.Stderr, "API: %s\n", backendURL)
 	fmt.Fprintf(os.Stderr, "UI : %s\n", uiOrigin)
+	if opts.Detach {
+		runDir := filepath.Join(installDir, "run")
+		apiPIDPath := filepath.Join(runDir, "v2-api.pid")
+		uiPIDPath := filepath.Join(runDir, "v2-ui.pid")
+		if err := os.WriteFile(apiPIDPath, []byte(fmt.Sprintf("%d\n", apiCmd.Process.Pid)), 0644); err != nil {
+			signalProcessStop(apiCmd)
+			signalProcessStop(uiCmd)
+			return fmt.Errorf("write api pid file: %w", err)
+		}
+		if err := os.WriteFile(uiPIDPath, []byte(fmt.Sprintf("%d\n", uiCmd.Process.Pid)), 0644); err != nil {
+			signalProcessStop(apiCmd)
+			signalProcessStop(uiCmd)
+			return fmt.Errorf("write ui pid file: %w", err)
+		}
+		_ = apiCmd.Process.Release()
+		_ = uiCmd.Process.Release()
+		fmt.Fprintf(os.Stderr, "Detached mode enabled.\n")
+		fmt.Fprintf(os.Stderr, "PID files: %s, %s\n", apiPIDPath, uiPIDPath)
+		fmt.Fprintf(os.Stderr, "Logs: %s, %s\n", filepath.Join(installDir, "logs", "v2-api.log"), filepath.Join(installDir, "logs", "v2-ui.log"))
+		return nil
+	}
 	fmt.Fprintln(os.Stderr, "Press Ctrl+C to stop both services.")
 
 	type procExit struct {
@@ -11295,7 +11351,9 @@ Then it writes startup scripts under --install-dir.`,
 		Short: "Start v2 API and UI services together",
 		Long: `Starts both ncc-api-server and ncc-ui-server from bootstrapped binaries.
 
-Run "ncc-orchestrator v2-bootstrap" once before using this command.`,
+Run "ncc-orchestrator v2-bootstrap" once before using this command.
+
+Use --detach to run services in the background.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			installDir, _ := cmd.Flags().GetString("install-dir")
 			configPath, _ := cmd.Flags().GetString("config-path")
@@ -11305,6 +11363,7 @@ Run "ncc-orchestrator v2-bootstrap" once before using this command.`,
 			apiListen, _ := cmd.Flags().GetString("api-listen")
 			uiListen, _ := cmd.Flags().GetString("ui-listen")
 			tokenFile, _ := cmd.Flags().GetString("token-file")
+			detach, _ := cmd.Flags().GetBool("detach")
 			return runV2Start(v2StartOptions{
 				InstallDir:      installDir,
 				ConfigPath:      configPath,
@@ -11314,6 +11373,7 @@ Run "ncc-orchestrator v2-bootstrap" once before using this command.`,
 				APIListen:       apiListen,
 				UIListen:        uiListen,
 				TokenFile:       tokenFile,
+				Detach:          detach,
 			})
 		},
 	}
@@ -11325,6 +11385,7 @@ Run "ncc-orchestrator v2-bootstrap" once before using this command.`,
 	v2StartCmd.Flags().String("api-listen", ":8081", "Listen address for API server")
 	v2StartCmd.Flags().String("ui-listen", ":8080", "Listen address for UI server")
 	v2StartCmd.Flags().String("token-file", ".ncc-api-token", "Token file path used by UI/API servers")
+	v2StartCmd.Flags().Bool("detach", false, "Run API and UI in background; writes PID/log files under <install-dir>/run and <install-dir>/logs")
 	cmd.AddCommand(v2StartCmd)
 
 	genTestAggCmd := &cobra.Command{
