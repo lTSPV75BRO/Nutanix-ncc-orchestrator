@@ -117,12 +117,14 @@ func main() {
 
 	proxy := httputil.NewSingleHostReverseProxy(backend)
 	proxy.Transport = transport
+	uiCSP := "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'"
+	apiCSP := "default-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"
 	applyBaseHeaders := func(w http.ResponseWriter, isTLS bool) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; object-src 'none'")
+		w.Header().Set("Content-Security-Policy", uiCSP)
 		if isTLS {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
@@ -133,7 +135,7 @@ func main() {
 		resp.Header.Set("X-Frame-Options", "DENY")
 		resp.Header.Set("Referrer-Policy", "no-referrer")
 		resp.Header.Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
-		resp.Header.Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; object-src 'none'")
+		resp.Header.Set("Content-Security-Policy", apiCSP)
 		return nil
 	}
 	origDirector := proxy.Director

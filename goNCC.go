@@ -7687,6 +7687,110 @@ func binaryPathInInstallDir(installDir, base string) string {
 	return path
 }
 
+func existingFile(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && !st.IsDir()
+}
+
+func existingDir(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.IsDir()
+}
+
+func v2BinaryNameCandidates(base string) []string {
+	names := []string{
+		base,
+		fmt.Sprintf("%s-%s-%s", base, runtime.GOOS, runtime.GOARCH),
+	}
+	if runtime.GOOS == "windows" {
+		withExe := make([]string, 0, len(names)*2)
+		for _, n := range names {
+			withExe = append(withExe, n, n+".exe")
+		}
+		return withExe
+	}
+	return names
+}
+
+func firstExistingBinary(searchDirs []string, base string) string {
+	candidates := v2BinaryNameCandidates(base)
+	for _, dir := range searchDirs {
+		d := strings.TrimSpace(dir)
+		if d == "" {
+			continue
+		}
+		for _, name := range candidates {
+			p := filepath.Join(d, name)
+			if existingFile(p) {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
+func resolveV2RuntimeLayout(installDir string) (string, string, string, string) {
+	installDir = strings.TrimSpace(installDir)
+	if installDir == "" {
+		installDir = ".ncc-v2"
+	}
+	cwd, _ := os.Getwd()
+	exeDir := ""
+	if exe, err := os.Executable(); err == nil {
+		exeDir = filepath.Dir(exe)
+	}
+
+	// Preferred layout from v2-bootstrap: <install>/bin/* + <install>/frontend-dist
+	apiBoot := binaryPathInInstallDir(installDir, "ncc-api-server")
+	uiBoot := binaryPathInInstallDir(installDir, "ncc-ui-server")
+	frontBoot := filepath.Join(installDir, "frontend-dist")
+	if existingFile(apiBoot) && existingFile(uiBoot) && existingDir(frontBoot) {
+		return apiBoot, uiBoot, frontBoot, "install-dir"
+	}
+
+	// Fallback for release asset folders (flat binaries + frontend-dist).
+	searchDirs := []string{installDir, cwd, exeDir}
+	apiFlat := firstExistingBinary(searchDirs, "ncc-api-server")
+	uiFlat := firstExistingBinary(searchDirs, "ncc-ui-server")
+	if apiFlat != "" && uiFlat != "" {
+		for _, d := range []string{
+			filepath.Join(installDir, "frontend-dist"),
+			filepath.Join(cwd, "frontend-dist"),
+			filepath.Join(exeDir, "frontend-dist"),
+			filepath.Join(cwd, "frontend", "dist"),
+			filepath.Join(exeDir, "frontend", "dist"),
+		} {
+			if existingDir(d) {
+				return apiFlat, uiFlat, d, "local-release-assets"
+			}
+		}
+	}
+	return "", "", "", ""
+}
+
+func resolveV2OrchestratorBin(preferred string) string {
+	clean := strings.TrimSpace(preferred)
+	if clean != "" && existingFile(clean) {
+		return clean
+	}
+	cwd, _ := os.Getwd()
+	exePath, _ := os.Executable()
+	exeDir := filepath.Dir(exePath)
+	for _, p := range []string{
+		clean,
+		filepath.Join(cwd, "ncc-orchestrator"),
+		filepath.Join(cwd, fmt.Sprintf("ncc-orchestrator-%s-%s", runtime.GOOS, runtime.GOARCH)),
+		filepath.Join(exeDir, "ncc-orchestrator"),
+		filepath.Join(exeDir, fmt.Sprintf("ncc-orchestrator-%s-%s", runtime.GOOS, runtime.GOARCH)),
+		exePath,
+	} {
+		if strings.TrimSpace(p) != "" && existingFile(p) {
+			return p
+		}
+	}
+	return clean
+}
+
 func localHTTPURLFromListen(listenAddr, defaultPort string) string {
 	addr := strings.TrimSpace(listenAddr)
 	if addr == "" {
@@ -7729,17 +7833,14 @@ func runV2Start(opts v2StartOptions) error {
 	if installDir == "" {
 		installDir = ".ncc-v2"
 	}
-	apiBin := binaryPathInInstallDir(installDir, "ncc-api-server")
-	uiBin := binaryPathInInstallDir(installDir, "ncc-ui-server")
-	frontendDir := filepath.Join(installDir, "frontend-dist")
-	if _, err := os.Stat(apiBin); err != nil {
-		return fmt.Errorf("missing API binary %s (run `ncc-orchestrator v2-bootstrap` first)", apiBin)
-	}
-	if _, err := os.Stat(uiBin); err != nil {
-		return fmt.Errorf("missing UI binary %s (run `ncc-orchestrator v2-bootstrap` first)", uiBin)
-	}
-	if st, err := os.Stat(frontendDir); err != nil || !st.IsDir() {
-		return fmt.Errorf("missing frontend bundle directory %s (run `ncc-orchestrator v2-bootstrap` first)", frontendDir)
+	apiBin, uiBin, frontendDir, layout := resolveV2RuntimeLayout(installDir)
+	if apiBin == "" || uiBin == "" || frontendDir == "" {
+		return fmt.Errorf("could not locate v2 runtime assets. expected either %s + %s + %s (from v2-bootstrap), or local release assets like ncc-api-server-%s-%s, ncc-ui-server-%s-%s, and frontend-dist/ (run `ncc-orchestrator v2-bootstrap` first)",
+			binaryPathInInstallDir(installDir, "ncc-api-server"),
+			binaryPathInInstallDir(installDir, "ncc-ui-server"),
+			filepath.Join(installDir, "frontend-dist"),
+			runtime.GOOS, runtime.GOARCH, runtime.GOOS, runtime.GOARCH,
+		)
 	}
 
 	if strings.TrimSpace(opts.ConfigPath) == "" {
@@ -7754,6 +7855,7 @@ func runV2Start(opts v2StartOptions) error {
 	if strings.TrimSpace(opts.OrchestratorBin) == "" {
 		opts.OrchestratorBin = "./ncc-orchestrator"
 	}
+	opts.OrchestratorBin = resolveV2OrchestratorBin(opts.OrchestratorBin)
 	if strings.TrimSpace(opts.APIListen) == "" {
 		opts.APIListen = ":8081"
 	}
@@ -7804,6 +7906,13 @@ func runV2Start(opts v2StartOptions) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "v2 services started (api pid=%d, ui pid=%d)\n", apiCmd.Process.Pid, uiCmd.Process.Pid)
+	if strings.TrimSpace(layout) != "" {
+		fmt.Fprintf(os.Stderr, "Asset layout: %s\n", layout)
+	}
+	fmt.Fprintf(os.Stderr, "API binary: %s\n", apiBin)
+	fmt.Fprintf(os.Stderr, "UI binary : %s\n", uiBin)
+	fmt.Fprintf(os.Stderr, "Frontend  : %s\n", frontendDir)
+	fmt.Fprintf(os.Stderr, "Orchestrator binary for API runs: %s\n", opts.OrchestratorBin)
 	fmt.Fprintf(os.Stderr, "API: %s\n", backendURL)
 	fmt.Fprintf(os.Stderr, "UI : %s\n", uiOrigin)
 	fmt.Fprintln(os.Stderr, "Press Ctrl+C to stop both services.")
@@ -9933,7 +10042,10 @@ func extractClusterAddressV3(entity map[string]interface{}) string {
 }
 
 func versionInfoString() string {
-	return fmt.Sprintf("Version: %s\nStream: %s\nBuild Date: %s\nGo Version: %s", Version, Stream, BuildDate, GoVersion)
+	return fmt.Sprintf(
+		"Version: %s\nStream: %s\nBuild Date: %s\nGo Version: %s\nOS: %s\nArch: %s",
+		Version, Stream, BuildDate, GoVersion, runtime.GOOS, runtime.GOARCH,
+	)
 }
 
 func printEnvInfo() {
