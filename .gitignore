@@ -25,3 +25,7 @@ promfiles/
 /ncc-orchestrator
 /ncc-orchestrator.exe
 ncc-mcp-server
+
+# Frontend dependencies/cache
+frontend/node_modules/
+frontend/*.tsbuildinfo
