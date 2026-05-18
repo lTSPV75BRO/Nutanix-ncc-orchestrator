@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -65,5 +66,54 @@ func TestSessionTokenRoundTrip(t *testing.T) {
 	}
 	if err := s.verifySessionToken(tok, "10.1.1.1"); err == nil {
 		t.Fatal("expected client IP mismatch to fail")
+	}
+}
+
+func TestFixedWindowRateLimiterEvictsExpiredBuckets(t *testing.T) {
+	l := newFixedWindowRateLimiter(1, time.Second)
+	base := time.Unix(100, 0).UTC()
+
+	for i := 0; i < 100; i++ {
+		key := fmt.Sprintf("client-%d", i)
+		ok, _ := l.allow(key, base)
+		if !ok {
+			t.Fatalf("expected key %q to pass on first request", key)
+		}
+	}
+	if got := len(l.buckets); got != 100 {
+		t.Fatalf("expected 100 buckets before cleanup, got %d", got)
+	}
+
+	ok, _ := l.allow("fresh-client", base.Add(2*time.Second))
+	if !ok {
+		t.Fatal("expected fresh client to pass after window roll")
+	}
+	if got := len(l.buckets); got != 1 {
+		t.Fatalf("expected expired buckets to be evicted, got %d buckets", got)
+	}
+}
+
+func TestRateLimiterStatsCounters(t *testing.T) {
+	l := newFixedWindowRateLimiter(1, time.Minute)
+	now := time.Unix(200, 0).UTC()
+
+	ok, _ := l.allow("127.0.0.1", now)
+	if !ok {
+		t.Fatal("expected first request to be allowed")
+	}
+	ok, _ = l.allow("127.0.0.1", now.Add(1*time.Second))
+	if ok {
+		t.Fatal("expected second request to be blocked")
+	}
+
+	st := l.stats(now.Add(2 * time.Second))
+	if st.AllowedTotal != 1 {
+		t.Fatalf("expected allowed_total=1, got %d", st.AllowedTotal)
+	}
+	if st.BlockedTotal != 1 {
+		t.Fatalf("expected blocked_total=1, got %d", st.BlockedTotal)
+	}
+	if st.ActiveBuckets != 1 {
+		t.Fatalf("expected active_buckets=1, got %d", st.ActiveBuckets)
 	}
 }

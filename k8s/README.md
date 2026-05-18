@@ -9,6 +9,10 @@ kubectl apply -k k8s/
 
 The deployed namespace is **`ncc-orchestrator-v2`**.
 
+If you are starting from a fresh machine and need full source build steps first, read:
+
+- `docs/BUILD_FROM_SCRATCH.md`
+
 ---
 
 ## Table of contents
@@ -318,7 +322,7 @@ Use a temporary debug pod mounting `ncc-v2-data`, or expose via API/UI artifact 
 From repo root:
 
 ```bash
-./scripts/uninstall-ncc-orchestrator.sh --force
+./scripts/uninstall-v2-clean.sh --force
 ```
 
 Default namespace in uninstall script is `ncc-orchestrator-v2`.
@@ -326,5 +330,5 @@ Default namespace in uninstall script is `ncc-orchestrator-v2`.
 To preview only:
 
 ```bash
-./scripts/uninstall-ncc-orchestrator.sh --dry-run
+./scripts/uninstall-v2-clean.sh --dry-run
 ```

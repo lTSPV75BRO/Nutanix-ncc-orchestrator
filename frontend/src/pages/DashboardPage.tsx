@@ -1,6 +1,6 @@
-import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Card, Input, Select, Space, Tag, Typography } from "antd";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Alert, Button, Card, Input, Select, Space, Tag, Typography } from "antd";
 import { api } from "../api/client";
 import { InsightsCards } from "../features/report/InsightsCards";
 import { PolicyStatus } from "../features/report/PolicyStatus";
@@ -12,13 +12,44 @@ import { useLocalStorageState } from "../hooks/useLocalStorageState";
 type Severity = "FAIL" | "WARN" | "ERR" | "INFO";
 
 export function DashboardPage() {
+  const PREVIEW_LIMIT = 1500;
+  const queryClient = useQueryClient();
   const [filterText, setFilterText] = useLocalStorageState("dashboard.filterText", "");
   const [severityFilters, setSeverityFilters] = useLocalStorageState<Severity[]>("dashboard.severityFilters", []);
   const [compareMode, setCompareMode] = useLocalStorageState<"all" | "changed" | "flaky">("dashboard.compareMode", "all");
   const [selectedClusters, setSelectedClusters] = useLocalStorageState<string[]>("dashboard.selectedClusters", []);
-  const report = useQuery({ queryKey: ["report-data"], queryFn: api.reportData });
+  const [loadFullReport, setLoadFullReport] = useState(false);
 
-  const reportData = report.data ?? {
+  const previewReport = useQuery({
+    queryKey: ["report-data", "preview", PREVIEW_LIMIT],
+    queryFn: () => api.reportDataWithPagination({ limit: PREVIEW_LIMIT }),
+    staleTime: 30_000,
+  });
+
+  const fullReport = useQuery({
+    queryKey: ["report-data", "full"],
+    queryFn: () => api.reportData(),
+    enabled: loadFullReport,
+    staleTime: 30_000,
+  });
+
+  useEffect(() => {
+    if (!previewReport.data) return;
+    const hasMoreChecks = Boolean(previewReport.data.pagination?.checks_snapshot?.has_more);
+    const hasMoreAgg = Boolean(previewReport.data.pagination?.agg_rows?.has_more);
+    if (hasMoreChecks || hasMoreAgg) {
+      const timer = setTimeout(() => setLoadFullReport(true), 100);
+      return () => clearTimeout(timer);
+    }
+  }, [previewReport.data]);
+
+  useEffect(() => {
+    if (!fullReport.data) return;
+    // Release preview cache once full payload is ready.
+    queryClient.removeQueries({ queryKey: ["report-data", "preview", PREVIEW_LIMIT], exact: true });
+  }, [fullReport.data, queryClient]);
+
+  const reportData = fullReport.data ?? previewReport.data ?? {
     run_summary: {},
     checks_snapshot: [],
     drilldown_diff: {},
@@ -101,12 +132,16 @@ export function DashboardPage() {
         <Typography.Title level={4} className="section-title">
           Dashboard
         </Typography.Title>
-        <Input
-          addonBefore="Search / tokens"
-          value={filterText}
-          onChange={(e) => setFilterText(e.target.value)}
-          placeholder="Type to filter... tokens: sev:FAIL cluster:10.1 changed:true flaky:true"
-        />
+        <Space.Compact style={{ width: "100%" }}>
+          <Button disabled type="default">
+            Search / tokens
+          </Button>
+          <Input
+            value={filterText}
+            onChange={(e) => setFilterText(e.target.value)}
+            placeholder="Type to filter... tokens: sev:FAIL cluster:10.1 changed:true flaky:true"
+          />
+        </Space.Compact>
         <Space size={[8, 8]} wrap style={{ marginTop: 12, marginBottom: 8 }}>
           <Tag.CheckableTag checked={severityFilters.length === 0} onChange={(checked) => checked && setSeverityFilters([])}>
             ALL
@@ -142,6 +177,16 @@ export function DashboardPage() {
         </Typography.Text>
         <Typography.Text type="secondary">Severity filters: {severityFilters.length === 0 ? "ALL" : severityFilters.join(", ")}</Typography.Text>
       </Card>
+
+      {previewReport.data && !fullReport.data && loadFullReport && (
+        <Alert
+          type="info"
+          showIcon
+          title="Loading complete dataset in background"
+          description="A fast preview is shown first for responsiveness. Full report rows are being fetched."
+          style={{ marginBottom: 12 }}
+        />
+      )}
 
       <InsightsCards
         runSummary={reportData.run_summary}

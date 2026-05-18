@@ -13,7 +13,7 @@ export function PolicyStatus({ violations }: Props) {
       <Alert
         type={violations.length > 0 ? "error" : "success"}
         style={{ marginBottom: 8 }}
-        message={violations.length > 0 ? "FAILED" : "PASS/NOT_CONFIGURED"}
+        title={violations.length > 0 ? "FAILED" : "PASS/NOT_CONFIGURED"}
       />
       {violations.length > 0 ? (
         <List

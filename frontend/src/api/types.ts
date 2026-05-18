@@ -129,4 +129,14 @@ export type ReportData = {
   artifact_links?: Record<string, string>;
   report_meta?: Record<string, unknown>;
   ncc_logs?: Array<{ name: string; path: string }>;
+  pagination?: Record<
+    string,
+    {
+      total: number;
+      offset: number;
+      limit: number;
+      count: number;
+      has_more: boolean;
+    }
+  >;
 };

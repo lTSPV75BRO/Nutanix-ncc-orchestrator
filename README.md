@@ -2,9 +2,30 @@
 
 A CLI tool to run NCC (Nutanix Cluster Check) across multiple clusters in parallel, aggregate results, and generate HTML/CSV reports. Built in Go for efficiency and cross-platform support.
 
-**Contents:** [Features](#features) · [Installation](#installation) · [Usage](#usage) · [Configuration](#configuration) · [Policy Gates](#policy-gates) · [Kubernetes](#kubernetes-deployment) · [Scripts](#scripts) · [Building](#building-and-contributing)
+**Contents:** [Build From Scratch](#build-from-scratch) · [Features](#features) · [Installation](#installation) · [Usage](#usage) · [Configuration](#configuration) · [Policy Gates](#policy-gates) · [Kubernetes](#kubernetes-deployment) · [Scripts](#scripts) · [Building](#building-and-contributing)
 
 **Full reference:** [docs/FEATURES_AND_CONFIG_FLAGS.md](docs/FEATURES_AND_CONFIG_FLAGS.md) (all features, config keys, and CLI flags with examples)
+
+---
+
+## Build From Scratch
+
+If you want to build and run the full application from a clean machine (CLI + API + UI + frontend + Kubernetes), use:
+
+- **Canonical guide:** [docs/BUILD_FROM_SCRATCH.md](docs/BUILD_FROM_SCRATCH.md)
+- **Engineering handover architecture:** [docs/ARCHITECTURE_AND_HANDOVER.md](docs/ARCHITECTURE_AND_HANDOVER.md)
+
+It includes:
+
+- toolchain prerequisites
+- source builds for all binaries
+- frontend build/dev flow
+- local v2 stack bring-up
+- validation/tests
+- release packaging basics
+- Kubernetes deployment and verification
+
+For developer takeover, architecture and operational ownership boundaries are documented in `docs/ARCHITECTURE_AND_HANDOVER.md`.
 
 ---
 
@@ -250,6 +271,8 @@ Basic command:
 - `ncc-orchestrator --clusters "10.0.1.1,10.0.2.1" --username admin --password yourpassword`
 
 Full options: Run `ncc-orchestrator --help` for all flags and subcommands. To see current env values: `ncc-orchestrator env-info`. Run `ncc-orchestrator version` to print version, stream, build date, and Go version, then exit. Run `ncc-orchestrator update` to fetch and update binaries (or `ncc-orchestrator update --check` for check-only mode). By default, updates stay on the current major track (`v1.x` -> latest `v1.x`); use `--allow-major-upgrade` to move to `v2.x` after reviewing migration steps in [docs/V2_BACKEND_FRONTEND_MVP.md](docs/V2_BACKEND_FRONTEND_MVP.md). You can also check/use non-GitHub binaries with `--binary-url`; installs from direct URLs require `--binary-sha256` for integrity verification. Set `GITHUB_TOKEN` for higher GitHub API rate limits. Release downloads now require checksum verification before replace. On Windows the new binary is written as `ncc-orchestrator.new.exe`; replace the old exe and run again. Release maintainers: see [docs/RELEASE_CHECKSUMS.md](docs/RELEASE_CHECKSUMS.md) for checksum publishing guidance.
+
+For cleanup, use `ncc-orchestrator uninstall` to remove local NCC artifacts/runtime state/schedule entries (including v2 bootstrap binaries/scripts in `--install-dir`). Kubernetes uninstall remains script-only via `scripts/uninstall-v2-clean.sh`.
 
 ### Exit codes
 
@@ -540,15 +563,16 @@ Helper scripts (run from repo root; set `KUBECONFIG` if needed):
 
 | Script | Purpose |
 |--------|---------|
-| **[scripts/uninstall-ncc-orchestrator.sh](scripts/uninstall-ncc-orchestrator.sh)** | Delete the `ncc-orchestrator` namespace and everything in it. Use `--force` to skip confirmation, `--dry-run` to preview. After uninstall you can be asked to prune NCC images from worker nodes, or use `--prune-images` to do it without prompt (set `SSH_KEY` if needed). |
-| **[scripts/prune-ncc-images-workers.sh](scripts/prune-ncc-images-workers.sh)** | Remove NCC container images from worker nodes via SSH (e.g. to clear old image with same tag). Set `SSH_KEY` and optionally `NODE_IPS`; see script header. |
+| **[scripts/uninstall-v2-clean.sh](scripts/uninstall-v2-clean.sh)** | Canonical v2 uninstaller. Deletes v2 k8s resources and namespace, supports `--dry-run`, `--keep-pvc`, `--remove-local-state`, `--wait-timeout`, and optional `--prune-images`. |
+| **[scripts/uninstall-ncc-orchestrator.sh](scripts/uninstall-ncc-orchestrator.sh)** | Backward-compatible wrapper that delegates to `uninstall-v2-clean.sh`. Existing automation can keep using it. |
+| **[scripts/prune-ncc-images-workers.sh](scripts/prune-ncc-images-workers.sh)** | Removes NCC images from worker nodes via SSH. Supports `--dry-run`, `--node-ips`, `--ssh-user`, `--ssh-key`, and `--image-match`. |
 
 Example:
 
 ```bash
 export KUBECONFIG=~/kubecon/mycluster.conf
-./scripts/uninstall-ncc-orchestrator.sh --dry-run   # preview
-./scripts/uninstall-ncc-orchestrator.sh --force     # uninstall
+./scripts/uninstall-v2-clean.sh --dry-run   # preview
+./scripts/uninstall-v2-clean.sh --force     # uninstall
 ```
 
 ## Building and Contributing

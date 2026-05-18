@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-05
 
-This release finalizes the v2.0.0 production baseline for the Go orchestrator runtime and aligns release/version assets across docs, manifests, and packaging.
+This release finalizes the v2.0.0 production baseline for the full v2 stack (orchestrator runtime + API + UI + UI-integrated proxy) and aligns release/version assets across docs, manifests, and packaging.
 
 ## Highlights
 
@@ -17,12 +17,38 @@ This release finalizes the v2.0.0 production baseline for the Go orchestrator ru
 - **Frontend/API Explorer hardening**: sensitive request headers/body are no longer persisted in browser storage; external absolute URLs are blocked by default.
 - **Kubernetes network hardening**: added default-deny ingress NetworkPolicy plus scoped UI/API ingress policies.
 
+## Post-baseline updates (v2.0.0 line)
+
+The following operational enhancements were added after the initial v2.0.0 baseline and are included in current branch state:
+
+- **Beginner-first quickstart automation**:
+  - New `quickstart` flow for bare-minimum installs (binary-only environments).
+  - Supports guided setup, safe auto-fixes, and optional interactive prompts.
+  - Can detect missing v2 components and ask user permission before auto-download.
+- **Automation policy levels**:
+  - `--automation-level advisory|safe-fix|full-auto` added for run/quickstart workflows.
+  - `full-auto` now applies conservative runtime stability tuning (parallelism/timeouts/retry guardrails).
+- **Detached v2 self-healing**:
+  - `v2-start --self-heal` with restart-budget controls (`--self-heal-max-restarts`, `--self-heal-window`).
+  - `v2-stop` now accounts for supervisor PID files created by detached self-heal monitors.
+- **Prometheus export controls**:
+  - Added optional metrics toggle: `prom-enabled` / `--prom-enabled`.
+  - Prometheus directory checks/writes are skipped cleanly when disabled.
+- **Expanded `.prom` metric set** for richer dashboards/alerts:
+  - health/quality signals (`run_health_score`, problem ratio, failure/warn/error presence)
+  - payload/shape signals (`check_unique_total`, `check_duplicate_total`, detail byte metrics)
+  - per-severity ratio metric (`nutanix_ncc_check_severity_ratio`).
+- **Documentation overhaul for reproducible builds**:
+  - Added `docs/BUILD_FROM_SCRATCH.md` as canonical end-to-end setup/build/run/deploy guide.
+  - Expanded migration and contributor guidance to include validation gates, phased cutover, and rollback checks.
+  - Aligned architecture notes with current Kubernetes API runner-binary staging model.
+
 ## Scope note for v2.0.0
 
 This release line includes the orchestrator runtime plus the v2 API/UI and frontend components:
 
 - `cmd/ncc-api-server`
-- `cmd/ncc-ui-server`
+- `cmd/ncc-ui-server` (includes UI-layer API proxy routes under `/api/v1/*`)
 - `frontend`
 
 ## Validation snapshot (2026-05-05)

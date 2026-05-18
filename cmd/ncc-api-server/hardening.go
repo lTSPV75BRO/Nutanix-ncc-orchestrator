@@ -47,6 +47,10 @@ type fixedWindowRateLimiter struct {
 	limit   int
 	window  time.Duration
 	buckets map[string]rateLimitBucket
+	lastGC  time.Time
+	allowed uint64
+	blocked uint64
+	evicted uint64
 }
 
 type rateLimitBucket struct {
@@ -65,17 +69,64 @@ func newFixedWindowRateLimiter(limit int, window time.Duration) *fixedWindowRate
 func (l *fixedWindowRateLimiter) allow(key string, now time.Time) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.gcExpiredLocked(now)
 	b, ok := l.buckets[key]
 	if !ok || !now.Before(b.resetAt) {
 		l.buckets[key] = rateLimitBucket{count: 1, resetAt: now.Add(l.window)}
+		l.allowed++
 		return true, 0
 	}
 	if b.count >= l.limit {
+		l.blocked++
 		return false, b.resetAt.Sub(now)
 	}
 	b.count++
 	l.buckets[key] = b
+	l.allowed++
 	return true, 0
+}
+
+func (l *fixedWindowRateLimiter) gcExpiredLocked(now time.Time) {
+	if !l.lastGC.IsZero() && now.Sub(l.lastGC) < l.window {
+		return
+	}
+	evicted := uint64(0)
+	for k, b := range l.buckets {
+		if !now.Before(b.resetAt) {
+			delete(l.buckets, k)
+			evicted++
+		}
+	}
+	l.evicted += evicted
+	l.lastGC = now
+}
+
+type rateLimiterStats struct {
+	LimitPerWindow int    `json:"limit_per_window"`
+	WindowSeconds  int64  `json:"window_seconds"`
+	ActiveBuckets  int    `json:"active_buckets"`
+	AllowedTotal   uint64 `json:"allowed_total"`
+	BlockedTotal   uint64 `json:"blocked_total"`
+	EvictedTotal   uint64 `json:"evicted_total"`
+	LastGCAt       string `json:"last_gc_at,omitempty"`
+}
+
+func (l *fixedWindowRateLimiter) stats(now time.Time) rateLimiterStats {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.gcExpiredLocked(now)
+	st := rateLimiterStats{
+		LimitPerWindow: l.limit,
+		WindowSeconds:  int64(l.window / time.Second),
+		ActiveBuckets:  len(l.buckets),
+		AllowedTotal:   l.allowed,
+		BlockedTotal:   l.blocked,
+		EvictedTotal:   l.evicted,
+	}
+	if !l.lastGC.IsZero() {
+		st.LastGCAt = l.lastGC.UTC().Format(time.RFC3339)
+	}
+	return st
 }
 
 func parseAllowedOrigins(raw string) map[string]struct{} {
@@ -433,11 +484,12 @@ func (s *apiServer) verifySessionToken(token, clientIP string) error {
 
 func (s *apiServer) withRateLimit(next http.Handler) http.Handler {
 	limitedPaths := map[string]bool{
-		"/api/v1/auth/session":         true,
-		"/api/v1/auth/rotate":          true,
-		"/api/v1/runs/trigger":         true,
-		"/api/v1/settings/config":      true,
-		"/api/v1/settings/config-file": true,
+		"/api/v1/auth/session":                true,
+		"/api/v1/auth/rotate":                 true,
+		"/api/v1/runs/trigger":                true,
+		"/api/v1/settings/config":             true,
+		"/api/v1/settings/config-file":        true,
+		"/api/v1/settings/notifications/test": true,
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.rateLimiter == nil || r.Method == http.MethodOptions || r.URL.Path == "/api/v1/health" {

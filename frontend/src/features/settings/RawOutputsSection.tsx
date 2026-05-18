@@ -18,7 +18,16 @@ export function RawOutputsSection({ onError }: Props) {
     try {
       const out = await api.artifacts();
       setArtifacts(out);
-      if (out.length > 0 && !selected) setSelected(out[0].name);
+      if (out.length === 0) {
+        setSelected("");
+        setRaw("");
+        return;
+      }
+      const hasSelected = out.some((a) => a.name === selected);
+      if (!hasSelected) {
+        setSelected(out[0].name);
+        setRaw("");
+      }
     } catch (e) {
       onError(e);
     }
@@ -39,8 +48,9 @@ export function RawOutputsSection({ onError }: Props) {
 
   useEffect(() => {
     if (!selected) return;
+    if (!artifacts.some((a) => a.name === selected)) return;
     void loadRaw(selected);
-  }, [selected]);
+  }, [selected, artifacts]);
 
   return (
     <Card className="page-card">

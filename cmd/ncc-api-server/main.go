@@ -12,6 +12,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"mime"
@@ -53,6 +54,9 @@ type apiServer struct {
 	tlsClientCAFile       string
 	rateLimitPerMinute    int
 	rateLimiter           *fixedWindowRateLimiter
+	readTimeout           time.Duration
+	writeTimeout          time.Duration
+	idleTimeout           time.Duration
 
 	mu      sync.Mutex
 	active  bool
@@ -67,10 +71,11 @@ type apiServer struct {
 }
 
 type envelope struct {
-	Success bool        `json:"success"`
-	Message string      `json:"message,omitempty"`
-	Data    interface{} `json:"data,omitempty"`
-	Error   string      `json:"error,omitempty"`
+	Success   bool        `json:"success"`
+	Message   string      `json:"message,omitempty"`
+	Data      interface{} `json:"data,omitempty"`
+	Error     string      `json:"error,omitempty"`
+	ErrorCode string      `json:"error_code,omitempty"`
 }
 
 type routeMeta struct {
@@ -193,6 +198,9 @@ func main() {
 	flag.StringVar(&s.tlsKeyFile, "tls-key-file", "", "TLS key file for direct HTTPS")
 	flag.StringVar(&s.tlsClientCAFile, "tls-client-ca-file", "", "Optional client CA file (for mTLS verification)")
 	flag.IntVar(&s.rateLimitPerMinute, "rate-limit-per-minute", 60, "Per-client rate limit for sensitive API routes (0 disables)")
+	flag.DurationVar(&s.readTimeout, "read-timeout", 15*time.Second, "HTTP server read timeout")
+	flag.DurationVar(&s.writeTimeout, "write-timeout", 60*time.Second, "HTTP server write timeout")
+	flag.DurationVar(&s.idleTimeout, "idle-timeout", 60*time.Second, "HTTP server idle timeout")
 	flag.Parse()
 
 	s.authToken = strings.TrimSpace(os.Getenv("NCC_API_TOKEN"))
@@ -207,6 +215,9 @@ func main() {
 	}
 	if s.rateLimitPerMinute < 0 {
 		log.Fatal("rate-limit-per-minute must be >= 0")
+	}
+	if s.readTimeout <= 0 || s.writeTimeout <= 0 || s.idleTimeout <= 0 {
+		log.Fatal("read-timeout, write-timeout, and idle-timeout must be > 0")
 	}
 	if err := s.ensureAuthToken(); err != nil {
 		log.Fatal(err)
@@ -227,6 +238,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/health", s.handleHealth)
+	mux.HandleFunc("/api/v1/metrics/rate-limit", s.handleRateLimitMetrics)
 	mux.HandleFunc("/api/v1/auth/session", s.handleAuthSession)
 	mux.HandleFunc("/api/v1/auth/rotate", s.handleAuthRotate)
 	mux.HandleFunc("/api/v1/settings/config", s.handleConfig)
@@ -247,14 +259,15 @@ func main() {
 	mux.HandleFunc("/api/v1/logs/runner", s.handleRunnerLogs)
 	mux.HandleFunc("/api/v1/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("/api/v1/meta/routes", s.handleMetaRoutes)
+	mux.HandleFunc("/", s.handleAPIDocsHome)
 
 	handler := s.withCORS(s.withRateLimit(s.withAuth(mux)))
 	srv := &http.Server{
 		Addr:         listen,
 		Handler:      handler,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 60 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  s.readTimeout,
+		WriteTimeout: s.writeTimeout,
+		IdleTimeout:  s.idleTimeout,
 	}
 	log.Printf("ncc-api-server listening on %s (auth_mode=%s, tls=%t)", listen, s.authMode, strings.TrimSpace(s.tlsCertFile) != "" && strings.TrimSpace(s.tlsKeyFile) != "")
 	if strings.TrimSpace(s.tlsCertFile) != "" || strings.TrimSpace(s.tlsKeyFile) != "" {
@@ -288,6 +301,14 @@ func main() {
 func (s *apiServer) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodOptions || r.URL.Path == "/api/v1/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.Method == http.MethodGet && (r.URL.Path == "/api/v1/openapi.json" || r.URL.Path == "/api/v1/meta/routes" || r.URL.Path == "/api/v1/metrics/rate-limit") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == "/" || r.URL.Path == "/docs" || r.URL.Path == "/docs/ui" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -372,6 +393,210 @@ func (s *apiServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *apiServer) handleRateLimitMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	if s.rateLimiter == nil {
+		writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
+			"enabled": false,
+			"config": map[string]interface{}{
+				"rate_limit_per_minute": s.rateLimitPerMinute,
+				"window_seconds":        60,
+			},
+		}})
+		return
+	}
+	st := s.rateLimiter.stats(time.Now().UTC())
+	writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
+		"enabled": true,
+		"config": map[string]interface{}{
+			"rate_limit_per_minute": s.rateLimitPerMinute,
+			"window_seconds":        st.WindowSeconds,
+		},
+		"metrics": st,
+	}})
+}
+
+func (s *apiServer) handleAPIDocsHome(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	if r.URL.Path == "/docs/ui" {
+		s.handleSwaggerUIPage(w, r)
+		return
+	}
+	if r.URL.Path != "/" && r.URL.Path != "/docs" {
+		writeJSON(w, http.StatusNotFound, envelope{Success: false, Error: "not found"})
+		return
+	}
+	authMode := html.EscapeString(strings.TrimSpace(s.authMode))
+	if authMode == "" {
+		authMode = "token"
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = fmt.Fprintf(w, `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NCC API Docs</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 1.5rem auto; max-width: 1100px; line-height: 1.4; padding: 0 1rem; }
+    h1, h2 { margin: 0.5rem 0; }
+    a { color: #1677ff; text-decoration: none; }
+    .muted { color: #666; }
+    .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0.75rem; margin: 1rem 0; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 0.8rem; background: rgba(127,127,127,0.05); }
+    .label { font-size: 0.85rem; color: #666; margin-bottom: 0.25rem; }
+    .value { font-size: 1.1rem; font-weight: 600; }
+    .toolbar { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.75rem 0; }
+    input { padding: 0.45rem 0.6rem; border: 1px solid #bbb; border-radius: 6px; min-width: 230px; }
+    button { padding: 0.45rem 0.7rem; border: 1px solid #bbb; border-radius: 6px; background: transparent; cursor: pointer; }
+    table { width: 100%%; border-collapse: collapse; margin-top: 0.6rem; }
+    th, td { border: 1px solid #ddd; padding: 0.5rem; vertical-align: top; text-align: left; }
+    th { background: rgba(127,127,127,0.09); }
+    code, pre { background: rgba(127,127,127,0.12); border-radius: 6px; }
+    code { padding: 0.1rem 0.35rem; }
+    pre { margin: 0.4rem 0 0 0; padding: 0.6rem; white-space: pre-wrap; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <h1>NCC API Docs + Live Status</h1>
+  <p class="muted">Auth mode: <code>%s</code> | OpenAPI: <a href="/api/v1/openapi.json">/api/v1/openapi.json</a> | Swagger UI: <a href="/docs/ui">/docs/ui</a></p>
+
+  <div class="row">
+    <div class="card"><div class="label">Server status</div><div class="value" id="st-health">Loading...</div></div>
+    <div class="card"><div class="label">API auth mode</div><div class="value" id="st-auth">-</div></div>
+    <div class="card"><div class="label">Rate limit blocked total</div><div class="value" id="st-blocked">-</div></div>
+    <div class="card"><div class="label">Active limiter buckets</div><div class="value" id="st-buckets">-</div></div>
+  </div>
+
+  <h2>Endpoint Explorer</h2>
+  <div class="toolbar">
+    <input id="route-filter" placeholder="Filter endpoints (path, method, description)">
+    <input id="api-token" placeholder="Optional token for protected curl examples">
+    <button id="refresh-btn" type="button">Refresh</button>
+  </div>
+  <table>
+    <thead><tr><th>Path</th><th>Methods</th><th>Description</th><th>Try-it curl</th></tr></thead>
+    <tbody id="routes-body"><tr><td colspan="4">Loading routes...</td></tr></tbody>
+  </table>
+
+  <script>
+    const state = { routes: [], health: null, metrics: null };
+    function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[c])); }
+    function tokenHeader(token) {
+      const t = String(token || "").trim();
+      return t ? '-H "X-API-Token: ' + t + '" ' : "";
+    }
+    function curlForRoute(route, token) {
+      const method = (route.methods && route.methods[0]) || "GET";
+      const base = window.location.origin + route.path;
+      const hdr = tokenHeader(token);
+      if (route.sample_body && (method === "POST" || method === "PUT")) {
+        return "curl -X " + method + " " + hdr + '-H "Content-Type: application/json" ' + base + " -d '" + String(route.sample_body) + "'";
+      }
+      return "curl -X " + method + " " + hdr + base;
+    }
+    function renderRoutes() {
+      const body = document.getElementById("routes-body");
+      const q = document.getElementById("route-filter").value.toLowerCase().trim();
+      const token = document.getElementById("api-token").value;
+      const rows = state.routes.filter(r => {
+        if (!q) return true;
+        const hay = ((r.path || "").toLowerCase() + " " + (r.description || "").toLowerCase() + " " + (r.methods || []).join(" ").toLowerCase());
+        return hay.includes(q);
+      });
+      if (rows.length === 0) {
+        body.innerHTML = "<tr><td colspan='4'>No routes match current filter.</td></tr>";
+        return;
+      }
+      body.innerHTML = rows.map(r => {
+        const curl = curlForRoute(r, token);
+        const methods = (r.methods || []).map(m => "<code>" + esc(m) + "</code>").join(" ");
+        return "<tr>" +
+          "<td><code>" + esc(r.path) + "</code></td>" +
+          "<td>" + methods + "</td>" +
+          "<td>" + esc(r.description || "") + "</td>" +
+          "<td><pre>" + esc(curl) + "</pre></td>" +
+        "</tr>";
+      }).join("");
+    }
+    async function refreshStatus() {
+      try {
+        const healthRes = await fetch("/api/v1/health");
+        const healthJson = await healthRes.json();
+        state.health = healthJson.data || {};
+      } catch (_) {
+        state.health = null;
+      }
+      try {
+        const metricsRes = await fetch("/api/v1/metrics/rate-limit");
+        const metricsJson = await metricsRes.json();
+        state.metrics = metricsJson.data || {};
+      } catch (_) {
+        state.metrics = null;
+      }
+      document.getElementById("st-health").textContent = (state.health && state.health.status) || "unavailable";
+      document.getElementById("st-auth").textContent = (state.health && state.health.auth_mode) || "-";
+      document.getElementById("st-blocked").textContent = ((state.metrics && state.metrics.metrics && state.metrics.metrics.blocked_total) ?? "-");
+      document.getElementById("st-buckets").textContent = ((state.metrics && state.metrics.metrics && state.metrics.metrics.active_buckets) ?? "-");
+    }
+    async function refreshRoutes() {
+      const res = await fetch("/api/v1/meta/routes");
+      const json = await res.json();
+      state.routes = (json.data && json.data.routes) || [];
+      renderRoutes();
+    }
+    async function refreshAll() {
+      await Promise.all([refreshStatus(), refreshRoutes()]);
+    }
+    document.getElementById("route-filter").addEventListener("input", renderRoutes);
+    document.getElementById("api-token").addEventListener("input", renderRoutes);
+    document.getElementById("refresh-btn").addEventListener("click", refreshAll);
+    refreshAll();
+    setInterval(refreshStatus, 5000);
+  </script>
+</body>
+</html>
+`, authMode)
+}
+
+func (s *apiServer) handleSwaggerUIPage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NCC API Swagger UI</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+</head>
+<body>
+  <div style="margin:10px 16px;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">
+    <a href="/">Back to API docs</a>
+  </div>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    window.ui = SwaggerUIBundle({
+      url: "/api/v1/openapi.json",
+      dom_id: "#swagger-ui",
+      deepLinking: true,
+      displayRequestDuration: true,
+      persistAuthorization: true
+    });
+  </script>
+</body>
+</html>`)
+}
+
 func (s *apiServer) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
@@ -422,13 +647,33 @@ func (s *apiServer) handleAuthRotate(w http.ResponseWriter, r *http.Request) {
 func (s *apiServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		b, err := os.ReadFile(s.absPath(s.configPath))
+		cfgPath, err := s.validateConfigPath(s.configPath)
 		if err != nil {
-			writeJSON(w, http.StatusNotFound, envelope{Success: false, Error: err.Error()})
+			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
+			return
+		}
+		b, err := os.ReadFile(cfgPath)
+		if errors.Is(err, os.ErrNotExist) {
+			// Bootstrap a dummy config through the root orchestrator flow.
+			// validate-config currently requires an existing file, while root --config creates one when missing.
+			out, runErr := s.runOrchestrator([]string{"--config", cfgPath}, 30*time.Second)
+			b, err = os.ReadFile(cfgPath)
+			if err == nil {
+				s.audit(r, "settings.config.bootstrap", true, map[string]interface{}{"config_path": cfgPath})
+			} else {
+				data := map[string]interface{}{"output": tailString(strings.TrimSpace(out), 4000)}
+				if runErr != nil {
+					data["bootstrap_error"] = runErr.Error()
+				}
+				writeJSON(w, http.StatusNotFound, envelope{Success: false, Error: fmt.Sprintf("config file not found: %s", cfgPath), Data: data})
+				return
+			}
+		} else if err != nil {
+			writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: err.Error()})
 			return
 		}
 		writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
-			"path":    s.absPath(s.configPath),
+			"path":    cfgPath,
 			"content": string(b),
 		}})
 	case http.MethodPut:
@@ -493,6 +738,9 @@ func (s *apiServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func parseScalarConfigValue(v interface{}) string {
+	if v == nil {
+		return ""
+	}
 	switch t := v.(type) {
 	case string:
 		return strings.TrimSpace(t)
@@ -503,6 +751,11 @@ func parseScalarConfigValue(v interface{}) string {
 	}
 }
 
+func isUnsetConfigPathLiteral(val string) bool {
+	v := strings.ToLower(strings.TrimSpace(val))
+	return v == "" || v == "null" || v == "nil" || v == "<nil>" || v == "~"
+}
+
 func extractRelatedFilePathFromConfig(content string, key string) string {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
@@ -511,7 +764,7 @@ func extractRelatedFilePathFromConfig(content string, key string) string {
 	var ym map[string]interface{}
 	if err := yaml.Unmarshal([]byte(content), &ym); err == nil {
 		val := parseScalarConfigValue(ym[key])
-		if strings.EqualFold(val, "null") || val == "" {
+		if isUnsetConfigPathLiteral(val) {
 			return ""
 		}
 		return val
@@ -519,7 +772,11 @@ func extractRelatedFilePathFromConfig(content string, key string) string {
 	if strings.HasPrefix(trimmed, "{") {
 		var m map[string]interface{}
 		if err := json.Unmarshal([]byte(trimmed), &m); err == nil {
-			return parseScalarConfigValue(m[key])
+			val := parseScalarConfigValue(m[key])
+			if isUnsetConfigPathLiteral(val) {
+				return ""
+			}
+			return val
 		}
 	}
 	pattern := fmt.Sprintf(`(?m)^\s*%s\s*:\s*(.+?)\s*$`, regexp.QuoteMeta(key))
@@ -530,7 +787,7 @@ func extractRelatedFilePathFromConfig(content string, key string) string {
 	}
 	val := strings.TrimSpace(matches[1])
 	val = strings.Trim(val, `"'`)
-	if strings.EqualFold(val, "null") || val == "" {
+	if isUnsetConfigPathLiteral(val) {
 		return ""
 	}
 	return val
@@ -714,7 +971,7 @@ func (s *apiServer) discoverConfigRelatedFiles() ([]configRelatedFile, error) {
 
 func (s *apiServer) relatedConfigFileByPath(rawPath string) (*configRelatedFile, error) {
 	target := strings.TrimSpace(rawPath)
-	if target == "" {
+	if isUnsetConfigPathLiteral(target) {
 		return nil, errors.New("path is required")
 	}
 	items, err := s.discoverConfigRelatedFiles()
@@ -1230,6 +1487,11 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
+	pg, err := parseReportDataPagination(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
+		return
+	}
 	outDir := s.selectBestReportOutDir()
 	runSummary := readJSONArtifact(filepath.Join(outDir, "run-summary.json"), map[string]interface{}{})
 	checksSnapshot := readJSONArtifact(filepath.Join(outDir, "checks-snapshot.json"), []interface{}{})
@@ -1247,6 +1509,18 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 			policyViolations = append(policyViolations, ln)
 		}
 	}
+	pagination := map[string]interface{}{}
+	aggRows := readInlineJSONVar(filepath.Join(outDir, "index.html"), "AGG", []interface{}{})
+	if rows, ok := checksSnapshot.([]interface{}); ok && pg.enabled() {
+		pageRows, meta := paginateAnySlice(rows, pg)
+		checksSnapshot = pageRows
+		pagination["checks_snapshot"] = meta
+	}
+	if rows, ok := aggRows.([]interface{}); ok && pg.enabled() {
+		pageRows, meta := paginateAnySlice(rows, pg)
+		aggRows = pageRows
+		pagination["agg_rows"] = meta
+	}
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
 		"run_summary":        runSummary,
 		"checks_snapshot":    checksSnapshot,
@@ -1255,7 +1529,7 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 		"regression_summary": regressionSummary,
 		"slo_dashboard":      sloDashboard,
 		"policy_violations":  policyViolations,
-		"agg_rows":           readInlineJSONVar(filepath.Join(outDir, "index.html"), "AGG", []interface{}{}),
+		"agg_rows":           aggRows,
 		"diff_flags":         readInlineJSONVar(filepath.Join(outDir, "index.html"), "DIFF_FLAGS", map[string]interface{}{}),
 		"flaky_keys":         readInlineJSONVar(filepath.Join(outDir, "index.html"), "FLAKY_KEYS", map[string]interface{}{}),
 		"cluster_links":      readInlineJSONVar(filepath.Join(outDir, "index.html"), "CLUSTER_LINKS", []interface{}{}),
@@ -1264,7 +1538,63 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 		"ncc_logs":           listNCCLogs(s.absPath(s.logDir)),
 		"trends":             collectTrendPoints(outDir, 30),
 		"report_source_dir":  outDir,
+		"pagination":         pagination,
 	}})
+}
+
+type reportDataPagination struct {
+	Limit  int
+	Offset int
+}
+
+func (p reportDataPagination) enabled() bool {
+	return p.Limit > 0 || p.Offset > 0
+}
+
+func parseReportDataPagination(r *http.Request) (reportDataPagination, error) {
+	const maxLimit = 5000
+	out := reportDataPagination{}
+	limitRaw := strings.TrimSpace(r.URL.Query().Get("limit"))
+	if limitRaw != "" {
+		v, err := strconv.Atoi(limitRaw)
+		if err != nil || v < 0 {
+			return out, errors.New("limit must be a non-negative integer")
+		}
+		if v > maxLimit {
+			return out, fmt.Errorf("limit must be <= %d", maxLimit)
+		}
+		out.Limit = v
+	}
+	offsetRaw := strings.TrimSpace(r.URL.Query().Get("offset"))
+	if offsetRaw != "" {
+		v, err := strconv.Atoi(offsetRaw)
+		if err != nil || v < 0 {
+			return out, errors.New("offset must be a non-negative integer")
+		}
+		out.Offset = v
+	}
+	return out, nil
+}
+
+func paginateAnySlice(items []interface{}, p reportDataPagination) ([]interface{}, map[string]interface{}) {
+	total := len(items)
+	start := p.Offset
+	if start > total {
+		start = total
+	}
+	end := total
+	if p.Limit > 0 && start+p.Limit < end {
+		end = start + p.Limit
+	}
+	out := items[start:end]
+	meta := map[string]interface{}{
+		"total":    total,
+		"offset":   p.Offset,
+		"limit":    p.Limit,
+		"count":    len(out),
+		"has_more": end < total,
+	}
+	return out, meta
 }
 
 type trendClusterSummary struct {
@@ -1403,6 +1733,7 @@ func (s *apiServer) handleMetaRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	routes := []routeMeta{
 		{Path: "/api/v1/health", Methods: []string{http.MethodGet}, Description: "Backend health and resolved paths"},
+		{Path: "/api/v1/metrics/rate-limit", Methods: []string{http.MethodGet}, Description: "Rate limiter configuration and counters"},
 		{Path: "/api/v1/auth/session", Methods: []string{http.MethodPost}, Description: "Issue short-lived session token"},
 		{Path: "/api/v1/auth/rotate", Methods: []string{http.MethodPost}, Description: "Rotate API token"},
 		{Path: "/api/v1/settings/config", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write runtime config", SampleBody: "{\n  \"content\": \"clusters: \\\"10.0.0.1\\\"\\nusername: \\\"admin\\\"\\n\"\n}"},
@@ -1418,7 +1749,7 @@ func (s *apiServer) handleMetaRoutes(w http.ResponseWriter, r *http.Request) {
 		{Path: "/api/v1/runs/active", Methods: []string{http.MethodGet}, Description: "Read active run state"},
 		{Path: "/api/v1/runs/preflight", Methods: []string{http.MethodPost}, Description: "Run preflight checks (config/secrets/path permissions)", SampleBody: "{\n  \"config_path\": \"config.yaml\"\n}"},
 		{Path: "/api/v1/runs/trigger", Methods: []string{http.MethodPost}, Description: "Trigger orchestrator run", SampleBody: "{\n  \"config_path\": \"config.yaml\",\n  \"password\": \"\",\n  \"extra_args\": [\"--no-html\"]\n}"},
-		{Path: "/api/v1/report/data", Methods: []string{http.MethodGet}, Description: "Aggregated report payload"},
+		{Path: "/api/v1/report/data", Methods: []string{http.MethodGet}, Description: "Aggregated report payload (supports optional limit/offset pagination for large arrays)"},
 		{Path: "/api/v1/report/trends", Methods: []string{http.MethodGet}, Description: "Historical trends from run summaries"},
 		{Path: "/api/v1/logs/runner", Methods: []string{http.MethodGet}, Description: "Read tail of runner log"},
 		{Path: "/api/v1/openapi.json", Methods: []string{http.MethodGet}, Description: "OpenAPI 3.0 specification"},
@@ -1455,6 +1786,9 @@ func (s *apiServer) buildOpenAPISpec() map[string]interface{} {
 		"paths": map[string]interface{}{
 			"/api/v1/health": map[string]interface{}{
 				"get": map[string]interface{}{"summary": "Backend health and resolved paths"},
+			},
+			"/api/v1/metrics/rate-limit": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Rate limiter configuration and counters"},
 			},
 			"/api/v1/auth/session": map[string]interface{}{
 				"post": map[string]interface{}{"summary": "Issue short-lived session token"},
@@ -1599,7 +1933,13 @@ func (s *apiServer) buildOpenAPISpec() map[string]interface{} {
 				},
 			},
 			"/api/v1/report/data": map[string]interface{}{
-				"get": map[string]interface{}{"summary": "Aggregated report payload"},
+				"get": map[string]interface{}{
+					"summary": "Aggregated report payload",
+					"parameters": []map[string]interface{}{
+						{"name": "limit", "in": "query", "required": false, "schema": map[string]interface{}{"type": "integer", "minimum": 0, "maximum": 5000}},
+						{"name": "offset", "in": "query", "required": false, "schema": map[string]interface{}{"type": "integer", "minimum": 0}},
+					},
+				},
 			},
 			"/api/v1/report/trends": map[string]interface{}{
 				"get": map[string]interface{}{"summary": "Historical trends from run summaries"},
@@ -1691,9 +2031,45 @@ func (s *apiServer) absPath(p string) string {
 }
 
 func writeJSON(w http.ResponseWriter, status int, v envelope) {
+	if !v.Success && strings.TrimSpace(v.Error) != "" && strings.TrimSpace(v.ErrorCode) == "" {
+		v.ErrorCode = defaultAPIErrorCode(status)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func defaultAPIErrorCode(status int) string {
+	switch status {
+	case http.StatusBadRequest:
+		return "NCC_API_BAD_REQUEST"
+	case http.StatusUnauthorized:
+		return "NCC_API_UNAUTHORIZED"
+	case http.StatusForbidden:
+		return "NCC_API_FORBIDDEN"
+	case http.StatusNotFound:
+		return "NCC_API_NOT_FOUND"
+	case http.StatusMethodNotAllowed:
+		return "NCC_API_METHOD_NOT_ALLOWED"
+	case http.StatusConflict:
+		return "NCC_API_CONFLICT"
+	case http.StatusUnsupportedMediaType:
+		return "NCC_API_UNSUPPORTED_MEDIA_TYPE"
+	case http.StatusTooManyRequests:
+		return "NCC_API_RATE_LIMITED"
+	case http.StatusBadGateway:
+		return "NCC_API_UPSTREAM_FAILURE"
+	case http.StatusInternalServerError:
+		return "NCC_API_INTERNAL"
+	default:
+		if status >= 400 && status < 500 {
+			return "NCC_API_CLIENT_ERROR"
+		}
+		if status >= 500 {
+			return "NCC_API_SERVER_ERROR"
+		}
+		return ""
+	}
 }
 
 func defaultIfEmpty(v, def string) string {

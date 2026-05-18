@@ -120,16 +120,18 @@ func main() {
 	proxy.Transport = transport
 	uiCSP := "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'"
 	apiCSP := "default-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"
-	applyBaseHeaders := func(w http.ResponseWriter, isTLS bool) {
+	applyHeaders := func(w http.ResponseWriter, isTLS bool, csp string) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
-		w.Header().Set("Content-Security-Policy", uiCSP)
+		w.Header().Set("Content-Security-Policy", csp)
 		if isTLS {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
 	}
+	applyUIHeaders := func(w http.ResponseWriter, isTLS bool) { applyHeaders(w, isTLS, uiCSP) }
+	applyAPIHeaders := func(w http.ResponseWriter, isTLS bool) { applyHeaders(w, isTLS, apiCSP) }
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		// Normalize security headers on proxied API responses to avoid duplicate comma-joined values.
 		resp.Header.Set("X-Content-Type-Options", "nosniff")
@@ -169,10 +171,10 @@ func main() {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/api/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		applyBaseHeaders(w, r.TLS != nil)
 		origin := strings.TrimSpace(r.Header.Get("Origin"))
 		if origin != "" {
 			if _, ok := originSet[origin]; !ok {
+				applyAPIHeaders(w, r.TLS != nil)
 				http.Error(w, "origin not allowed", http.StatusForbidden)
 				return
 			}
@@ -180,16 +182,19 @@ func main() {
 			w.Header().Set("Vary", "Origin")
 		}
 		if r.Method == http.MethodOptions {
+			applyAPIHeaders(w, r.TLS != nil)
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		if !(r.Method == http.MethodGet || r.Method == http.MethodPost || r.Method == http.MethodPut) {
+			applyAPIHeaders(w, r.TLS != nil)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		if !strings.HasPrefix(r.URL.Path, "/api/v1/") {
+			applyAPIHeaders(w, r.TLS != nil)
 			http.Error(w, "path not allowed", http.StatusForbidden)
 			return
 		}
@@ -221,7 +226,11 @@ func main() {
 		fileServer.ServeHTTP(w, clone)
 	}))
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		applyBaseHeaders(w, r.TLS != nil)
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		applyUIHeaders(w, r.TLS != nil)
 		mux.ServeHTTP(w, r)
 	})
 

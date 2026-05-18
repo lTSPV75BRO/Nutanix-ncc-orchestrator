@@ -16,7 +16,7 @@ Checklist and status for releasing **Nutanix NCC Orchestrator** v2.0.0 to produc
 | CHANGELOG.md | ✅ | `2.0.0` release section added |
 | RELEASE_NOTES_v2.0.0.md | ✅ | Release notes created |
 | README release status | ✅ | Points to `v2.0.0` release/readiness docs |
-| k8s image tags | ✅ | `k8s/cronjob.yaml` and `k8s/job-debug.yaml` use `2.0.0` |
+| k8s image tags | ✅ | `k8s/api-deployment.yaml`, `k8s/ui-deployment.yaml`, and `k8s/runner-cronjob.yaml` use `2.0.0` |
 | Helm chart/appVersion | ✅ | `helm/ncc-orchestrator/Chart.yaml` set to `2.0.0` |
 | Helm values default tag | ✅ | `helm/ncc-orchestrator/values.yaml` tag set to `2.0.0` |
 

@@ -165,7 +165,7 @@ export function ClusterTable({ checksSnapshot, aggRows, diffFlags, flakyKeys, nc
       if (parsedTokens.flaky && !r.isFlaky) return false;
       if (compareMode === "changed" && !r.isChanged) return false;
       if (compareMode === "flaky" && !r.isFlaky) return false;
-      const hay = `${r.clusterName} ${r.cluster} ${r.severity} ${r.alert} ${r.detail}`.toLowerCase();
+      const hay = `${r.clusterName} ${r.cluster} ${r.severity} ${r.alert}`.toLowerCase();
       return parsedTokens.terms.every((t) => hay.includes(t));
     });
   }, [checksSnapshot, aggRows, diffFlags, flakyKeys, nccLogs, filterText, selectedClusters, clusterNameMap, severityFilters, compareMode]);
@@ -200,7 +200,8 @@ export function ClusterTable({ checksSnapshot, aggRows, diffFlags, flakyKeys, nc
       title: "Cluster Name",
       dataIndex: "clusterName",
       key: "clusterName",
-      width: 240,
+      width: 220,
+      ellipsis: true,
       sorter: true,
       sortOrder: sorterFor("clusterName"),
       render: (_, row) => {
@@ -223,6 +224,8 @@ export function ClusterTable({ checksSnapshot, aggRows, diffFlags, flakyKeys, nc
       title: "Cluster",
       dataIndex: "cluster",
       key: "cluster",
+      width: 190,
+      ellipsis: true,
       sorter: true,
       sortOrder: sorterFor("cluster"),
       render: (value: string) => {
@@ -230,10 +233,14 @@ export function ClusterTable({ checksSnapshot, aggRows, diffFlags, flakyKeys, nc
         const label = resolveClusterName(value, clusterNameMap);
         return clusterURL ? (
           <a href={clusterURL} target="_blank" rel="noreferrer">
-            {label}
+            <Typography.Text ellipsis className="cluster-cell-text">
+              {label}
+            </Typography.Text>
           </a>
         ) : (
-          label
+          <Typography.Text ellipsis className="cluster-cell-text">
+            {label}
+          </Typography.Text>
         );
       },
     });
@@ -241,11 +248,15 @@ export function ClusterTable({ checksSnapshot, aggRows, diffFlags, flakyKeys, nc
       title: "Alert",
       dataIndex: "alert",
       key: "alert",
+      width: 300,
+      ellipsis: true,
       sorter: true,
       sortOrder: sorterFor("alert"),
       render: (value: string, row) => (
-        <Space size={6} wrap>
-          <span>{value}</span>
+        <Space size={6} wrap={false} style={{ width: "100%" }}>
+          <Typography.Text ellipsis className="alert-title-inline">
+            {value}
+          </Typography.Text>
           {row.isChanged ? <Tag color="gold">changed</Tag> : null}
           {row.isFlaky ? <Tag color="purple">flaky</Tag> : null}
         </Space>
@@ -281,11 +292,11 @@ export function ClusterTable({ checksSnapshot, aggRows, diffFlags, flakyKeys, nc
       title: "NCC Details",
       dataIndex: "detail",
       key: "detail",
-      width: 480,
+      width: 420,
       render: (value: string, row) => (
         <Typography.Paragraph
           style={{ marginBottom: 0, maxWidth: 460 }}
-          ellipsis={{ rows: 2, tooltip: value || "-" }}
+          ellipsis={{ rows: 1 }}
         >
           {value || "-"}{" "}
           <Button type="link" size="small" onClick={() => setDetailModalRow(row)}>
@@ -387,7 +398,9 @@ export function ClusterTable({ checksSnapshot, aggRows, diffFlags, flakyKeys, nc
       </Space>
       <Table<RowRecord>
         bordered
+        virtual
         className="alerts-table"
+        tableLayout="fixed"
         columns={columns}
         dataSource={dataSource}
         rowClassName={(_, index) => (index % 2 === 0 ? "alerts-row-even" : "alerts-row-odd")}
@@ -412,7 +425,7 @@ export function ClusterTable({ checksSnapshot, aggRows, diffFlags, flakyKeys, nc
           }
         }}
         size="middle"
-        scroll={{ x: 1200 }}
+        scroll={{ x: 1380, y: 620 }}
       />
       <Modal
         open={Boolean(detailModalRow)}

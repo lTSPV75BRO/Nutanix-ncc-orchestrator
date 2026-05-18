@@ -53,17 +53,21 @@ export function DrilldownDiffPanel({ drilldownDiff, clusterNameMap }: Props) {
       <Row gutter={[12, 12]} style={{ marginTop: 8, marginBottom: 8 }}>
         <Col xs={24} md={6}>
           <Card size="small">
-            <Statistic title="New FAIL" value={newFailCount} valueStyle={{ color: "#f43f5e" }} />
+            <Statistic title="New FAIL" value={newFailCount} styles={{ content: { color: "#f43f5e" } }} />
           </Card>
         </Col>
         <Col xs={24} md={6}>
           <Card size="small">
-            <Statistic title="Resolved FAIL" value={resolvedFailCount} valueStyle={{ color: "#22c55e" }} />
+            <Statistic title="Resolved FAIL" value={resolvedFailCount} styles={{ content: { color: "#22c55e" } }} />
           </Card>
         </Col>
         <Col xs={24} md={6}>
           <Card size="small">
-            <Statistic title="Net FAIL Change" value={netFail} valueStyle={{ color: netFail > 0 ? "#f43f5e" : netFail < 0 ? "#22c55e" : undefined }} />
+            <Statistic
+              title="Net FAIL Change"
+              value={netFail}
+              styles={{ content: { color: netFail > 0 ? "#f43f5e" : netFail < 0 ? "#22c55e" : undefined } }}
+            />
           </Card>
         </Col>
         <Col xs={24} md={6}>

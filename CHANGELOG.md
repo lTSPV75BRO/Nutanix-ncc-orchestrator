@@ -8,30 +8,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
-
-### Added
-
-- None yet.
-
-### Changed
-
-- None yet.
-
----
-
 ## [2.0.0] - 2026-05-05
 
 ### Added
 
+- **Full v2 application stack in 2.0.0** — Release scope now explicitly includes API (`cmd/ncc-api-server`), UI (`cmd/ncc-ui-server` + `frontend`), and UI-integrated API proxy surface for `/api/v1/*`.
+- **Build-from-scratch documentation** - Added `docs/BUILD_FROM_SCRATCH.md` with full setup flow for clean machines, including local build, frontend build, v2 stack startup, tests, packaging, and Kubernetes verification.
 - **Release validation suite for v2.0.0** — Production checks and edge-case verification documented with reproducible command evidence.
 - **CodeQL workflow alignment** — Added repository workflow that analyzes only `go` and `actions`, preventing JS/TS language-detection failures in this branch scope.
 - **v2.0.0 release documentation set** — Added release notes, production-readiness checklist, and milestone summary documents for the v2 train.
+- **Build and handover guides** — Added `docs/BUILD_FROM_SCRATCH.md` and `docs/ARCHITECTURE_AND_HANDOVER.md` for end-to-end onboarding, operations, and ownership transfer.
+- **Clean v2 uninstall tooling** — Added `scripts/uninstall-v2-clean.sh` as the canonical Kubernetes/runtime cleanup entrypoint; legacy `scripts/uninstall-ncc-orchestrator.sh` now delegates to it.
+- **CLI local uninstall command** — Added `ncc-orchestrator uninstall` for standalone local cleanup of artifacts/state created by the binary.
 
 ### Changed
 
 - **Version baselines** — `VERSION`, default `main.Version`, Helm chart/appVersion, Helm values image tag, and Kubernetes manifest image tags aligned to `2.0.0`.
 - **README release pointers** — Updated current release status links to `v2.0.0` documents and clarified current branch scope.
+- **Documentation alignment across v2 docs** - Updated README, CONTRIBUTING, migration guide, and v2 architecture doc for consistent source-build and deployment instructions.
+- **Kubernetes architecture docs** - Clarified API runner binary staging model (runner image -> API init container -> shared tools path) in design docs and release notes.
+- **Kubernetes runtime model** — API now stages the runner binary via init container (`runner image -> /tools/ncc-orchestrator`) and validates `--orchestrator-bin` at startup (exists + executable).
+- **Production readiness manifests** — Added startup/readiness/liveness probes to API and UI deployments to improve rollout safety and self-healing behavior.
+- **Preflight probe handling** — `.ncc-preflight-check` moved to a persistent read/write sentinel approach (no create/delete churn) with legacy typo cleanup.
+- **Performance and reliability optimizations** — Cached exclude-title matchers/regex, reduced config re-parse and allocations in secret validation, de-duplicated replay metadata parsing, and eliminated redundant Prometheus writes during replay.
+- **Console error UX** — Consolidated duplicate startup error logging to a single user-facing error path.
 
 ---
 

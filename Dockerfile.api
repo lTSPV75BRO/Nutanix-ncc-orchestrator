@@ -2,14 +2,16 @@ FROM golang:1.26-alpine AS builder
 
 WORKDIR /src
 RUN apk add --no-cache ca-certificates git
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
 
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/ncc-api-server ./cmd/ncc-api-server
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/ncc-orchestrator .
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o /out/ncc-api-server ./cmd/ncc-api-server
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o /out/ncc-orchestrator .
 
 FROM alpine:3.20
 
@@ -27,6 +29,7 @@ RUN chmod 0755 /usr/local/bin/ncc-api-server /usr/local/bin/ncc-orchestrator \
 USER 10001:10001
 
 EXPOSE 8081
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD wget -qO- http://127.0.0.1:8081/api/v1/health >/dev/null || exit 1
 
 ENTRYPOINT ["/usr/local/bin/ncc-api-server"]
 CMD ["--listen", ":8081", "--repo-root", "/app", "--config-path", "/app/config/config.yaml", "--output-dir", "/app/outputfiles", "--log-dir", "/app/nccfiles", "--runner-log-path", "/app/logs/ncc-runner.log", "--token-file-path", "/app/data/auth/.ncc-api-token", "--orchestrator-bin", "/usr/local/bin/ncc-orchestrator", "--auth-mode", "token", "--cors-origin", "http://localhost:8080"]

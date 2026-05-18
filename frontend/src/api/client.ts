@@ -116,6 +116,17 @@ export const api = {
     }),
   artifacts: () => callApi<ArtifactInfo[]>("/api/v1/artifacts"),
   artifactByName: (name: string) => callApi<{ name: string; content: string }>(`/api/v1/artifacts/${encodeURIComponent(name)}`),
+  reportDataWithPagination: async (opts?: { limit?: number; offset?: number }) => {
+    const params = new URLSearchParams();
+    if (typeof opts?.limit === "number" && opts.limit >= 0) params.set("limit", String(opts.limit));
+    if (typeof opts?.offset === "number" && opts.offset >= 0) params.set("offset", String(opts.offset));
+    const path = params.size > 0 ? `/api/v1/report/data?${params.toString()}` : "/api/v1/report/data";
+    try {
+      return await callApi<ReportData>(path);
+    } catch {
+      return loadReportDataFallback();
+    }
+  },
   reportData: async () => {
     try {
       return await callApi<ReportData>("/api/v1/report/data");

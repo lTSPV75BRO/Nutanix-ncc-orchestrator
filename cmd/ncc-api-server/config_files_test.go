@@ -66,3 +66,39 @@ func TestDiscoverConfigRelatedFilesExcludesLogFile(t *testing.T) {
 		}
 	}
 }
+
+func TestExtractRelatedFilePathTreatsNilLiteralsAsUnset(t *testing.T) {
+	cfg := strings.Join([]string{
+		"clusters-file: <nil>",
+		"exclude-alert-titles-file: null",
+		"secrets-file: ~",
+		"",
+	}, "\n")
+	if got := extractRelatedFilePathFromConfig(cfg, "clusters-file"); got != "" {
+		t.Fatalf("expected empty clusters-file path for <nil>, got %q", got)
+	}
+	if got := extractRelatedFilePathFromConfig(cfg, "exclude-alert-titles-file"); got != "" {
+		t.Fatalf("expected empty exclude-alert-titles-file path for null, got %q", got)
+	}
+	if got := extractRelatedFilePathFromConfig(cfg, "secrets-file"); got != "" {
+		t.Fatalf("expected empty secrets-file path for ~, got %q", got)
+	}
+}
+
+func TestRelatedConfigFileByPathRejectsNilLiteral(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := strings.Join([]string{
+		"clusters-file: <nil>",
+		"",
+	}, "\n")
+	if err := os.WriteFile(tmp+"/config.yaml", []byte(cfg), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	s := &apiServer{
+		repoRoot:   tmp,
+		configPath: "config.yaml",
+	}
+	if _, err := s.relatedConfigFileByPath("<nil>"); err == nil {
+		t.Fatal("expected nil literal path to be rejected")
+	}
+}

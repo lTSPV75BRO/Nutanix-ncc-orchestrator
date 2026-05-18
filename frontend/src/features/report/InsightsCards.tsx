@@ -53,7 +53,11 @@ export function InsightsCards({ runSummary, aggRows }: Props) {
         {cards.map((c) => (
           <Col key={c.label} xs={12} md={6} lg={3}>
             <Card size="small" style={{ borderTop: `3px solid ${metricColor(c.label)}` }}>
-              <Statistic title={c.label} value={c.value as string | number} valueStyle={{ color: metricColor(c.label), fontWeight: 700 }} />
+              <Statistic
+                title={c.label}
+                value={c.value as string | number}
+                styles={{ content: { color: metricColor(c.label), fontWeight: 700 } }}
+              />
             </Card>
           </Col>
         ))}

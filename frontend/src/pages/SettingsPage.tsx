@@ -20,7 +20,7 @@ export function SettingsPage() {
 
   return (
     <>
-      {err ? <Alert type="error" style={{ marginBottom: 16 }} message={err} /> : null}
+      {err ? <Alert type="error" style={{ marginBottom: 16 }} title={err} /> : null}
       <Tabs
         activeKey={tab}
         onChange={setTab}

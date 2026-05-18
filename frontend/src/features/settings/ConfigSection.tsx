@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button, Card, Empty, List, Space, Tag, Typography } from "antd";
 import { api } from "../../api/client";
 import { CodeEditor, inferEditorLanguage } from "../../components/CodeEditor";
@@ -23,6 +23,7 @@ function applyPolicyGatesToConfigContent(content: string, gatesCsv: string): str
 export function ConfigSection({ onError }: Props) {
   const [content, setContent] = useState("");
   const [out, setOut] = useState("");
+  const [configPath, setConfigPath] = useState("");
   const [files, setFiles] = useState<ConfigRelatedFileInfo[]>([]);
   const [activeFile, setActiveFile] = useState<string>("");
   const [activeFileContent, setActiveFileContent] = useState("");
@@ -48,10 +49,11 @@ export function ConfigSection({ onError }: Props) {
     return next;
   };
 
-  const load = async () => {
+  const load = useCallback(async (suppressError = false) => {
     try {
       const cfg = await api.loadConfig();
       setContent(cfg.content ?? "");
+      setConfigPath(cfg.path ?? "");
       const related = await refreshConfigFiles();
       setOut(
         JSON.stringify(
@@ -63,10 +65,35 @@ export function ConfigSection({ onError }: Props) {
           2,
         ),
       );
+      return true;
     } catch (e) {
-      onError(e);
+      if (!suppressError) {
+        onError(e);
+      }
+      return false;
     }
-  };
+  }, [activeFile, onError]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      // Retry briefly to handle API startup race right after v2-start.
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (cancelled) {
+          return;
+        }
+        const ok = await load(attempt < 2);
+        if (ok) {
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [load]);
 
   const save = async () => {
     try {
@@ -112,11 +139,16 @@ export function ConfigSection({ onError }: Props) {
         Application Config
       </Typography.Title>
       <Space size={8} style={{ marginBottom: 12 }}>
-        <Button onClick={load}>Load Config</Button>
+        <Button onClick={() => void load()}>Load Config</Button>
         <Button type="primary" onClick={save}>
           Save Config
         </Button>
       </Space>
+      {configPath ? (
+        <Typography.Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
+          Loaded: {configPath} ({content.length} chars)
+        </Typography.Text>
+      ) : null}
       <CodeEditor value={content} onChange={setContent} language="yaml" height={320} />
       <PolicyGateBuilderSection configContent={content} onApplyPolicyGates={applyPolicyGates} />
 

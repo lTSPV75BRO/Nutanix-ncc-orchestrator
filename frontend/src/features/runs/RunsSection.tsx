@@ -3,6 +3,7 @@ import { Alert, Button, Card, Col, Input, List, Row, Space, Tag, Typography } fr
 import { api } from "../../api/client";
 import type { ArtifactInfo, RunActiveData, RunInfo, RunPreflightData } from "../../api/types";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
+import { CodeEditor } from "../../components/CodeEditor";
 
 type Props = {
   backendConfigPath: string;
@@ -14,7 +15,7 @@ function parseExtraArgs(raw: string): string[] {
 }
 
 export function RunsSection({ backendConfigPath, onError }: Props) {
-  const [runConfigPath, setRunConfigPath] = useLocalStorageState("runs.configPath", "");
+  const [runConfigPath, setRunConfigPath] = useState("");
   const [runPassword, setRunPassword] = useState("");
   const [extraArgs, setExtraArgs] = useLocalStorageState("runs.extraArgs", "");
   const [runsOut, setRunsOut] = useState("");
@@ -25,13 +26,22 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
   const [preflight, setPreflight] = useState<RunPreflightData | null>(null);
 
   useEffect(() => {
-    if (backendConfigPath && !runConfigPath) setRunConfigPath(backendConfigPath);
-  }, [backendConfigPath, runConfigPath]);
+    if (backendConfigPath) setRunConfigPath(backendConfigPath);
+  }, [backendConfigPath]);
 
   const triggerPayload = useMemo(
     () => ({
       config_path: runConfigPath || undefined,
       password: runPassword || undefined,
+      extra_args: parseExtraArgs(extraArgs),
+    }),
+    [runConfigPath, runPassword, extraArgs],
+  );
+
+  const triggerPayloadPreview = useMemo(
+    () => ({
+      config_path: runConfigPath || undefined,
+      password: runPassword ? "***" : undefined,
       extra_args: parseExtraArgs(extraArgs),
     }),
     [runConfigPath, runPassword, extraArgs],
@@ -145,7 +155,7 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
           <div style={{ marginBottom: 12 }}>
             <Alert
               type={preflight.ok ? "success" : "error"}
-              message={preflight.ok ? "Preflight passed" : "Preflight has blocking failures"}
+              title={preflight.ok ? "Preflight passed" : "Preflight has blocking failures"}
               description={`config: ${preflight.config_path} | failed: ${preflight.failed} | warnings: ${preflight.warn}`}
               showIcon
             />
@@ -173,10 +183,10 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
             />
           </div>
         ) : null}
-        <pre>{JSON.stringify(triggerPayload, null, 2)}</pre>
+        <pre>{JSON.stringify(triggerPayloadPreview, null, 2)}</pre>
         <pre>{runsOut}</pre>
         <Typography.Title level={5}>Live Logs</Typography.Title>
-        <pre className="live-log">{liveLogs}</pre>
+        <CodeEditor value={liveLogs} language="plaintext" readOnly height={420} autoRevealLastLine />
         <Typography.Title level={5}>Runs</Typography.Title>
         <ul>
           {runs.map((r) => (

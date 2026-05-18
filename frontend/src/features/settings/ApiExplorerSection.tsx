@@ -293,9 +293,9 @@ export function ApiExplorerSection({ onError }: Props) {
         type="info"
         showIcon
         style={{ marginBottom: 12 }}
-        message="Sensitive request headers/body are not persisted in browser storage."
+        title="Sensitive request headers/body are not persisted in browser storage."
       />
-      {routesError ? <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={`Route discovery failed: ${routesError}`} /> : null}
+      {routesError ? <Alert type="warning" showIcon style={{ marginBottom: 12 }} title={`Route discovery failed: ${routesError}`} /> : null}
 
       <Row gutter={[12, 12]}>
         <Col xs={24} md={6}>
@@ -373,7 +373,7 @@ export function ApiExplorerSection({ onError }: Props) {
         />
       </Card>
 
-      {lastError ? <Alert type="error" message={lastError} style={{ marginTop: 12 }} /> : null}
+      {lastError ? <Alert type="error" title={lastError} style={{ marginTop: 12 }} /> : null}
 
       {response ? (
         <Card size="small" style={{ marginTop: 12 }}>

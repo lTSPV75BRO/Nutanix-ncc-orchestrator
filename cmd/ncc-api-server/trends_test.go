@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -61,5 +62,36 @@ func TestParseTrendLimit(t *testing.T) {
 	}
 	if got := parseTrendLimit("7"); got != 7 {
 		t.Fatalf("expected limit 7, got %d", got)
+	}
+}
+
+func TestParseReportDataPagination(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/v1/report/data?limit=25&offset=10", nil)
+	pg, err := parseReportDataPagination(req)
+	if err != nil {
+		t.Fatalf("parseReportDataPagination failed: %v", err)
+	}
+	if pg.Limit != 25 || pg.Offset != 10 {
+		t.Fatalf("unexpected pagination %+v", pg)
+	}
+
+	reqBad := httptest.NewRequest("GET", "/api/v1/report/data?limit=-1", nil)
+	if _, err := parseReportDataPagination(reqBad); err == nil {
+		t.Fatal("expected negative limit to fail")
+	}
+}
+
+func TestPaginateAnySlice(t *testing.T) {
+	in := []interface{}{1, 2, 3, 4, 5}
+	pg := reportDataPagination{Limit: 2, Offset: 1}
+	out, meta := paginateAnySlice(in, pg)
+	if len(out) != 2 {
+		t.Fatalf("expected 2 records, got %d", len(out))
+	}
+	if out[0].(int) != 2 || out[1].(int) != 3 {
+		t.Fatalf("unexpected pagination output: %#v", out)
+	}
+	if meta["has_more"] != true {
+		t.Fatalf("expected has_more=true, got %#v", meta["has_more"])
 	}
 }

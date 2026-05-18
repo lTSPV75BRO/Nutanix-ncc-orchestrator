@@ -6,6 +6,10 @@ This document describes the `v2` split architecture:
 - Frontend app: `frontend/` (React + Vite + TypeScript)
 - Optional static UI server: `cmd/ncc-ui-server`
 
+For complete machine setup/build/run instructions, use:
+
+- `docs/BUILD_FROM_SCRATCH.md`
+
 ## Goals
 
 - GET-heavy API surface for observability and reads
@@ -20,6 +24,7 @@ This document describes the `v2` split architecture:
 Base path: `/api/v1`
 
 - `GET /health`
+- `GET /metrics/rate-limit` (rate limiter counters + active bucket cardinality)
 - `POST /auth/session` (loopback bootstrap; returns short-lived bearer token)
 - `POST /auth/rotate` (rotate API token)
 - `GET /settings/config`
@@ -38,6 +43,10 @@ Base path: `/api/v1`
 - `GET /artifacts/{name}`
   - add `?download=1` to stream file download
 - `GET /logs/runner`
+
+Backend root docs page:
+
+- `GET /` (or `/docs`) returns a lightweight HTML status page with links to health, OpenAPI, and route metadata.
 
 ## Run backend
 
@@ -142,12 +151,22 @@ Open: `http://localhost:8080`
 - OpenAPI spec endpoint: `GET /api/v1/openapi.json`
 - Route metadata endpoint: `GET /api/v1/meta/routes`
 - Frontend API Explorer consumes OpenAPI first and falls back to route metadata.
+- API root docs page: `GET /` (or `/docs`) with quick links and usage hint.
 
 Recommended integration order for external clients:
 
 1. Fetch `/api/v1/openapi.json` and generate/validate client contracts.
 2. Use `/api/v1/meta/routes` for lightweight route-health checks.
 3. Validate auth mode (`token`, `session`, or `hybrid`) before invoking mutations.
+4. Handle stable API `error_code` values for automation (for example `NCC_API_BAD_REQUEST`, `NCC_API_RATE_LIMITED`).
+
+## API automation contracts
+
+- Error responses now include a machine-readable `error_code` field in addition to human-readable `error`.
+- `GET /api/v1/report/data` supports optional pagination query params for large arrays:
+  - `limit` (0..5000)
+  - `offset` (>=0)
+- When pagination is used, response includes `pagination` metadata for `checks_snapshot` and `agg_rows`.
 
 ## Config-referenced file lifecycle
 
@@ -240,6 +259,42 @@ Use this when you want web UI, API endpoints, API explorer, and settings managem
 4. Open:
    `http://localhost:8080`
 
+Beginner-friendly bootstrap alternative:
+
+```bash
+ncc-orchestrator quickstart --auto-fix --setup-v2 ask
+```
+
+This mode can initialize config, run preflight, apply safe fixes, and ask permission before downloading missing v2 components.
+
+### API-only mode (bring your own frontend)
+
+Use this mode when you want to integrate with your own UI or automation client while keeping NCC backend APIs running.
+
+```bash
+ncc-orchestrator v2-start --api-only
+```
+
+What you get:
+
+- Starts only `ncc-api-server` (no `ncc-ui-server` / frontend static hosting).
+- API base endpoint at `http://localhost:8081` (default).
+- Built-in API docs/status page at `http://localhost:8081/`.
+- Machine-readable discovery endpoints:
+  - `http://localhost:8081/api/v1/openapi.json`
+  - `http://localhost:8081/api/v1/meta/routes`
+
+Detached API-only mode:
+
+```bash
+ncc-orchestrator v2-start --api-only --detach
+```
+
+This writes:
+
+- PID file: `<install-dir>/run/v2-api.pid`
+- API log: `<install-dir>/logs/v2-api.log`
+
 Optional flags for customized bootstrap:
 
 - `--version 2.0.0` to pin release version
@@ -248,11 +303,59 @@ Optional flags for customized bootstrap:
 - `--orchestrator-bin /usr/local/bin/ncc-orchestrator` for explicit CLI binary path
 - `--repo owner/repo` or `--repo https://github.com/owner/repo` for alternate release source
 
-`v2-start` can also be customized with similar flags:
+`v2-start` can also be customized with operator-focused flags:
 
-- `ncc-orchestrator v2-start --install-dir /opt/ncc-v2`
-- `ncc-orchestrator v2-start --api-listen :18081 --ui-listen :18080`
-- `ncc-orchestrator v2-start --config-path /etc/ncc/config.yaml`
+- Core paths/listeners:
+  - `--install-dir`, `--config-path`, `--output-dir`, `--log-dir`, `--orchestrator-bin`
+  - `--api-listen`, `--ui-listen`, `--api-only`
+- Throughput and stability:
+  - `--api-run-timeout`
+  - `--api-rate-limit-per-minute`
+  - `--api-read-timeout`, `--api-write-timeout`, `--api-idle-timeout`
+- Auth and browser policy:
+  - `--api-auth-mode` (`token|session|hybrid`)
+  - `--api-session-ttl`
+  - `--api-session-secret` or `--api-session-secret-file`
+  - `--api-cors-origins`
+  - `--ui-allowed-origins`
+- Network topology:
+  - `--ui-backend-url` (UI proxy target override)
+  - `--api-advertise-url`, `--ui-advertise-url` (operator-facing startup URLs)
+- TLS and mTLS:
+  - API: `--api-tls-cert-file`, `--api-tls-key-file`, `--api-tls-client-ca-file`
+  - UI: `--ui-tls-cert-file`, `--ui-tls-key-file`
+  - UI->API TLS: `--ui-backend-ca-file`, `--ui-backend-client-cert-file`, `--ui-backend-client-key-file`, `--ui-backend-insecure-skip-verify`
+- Operability:
+  - `--wait-ready`, `--ready-timeout`
+  - `--detach`
+  - `--api-log-file`, `--ui-log-file`
+  - `--api-pid-file`, `--ui-pid-file`
+  - `--self-heal`, `--self-heal-max-restarts`, `--self-heal-window` (detached auto-restart watchdog)
+
+`v2-stop` now supports:
+
+- `--stop-timeout` (graceful stop before force-kill)
+- `--api-pid-file` / `--ui-pid-file` (custom PID file paths)
+
+Scalable example for multi-user deployments:
+
+```bash
+ncc-orchestrator v2-start \
+  --api-listen :8081 \
+  --ui-listen :8080 \
+  --api-auth-mode hybrid \
+  --api-session-secret-file /etc/ncc/session-secret.txt \
+  --api-session-ttl 30m \
+  --api-rate-limit-per-minute 300 \
+  --api-run-timeout 120m \
+  --api-read-timeout 20s \
+  --api-write-timeout 75s \
+  --api-idle-timeout 90s \
+  --api-cors-origins https://ncc-ui.example.com \
+  --ui-backend-url https://ncc-api.internal:8443 \
+  --ui-backend-ca-file /etc/ncc/internal-ca.pem \
+  --wait-ready --ready-timeout 45s --detach
+```
 
 Fallback (manual source workflow):
 
@@ -281,6 +384,17 @@ Migration checklist:
 - Enable retention controls for run-history and generated artifacts.
 - Run preflight checks in CI/CD before applying schedule or release changes.
 - Keep API Explorer external URL mode disabled by default unless explicitly needed.
+- Use `quickstart --auto-fix` for first-time environments to reduce setup mistakes and improve operator consistency.
+
+## Prometheus metrics behavior
+
+- Textfile metrics are controlled by `prom-enabled` (default `true`) and `prom-dir`.
+- When `prom-enabled=false`, `.prom` writes and preflight path checks for `prom-dir` are skipped.
+- Expanded textfile metrics include:
+  - run-state booleans (`run_has_failures|warnings|errors|problems`)
+  - `run_health_score`
+  - quality/shape indicators (`check_unique_total`, `check_duplicate_total`, detail byte metrics)
+  - severity ratio metric (`check_severity_ratio`).
 
 ## Kubernetes deployment process
 
@@ -304,9 +418,9 @@ kubectl apply -k k8s/
 Important:
 
 - Update image names in `api-deployment.yaml` and `ui-deployment.yaml` to your published v2 images.
-- API pod must include `ncc-api-server` + `ncc-orchestrator`.
+- API pod must include `ncc-api-server`.
+- Runner binary is staged for API execution via init container from runner image (`/tools/ncc-orchestrator`).
 - UI pod must include `ncc-ui-server` + built frontend files at `/app/frontend/dist`.
-
 
 ## Migration runbook
 

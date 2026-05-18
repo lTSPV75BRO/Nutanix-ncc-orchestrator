@@ -2530,6 +2530,7 @@ func TestValidateConfig(t *testing.T) {
 			OutputDirLogs:     "nccfiles",
 			OutputDirFiltered: "outputfiles",
 			LogFile:           "logs/ncc-runner.log",
+			PromEnabled:       true,
 			PromDir:           "promfiles",
 		}
 	}
@@ -2620,6 +2621,14 @@ func TestValidateConfig(t *testing.T) {
 		cfg.PromDir = ""
 		if err := validateConfig(cfg); err == nil {
 			t.Error("expected error for empty prom-dir")
+		}
+	})
+	t.Run("Empty prom-dir allowed when prom disabled", func(t *testing.T) {
+		cfg := validPaths()
+		cfg.PromEnabled = false
+		cfg.PromDir = ""
+		if err := validateConfig(cfg); err != nil {
+			t.Errorf("expected no error when prom is disabled, got %v", err)
 		}
 	})
 }

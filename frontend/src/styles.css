@@ -593,6 +593,16 @@ a {
   background: var(--table-row-odd);
 }
 
+.alerts-table .cluster-cell-text {
+  display: inline-block;
+  max-width: 160px;
+}
+
+.alerts-table .alert-title-inline {
+  display: inline-block;
+  max-width: 220px;
+}
+
 html[data-theme="light"] .alerts-toolbar {
   background: color-mix(in srgb, #ffffff 94%, #e2e8f0);
 }

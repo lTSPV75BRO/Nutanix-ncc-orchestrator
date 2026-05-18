@@ -80,7 +80,15 @@ export function SloPanel({ sloDashboard, regressionSummary, clusterNameMap }: Pr
         </Col>
         <Col xs={24} md={6}>
           <Card size="small">
-            <Statistic title="Delta FAIL Total" value={toNumber(reg.delta_fail_total)} valueStyle={{ color: toNumber(reg.delta_fail_total) > 0 ? "#f43f5e" : toNumber(reg.delta_fail_total) < 0 ? "#22c55e" : undefined }} />
+            <Statistic
+              title="Delta FAIL Total"
+              value={toNumber(reg.delta_fail_total)}
+              styles={{
+                content: {
+                  color: toNumber(reg.delta_fail_total) > 0 ? "#f43f5e" : toNumber(reg.delta_fail_total) < 0 ? "#22c55e" : undefined,
+                },
+              }}
+            />
           </Card>
         </Col>
       </Row>

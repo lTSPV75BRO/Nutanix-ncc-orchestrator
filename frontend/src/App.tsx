@@ -1,12 +1,13 @@
+import { lazy, Suspense } from "react";
 import { BgColorsOutlined, BarChartOutlined, DashboardOutlined, SettingOutlined } from "@ant-design/icons";
-import { Button, Dropdown, Layout, Menu, Typography } from "antd";
+import { Button, Dropdown, Layout, Menu, Spin, Typography } from "antd";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { DashboardPage } from "./pages/DashboardPage";
-import { SettingsPage } from "./pages/SettingsPage";
-import { InsightsPage } from "./pages/InsightsPage";
 import { THEME_OPTIONS, useAppTheme, type AppThemeSelection } from "./theme";
 
 const { Header, Content } = Layout;
+const DashboardPage = lazy(() => import("./pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
+const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
+const InsightsPage = lazy(() => import("./pages/InsightsPage").then((m) => ({ default: m.InsightsPage })));
 
 export default function App() {
   const location = useLocation();
@@ -57,12 +58,14 @@ export default function App() {
         </div>
       </Header>
       <Content className="app-content" style={{ padding: "16px", maxWidth: 1400, margin: "0 auto", width: "100%" }}>
-        <Routes>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/insights" element={<InsightsPage />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <Suspense fallback={<Spin size="large" />}>
+          <Routes>
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/insights" element={<InsightsPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
       </Content>
     </Layout>
   );
