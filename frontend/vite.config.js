@@ -3,24 +3,23 @@ import react from "@vitejs/plugin-react";
 import fs from "node:fs";
 import path from "node:path";
 function resolveApiToken() {
-    var envToken = (process.env.NCC_API_TOKEN || "").trim();
+    const envToken = (process.env.NCC_API_TOKEN || "").trim();
     if (envToken)
         return envToken;
-    var candidates = [
+    const candidates = [
         path.resolve(process.cwd(), ".ncc-api-token"),
         path.resolve(process.cwd(), "..", ".ncc-api-token"),
     ];
-    for (var _i = 0, candidates_1 = candidates; _i < candidates_1.length; _i++) {
-        var tokenPath = candidates_1[_i];
+    for (const tokenPath of candidates) {
         if (!fs.existsSync(tokenPath))
             continue;
-        var tok = fs.readFileSync(tokenPath, "utf8").trim();
+        const tok = fs.readFileSync(tokenPath, "utf8").trim();
         if (tok)
             return tok;
     }
     return "";
 }
-var apiToken = resolveApiToken();
+const apiToken = resolveApiToken();
 if (!apiToken) {
     // Helpful during local dev if proxy requests still return 401.
     // eslint-disable-next-line no-console
@@ -34,8 +33,8 @@ export default defineConfig({
             "/api": {
                 target: "http://localhost:8081",
                 changeOrigin: true,
-                configure: function (proxy) {
-                    proxy.on("proxyReq", function (proxyReq) {
+                configure: (proxy) => {
+                    proxy.on("proxyReq", (proxyReq) => {
                         if (apiToken) {
                             proxyReq.setHeader("X-API-Token", apiToken);
                         }

@@ -15,7 +15,7 @@ describe("App", () => {
     render(
       <AppThemeProvider>
         <QueryClientProvider client={queryClient}>
-          <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <MemoryRouter>
             <App />
           </MemoryRouter>
         </QueryClientProvider>

@@ -29,3 +29,16 @@ ncc-mcp-server
 # Frontend dependencies/cache
 frontend/node_modules/
 frontend/*.tsbuildinfo
+
+# Local runtime state/secrets
+.ncc-api-token
+.ncc-api-schedule.json
+.ncc-preflight-check
+.ncc-prefight-check
+
+# Local scratch/temp files
+.tmp_*
+
+# Local packaged release bundles
+ncc-v2-stack-*.tar.gz
+ncc-v2-stack-*.zip
