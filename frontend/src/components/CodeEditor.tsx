@@ -51,16 +51,25 @@ export function CodeEditor({
 
   useEffect(() => {
     if (!autoRevealLastLine) return;
-    const editor = editorRef.current;
-    if (editor) {
-      const lastLine = editor.getModel()?.getLineCount() ?? 1;
-      editor.revealLine(lastLine);
-      editor.setPosition({ lineNumber: lastLine, column: 1 });
-      return;
-    }
-    const fallback = fallbackRef.current;
-    if (!fallback) return;
-    fallback.scrollTop = fallback.scrollHeight;
+    const revealToBottom = () => {
+      const editor = editorRef.current;
+      if (editor) {
+        const lastLine = editor.getModel()?.getLineCount() ?? 1;
+        editor.revealLineInCenterIfOutsideViewport(lastLine);
+        editor.setPosition({ lineNumber: lastLine, column: 1 });
+        editor.setScrollTop(editor.getScrollHeight());
+        return;
+      }
+      const fallback = fallbackRef.current;
+      if (!fallback) return;
+      fallback.scrollTop = fallback.scrollHeight;
+    };
+    // Run after layout settles; Monaco may defer sizing/paint.
+    const raf1 = window.requestAnimationFrame(() => {
+      revealToBottom();
+      window.requestAnimationFrame(revealToBottom);
+    });
+    return () => window.cancelAnimationFrame(raf1);
   }, [autoRevealLastLine, value]);
 
   if (fallback) {
@@ -98,6 +107,12 @@ export function CodeEditor({
       onMount={(editor) => {
         editorRef.current = editor;
         setFallback(false);
+        if (autoRevealLastLine) {
+          const lastLine = editor.getModel()?.getLineCount() ?? 1;
+          editor.revealLineInCenterIfOutsideViewport(lastLine);
+          editor.setPosition({ lineNumber: lastLine, column: 1 });
+          editor.setScrollTop(editor.getScrollHeight());
+        }
       }}
       options={{
         readOnly,

@@ -48,6 +48,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/rs/zerolog/pkgerrors"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"github.com/vbauerster/mpb/v7"
 	"github.com/vbauerster/mpb/v7/decor"
@@ -333,6 +334,159 @@ func splitCSVTrimLower(s string) []string {
 		out = append(out, strings.ToLower(strings.TrimSpace(v)))
 	}
 	return out
+}
+
+func levenshteinDistance(a, b string) int {
+	if a == b {
+		return 0
+	}
+	if len(a) == 0 {
+		return len(b)
+	}
+	if len(b) == 0 {
+		return len(a)
+	}
+	prev := make([]int, len(b)+1)
+	for j := 0; j <= len(b); j++ {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		curr := make([]int, len(b)+1)
+		curr[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 0
+			if a[i-1] != b[j-1] {
+				cost = 1
+			}
+			del := prev[j] + 1
+			ins := curr[j-1] + 1
+			sub := prev[j-1] + cost
+			curr[j] = minInt(del, minInt(ins, sub))
+		}
+		prev = curr
+	}
+	return prev[len(b)]
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func closestToken(input string, candidates []string) string {
+	in := strings.ToLower(strings.TrimSpace(input))
+	if in == "" || len(candidates) == 0 {
+		return ""
+	}
+	best := ""
+	bestDist := 1 << 30
+	for _, c := range candidates {
+		clean := strings.ToLower(strings.TrimSpace(c))
+		if clean == "" {
+			continue
+		}
+		if clean == in {
+			return c
+		}
+		d := levenshteinDistance(in, clean)
+		if d < bestDist {
+			bestDist = d
+			best = c
+		}
+	}
+	// Keep suggestions conservative to avoid noisy/wrong hints.
+	if bestDist > 3 && !strings.HasPrefix(strings.ToLower(best), in) {
+		return ""
+	}
+	return best
+}
+
+func knownCommandNames(cmd *cobra.Command) []string {
+	names := []string{}
+	for _, c := range cmd.Commands() {
+		if !c.IsAvailableCommand() || c.Hidden {
+			continue
+		}
+		names = append(names, c.Name())
+	}
+	return names
+}
+
+func knownFlagNames(cmd *cobra.Command) []string {
+	set := map[string]struct{}{}
+	cmd.Flags().VisitAll(func(f *pflag.Flag) {
+		set["--"+f.Name] = struct{}{}
+	})
+	cmd.InheritedFlags().VisitAll(func(f *pflag.Flag) {
+		set["--"+f.Name] = struct{}{}
+	})
+	cmd.PersistentFlags().VisitAll(func(f *pflag.Flag) {
+		set["--"+f.Name] = struct{}{}
+	})
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func extractQuotedValue(msg string) string {
+	start := strings.Index(msg, "\"")
+	if start < 0 {
+		return ""
+	}
+	rest := msg[start+1:]
+	end := strings.Index(rest, "\"")
+	if end < 0 {
+		return ""
+	}
+	return rest[:end]
+}
+
+func humanizeCLIError(root *cobra.Command, argv []string, err error) string {
+	msg := strings.TrimSpace(err.Error())
+	lower := strings.ToLower(msg)
+	active := root
+	if len(argv) > 0 {
+		if found, _, findErr := root.Find(argv); findErr == nil && found != nil {
+			active = found
+		}
+	}
+	helpCmd := "ncc-orchestrator --help"
+	if active != nil && active != root {
+		helpCmd = active.CommandPath() + " --help"
+	}
+	if strings.Contains(lower, "unknown command") {
+		bad := extractQuotedValue(msg)
+		suggestion := closestToken(bad, knownCommandNames(root))
+		if suggestion != "" {
+			return fmt.Sprintf("unknown command %q. Did you mean `%s`?\nHint: run `%s` for available commands.", bad, suggestion, helpCmd)
+		}
+		return fmt.Sprintf("%s\nHint: run `%s` for available commands.", msg, helpCmd)
+	}
+	if strings.Contains(lower, "unknown flag") {
+		bad := extractQuotedValue(msg)
+		if bad == "" {
+			if idx := strings.Index(lower, "unknown flag:"); idx >= 0 {
+				raw := strings.TrimSpace(msg[idx+len("unknown flag:"):])
+				if raw != "" {
+					bad = strings.Fields(raw)[0]
+				}
+			}
+		}
+		suggestion := closestToken(bad, knownFlagNames(active))
+		if strings.EqualFold(strings.TrimSpace(suggestion), strings.TrimSpace(bad)) {
+			suggestion = ""
+		}
+		if suggestion != "" {
+			return fmt.Sprintf("%s\nDid you mean `%s`?\nHint: run `%s` to view supported flags.", msg, suggestion, helpCmd)
+		}
+		return fmt.Sprintf("%s\nHint: run `%s` to view supported flags.", msg, helpCmd)
+	}
+	return msg
 }
 
 func readLineValuesFile(path string) ([]string, error) {
@@ -677,6 +831,55 @@ func parseClusterFileLine(line string) (cluster string, username string, passwor
 	}
 }
 
+func normalizeClusterAddress(raw string) (string, error) {
+	cluster := strings.TrimSpace(raw)
+	if cluster == "" {
+		return "", errors.New("cluster address cannot be empty")
+	}
+	if strings.Contains(cluster, "://") {
+		parsed, err := url.Parse(cluster)
+		if err != nil {
+			return "", fmt.Errorf("invalid cluster URL: %w", err)
+		}
+		host := strings.TrimSpace(parsed.Hostname())
+		if host == "" {
+			return "", errors.New("cluster URL must include a host")
+		}
+		cluster = host
+	}
+	// Accept host:port/IP:port shorthand; NCC always targets 9440 internally.
+	if host, port, err := net.SplitHostPort(cluster); err == nil {
+		if port == "" {
+			return "", errors.New("cluster port is empty")
+		}
+		cluster = strings.Trim(host, "[]")
+	} else {
+		if last := strings.LastIndex(cluster, ":"); last > 0 && strings.Count(cluster, ":") == 1 {
+			port := strings.TrimSpace(cluster[last+1:])
+			if _, pErr := strconv.Atoi(port); pErr == nil {
+				cluster = strings.TrimSpace(cluster[:last])
+			}
+		}
+	}
+	cluster = strings.Trim(cluster, "[]")
+	if cluster == "" {
+		return "", errors.New("cluster address cannot be empty")
+	}
+	return cluster, nil
+}
+
+func normalizeClusters(clusters []string) ([]string, error) {
+	out := make([]string, 0, len(clusters))
+	for i, cluster := range clusters {
+		norm, err := normalizeClusterAddress(cluster)
+		if err != nil {
+			return nil, fmt.Errorf("cluster %d (%s): %w", i+1, cluster, err)
+		}
+		out = append(out, norm)
+	}
+	return out, nil
+}
+
 func credentialsForCluster(cfg Config, cluster string) (string, string) {
 	user := strings.TrimSpace(cfg.Username)
 	pass := cfg.Password
@@ -732,8 +935,9 @@ func mustParseDur(s string, def time.Duration) time.Duration {
 
 // validateClusterAddress validates cluster IP or hostname
 func validateClusterAddress(cluster string) error {
-	if cluster == "" {
-		return errors.New("cluster address cannot be empty")
+	cluster, err := normalizeClusterAddress(cluster)
+	if err != nil {
+		return err
 	}
 	if len(cluster) > maxClusterNameLen {
 		return fmt.Errorf("cluster address too long (max %d chars)", maxClusterNameLen)
@@ -768,13 +972,17 @@ func validateClusters(clusters []string) error {
 
 	seen := make(map[string]bool)
 	for i, cluster := range clusters {
-		if err := validateClusterAddress(cluster); err != nil {
+		norm, err := normalizeClusterAddress(cluster)
+		if err != nil {
 			return fmt.Errorf("cluster %d (%s): %w", i+1, cluster, err)
 		}
-		if seen[cluster] {
-			return fmt.Errorf("duplicate cluster address: %s", cluster)
+		if err := validateClusterAddress(norm); err != nil {
+			return fmt.Errorf("cluster %d (%s): %w", i+1, cluster, err)
 		}
-		seen[cluster] = true
+		if seen[norm] {
+			return fmt.Errorf("duplicate cluster address: %s", norm)
+		}
+		seen[norm] = true
 	}
 
 	return nil
@@ -1613,6 +1821,30 @@ func bindConfig() (Config, error) {
 			clustersFromFlag = lines
 		}
 		clusterCreds = fileCreds
+	}
+	if len(clustersFromFlag) > 0 {
+		normalizedClusters, err := normalizeClusters(clustersFromFlag)
+		if err != nil {
+			return Config{}, err
+		}
+		clustersFromFlag = normalizedClusters
+	}
+	if len(clusterCreds) > 0 {
+		normalizedCreds := make(map[string]ClusterCredential, len(clusterCreds))
+		for cluster, cred := range clusterCreds {
+			norm, err := normalizeClusterAddress(cluster)
+			if err != nil {
+				return Config{}, fmt.Errorf("clusters-file credential key %s: %w", cluster, err)
+			}
+			if existing, ok := normalizedCreds[norm]; ok {
+				if (strings.TrimSpace(existing.Username) != "" && strings.TrimSpace(cred.Username) != "" && existing.Username != cred.Username) ||
+					(strings.TrimSpace(existing.Password) != "" && strings.TrimSpace(cred.Password) != "" && existing.Password != cred.Password) {
+					return Config{}, fmt.Errorf("clusters-file has conflicting credentials for %s after normalization", norm)
+				}
+			}
+			normalizedCreds[norm] = cred
+		}
+		clusterCreds = normalizedCreds
 	}
 	if pcsFile != "" {
 		lines, err := readLineValuesFile(pcsFile)
@@ -8315,7 +8547,11 @@ func waitForPIDExit(pid int, timeout time.Duration) bool {
 	}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if err := syscall.Kill(pid, 0); err != nil {
+		proc, err := os.FindProcess(pid)
+		if err != nil {
+			return true
+		}
+		if err := proc.Signal(syscall.Signal(0)); err != nil {
 			return true
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -8427,6 +8663,7 @@ func runV2Stop(opts v2StopOptions) error {
 
 	foundAny := false
 	stoppedAny := false
+	cleanedStaleAny := false
 	for _, t := range targets {
 		pid, err := readPIDFromFile(t.pidPath)
 		if err != nil {
@@ -8438,6 +8675,12 @@ func runV2Stop(opts v2StopOptions) error {
 		}
 		foundAny = true
 		if err := signalPIDStop(pid, opts.Force); err != nil {
+			if errors.Is(err, os.ErrProcessDone) {
+				_ = os.Remove(t.pidPath)
+				cleanedStaleAny = true
+				fmt.Fprintf(os.Stderr, "removed stale %s pid file (pid=%d already exited)\n", t.name, pid)
+				continue
+			}
 			fmt.Fprintf(os.Stderr, "failed to stop %s (pid=%d): %v\n", t.name, pid, err)
 			continue
 		}
@@ -8454,8 +8697,11 @@ func runV2Stop(opts v2StopOptions) error {
 	if !foundAny {
 		return fmt.Errorf("no detached pid files found under %s", runDir)
 	}
-	if !stoppedAny {
+	if !stoppedAny && !cleanedStaleAny {
 		return errors.New("found detached pid files but failed to stop services")
+	}
+	if !stoppedAny && cleanedStaleAny {
+		fmt.Fprintln(os.Stderr, "detached services were already stopped; stale pid files cleaned.")
 	}
 	return nil
 }
@@ -8599,6 +8845,9 @@ func runV2Start(opts v2StartOptions) error {
 	if installDir == "" {
 		installDir = ".ncc-v2"
 	}
+	if absInstallDir, err := filepath.Abs(installDir); err == nil {
+		installDir = absInstallDir
+	}
 	apiOnly := opts.APIOnly
 	var (
 		apiBin      string
@@ -8646,6 +8895,18 @@ func runV2Start(opts v2StartOptions) error {
 	}
 	if strings.TrimSpace(opts.TokenFile) == "" {
 		opts.TokenFile = ".ncc-api-token"
+	}
+	if absConfigPath, err := filepath.Abs(opts.ConfigPath); err == nil {
+		opts.ConfigPath = absConfigPath
+	}
+	if absOutputDir, err := filepath.Abs(opts.OutputDir); err == nil {
+		opts.OutputDir = absOutputDir
+	}
+	if absLogDir, err := filepath.Abs(opts.LogDir); err == nil {
+		opts.LogDir = absLogDir
+	}
+	if absTokenPath, err := filepath.Abs(opts.TokenFile); err == nil {
+		opts.TokenFile = absTokenPath
 	}
 	if strings.TrimSpace(opts.APIAuthMode) == "" {
 		opts.APIAuthMode = "token"
@@ -8782,17 +9043,21 @@ func runV2Start(opts v2StartOptions) error {
 	}
 	if opts.Detach {
 		runDir := filepath.Join(installDir, "run")
-		logDir := filepath.Join(installDir, "logs")
+		detachedLogDir := filepath.Join(installDir, "logs")
 		if err := os.MkdirAll(runDir, 0755); err != nil {
 			return fmt.Errorf("prepare detached run dir: %w", err)
 		}
-		if err := os.MkdirAll(logDir, 0755); err != nil {
+		if err := os.MkdirAll(detachedLogDir, 0755); err != nil {
 			return fmt.Errorf("prepare detached log dir: %w", err)
 		}
 		apiLogPath := strings.TrimSpace(opts.APILogFile)
 		if apiLogPath == "" {
-			apiLogPath = filepath.Join(logDir, "v2-api.log")
+			apiLogPath = filepath.Join(detachedLogDir, "v2-api.log")
 		}
+		if absPath, err := filepath.Abs(apiLogPath); err == nil {
+			apiLogPath = absPath
+		}
+		opts.APILogFile = apiLogPath
 		if err := os.MkdirAll(filepath.Dir(apiLogPath), 0755); err != nil {
 			return fmt.Errorf("prepare api detached log parent dir: %w", err)
 		}
@@ -8812,8 +9077,12 @@ func runV2Start(opts v2StartOptions) error {
 		if uiCmd != nil {
 			uiLogPath := strings.TrimSpace(opts.UILogFile)
 			if uiLogPath == "" {
-				uiLogPath = filepath.Join(logDir, "v2-ui.log")
+				uiLogPath = filepath.Join(detachedLogDir, "v2-ui.log")
 			}
+			if absPath, err := filepath.Abs(uiLogPath); err == nil {
+				uiLogPath = absPath
+			}
+			opts.UILogFile = uiLogPath
 			if err := os.MkdirAll(filepath.Dir(uiLogPath), 0755); err != nil {
 				return fmt.Errorf("prepare ui detached log parent dir: %w", err)
 			}
@@ -8863,6 +9132,8 @@ func runV2Start(opts v2StartOptions) error {
 		fmt.Fprintf(os.Stderr, "Frontend  : %s\n", frontendDir)
 	}
 	fmt.Fprintf(os.Stderr, "Orchestrator binary for API runs: %s\n", opts.OrchestratorBin)
+	fmt.Fprintf(os.Stderr, "Config path: %s\n", opts.ConfigPath)
+	fmt.Fprintf(os.Stderr, "Token file: %s\n", opts.TokenFile)
 	fmt.Fprintf(os.Stderr, "API: %s\n", displayAPIURL)
 	if uiCmd != nil {
 		fmt.Fprintf(os.Stderr, "UI : %s\n", displayUIURL)
@@ -8894,6 +9165,9 @@ func runV2Start(opts v2StartOptions) error {
 		if apiPIDPath == "" {
 			apiPIDPath = filepath.Join(runDir, "v2-api.pid")
 		}
+		if absPath, err := filepath.Abs(apiPIDPath); err == nil {
+			apiPIDPath = absPath
+		}
 		if err := os.MkdirAll(filepath.Dir(apiPIDPath), 0755); err != nil {
 			signalProcessStop(apiCmd)
 			if uiCmd != nil {
@@ -8910,6 +9184,9 @@ func runV2Start(opts v2StartOptions) error {
 			uiPIDPath = strings.TrimSpace(opts.UIPIDFile)
 			if uiPIDPath == "" {
 				uiPIDPath = filepath.Join(runDir, "v2-ui.pid")
+			}
+			if absPath, err := filepath.Abs(uiPIDPath); err == nil {
+				uiPIDPath = absPath
 			}
 			if err := os.MkdirAll(filepath.Dir(uiPIDPath), 0755); err != nil {
 				signalProcessStop(apiCmd)
@@ -10848,6 +11125,26 @@ func preflightProbePath(path string) error {
 	return nil
 }
 
+func preflightResolveClusterTarget(cluster string) error {
+	target, err := normalizeClusterAddress(cluster)
+	if err != nil {
+		return err
+	}
+	if net.ParseIP(target) != nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, target)
+	if err != nil {
+		return err
+	}
+	if len(addrs) == 0 {
+		return errors.New("resolver returned no addresses")
+	}
+	return nil
+}
+
 func buildPreflightReport(cfgPath string) preflightReport {
 	report := preflightReport{
 		OK:         true,
@@ -10974,6 +11271,21 @@ func buildPreflightReport(cfgPath string) preflightReport {
 		checkFile("file.clusters-file", "Clusters file", cfg.ClustersFile, false)
 		checkFile("file.exclude-alert-titles-file", "Exclude alert titles file", cfg.ExcludeAlertTitlesFile, false)
 		checkFile("file.secrets-file", "Secrets file", cfg.SecretsFile, strings.EqualFold(strings.TrimSpace(cfg.SecretsProvider), "file"))
+		for i, cluster := range cfg.Clusters {
+			id := fmt.Sprintf("cluster.target.%d", i+1)
+			title := fmt.Sprintf("Cluster target %d resolution", i+1)
+			if err := preflightResolveClusterTarget(cluster); err != nil {
+				add(preflightCheck{
+					ID:      id,
+					Status:  "fail",
+					Title:   title,
+					Message: fmt.Sprintf("%s: %v", cluster, err),
+					Hint:    "Use a reachable IP/FQDN, or verify DNS/network from this runtime.",
+				})
+			} else {
+				add(preflightCheck{ID: id, Status: "pass", Title: title, Message: cluster})
+			}
+		}
 		// Security posture advisories.
 		if cfg.InsecureSkipVerify {
 			add(preflightCheck{
@@ -11227,20 +11539,67 @@ func applyFullAutoRuntimeTuning(cfg *Config) []string {
 }
 
 func quickstartPrompt(reader *bufio.Reader, prompt string, defaultValue string) (string, error) {
-	if strings.TrimSpace(defaultValue) != "" {
-		fmt.Printf("%s [%s]: ", prompt, defaultValue)
-	} else {
-		fmt.Printf("%s: ", prompt)
+	renderPrompt := func() {
+		if strings.TrimSpace(defaultValue) != "" {
+			fmt.Printf("%s [%s]: ", prompt, defaultValue)
+		} else {
+			fmt.Printf("%s: ", prompt)
+		}
 	}
+	renderPrompt()
 	raw, err := reader.ReadString('\n')
 	if err != nil {
 		return "", err
 	}
 	v := strings.TrimSpace(raw)
+	if v != "" {
+		return v, nil
+	}
+	fmt.Println("Input is empty. Press Enter again to continue, or type a value.")
+	renderPrompt()
+	raw, err = reader.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	v = strings.TrimSpace(raw)
 	if v == "" {
 		return strings.TrimSpace(defaultValue), nil
 	}
 	return v, nil
+}
+
+func quickstartWarnOnEmptyTargets(mode, clusters, pcs string) {
+	if mode == "clusters" && strings.TrimSpace(clusters) == "" {
+		fmt.Println("Warning: cluster targets are empty; preflight will fail until clusters (or clusters-file) is set.")
+	}
+	if mode == "pc" && strings.TrimSpace(pcs) == "" {
+		fmt.Println("Warning: Prism Central targets are empty; discovery will rely on prism-central-url.")
+	}
+}
+
+func quickstartPromptChoice(reader *bufio.Reader, prompt string, defaultValue string, allowed []string) (string, error) {
+	allowSet := map[string]bool{}
+	for _, a := range allowed {
+		allowSet[strings.ToLower(strings.TrimSpace(a))] = true
+	}
+	v, err := quickstartPrompt(reader, prompt, defaultValue)
+	if err != nil {
+		return "", err
+	}
+	normalized := strings.ToLower(strings.TrimSpace(v))
+	if allowSet[normalized] {
+		return normalized, nil
+	}
+	fmt.Printf("Invalid value %q. Allowed values: %s\n", v, strings.Join(allowed, ", "))
+	v, err = quickstartPrompt(reader, prompt, defaultValue)
+	if err != nil {
+		return "", err
+	}
+	normalized = strings.ToLower(strings.TrimSpace(v))
+	if !allowSet[normalized] {
+		return strings.ToLower(strings.TrimSpace(defaultValue)), nil
+	}
+	return normalized, nil
 }
 
 func upsertYAMLScalar(content string, key string, value string) string {
@@ -11256,6 +11615,115 @@ func upsertYAMLScalar(content string, key string, value string) string {
 	return content + quoted + "\n"
 }
 
+func yamlScalarValue(content, key string) string {
+	pattern := fmt.Sprintf(`(?m)^\s*%s:\s*(.*)$`, regexp.QuoteMeta(key))
+	re := regexp.MustCompile(pattern)
+	m := re.FindStringSubmatch(content)
+	if len(m) != 2 {
+		return ""
+	}
+	v := strings.TrimSpace(m[1])
+	if i := strings.Index(v, "#"); i >= 0 {
+		v = strings.TrimSpace(v[:i])
+	}
+	v = strings.TrimSpace(strings.Trim(v, `"'`))
+	return v
+}
+
+func repairConfigInlineCommentValues(cfgPath string) (bool, error) {
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return false, err
+	}
+	lines := strings.Split(string(raw), "\n")
+	changed := false
+	repairableKey := func(k string) bool {
+		switch strings.TrimSpace(k) {
+		case "timeout", "request-timeout", "poll-interval", "poll-jitter", "retry-base-delay", "retry-max-delay", "idle-conn-timeout":
+			return true
+		default:
+			return false
+		}
+	}
+	stripCommentTailForKey := func(k string) bool {
+		switch strings.TrimSpace(k) {
+		case "username", "cluster-source-mode", "discover-api-version", "nutanix-v4-api-version", "insecure-skip-verify", "timeout", "request-timeout":
+			return true
+		default:
+			return false
+		}
+	}
+	for i, ln := range lines {
+		trim := strings.TrimSpace(ln)
+		if trim == "" || strings.HasPrefix(trim, "#") {
+			continue
+		}
+		colon := strings.Index(ln, ":")
+		if colon <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(ln[:colon])
+		prefix := ln[:colon+1]
+		rest := strings.TrimSpace(ln[colon+1:])
+		if len(rest) < 2 || rest[0] != '"' || rest[len(rest)-1] != '"' {
+			continue
+		}
+		if stripCommentTailForKey(key) {
+			body := strings.TrimPrefix(rest, `"`)
+			body = strings.TrimSuffix(body, `"`)
+			if hash := strings.Index(body, "#"); hash >= 0 {
+				body = body[:hash]
+			}
+			body = strings.TrimSpace(body)
+			for strings.HasSuffix(body, `\"`) {
+				body = strings.TrimSpace(strings.TrimSuffix(body, `\"`))
+			}
+			body = strings.TrimRight(body, `\`)
+			fixedLine := prefix + " " + strconv.Quote(body)
+			if strings.TrimSpace(fixedLine) != strings.TrimSpace(ln) {
+				lines[i] = fixedLine
+				changed = true
+			}
+			continue
+		}
+		inner := rest[1 : len(rest)-1]
+		orig := inner
+		legacyIdx := strings.Index(inner, `\"`)
+		if legacyIdx >= 0 {
+			legacyTail := inner[legacyIdx+2:]
+			if strings.Contains(legacyTail, "#") {
+				inner = strings.TrimSpace(inner[:legacyIdx])
+			}
+		}
+		if repairableKey(key) {
+			inner = strings.TrimRight(inner, `\`)
+		}
+		inner = strings.TrimSpace(inner)
+		if inner != strings.TrimSpace(orig) {
+			lines[i] = prefix + " " + strconv.Quote(inner)
+			changed = true
+		}
+	}
+	if !changed {
+		return false, nil
+	}
+	out := strings.Join(lines, "\n")
+	if err := os.WriteFile(cfgPath, []byte(out), 0644); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func maskQuickstartValue(key, value string) string {
+	if strings.EqualFold(strings.TrimSpace(key), "password") {
+		if strings.TrimSpace(value) == "" {
+			return `""`
+		}
+		return `"********"`
+	}
+	return strconv.Quote(value)
+}
+
 func runQuickstartInteractive(cfgPath string) error {
 	reader := bufio.NewReader(os.Stdin)
 	contentBytes, err := os.ReadFile(cfgPath)
@@ -11263,35 +11731,169 @@ func runQuickstartInteractive(cfgPath string) error {
 		return err
 	}
 	content := string(contentBytes)
-	mode, err := quickstartPrompt(reader, "Cluster source mode (clusters|pc)", "clusters")
+	original := content
+	updates := map[string]string{}
+	defaultMode := yamlScalarValue(original, "cluster-source-mode")
+	if defaultMode == "" {
+		defaultMode = "clusters"
+	}
+	mode, err := quickstartPromptChoice(reader, "Cluster source mode (clusters|pc)", defaultMode, []string{"clusters", "pc"})
 	if err != nil {
 		return err
 	}
-	mode = strings.ToLower(strings.TrimSpace(mode))
-	if mode != "clusters" && mode != "pc" {
-		mode = "clusters"
-	}
+	updates["cluster-source-mode"] = mode
 	content = upsertYAMLScalar(content, "cluster-source-mode", mode)
 	if mode == "pc" {
-		pcs, err := quickstartPrompt(reader, "Prism Central targets (comma-separated)", "")
+		pcURLDefault := yamlScalarValue(original, "prism-central-url")
+		pcURL, err := quickstartPrompt(reader, "Prism Central URL (optional, e.g. https://pc:9440)", pcURLDefault)
 		if err != nil {
 			return err
 		}
-		content = upsertYAMLScalar(content, "pcs", pcs)
+		updates["prism-central-url"] = pcURL
+		content = upsertYAMLScalar(content, "prism-central-url", pcURL)
+		pcs := ""
+		if strings.TrimSpace(pcURL) == "" {
+			pcsDefault := yamlScalarValue(original, "pcs")
+			pcs, err = quickstartPrompt(reader, "Prism Central targets (comma-separated)", pcsDefault)
+			if err != nil {
+				return err
+			}
+			updates["pcs"] = pcs
+			content = upsertYAMLScalar(content, "pcs", pcs)
+			quickstartWarnOnEmptyTargets(mode, "", pcs)
+		} else {
+			updates["pcs"] = yamlScalarValue(original, "pcs")
+		}
+		updates["clusters"] = ""
 		content = upsertYAMLScalar(content, "clusters", "")
 	} else {
-		clusters, err := quickstartPrompt(reader, "Cluster targets (comma-separated)", "")
+		clusterDefault := yamlScalarValue(original, "clusters")
+		clusters, err := quickstartPrompt(reader, "Cluster targets (comma-separated)", clusterDefault)
 		if err != nil {
 			return err
 		}
+		updates["clusters"] = clusters
+		updates["pcs"] = ""
 		content = upsertYAMLScalar(content, "clusters", clusters)
 		content = upsertYAMLScalar(content, "pcs", "")
+		quickstartWarnOnEmptyTargets(mode, clusters, "")
 	}
-	username, err := quickstartPrompt(reader, "Prism username", "admin")
+	defaultUser := yamlScalarValue(original, "username")
+	if strings.TrimSpace(defaultUser) == "" {
+		defaultUser = "admin"
+	}
+	username, err := quickstartPrompt(reader, "Prism username", defaultUser)
 	if err != nil {
 		return err
 	}
+	updates["username"] = username
 	content = upsertYAMLScalar(content, "username", username)
+	insecureDefault := strings.ToLower(strings.TrimSpace(yamlScalarValue(original, "insecure-skip-verify")))
+	if insecureDefault != "true" && insecureDefault != "false" {
+		insecureDefault = "false"
+	}
+	insecureValue, err := quickstartPromptChoice(reader, "Skip TLS certificate verification? (true|false)", insecureDefault, []string{"true", "false"})
+	if err != nil {
+		return err
+	}
+	updates["insecure-skip-verify"] = insecureValue
+	content = upsertYAMLScalar(content, "insecure-skip-verify", insecureValue)
+	advanced, err := quickstartConfirm(reader, "Configure advanced network/runtime options (timeouts/api version)?", false)
+	if err != nil {
+		return err
+	}
+	if advanced {
+		timeoutDefault := yamlScalarValue(original, "timeout")
+		if timeoutDefault == "" {
+			timeoutDefault = "15m"
+		}
+		timeoutValue, err := quickstartPrompt(reader, "Overall cluster timeout (e.g. 15m)", timeoutDefault)
+		if err != nil {
+			return err
+		}
+		updates["timeout"] = timeoutValue
+		content = upsertYAMLScalar(content, "timeout", timeoutValue)
+		reqTimeoutDefault := yamlScalarValue(original, "request-timeout")
+		if reqTimeoutDefault == "" {
+			reqTimeoutDefault = "20s"
+		}
+		reqTimeoutValue, err := quickstartPrompt(reader, "Per-request timeout (e.g. 20s)", reqTimeoutDefault)
+		if err != nil {
+			return err
+		}
+		updates["request-timeout"] = reqTimeoutValue
+		content = upsertYAMLScalar(content, "request-timeout", reqTimeoutValue)
+		if mode == "pc" {
+			discoverDefault := yamlScalarValue(original, "discover-api-version")
+			if discoverDefault == "" {
+				discoverDefault = defaultDiscoverAPIVersion
+			}
+			discoverVer, err := quickstartPromptChoice(reader, "Discover API version (v4|v3)", discoverDefault, []string{"v4", "v3"})
+			if err != nil {
+				return err
+			}
+			updates["discover-api-version"] = discoverVer
+			content = upsertYAMLScalar(content, "discover-api-version", discoverVer)
+
+			v4PathDefault := yamlScalarValue(original, "nutanix-v4-api-version")
+			if v4PathDefault == "" {
+				v4PathDefault = defaultNutanixV4APIVersion
+			}
+			v4PathValue, err := quickstartPrompt(reader, "Nutanix v4 API path version (e.g. v4.2)", v4PathDefault)
+			if err != nil {
+				return err
+			}
+			updates["nutanix-v4-api-version"] = v4PathValue
+			content = upsertYAMLScalar(content, "nutanix-v4-api-version", v4PathValue)
+		}
+	}
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		setPasswordNow, err := quickstartConfirm(reader, "Set Prism password now?", false)
+		if err != nil {
+			return err
+		}
+		if setPasswordNow {
+			fmt.Print("Prism password (input hidden): ")
+			bytePw, err := term.ReadPassword(int(os.Stdin.Fd()))
+			fmt.Println()
+			if err != nil {
+				return fmt.Errorf("read quickstart password: %w", err)
+			}
+			pw := strings.TrimSpace(string(bytePw))
+			updates["password"] = pw
+			content = upsertYAMLScalar(content, "password", pw)
+		}
+	}
+	fmt.Println("Planned config updates:")
+	orderedKeys := []string{
+		"cluster-source-mode", "clusters", "pcs", "prism-central-url",
+		"username", "password", "insecure-skip-verify",
+		"timeout", "request-timeout", "discover-api-version", "nutanix-v4-api-version",
+	}
+	changed := 0
+	for _, key := range orderedKeys {
+		newVal, ok := updates[key]
+		if !ok {
+			continue
+		}
+		oldVal := yamlScalarValue(original, key)
+		if oldVal == newVal {
+			continue
+		}
+		changed++
+		fmt.Printf("- %s: %s -> %s\n", key, maskQuickstartValue(key, oldVal), maskQuickstartValue(key, newVal))
+	}
+	if changed == 0 {
+		fmt.Println("- No effective value changes detected.")
+	}
+	applyChanges, err := quickstartConfirm(reader, "Apply these changes to config?", true)
+	if err != nil {
+		return err
+	}
+	if !applyChanges {
+		fmt.Printf("Interactive quickstart did not modify %s\n", cfgPath)
+		return nil
+	}
 	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
 		return err
 	}
@@ -11304,14 +11906,26 @@ func quickstartConfirm(reader *bufio.Reader, prompt string, defaultYes bool) (bo
 	if defaultYes {
 		suffix = "[Y/n]"
 	}
-	fmt.Printf("%s %s ", prompt, suffix)
+	renderPrompt := func() {
+		fmt.Printf("%s %s ", prompt, suffix)
+	}
+	renderPrompt()
 	raw, err := reader.ReadString('\n')
 	if err != nil {
 		return false, err
 	}
 	v := strings.ToLower(strings.TrimSpace(raw))
 	if v == "" {
-		return defaultYes, nil
+		fmt.Println("Input is empty. Press Enter again to continue, or type y/n.")
+		renderPrompt()
+		raw, err = reader.ReadString('\n')
+		if err != nil {
+			return false, err
+		}
+		v = strings.ToLower(strings.TrimSpace(raw))
+		if v == "" {
+			return defaultYes, nil
+		}
 	}
 	if v == "y" || v == "yes" {
 		return true, nil
@@ -11330,8 +11944,60 @@ func quickstartV2Status(installDir string) (bool, string, string, string, string
 	return true, apiBin, uiBin, frontendDir, layout
 }
 
+func quickstartStatusSummary(report preflightReport) (pass, warn, fail int) {
+	for _, c := range report.Checks {
+		switch strings.ToLower(strings.TrimSpace(c.Status)) {
+		case "pass":
+			pass++
+		case "warn":
+			warn++
+		case "fail":
+			fail++
+		}
+	}
+	return pass, warn, fail
+}
+
+func printQuickstartWarningHighlights(report preflightReport, limit int) {
+	if limit <= 0 {
+		limit = 3
+	}
+	printed := 0
+	for _, c := range report.Checks {
+		if strings.ToLower(strings.TrimSpace(c.Status)) != "warn" {
+			continue
+		}
+		msg := strings.TrimSpace(c.Message)
+		title := strings.TrimSpace(c.Title)
+		switch strings.ToLower(msg) {
+		case "", "not set":
+			if title != "" {
+				msg = fmt.Sprintf("%s: %s", title, strings.TrimSpace(c.Message))
+			}
+		}
+		if strings.TrimSpace(msg) == "" {
+			msg = c.ID
+		}
+		fmt.Printf("- [warn] %s", strings.TrimSpace(msg))
+		if h := strings.TrimSpace(c.Hint); h != "" {
+			fmt.Printf(" | hint: %s", h)
+		}
+		fmt.Println()
+		printed++
+		if printed >= limit {
+			break
+		}
+	}
+	if report.Warn > printed {
+		fmt.Printf("- ... %d more warnings (run `ncc-orchestrator preflight-check --config %s` for full details)\n", report.Warn-printed, report.ConfigPath)
+	}
+}
+
 func runQuickstartCommand(cmd *cobra.Command, args []string) error {
 	cfgPath, _ := cmd.Flags().GetString("config")
+	if strings.TrimSpace(cfgPath) == "" {
+		cfgPath = "config.yaml"
+	}
 	autoFix, _ := cmd.Flags().GetBool("auto-fix")
 	interactive, _ := cmd.Flags().GetBool("interactive")
 	assumeYes, _ := cmd.Flags().GetBool("assume-yes")
@@ -11370,6 +12036,22 @@ func runQuickstartCommand(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Printf("Created starter config: %s\n", cfgPath)
 	}
+	if autoFix {
+		repairedAny := false
+		for i := 0; i < 3; i++ {
+			fixed, err := repairConfigInlineCommentValues(cfgPath)
+			if err != nil {
+				break
+			}
+			if !fixed {
+				break
+			}
+			repairedAny = true
+		}
+		if repairedAny {
+			fmt.Println("Auto-fix: repaired malformed quoted config values.")
+		}
+	}
 	if interactive {
 		if err := runQuickstartInteractive(cfgPath); err != nil {
 			return fmt.Errorf("quickstart interactive: %w", err)
@@ -11377,7 +12059,12 @@ func runQuickstartCommand(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Println("Step 2/3: running safety checks")
 	report := buildPreflightReport(cfgPath)
-	fmt.Printf("Quickstart preflight: failed=%d warn=%d\n", report.Failed, report.Warn)
+	pass, warn, fail := quickstartStatusSummary(report)
+	fmt.Printf("Quickstart preflight: pass=%d warn=%d failed=%d\n", pass, warn, fail)
+	if warn > 0 {
+		fmt.Println("Preflight warnings:")
+		printQuickstartWarningHighlights(report, 3)
+	}
 	if report.Failed > 0 && autoFix {
 		cfg, cfgErr := loadConfigForValidation(cfgPath)
 		if cfgErr == nil {
@@ -11387,7 +12074,12 @@ func runQuickstartCommand(cmd *cobra.Command, args []string) error {
 			}
 			if fixed > 0 {
 				report = buildPreflightReport(cfgPath)
-				fmt.Printf("After auto-fix: failed=%d warn=%d\n", report.Failed, report.Warn)
+				pass, warn, fail = quickstartStatusSummary(report)
+				fmt.Printf("After auto-fix: pass=%d warn=%d failed=%d\n", pass, warn, fail)
+				if warn > 0 {
+					fmt.Println("Remaining warnings:")
+					printQuickstartWarningHighlights(report, 3)
+				}
 			}
 		}
 	}
@@ -11395,8 +12087,9 @@ func runQuickstartCommand(cmd *cobra.Command, args []string) error {
 		printAutomationRunbook(report, level)
 		return fmt.Errorf("quickstart preflight failed (%d failures)", report.Failed)
 	}
-	fmt.Println("Step 3/3: checking optional v2 web components")
+	fmt.Println("Step 3/3: checking optional v2 API/UI components")
 	v2Ready, apiBin, uiBin, frontendDir, layout := quickstartV2Status(installDir)
+	webComponentsInstalled := v2Ready
 	if v2Ready {
 		fmt.Println("v2 components are ready.")
 		fmt.Printf("- API binary : %s\n", apiBin)
@@ -11413,7 +12106,7 @@ func runQuickstartCommand(cmd *cobra.Command, args []string) error {
 				downloadV2 = true
 			} else if term.IsTerminal(int(os.Stdin.Fd())) {
 				reader := bufio.NewReader(os.Stdin)
-				ok, err := quickstartConfirm(reader, "I can download v2 web components now. Continue?", true)
+				ok, err := quickstartConfirm(reader, "Install optional API/UI components now?", true)
 				if err == nil {
 					downloadV2 = ok
 				}
@@ -11433,6 +12126,7 @@ func runQuickstartCommand(cmd *cobra.Command, args []string) error {
 				fmt.Printf("Command: ncc-orchestrator v2-bootstrap --repo %s --install-dir %s\n", repo, installDir)
 			} else {
 				fmt.Println("v2 components downloaded successfully.")
+				webComponentsInstalled = true
 			}
 		} else {
 			fmt.Println("v2 components are not installed yet (this is okay for CLI-only use).")
@@ -11444,7 +12138,11 @@ func runQuickstartCommand(cmd *cobra.Command, args []string) error {
 	fmt.Println("Next:")
 	fmt.Printf("1) Edit config if needed: %s\n", cfgPath)
 	fmt.Printf("2) Run checks: ncc-orchestrator --auto --config %s\n", cfgPath)
-	fmt.Println("3) (Optional) Start web UI: ncc-orchestrator v2-start")
+	if webComponentsInstalled {
+		fmt.Println("3) (Optional) Start web UI: ncc-orchestrator v2-start")
+	} else {
+		fmt.Printf("3) (Optional) Install API/UI components: ncc-orchestrator v2-bootstrap --repo %s --install-dir %s\n", repo, installDir)
+	}
 	return nil
 }
 
@@ -12611,11 +13309,16 @@ Run 'ncc-orchestrator --help' for a full list of options.
 	}
 	cmd.SilenceErrors = true
 	cmd.SilenceUsage = true
-
-	cmd.SilenceUsage = true
+	cmd.SuggestionsMinimumDistance = 2
 
 	cmd.PersistentFlags().String("nutanix-v4-api-version", defaultNutanixV4APIVersion, "Nutanix v4 REST API path revision for clustermgmt and monitoring (e.g. v4.2, v4.1, v4.0.a1)")
 	_ = viper.BindPFlag("nutanix-v4-api-version", cmd.PersistentFlags().Lookup("nutanix-v4-api-version"))
+	cmd.PersistentFlags().String("config", "", "Config file path (yaml/json)")
+	_ = viper.BindPFlag("config", cmd.PersistentFlags().Lookup("config"))
+	cmd.PersistentFlags().Bool("insecure-skip-verify", false, "Skip TLS verify (only for trusted labs)")
+	_ = viper.BindPFlag("insecure-skip-verify", cmd.PersistentFlags().Lookup("insecure-skip-verify"))
+	cmd.PersistentFlags().String("request-timeout", "20s", "Per-request timeout")
+	_ = viper.BindPFlag("request-timeout", cmd.PersistentFlags().Lookup("request-timeout"))
 
 	// Deprecated root aliases (kept hidden for backward compatibility).
 	cmd.Flags().BoolP("update", "u", false, "Fetch latest release from GitHub and update this binary if a matching asset exists")
@@ -12635,7 +13338,6 @@ Run 'ncc-orchestrator --help' for a full list of options.
 	cmd.Flags().Bool("skip-preflight-check", false, "Skip default preflight-check before run (not recommended)")
 	cmd.Flags().Bool("auto", false, "Enable guided automation: apply safe self-healing fixes before failing")
 	cmd.Flags().String("automation-level", "safe-fix", "Automation policy: advisory, safe-fix, full-auto")
-	cmd.Flags().String("config", "", "Config file path (yaml/json)")
 	cmd.Flags().String("cluster-source-mode", defaultClusterSourceMode, "Cluster source mode: clusters (direct PE list) or pc (discover PEs from Prism Central targets)")
 	cmd.Flags().String("clusters", "", "Comma-separated cluster IPs or FQDNs")
 	cmd.Flags().String("clusters-file", "", "Path to cluster file (cluster or cluster,username[,password] per line; overrides clusters when set)")
@@ -12646,9 +13348,7 @@ Run 'ncc-orchestrator --help' for a full list of options.
 	cmd.Flags().String("username", "admin", "Username for Prism Gateway")
 	cmd.Flags().String("password", "", "Password (omit to be prompted)")
 	cmd.Flags().String("ncc-api-version", "v4", "NCC API mode: v4 (default) or Legacy (Prism Gateway v1 start-checks only; v1 accepted as alias); use --nutanix-v4-api-version for v4.2 vs v4.0.a1 etc.")
-	cmd.Flags().Bool("insecure-skip-verify", false, "Skip TLS verify (only for trusted labs)")
 	cmd.Flags().String("timeout", "15m", "Overall per-cluster timeout")
-	cmd.Flags().String("request-timeout", "20s", "Per-request timeout")
 	cmd.Flags().String("poll-interval", "15s", "Polling interval for task status")
 	cmd.Flags().String("poll-jitter", "2s", "Additive jitter to polling interval")
 	cmd.Flags().Int("max-parallel", 4, "Max concurrent clusters")
@@ -13117,7 +13817,6 @@ Use --output to write to a file (e.g. for --clusters-file).`,
 	discoverCmd.Flags().String("password", "", "Prism password (or NCC_PASSWORD)")
 	discoverCmd.Flags().String("output", "", "Write cluster list to file (one per line)")
 	discoverCmd.Flags().String("format", "lines", "Output format: lines (address per line), table (NAME EXT_ID ADDRESS API), or json")
-	discoverCmd.Flags().Bool("insecure-skip-verify", false, "Skip TLS verify for Prism Central")
 	discoverCmd.Flags().String("discover-api-version", "v4", "Cluster list API: v4 (GET clustermgmt) or v3 (legacy POST); v4 path uses --nutanix-v4-api-version")
 	_ = viper.BindPFlag("prism-central-url", discoverCmd.Flags().Lookup("prism-central-url"))
 	// Do not BindPFlag username, password, or insecure-skip-verify here — they share keys
@@ -13144,7 +13843,6 @@ Examples:
 	createScheduleCmd.Flags().String("type", "auto", "Scheduler type: auto, cron, or windows")
 	createScheduleCmd.Flags().String("action", "create", "Action: create, list, remove, or run-now")
 	createScheduleCmd.Flags().String("task-name", "ncc-orchestrator", "Schedule/task name marker")
-	createScheduleCmd.Flags().String("config", "", "Config file path passed to ncc-orchestrator --config")
 	createScheduleCmd.Flags().String("command", "", "Override full command used by scheduler (advanced)")
 	createScheduleCmd.Flags().String("cron", "", "Cron expression (for --type cron). If empty, derived from --every")
 	createScheduleCmd.Flags().Duration("every", 4*time.Hour, "Periodic interval used for cron derivation or Windows schedule (e.g. 30m, 4h, 24h)")
@@ -13159,7 +13857,6 @@ Examples:
 and can apply safe self-healing actions for common setup issues.`,
 		RunE: runQuickstartCommand,
 	}
-	quickstartCmd.Flags().String("config", "config.yaml", "Config file path to initialize/validate")
 	quickstartCmd.Flags().Bool("auto-fix", true, "Apply safe auto-fixes during quickstart")
 	quickstartCmd.Flags().Bool("interactive", false, "Prompt for common configuration values and write them to config")
 	quickstartCmd.Flags().String("setup-v2", "ask", "v2 component setup mode: ask, download, skip")
@@ -13182,7 +13879,6 @@ and can apply safe self-healing actions for common setup issues.`,
 		Short: "Validate configuration file and exit (use preflight-check for full guidance)",
 		RunE:  runValidateConfigCommand,
 	}
-	validateConfigCmd.Flags().String("config", "", "Config file path (yaml/json)")
 	cmd.AddCommand(validateConfigCmd)
 
 	validateSecretsCmd := &cobra.Command{
@@ -13190,7 +13886,6 @@ and can apply safe self-healing actions for common setup issues.`,
 		Short: "Validate secret:// references and secret source accessibility (use preflight-check for full guidance)",
 		RunE:  runValidateSecretsCommand,
 	}
-	validateSecretsCmd.Flags().String("config", "", "Config file path (yaml/json)")
 	cmd.AddCommand(validateSecretsCmd)
 
 	preflightCmd := &cobra.Command{
@@ -13198,7 +13893,6 @@ and can apply safe self-healing actions for common setup issues.`,
 		Short: "Run combined config/secrets/path preflight checks",
 		RunE:  runPreflightCheckCommand,
 	}
-	preflightCmd.Flags().String("config", "", "Config file path (yaml/json)")
 	preflightCmd.Flags().String("format", "json", "Output format (json)")
 	cmd.AddCommand(preflightCmd)
 
@@ -13213,7 +13907,6 @@ Examples:
   ncc-orchestrator uninstall --config config.yaml --force`,
 		RunE: runUninstallCommand,
 	}
-	uninstallCmd.Flags().String("config", "", "Optional config file used to discover custom output/log/prom paths")
 	uninstallCmd.Flags().String("install-dir", ".ncc-v2", "v2 install directory created by bootstrap/start")
 	uninstallCmd.Flags().String("task-name", "ncc-orchestrator", "Scheduler task marker name to remove")
 	uninstallCmd.Flags().Bool("remove-local", true, "Remove local NCC artifacts/state (outputfiles, nccfiles, promfiles, logs, token/state files)")
@@ -13233,8 +13926,9 @@ func main() {
 		time.Sleep(100 * time.Millisecond)
 	}()
 
-	if err := newRootCmd().Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	root := newRootCmd()
+	if err := root.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", humanizeCLIError(root, os.Args[1:], err))
 		code := 1
 		var exitErr *exitCodeError
 		if errors.As(err, &exitErr) {

@@ -116,6 +116,8 @@ export type RunnerLogData = {
 
 export type ReportData = {
   run_summary: unknown;
+  ncc_summary_counts?: Record<string, number>;
+  ncc_cluster_summary?: Array<Record<string, unknown>>;
   checks_snapshot: unknown;
   drilldown_diff: unknown;
   flaky_checks: unknown;

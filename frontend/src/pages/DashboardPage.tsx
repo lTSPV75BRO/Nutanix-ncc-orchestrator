@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Button, Card, Input, Select, Space, Tag, Typography } from "antd";
+import { Alert, Card, Input, Select, Space, Tag, Typography } from "antd";
 import { api } from "../api/client";
 import { InsightsCards } from "../features/report/InsightsCards";
 import { PolicyStatus } from "../features/report/PolicyStatus";
@@ -132,10 +132,10 @@ export function DashboardPage() {
         <Typography.Title level={4} className="section-title">
           Dashboard
         </Typography.Title>
+        <Typography.Text type="secondary" className="section-subtitle">
+          Filter report rows using text tokens and cluster selectors.
+        </Typography.Text>
         <Space.Compact style={{ width: "100%" }}>
-          <Button disabled type="default">
-            Search / tokens
-          </Button>
           <Input
             value={filterText}
             onChange={(e) => setFilterText(e.target.value)}
@@ -154,7 +154,7 @@ export function DashboardPage() {
           <Select
             mode="multiple"
             allowClear
-            placeholder="Filter clusters (v1 style)"
+            placeholder="Filter clusters"
             maxTagCount="responsive"
             style={{ minWidth: 300 }}
             value={selectedClusters}
@@ -191,9 +191,16 @@ export function DashboardPage() {
       <InsightsCards
         runSummary={reportData.run_summary}
         aggRows={Array.isArray(reportData.agg_rows) ? reportData.agg_rows : []}
+        nccSummaryCounts={reportData.ncc_summary_counts as Record<string, number> | undefined}
       />
       <PolicyStatus violations={Array.isArray(reportData.policy_violations) ? reportData.policy_violations : []} />
-      <ClusterHealthWidget runSummary={filteredSummary} filterText={filterText} selectedClusters={selectedClusters} clusterNameMap={clusterNameMap} />
+      <ClusterHealthWidget
+        runSummary={filteredSummary}
+        nccClusterSummary={Array.isArray(reportData.ncc_cluster_summary) ? reportData.ncc_cluster_summary : []}
+        filterText={filterText}
+        selectedClusters={selectedClusters}
+        clusterNameMap={clusterNameMap}
+      />
       <ClusterTable
         checksSnapshot={reportData.checks_snapshot}
         aggRows={Array.isArray(reportData.agg_rows) ? reportData.agg_rows : []}

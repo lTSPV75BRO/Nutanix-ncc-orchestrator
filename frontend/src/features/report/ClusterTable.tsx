@@ -26,6 +26,7 @@ type RowRecord = {
   cluster: string;
   alert: string;
   severity: Severity;
+  isUnknownSeverity: boolean;
   detail: string;
   kb: string;
   clusterVersion: string;
@@ -108,7 +109,8 @@ export function ClusterTable({ checksSnapshot, aggRows, diffFlags, flakyKeys, nc
       const cluster = String(raw.cluster || raw.address || "-");
       const alert = normalizeCheckTitle(String(raw.check_name ?? raw.check ?? "-"));
       const severityRaw = String(raw.severity || "UNKNOWN").toUpperCase();
-      const severity = (["FAIL", "WARN", "ERR", "INFO"].includes(severityRaw) ? severityRaw : "UNKNOWN") as Severity;
+      const isUnknownSeverity = !["FAIL", "WARN", "ERR", "INFO"].includes(severityRaw);
+      const severity = (isUnknownSeverity ? "ERR" : severityRaw) as Severity;
       const detail = String(raw.detail || "");
       const diff = pickDiff(cluster, alert);
       const isChanged = Boolean(diff.new_fail || diff.resolved_fail || diff.severity_changed);
@@ -120,6 +122,7 @@ export function ClusterTable({ checksSnapshot, aggRows, diffFlags, flakyKeys, nc
         cluster,
         alert,
         severity,
+        isUnknownSeverity,
         detail,
         kb: parseKB(detail),
         clusterVersion: String(raw.clusterVersion || raw.cluster_version || ""),
@@ -205,17 +208,15 @@ export function ClusterTable({ checksSnapshot, aggRows, diffFlags, flakyKeys, nc
       sorter: true,
       sortOrder: sorterFor("clusterName"),
       render: (_, row) => {
-        const clusterVersion = row.clusterVersion.trim();
-        const nccVersion = row.nccVersion.trim();
+        const clusterVersion = row.clusterVersion.trim() || "N/A";
+        const nccVersion = row.nccVersion.trim() || "N/A";
         return (
           <div className="mono">
             <div style={{ fontWeight: 600 }}>{row.clusterName}</div>
-            {(clusterVersion || nccVersion) && (
-              <div className="table-meta-text" style={{ fontSize: 12 }}>
-                {clusterVersion ? <div>{`Version: ${clusterVersion}`}</div> : null}
-                {nccVersion ? <div>{`NCC: ${nccVersion}`}</div> : null}
-              </div>
-            )}
+            <div className="table-meta-text" style={{ fontSize: 12 }}>
+              <div>{`Version: ${clusterVersion}`}</div>
+              <div>{`NCC: ${nccVersion}`}</div>
+            </div>
           </div>
         );
       },
@@ -232,10 +233,8 @@ export function ClusterTable({ checksSnapshot, aggRows, diffFlags, flakyKeys, nc
         const clusterURL = clusterPrismURL(value);
         const label = resolveClusterName(value, clusterNameMap);
         return clusterURL ? (
-          <a href={clusterURL} target="_blank" rel="noreferrer">
-            <Typography.Text ellipsis className="cluster-cell-text">
-              {label}
-            </Typography.Text>
+          <a href={clusterURL} target="_blank" rel="noreferrer" className="cluster-link kb-like-link">
+            {label}
           </a>
         ) : (
           <Typography.Text ellipsis className="cluster-cell-text">
@@ -269,10 +268,12 @@ export function ClusterTable({ checksSnapshot, aggRows, diffFlags, flakyKeys, nc
       width: 110,
       sorter: true,
       sortOrder: sorterFor("severity"),
-      render: (value: Severity) => {
-        const sev = String(value ?? "UNKNOWN").toUpperCase();
-        const color = sev === "FAIL" ? "error" : sev === "WARN" ? "warning" : sev === "ERR" ? "magenta" : sev === "INFO" ? "processing" : "default";
-        return <Tag className="severity-pill" color={color}>{sev}</Tag>;
+      render: (value: Severity, row) => {
+        const rowIsUnknown = row.isUnknownSeverity;
+        const sev = rowIsUnknown ? "UNKNOWN" : String(value ?? "UNKNOWN").toUpperCase();
+        const color = rowIsUnknown ? "default" : sev === "FAIL" ? "error" : sev === "WARN" ? "warning" : sev === "ERR" ? "volcano" : sev === "INFO" ? "processing" : "default";
+        const className = rowIsUnknown ? "severity-pill severity-pill-unknown" : "severity-pill";
+        return <Tag className={className} color={color}>{sev}</Tag>;
       },
     });
     cols.push({
@@ -292,17 +293,14 @@ export function ClusterTable({ checksSnapshot, aggRows, diffFlags, flakyKeys, nc
       title: "NCC Details",
       dataIndex: "detail",
       key: "detail",
-      width: 420,
+      width: 360,
       render: (value: string, row) => (
-        <Typography.Paragraph
-          style={{ marginBottom: 0, maxWidth: 460 }}
-          ellipsis={{ rows: 1 }}
-        >
-          {value || "-"}{" "}
-          <Button type="link" size="small" onClick={() => setDetailModalRow(row)}>
+        <div className="ncc-detail-cell">
+          <Typography.Text className="ncc-detail-text">{value || "-"}</Typography.Text>
+          <Button type="link" size="small" className="ncc-detail-view-btn" onClick={() => setDetailModalRow(row)}>
             view
           </Button>
-        </Typography.Paragraph>
+        </div>
       ),
     });
     cols.push({
@@ -333,16 +331,20 @@ export function ClusterTable({ checksSnapshot, aggRows, diffFlags, flakyKeys, nc
     return cols;
   }, [sortField, sortOrder, clusterNameMap]);
 
-  const pageRows = useMemo(() => sortedRows.slice((page - 1) * rowsPerPage, page * rowsPerPage), [sortedRows, page, rowsPerPage]);
-  const dataSource = pageRows;
-
   const severityCounts = useMemo(() => {
     const counts: Record<Severity, number> = { FAIL: 0, WARN: 0, ERR: 0, INFO: 0, UNKNOWN: 0 };
     sortedRows.forEach((r) => {
+      if (r.isUnknownSeverity) {
+        counts.UNKNOWN = (counts.UNKNOWN || 0) + 1;
+        counts.ERR = (counts.ERR || 0) + 1;
+        return;
+      }
       counts[r.severity] = (counts[r.severity] || 0) + 1;
     });
     return counts;
   }, [sortedRows]);
+  const pageRows = useMemo(() => sortedRows.slice((page - 1) * rowsPerPage, page * rowsPerPage), [sortedRows, page, rowsPerPage]);
+  const dataSource = pageRows;
 
   return (
     <Card className="alerts-card page-card">
@@ -352,50 +354,59 @@ export function ClusterTable({ checksSnapshot, aggRows, diffFlags, flakyKeys, nc
       <Space size={[8, 8]} wrap style={{ marginBottom: 10 }}>
         <Tag color="error">{`FAIL ${severityCounts.FAIL}`}</Tag>
         <Tag color="warning">{`WARN ${severityCounts.WARN}`}</Tag>
-        <Tag color="magenta">{`ERR ${severityCounts.ERR}`}</Tag>
+        <Tag color="volcano">{`ERR ${severityCounts.ERR}`}</Tag>
+        <Tag className="severity-pill severity-pill-unknown" color="default">{`UNKNOWN ${severityCounts.UNKNOWN}`}</Tag>
         <Tag color="processing">{`INFO ${severityCounts.INFO}`}</Tag>
       </Space>
-      <Space size={[8, 8]} wrap style={{ marginBottom: 12 }}>
-        <Select
-          size="middle"
-          style={{ width: 100 }}
-          value={rowsPerPage}
-          onChange={(e) => {
-            setRowsPerPage(Number(e) || 100);
-            setPage(1);
-          }}
-          options={[100, 200, 300, 400, 500].map((n) => ({ label: `${n} rows`, value: n }))}
-        />
-        <Typography.Text type="secondary">Showing {rows.length} alerts</Typography.Text>
-        <Select
-          size="middle"
-          style={{ width: 170 }}
-          value={sortField}
-          onChange={(value) => {
-            setSortField(value as SortField);
-            setPage(1);
-          }}
-          options={[
-            { label: "Sort: Severity", value: "severity" },
-            { label: "Sort: Cluster Name", value: "clusterName" },
-            { label: "Sort: Cluster", value: "cluster" },
-            { label: "Sort: Alert", value: "alert" },
-          ]}
-        />
-        <Select
-          size="middle"
-          style={{ width: 130 }}
-          value={sortOrder}
-          onChange={(value) => {
-            setSortOrder(value as SortOrder);
-            setPage(1);
-          }}
-          options={[
-            { label: "Desc", value: "desc" },
-            { label: "Asc", value: "asc" },
-          ]}
-        />
-      </Space>
+      <div className="alerts-toolbar">
+        <div className="alerts-controls-row">
+          <Space size={[8, 8]} wrap>
+            <Select
+              size="middle"
+              style={{ width: 100 }}
+              value={rowsPerPage}
+              onChange={(e) => {
+                setRowsPerPage(Number(e) || 100);
+                setPage(1);
+              }}
+              options={[100, 200, 300, 400, 500].map((n) => ({ label: `${n} rows`, value: n }))}
+            />
+            <Typography.Text type="secondary" className="alerts-showing-text">
+              Showing {rows.length} alerts
+            </Typography.Text>
+          </Space>
+          <Space size={[8, 8]} wrap>
+            <Select
+              size="middle"
+              style={{ width: 170 }}
+              value={sortField}
+              onChange={(value) => {
+                setSortField(value as SortField);
+                setPage(1);
+              }}
+              options={[
+                { label: "Sort: Severity", value: "severity" },
+                { label: "Sort: Cluster Name", value: "clusterName" },
+                { label: "Sort: Cluster", value: "cluster" },
+                { label: "Sort: Alert", value: "alert" },
+              ]}
+            />
+            <Select
+              size="middle"
+              style={{ width: 130 }}
+              value={sortOrder}
+              onChange={(value) => {
+                setSortOrder(value as SortOrder);
+                setPage(1);
+              }}
+              options={[
+                { label: "Desc", value: "desc" },
+                { label: "Asc", value: "asc" },
+              ]}
+            />
+          </Space>
+        </div>
+      </div>
       <Table<RowRecord>
         bordered
         virtual

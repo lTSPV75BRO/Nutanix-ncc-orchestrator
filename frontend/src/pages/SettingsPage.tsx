@@ -34,7 +34,7 @@ export function SettingsPage() {
                   Connection + Report Refresh
                 </Typography.Title>
                 <Typography.Text type="secondary" className="section-subtitle">
-                  Backend config path: {backendConfigPath || "unknown"}
+                  Backend config path: {backendConfigPath || "not reported yet"}
                 </Typography.Text>
                 <Space size={8} style={{ marginTop: 8, marginBottom: 8, display: "flex" }}>
                   <Button onClick={() => void health.refetch()}>Refresh Health</Button>

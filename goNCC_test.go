@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/csv"
@@ -82,6 +83,114 @@ func TestSplitCSV(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestQuickstartPrompt_EmptyThenDefault(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("\n\n"))
+	got, err := quickstartPrompt(reader, "Cluster targets", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("quickstartPrompt returned error: %v", err)
+	}
+	if got != "10.0.0.1" {
+		t.Fatalf("expected default value, got %q", got)
+	}
+}
+
+func TestQuickstartConfirm_EmptyThenDefault(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("\n\n"))
+	got, err := quickstartConfirm(reader, "Apply?", true)
+	if err != nil {
+		t.Fatalf("quickstartConfirm returned error: %v", err)
+	}
+	if !got {
+		t.Fatal("expected default yes on double empty input")
+	}
+}
+
+func TestQuickstartPromptChoice_InvalidThenDefault(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("wrong\n\n\n"))
+	got, err := quickstartPromptChoice(reader, "Mode", "clusters", []string{"clusters", "pc"})
+	if err != nil {
+		t.Fatalf("quickstartPromptChoice returned error: %v", err)
+	}
+	if got != "clusters" {
+		t.Fatalf("expected fallback to default, got %q", got)
+	}
+}
+
+func TestRepairConfigInlineCommentValues(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	bad := []byte("timeout: \"15m\\\"                            # Per-cluster overall timeout\"\nrequest-timeout: \"20s\"\n")
+	if err := os.WriteFile(cfgPath, bad, 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	changed, err := repairConfigInlineCommentValues(cfgPath)
+	if err != nil {
+		t.Fatalf("repairConfigInlineCommentValues error: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected repair to report changes")
+	}
+	gotRaw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(gotRaw)
+	if !strings.Contains(got, "timeout: \"15m\"") {
+		t.Fatalf("expected repaired timeout value, got: %s", got)
+	}
+	if strings.Contains(got, "\\\"                            #") {
+		t.Fatalf("expected legacy malformed suffix to be removed, got: %s", got)
+	}
+}
+
+func TestRepairConfigInlineCommentValues_TrailingBackslashes(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	bad := []byte("timeout: \"15m\\\\\"\nrequest-timeout: \"20s\\\\\"\n")
+	if err := os.WriteFile(cfgPath, bad, 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	changed, err := repairConfigInlineCommentValues(cfgPath)
+	if err != nil {
+		t.Fatalf("repairConfigInlineCommentValues error: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected trailing backslash repair to report changes")
+	}
+	gotRaw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(gotRaw)
+	if !strings.Contains(got, "timeout: \"15m\"") || !strings.Contains(got, "request-timeout: \"20s\"") {
+		t.Fatalf("expected cleaned duration values, got: %s", got)
+	}
+}
+
+func TestRepairConfigInlineCommentValues_StripsInlineCommentTailForKnownKeys(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	bad := []byte("nutanix-v4-api-version: \"v4.2              # v4 path revision\"\n")
+	if err := os.WriteFile(cfgPath, bad, 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	changed, err := repairConfigInlineCommentValues(cfgPath)
+	if err != nil {
+		t.Fatalf("repairConfigInlineCommentValues error: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected inline comment tail repair to report changes")
+	}
+	gotRaw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(gotRaw)
+	if !strings.Contains(got, "nutanix-v4-api-version: \"v4.2\"") {
+		t.Fatalf("expected cleaned v4 api version value, got: %s", got)
 	}
 }
 
@@ -2377,6 +2486,8 @@ func TestValidateClusterAddress(t *testing.T) {
 		{"Valid IPv4 another", "192.168.0.1", false},
 		{"Valid hostname", "prism.example.com", false},
 		{"Valid hostname with hyphen", "prism-element-01", false},
+		{"Valid URL target", "https://prism.example.com:9440/api", false},
+		{"Valid host with port", "prism.example.com:9440", false},
 		{"Empty", "", true},
 		{"Double dot", "10.0..1", true},
 		{"Leading dot", ".host", true},
@@ -2455,6 +2566,42 @@ func TestReadClusterFile(t *testing.T) {
 	}
 }
 
+func TestNormalizeClusterAddress(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		want    string
+		wantErr bool
+	}{
+		{name: "ip", raw: "10.0.1.1", want: "10.0.1.1"},
+		{name: "hostname", raw: "prism.example.com", want: "prism.example.com"},
+		{name: "url", raw: "https://prism.example.com:9440/api/v1", want: "prism.example.com"},
+		{name: "host and port", raw: "prism.example.com:9440", want: "prism.example.com"},
+		{name: "ipv4 and port", raw: "10.0.1.1:9440", want: "10.0.1.1"},
+		{name: "empty", raw: "", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeClusterAddress(tt.raw)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("normalizeClusterAddress(%q) err=%v wantErr=%v", tt.raw, err, tt.wantErr)
+			}
+			if err == nil && got != tt.want {
+				t.Fatalf("normalizeClusterAddress(%q)=%q want=%q", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPreflightResolveClusterTarget(t *testing.T) {
+	if err := preflightResolveClusterTarget("127.0.0.1"); err != nil {
+		t.Fatalf("expected IP target to pass preflight resolution, got %v", err)
+	}
+	if err := preflightResolveClusterTarget("nonexistent-preflight-target.invalid"); err == nil {
+		t.Fatal("expected invalid FQDN to fail preflight resolution")
+	}
+}
+
 func TestReadClusterFileInvalidLine(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "clusters.txt")
@@ -2487,6 +2634,35 @@ func TestValidateURL(t *testing.T) {
 				t.Errorf("validateURL(%q) err = %v, wantOk %v", tt.urlStr, err, tt.wantOk)
 			}
 		})
+	}
+}
+
+func TestClosestToken(t *testing.T) {
+	candidates := []string{"discover-clusters", "preflight-check", "validate-config"}
+	if got := closestToken("discovr-clusters", candidates); got != "discover-clusters" {
+		t.Fatalf("closestToken mismatch: got=%q want=%q", got, "discover-clusters")
+	}
+	if got := closestToken("zzzz", candidates); got != "" {
+		t.Fatalf("expected no suggestion for distant token, got=%q", got)
+	}
+}
+
+func TestHumanizeCLIError(t *testing.T) {
+	root := newRootCmd()
+	msg := humanizeCLIError(root, []string{"discovr-clusters"}, errors.New(`unknown command "discovr-clusters" for "ncc-orchestrator"`))
+	if !strings.Contains(msg, "Did you mean `discover-clusters`?") {
+		t.Fatalf("expected command suggestion, got: %s", msg)
+	}
+	flagMsg := humanizeCLIError(root, []string{"--max-paralel"}, errors.New(`unknown flag: --max-paralel`))
+	if !strings.Contains(flagMsg, "Did you mean `--max-parallel`?") {
+		t.Fatalf("expected flag suggestion, got: %s", flagMsg)
+	}
+	subcmdFlagMsg := humanizeCLIError(root, []string{"gen-test-agg", "--autr"}, errors.New(`unknown flag: --autr`))
+	if strings.Contains(subcmdFlagMsg, "`--auto`") {
+		t.Fatalf("did not expect root-only flag suggestion for subcommand, got: %s", subcmdFlagMsg)
+	}
+	if !strings.Contains(subcmdFlagMsg, "ncc-orchestrator gen-test-agg --help") {
+		t.Fatalf("expected subcommand help hint, got: %s", subcmdFlagMsg)
 	}
 }
 

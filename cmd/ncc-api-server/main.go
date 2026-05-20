@@ -147,6 +147,16 @@ type runInfo struct {
 	HasIndex bool   `json:"has_index"`
 }
 
+func isInternalArtifactName(name string) bool {
+	clean := strings.TrimSpace(name)
+	switch clean {
+	case ".ncc-preflight-check", ".ncc-prefight-check":
+		return true
+	default:
+		return false
+	}
+}
+
 type tailBuffer struct {
 	mu  sync.Mutex
 	buf []byte
@@ -1167,6 +1177,9 @@ func (s *apiServer) handleArtifacts(w http.ResponseWriter, r *http.Request) {
 		if e.IsDir() {
 			continue
 		}
+		if isInternalArtifactName(e.Name()) {
+			continue
+		}
 		info, err := e.Info()
 		if err != nil {
 			continue
@@ -1188,6 +1201,10 @@ func (s *apiServer) handleArtifactByName(w http.ResponseWriter, r *http.Request)
 	name := strings.TrimPrefix(r.URL.Path, "/api/v1/artifacts/")
 	if name == "" || strings.Contains(name, "/") || strings.Contains(name, "..") {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "invalid artifact name"})
+		return
+	}
+	if isInternalArtifactName(name) {
+		writeJSON(w, http.StatusNotFound, envelope{Success: false, Error: "artifact not found"})
 		return
 	}
 	path := filepath.Join(s.absPath(s.outputDir), name)
@@ -1536,6 +1553,8 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 		"artifact_links":     readInlineJSONVar(filepath.Join(outDir, "index.html"), "ARTIFACT_LINKS", map[string]interface{}{}),
 		"report_meta":        readInlineJSONVar(filepath.Join(outDir, "index.html"), "REPORT_META", map[string]interface{}{}),
 		"ncc_logs":           listNCCLogs(s.absPath(s.logDir)),
+		"ncc_summary_counts": parseNCCSummaryCounts(s.absPath(s.logDir)),
+		"ncc_cluster_summary": parseNCCClusterSummary(s.absPath(s.logDir)),
 		"trends":             collectTrendPoints(outDir, 30),
 		"report_source_dir":  outDir,
 		"pagination":         pagination,
@@ -2231,6 +2250,108 @@ func listNCCLogs(logDir string) []map[string]string {
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i]["name"] < out[j]["name"] })
+	return out
+}
+
+func parseNCCSummaryCounts(logDir string) map[string]int {
+	totals := map[string]int{
+		"fail":          0,
+		"pass":          0,
+		"info":          0,
+		"error":         0,
+		"unknown":       0,
+		"total_plugins": 0,
+	}
+	entries, err := os.ReadDir(logDir)
+	if err != nil {
+		return totals
+	}
+	parseCount := func(content, label string) int {
+		re := regexp.MustCompile(`(?im)\|\s*` + regexp.QuoteMeta(label) + `\s*\|\s*(\d+)\s*\|`)
+		m := re.FindStringSubmatch(content)
+		if len(m) < 2 {
+			return 0
+		}
+		v, _ := strconv.Atoi(m[1])
+		return v
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := strings.ToLower(e.Name())
+		if !strings.HasSuffix(name, ".log") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(logDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		content := string(b)
+		totals["fail"] += parseCount(content, "Fail")
+		totals["pass"] += parseCount(content, "Pass")
+		totals["info"] += parseCount(content, "Info")
+		totals["error"] += parseCount(content, "Error")
+		totals["unknown"] += parseCount(content, "Unknown")
+		totals["total_plugins"] += parseCount(content, "Total Plugins")
+	}
+	return totals
+}
+
+func parseNCCClusterSummary(logDir string) []map[string]interface{} {
+	entries, err := os.ReadDir(logDir)
+	if err != nil {
+		return []map[string]interface{}{}
+	}
+	out := make([]map[string]interface{}, 0, len(entries))
+	parseCount := func(content, label string) int {
+		re := regexp.MustCompile(`(?im)\|\s*` + regexp.QuoteMeta(label) + `\s*\|\s*(\d+)\s*\|`)
+		m := re.FindStringSubmatch(content)
+		if len(m) < 2 {
+			return 0
+		}
+		v, _ := strconv.Atoi(m[1])
+		return v
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(strings.ToLower(name), ".log") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(logDir, name))
+		if err != nil {
+			continue
+		}
+		content := string(b)
+		fail := parseCount(content, "Fail")
+		pass := parseCount(content, "Pass")
+		info := parseCount(content, "Info")
+		errCount := parseCount(content, "Error")
+		unknown := parseCount(content, "Unknown")
+		total := parseCount(content, "Total Plugins")
+		healthRate := 0.0
+		if total > 0 {
+			healthRate = (float64(pass) / float64(total)) * 100.0
+		}
+		addr := strings.TrimSuffix(name, ".log")
+		out = append(out, map[string]interface{}{
+			"address":       addr,
+			"log_name":      name,
+			"fail":          fail,
+			"pass":          pass,
+			"info":          info,
+			"error":         errCount,
+			"unknown":       unknown,
+			"total_plugins": total,
+			"health_rate":   healthRate,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return fmt.Sprint(out[i]["address"]) < fmt.Sprint(out[j]["address"])
+	})
 	return out
 }
 

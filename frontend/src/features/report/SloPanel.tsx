@@ -4,22 +4,32 @@ import { asArray, asRecord, resolveClusterName, toNumber } from "../../utils/rep
 
 type Props = {
   sloDashboard: unknown;
+  nccClusterSummary?: Array<Record<string, unknown>>;
   regressionSummary: unknown;
   clusterNameMap: Record<string, string>;
 };
 
-export function SloPanel({ sloDashboard, regressionSummary, clusterNameMap }: Props) {
+export function SloPanel({ sloDashboard, nccClusterSummary, regressionSummary, clusterNameMap }: Props) {
   const slo = asRecord(sloDashboard);
-  const clusters = asArray(slo.clusters).map((c, idx) => {
+  const useNCCSummary = Array.isArray(nccClusterSummary) && nccClusterSummary.length > 0;
+  const clusters = (useNCCSummary ? nccClusterSummary || [] : asArray(slo.clusters)).map((c, idx) => {
     const cc = asRecord(c);
+    const checks = useNCCSummary ? toNumber(cc.total_plugins) : toNumber(cc.checks_total);
+    const failCount = useNCCSummary ? toNumber(cc.fail) + toNumber(cc.error) : toNumber(cc.fail_count);
+    const failRate = checks > 0 ? (failCount / checks) * 100 : 0;
+    const healthRaw = useNCCSummary ? toNumber(cc.health_rate) : toNumber(cc.health_score);
+    const infoRate = checks > 0 ? (useNCCSummary ? (toNumber(cc.info) / checks) * 100 : 0) : 0;
+    const unknownRate = checks > 0 ? (useNCCSummary ? (toNumber(cc.unknown) / checks) * 100 : 0) : 0;
+    const health = useNCCSummary ? Math.max(0, healthRaw - failRate * 8.0 - infoRate * 2.2 - unknownRate * 3.0) : healthRaw;
+    const status = failRate >= 2 ? "critical" : failRate >= 1 ? "at-risk" : String(cc.status || "ok");
     return {
       key: `${String(cc.address || "cluster")}-${idx}`,
       cluster: resolveClusterName(String(cc.address || "-"), clusterNameMap),
-      health: toNumber(cc.health_score),
-      failRate: toNumber(cc.fail_rate_percent),
-      status: String(cc.status || "-"),
-      failCount: toNumber(cc.fail_count),
-      checks: toNumber(cc.checks_total),
+      health,
+      failRate,
+      status,
+      failCount,
+      checks,
     };
   });
   const avgHealth = clusters.length ? clusters.reduce((acc, c) => acc + c.health, 0) / clusters.length : 0;
