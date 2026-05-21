@@ -12,6 +12,8 @@ export function LogsSection({ onError }: Props) {
   const [content, setContent] = useState("");
   const [path, setPath] = useState("");
   const [auto, setAuto] = useLocalStorageState("settings.logs.autoRefresh", true);
+  const [followTail, setFollowTail] = useLocalStorageState("settings.logs.followTail", true);
+  const [jumpToLastSignal, setJumpToLastSignal] = useState(0);
 
   const load = async () => {
     try {
@@ -42,9 +44,19 @@ export function LogsSection({ onError }: Props) {
         <Space size={8} style={{ marginTop: 8, marginBottom: 8, display: "flex" }}>
           <Switch checked={auto} onChange={setAuto} />
           <Typography.Text>Auto refresh every 3s</Typography.Text>
+          <Switch checked={followTail} onChange={setFollowTail} />
+          <Typography.Text>Follow tail</Typography.Text>
           <Button onClick={load}>Refresh</Button>
+          <Button onClick={() => setJumpToLastSignal((n) => n + 1)}>Jump to latest</Button>
         </Space>
-        <CodeEditor value={content} language="plaintext" readOnly height={420} autoRevealLastLine />
+        <CodeEditor
+          value={content}
+          language="plaintext"
+          readOnly
+          height={420}
+          autoRevealLastLine={followTail}
+          jumpToLastSignal={jumpToLastSignal}
+        />
     </Card>
   );
 }

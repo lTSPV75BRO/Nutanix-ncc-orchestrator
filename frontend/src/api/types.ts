@@ -8,14 +8,15 @@ export type Envelope<T> = {
 export type HealthData = {
   status: string;
   time: string;
-  repo_root: string;
   config_path: string;
   output_dir: string;
-  schedule_state: string;
-  orchestrator_bin: string;
-  orchestrator_cmd: string;
+  log_dir?: string;
   token_file?: string;
   token_source?: string;
+  repo_root?: string;
+  schedule_state?: string;
+  orchestrator_bin?: string;
+  orchestrator_cmd?: string;
 };
 
 export type ConfigData = {
@@ -49,9 +50,28 @@ export type ScheduleState = {
   cron?: string;
   every?: string;
   config: string;
+  log_path?: string;
+  with_lock?: boolean;
   task_name?: string;
   print_only: boolean;
   updated_at: string;
+};
+
+export type ScheduleHealthData = {
+  configured: boolean;
+  type?: string;
+  action?: string;
+  with_lock?: boolean;
+  log_path?: string;
+  lock_path?: string;
+  last_updated_at?: string;
+  last_run?: string;
+  last_success?: string;
+  last_error?: string;
+  log_exists?: boolean;
+  log_size?: number;
+  log_mod_time?: string;
+  error?: string;
 };
 
 export type ArtifactInfo = {
@@ -141,4 +161,25 @@ export type ReportData = {
       has_more: boolean;
     }
   >;
+};
+
+export type TrendPoint = {
+  timestamp: string;
+  duration_s: number;
+  clusters_ok: number;
+  clusters_failed: number;
+  total_checks: number;
+  avg_health_score: number;
+  min_health_score: number;
+  fail_total: number;
+  warn_total: number;
+  err_total: number;
+  info_total: number;
+};
+
+export type ReportTrendsData = {
+  points: TrendPoint[];
+  count: number;
+  limit: number;
+  report_source_dir: string;
 };

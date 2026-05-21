@@ -15,7 +15,9 @@ export function SloPanel({ sloDashboard, nccClusterSummary, regressionSummary, c
   const clusters = (useNCCSummary ? nccClusterSummary || [] : asArray(slo.clusters)).map((c, idx) => {
     const cc = asRecord(c);
     const checks = useNCCSummary ? toNumber(cc.total_plugins) : toNumber(cc.checks_total);
-    const failCount = useNCCSummary ? toNumber(cc.fail) + toNumber(cc.error) : toNumber(cc.fail_count);
+    const failOnlyCount = useNCCSummary ? toNumber(cc.fail) : toNumber(cc.fail_count);
+    const errCount = useNCCSummary ? toNumber(cc.error) : toNumber(cc.error_count);
+    const failCount = failOnlyCount + errCount;
     const failRate = checks > 0 ? (failCount / checks) * 100 : 0;
     const healthRaw = useNCCSummary ? toNumber(cc.health_rate) : toNumber(cc.health_score);
     const infoRate = checks > 0 ? (useNCCSummary ? (toNumber(cc.info) / checks) * 100 : 0) : 0;
@@ -29,6 +31,8 @@ export function SloPanel({ sloDashboard, nccClusterSummary, regressionSummary, c
       failRate,
       status,
       failCount,
+      failOnlyCount,
+      errCount,
       checks,
     };
   });
@@ -61,7 +65,9 @@ export function SloPanel({ sloDashboard, nccClusterSummary, regressionSummary, c
       width: 120,
       render: (v: string) => <Tag color={v.toLowerCase().includes("at-risk") ? "warning" : v.toLowerCase().includes("critical") ? "error" : "success"}>{v || "-"}</Tag>,
     },
-    { title: "FAIL / Total", key: "failTotal", width: 110, render: (_, row) => `${row.failCount}/${row.checks}` },
+    { title: "FAIL", key: "failOnly", width: 90, render: (_, row) => row.failOnlyCount },
+    { title: "ERR", key: "errCount", width: 90, render: (_, row) => row.errCount },
+    { title: "FAIL+ERR / Total", key: "failTotal", width: 140, render: (_, row) => `${row.failCount}/${row.checks}` },
   ];
 
   return (

@@ -192,6 +192,7 @@ export function DashboardPage() {
         runSummary={reportData.run_summary}
         aggRows={Array.isArray(reportData.agg_rows) ? reportData.agg_rows : []}
         nccSummaryCounts={reportData.ncc_summary_counts as Record<string, number> | undefined}
+        healthSource={reportData.ncc_summary_counts ? "plugin-summary" : "report-snapshot"}
       />
       <PolicyStatus violations={Array.isArray(reportData.policy_violations) ? reportData.policy_violations : []} />
       <ClusterHealthWidget

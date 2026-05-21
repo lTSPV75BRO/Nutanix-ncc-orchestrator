@@ -80,6 +80,7 @@ Prajwal Vernekar (prajwal.vernekar@nutanix.com)
 - `GET|PUT /api/v1/settings/notifications`
 - `POST /api/v1/settings/notifications/test`
 - `GET|PUT /api/v1/schedule`
+- `GET /api/v1/schedule/health`
 - `GET /api/v1/runs`, `GET /api/v1/runs/summary`, `GET /api/v1/runs/active`
 - `POST /api/v1/runs/trigger`
 - `POST /api/v1/runs/preflight`
@@ -216,6 +217,21 @@ Config/secret preflight:
 NCC_SECRETS_PROVIDER=env ./ncc-orchestrator validate-secrets --config config.yaml
 ```
 
+v2 runtime self-check before startup:
+
+```bash
+./ncc-orchestrator v2-check \
+  --install-dir .ncc-v2 \
+  --config-path /absolute/path/config.yaml \
+  --output-dir /absolute/path/outputfiles \
+  --log-dir /absolute/path/nccfiles \
+  --token-file /absolute/path/.ncc-api-token \
+  --api-listen :8081 \
+  --ui-listen :8080
+```
+
+This validates binary executability, config readability, directory writability, and API/UI port bind availability before `v2-start`.
+
 ### Trigger run through backend API (with extra flags)
 
 ```bash
@@ -239,6 +255,15 @@ curl -sS "http://localhost:8081/api/v1/report/trends?limit=30" \
 ```
 
 This returns chronological points built from `run-summary.json` (current + run-history snapshots) with totals for FAIL/WARN/ERR/INFO and health/check aggregates.
+
+### Scheduler health API example
+
+```bash
+curl -sS "http://localhost:8081/api/v1/schedule/health" \
+  -H "Authorization: Bearer $(cat .ncc-api-token)"
+```
+
+This endpoint reports scheduler state and runtime hints (`last_run`, `last_success`, `last_error`) from the scheduler log, and includes lock/log paths used by cron-based schedules.
 
 ## Installation
 

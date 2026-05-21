@@ -8537,6 +8537,115 @@ func waitForHTTPReady(url string, timeout time.Duration) error {
 	return fmt.Errorf("endpoint %s not ready: %w", url, lastErr)
 }
 
+func isExecutableFile(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	return info.Mode()&0o111 != 0
+}
+
+func canBindListenAddress(listenAddr string) error {
+	addr := strings.TrimSpace(listenAddr)
+	if addr == "" {
+		return errors.New("empty listen address")
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	_ = ln.Close()
+	return nil
+}
+
+func runV2Check(opts v2StartOptions) error {
+	installDir := strings.TrimSpace(opts.InstallDir)
+	if installDir == "" {
+		installDir = ".ncc-v2"
+	}
+	if absInstallDir, err := filepath.Abs(installDir); err == nil {
+		installDir = absInstallDir
+	}
+	if absConfigPath, err := filepath.Abs(opts.ConfigPath); err == nil {
+		opts.ConfigPath = absConfigPath
+	}
+	if absOutputDir, err := filepath.Abs(opts.OutputDir); err == nil {
+		opts.OutputDir = absOutputDir
+	}
+	if absLogDir, err := filepath.Abs(opts.LogDir); err == nil {
+		opts.LogDir = absLogDir
+	}
+	if absTokenPath, err := filepath.Abs(opts.TokenFile); err == nil {
+		opts.TokenFile = absTokenPath
+	}
+	opts.OrchestratorBin = resolveV2OrchestratorBin(opts.OrchestratorBin)
+	apiBin, uiBin, frontDir, _ := resolveV2RuntimeLayout(installDir)
+	failures := make([]string, 0)
+	warnings := make([]string, 0)
+	if !isExecutableFile(opts.OrchestratorBin) {
+		failures = append(failures, fmt.Sprintf("orchestrator-bin not executable: %s", opts.OrchestratorBin))
+	}
+	if apiBin == "" || !isExecutableFile(apiBin) {
+		failures = append(failures, fmt.Sprintf("api-server binary not executable under install dir: %s", installDir))
+	}
+	if !opts.APIOnly {
+		if uiBin == "" || !isExecutableFile(uiBin) {
+			failures = append(failures, fmt.Sprintf("ui-server binary not executable under install dir: %s", installDir))
+		}
+		if strings.TrimSpace(frontDir) == "" || !existingDir(frontDir) {
+			failures = append(failures, fmt.Sprintf("frontend-dist missing under install dir: %s", installDir))
+		}
+	}
+	if _, err := os.Stat(opts.ConfigPath); err != nil {
+		failures = append(failures, fmt.Sprintf("config-path not readable: %s (%v)", opts.ConfigPath, err))
+	}
+	if err := os.MkdirAll(opts.OutputDir, 0o755); err != nil {
+		failures = append(failures, fmt.Sprintf("output-dir not writable: %s (%v)", opts.OutputDir, err))
+	}
+	if err := os.MkdirAll(opts.LogDir, 0o755); err != nil {
+		failures = append(failures, fmt.Sprintf("log-dir not writable: %s (%v)", opts.LogDir, err))
+	}
+	if err := os.MkdirAll(filepath.Dir(opts.TokenFile), 0o755); err != nil {
+		failures = append(failures, fmt.Sprintf("token-file parent dir not writable: %s (%v)", filepath.Dir(opts.TokenFile), err))
+	}
+	if err := canBindListenAddress(opts.APIListen); err != nil {
+		failures = append(failures, fmt.Sprintf("api-listen bind failed (%s): %v", opts.APIListen, err))
+	}
+	if !opts.APIOnly {
+		if err := canBindListenAddress(opts.UIListen); err != nil {
+			failures = append(failures, fmt.Sprintf("ui-listen bind failed (%s): %v", opts.UIListen, err))
+		}
+	}
+	if cfg, err := loadConfigForValidation(opts.ConfigPath); err == nil {
+		pwd := strings.TrimSpace(cfg.Password)
+		if pwd != "" && !strings.HasPrefix(strings.ToLower(pwd), "secret://") {
+			warnings = append(warnings, "config contains plaintext password; prefer NCC_PASSWORD env or secret:// source")
+		}
+	}
+	fmt.Println("v2-check results")
+	fmt.Println("---------------")
+	fmt.Printf("install-dir: %s\n", installDir)
+	fmt.Printf("config-path: %s\n", opts.ConfigPath)
+	fmt.Printf("output-dir:  %s\n", opts.OutputDir)
+	fmt.Printf("log-dir:     %s\n", opts.LogDir)
+	fmt.Printf("token-file:  %s\n", opts.TokenFile)
+	if len(warnings) > 0 {
+		fmt.Println("warnings:")
+		for _, w := range warnings {
+			fmt.Printf("- %s\n", w)
+		}
+	}
+	if len(failures) > 0 {
+		fmt.Println("failures:")
+		for _, f := range failures {
+			fmt.Printf("- %s\n", f)
+		}
+		return fmt.Errorf("v2-check failed (%d issues)", len(failures))
+	}
+	fmt.Println("status: ok (all checks passed)")
+	return nil
+}
+
 func waitForPIDExit(pid int, timeout time.Duration) bool {
 	if pid <= 0 {
 		return true
@@ -8907,6 +9016,12 @@ func runV2Start(opts v2StartOptions) error {
 	}
 	if absTokenPath, err := filepath.Abs(opts.TokenFile); err == nil {
 		opts.TokenFile = absTokenPath
+	}
+	if cfg, err := loadConfigForValidation(opts.ConfigPath); err == nil {
+		pwd := strings.TrimSpace(cfg.Password)
+		if pwd != "" && !strings.HasPrefix(strings.ToLower(pwd), "secret://") {
+			fmt.Fprintln(os.Stderr, "warning: config contains plaintext password; prefer NCC_PASSWORD env or secret:// source")
+		}
 	}
 	if strings.TrimSpace(opts.APIAuthMode) == "" {
 		opts.APIAuthMode = "token"
@@ -10728,9 +10843,23 @@ func runScheduleCommandNow(runCmd string) error {
 	return c.Run()
 }
 
-func installCronSchedule(taskName, cronSpec, runCmd, logPath string) error {
+func buildCronScheduleLine(cronSpec, runCmd, logPath, marker string, withLock bool) string {
+	if withLock {
+		lockFile := filepath.Join(filepath.Dir(logPath), ".ncc-scheduler.lock")
+		return fmt.Sprintf("%s flock -n %s -c %s >> %s 2>&1 # %s",
+			cronSpec,
+			shellQuotePOSIX(lockFile),
+			shellQuotePOSIX(runCmd),
+			shellQuotePOSIX(logPath),
+			marker,
+		)
+	}
+	return fmt.Sprintf("%s %s >> %s 2>&1 # %s", cronSpec, runCmd, shellQuotePOSIX(logPath), marker)
+}
+
+func installCronSchedule(taskName, cronSpec, runCmd, logPath string, withLock bool) error {
 	marker := scheduleMarker(taskName)
-	line := fmt.Sprintf("%s %s >> %s 2>&1 # %s", cronSpec, runCmd, shellQuotePOSIX(logPath), marker)
+	line := buildCronScheduleLine(cronSpec, runCmd, logPath, marker, withLock)
 
 	existingBytes, err := exec.Command("crontab", "-l").CombinedOutput()
 	existing := string(existingBytes)
@@ -10801,10 +10930,22 @@ func runCreateSchedule(cmd *cobra.Command, args []string) error {
 	if strings.TrimSpace(logPath) == "" {
 		logPath = "logs/ncc-scheduler.log"
 	}
+	logPath = strings.TrimSpace(logPath)
+	if !filepath.IsAbs(logPath) {
+		if absLogPath, absErr := filepath.Abs(logPath); absErr == nil {
+			logPath = absLogPath
+		}
+	}
 
 	runCmd, _ := cmd.Flags().GetString("command")
 	if strings.TrimSpace(runCmd) == "" {
 		configPath, _ := cmd.Flags().GetString("config")
+		configPath = strings.TrimSpace(configPath)
+		if configPath != "" && !filepath.IsAbs(configPath) {
+			if absConfigPath, absErr := filepath.Abs(configPath); absErr == nil {
+				configPath = absConfigPath
+			}
+		}
 		runCmd, err = defaultScheduleCommand(configPath)
 		if err != nil {
 			return fmt.Errorf("build schedule command: %w", err)
@@ -10816,6 +10957,7 @@ func runCreateSchedule(cmd *cobra.Command, args []string) error {
 	}
 
 	printOnly, _ := cmd.Flags().GetBool("print-only")
+	withLock, _ := cmd.Flags().GetBool("with-lock")
 	every, _ := cmd.Flags().GetDuration("every")
 	action, _ := cmd.Flags().GetString("action")
 	action = strings.ToLower(strings.TrimSpace(action))
@@ -10850,12 +10992,12 @@ func runCreateSchedule(cmd *cobra.Command, args []string) error {
 				return exitConfig(fmt.Errorf("derive cron from --every: %w", err))
 			}
 		}
-		line := fmt.Sprintf("%s %s >> %s 2>&1 # %s", cronSpec, runCmd, shellQuotePOSIX(logPath), scheduleMarker(taskName))
+		line := buildCronScheduleLine(cronSpec, runCmd, logPath, scheduleMarker(taskName), withLock)
 		if printOnly {
 			fmt.Printf("Cron entry preview:\n%s\n", line)
 			return nil
 		}
-		return installCronSchedule(taskName, cronSpec, runCmd, logPath)
+		return installCronSchedule(taskName, cronSpec, runCmd, logPath, withLock)
 	case "windows":
 		switch action {
 		case "list":
@@ -13735,6 +13877,44 @@ Use --self-heal with --detach to auto-restart services on unexpected exits.`,
 	v2StartCmd.Flags().Duration("self-heal-window", 10*time.Minute, "Rolling window used for self-heal restart budget")
 	cmd.AddCommand(v2StartCmd)
 
+	v2CheckCmd := &cobra.Command{
+		Use:   "v2-check",
+		Short: "Run lightweight self-check for v2 paths and ports",
+		Long:  `Validates v2 runtime prerequisites (binaries, config, dirs, and listen port availability) before running v2-start.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			installDir, _ := cmd.Flags().GetString("install-dir")
+			configPath, _ := cmd.Flags().GetString("config-path")
+			outputDir, _ := cmd.Flags().GetString("output-dir")
+			logDir, _ := cmd.Flags().GetString("log-dir")
+			orchestratorBin, _ := cmd.Flags().GetString("orchestrator-bin")
+			apiListen, _ := cmd.Flags().GetString("api-listen")
+			uiListen, _ := cmd.Flags().GetString("ui-listen")
+			tokenFile, _ := cmd.Flags().GetString("token-file")
+			apiOnly, _ := cmd.Flags().GetBool("api-only")
+			return runV2Check(v2StartOptions{
+				InstallDir:      installDir,
+				ConfigPath:      configPath,
+				OutputDir:       outputDir,
+				LogDir:          logDir,
+				OrchestratorBin: orchestratorBin,
+				APIListen:       apiListen,
+				UIListen:        uiListen,
+				TokenFile:       tokenFile,
+				APIOnly:         apiOnly,
+			})
+		},
+	}
+	v2CheckCmd.Flags().String("install-dir", ".ncc-v2", "Installation directory used by v2-bootstrap")
+	v2CheckCmd.Flags().String("config-path", "config.yaml", "Config file path passed to API server")
+	v2CheckCmd.Flags().String("output-dir", "outputfiles", "Output directory passed to API server")
+	v2CheckCmd.Flags().String("log-dir", "nccfiles", "Log directory passed to API server")
+	v2CheckCmd.Flags().String("orchestrator-bin", "./ncc-orchestrator", "Path to ncc-orchestrator binary used by API server")
+	v2CheckCmd.Flags().String("api-listen", ":8081", "Listen address for API server")
+	v2CheckCmd.Flags().String("ui-listen", ":8080", "Listen address for UI server")
+	v2CheckCmd.Flags().String("token-file", ".ncc-api-token", "Token file path used by UI/API servers")
+	v2CheckCmd.Flags().Bool("api-only", false, "Validate only API prerequisites (skip UI/frontend checks)")
+	cmd.AddCommand(v2CheckCmd)
+
 	v2StopCmd := &cobra.Command{
 		Use:   "v2-stop",
 		Short: "Stop detached v2 API/UI services",
@@ -13847,6 +14027,7 @@ Examples:
 	createScheduleCmd.Flags().String("cron", "", "Cron expression (for --type cron). If empty, derived from --every")
 	createScheduleCmd.Flags().Duration("every", 4*time.Hour, "Periodic interval used for cron derivation or Windows schedule (e.g. 30m, 4h, 24h)")
 	createScheduleCmd.Flags().String("log-path", "logs/ncc-scheduler.log", "Log file path for cron redirect")
+	createScheduleCmd.Flags().Bool("with-lock", true, "Use flock lock file for cron runs to prevent overlap")
 	createScheduleCmd.Flags().Bool("print-only", true, "Preview action without applying changes (used by create/remove)")
 	cmd.AddCommand(createScheduleCmd)
 

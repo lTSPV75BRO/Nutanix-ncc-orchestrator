@@ -42,6 +42,16 @@ The following operational enhancements were added after the initial v2.0.0 basel
   - Added `docs/BUILD_FROM_SCRATCH.md` as canonical end-to-end setup/build/run/deploy guide.
   - Expanded migration and contributor guidance to include validation gates, phased cutover, and rollback checks.
   - Aligned architecture notes with current Kubernetes API runner-binary staging model.
+- **Scheduler overlap protection and observability**:
+  - `create-schedule` now supports lock-enabled cron generation (`--with-lock=true`) to prevent overlapping runs.
+  - Added `/api/v1/schedule/health` for scheduler health snapshots (`last_run`, `last_success`, `last_error`, lock/log metadata).
+- **v2 startup pre-check command**:
+  - Added `v2-check` to validate runtime binaries, absolute path readiness, directory writability, and API/UI port bind availability before `v2-start`.
+- **Security posture improvements**:
+  - Startup warns when config includes plaintext `password` (recommend `NCC_PASSWORD` or `secret://` source).
+  - Config API responses now expose redacted-safe content variants for sensitive values.
+- **Logs UX control enhancements in UI**:
+  - Added `Follow tail` and `Jump to latest` controls for Runner Logs and Live Logs to improve incident review workflows.
 
 ## Scope note for v2.0.0
 

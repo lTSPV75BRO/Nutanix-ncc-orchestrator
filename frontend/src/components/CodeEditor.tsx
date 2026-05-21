@@ -12,6 +12,7 @@ type Props = {
   height?: number;
   readOnly?: boolean;
   autoRevealLastLine?: boolean;
+  jumpToLastSignal?: number;
 };
 
 export function inferEditorLanguage(name: string): EditorLanguage {
@@ -30,6 +31,7 @@ export function CodeEditor({
   height = 320,
   readOnly = false,
   autoRevealLastLine = false,
+  jumpToLastSignal = 0,
 }: Props) {
   const { theme } = useAppTheme();
   const editorRef = useRef<MonacoEditorApi.IStandaloneCodeEditor | null>(null);
@@ -50,7 +52,7 @@ export function CodeEditor({
   }, [language, readOnly]);
 
   useEffect(() => {
-    if (!autoRevealLastLine) return;
+    if (!autoRevealLastLine && jumpToLastSignal <= 0) return;
     const revealToBottom = () => {
       const editor = editorRef.current;
       if (editor) {
@@ -70,7 +72,7 @@ export function CodeEditor({
       window.requestAnimationFrame(revealToBottom);
     });
     return () => window.cancelAnimationFrame(raf1);
-  }, [autoRevealLastLine, value]);
+  }, [autoRevealLastLine, jumpToLastSignal, value]);
 
   if (fallback) {
     const isLight = theme === "light";

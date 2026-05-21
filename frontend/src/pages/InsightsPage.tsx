@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Card, Col, Descriptions, Empty, Row, Space, Statistic, Typography } from "antd";
+import { Alert, Card, Col, Descriptions, Empty, Progress, Row, Space, Statistic, Typography } from "antd";
 import { asArray, asRecord, buildClusterNameMap, resolveClusterName, toNumber } from "../utils/report";
 import { api } from "../api/client";
 import { DrilldownDiffPanel } from "../features/report/DrilldownDiffPanel";
@@ -9,6 +9,7 @@ import { useMemo } from "react";
 
 export function InsightsPage() {
   const report = useQuery({ queryKey: ["report-data"], queryFn: api.reportData });
+  const trends = useQuery({ queryKey: ["report-trends"], queryFn: () => api.reportTrends(24) });
   const data = report.data ?? {
     run_summary: {},
     ncc_summary_counts: {},
@@ -62,6 +63,15 @@ export function InsightsPage() {
       }),
     [data],
   );
+  const trendPoints = asArray(asRecord(trends.data || {}).points).map((p) => asRecord(p));
+  const recentTrends = trendPoints.slice(-8);
+  const actionableFindings = asArray(data.agg_rows)
+    .map((r) => asRecord(r))
+    .filter((r) => {
+      const severity = String(r.severity || "").toUpperCase();
+      return severity === "FAIL" || severity === "ERR";
+    })
+    .slice(0, 3);
   return (
     <>
       <Card className="page-card">
@@ -140,6 +150,61 @@ export function InsightsPage() {
           }
         />
       </Card>
+      <Row gutter={[12, 12]}>
+        <Col xs={24} md={12}>
+          <Card className="page-card" title="Top 3 Actionable Findings">
+            {actionableFindings.length === 0 ? (
+              <Empty description="No FAIL/ERR findings in current snapshot." />
+            ) : (
+              <Space direction="vertical" size={10} style={{ width: "100%" }}>
+                {actionableFindings.map((item, idx) => {
+                  const cluster = resolveClusterName(String(item.cluster || "-"), clusterNameMap);
+                  const checkName = String(item.check || item.check_name || item.title || "Unnamed check");
+                  const kbUrl = String(item.kb || item.kb_link || item.kb_url || "").trim();
+                  return (
+                    <Card key={`${cluster}-${checkName}-${idx}`} size="small">
+                      <Typography.Text strong>{cluster}</Typography.Text>
+                      <div>{checkName}</div>
+                      <Typography.Text type="secondary">
+                        Why it matters: {String(item.details || item.message || "Cluster health is impacted by this result.").slice(0, 180)}
+                      </Typography.Text>
+                      {kbUrl ? (
+                        <div style={{ marginTop: 6 }}>
+                          <a href={kbUrl} target="_blank" rel="noreferrer">
+                            KB reference
+                          </a>
+                        </div>
+                      ) : null}
+                    </Card>
+                  );
+                })}
+              </Space>
+            )}
+          </Card>
+        </Col>
+        <Col xs={24} md={12}>
+          <Card className="page-card" title="Severity Trend (last runs)">
+            {recentTrends.length === 0 ? (
+              <Empty description="No trend points available yet." />
+            ) : (
+              <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                {recentTrends.map((p, idx) => {
+                  const total = Math.max(1, toNumber(p.total_checks, 1));
+                  const riskPct = Math.min(100, ((toNumber(p.fail_total) + toNumber(p.err_total)) / total) * 100);
+                  return (
+                    <div key={`${p.timestamp || "point"}-${idx}`}>
+                      <Typography.Text type="secondary">
+                        {String(p.timestamp || "-")} | FAIL {toNumber(p.fail_total)} | ERR {toNumber(p.err_total)}
+                      </Typography.Text>
+                      <Progress percent={Number(riskPct.toFixed(2))} size="small" status={riskPct >= 3 ? "exception" : riskPct >= 1 ? "active" : "success"} />
+                    </div>
+                  );
+                })}
+              </Space>
+            )}
+          </Card>
+        </Col>
+      </Row>
       <DrilldownDiffPanel drilldownDiff={data.drilldown_diff} clusterNameMap={clusterNameMap} />
       <FlakyChecksPanel flakyChecks={data.flaky_checks} clusterNameMap={clusterNameMap} />
       <SloPanel

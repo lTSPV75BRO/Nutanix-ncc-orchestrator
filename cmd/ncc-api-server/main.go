@@ -108,6 +108,8 @@ type scheduleState struct {
 	Cron      string `json:"cron,omitempty"`
 	Every     string `json:"every,omitempty"`
 	Config    string `json:"config"`
+	LogPath   string `json:"log_path,omitempty"`
+	WithLock  bool   `json:"with_lock,omitempty"`
 	TaskName  string `json:"task_name,omitempty"`
 	PrintOnly bool   `json:"print_only"`
 	UpdatedAt string `json:"updated_at"`
@@ -119,6 +121,8 @@ type scheduleUpdateRequest struct {
 	Cron      string `json:"cron,omitempty"`
 	Every     string `json:"every,omitempty"`
 	Config    string `json:"config,omitempty"`
+	LogPath   string `json:"log_path,omitempty"`
+	WithLock  *bool  `json:"with_lock,omitempty"`
 	TaskName  string `json:"task_name,omitempty"`
 	PrintOnly *bool  `json:"print_only,omitempty"`
 	Apply     bool   `json:"apply"`
@@ -257,6 +261,7 @@ func main() {
 	mux.HandleFunc("/api/v1/settings/notifications", s.handleNotifications)
 	mux.HandleFunc("/api/v1/settings/notifications/test", s.handleNotificationsTest)
 	mux.HandleFunc("/api/v1/schedule", s.handleSchedule)
+	mux.HandleFunc("/api/v1/schedule/health", s.handleScheduleHealth)
 	mux.HandleFunc("/api/v1/artifacts", s.handleArtifacts)
 	mux.HandleFunc("/api/v1/artifacts/", s.handleArtifactByName)
 	mux.HandleFunc("/api/v1/runs", s.handleRuns)
@@ -387,15 +392,16 @@ func (s *apiServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"time":         time.Now().UTC().Format(time.RFC3339),
 		"auth_mode":    s.authMode,
 		"token_source": tokenSource(s.authToken, os.Getenv("NCC_API_TOKEN")),
+		"config_path":  s.absPath(s.configPath),
+		"output_dir":   s.absPath(s.outputDir),
+		"log_dir":      s.absPath(s.logDir),
+		"token_file":   s.absPath(s.tokenFilePath),
 	}
 	if s.debugExpose {
 		data["repo_root"] = s.absPath(s.repoRoot)
-		data["config_path"] = s.absPath(s.configPath)
-		data["output_dir"] = s.absPath(s.outputDir)
 		data["schedule_state"] = s.absPath(s.scheduleStatePath)
 		data["orchestrator_bin"] = s.absPath(s.orchestratorBin)
 		data["orchestrator_cmd"] = strings.Join(s.orchestratorBaseCommand(), " ")
-		data["token_file"] = s.absPath(s.tokenFilePath)
 	}
 	writeJSON(w, http.StatusOK, envelope{
 		Success: true,
@@ -671,7 +677,7 @@ func (s *apiServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 			if err == nil {
 				s.audit(r, "settings.config.bootstrap", true, map[string]interface{}{"config_path": cfgPath})
 			} else {
-				data := map[string]interface{}{"output": tailString(strings.TrimSpace(out), 4000)}
+				data := map[string]interface{}{"output": tailString(redactSensitiveText(strings.TrimSpace(out)), 4000)}
 				if runErr != nil {
 					data["bootstrap_error"] = runErr.Error()
 				}
@@ -683,8 +689,9 @@ func (s *apiServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
-			"path":    cfgPath,
-			"content": string(b),
+			"path":             cfgPath,
+			"content":          string(b),
+			"content_redacted": redactSensitiveText(string(b)),
 		}})
 	case http.MethodPut:
 		if err := requireJSONContentType(r); err != nil {
@@ -729,7 +736,7 @@ func (s *apiServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, envelope{
 				Success: false,
 				Error:   fmt.Sprintf("strict config validation failed: %v", err),
-				Data:    map[string]string{"output": string(out)},
+				Data:    map[string]string{"output": redactSensitiveText(string(out))},
 			})
 			return
 		}
@@ -759,6 +766,30 @@ func parseScalarConfigValue(v interface{}) string {
 	default:
 		return strings.TrimSpace(fmt.Sprintf("%v", v))
 	}
+}
+
+func redactSensitiveText(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return raw
+	}
+	lines := strings.Split(raw, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			out = append(out, line)
+			continue
+		}
+		lower := strings.ToLower(trimmed)
+		if strings.Contains(lower, "password:") || strings.Contains(lower, "token:") || strings.Contains(lower, "secret:") {
+			if idx := strings.Index(line, ":"); idx >= 0 {
+				out = append(out, line[:idx+1]+" \"***\"")
+				continue
+			}
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
 }
 
 func isUnsetConfigPathLiteral(val string) bool {
@@ -1115,12 +1146,17 @@ func (s *apiServer) handleSchedule(w http.ResponseWriter, r *http.Request) {
 			Cron:      strings.TrimSpace(req.Cron),
 			Every:     strings.TrimSpace(req.Every),
 			Config:    defaultIfEmpty(req.Config, s.configPath),
+			LogPath:   strings.TrimSpace(req.LogPath),
 			TaskName:  strings.TrimSpace(req.TaskName),
 			PrintOnly: true,
+			WithLock:  true,
 			UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 		}
 		if req.PrintOnly != nil {
 			st.PrintOnly = *req.PrintOnly
+		}
+		if req.WithLock != nil {
+			st.WithLock = *req.WithLock
 		}
 		if err := validateScheduleInput(st); err != nil {
 			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
@@ -1143,6 +1179,10 @@ func (s *apiServer) handleSchedule(w http.ResponseWriter, r *http.Request) {
 			if st.Every != "" {
 				args = append(args, "--every", st.Every)
 			}
+			if st.LogPath != "" {
+				args = append(args, "--log-path", st.LogPath)
+			}
+			args = append(args, fmt.Sprintf("--with-lock=%t", st.WithLock))
 			if st.TaskName != "" {
 				args = append(args, "--task-name", st.TaskName)
 			}
@@ -1159,6 +1199,82 @@ func (s *apiServer) handleSchedule(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 	}
+}
+
+func parseScheduleHealthFromLog(path string) map[string]string {
+	out := map[string]string{
+		"last_run":     "",
+		"last_success": "",
+		"last_error":   "",
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return out
+	}
+	lines := strings.Split(string(b), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		if out["last_run"] == "" {
+			out["last_run"] = line
+		}
+		lower := strings.ToLower(line)
+		if out["last_success"] == "" && (strings.Contains(lower, "completed") || strings.Contains(lower, "success") || strings.Contains(lower, "report generated")) {
+			out["last_success"] = line
+		}
+		if out["last_error"] == "" && (strings.Contains(lower, "error") || strings.Contains(lower, "failed") || strings.Contains(lower, "panic")) {
+			out["last_error"] = line
+		}
+		if out["last_success"] != "" && out["last_error"] != "" && out["last_run"] != "" {
+			break
+		}
+	}
+	return out
+}
+
+func (s *apiServer) handleScheduleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	st, err := s.loadSchedule()
+	if err != nil {
+		writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
+			"configured": false,
+			"error":      err.Error(),
+		}})
+		return
+	}
+	logPath := strings.TrimSpace(st.LogPath)
+	if logPath == "" {
+		logPath = filepath.Join("logs", "ncc-scheduler.log")
+	}
+	logAbs := s.absPath(logPath)
+	logInfo, statErr := os.Stat(logAbs)
+	lockPath := filepath.Join(filepath.Dir(logAbs), ".ncc-scheduler.lock")
+	parsed := parseScheduleHealthFromLog(logAbs)
+	data := map[string]interface{}{
+		"configured":      true,
+		"type":            st.Type,
+		"action":          st.Action,
+		"with_lock":       st.WithLock,
+		"log_path":        logAbs,
+		"lock_path":       lockPath,
+		"last_updated_at": st.UpdatedAt,
+		"last_run":        parsed["last_run"],
+		"last_success":    parsed["last_success"],
+		"last_error":      parsed["last_error"],
+	}
+	if statErr == nil {
+		data["log_exists"] = true
+		data["log_size"] = logInfo.Size()
+		data["log_mod_time"] = logInfo.ModTime().UTC().Format(time.RFC3339)
+	} else {
+		data["log_exists"] = false
+	}
+	writeJSON(w, http.StatusOK, envelope{Success: true, Data: data})
 }
 
 func (s *apiServer) handleArtifacts(w http.ResponseWriter, r *http.Request) {
@@ -1761,6 +1877,7 @@ func (s *apiServer) handleMetaRoutes(w http.ResponseWriter, r *http.Request) {
 		{Path: "/api/v1/settings/notifications", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write notifications state", SampleBody: "{\n  \"enabled\": true,\n  \"channel\": \"webhook\"\n}"},
 		{Path: "/api/v1/settings/notifications/test", Methods: []string{http.MethodPost}, Description: "Send test notification(s)", SampleBody: "{\n  \"channel\": \"all\"\n}"},
 		{Path: "/api/v1/schedule", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write scheduler state", SampleBody: "{\n  \"type\": \"cron\",\n  \"action\": \"create\",\n  \"cron\": \"15 */4 * * *\",\n  \"config\": \"config.yaml\",\n  \"print_only\": true,\n  \"apply\": false\n}"},
+		{Path: "/api/v1/schedule/health", Methods: []string{http.MethodGet}, Description: "Scheduler health snapshot (last run/success/error hints)"},
 		{Path: "/api/v1/artifacts", Methods: []string{http.MethodGet}, Description: "List available artifacts"},
 		{Path: "/api/v1/artifacts/{name}", Methods: []string{http.MethodGet}, Description: "Read artifact by name"},
 		{Path: "/api/v1/runs", Methods: []string{http.MethodGet}, Description: "List historical runs"},
@@ -1904,6 +2021,9 @@ func (s *apiServer) buildOpenAPISpec() map[string]interface{} {
 					},
 				},
 			},
+			"/api/v1/schedule/health": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Read scheduler health snapshot"},
+			},
 			"/api/v1/artifacts": map[string]interface{}{
 				"get": map[string]interface{}{"summary": "List available artifacts"},
 			},
@@ -2014,6 +2134,8 @@ func (s *apiServer) loadSchedule() (scheduleState, error) {
 				Type:      "auto",
 				Action:    "create",
 				Config:    s.configPath,
+				LogPath:   "logs/ncc-scheduler.log",
+				WithLock:  true,
 				PrintOnly: true,
 				UpdatedAt: "",
 			}, nil
@@ -2023,6 +2145,9 @@ func (s *apiServer) loadSchedule() (scheduleState, error) {
 	var st scheduleState
 	if err := json.Unmarshal(b, &st); err != nil {
 		return scheduleState{}, err
+	}
+	if strings.TrimSpace(st.LogPath) == "" {
+		st.LogPath = "logs/ncc-scheduler.log"
 	}
 	return st, nil
 }

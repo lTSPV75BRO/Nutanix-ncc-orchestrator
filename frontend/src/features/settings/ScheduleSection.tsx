@@ -19,8 +19,11 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
   const [everyUnit, setEveryUnit] = useLocalStorageState("settings.schedule.everyUnit", "h");
   const [config, setConfig] = useLocalStorageState("settings.schedule.config", "config.yaml");
   const [taskName, setTaskName] = useLocalStorageState("settings.schedule.taskName", "ncc-orchestrator");
+  const [logPath, setLogPath] = useLocalStorageState("settings.schedule.logPath", "logs/ncc-scheduler.log");
+  const [withLock, setWithLock] = useLocalStorageState("settings.schedule.withLock", true);
   const [printOnly, setPrintOnly] = useLocalStorageState("settings.schedule.printOnly", true);
   const [apply, setApply] = useLocalStorageState("settings.schedule.apply", false);
+  const [healthOut, setHealthOut] = useState("");
   const [out, setOut] = useState("");
 
   const payload = useMemo(() => {
@@ -31,11 +34,13 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
       cron: mode === "advanced" ? cron.trim() : "",
       every,
       config: config.trim(),
+      log_path: logPath.trim(),
+      with_lock: withLock,
       task_name: taskName.trim(),
       print_only: printOnly,
       apply,
     };
-  }, [mode, type, action, cron, everyValue, everyUnit, config, taskName, printOnly, apply]);
+  }, [mode, type, action, cron, everyValue, everyUnit, config, logPath, withLock, taskName, printOnly, apply]);
 
   const load = async () => {
     try {
@@ -44,6 +49,8 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
       setAction(s.action || "create");
       setCron(s.cron || "");
       setConfig(s.config || backendConfigPath || "config.yaml");
+      setLogPath(s.log_path || "logs/ncc-scheduler.log");
+      setWithLock(Boolean(s.with_lock ?? true));
       setTaskName(s.task_name || "ncc-orchestrator");
       setPrintOnly(Boolean(s.print_only));
       const m = String(s.every || "").match(/^(\d+)([mhd])$/);
@@ -53,6 +60,15 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
       }
       setMode((s.type !== "auto" || s.action !== "create" || (s.cron || "").trim()) ? "advanced" : "simple");
       setOut(JSON.stringify(s, null, 2));
+    } catch (e) {
+      onError(e);
+    }
+  };
+
+  const loadHealth = async () => {
+    try {
+      const h = await api.scheduleHealth();
+      setHealthOut(JSON.stringify(h, null, 2));
     } catch (e) {
       onError(e);
     }
@@ -110,6 +126,10 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
             <Typography.Text type="secondary">Task Name</Typography.Text>
             <Input value={taskName} onChange={(e) => setTaskName(e.target.value)} />
           </Col>
+          <Col xs={24} md={6}>
+            <Typography.Text type="secondary">Scheduler Log Path</Typography.Text>
+            <Input value={logPath} onChange={(e) => setLogPath(e.target.value)} />
+          </Col>
         </Row>
         <Space size={8} wrap style={{ marginTop: 12, marginBottom: 12 }}>
           <Button onClick={() => { setEveryValue(15); setEveryUnit("m"); }}>Every 15m</Button>
@@ -159,14 +179,23 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
             <Switch checked={apply} onChange={setApply} />
             <Typography.Text>apply now</Typography.Text>
           </Space>
+          <Space size={6}>
+            <Switch checked={withLock} onChange={setWithLock} />
+            <Typography.Text>flock overlap lock</Typography.Text>
+          </Space>
         </Space>
         <pre>{JSON.stringify(payload, null, 2)}</pre>
         <Space size={8} style={{ marginTop: 12 }}>
           <Button onClick={load}>Load Schedule</Button>
+          <Button onClick={loadHealth}>Scheduler Health</Button>
           <Button type="primary" onClick={save}>
             Save Schedule
           </Button>
         </Space>
+        <div style={{ marginTop: 12 }}>
+          <Typography.Text type="secondary">Scheduler Health</Typography.Text>
+          <pre>{healthOut}</pre>
+        </div>
         <div style={{ marginTop: 12 }}>
           <pre>{out}</pre>
         </div>

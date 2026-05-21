@@ -20,6 +20,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Build and handover guides** — Added `docs/BUILD_FROM_SCRATCH.md` and `docs/ARCHITECTURE_AND_HANDOVER.md` for end-to-end onboarding, operations, and ownership transfer.
 - **Clean v2 uninstall tooling** — Added `scripts/uninstall-v2-clean.sh` as the canonical Kubernetes/runtime cleanup entrypoint; legacy `scripts/uninstall-ncc-orchestrator.sh` now delegates to it.
 - **CLI local uninstall command** — Added `ncc-orchestrator uninstall` for standalone local cleanup of artifacts/state created by the binary.
+- **`v2-check` preflight command** — Added lightweight v2 runtime self-check for binary executability, config/path readiness, directory writability, and API/UI port bind availability before `v2-start`.
+- **Scheduler health API** — Added `GET /api/v1/schedule/health` to expose scheduler runtime hints (`last_run`, `last_success`, `last_error`) and lock/log path metadata.
 
 ### Changed
 
@@ -32,6 +34,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Preflight probe handling** — `.ncc-preflight-check` moved to a persistent read/write sentinel approach (no create/delete churn) with legacy typo cleanup.
 - **Performance and reliability optimizations** — Cached exclude-title matchers/regex, reduced config re-parse and allocations in secret validation, de-duplicated replay metadata parsing, and eliminated redundant Prometheus writes during replay.
 - **Console error UX** — Consolidated duplicate startup error logging to a single user-facing error path.
+- **Scheduler overlap safety** — `create-schedule` now supports lock-enabled cron generation with `--with-lock` (default true) to prevent overlapping scheduled runs.
+- **Security response handling** — Added redacted-safe config response content and startup warning for plaintext config passwords.
+- **Logs UX operability** — Added UI `Follow tail` and `Jump to latest` controls for Runner Logs and Live Logs.
 
 ---
 

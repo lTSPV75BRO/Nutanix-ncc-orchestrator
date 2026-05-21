@@ -490,6 +490,7 @@ ncc-orchestrator create-schedule [flags]
 | `--cron` | string | Standard 5-field cron expression | derived from `--every` when empty | Explicit cron schedule for `--type cron`. Takes precedence over `--every` derivation. |
 | `--every` | duration | Go duration (`30m`, `4h`, `24h`) | `4h` | Used to derive schedule intervals (cron or Windows task cadence). |
 | `--log-path` | string | File path | `logs/ncc-scheduler.log` | Output redirection path for scheduled command logs. |
+| `--with-lock` | bool | `true`, `false` | `true` | Enables `flock`-based overlap protection for cron runs to prevent concurrent schedule collisions. |
 | `--print-only` | bool | `true`, `false` | `true` | Safety preview mode. Keep true to inspect planned scheduler changes before applying. |
 | `--task-name` | string | Task/marker name string | `ncc-orchestrator` | Identifier used in cron marker comments or Windows task naming. |
 | `--type` | string | `auto`, `cron`, `windows` | `auto` | Scheduler backend. `auto` picks platform-appropriate implementation. |
@@ -619,6 +620,26 @@ These are runtime flags for v2 services (`cmd/ncc-api-server`, `cmd/ncc-ui-serve
 | `--api-pid-file`, `--ui-pid-file` | empty | PID path overrides when custom PID files are used. |
 | `--force` | `false` | Immediate hard kill, no graceful wait. |
 
+### 6.12a `v2-check`
+
+```bash
+ncc-orchestrator v2-check --config-path /abs/config.yaml --api-listen :8081 --ui-listen :8080
+```
+
+| Flag | Type | Default | Detailed explanation |
+|---|---|---|---|
+| `--install-dir` | string | `.ncc-v2` | Runtime layout root used to validate API/UI binaries and frontend assets. |
+| `--config-path` | string | `config.yaml` | Config file that must exist/read successfully for v2 startup. |
+| `--output-dir` | string | `outputfiles` | Directory validated for write access before v2 runtime start. |
+| `--log-dir` | string | `nccfiles` | NCC raw log directory validated for write access. |
+| `--token-file` | string | `.ncc-api-token` | Token path parent is validated for write access. |
+| `--orchestrator-bin` | string | `./ncc-orchestrator` | Runner binary path validated for existence + executability. |
+| `--api-listen` | string | `:8081` | API listen address bind check to catch "address already in use". |
+| `--ui-listen` | string | `:8080` | UI listen address bind check (skipped when `--api-only=true`). |
+| `--api-only` | bool | `false` | Limits checks to API prerequisites only. |
+
+Use this command before `v2-start` in production automation to fail fast on path/port misconfiguration.
+
 Production-style startup example:
 
 ```bash
@@ -656,6 +677,15 @@ Large payload control for report endpoint:
 - Applies to large array fields (`checks_snapshot`, `agg_rows`) and returns per-field pagination metadata.
 
 Machine-readable API errors:
+
+Scheduler health endpoint:
+
+- `GET /api/v1/schedule/health`
+- Returns scheduler configuration and operational hints:
+  - `last_run`
+  - `last_success`
+  - `last_error`
+  - `log_path`, `lock_path`, `with_lock`
 
 - All non-success API responses include a stable `error_code` field for automation/UI handling.
 - Examples:

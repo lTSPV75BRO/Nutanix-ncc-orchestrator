@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Col, Input, List, Row, Space, Tag, Typography } from "antd";
+import { Alert, Button, Card, Col, Input, List, Row, Space, Switch, Tag, Typography } from "antd";
 import { api } from "../../api/client";
 import type { ArtifactInfo, RunActiveData, RunInfo, RunPreflightData } from "../../api/types";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
@@ -24,6 +24,8 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
   const [artifacts, setArtifacts] = useState<ArtifactInfo[]>([]);
   const [active, setActive] = useState<RunActiveData | null>(null);
   const [preflight, setPreflight] = useState<RunPreflightData | null>(null);
+  const [followTail, setFollowTail] = useLocalStorageState("runs.logs.followTail", true);
+  const [jumpToLastSignal, setJumpToLastSignal] = useState(0);
 
   useEffect(() => {
     if (backendConfigPath) setRunConfigPath(backendConfigPath);
@@ -186,7 +188,19 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
         <pre>{JSON.stringify(triggerPayloadPreview, null, 2)}</pre>
         <pre>{runsOut}</pre>
         <Typography.Title level={5}>Live Logs</Typography.Title>
-        <CodeEditor value={liveLogs} language="plaintext" readOnly height={420} autoRevealLastLine />
+        <Space size={8} style={{ marginBottom: 8 }}>
+          <Switch checked={followTail} onChange={setFollowTail} />
+          <Typography.Text>Follow tail</Typography.Text>
+          <Button onClick={() => setJumpToLastSignal((n) => n + 1)}>Jump to latest</Button>
+        </Space>
+        <CodeEditor
+          value={liveLogs}
+          language="plaintext"
+          readOnly
+          height={420}
+          autoRevealLastLine={followTail}
+          jumpToLastSignal={jumpToLastSignal}
+        />
         <Typography.Title level={5}>Runs</Typography.Title>
         <ul>
           {runs.map((r) => (

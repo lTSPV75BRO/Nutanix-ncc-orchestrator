@@ -6,11 +6,13 @@ import type {
   Envelope,
   HealthData,
   ReportData,
+  ReportTrendsData,
   RunPreflightData,
   RunActiveData,
   RunnerLogData,
   RunInfo,
   ScheduleState,
+  ScheduleHealthData,
   TriggerRunData,
 } from "./types";
 
@@ -101,6 +103,7 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
+  scheduleHealth: () => callApi<ScheduleHealthData>("/api/v1/schedule/health"),
   runs: () => callApi<RunInfo[]>("/api/v1/runs"),
   runSummary: () => callApi<unknown>("/api/v1/runs/summary"),
   runActive: () => callApi<RunActiveData>("/api/v1/runs/active"),
@@ -134,5 +137,6 @@ export const api = {
       return loadReportDataFallback();
     }
   },
+  reportTrends: (limit = 30) => callApi<ReportTrendsData>(`/api/v1/report/trends?limit=${encodeURIComponent(String(limit))}`),
   runnerLogs: () => callApi<RunnerLogData>("/api/v1/logs/runner"),
 };
