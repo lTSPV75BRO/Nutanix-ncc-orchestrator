@@ -1,5 +1,6 @@
 import type {
   ArtifactInfo,
+  AuditLogData,
   ConfigData,
   ConfigRelatedFileData,
   ConfigRelatedFilesData,
@@ -31,7 +32,9 @@ async function callApi<T>(path: string, init?: RequestInit): Promise<T> {
   }).finally(() => clearTimeout(timer));
   const contentType = (response.headers.get("content-type") || "").toLowerCase();
   if (!contentType.includes("application/json")) {
-    throw new Error(`unexpected response content-type: ${contentType || "unknown"}`);
+    const textBody = (await response.text().catch(() => "")).trim();
+    const snippet = textBody ? `\n${textBody.slice(0, 600)}` : "";
+    throw new Error(`unexpected response content-type: ${contentType || "unknown"}${snippet}`);
   }
   const payload = (await response.json().catch(() => ({}))) as Envelope<T>;
   if (!response.ok || !payload.success) {
@@ -139,4 +142,12 @@ export const api = {
   },
   reportTrends: (limit = 30) => callApi<ReportTrendsData>(`/api/v1/report/trends?limit=${encodeURIComponent(String(limit))}`),
   runnerLogs: () => callApi<RunnerLogData>("/api/v1/logs/runner"),
+  audit: (opts?: { limit?: number; action?: string; failures?: boolean }) => {
+    const params = new URLSearchParams();
+    if (typeof opts?.limit === "number" && opts.limit > 0) params.set("limit", String(opts.limit));
+    if (opts?.action) params.set("action", opts.action);
+    if (opts?.failures) params.set("failures", "1");
+    const path = params.size > 0 ? `/api/v1/audit?${params.toString()}` : "/api/v1/audit";
+    return callApi<AuditLogData>(path);
+  },
 };

@@ -19,6 +19,38 @@ import (
 	"time"
 )
 
+type apiErrorEnvelope struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error"`
+}
+
+func writeAPIError(w http.ResponseWriter, status int, message string, isTLS bool, csp string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+	w.Header().Set("Content-Security-Policy", csp)
+	if isTLS {
+		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+	}
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(apiErrorEnvelope{Success: false, Error: message})
+}
+
+func inferRequestOrigin(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	host := strings.TrimSpace(r.Host)
+	if host == "" {
+		return ""
+	}
+	return scheme + "://" + host
+}
+
 func main() {
 	var listen string
 	var dir string
@@ -159,7 +191,7 @@ func main() {
 		}
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, e error) {
-		http.Error(w, "api proxy error: "+e.Error(), http.StatusBadGateway)
+		writeAPIError(w, http.StatusBadGateway, "api proxy error: "+e.Error(), r.TLS != nil, apiCSP)
 	}
 
 	originSet := map[string]struct{}{}
@@ -173,9 +205,8 @@ func main() {
 	mux.Handle("/api/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := strings.TrimSpace(r.Header.Get("Origin"))
 		if origin != "" {
-			if _, ok := originSet[origin]; !ok {
-				applyAPIHeaders(w, r.TLS != nil)
-				http.Error(w, "origin not allowed", http.StatusForbidden)
+			if _, ok := originSet[origin]; !ok && origin != inferRequestOrigin(r) {
+				writeAPIError(w, http.StatusForbidden, "origin not allowed", r.TLS != nil, apiCSP)
 				return
 			}
 			w.Header().Set("Access-Control-Allow-Origin", origin)
@@ -189,13 +220,11 @@ func main() {
 			return
 		}
 		if !(r.Method == http.MethodGet || r.Method == http.MethodPost || r.Method == http.MethodPut) {
-			applyAPIHeaders(w, r.TLS != nil)
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed", r.TLS != nil, apiCSP)
 			return
 		}
 		if !strings.HasPrefix(r.URL.Path, "/api/v1/") {
-			applyAPIHeaders(w, r.TLS != nil)
-			http.Error(w, "path not allowed", http.StatusForbidden)
+			writeAPIError(w, http.StatusForbidden, "path not allowed", r.TLS != nil, apiCSP)
 			return
 		}
 		proxy.ServeHTTP(w, r)

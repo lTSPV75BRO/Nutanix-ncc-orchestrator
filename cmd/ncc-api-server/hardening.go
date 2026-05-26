@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -11,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -528,16 +530,108 @@ func (s *apiServer) withRateLimit(next http.Handler) http.Handler {
 
 func (s *apiServer) audit(r *http.Request, action string, success bool, fields map[string]interface{}) {
 	payload := map[string]interface{}{
-		"ts":      time.Now().UTC().Format(time.RFC3339),
-		"action":  action,
-		"success": success,
-		"path":    r.URL.Path,
-		"method":  r.Method,
-		"client":  cleanClientIP(r),
+		"ts":        time.Now().UTC().Format(time.RFC3339),
+		"action":    action,
+		"success":   success,
+		"path":      r.URL.Path,
+		"method":    r.Method,
+		"client":    cleanClientIP(r),
+		"auth_mode": s.authMode,
+	}
+	if ua := strings.TrimSpace(r.Header.Get("User-Agent")); ua != "" {
+		if len(ua) > 200 {
+			ua = ua[:200]
+		}
+		payload["user_agent"] = ua
 	}
 	for k, v := range fields {
 		payload[k] = v
 	}
 	b, _ := json.Marshal(payload)
 	fmt.Printf("AUDIT %s\n", string(b))
+	s.appendAuditLine(b)
+}
+
+// appendAuditLine writes a JSONL audit entry with a serialized lock so concurrent
+// requests don't interleave bytes. It rotates the log when it exceeds
+// auditLogMaxBytes (renaming current file to <path>.1).
+func (s *apiServer) appendAuditLine(line []byte) {
+	if strings.TrimSpace(s.auditLogPath) == "" {
+		return
+	}
+	s.auditMu.Lock()
+	defer s.auditMu.Unlock()
+	abs := s.absPath(s.auditLogPath)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		log.Printf("audit log: ensure dir: %v", err)
+		return
+	}
+	if s.auditLogMaxBytes > 0 {
+		if st, err := os.Stat(abs); err == nil && st.Size() >= s.auditLogMaxBytes {
+			rotated := abs + ".1"
+			_ = os.Remove(rotated)
+			if err := os.Rename(abs, rotated); err != nil {
+				log.Printf("audit log: rotate: %v", err)
+			}
+		}
+	}
+	f, err := os.OpenFile(abs, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		log.Printf("audit log: open: %v", err)
+		return
+	}
+	defer f.Close()
+	if _, err := f.Write(append(line, '\n')); err != nil {
+		log.Printf("audit log: write: %v", err)
+	}
+}
+
+// auditEntries reads and parses up to `limit` most recent audit entries,
+// optionally filtered by an action prefix or success flag.
+func (s *apiServer) auditEntries(limit int, actionPrefix string, onlyFailures bool) ([]map[string]interface{}, error) {
+	if strings.TrimSpace(s.auditLogPath) == "" {
+		return nil, nil
+	}
+	s.auditMu.Lock()
+	defer s.auditMu.Unlock()
+	abs := s.absPath(s.auditLogPath)
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	lines := bytes.Split(data, []byte{'\n'})
+	out := make([]map[string]interface{}, 0, limit)
+	// Walk newest-first.
+	for i := len(lines) - 1; i >= 0 && len(out) < limit; i-- {
+		ln := bytes.TrimSpace(lines[i])
+		if len(ln) == 0 {
+			continue
+		}
+		var entry map[string]interface{}
+		if err := json.Unmarshal(ln, &entry); err != nil {
+			continue
+		}
+		if actionPrefix != "" {
+			act, _ := entry["action"].(string)
+			if !strings.HasPrefix(act, actionPrefix) {
+				continue
+			}
+		}
+		if onlyFailures {
+			if ok, _ := entry["success"].(bool); ok {
+				continue
+			}
+		}
+		out = append(out, entry)
+	}
+	return out, nil
 }

@@ -13,10 +13,48 @@ export type HealthData = {
   log_dir?: string;
   token_file?: string;
   token_source?: string;
+  auth_mode?: string;
   repo_root?: string;
   schedule_state?: string;
   orchestrator_bin?: string;
   orchestrator_cmd?: string;
+  /** API server version, e.g. "2.0.0" or "2.0.0-<sha>". */
+  version?: string;
+  /** Build timestamp (RFC3339) injected via -ldflags at build time. */
+  build_date?: string;
+  /** Release stream, e.g. "Release", "Beta", "dev". */
+  stream?: string;
+  /** Go toolchain that built the binary. */
+  go_version?: string;
+  os?: string;
+  arch?: string;
+};
+
+export type AuditLogEntry = {
+  ts: string;
+  action: string;
+  success: boolean;
+  path?: string;
+  method?: string;
+  client?: string;
+  auth_mode?: string;
+  user_agent?: string;
+  /** All other audit fields land here. */
+  [key: string]: unknown;
+};
+
+export type AuditLogData = {
+  path: string;
+  size: number;
+  mod_time: string;
+  limit: number;
+  count: number;
+  max_bytes: number;
+  entries: AuditLogEntry[];
+  filters: {
+    action: string;
+    failures: boolean;
+  };
 };
 
 export type ConfigData = {
@@ -59,6 +97,10 @@ export type ScheduleState = {
 
 export type ScheduleHealthData = {
   configured: boolean;
+  saved?: boolean;
+  installed?: boolean;
+  state_file_exists?: boolean;
+  task_name?: string;
   type?: string;
   action?: string;
   with_lock?: boolean;
@@ -71,6 +113,8 @@ export type ScheduleHealthData = {
   log_exists?: boolean;
   log_size?: number;
   log_mod_time?: string;
+  detector?: string;
+  install_check_error?: string;
   error?: string;
 };
 

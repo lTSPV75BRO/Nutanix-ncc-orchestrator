@@ -37,7 +37,6 @@ export function InsightsCards({ runSummary, aggRows, nccSummaryCounts, healthSou
     { label: "Err", value: errs },
     { label: "Pass", value: pass },
     { label: "Unknown", value: unknown },
-    { label: "Raw Pass Rate", value: `${rawPassRate.toFixed(2)}%` },
     { label: "Health Rate", value: `${healthRate.toFixed(2)}%` },
     { label: "Duration Sec", value: duration.toFixed(1) },
   ];
@@ -58,8 +57,6 @@ export function InsightsCards({ runSummary, aggRows, nccSummaryCounts, healthSou
         return "#38bdf8";
       case "Health Rate":
         return "#22c55e";
-      case "Raw Pass Rate":
-        return "#0ea5e9";
       default:
         return "#93c5fd";
     }
@@ -70,7 +67,7 @@ export function InsightsCards({ runSummary, aggRows, nccSummaryCounts, healthSou
         Insights
       </Typography.Title>
       <Typography.Text type="secondary" className="section-subtitle">
-        Health source: {healthSource || "fallback"} (Raw + weighted shown)
+        Health source: {healthSource || "fallback"} (pass + weighted shown)
       </Typography.Text>
       <Row gutter={[8, 8]}>
         {cards.map((c) => (

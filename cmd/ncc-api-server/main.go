@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,6 +32,35 @@ import (
 	yaml "go.yaml.in/yaml/v3"
 )
 
+// Build-time metadata. These are set via -ldflags at link time, e.g.:
+//
+//	go build -ldflags "-X main.Version=2.0.0 -X main.BuildDate=2026-05-21T12:34:56Z \
+//	  -X main.Stream=Release -X main.GoVersion=go1.22" ./cmd/ncc-api-server
+//
+// They are surfaced on /api/v1/health so support teams can see the exact build
+// the API server is running.
+var (
+	Version   string
+	BuildDate string
+	Stream    string
+	GoVersion string
+)
+
+func init() {
+	if Version == "" {
+		Version = "2.0.0"
+	}
+	if BuildDate == "" {
+		BuildDate = "unknown"
+	}
+	if Stream == "" {
+		Stream = "dev"
+	}
+	if GoVersion == "" {
+		GoVersion = runtime.Version()
+	}
+}
+
 type apiServer struct {
 	repoRoot              string
 	configPath            string
@@ -39,6 +69,9 @@ type apiServer struct {
 	runnerLogPath         string
 	scheduleStatePath     string
 	notificationStatePath string
+	auditLogPath          string
+	auditLogMaxBytes      int64
+	auditMu               sync.Mutex
 	orchestratorBin       string
 	authToken             string
 	tokenFilePath         string
@@ -199,6 +232,8 @@ func main() {
 	flag.StringVar(&s.runnerLogPath, "runner-log-path", "logs/ncc-runner.log", "Runner log file path")
 	flag.StringVar(&s.scheduleStatePath, "schedule-state-path", ".ncc-api-schedule.json", "Schedule state file path")
 	flag.StringVar(&s.notificationStatePath, "notifications-state-path", ".ncc-api-notifications.json", "Notifications state file path")
+	flag.StringVar(&s.auditLogPath, "audit-log-path", "logs/ncc-audit.log", "JSONL audit log file path")
+	flag.Int64Var(&s.auditLogMaxBytes, "audit-log-max-bytes", 5*1024*1024, "Audit log size before rotation (bytes); 0 disables rotation")
 	flag.StringVar(&s.orchestratorBin, "orchestrator-bin", "./ncc-orchestrator", "Path to ncc-orchestrator binary")
 	flag.StringVar(&s.tokenFilePath, "token-file-path", ".ncc-api-token", "Token file path for UI proxy/frontend use")
 	flag.StringVar(&s.corsOrigin, "cors-origin", "http://localhost:8080", "CORS allowed origin(s), comma-separated")
@@ -252,6 +287,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/health", s.handleHealth)
+	mux.HandleFunc("/api/v1/audit", s.handleAudit)
 	mux.HandleFunc("/api/v1/metrics/rate-limit", s.handleRateLimitMetrics)
 	mux.HandleFunc("/api/v1/auth/session", s.handleAuthSession)
 	mux.HandleFunc("/api/v1/auth/rotate", s.handleAuthRotate)
@@ -388,25 +424,77 @@ func (s *apiServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := map[string]interface{}{
-		"status":       "ok",
-		"time":         time.Now().UTC().Format(time.RFC3339),
-		"auth_mode":    s.authMode,
-		"token_source": tokenSource(s.authToken, os.Getenv("NCC_API_TOKEN")),
-		"config_path":  s.absPath(s.configPath),
-		"output_dir":   s.absPath(s.outputDir),
-		"log_dir":      s.absPath(s.logDir),
-		"token_file":   s.absPath(s.tokenFilePath),
+		"status":           "ok",
+		"time":             time.Now().UTC().Format(time.RFC3339),
+		"auth_mode":        s.authMode,
+		"token_source":     tokenSource(s.authToken, os.Getenv("NCC_API_TOKEN")),
+		"config_path":      s.absPath(s.configPath),
+		"output_dir":       s.absPath(s.outputDir),
+		"log_dir":          s.absPath(s.logDir),
+		"token_file":       s.absPath(s.tokenFilePath),
+		"orchestrator_bin": s.absPath(s.orchestratorBin),
+		"version":          Version,
+		"build_date":       BuildDate,
+		"stream":           Stream,
+		"go_version":       GoVersion,
+		"os":               runtime.GOOS,
+		"arch":             runtime.GOARCH,
 	}
 	if s.debugExpose {
 		data["repo_root"] = s.absPath(s.repoRoot)
 		data["schedule_state"] = s.absPath(s.scheduleStatePath)
-		data["orchestrator_bin"] = s.absPath(s.orchestratorBin)
 		data["orchestrator_cmd"] = strings.Join(s.orchestratorBaseCommand(), " ")
 	}
 	writeJSON(w, http.StatusOK, envelope{
 		Success: true,
 		Data:    data,
 	})
+}
+
+// handleAudit returns recent audit log entries (newest first) read from the
+// JSONL file. Filters: ?limit=200, ?action=settings, ?failures=1.
+func (s *apiServer) handleAudit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	q := r.URL.Query()
+	limit := 100
+	if raw := strings.TrimSpace(q.Get("limit")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	actionPrefix := strings.TrimSpace(q.Get("action"))
+	onlyFailures := q.Get("failures") == "1" || strings.EqualFold(q.Get("failures"), "true")
+
+	entries, err := s.auditEntries(limit, actionPrefix, onlyFailures)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "read audit log: " + err.Error()})
+		return
+	}
+
+	abs := s.absPath(s.auditLogPath)
+	var size int64
+	var modTime string
+	if st, err := os.Stat(abs); err == nil {
+		size = st.Size()
+		modTime = st.ModTime().UTC().Format(time.RFC3339)
+	}
+
+	writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
+		"path":       abs,
+		"size":       size,
+		"mod_time":   modTime,
+		"limit":      limit,
+		"count":      len(entries),
+		"max_bytes":  s.auditLogMaxBytes,
+		"entries":    entries,
+		"filters": map[string]interface{}{
+			"action":   actionPrefix,
+			"failures": onlyFailures,
+		},
+	}})
 }
 
 func (s *apiServer) handleRateLimitMetrics(w http.ResponseWriter, r *http.Request) {
@@ -1240,13 +1328,28 @@ func (s *apiServer) handleScheduleHealth(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	st, err := s.loadSchedule()
+	saved := false
+	stateFileExists := true
 	if err != nil {
+		stateFileExists = false
 		writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
-			"configured": false,
-			"error":      err.Error(),
+			"configured":        false,
+			"saved":             false,
+			"installed":         false,
+			"state_file_exists": stateFileExists,
+			"error":             err.Error(),
 		}})
 		return
 	}
+	if strings.TrimSpace(st.UpdatedAt) != "" {
+		saved = true
+	}
+	taskName := strings.TrimSpace(st.TaskName)
+	if taskName == "" {
+		taskName = "ncc-orchestrator"
+	}
+	installed, installError := s.detectInstalledSchedule(taskName)
+
 	logPath := strings.TrimSpace(st.LogPath)
 	if logPath == "" {
 		logPath = filepath.Join("logs", "ncc-scheduler.log")
@@ -1256,16 +1359,24 @@ func (s *apiServer) handleScheduleHealth(w http.ResponseWriter, r *http.Request)
 	lockPath := filepath.Join(filepath.Dir(logAbs), ".ncc-scheduler.lock")
 	parsed := parseScheduleHealthFromLog(logAbs)
 	data := map[string]interface{}{
-		"configured":      true,
-		"type":            st.Type,
-		"action":          st.Action,
-		"with_lock":       st.WithLock,
-		"log_path":        logAbs,
-		"lock_path":       lockPath,
-		"last_updated_at": st.UpdatedAt,
-		"last_run":        parsed["last_run"],
-		"last_success":    parsed["last_success"],
-		"last_error":      parsed["last_error"],
+		"configured":        installed, // authoritative: schedule is actually installed in OS
+		"saved":             saved,
+		"installed":         installed,
+		"state_file_exists": stateFileExists,
+		"task_name":         taskName,
+		"type":              st.Type,
+		"action":            st.Action,
+		"with_lock":         st.WithLock,
+		"log_path":          logAbs,
+		"lock_path":         lockPath,
+		"last_updated_at":   st.UpdatedAt,
+		"last_run":          parsed["last_run"],
+		"last_success":      parsed["last_success"],
+		"last_error":        parsed["last_error"],
+		"detector":          s.scheduleDetectorName(),
+	}
+	if installError != "" {
+		data["install_check_error"] = installError
 	}
 	if statErr == nil {
 		data["log_exists"] = true
@@ -1275,6 +1386,55 @@ func (s *apiServer) handleScheduleHealth(w http.ResponseWriter, r *http.Request)
 		data["log_exists"] = false
 	}
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: data})
+}
+
+// detectInstalledSchedule returns true iff a schedule entry tagged with the
+// expected ncc-orchestrator marker is present in the host's scheduler.
+//
+// Detection is delegated to the orchestrator binary via
+//
+//	create-schedule --type=auto --action=list --task-name=<name>
+//
+// so that the API server never touches the host scheduler directly. The
+// orchestrator prints the matching schedule line (containing the marker) when
+// installed and a stable "No cron entries found" / "No scheduled tasks" line
+// otherwise. Returns (installed, errorMessage). errorMessage is non-empty
+// only when the orchestrator could not be invoked or returned an unexpected
+// failure.
+func (s *apiServer) detectInstalledSchedule(taskName string) (bool, string) {
+	if taskName == "" {
+		return false, ""
+	}
+	args := []string{
+		"create-schedule",
+		"--type", "auto",
+		"--action", "list",
+		"--task-name", taskName,
+	}
+	out, err := s.runOrchestrator(args, 8*time.Second)
+	text := string(out)
+	if err != nil {
+		return false, fmt.Sprintf("orchestrator schedule list failed: %v: %s", err, strings.TrimSpace(tailString(text, 240)))
+	}
+	marker := fmt.Sprintf("# ncc-orchestrator:%s", taskName)
+	if strings.Contains(text, marker) {
+		return true, ""
+	}
+	// Defensive: also accept the marker without the leading hash in case the
+	// orchestrator output format changes for the listing line. (Used by both
+	// cron and schtasks list outputs which include the task name.)
+	bareMarker := fmt.Sprintf("ncc-orchestrator:%s", taskName)
+	if strings.Contains(text, bareMarker) && !strings.Contains(text, "No cron entries") && !strings.Contains(text, "No scheduled tasks") {
+		return true, ""
+	}
+	return false, ""
+}
+
+func (s *apiServer) scheduleDetectorName() string {
+	if runtime.GOOS == "windows" {
+		return "schtasks (via orchestrator)"
+	}
+	return "crontab (via orchestrator)"
 }
 
 func (s *apiServer) handleArtifacts(w http.ResponseWriter, r *http.Request) {
@@ -1867,7 +2027,8 @@ func (s *apiServer) handleMetaRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	routes := []routeMeta{
-		{Path: "/api/v1/health", Methods: []string{http.MethodGet}, Description: "Backend health and resolved paths"},
+		{Path: "/api/v1/health", Methods: []string{http.MethodGet}, Description: "Backend health, version, and resolved paths"},
+		{Path: "/api/v1/audit", Methods: []string{http.MethodGet}, Description: "Read recent audit log entries (limit, action, failures filters)"},
 		{Path: "/api/v1/metrics/rate-limit", Methods: []string{http.MethodGet}, Description: "Rate limiter configuration and counters"},
 		{Path: "/api/v1/auth/session", Methods: []string{http.MethodPost}, Description: "Issue short-lived session token"},
 		{Path: "/api/v1/auth/rotate", Methods: []string{http.MethodPost}, Description: "Rotate API token"},
@@ -1921,7 +2082,10 @@ func (s *apiServer) buildOpenAPISpec() map[string]interface{} {
 		},
 		"paths": map[string]interface{}{
 			"/api/v1/health": map[string]interface{}{
-				"get": map[string]interface{}{"summary": "Backend health and resolved paths"},
+				"get": map[string]interface{}{"summary": "Backend health, version, build_date, and resolved paths"},
+			},
+			"/api/v1/audit": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Recent audit log entries (filters: limit, action, failures)"},
 			},
 			"/api/v1/metrics/rate-limit": map[string]interface{}{
 				"get": map[string]interface{}{"summary": "Rate limiter configuration and counters"},

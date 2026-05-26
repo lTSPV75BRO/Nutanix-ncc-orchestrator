@@ -1,7 +1,8 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { ConfigProvider, theme as antdTheme } from "antd";
+import { App as AntApp, ConfigProvider, theme as antdTheme } from "antd";
 import type { ThemeConfig } from "antd";
 import { useLocalStorageState } from "./hooks/useLocalStorageState";
+import { NotifyBridge } from "./notify";
 
 export type AppThemeKey = "dark" | "light" | "it-pro";
 export type AppThemeSelection = AppThemeKey | "auto";
@@ -131,7 +132,12 @@ export function AppThemeProvider({ children }: { children: ReactNode }) {
 
   return (
     <ThemeContext.Provider value={{ selectedTheme, theme, setTheme }}>
-      <ConfigProvider theme={toAntThemeConfig(theme)}>{children}</ConfigProvider>
+      <ConfigProvider theme={toAntThemeConfig(theme)}>
+        <AntApp notification={{ placement: "topRight", duration: 4.5 }} component={false}>
+          <NotifyBridge />
+          {children}
+        </AntApp>
+      </ConfigProvider>
     </ThemeContext.Provider>
   );
 }

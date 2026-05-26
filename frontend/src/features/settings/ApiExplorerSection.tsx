@@ -1,6 +1,37 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Col, Input, List, Row, Select, Space, Statistic, Switch, Tag, Typography } from "antd";
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  Col,
+  Drawer,
+  Empty,
+  Input,
+  List,
+  Row,
+  Segmented,
+  Select,
+  Space,
+  Statistic,
+  Switch,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
+import {
+  ApiOutlined,
+  CopyOutlined,
+  ExperimentOutlined,
+  ReloadOutlined,
+  SafetyCertificateOutlined,
+  SearchOutlined,
+  SendOutlined,
+  WarningOutlined,
+} from "@ant-design/icons";
+import { CodeEditor } from "../../components/CodeEditor";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
+import { notify } from "../../notify";
 
 type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
@@ -19,15 +50,22 @@ type RouteMeta = {
 };
 
 type OpenAPISpec = {
-  paths?: Record<string, Record<string, { summary?: string; requestBody?: { content?: Record<string, { example?: unknown }> } }>>;
+  paths?: Record<
+    string,
+    Record<
+      string,
+      { summary?: string; requestBody?: { content?: Record<string, { example?: unknown }> } }
+    >
+  >;
 };
 
-const presets: EndpointPreset[] = [
+const PRESETS: EndpointPreset[] = [
   { label: "Health", method: "GET", path: "/api/v1/health" },
   { label: "Report Data", method: "GET", path: "/api/v1/report/data" },
   { label: "Report Trends", method: "GET", path: "/api/v1/report/trends?limit=30" },
   { label: "Runs Summary", method: "GET", path: "/api/v1/runs/summary" },
   { label: "Artifacts", method: "GET", path: "/api/v1/artifacts" },
+  { label: "Schedule Health", method: "GET", path: "/api/v1/schedule/health" },
   {
     label: "Trigger Run (sample)",
     method: "POST",
@@ -54,6 +92,13 @@ type ResponseData = {
   elapsedMs: number;
   headers: Record<string, string>;
   body: string;
+};
+
+const METHOD_COLOR: Record<HttpMethod, string> = {
+  GET: "blue",
+  POST: "green",
+  PUT: "orange",
+  DELETE: "red",
 };
 
 function parseHeaderLines(raw: string): Record<string, string> {
@@ -114,6 +159,27 @@ function parseRoutesFromOpenAPI(spec: OpenAPISpec): RouteMeta[] {
   return out.sort((a, b) => a.path.localeCompare(b.path));
 }
 
+function buildCurl(method: HttpMethod, url: string, headers: Record<string, string>, body?: string): string {
+  const parts: string[] = ["curl"];
+  if (method !== "GET") parts.push(`-X ${method}`);
+  parts.push(`'${url}'`);
+  for (const [k, v] of Object.entries(headers)) {
+    parts.push(`-H '${k}: ${v}'`);
+  }
+  if (body && body.trim()) {
+    const escaped = body.replace(/'/g, "'\\''");
+    parts.push(`--data '${escaped}'`);
+  }
+  return parts.join(" \\\n  ");
+}
+
+function statusToBadgeStatus(status: number): "success" | "warning" | "error" | "default" {
+  if (status >= 200 && status < 300) return "success";
+  if (status >= 300 && status < 400) return "default";
+  if (status >= 400 && status < 500) return "warning";
+  return "error";
+}
+
 export function ApiExplorerSection({ onError }: Props) {
   const [method, setMethod] = useLocalStorageState<HttpMethod>("apiExplorer.method", "GET");
   const [path, setPath] = useLocalStorageState("apiExplorer.path", "/api/v1/health");
@@ -122,10 +188,11 @@ export function ApiExplorerSection({ onError }: Props) {
   const [allowExternalURL, setAllowExternalURL] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [response, setResponse] = useState<ResponseData | null>(null);
-  const [lastError, setLastError] = useState("");
   const [routes, setRoutes] = useState<RouteMeta[]>([]);
   const [routesError, setRoutesError] = useState("");
-  const [selectedRoute, setSelectedRoute] = useState<string>("");
+  const [routesOpen, setRoutesOpen] = useState(false);
+  const [routeFilter, setRouteFilter] = useState("");
+  const [responseTab, setResponseTab] = useState<"body" | "headers">("body");
 
   const effectiveUrl = useMemo(() => {
     const trimmed = path.trim();
@@ -135,24 +202,33 @@ export function ApiExplorerSection({ onError }: Props) {
     return `/${trimmed}`;
   }, [path]);
 
+  const filteredRoutes = useMemo(() => {
+    const q = routeFilter.trim().toLowerCase();
+    if (!q) return routes;
+    return routes.filter(
+      (r) =>
+        r.path.toLowerCase().includes(q) ||
+        (r.description || "").toLowerCase().includes(q) ||
+        r.methods.some((m) => m.toLowerCase() === q),
+    );
+  }, [routes, routeFilter]);
+
   const applyPreset = (label: string) => {
-    const preset = presets.find((p) => p.label === label);
+    const preset = PRESETS.find((p) => p.label === label);
     if (!preset) return;
     setMethod(preset.method);
     setPath(preset.path);
     setBody(preset.body ?? "");
   };
 
-  const applyRouteMeta = (routePath: string) => {
-    setSelectedRoute(routePath);
-    const route = routes.find((r) => r.path === routePath);
-    if (!route) return;
+  const applyRouteMeta = (route: RouteMeta) => {
     const firstMethod = route.methods[0] || "GET";
     if (firstMethod === "GET" || firstMethod === "POST" || firstMethod === "PUT" || firstMethod === "DELETE") {
       setMethod(firstMethod);
     }
     setPath(route.path);
     setBody(route.sample_body ?? "");
+    setRoutesOpen(false);
   };
 
   const loadRoutes = async () => {
@@ -161,9 +237,7 @@ export function ApiExplorerSection({ onError }: Props) {
       const openAPIRes = await fetch("/api/v1/openapi.json", {
         method: "GET",
         credentials: "same-origin",
-        headers: {
-          "X-Requested-With": "ncc-ui",
-        },
+        headers: { "X-Requested-With": "ncc-ui" },
       });
       const openAPI = (await openAPIRes.json().catch(() => ({}))) as OpenAPISpec;
       if (openAPIRes.ok) {
@@ -173,13 +247,10 @@ export function ApiExplorerSection({ onError }: Props) {
           return;
         }
       }
-
       const res = await fetch("/api/v1/meta/routes", {
         method: "GET",
         credentials: "same-origin",
-        headers: {
-          "X-Requested-With": "ncc-ui",
-        },
+        headers: { "X-Requested-With": "ncc-ui" },
       });
       const payload = (await res.json().catch(() => ({}))) as {
         success?: boolean;
@@ -187,13 +258,11 @@ export function ApiExplorerSection({ onError }: Props) {
         data?: { routes?: RouteMeta[] };
       };
       if (!res.ok || !payload.success) {
-        throw new Error(payload.error || res.statusText || "failed to load routes from OpenAPI or meta endpoint");
+        throw new Error(payload.error || res.statusText || "failed to load routes");
       }
-      const apiRoutes = Array.isArray(payload.data?.routes) ? payload.data?.routes : [];
-      setRoutes(apiRoutes);
+      setRoutes(Array.isArray(payload.data?.routes) ? payload.data?.routes : []);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setRoutesError(message);
+      setRoutesError(error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -203,30 +272,18 @@ export function ApiExplorerSection({ onError }: Props) {
 
   const sendRequest = async () => {
     try {
-      if (!effectiveUrl) {
-        throw new Error("path is required");
-      }
+      if (!effectiveUrl) throw new Error("path is required");
       if (!allowExternalURL && /^https?:\/\//i.test(effectiveUrl)) {
-        throw new Error("external URLs are blocked by default. Enable 'Allow External URL' only for trusted endpoints.");
+        throw new Error("external URLs are blocked. Enable 'Allow External URL' to send to remote endpoints.");
       }
       setIsLoading(true);
-      setLastError("");
       const extraHeaders = parseHeaderLines(headerLines);
-      const headers = new Headers({
-        "X-Requested-With": "ncc-ui",
-        ...extraHeaders,
-      });
-      const init: RequestInit = {
-        method,
-        credentials: "same-origin",
-        headers,
-      };
+      const headers = new Headers({ "X-Requested-With": "ncc-ui", ...extraHeaders });
+      const init: RequestInit = { method, credentials: "same-origin", headers };
       if (method === "POST" || method === "PUT" || method === "DELETE") {
         const payload = body.trim();
         if (payload) {
-          if (!headers.has("Content-Type")) {
-            headers.set("Content-Type", "application/json");
-          }
+          if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
           try {
             init.body = JSON.stringify(JSON.parse(payload));
           } catch {
@@ -251,142 +308,247 @@ export function ApiExplorerSection({ onError }: Props) {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setLastError(message);
       onError(message);
     } finally {
       setIsLoading(false);
     }
   };
 
+  const copyAsCurl = async () => {
+    try {
+      const headers = parseHeaderLines(headerLines);
+      const text = buildCurl(method, effectiveUrl, headers, body || undefined);
+      await navigator.clipboard.writeText(text);
+      notify.success("cURL command copied.");
+    } catch (e) {
+      notify.warning(e instanceof Error ? e.message : "Failed to build cURL.");
+    }
+  };
+
   return (
-    <Card>
-      <Typography.Title level={4} className="section-title">
-        REST API Explorer
-      </Typography.Title>
+    <Card
+      className="page-card"
+      title={
+        <Space size={10} align="center">
+          <ApiOutlined className="section-header-icon" />
+          <Typography.Text strong>REST API Explorer</Typography.Text>
+        </Space>
+      }
+      extra={
+        <Space size={6}>
+          <Tooltip title="Discovered routes">
+            <Badge count={routes.length} size="small" offset={[-4, 4]}>
+              <Button icon={<ExperimentOutlined />} onClick={() => setRoutesOpen(true)}>
+                Routes
+              </Button>
+            </Badge>
+          </Tooltip>
+          <Tooltip title="Refresh route list">
+            <Button icon={<ReloadOutlined />} onClick={() => void loadRoutes()} />
+          </Tooltip>
+        </Space>
+      }
+    >
       <Typography.Text type="secondary" className="section-subtitle">
-        Build and send requests against backend endpoints from the UI. Relative paths use the same origin (for example `/api/v1/...`).
+        Send requests to the orchestrator API directly from the UI. Same-origin paths use the proxy; cross-origin
+        URLs require explicit opt-in.
       </Typography.Text>
-      <Space wrap style={{ marginTop: 12, marginBottom: 12 }}>
+
+      <Space size={8} wrap style={{ marginTop: 12, marginBottom: 12 }}>
         <Select
           style={{ minWidth: 220 }}
-          placeholder="Load endpoint preset"
+          placeholder="Quick presets…"
           onChange={applyPreset}
-          options={presets.map((p) => ({ label: p.label, value: p.label }))}
+          options={PRESETS.map((p) => ({
+            label: (
+              <Space size={6}>
+                <Tag color={METHOD_COLOR[p.method]} style={{ marginInlineEnd: 0 }}>
+                  {p.method}
+                </Tag>
+                <span>{p.label}</span>
+              </Space>
+            ),
+            value: p.label,
+          }))}
         />
-        <Select
-          style={{ minWidth: 280 }}
-          placeholder="Load backend route (auto)"
-          value={selectedRoute || undefined}
-          onChange={applyRouteMeta}
-          options={routes.map((r) => ({ label: `${r.methods.join("|")} ${r.path}`, value: r.path }))}
-        />
-        <Button onClick={() => void loadRoutes()}>Refresh Routes</Button>
-        <Space>
-          <Typography.Text>Allow External URL</Typography.Text>
-          <Switch checked={allowExternalURL} onChange={setAllowExternalURL} />
-        </Space>
-        <Button type="primary" loading={isLoading} onClick={() => void sendRequest()}>
-          Send Request
-        </Button>
+        <Tooltip title="Allow sending requests to absolute http(s) URLs (off by default)">
+          <Space size={6}>
+            <Switch checked={allowExternalURL} onChange={setAllowExternalURL} size="small" />
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              Allow external URLs
+            </Typography.Text>
+            {allowExternalURL ? <WarningOutlined style={{ color: "#f59e0b" }} /> : null}
+          </Space>
+        </Tooltip>
       </Space>
-      <Alert
-        type="info"
-        showIcon
-        style={{ marginBottom: 12 }}
-        title="Sensitive request headers/body are not persisted in browser storage."
-      />
-      {routesError ? <Alert type="warning" showIcon style={{ marginBottom: 12 }} title={`Route discovery failed: ${routesError}`} /> : null}
 
-      <Row gutter={[12, 12]}>
-        <Col xs={24} md={6}>
-          <Typography.Text strong>Method</Typography.Text>
+      <Row gutter={[8, 8]} align="middle">
+        <Col xs={8} sm={5}>
           <Select<HttpMethod>
             value={method}
-            style={{ width: "100%", marginTop: 6 }}
             onChange={setMethod}
-            options={[
-              { label: "GET", value: "GET" },
-              { label: "POST", value: "POST" },
-              { label: "PUT", value: "PUT" },
-              { label: "DELETE", value: "DELETE" },
-            ]}
+            style={{ width: "100%" }}
+            options={(["GET", "POST", "PUT", "DELETE"] as HttpMethod[]).map((m) => ({
+              value: m,
+              label: <Tag color={METHOD_COLOR[m]} style={{ marginInlineEnd: 0 }}>{m}</Tag>,
+            }))}
           />
         </Col>
-        <Col xs={24} md={18}>
-          <Typography.Text strong>Path or URL</Typography.Text>
+        <Col xs={16} sm={13}>
           <Input
             value={path}
             onChange={(e) => setPath(e.target.value)}
             placeholder="/api/v1/health"
-            style={{ marginTop: 6 }}
+            prefix={<ApiOutlined style={{ color: "rgba(226,232,240,0.6)" }} />}
           />
         </Col>
-        <Col xs={24}>
-          <Typography.Text strong>Headers (optional)</Typography.Text>
+        <Col xs={24} sm={6}>
+          <Space size={6} style={{ display: "flex" }}>
+            <Tooltip title="Copy as cURL">
+              <Button icon={<CopyOutlined />} onClick={copyAsCurl} />
+            </Tooltip>
+            <Button type="primary" loading={isLoading} icon={<SendOutlined />} onClick={() => void sendRequest()} block>
+              Send
+            </Button>
+          </Space>
+        </Col>
+      </Row>
+
+      <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
+        <Col xs={24} md={12}>
+          <Typography.Text strong style={{ fontSize: 13 }}>Headers</Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12, marginLeft: 6 }}>
+            (one per line, <code>Key: Value</code>)
+          </Typography.Text>
           <Input.TextArea
             value={headerLines}
             onChange={(e) => setHeaderLines(e.target.value)}
-            rows={4}
+            rows={5}
             placeholder={"Authorization: Bearer <token>\nX-Custom-Header: value"}
-            style={{ marginTop: 6 }}
+            style={{ marginTop: 6, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: 12 }}
           />
         </Col>
-        <Col xs={24}>
-          <Typography.Text strong>Body (optional)</Typography.Text>
+        <Col xs={24} md={12}>
+          <Typography.Text strong style={{ fontSize: 13 }}>Body (JSON)</Typography.Text>
           <Input.TextArea
             value={body}
             onChange={(e) => setBody(e.target.value)}
-            rows={10}
+            rows={5}
             placeholder='{"example":"value"}'
-            style={{ marginTop: 6, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" }}
+            style={{ marginTop: 6, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: 12 }}
           />
         </Col>
       </Row>
 
-      <Card size="small" style={{ marginTop: 12 }}>
-        <Typography.Text strong>Discovered Backend Routes</Typography.Text>
-        <List
-          size="small"
-          dataSource={routes}
-          locale={{ emptyText: "No discovered routes yet." }}
-          renderItem={(route) => (
-            <List.Item
-              actions={[
-                <Button key="use" size="small" onClick={() => applyRouteMeta(route.path)}>
-                  Use
-                </Button>,
-              ]}
-            >
-              <Space direction="vertical" size={2} style={{ width: "100%" }}>
-                <Space size={6} wrap>
-                  {route.methods.map((m) => (
-                    <Tag key={`${route.path}-${m}`} color="blue">
-                      {m}
-                    </Tag>
-                  ))}
-                  <Typography.Text code>{route.path}</Typography.Text>
-                </Space>
-                {route.description ? <Typography.Text type="secondary">{route.description}</Typography.Text> : null}
-              </Space>
-            </List.Item>
-          )}
-        />
-      </Card>
-
-      {lastError ? <Alert type="error" title={lastError} style={{ marginTop: 12 }} /> : null}
+      <Alert
+        type="info"
+        showIcon
+        icon={<SafetyCertificateOutlined />}
+        style={{ marginTop: 12 }}
+        message="Sensitive request headers/body are not persisted in browser storage."
+      />
 
       {response ? (
-        <Card size="small" style={{ marginTop: 12 }}>
-          <Space size={24} wrap style={{ marginBottom: 12 }}>
-            <Statistic title="Status" value={`${response.status} ${response.statusText}`.trim()} />
-            <Statistic title="Duration" value={response.elapsedMs} suffix="ms" />
+        <Card size="small" style={{ marginTop: 12 }} className="api-response-card">
+          <Space size={20} wrap style={{ marginBottom: 12 }} align="center">
+            <Statistic
+              title="Status"
+              value={`${response.status} ${response.statusText}`.trim()}
+              valueStyle={{ fontSize: 18 }}
+              prefix={<Badge status={statusToBadgeStatus(response.status)} />}
+            />
+            <Statistic title="Duration" value={response.elapsedMs} suffix="ms" valueStyle={{ fontSize: 18 }} />
+            <Statistic
+              title="Size"
+              value={new TextEncoder().encode(response.body).length}
+              suffix="bytes"
+              valueStyle={{ fontSize: 18 }}
+            />
+            <Tooltip title="Copy body">
+              <Button
+                icon={<CopyOutlined />}
+                size="small"
+                onClick={() => {
+                  void navigator.clipboard.writeText(response.body);
+                  notify.success("Response body copied.");
+                }}
+              />
+            </Tooltip>
           </Space>
-          <Typography.Text strong>Response Headers</Typography.Text>
-          <pre>{JSON.stringify(response.headers, null, 2)}</pre>
-          <Typography.Text strong>Response Body</Typography.Text>
-          <pre>{response.body || "(empty response body)"}</pre>
+          <Segmented
+            value={responseTab}
+            onChange={(v) => setResponseTab(v as "body" | "headers")}
+            options={[
+              { value: "body", label: "Body" },
+              { value: "headers", label: `Headers (${Object.keys(response.headers).length})` },
+            ]}
+            style={{ marginBottom: 8 }}
+          />
+          {responseTab === "body" ? (
+            <CodeEditor value={response.body || "(empty response body)"} language="json" readOnly height={320} />
+          ) : (
+            <CodeEditor
+              value={JSON.stringify(response.headers, null, 2)}
+              language="json"
+              readOnly
+              height={320}
+            />
+          )}
         </Card>
       ) : null}
+
+      <Drawer
+        open={routesOpen}
+        onClose={() => setRoutesOpen(false)}
+        title="Discovered backend routes"
+        width={560}
+        styles={{ body: { padding: 16 } }}
+      >
+        <Input
+          allowClear
+          value={routeFilter}
+          onChange={(e) => setRouteFilter(e.target.value)}
+          placeholder="Filter by path, method, or description…"
+          prefix={<SearchOutlined />}
+          style={{ marginBottom: 12 }}
+        />
+        {routesError ? (
+          <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={routesError} />
+        ) : null}
+        {filteredRoutes.length === 0 ? (
+          <Empty description="No routes match" />
+        ) : (
+          <List
+            size="small"
+            dataSource={filteredRoutes}
+            renderItem={(route) => (
+              <List.Item
+                actions={[
+                  <Button key="use" size="small" type="link" onClick={() => applyRouteMeta(route)}>
+                    Use
+                  </Button>,
+                ]}
+              >
+                <Space direction="vertical" size={2} style={{ width: "100%" }}>
+                  <Space size={6} wrap>
+                    {route.methods.map((m) => (
+                      <Tag key={`${route.path}-${m}`} color={METHOD_COLOR[m as HttpMethod] || "default"}>
+                        {m}
+                      </Tag>
+                    ))}
+                    <Typography.Text code style={{ fontSize: 12 }}>{route.path}</Typography.Text>
+                  </Space>
+                  {route.description ? (
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {route.description}
+                    </Typography.Text>
+                  ) : null}
+                </Space>
+              </List.Item>
+            )}
+          />
+        )}
+      </Drawer>
     </Card>
   );
 }

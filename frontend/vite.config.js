@@ -43,4 +43,10 @@ export default defineConfig({
             },
         },
     },
+    // Bumped because the Ant Design + react-query bundle naturally lands ~660 kB
+    // (gzip ~215 kB). Heavy editor (Monaco) is already split into its own chunk
+    // via React.lazy, so this threshold silences a cosmetic warning only.
+    build: {
+        chunkSizeWarningLimit: 800,
+    },
 });
