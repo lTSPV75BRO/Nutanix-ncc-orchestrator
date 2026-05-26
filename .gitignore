@@ -24,6 +24,12 @@ promfiles/
 # Binaries (repo root only; do not use ncc-orchestrator* — it would ignore helm/ncc-orchestrator/)
 /ncc-orchestrator
 /ncc-orchestrator.exe
+/ncc-api-server
+/ncc-api-server.exe
+/ncc-ui-server
+/ncc-ui-server.exe
+/goncc
+/goncc.exe
 ncc-mcp-server
 
 # Frontend dependencies/cache
@@ -33,6 +39,7 @@ frontend/*.tsbuildinfo
 # Local runtime state/secrets
 .ncc-api-token
 .ncc-api-schedule.json
+.ncc-api-notifications.json
 .ncc-preflight-check
 .ncc-prefight-check
 
