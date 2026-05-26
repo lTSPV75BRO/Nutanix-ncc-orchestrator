@@ -594,22 +594,24 @@ func (s *apiServer) auditEntries(limit int, actionPrefix string, onlyFailures bo
 	}
 	s.auditMu.Lock()
 	defer s.auditMu.Unlock()
-	abs := s.absPath(s.auditLogPath)
-	data, err := os.ReadFile(abs)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
 	if limit <= 0 {
 		limit = 100
 	}
 	if limit > 1000 {
 		limit = 1000
 	}
-	lines := bytes.Split(data, []byte{'\n'})
+	// Always return a non-nil slice so JSON encodes [] (not null), keeping the
+	// API shape stable for the UI even when the file doesn't exist yet.
 	out := make([]map[string]interface{}, 0, limit)
+	abs := s.absPath(s.auditLogPath)
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return out, nil
+		}
+		return out, err
+	}
+	lines := bytes.Split(data, []byte{'\n'})
 	// Walk newest-first.
 	for i := len(lines) - 1; i >= 0 && len(out) < limit; i-- {
 		ln := bytes.TrimSpace(lines[i])

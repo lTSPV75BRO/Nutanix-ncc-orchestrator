@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Alert,
@@ -76,6 +76,8 @@ function actionTone(action: string): "blue" | "green" | "orange" | "purple" | "d
   return "default";
 }
 
+type AuditRow = AuditLogEntry & { __idx: number };
+
 export function AuditLogSection({ onError }: Props) {
   const [actionFilter, setActionFilter] = useState<string>("");
   const [onlyFailures, setOnlyFailures] = useState(false);
@@ -89,85 +91,98 @@ export function AuditLogSection({ onError }: Props) {
     staleTime: 5_000,
   });
 
-  if (audit.error) onError(audit.error);
+  // Surface load errors exactly once per error change, not on every render
+  // (otherwise notifyError fires for every re-render in an infinite spiral).
+  useEffect(() => {
+    if (audit.error) onError(audit.error);
+  }, [audit.error, onError]);
 
   const data = audit.data;
-  const entries: AuditLogEntry[] = data?.entries ?? [];
+  const entries = useMemo<AuditRow[]>(() => {
+    const list = (data?.entries ?? []) as AuditLogEntry[];
+    // Tag with a stable index so the Table can use a deterministic rowKey
+    // (audit lines aren't unique by ts/action alone).
+    return list.map((e, idx) => ({ ...e, __idx: idx }));
+  }, [data]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return entries;
-    return entries.filter((e) => {
-      const blob = JSON.stringify(e).toLowerCase();
-      return blob.includes(q);
-    });
+    return entries.filter((e) => JSON.stringify(e).toLowerCase().includes(q));
   }, [entries, search]);
 
   const successCount = filtered.filter((e) => e.success).length;
   const failureCount = filtered.length - successCount;
 
-  const columns: ColumnsType<AuditLogEntry> = [
-    {
-      title: "When",
-      key: "ts",
-      width: 150,
-      render: (_, row) => (
-        <Tooltip title={row.ts}>
-          <Typography.Text style={{ fontSize: 12 }}>{relativeTime(row.ts)}</Typography.Text>
-        </Tooltip>
-      ),
-    },
-    {
-      title: "Action",
-      key: "action",
-      render: (_, row) => <Tag color={actionTone(row.action)}>{row.action}</Tag>,
-    },
-    {
-      title: "Result",
-      key: "success",
-      width: 110,
-      align: "center",
-      render: (_, row) =>
-        row.success ? (
-          <Tag icon={<CheckCircleOutlined />} color="success">success</Tag>
-        ) : (
-          <Tag icon={<CloseCircleOutlined />} color="error">failed</Tag>
+  const columns = useMemo<ColumnsType<AuditRow>>(
+    () => [
+      {
+        title: "When",
+        key: "ts",
+        width: 150,
+        render: (_, row) => (
+          <Tooltip title={row.ts}>
+            <Typography.Text style={{ fontSize: 12 }}>{relativeTime(row.ts)}</Typography.Text>
+          </Tooltip>
         ),
-    },
-    {
-      title: "Client",
-      key: "client",
-      width: 150,
-      render: (_, row) => (
-        <Typography.Text type="secondary" className="mono" style={{ fontSize: 12 }}>
-          {row.client || "—"}
-        </Typography.Text>
-      ),
-    },
-    {
-      title: "Auth",
-      key: "auth_mode",
-      width: 90,
-      render: (_, row) => row.auth_mode ? <Tag>{row.auth_mode}</Tag> : <span>—</span>,
-    },
-    {
-      title: "Endpoint",
-      key: "path",
-      ellipsis: true,
-      render: (_, row) => (
-        <Typography.Text type="secondary" className="mono" style={{ fontSize: 12 }}>
-          {row.method ? `${row.method} ` : ""}
-          {row.path || "—"}
-        </Typography.Text>
-      ),
-    },
-  ];
+      },
+      {
+        title: "Action",
+        key: "action",
+        render: (_, row) => <Tag color={actionTone(row.action)}>{row.action}</Tag>,
+      },
+      {
+        title: "Result",
+        key: "success",
+        width: 110,
+        align: "center",
+        render: (_, row) =>
+          row.success ? (
+            <Tag icon={<CheckCircleOutlined />} color="success">
+              success
+            </Tag>
+          ) : (
+            <Tag icon={<CloseCircleOutlined />} color="error">
+              failed
+            </Tag>
+          ),
+      },
+      {
+        title: "Client",
+        key: "client",
+        width: 150,
+        render: (_, row) => (
+          <Typography.Text type="secondary" className="mono" style={{ fontSize: 12 }}>
+            {row.client || "—"}
+          </Typography.Text>
+        ),
+      },
+      {
+        title: "Auth",
+        key: "auth_mode",
+        width: 90,
+        render: (_, row) => (row.auth_mode ? <Tag>{row.auth_mode}</Tag> : <span>—</span>),
+      },
+      {
+        title: "Endpoint",
+        key: "path",
+        ellipsis: true,
+        render: (_, row) => (
+          <Typography.Text type="secondary" className="mono" style={{ fontSize: 12 }}>
+            {row.method ? `${row.method} ` : ""}
+            {row.path || "—"}
+          </Typography.Text>
+        ),
+      },
+    ],
+    [],
+  );
 
   const downloadJsonl = () => {
-    const blob = new Blob(
-      [filtered.map((e) => JSON.stringify(e)).join("\n") + "\n"],
-      { type: "application/x-ndjson" },
-    );
+    const lines = filtered.map(({ __idx: _omit, ...rest }) => JSON.stringify(rest));
+    const blob = new Blob([lines.join("\n") + (lines.length ? "\n" : "")], {
+      type: "application/x-ndjson",
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -180,7 +195,8 @@ export function AuditLogSection({ onError }: Props) {
   };
 
   const copyEntry = (entry: AuditLogEntry) => {
-    void navigator.clipboard.writeText(JSON.stringify(entry, null, 2)).then(() => {
+    const { __idx: _omit, ...rest } = entry as AuditRow;
+    void navigator.clipboard.writeText(JSON.stringify(rest, null, 2)).then(() => {
       notify.success("Audit entry copied to clipboard.");
     });
   };
@@ -280,15 +296,22 @@ export function AuditLogSection({ onError }: Props) {
           }
         />
       ) : (
-        <Table
-          rowKey={(row) => `${row.ts}-${row.action}-${row.path ?? ""}-${Math.random().toString(36).slice(2, 8)}`}
+        <Table<AuditRow>
+          rowKey="__idx"
           columns={columns}
           dataSource={filtered}
           loading={audit.isLoading}
           size="small"
           style={{ marginTop: 12 }}
-          pagination={{ defaultPageSize: 25, showSizeChanger: true, pageSizeOptions: [10, 25, 50, 100] }}
-          onRow={(row) => ({ onClick: () => setSelected(row), style: { cursor: "pointer" } })}
+          pagination={{
+            defaultPageSize: 25,
+            showSizeChanger: true,
+            pageSizeOptions: [10, 25, 50, 100],
+          }}
+          onRow={(row) => ({
+            onClick: () => setSelected(row),
+            style: { cursor: "pointer" },
+          })}
         />
       )}
 
@@ -324,7 +347,10 @@ export function AuditLogSection({ onError }: Props) {
               wordBreak: "break-all",
             }}
           >
-            {JSON.stringify(selected, null, 2)}
+            {(() => {
+              const { __idx: _omit, ...rest } = selected as AuditRow;
+              return JSON.stringify(rest, null, 2);
+            })()}
           </pre>
         ) : null}
       </Modal>
