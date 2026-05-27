@@ -41,9 +41,9 @@ func TestGenerateHTMLMatchesGolden(t *testing.T) {
 		{Severity: "FAIL", CheckName: "sample_check", Detail: "Sample detail line"},
 	}
 	meta := HTMLMeta{
-		ClusterName:     "golden-cluster",
-		ClusterVersion:  "6.8",
-		NCCVersion:      "ncc-4.0.0",
+		ClusterName:    "golden-cluster",
+		ClusterVersion: "6.8",
+		NCCVersion:     "ncc-4.0.0",
 	}
 	dir := t.TempDir()
 	out := filepath.Join(dir, "out.html")

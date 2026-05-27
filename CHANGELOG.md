@@ -8,7 +8,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [2.0.0] - 2026-05-05
+## [2.0.0] - 2026-05-05 (release-candidate hardening through 2026-05-27)
+
+### Added (late-cycle hardening, 2026-05)
+
+- **`DELETE /api/v1/runs/active`** — Cancel a stuck/in-flight orchestrator run from the UI; returns `409` with structured `error_code` when no run is active.
+- **`GET /api/v1/runs/{id}`** — Single archived run metadata + embedded summary, including artifact bodies (`run-summary.json`, `ncc-run-record.json`, `regression-summary.json`, `checks-snapshot.json`, `run-meta.json`); rejects path traversal (`..`/`/`).
+- **Header trigger button with live elapsed time** — Top-ribbon Run control now shows a pulsing primary-tinted button with spinning icon and `Running · Xm Ys` elapsed time, mirroring the Settings → Runs indicator.
+- **Context-aware Dashboard empty states** — Alerts table now distinguishes "Run in progress" (with live output link), "All clusters clean", and onboarding "No alerts yet" states based on the active-run query and last summary.
+- **Schedule input validator** — `action=create` now requires at least one of `cron` or `every`; covered by `TestValidateScheduleInput` table-driven test.
+- **Audit + meta route surface** — Audit query params (`limit`, `since`, `source`) are validated server-side with structured `400` on bad input; CORS `Access-Control-Allow-Methods` now includes `DELETE`.
+
+### Security (late-cycle hardening)
+
+- **Go toolchain upgraded 1.26.2 → 1.26.3** — Fixes five Go standard-library CVEs surfaced by `govulncheck`:
+  - `GO-2026-4976` ReverseProxy query forwarding (`net/http/httputil`)
+  - `GO-2026-4971` `net.Dial` / `LookupPort` NUL-byte panic
+  - `GO-2026-4918` HTTP/2 transport infinite loop on bad `SETTINGS_MAX_FRAME_SIZE`
+  - `GO-2026-4977` and the related stdlib advisories
+  - After upgrade: `govulncheck ./...` → **No vulnerabilities found**.
+- **npm DOMPurify override `^3.4.7`** — Pinned via `package.json#overrides` to clear 5 transitive DOMPurify advisories in `monaco-editor` (ADD_TAGS/FORBID_TAGS bypasses, SAFE_FOR_TEMPLATES bypass, prototype pollution, mutation-XSS) without downgrading Monaco; after override: `npm audit --omit=dev` → **found 0 vulnerabilities**.
+- **`yaml` patch update** via `npm audit fix` — Closes deeply-nested-collection stack-overflow advisory (`GHSA-48c2-rrv3-qjmp`).
+
+### Frontend / UX (late-cycle hardening)
+
+- **Theme overhaul** — Dark mode rewritten to a near-black neutral charcoal palette; light mode rewritten to a clean zinc palette with crisp white cards; Ant Design and `styles.css` variables aligned through `theme.tsx`.
+- **Monaco editor local + themed** — `@monaco-editor/react` now loads `monaco-editor` locally (resolves CSP `script-src 'self'` violation that was blocking the editor from the CDN). Workers bundled via Vite `?worker` imports. Custom Monaco themes (`ncc-light`, `ncc-dark`, `ncc-it-pro`) registered to mirror the app palette; fallback `<textarea>` styled to match.
+- **Form/Accessibility cleanup** — Added `id`, `name`, `htmlFor`, `aria-label`, and `autoComplete` across `ConfigSection`, `RunsSection`, `ScheduleSection`, `PolicyGateBuilderSection`, `AuditLogSection`, `LogsSection`, `DashboardPage`, `ApiExplorerSection`, `JsonOutputsSection`, `RawOutputsSection`, and `SecretsMigrationModal`; trigger-run password field is now wrapped in a real `<form>`; eliminates the DOM warnings for unassociated labels, missing `id`/`name`, password-not-in-form, and missing autocomplete.
+- **Runs table redesign** — Replaced often-blank "Index" column with `Type`, `Status`, `Duration`, `Clusters`, and `Issues` columns; cells degrade to `—` for trigger entries.
+- **Sparkline correctness** — Fixed timezone bug in `RecentRunsSparkline` (mixed UTC and local dates) via `localDateKey` helper; filtered to count only `history`/`summary` sources so trigger events no longer inflate the "runs in last 7 days" count.
+
+### Build / Release
+
+- **`binaryGO.txt` overhaul** — Preflight checks, consolidated variable declarations, local-arch symlinks, example-file copy, cleaner tar/zip archives, and end-to-end verification (`api/health` filter, version assertion).
+- **Production verification (2026-05-27)** — `govulncheck ./...` clean, `npm audit --omit=dev` clean, `go test -race -count=1 ./...` clean, `gofmt -l .` clean, `go vet ./...` clean, `tsc --noEmit` clean, `vite build` clean.
 
 ### Added
 

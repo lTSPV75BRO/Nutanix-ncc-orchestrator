@@ -38,6 +38,36 @@ func TestValidateConfigPath(t *testing.T) {
 	}
 }
 
+func TestValidateScheduleInput(t *testing.T) {
+	cases := []struct {
+		name    string
+		state   scheduleState
+		wantErr bool
+	}{
+		{name: "empty action=create rejects", state: scheduleState{Type: "auto", Action: "create"}, wantErr: true},
+		{name: "create with cron ok", state: scheduleState{Type: "cron", Action: "create", Cron: "*/5 * * * *"}, wantErr: false},
+		{name: "create with every ok", state: scheduleState{Type: "auto", Action: "create", Every: "15m"}, wantErr: false},
+		{name: "list without cron ok", state: scheduleState{Type: "auto", Action: "list"}, wantErr: false},
+		{name: "remove without cron ok", state: scheduleState{Type: "auto", Action: "remove"}, wantErr: false},
+		{name: "bad type", state: scheduleState{Type: "garbage", Action: "create", Cron: "*/5 * * * *"}, wantErr: true},
+		{name: "bad action", state: scheduleState{Type: "cron", Action: "exec", Cron: "*/5 * * * *"}, wantErr: true},
+		{name: "cron with semicolon", state: scheduleState{Type: "cron", Action: "create", Cron: "*/5 * * * *;rm -rf /"}, wantErr: true},
+		{name: "every bad pattern", state: scheduleState{Type: "auto", Action: "create", Every: "fast"}, wantErr: true},
+		{name: "task name unsafe", state: scheduleState{Type: "auto", Action: "create", Every: "15m", TaskName: "ncc;evil"}, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateScheduleInput(tc.state)
+			if tc.wantErr && err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestSanitizeExtraArgs(t *testing.T) {
 	_, err := sanitizeExtraArgs([]string{"--output-dir", "outputfiles", "--gen-test-agg"})
 	if err != nil {

@@ -329,14 +329,23 @@ func validateScheduleInput(st scheduleState) error {
 	default:
 		return fmt.Errorf("invalid schedule action: %s", st.Action)
 	}
-	if strings.TrimSpace(st.Cron) != "" && !reCronSafe.MatchString(strings.TrimSpace(st.Cron)) {
+	cron := strings.TrimSpace(st.Cron)
+	every := strings.TrimSpace(st.Every)
+	if cron != "" && !reCronSafe.MatchString(cron) {
 		return errors.New("cron contains invalid characters")
 	}
-	if strings.TrimSpace(st.Every) != "" && !reEvery.MatchString(strings.TrimSpace(st.Every)) {
+	if every != "" && !reEvery.MatchString(every) {
 		return errors.New("every must match patterns like 15m, 4h, or 1d")
 	}
 	if strings.TrimSpace(st.TaskName) != "" && !reTaskName.MatchString(strings.TrimSpace(st.TaskName)) {
 		return errors.New("task_name contains invalid characters")
+	}
+	// An "action: create" schedule must have a recurrence — otherwise the saved
+	// state is meaningless and any later --apply will fail in the orchestrator.
+	// "list", "remove", and "run-now" are introspective/one-shot and don't need
+	// a cron/every spec.
+	if st.Action == "create" && cron == "" && every == "" {
+		return errors.New("schedule with action=create requires either cron or every")
 	}
 	return nil
 }

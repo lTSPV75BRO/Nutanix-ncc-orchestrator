@@ -76,6 +76,45 @@ This release line includes the orchestrator runtime plus the v2 API/UI and front
 - `npm run build` -> pass
 - `kubectl kustomize k8s` -> pass
 
+## Release-readiness validation (2026-05-27, late-cycle hardening)
+
+| Gate                                    | Result                                                                                             |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `govulncheck ./...` (Go stdlib + deps)  | **No vulnerabilities found** after `go 1.26.2 → 1.26.3` toolchain bump                              |
+| `npm audit --omit=dev`                  | **found 0 vulnerabilities** after `dompurify` `^3.4.7` override and `yaml` patch                    |
+| `go test -count=1 -race -timeout=180s ./...` | pass (`goncc`, `goncc/cmd/ncc-api-server`, `goncc/internal/kblinks`)                            |
+| `go vet ./...`                          | clean                                                                                              |
+| `gofmt -l .`                            | clean                                                                                              |
+| `tsc --noEmit` (frontend)               | clean                                                                                              |
+| `vite build` (frontend)                 | clean                                                                                              |
+| Secret scan                             | clean (only template placeholders, K8s `secretKeyRef`, and test fixtures)                          |
+| API smoke + edge-case suite (57 checks) | 100% pass: public endpoints, token enforcement (no/bad/mutated tokens), method gating (405 on disallowed verbs), CORS preflight (allowed/forbidden origins), invalid-input rejection (`limit=-5/abc`, `since=garbage`, `source=invalid`), path traversal rejection (`..%2F`, `sub%2Fevil`), structured `error_code` envelopes, `DELETE /runs/active` 409 when no active run, security headers (`X-Content-Type-Options`, `X-Frame-Options`, `Cache-Control`), schedule input validation (`action=create` requires cron or every) |
+
+## What changed in late-cycle hardening (after 2026-05-05 baseline)
+
+### Security uplift
+
+- **Go stdlib 1.26.2 → 1.26.3** — closes 5 stdlib CVEs (`GO-2026-4976` ReverseProxy query forwarding, `GO-2026-4971` `net.Dial`/`LookupPort` NUL-byte panic, `GO-2026-4918` HTTP/2 transport infinite loop, plus two related stdlib advisories).
+- **DOMPurify `^3.4.7` pinned via `package.json#overrides`** — clears 5 transitive Monaco-bundled DOMPurify advisories (ADD_TAGS/FORBID_TAGS bypasses, SAFE_FOR_TEMPLATES bypass, prototype pollution, mutation-XSS) without downgrading Monaco.
+- **`yaml` patch** — closes deeply-nested-collection stack-overflow (`GHSA-48c2-rrv3-qjmp`).
+- **Schedule validator tightened** — `action=create` now requires `cron` or `every`; empty `{}` PUT now correctly returns `400`. Covered by `TestValidateScheduleInput` table-driven test.
+
+### New endpoints / API surface
+
+- `DELETE /api/v1/runs/active` — cancel an active run (409 when none active).
+- `GET /api/v1/runs/{id}` — single archived run details with embedded artifacts; rejects `..`/`/` in id.
+- `Access-Control-Allow-Methods` now correctly includes `DELETE`.
+
+### Frontend / UX
+
+- Header trigger button now mirrors Settings → Runs indicator (spinning icon + `Running · Xm Ys`).
+- Dashboard alerts table empty state is now context-aware (in-progress / clean / no-runs).
+- Runs table replaces blank "Index" column with `Type`/`Status`/`Duration`/`Clusters`/`Issues`.
+- Monaco editor now loads locally (CSP-compliant `script-src 'self'`) with custom `ncc-light` / `ncc-dark` / `ncc-it-pro` themes.
+- Theme overhaul: near-black charcoal dark mode, clean zinc light mode, aligned across `theme.tsx` and `styles.css`.
+- Form accessibility: every interactive form field across ConfigSection, RunsSection, ScheduleSection, PolicyGateBuilderSection, AuditLogSection, LogsSection, DashboardPage, ApiExplorerSection, JsonOutputsSection, RawOutputsSection, and SecretsMigrationModal now has `id`/`name`/`htmlFor`/`aria-label`/`autoComplete` as appropriate; password fields are wrapped in real `<form>` elements.
+- Sparkline timezone bug fixed (`localDateKey`) and now counts only completed `history`/`summary` events, not `trigger` button presses.
+
 ## Upgrade notes from v1.1.0
 
 - Update image/binary tag to `2.0.0`.

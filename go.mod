@@ -1,12 +1,13 @@
 module goncc
 
-go 1.26.2
+go 1.26.3
 
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/modelcontextprotocol/go-sdk v1.6.0
 	github.com/rs/zerolog v1.35.1
 	github.com/spf13/cobra v1.10.2
+	github.com/spf13/pflag v1.0.10
 	github.com/spf13/viper v1.21.0
 	github.com/vbauerster/mpb/v7 v7.5.3
 	go.yaml.in/yaml/v3 v3.0.4
@@ -32,7 +33,6 @@ require (
 	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
-	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
