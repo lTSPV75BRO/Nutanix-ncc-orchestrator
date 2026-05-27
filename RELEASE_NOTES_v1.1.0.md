@@ -1,6 +1,6 @@
 # Release notes – v1.1.0
 
-**Date:** 2026-05-05
+**Date:** 2026-05-07
 
 This release focuses on automation quality, regression intelligence, and production operations hardening.
 
@@ -20,6 +20,11 @@ This release focuses on automation quality, regression intelligence, and product
 - **Secrets provider support**: `secret://` references now resolve from environment (`secrets-provider=env`) or file-backed secret map (`secrets-provider=file`, `secrets-file`).
 - **Quiet hours and maintenance windows**: suppress per-cluster/replay/digest notifications with `quiet-hours` and `maintenance-windows`.
 - **Strict validation default**: config validation now rejects unknown keys and enforces strict config-file typing by default.
+- **Command model refresh**: moved operational root flags to subcommands (`terms`, `env-info`, `update`, `gen-test-agg`, `version`) with backward-compatible deprecated aliases.
+- **Preflight-by-default runtime safety**: preflight checks are integrated into normal execution with explicit `--skip-preflight-check` override.
+- **Track-aware updater**: `update --check`, `--repo`, `--binary-url`, and `--target-version` support safer release checks and custom binary sources.
+- **Major upgrade guardrails**: updater keeps `v1.x` users on `v1.x` by default and requires explicit opt-in for `v1 -> v2`.
+- **v2 migration helpers from CLI**: added `v2-bootstrap` (asset bootstrap) and `v2-start` (start API+UI together) to simplify optional migration testing.
 
 ## New run artifacts
 
@@ -51,12 +56,15 @@ Runs now emit these additional artifacts in `outputfiles/`:
   - `artifact-retain-max-files`
 - If you use strict config validation in CI (`validate-config`), ensure custom keys are removed or migrated.
 - If using secret references (`secret://...`), configure `secrets-provider` first.
+- If you use old operational root flags (`--env-info`, `--update`, `--tc`, `--gen-test-agg`, `--version`), migrate to subcommands; aliases remain available but deprecated.
+- For mixed-track environments, use `ncc-orchestrator update --check` before applying updates.
 
 ## Production verification snapshot (2026-05-05)
 
 - `go test ./...` passed
 - `go vet ./...` passed
 - `go build ./...` passed
+- `go test ./...` re-validated after updater/subcommand and preflight UX enhancements
 - Edge-case coverage added for:
   - retry circuit breaker trip behavior
   - secrets-file hardening failures
@@ -89,3 +97,10 @@ Before clicking **Publish release** on GitHub:
    - release assets are downloadable
    - Docker tag `prajwalnutant/nutanix-ncc-orchestrator:1.1.0` exists
    - `ncc-orchestrator --update` can discover and verify assets
+   - `ncc-orchestrator update --check` reports expected `v1.1.0` track
+
+## Maintainer notes for this refreshed v1.1.0 release
+
+- Keep release scope v1-focused: CLI runtime and docs for v1 operation.
+- If publishing v2 helper assets as part of shared repository releases, ensure v1 CLI assets remain present and checksummed.
+- `dist/example_config.yaml` has been refreshed to v1.1.0 defaults and should be attached as an example asset when possible.
