@@ -20,7 +20,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: ["go", "javascript-typescript", "actions"]
+        # The repo has no first-party JS/TS at the analysis root (the React
+        # frontend lives under `frontend/` and is built via vite; CodeQL's
+        # JS/TS autodetect on the repo root fails). Scope the matrix to the
+        # languages actually present at the top level.
+        language: ["go", "actions"]
 
     steps:
       - name: Checkout repository
@@ -30,6 +34,7 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Autobuild
         uses: github/codeql-action/autobuild@v3
