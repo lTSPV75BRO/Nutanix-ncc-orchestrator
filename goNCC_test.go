@@ -1,8 +1,10 @@
 package main
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/csv"
 	"encoding/json"
@@ -3518,6 +3520,71 @@ func TestPickAssetForPlatform_NoMatch(t *testing.T) {
 	url, name := pickAssetForPlatform(rel, "linux", "amd64", "ncc-orchestrator")
 	if url != "" || name != "" {
 		t.Fatalf("expected empty results for unsupported platform; got url=%q name=%q", url, name)
+	}
+}
+
+// TestExtractTarGzArchive_PreservesExecutableBit pins the v2.0.1 fix to
+// extractTarGzArchive (and by symmetry extractZipArchive). Previously the
+// extractor wrote every file with a hardcoded 0644 mode, which dropped the
+// executable bit from binaries shipped inside the v2 stack archives. The
+// post-extract isExecutableFile checks in v2-check / v2-start then failed
+// with "binary not executable under install dir: ...". The fix honors
+// hdr.Mode (or zip's FileInfo().Mode()) so extracted binaries are 0755 as
+// packaged. This test builds a synthetic tar.gz with one 0755 binary-like
+// entry and one 0644 plain file, extracts it, and asserts the on-disk modes
+// match the archive metadata.
+func TestExtractTarGzArchive_PreservesExecutableBit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix mode bits not meaningful on windows")
+	}
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+	if err := tw.WriteHeader(&tar.Header{Name: "bin/", Mode: 0o755, Typeflag: tar.TypeDir}); err != nil {
+		t.Fatalf("write dir hdr: %v", err)
+	}
+	binBody := []byte("#!/bin/sh\necho hi\n")
+	if err := tw.WriteHeader(&tar.Header{Name: "bin/ncc-stub", Mode: 0o755, Size: int64(len(binBody)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatalf("write exec hdr: %v", err)
+	}
+	if _, err := tw.Write(binBody); err != nil {
+		t.Fatalf("write exec body: %v", err)
+	}
+	cfgBody := []byte("key: value\n")
+	if err := tw.WriteHeader(&tar.Header{Name: "example.yaml", Mode: 0o644, Size: int64(len(cfgBody)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatalf("write cfg hdr: %v", err)
+	}
+	if _, err := tw.Write(cfgBody); err != nil {
+		t.Fatalf("write cfg body: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar close: %v", err)
+	}
+	if err := gzw.Close(); err != nil {
+		t.Fatalf("gz close: %v", err)
+	}
+	dest := t.TempDir()
+	if err := extractTarGzArchive(buf.Bytes(), dest); err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	binPath := filepath.Join(dest, "bin", "ncc-stub")
+	cfgPath := filepath.Join(dest, "example.yaml")
+	binInfo, err := os.Stat(binPath)
+	if err != nil {
+		t.Fatalf("stat bin: %v", err)
+	}
+	if binInfo.Mode().Perm() != 0o755 {
+		t.Fatalf("bin/ncc-stub mode = %#o; want 0755 (executable bit dropped during extraction)", binInfo.Mode().Perm())
+	}
+	if !isExecutableFile(binPath) {
+		t.Fatalf("isExecutableFile(bin/ncc-stub) = false; extractor must preserve the +x bit so v2-check passes")
+	}
+	cfgInfo, err := os.Stat(cfgPath)
+	if err != nil {
+		t.Fatalf("stat cfg: %v", err)
+	}
+	if cfgInfo.Mode().Perm() != 0o644 {
+		t.Fatalf("example.yaml mode = %#o; want 0644 (non-exec entries should not gain +x)", cfgInfo.Mode().Perm())
 	}
 }
 

@@ -9871,7 +9871,16 @@ func extractZipArchive(archive []byte, destDir string) error {
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(target, data, 0644); err != nil {
+		// Preserve archive entry mode bits (esp. the executable bit). The
+		// stack archives we ship contain executable binaries under bin/; if
+		// we wrote them with a hardcoded 0644 mode the post-extract
+		// isExecutableFile checks (and any attempt to exec the binary) would
+		// fail. Defaults to 0644 only if the archive entry has no mode set.
+		mode := f.FileInfo().Mode().Perm()
+		if mode == 0 {
+			mode = 0o644
+		}
+		if err := os.WriteFile(target, data, mode); err != nil {
 			return err
 		}
 	}
@@ -9912,7 +9921,15 @@ func extractTarGzArchive(archive []byte, destDir string) error {
 			if err != nil {
 				return err
 			}
-			if err := os.WriteFile(target, data, 0644); err != nil {
+			// Preserve the tar entry mode (esp. the +x bit for binaries
+			// under bin/). Without this, v2-bootstrap drops the executable
+			// bit during extraction, causing v2-check / v2-start failures
+			// with "binary not executable under install dir" errors.
+			mode := os.FileMode(hdr.Mode).Perm()
+			if mode == 0 {
+				mode = 0o644
+			}
+			if err := os.WriteFile(target, data, mode); err != nil {
 				return err
 			}
 		}
