@@ -99,6 +99,10 @@ This release line includes the orchestrator runtime plus the v2 API/UI and front
 - **`yaml` patch** — closes deeply-nested-collection stack-overflow (`GHSA-48c2-rrv3-qjmp`).
 - **Schedule validator tightened** — `action=create` now requires `cron` or `every`; empty `{}` PUT now correctly returns `400`. Covered by `TestValidateScheduleInput` table-driven test.
 
+### Release ergonomics
+
+- **`example_config.yaml` is now first-class** — Curated, validator-clean reference config lives at the repo root, ships in `dist/`, and is bundled inside every `ncc-v2-stack-*.tar.gz`/`.zip` archive. Uses `secret://NAME` refs with `secrets-provider: env` so it validates and runs out-of-the-box once `NCC_PASSWORD` (and optional `SMTP_PASSWORD`, `WEBHOOK_TOKEN`) are exported. Verified with `ncc-orchestrator validate-config --config example_config.yaml`.
+
 ### New endpoints / API surface
 
 - `DELETE /api/v1/runs/active` — cancel an active run (409 when none active).

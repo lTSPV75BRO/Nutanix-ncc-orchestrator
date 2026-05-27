@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added (late-cycle hardening, 2026-05)
 
+- **`example_config.yaml`** — Repo-rooted, validator-clean (`ncc-orchestrator validate-config`) reference config that ships in `dist/` and inside every `ncc-v2-stack-*.tar.gz`/`.zip` archive. Uses `secret://NAME` references with `secrets-provider: env` so it works out-of-the-box once `NCC_PASSWORD` (and optionally `SMTP_PASSWORD`, `WEBHOOK_TOKEN`) are exported.
 - **`DELETE /api/v1/runs/active`** — Cancel a stuck/in-flight orchestrator run from the UI; returns `409` with structured `error_code` when no run is active.
 - **`GET /api/v1/runs/{id}`** — Single archived run metadata + embedded summary, including artifact bodies (`run-summary.json`, `ncc-run-record.json`, `regression-summary.json`, `checks-snapshot.json`, `run-meta.json`); rejects path traversal (`..`/`/`).
 - **Header trigger button with live elapsed time** — Top-ribbon Run control now shows a pulsing primary-tinted button with spinning icon and `Running · Xm Ys` elapsed time, mirroring the Settings → Runs indicator.
