@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -3518,6 +3519,203 @@ func TestPickAssetForPlatform_NoMatch(t *testing.T) {
 	if url != "" || name != "" {
 		t.Fatalf("expected empty results for unsupported platform; got url=%q name=%q", url, name)
 	}
+}
+
+// TestPickStackAssetForPlatform locks in the v2.0.1 behavior that `update`
+// upgrades the whole v2 stack package irrespective of which binary
+// (orchestrator, api-server, ui-server, or any renamed variant) was
+// invoked. The selector must return the ncc-v2-stack-<os>-<arch> archive
+// when present, and empty strings for legacy releases that ship only
+// individual binaries.
+func TestPickStackAssetForPlatform(t *testing.T) {
+	v201Layout := githubRelease{
+		TagName: "v2.0.1",
+		Assets: []githubAsset{
+			{Name: "checksums.txt", BrowserDownloadURL: "https://example.com/checksums.txt"},
+			{Name: "example_config.yaml", BrowserDownloadURL: "https://example.com/example_config.yaml"},
+			{Name: "ncc-orchestrator-darwin-amd64", BrowserDownloadURL: "https://example.com/ncc-orchestrator-darwin-amd64"},
+			{Name: "ncc-orchestrator-darwin-arm64", BrowserDownloadURL: "https://example.com/ncc-orchestrator-darwin-arm64"},
+			{Name: "ncc-orchestrator-linux-amd64", BrowserDownloadURL: "https://example.com/ncc-orchestrator-linux-amd64"},
+			{Name: "ncc-orchestrator-linux-arm64", BrowserDownloadURL: "https://example.com/ncc-orchestrator-linux-arm64"},
+			{Name: "ncc-orchestrator-windows-amd64.exe", BrowserDownloadURL: "https://example.com/ncc-orchestrator-windows-amd64.exe"},
+			{Name: "ncc-orchestrator-windows-arm64.exe", BrowserDownloadURL: "https://example.com/ncc-orchestrator-windows-arm64.exe"},
+			{Name: "ncc-v2-stack-darwin-amd64.tar.gz", BrowserDownloadURL: "https://example.com/ncc-v2-stack-darwin-amd64.tar.gz"},
+			{Name: "ncc-v2-stack-darwin-arm64.tar.gz", BrowserDownloadURL: "https://example.com/ncc-v2-stack-darwin-arm64.tar.gz"},
+			{Name: "ncc-v2-stack-linux-amd64.tar.gz", BrowserDownloadURL: "https://example.com/ncc-v2-stack-linux-amd64.tar.gz"},
+			{Name: "ncc-v2-stack-linux-arm64.tar.gz", BrowserDownloadURL: "https://example.com/ncc-v2-stack-linux-arm64.tar.gz"},
+			{Name: "ncc-v2-stack-windows-amd64.zip", BrowserDownloadURL: "https://example.com/ncc-v2-stack-windows-amd64.zip"},
+			{Name: "ncc-v2-stack-windows-arm64.zip", BrowserDownloadURL: "https://example.com/ncc-v2-stack-windows-arm64.zip"},
+		},
+	}
+	cases := []struct {
+		name     string
+		goos     string
+		goarch   string
+		wantName string
+	}{
+		{"darwin/arm64 selects darwin-arm64 stack", "darwin", "arm64", "ncc-v2-stack-darwin-arm64.tar.gz"},
+		{"darwin/amd64 selects darwin-amd64 stack", "darwin", "amd64", "ncc-v2-stack-darwin-amd64.tar.gz"},
+		{"linux/arm64 selects linux-arm64 stack", "linux", "arm64", "ncc-v2-stack-linux-arm64.tar.gz"},
+		{"linux/amd64 selects linux-amd64 stack", "linux", "amd64", "ncc-v2-stack-linux-amd64.tar.gz"},
+		{"windows/arm64 selects windows-arm64 zip", "windows", "arm64", "ncc-v2-stack-windows-arm64.zip"},
+		{"windows/amd64 selects windows-amd64 zip", "windows", "amd64", "ncc-v2-stack-windows-amd64.zip"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, got := pickStackAssetForPlatform(v201Layout, tc.goos, tc.goarch)
+			if got != tc.wantName {
+				t.Fatalf("pickStackAssetForPlatform(%s/%s) = %q; want %q", tc.goos, tc.goarch, got, tc.wantName)
+			}
+		})
+	}
+}
+
+// TestPickStackAssetForPlatform_NoStackInRelease confirms that legacy v1.x
+// releases (no ncc-v2-stack-* assets) return empty strings so the caller can
+// fall back to the single-binary update path.
+func TestPickStackAssetForPlatform_NoStackInRelease(t *testing.T) {
+	v1Layout := githubRelease{
+		TagName: "v1.1.0",
+		Assets: []githubAsset{
+			{Name: "checksums.txt", BrowserDownloadURL: "https://example.com/checksums.txt"},
+			{Name: "ncc-orchestrator-darwin-arm64", BrowserDownloadURL: "https://example.com/ncc-orchestrator-darwin-arm64"},
+			{Name: "ncc-orchestrator-linux-amd64", BrowserDownloadURL: "https://example.com/ncc-orchestrator-linux-amd64"},
+		},
+	}
+	url, name := pickStackAssetForPlatform(v1Layout, "darwin", "arm64")
+	if url != "" || name != "" {
+		t.Fatalf("legacy release should return empty stack asset; got url=%q name=%q", url, name)
+	}
+}
+
+// TestResolvePackageInstallDir locks the install-dir resolution invariants:
+//
+//  1. running binary inside <X>/bin/ → install-dir is <X>
+//  2. running binary anywhere else → install-dir is the binary's directory
+//
+// This is what makes `update` invariant to the running binary's name (the
+// caller just needs the install-dir, and the running binary self-replaces
+// via os.Rename regardless of its filename).
+func TestResolvePackageInstallDir(t *testing.T) {
+	cases := []struct {
+		name     string
+		selfPath string
+		want     string
+	}{
+		{
+			name:     "inside bootstrapped stack",
+			selfPath: filepath.Join("/opt", ".ncc-v2", "bin", "ncc-orchestrator"),
+			want:     filepath.Join("/opt", ".ncc-v2"),
+		},
+		{
+			name:     "inside bootstrapped stack, renamed binary",
+			selfPath: filepath.Join("/opt", "ncc-v2", "bin", "my-fork"),
+			want:     filepath.Join("/opt", "ncc-v2"),
+		},
+		{
+			name:     "flat layout, alongside other binaries",
+			selfPath: filepath.Join("/home", "user", "dist", "ncc-orchestrator-darwin-arm64"),
+			want:     filepath.Join("/home", "user", "dist"),
+		},
+		{
+			name:     "system path",
+			selfPath: filepath.Join("/usr", "local", "bin", "ncc-orchestrator"),
+			want:     filepath.Join("/usr", "local"), // bin parent
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolvePackageInstallDir(tc.selfPath)
+			if got != tc.want {
+				t.Fatalf("resolvePackageInstallDir(%q) = %q; want %q", tc.selfPath, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestHasBootstrappedV2Layout_AcceptsBothNamingConventions locks in the fix
+// for the v2.0.0 stack-archive bootstrap regression where `v2-bootstrap`
+// downloaded the stack tarball, extracted it, then failed the post-extract
+// layout check because the binaries were named with platform suffixes
+// (`bin/ncc-api-server-darwin-arm64`) but the layout check looked up the
+// canonical name only (`bin/ncc-api-server`). The fix accepts both forms.
+func TestHasBootstrappedV2Layout_AcceptsBothNamingConventions(t *testing.T) {
+	t.Run("canonical names (post-fix packaging)", func(t *testing.T) {
+		dir := t.TempDir()
+		mustMkdir(t, filepath.Join(dir, "bin"))
+		mustMkdir(t, filepath.Join(dir, "frontend-dist"))
+		apiBin := "ncc-api-server"
+		uiBin := "ncc-ui-server"
+		if runtime.GOOS == "windows" {
+			apiBin += ".exe"
+			uiBin += ".exe"
+		}
+		mustTouch(t, filepath.Join(dir, "bin", apiBin))
+		mustTouch(t, filepath.Join(dir, "bin", uiBin))
+		if !hasBootstrappedV2Layout(dir) {
+			t.Fatalf("canonical names should be accepted: %s", dir)
+		}
+	})
+	t.Run("platform-suffixed names (legacy v2.0.0 packaging)", func(t *testing.T) {
+		dir := t.TempDir()
+		mustMkdir(t, filepath.Join(dir, "bin"))
+		mustMkdir(t, filepath.Join(dir, "frontend-dist"))
+		apiBin := fmt.Sprintf("ncc-api-server-%s-%s", runtime.GOOS, runtime.GOARCH)
+		uiBin := fmt.Sprintf("ncc-ui-server-%s-%s", runtime.GOOS, runtime.GOARCH)
+		if runtime.GOOS == "windows" {
+			apiBin += ".exe"
+			uiBin += ".exe"
+		}
+		mustTouch(t, filepath.Join(dir, "bin", apiBin))
+		mustTouch(t, filepath.Join(dir, "bin", uiBin))
+		if !hasBootstrappedV2Layout(dir) {
+			t.Fatalf("platform-suffixed names should be accepted (legacy v2.0.0 stack layout): %s", dir)
+		}
+	})
+	t.Run("missing frontend-dist fails", func(t *testing.T) {
+		dir := t.TempDir()
+		mustMkdir(t, filepath.Join(dir, "bin"))
+		apiBin := "ncc-api-server"
+		uiBin := "ncc-ui-server"
+		if runtime.GOOS == "windows" {
+			apiBin += ".exe"
+			uiBin += ".exe"
+		}
+		mustTouch(t, filepath.Join(dir, "bin", apiBin))
+		mustTouch(t, filepath.Join(dir, "bin", uiBin))
+		if hasBootstrappedV2Layout(dir) {
+			t.Fatalf("missing frontend-dist must fail layout check: %s", dir)
+		}
+	})
+	t.Run("missing api binary fails", func(t *testing.T) {
+		dir := t.TempDir()
+		mustMkdir(t, filepath.Join(dir, "bin"))
+		mustMkdir(t, filepath.Join(dir, "frontend-dist"))
+		uiBin := "ncc-ui-server"
+		if runtime.GOOS == "windows" {
+			uiBin += ".exe"
+		}
+		mustTouch(t, filepath.Join(dir, "bin", uiBin))
+		if hasBootstrappedV2Layout(dir) {
+			t.Fatalf("missing api binary must fail layout check: %s", dir)
+		}
+	})
+}
+
+func mustMkdir(t *testing.T, p string) {
+	t.Helper()
+	if err := os.MkdirAll(p, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", p, err)
+	}
+}
+
+func mustTouch(t *testing.T, p string) {
+	t.Helper()
+	f, err := os.Create(p)
+	if err != nil {
+		t.Fatalf("create %s: %v", p, err)
+	}
+	_ = f.Close()
 }
 
 // TestPickAssetForPlatform_TrimmedV200Release simulates the post-hotfix v2.0.0

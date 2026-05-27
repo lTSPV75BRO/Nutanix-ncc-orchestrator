@@ -10,20 +10,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [2.0.1] - 2026-05-27
 
-Patch release. Single user-visible change: a critical fix for the `update --allow-major-upgrade` path that affected users moving from v1.x to v2.0.0. **All v1.x users should upgrade via this release rather than v2.0.0.**
-
-### Fixed
-
-- **`pickAssetForCurrentPlatform` regression on multi-binary releases** ([#9]) — When a GitHub release shipped multiple binaries per platform (e.g. `ncc-orchestrator-…`, `ncc-api-server-…`, `ncc-ui-server-…`), the v1.x self-updater selected the first asset whose name contained the GOOS+GOARCH strings. GitHub returns assets alphabetically, so `ncc-api-server-…` was picked and silently overwrote `ncc-orchestrator` with the api-server binary. The api-server boots an HTTP listener on `:8081` regardless of CLI arguments, so users running `update --check` or any subsequent command would see the listener start instead of the expected command.
-  - The selector now prefers assets whose name starts with the running executable's basename (e.g. `ncc-orchestrator-*`) before falling back to the legacy first-match behavior (preserves compatibility with renamed binaries and forks).
-  - Archive assets (`.tar.gz` / `.zip`) continue to take the "download and extract" code path rather than overwriting in place.
-  - Locked in by four new regression tests in `goNCC_test.go` — `TestPickAssetForPlatform_PrefersExeBasenamePrefix` (7 sub-cases), `TestPickAssetForPlatform_ArchiveOnlyRelease`, `TestPickAssetForPlatform_NoMatch`, `TestPickAssetForPlatform_TrimmedV200Release`.
-- **v2.0.0 release-asset layout hotfix (2026-05-27 19:35Z)** — As an immediate mitigation for users still on v1.x updaters, the 12 standalone `ncc-api-server-*` and `ncc-ui-server-*` assets were removed from the v2.0.0 release; the api-server and ui-server binaries continue to ship inside `ncc-v2-stack-*` archives. `binaryGO.txt` step 7 was updated to enforce this asset-layout policy at build time (standalone server binaries are intentionally excluded from `checksums.txt` and therefore from publishable assets).
+Patch release with one substantial behavior change: **`update` now upgrades the v2 stack as a single package, irrespective of which binary (orchestrator, api-server, ui-server, or any renamed variant) was invoked.** All v1.x users should upgrade via this release rather than v2.0.0.
 
 ### Changed
 
-- `binaryGO.txt` step 0 now exports `LDFLAGS` so the variable survives across step-by-step shell invocations. (Previously LDFLAGS was a plain shell variable; running steps as separate shell calls would lose the LDFLAGS value and produce binaries with `Stream: dev` and `Build Date: unknown` defaults.)
-- Version metadata bumped to `2.0.1` across `VERSION`, `goNCC.go` (default `Version`), `cmd/ncc-api-server/main.go` (default `Version` + OpenAPI `info.version`), `cmd/ncc-mcp-server/main.go` (`serverVersion`), `helm/ncc-orchestrator/Chart.yaml` (`version` + `appVersion`), `helm/ncc-orchestrator/values.yaml` (`image.tag`), and the three k8s manifests (`api-deployment.yaml`, `ui-deployment.yaml`, `runner-cronjob.yaml`).
+- **`update` is now a package-level operation** ([#9]). When the selected release publishes a `ncc-v2-stack-<os>-<arch>.{tar.gz,zip}` archive (true for v2.0.0+), `update` downloads it, verifies the SHA-256 against `checksums.txt`, extracts to a private temp dir, and atomically installs `bin/*` + `frontend-dist/` + `example_config.yaml` into the resolved install directory. The running binary is self-replaced from the canonical-or-basename-matched entry in the extracted `bin/`. Install-dir auto-detection: running from `<X>/bin/<self>` → install over `<X>`; otherwise install into the binary's directory. This makes the upgrade path identical regardless of which binary you ran or how you renamed it. For legacy v1.x releases without a stack archive, falls back to the original single-binary update path.
+- **Legacy single-binary selector hardening (fallback path).** `pickAssetForCurrentPlatform` now prefers assets whose name starts with the running executable's basename (e.g. `ncc-orchestrator-*`) before falling back to the legacy first-match behavior. Retained as defense in depth even though the package-archive path is now primary.
+
+### Fixed
+
+- **`v2-bootstrap` / `v2-start` failed against the v2.0.0 stack archives** because the layout-check (`hasBootstrappedV2Layout`) only accepted canonical binary names (`bin/ncc-api-server`), but v2.0.0 stack archives packaged platform-suffixed names (`bin/ncc-api-server-<os>-<arch>`). The lookup helpers now accept either form, so existing v2.0.0 stack archives bootstrap cleanly, and future archives can converge on canonical names.
+- **`pickAssetForCurrentPlatform` regression on multi-binary releases** ([#9]) — The original P0: GitHub returns release assets alphabetically, so when v2.0.0 shipped three binaries per platform the v1.x self-updater silently overwrote `ncc-orchestrator` with the api-server binary. Replaced by the package-update flow above; the legacy code path also got the basename-prefix selector fix as a fallback.
+- **v2.0.0 release-asset layout hotfix (2026-05-27 19:35Z)** — As an immediate mitigation for users still on v1.x updaters, the 12 standalone `ncc-api-server-*` and `ncc-ui-server-*` assets were removed from the v2.0.0 release; the api-server and ui-server binaries continue to ship inside `ncc-v2-stack-*` archives.
+- **macOS `._*` resource-fork sidecars** are no longer included in tarballs (`COPYFILE_DISABLE=1` + `--no-mac-metadata` honored by BSD tar).
+
+### Build / packaging policy
+
+- `binaryGO.txt` step 6 renames binaries inside the stack archive to canonical names (`bin/ncc-orchestrator`, `bin/ncc-api-server`, `bin/ncc-ui-server`) without platform suffix. Matches the v2-bootstrap expected layout.
+- `binaryGO.txt` step 7 enforces the no-standalone-server-binaries publishing policy at build time (excluded from `checksums.txt` and therefore from publishable assets). Documented inline with rationale.
+- `binaryGO.txt` step 0 exports `LDFLAGS` so the variable survives step-by-step shell invocation.
+- Version metadata bumped to `2.0.1` across `VERSION`, `goNCC.go`, `cmd/ncc-api-server/main.go` (default `Version` + OpenAPI `info.version`), `cmd/ncc-mcp-server/main.go`, `helm/ncc-orchestrator/Chart.yaml`, `helm/ncc-orchestrator/values.yaml`, and the three k8s manifests.
+
+### Tests
+
+Seven tests / twenty sub-cases added covering the package selector, install-dir resolution, layout-check naming tolerance, the v2.0.0 regression path, and the legacy-release fallback.
 
 ### Migration
 

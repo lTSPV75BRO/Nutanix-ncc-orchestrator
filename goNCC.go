@@ -8160,6 +8160,44 @@ func pickAssetForCurrentPlatform(rel githubRelease) (downloadURL string, assetNa
 	return pickAssetForPlatform(rel, runtime.GOOS, runtime.GOARCH, currentExecutableBasename())
 }
 
+// pickStackAssetForCurrentPlatform returns the v2 stack archive URL+name for
+// this platform, or empty strings if no stack archive is published in the
+// release.
+//
+// The stack archive is the canonical "update-the-whole-package" distribution
+// path. It is independent of which binary (orchestrator, api-server,
+// ui-server) was invoked, independent of how that binary was renamed, and
+// upgrades all v2 components atomically (orchestrator + api-server +
+// ui-server + frontend-dist + example_config.yaml). For releases that do not
+// publish a stack archive (e.g. legacy v1.x releases), this returns empty
+// strings and callers fall back to the single-binary update path via
+// pickAssetForCurrentPlatform.
+func pickStackAssetForCurrentPlatform(rel githubRelease) (downloadURL string, assetName string) {
+	return pickStackAssetForPlatform(rel, runtime.GOOS, runtime.GOARCH)
+}
+
+// pickStackAssetForPlatform is the testable inner function of
+// pickStackAssetForCurrentPlatform. Returns the first archive asset whose
+// name contains "ncc-v2-stack", goos, and goarch.
+func pickStackAssetForPlatform(rel githubRelease, goos, goarch string) (downloadURL string, assetName string) {
+	goos = strings.ToLower(strings.TrimSpace(goos))
+	goarch = strings.ToLower(strings.TrimSpace(goarch))
+	for _, a := range rel.Assets {
+		name := strings.ToLower(a.Name)
+		if !strings.Contains(name, "ncc-v2-stack") {
+			continue
+		}
+		if !strings.Contains(name, goos) || !strings.Contains(name, goarch) {
+			continue
+		}
+		if !isArchiveAssetURL(a.BrowserDownloadURL) {
+			continue
+		}
+		return a.BrowserDownloadURL, a.Name
+	}
+	return "", ""
+}
+
 // currentExecutableBasename returns the basename of the running executable
 // with any ".exe" suffix stripped, lowercased. Empty string if it cannot be
 // determined (callers fall back to the legacy first-match behavior).
@@ -8297,6 +8335,236 @@ func installDownloadedBinary(body []byte, targetVer string) error {
 	return nil
 }
 
+// resolvePackageInstallDir returns the directory that should receive the
+// extracted v2 stack components when the user runs `update`. It is invariant
+// to which binary (orchestrator, api-server, ui-server) was invoked and to
+// any user-side renames — only the running executable's location matters.
+//
+// Resolution order:
+//
+//  1. If the running binary lives inside <X>/bin/, treat <X> as the install
+//     dir (the binary is already inside a bootstrapped stack layout, so
+//     refresh that layout in place).
+//  2. Otherwise, treat the running binary's directory as the install dir
+//     (flat layout: <install-dir>/<self>, <install-dir>/bin/*,
+//     <install-dir>/frontend-dist/, <install-dir>/example_config.yaml).
+//
+// Callers may still self-replace the running binary atomically via
+// installDownloadedBinary, regardless of the install-dir result.
+func resolvePackageInstallDir(selfPath string) string {
+	dir := filepath.Dir(selfPath)
+	if filepath.Base(dir) == "bin" {
+		return filepath.Dir(dir)
+	}
+	return dir
+}
+
+// installPackageUpdate downloads the stack archive, verifies the checksum
+// against the release's checksums.txt asset, extracts to a temp dir, copies
+// the v2 stack components (bin/*, frontend-dist/, example_config.yaml) into
+// the resolved install dir, and atomically self-replaces the running binary
+// with the canonically-named match from the extracted bin/.
+//
+// This is the canonical "upgrade-the-whole-package" code path that handles
+// the running binary being orchestrator OR api-server OR ui-server (or any
+// renamed variant of those). The selection is based on the running
+// executable's basename; if no match is found in the archive, the function
+// falls back to bin/ncc-orchestrator and emits a guidance message.
+func installPackageUpdate(stackURL, stackName string, rel *githubRelease, targetVer string, client *http.Client) error {
+	fmt.Fprintf(os.Stderr, "Downloading package %s ...\n", stackURL)
+	body, err := downloadBinaryURL(client, stackURL)
+	if err != nil {
+		return err
+	}
+	if err := verifyAssetAgainstReleaseChecksum(rel, stackName, body, client); err != nil {
+		return err
+	}
+
+	tmpRoot, err := os.MkdirTemp("", "ncc-update-package-")
+	if err != nil {
+		return fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpRoot)
+
+	if err := extractArchiveByAssetName(body, stackName, tmpRoot); err != nil {
+		return fmt.Errorf("extract stack archive %s: %w", stackName, err)
+	}
+	if !hasBootstrappedV2Layout(tmpRoot) {
+		return fmt.Errorf("stack archive %s extracted but required layout was not found (expected bin/ncc-api-server, bin/ncc-ui-server, frontend-dist/)", stackName)
+	}
+
+	selfPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("get executable path: %w", err)
+	}
+	installDir := resolvePackageInstallDir(selfPath)
+	fmt.Fprintf(os.Stderr, "Installing package into %s ...\n", installDir)
+
+	if err := installStackComponents(tmpRoot, installDir); err != nil {
+		return fmt.Errorf("install stack components: %w", err)
+	}
+
+	// Locate the new binary that matches the currently-running one so we
+	// can self-replace. We honor the user's renamed binaries by matching
+	// the running exe's basename first, then fall back to the canonical
+	// ncc-orchestrator name.
+	exeBase := currentExecutableBasename()
+	newSelfPath := ""
+	if exeBase != "" {
+		newSelfPath = existingBinaryInInstallDir(tmpRoot, exeBase)
+	}
+	if newSelfPath == "" {
+		newSelfPath = existingBinaryInInstallDir(tmpRoot, "ncc-orchestrator")
+	}
+	if newSelfPath == "" {
+		fmt.Fprintf(os.Stderr, "Package update complete. The running binary was not replaced because no matching binary was found in the stack archive. Re-launch from %s.\n", filepath.Join(installDir, "bin"))
+		return nil
+	}
+	newBody, err := os.ReadFile(newSelfPath)
+	if err != nil {
+		return fmt.Errorf("read new binary %s: %w", newSelfPath, err)
+	}
+	return installDownloadedBinary(newBody, targetVer)
+}
+
+// verifyAssetAgainstReleaseChecksum looks up `assetName` in the release's
+// checksums.txt asset (or sha256/.sha256 asset) and compares its hash to a
+// fresh sha256 of `body`. Returns nil on match, an error otherwise. If no
+// checksum asset is present on the release the function returns an error
+// (package updates must be authenticated).
+func verifyAssetAgainstReleaseChecksum(rel *githubRelease, assetName string, body []byte, client *http.Client) error {
+	if rel == nil {
+		return errors.New("nil release passed to checksum verifier")
+	}
+	for _, a := range rel.Assets {
+		an := strings.ToLower(a.Name)
+		if !(strings.Contains(an, "checksum") || strings.Contains(an, "sha256") || strings.HasSuffix(an, ".sha256")) {
+			continue
+		}
+		csBody, err := fetchURL(a.BrowserDownloadURL, client)
+		if err != nil {
+			return fmt.Errorf("fetch checksum asset %s: %w", a.Name, err)
+		}
+		expectedHash := parseChecksumFile(csBody, assetName)
+		if expectedHash == "" {
+			return fmt.Errorf("checksum entry for %s not found in %s", assetName, a.Name)
+		}
+		sum := sha256.Sum256(body)
+		got := hex.EncodeToString(sum[:])
+		if !strings.EqualFold(got, expectedHash) {
+			return fmt.Errorf("checksum mismatch for %s: expected %s, got %s", assetName, expectedHash, got)
+		}
+		fmt.Fprintln(os.Stderr, "Checksum verified.")
+		return nil
+	}
+	return fmt.Errorf("no checksum asset found for release %s; refusing to install %s without authentication", rel.TagName, assetName)
+}
+
+// installStackComponents copies bin/*, frontend-dist/, and example_config.yaml
+// from the extracted stack root (`src`) to the target install directory
+// (`dst`). Existing files are replaced atomically where possible.
+func installStackComponents(src, dst string) error {
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dst, err)
+	}
+	srcBin := filepath.Join(src, "bin")
+	dstBin := filepath.Join(dst, "bin")
+	if existingDir(srcBin) {
+		if err := os.MkdirAll(dstBin, 0o755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", dstBin, err)
+		}
+		entries, err := os.ReadDir(srcBin)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", srcBin, err)
+		}
+		for _, ent := range entries {
+			if ent.IsDir() {
+				continue
+			}
+			from := filepath.Join(srcBin, ent.Name())
+			to := filepath.Join(dstBin, ent.Name())
+			if err := copyFileAtomic(from, to, 0o755); err != nil {
+				return fmt.Errorf("install binary %s: %w", ent.Name(), err)
+			}
+		}
+	}
+	srcFront := filepath.Join(src, "frontend-dist")
+	dstFront := filepath.Join(dst, "frontend-dist")
+	if existingDir(srcFront) {
+		if err := os.RemoveAll(dstFront); err != nil {
+			return fmt.Errorf("remove old frontend-dist: %w", err)
+		}
+		if err := copyDir(srcFront, dstFront); err != nil {
+			return fmt.Errorf("install frontend-dist: %w", err)
+		}
+	}
+	srcCfg := filepath.Join(src, "example_config.yaml")
+	dstCfg := filepath.Join(dst, "example_config.yaml")
+	if existingFile(srcCfg) {
+		if err := copyFileAtomic(srcCfg, dstCfg, 0o644); err != nil {
+			return fmt.Errorf("install example_config.yaml: %w", err)
+		}
+	}
+	return nil
+}
+
+// copyFileAtomic writes the source file to dst via a sibling temp file and
+// rename, so that the destination is never observed half-written. Existing
+// destination files are replaced.
+func copyFileAtomic(src, dst string, mode os.FileMode) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(dst)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".ncc-update-")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	_, writeErr := tmp.Write(data)
+	closeErr := tmp.Close()
+	if writeErr != nil {
+		_ = os.Remove(tmpName)
+		return writeErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmpName)
+		return closeErr
+	}
+	if err := os.Chmod(tmpName, mode); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, dst); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return nil
+}
+
+// copyDir recursively copies the contents of src into dst. Destination must
+// not exist (caller is responsible for cleaning up beforehand if needed).
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, info.Mode().Perm())
+		}
+		return copyFileAtomic(path, target, info.Mode().Perm())
+	})
+}
+
 type v2BootstrapOptions struct {
 	Repo            string
 	Version         string
@@ -8400,6 +8668,22 @@ func binaryPathInInstallDir(installDir, base string) string {
 	return path
 }
 
+// existingBinaryInInstallDir returns the path to a v2 runtime binary inside
+// <installDir>/bin/, accepting either the canonical name (`ncc-api-server`,
+// preferred for newly-packaged stack archives) or the platform-suffixed name
+// (`ncc-api-server-<os>-<arch>`, used by legacy v2.0.0 stack archives).
+// Returns "" if no candidate exists.
+func existingBinaryInInstallDir(installDir, base string) string {
+	binDir := filepath.Join(installDir, "bin")
+	for _, name := range v2BinaryNameCandidates(base) {
+		p := filepath.Join(binDir, name)
+		if existingFile(p) {
+			return p
+		}
+	}
+	return ""
+}
+
 func existingFile(path string) bool {
 	st, err := os.Stat(path)
 	return err == nil && !st.IsDir()
@@ -8454,10 +8738,13 @@ func resolveV2RuntimeLayout(installDir string) (string, string, string, string) 
 	}
 
 	// Preferred layout from v2-bootstrap: <install>/bin/* + <install>/frontend-dist
-	apiBoot := binaryPathInInstallDir(installDir, "ncc-api-server")
-	uiBoot := binaryPathInInstallDir(installDir, "ncc-ui-server")
+	// Accepts either canonical (ncc-api-server) or platform-suffixed
+	// (ncc-api-server-<os>-<arch>) binary names; legacy v2.0.0 stack archives
+	// shipped the suffixed form, current/future archives ship canonical.
+	apiBoot := existingBinaryInInstallDir(installDir, "ncc-api-server")
+	uiBoot := existingBinaryInInstallDir(installDir, "ncc-ui-server")
 	frontBoot := filepath.Join(installDir, "frontend-dist")
-	if existingFile(apiBoot) && existingFile(uiBoot) && existingDir(frontBoot) {
+	if apiBoot != "" && uiBoot != "" && existingDir(frontBoot) {
 		return apiBoot, uiBoot, frontBoot, "install-dir"
 	}
 
@@ -8486,8 +8773,7 @@ func resolveV2APIBinary(installDir string) (string, string) {
 	if installDir == "" {
 		installDir = ".ncc-v2"
 	}
-	apiBoot := binaryPathInInstallDir(installDir, "ncc-api-server")
-	if existingFile(apiBoot) {
+	if apiBoot := existingBinaryInInstallDir(installDir, "ncc-api-server"); apiBoot != "" {
 		return apiBoot, "install-dir"
 	}
 	cwd, _ := os.Getwd()
@@ -9656,13 +9942,13 @@ func extractArchiveByAssetName(archive []byte, assetName string, destDir string)
 }
 
 func hasBootstrappedV2Layout(installDir string) bool {
-	apiBin := binaryPathInInstallDir(installDir, "ncc-api-server")
-	uiBin := binaryPathInInstallDir(installDir, "ncc-ui-server")
-	frontendDir := filepath.Join(installDir, "frontend-dist")
-	apiInfo, apiErr := os.Stat(apiBin)
-	uiInfo, uiErr := os.Stat(uiBin)
-	frontInfo, frontErr := os.Stat(frontendDir)
-	return apiErr == nil && !apiInfo.IsDir() && uiErr == nil && !uiInfo.IsDir() && frontErr == nil && frontInfo.IsDir()
+	if existingBinaryInInstallDir(installDir, "ncc-api-server") == "" {
+		return false
+	}
+	if existingBinaryInInstallDir(installDir, "ncc-ui-server") == "" {
+		return false
+	}
+	return existingDir(filepath.Join(installDir, "frontend-dist"))
 }
 
 func releaseHasRequiredV2Assets(rel githubRelease, goos, goarch string) bool {
@@ -10046,6 +10332,11 @@ func runUpdate(opts updateOptions) error {
 			fmt.Fprintln(os.Stderr, "Use --allow-major-upgrade to move from v1.x to v2.x after migration review.")
 		}
 	}
+	// Prefer the stack archive when available: this is the canonical
+	// "update the whole package" path. Falls back to single-binary update
+	// for legacy releases (v1.x) that don't ship a stack archive.
+	stackURL, stackName := pickStackAssetForCurrentPlatform(*targetRelease)
+
 	if opts.CheckOnly {
 		if versionLess(currentVer, targetVer) {
 			fmt.Fprintf(os.Stderr, "Update available in track: %s -> %s\n", currentVer, targetVer)
@@ -10054,9 +10345,13 @@ func runUpdate(opts updateOptions) error {
 		} else {
 			fmt.Fprintln(os.Stderr, "You are already on the latest version for the selected track.")
 		}
-		downloadURL, assetName := pickAssetForCurrentPlatform(*targetRelease)
-		if downloadURL != "" {
-			fmt.Fprintf(os.Stderr, "Binary candidate for %s/%s: %s (%s)\n", runtime.GOOS, runtime.GOARCH, assetName, downloadURL)
+		if stackURL != "" {
+			fmt.Fprintf(os.Stderr, "Package candidate for %s/%s: %s (%s)\n", runtime.GOOS, runtime.GOARCH, stackName, stackURL)
+		} else {
+			downloadURL, assetName := pickAssetForCurrentPlatform(*targetRelease)
+			if downloadURL != "" {
+				fmt.Fprintf(os.Stderr, "Binary candidate for %s/%s: %s (%s)\n", runtime.GOOS, runtime.GOARCH, assetName, downloadURL)
+			}
 		}
 		return nil
 	}
@@ -10069,6 +10364,11 @@ func runUpdate(opts updateOptions) error {
 		return nil
 	}
 
+	if stackURL != "" {
+		return installPackageUpdate(stackURL, stackName, targetRelease, targetVer, client)
+	}
+
+	// Legacy single-binary update path (v1.x releases without a stack archive).
 	downloadURL, chosenAssetName := pickAssetForCurrentPlatform(*targetRelease)
 	if downloadURL == "" {
 		fmt.Fprintf(os.Stderr, "No binary found for %s/%s. Download manually: %s\n", runtime.GOOS, runtime.GOARCH, targetRelease.HTMLURL)
@@ -10084,37 +10384,8 @@ func runUpdate(opts updateOptions) error {
 	if err != nil {
 		return err
 	}
-	if chosenAssetName != "" {
-		checksumVerified := false
-		checksumAssetFound := false
-		for _, a := range targetRelease.Assets {
-			an := strings.ToLower(a.Name)
-			if strings.Contains(an, "checksum") || strings.Contains(an, "sha256") || strings.HasSuffix(an, ".sha256") {
-				checksumAssetFound = true
-				csBody, err := fetchURL(a.BrowserDownloadURL, client)
-				if err != nil {
-					return fmt.Errorf("fetch checksum asset %s: %w", a.Name, err)
-				}
-				expectedHash := parseChecksumFile(csBody, chosenAssetName)
-				if expectedHash == "" {
-					return fmt.Errorf("checksum entry for %s not found in %s", chosenAssetName, a.Name)
-				}
-				sum := sha256.Sum256(body)
-				got := hex.EncodeToString(sum[:])
-				if !strings.EqualFold(got, expectedHash) {
-					return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedHash, got)
-				}
-				checksumVerified = true
-				fmt.Fprintln(os.Stderr, "Checksum verified.")
-				break
-			}
-		}
-		if !checksumAssetFound {
-			return fmt.Errorf("no checksum asset found for release %s", targetRelease.TagName)
-		}
-		if !checksumVerified {
-			return fmt.Errorf("checksum verification did not complete for asset %s", chosenAssetName)
-		}
+	if err := verifyAssetAgainstReleaseChecksum(targetRelease, chosenAssetName, body, client); err != nil {
+		return err
 	}
 	return installDownloadedBinary(body, targetVer)
 }

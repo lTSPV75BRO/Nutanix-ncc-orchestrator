@@ -1,13 +1,16 @@
 # Release notes — v2.0.1
 
 **Date:** 2026-05-27
-**Type:** Patch release (single user-visible fix)
+**Type:** Patch release (P0 update-path fix + UX polish)
 
-This release fixes a P0 silent-corruption regression in the v1.x self-updater that affected users moving from v1.x to v2.0.0. **All v1.x users should upgrade via this release rather than v2.0.0.**
+This release fixes the P0 silent-corruption regression in the v1.x → v2.0.0 self-updater **and** rebuilds the `update` semantics around a single, name-invariant abstraction: **`update` upgrades the v2 stack package as a whole, irrespective of which binary you invoke or how it was renamed**. All v1.x users should upgrade via this release.
 
 ## TL;DR
 
-- Fixes `update --allow-major-upgrade` so v1.x → v2.x upgrades pick the correct binary even when the release ships multiple binaries per platform.
+- `update` now downloads the **stack archive** (`ncc-v2-stack-<os>-<arch>.{tar.gz,zip}`) and reinstalls every v2 component atomically (orchestrator + api-server + ui-server + frontend-dist + example_config.yaml). The running binary self-replaces in place.
+- Works the same whether you run `update` from `ncc-orchestrator`, `ncc-api-server`, `ncc-ui-server`, or any renamed binary — the package selection is independent of the invocation name.
+- Falls back to the legacy single-binary update path for v1.x releases that don't ship a stack archive.
+- `v2-bootstrap` and `v2-start` are robust against both canonical (`bin/ncc-api-server`) and legacy platform-suffixed (`bin/ncc-api-server-<os>-<arch>`) names.
 - v2.0.0 → v2.0.1 is a trivial in-place patch.
 - v1.x → v2.0.0 users who already ran the buggy path can recover by running `update` again (the v2.0.0 release was already hotfixed in place on 2026-05-27 19:35Z) or by following the recovery instructions in `RELEASE_NOTES_v2.0.0.md` → Known issues.
 
@@ -31,30 +34,55 @@ $ ./ncc-orchestrator update --check
 
 ## What was fixed
 
-### 1. Selector now prefers the running executable's basename
+### 1. `update` is now a package-level, name-invariant operation
 
-`pickAssetForCurrentPlatform` was refactored into a testable inner function `pickAssetForPlatform(rel, goos, goarch, exeBase)`. The new selection order:
+The core abstraction shift in v2.0.1. Previously `update` was a "self-replace this one binary" operation; the v1.x selector picked an asset by matching the running executable's basename against asset names. That broke catastrophically when v2.0.0 shipped three binaries per platform.
 
-1. **Prefix-match (preferred):** non-archive asset whose name starts with `<exeBase>-` (e.g. `ncc-orchestrator-`) and contains both `goos` and `goarch`. This is the path that protects against the v2.0.0 regression.
-2. **Legacy first-match (fallback):** any other non-archive asset whose name contains both `goos` and `goarch`. Preserves v1.x behavior for forks and renamed binaries.
-3. **Archive (last resort):** any `.tar.gz` / `.zip` asset for the platform. Returned for inspection so the caller emits a "download and extract" hint rather than overwriting in place.
+In v2.0.1, `update` instead selects the **stack archive** (`ncc-v2-stack-<os>-<arch>.{tar.gz,zip}`) — a single asset that bundles every v2 component. The install flow:
 
-### 2. Release-asset layout policy enforced in `binaryGO.txt`
+1. Download the stack archive for the platform.
+2. Verify the SHA-256 against the release's `checksums.txt`. Refuses to install if no checksum manifest is found on the release.
+3. Extract to a private temp directory.
+4. Verify the extracted layout (`bin/ncc-api-server`, `bin/ncc-ui-server`, `frontend-dist/`).
+5. Atomically copy `bin/*`, `frontend-dist/`, and `example_config.yaml` into the install directory.
+6. Atomically self-replace the running binary by matching its basename against the canonical names in the extracted `bin/` (falls back to `bin/ncc-orchestrator` if no match).
 
-The release packaging step (step 7) now excludes standalone `ncc-api-server-*` and `ncc-ui-server-*` binaries from `checksums.txt` (and therefore from publishable assets). The api-server and ui-server binaries continue to ship **inside** the `ncc-v2-stack-*` archives. The exclusion is documented in `binaryGO.txt` with an explanatory comment so it cannot be reverted without intent.
+Install-dir resolution is deterministic and binary-name-invariant:
 
-### 3. v2.0.0 release was hotfixed in place
+- Running from `<X>/bin/<self>` → install over `<X>` (refreshes an existing bootstrapped stack).
+- Running from anywhere else → install into the binary's directory (flat layout).
+
+For legacy releases (v1.x) that do not publish a stack archive, the code falls back to the original single-binary update flow with the prefix-match selector fix (see #4 below) preserved as a safety net.
+
+### 2. Legacy single-binary selector hardening (fallback path)
+
+When the stack archive path doesn't apply (legacy v1.x releases), `pickAssetForCurrentPlatform` now prefers assets whose name starts with `<exeBase>-` over plain first-match. This is the v2.0.0 regression fix retained as defense in depth.
+
+### 3. `v2-bootstrap` / `v2-start` accept both binary naming conventions
+
+`hasBootstrappedV2Layout`, `resolveV2RuntimeLayout`, and `resolveV2APIBinary` now accept either canonical (`bin/ncc-api-server`) or platform-suffixed (`bin/ncc-api-server-<os>-<arch>`) names. This unblocks bootstrap against legacy v2.0.0 stack archives that ship platform-suffixed names, while remaining the preferred lookup for future stack archives that ship canonical names.
+
+### 4. Release-asset layout policy enforced in `binaryGO.txt`
+
+The packaging script now enforces two policies that prevent the v1.x→v2.0.0 regression from ever recurring:
+
+- **Stack archives use canonical binary names** (no platform suffix inside `bin/`). `cp src/ncc-api-server-<os>-<arch> bin/ncc-api-server`. Matches what `v2-bootstrap` writes and what every layout-resolver expects.
+- **Standalone `ncc-api-server-*` / `ncc-ui-server-*` are excluded from the publishable asset set** (release upload + `checksums.txt`). They continue to ship inside the stack archives. Documented inline with rationale that cannot be reverted without intent.
+- `COPYFILE_DISABLE=1` + `--no-mac-metadata` are passed to tar so macOS-built archives no longer carry `._*` resource-fork sidecars.
+
+### 5. v2.0.0 release was hotfixed in place
 
 For users still on v1.x updaters who run `update --allow-major-upgrade`, the 12 standalone `ncc-api-server-*` and `ncc-ui-server-*` assets were deleted from the v2.0.0 release on 2026-05-27 19:35Z. The v1.x selector now alphabetically lands on `ncc-orchestrator-*` as the first match, so the regression cannot trigger against the v2.0.0 release going forward.
 
-### 4. Regression locked in with tests
+### 6. Regression locked in with tests
 
-`goNCC_test.go` adds four tests with ten total cases:
+`goNCC_test.go` adds seven tests with twenty total cases:
 
-- `TestPickAssetForPlatform_PrefersExeBasenamePrefix` — seven sub-cases covering the full v2.0.0 asset layout for orchestrator, api-server, ui-server, plus renamed-binary and empty-exeBase fallbacks.
-- `TestPickAssetForPlatform_ArchiveOnlyRelease` — verifies archive-only releases return the `.tar.gz`.
-- `TestPickAssetForPlatform_NoMatch` — verifies empty results for unsupported platforms.
-- `TestPickAssetForPlatform_TrimmedV200Release` — pins the post-hotfix v2.0.0 asset layout as the canonical going-forward policy.
+- `TestPickAssetForPlatform_PrefersExeBasenamePrefix` (7 sub-cases) — legacy single-binary selector fix.
+- `TestPickAssetForPlatform_ArchiveOnlyRelease`, `TestPickAssetForPlatform_NoMatch`, `TestPickAssetForPlatform_TrimmedV200Release` — selector edge cases.
+- `TestPickStackAssetForPlatform` (6 sub-cases) + `TestPickStackAssetForPlatform_NoStackInRelease` — pins the package-archive selection on every supported platform and the legacy-release fallback behavior.
+- `TestResolvePackageInstallDir` (4 sub-cases) — pins the install-dir auto-detection (binary-name-invariant by construction).
+- `TestHasBootstrappedV2Layout_AcceptsBothNamingConventions` (4 sub-cases) — both `bin/ncc-api-server` and `bin/ncc-api-server-<os>-<arch>` layouts pass the post-bootstrap check.
 
 ## How to upgrade
 
