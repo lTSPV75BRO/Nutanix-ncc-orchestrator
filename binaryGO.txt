@@ -1,51 +1,35 @@
-# For Linux x86_64
-GOOS=linux GOARCH=amd64 go build -ldflags "-w -s \
-  -X main.Version=1.1.0_LINUX_AMD64 \
-  -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
-  -X main.Stream=Prod \
-  -X main.GoVersion=$(go version | cut -d ' ' -f 3)" \
-  -o ncc-orchestrator-linux-amd64
+# Run from repo root once per release. Edit VERSION/STREAM if needed.
+# Each line is independently re-runnable (no shared shell state required).
+if [ -n "${ZSH_VERSION:-}" ]; then setopt nonomatch; fi
 
-# For Linux ARM64
-GOOS=linux GOARCH=arm64 go build -ldflags "-w -s \
-  -X main.Version=1.1.0_LINUX_ARM64 \
-  -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
-  -X main.Stream=Prod \
-  -X main.GoVersion=$(go version | cut -d ' ' -f 3)" \
-  -o ncc-orchestrator-linux-arm64
+# 0) Variables. Re-source this block (or copy/paste) before any subsequent step.
+# Note: git revision is picked up automatically by Go's build info (-buildvcs=true,
+# default), surfaced as `gitRevision` inside the binaries. We only thread the
+# `-dirty` suffix into Version so support tickets can spot uncommitted builds.
+export VERSION=2.0.0 STREAM=Release BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ') GO_VER=$(go version | awk '{print $3}') GIT_DIRTY=$(git diff --quiet 2>/dev/null || echo "-dirty"); LDFLAGS="-w -s -X main.Version=${VERSION}${GIT_DIRTY} -X main.BuildDate=${BUILD_DATE} -X main.Stream=${STREAM} -X main.GoVersion=${GO_VER}"; mkdir -p dist
 
-# For Windows x86_64
-GOOS=windows GOARCH=amd64 go build -ldflags "-w -s \
-  -X main.Version=1.1.0_WIN_AMD64 \
-  -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
-  -X main.Stream=Prod \
-  -X main.GoVersion=$(go version | cut -d ' ' -f 3)" \
-  -o ncc-orchestrator-windows-amd64.exe
+# 1) Preflight: module integrity, vet, unit tests, frontend typecheck. Fails fast.
+go mod download && go mod verify && go vet ./... && go test ./cmd/... ./... -count=1 -short 2>&1 | tail -20 && (cd frontend && npm ci && npx tsc --noEmit -p tsconfig.json) && echo "PREFLIGHT_OK"
 
-# For Windows ARM64
-GOOS=windows GOARCH=arm64 go build -ldflags "-w -s \
-  -X main.Version=1.1.0_WIN_ARM64 \
-  -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
-  -X main.Stream=Prod \
-  -X main.GoVersion=$(go version | cut -d ' ' -f 3)" \
-  -o ncc-orchestrator-windows-arm64.exe
+# 2) Build CLI/API/UI binaries for linux/darwin/windows × amd64/arm64.
+# -buildvcs=true (default) embeds git revision+dirty status accessible via debug.ReadBuildInfo().
+for goos in linux darwin windows; do for goarch in amd64 arm64; do ext=""; [ "$goos" = "windows" ] && ext=".exe"; for pkg in . ./cmd/ncc-api-server ./cmd/ncc-ui-server; do name=$(basename "$pkg"); [ "$pkg" = "." ] && name=ncc-orchestrator; CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch go build -trimpath -buildvcs=true -ldflags "$LDFLAGS" -o "dist/${name}-${goos}-${goarch}${ext}" "$pkg" || exit 1; done; done; done
 
-# For darwin ARM64
-GOOS=darwin GOARCH=arm64 go build -ldflags "-w -s \
-  -X main.Version=1.1.0_darwin_ARM64 \
-  -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
-  -X main.Stream=Prod \
-  -X main.GoVersion=$(go version | cut -d ' ' -f 3)" \
-  -o ncc-orchestrator-darwin-arm64
+# 3) Local-arch convenience symlinks at dist/ncc-{orchestrator,api-server,ui-server} for quick testing.
+LOCAL_OS=$(go env GOOS); LOCAL_ARCH=$(go env GOARCH); LOCAL_EXT=""; if [ "$LOCAL_OS" = "windows" ]; then LOCAL_EXT=".exe"; fi; for n in ncc-orchestrator ncc-api-server ncc-ui-server; do ln -sf "${n}-${LOCAL_OS}-${LOCAL_ARCH}${LOCAL_EXT}" "dist/${n}${LOCAL_EXT}"; done
 
-# For darwin x86_64
-GOOS=darwin GOARCH=amd64 go build -ldflags "-w -s \
-  -X main.Version=1.1.0_darwin_AMD64 \
-  -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
-  -X main.Stream=Prod \
-  -X main.GoVersion=$(go version | cut -d ' ' -f 3)" \
-  -o ncc-orchestrator-darwin-amd64
+# 4) Build frontend bundle into dist/frontend-dist (deterministic).
+(cd frontend && npm run build) && rm -rf dist/frontend-dist && cp -R frontend/dist dist/frontend-dist
 
-sha256sum ncc-orchestrator-linux-amd64 ncc-orchestrator-linux-arm64 ncc-orchestrator-windows-amd64.exe ncc-orchestrator-windows-arm64.exe ncc-orchestrator-darwin-arm64 ncc-orchestrator-darwin-amd64 > checksums.txt
+# 5) Copy example_config.yaml and docs into dist/ so the release zips include them.
+cp example_config.yaml dist/ 2>/dev/null; [ -f RELEASE_NOTES_v${VERSION}.md ] && cp "RELEASE_NOTES_v${VERSION}.md" dist/ || true
 
-Check using: go tool dist list
+# 6) Create v2 stack bundles (linux/darwin tar.gz, windows zip) with layout: bin/, frontend-dist/, example_config.yaml.
+rm -rf dist/.stack && mkdir -p dist/.stack && for goos in linux darwin windows; do for goarch in amd64 arm64; do root="dist/.stack/${goos}-${goarch}"; rm -rf "$root"; mkdir -p "$root/bin"; ext=""; [ "$goos" = "windows" ] && ext=".exe"; cp "dist/ncc-orchestrator-${goos}-${goarch}${ext}" "$root/bin/" || exit 1; cp "dist/ncc-api-server-${goos}-${goarch}${ext}" "$root/bin/" || exit 1; cp "dist/ncc-ui-server-${goos}-${goarch}${ext}" "$root/bin/" || exit 1; cp -R dist/frontend-dist "$root/frontend-dist"; [ -f dist/example_config.yaml ] && cp dist/example_config.yaml "$root/"; if [ "$goos" = "windows" ]; then (cd "$root" && zip -qr "../../ncc-v2-stack-${goos}-${goarch}.zip" bin frontend-dist example_config.yaml 2>/dev/null) || (cd "$root" && zip -qr "../../ncc-v2-stack-${goos}-${goarch}.zip" .); else (cd "$root" && tar -czf "../../ncc-v2-stack-${goos}-${goarch}.tar.gz" bin frontend-dist $([ -f example_config.yaml ] && echo example_config.yaml)); fi; done; done
+
+# 7) Generate checksums for every publishable release asset (macOS/BSD + GNU fallback).
+(cd dist && : > checksums.txt && for f in ncc-orchestrator-* ncc-api-server-* ncc-ui-server-* ncc-v2-stack-* example_config.yaml RELEASE_NOTES_v${VERSION}.md; do [ -e "$f" ] || continue; (shasum -a 256 "$f" 2>/dev/null || sha256sum "$f") >> checksums.txt; done; sort -o checksums.txt checksums.txt)
+
+# 8) Verification: print the 6 stack archives, list cross-arch binaries, then assert counts.
+ls -1 dist/ncc-v2-stack-* 2>/dev/null; ls -1 dist/ncc-orchestrator-* dist/ncc-api-server-* dist/ncc-ui-server-* 2>/dev/null
+STACKS=$(ls dist/ncc-v2-stack-* 2>/dev/null | wc -l | tr -d ' '); BINS=$(ls dist/ncc-orchestrator-* dist/ncc-api-server-* dist/ncc-ui-server-* 2>/dev/null | wc -l | tr -d ' '); echo "stacks=$STACKS (expect 6), binaries=$BINS (expect 18)"; if [ "$STACKS" = "6" ] && [ "$BINS" = "18" ]; then echo "RELEASE_OK"; else echo "RELEASE_INCOMPLETE — check failed steps above" >&2; false; fi

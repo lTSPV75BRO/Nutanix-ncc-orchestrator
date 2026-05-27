@@ -48,6 +48,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/rs/zerolog/pkgerrors"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"github.com/vbauerster/mpb/v7"
 	"github.com/vbauerster/mpb/v7/decor"
@@ -123,7 +124,8 @@ type Config struct {
 	IdleConnTimeout     time.Duration // Idle connection timeout
 
 	// Prometheus metrics
-	PromDir string `mapstructure:"prom-dir"`
+	PromEnabled bool   `mapstructure:"prom-enabled"`
+	PromDir     string `mapstructure:"prom-dir"`
 
 	// Email
 	EmailEnabled    bool
@@ -332,6 +334,159 @@ func splitCSVTrimLower(s string) []string {
 		out = append(out, strings.ToLower(strings.TrimSpace(v)))
 	}
 	return out
+}
+
+func levenshteinDistance(a, b string) int {
+	if a == b {
+		return 0
+	}
+	if len(a) == 0 {
+		return len(b)
+	}
+	if len(b) == 0 {
+		return len(a)
+	}
+	prev := make([]int, len(b)+1)
+	for j := 0; j <= len(b); j++ {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		curr := make([]int, len(b)+1)
+		curr[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 0
+			if a[i-1] != b[j-1] {
+				cost = 1
+			}
+			del := prev[j] + 1
+			ins := curr[j-1] + 1
+			sub := prev[j-1] + cost
+			curr[j] = minInt(del, minInt(ins, sub))
+		}
+		prev = curr
+	}
+	return prev[len(b)]
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func closestToken(input string, candidates []string) string {
+	in := strings.ToLower(strings.TrimSpace(input))
+	if in == "" || len(candidates) == 0 {
+		return ""
+	}
+	best := ""
+	bestDist := 1 << 30
+	for _, c := range candidates {
+		clean := strings.ToLower(strings.TrimSpace(c))
+		if clean == "" {
+			continue
+		}
+		if clean == in {
+			return c
+		}
+		d := levenshteinDistance(in, clean)
+		if d < bestDist {
+			bestDist = d
+			best = c
+		}
+	}
+	// Keep suggestions conservative to avoid noisy/wrong hints.
+	if bestDist > 3 && !strings.HasPrefix(strings.ToLower(best), in) {
+		return ""
+	}
+	return best
+}
+
+func knownCommandNames(cmd *cobra.Command) []string {
+	names := []string{}
+	for _, c := range cmd.Commands() {
+		if !c.IsAvailableCommand() || c.Hidden {
+			continue
+		}
+		names = append(names, c.Name())
+	}
+	return names
+}
+
+func knownFlagNames(cmd *cobra.Command) []string {
+	set := map[string]struct{}{}
+	cmd.Flags().VisitAll(func(f *pflag.Flag) {
+		set["--"+f.Name] = struct{}{}
+	})
+	cmd.InheritedFlags().VisitAll(func(f *pflag.Flag) {
+		set["--"+f.Name] = struct{}{}
+	})
+	cmd.PersistentFlags().VisitAll(func(f *pflag.Flag) {
+		set["--"+f.Name] = struct{}{}
+	})
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func extractQuotedValue(msg string) string {
+	start := strings.Index(msg, "\"")
+	if start < 0 {
+		return ""
+	}
+	rest := msg[start+1:]
+	end := strings.Index(rest, "\"")
+	if end < 0 {
+		return ""
+	}
+	return rest[:end]
+}
+
+func humanizeCLIError(root *cobra.Command, argv []string, err error) string {
+	msg := strings.TrimSpace(err.Error())
+	lower := strings.ToLower(msg)
+	active := root
+	if len(argv) > 0 {
+		if found, _, findErr := root.Find(argv); findErr == nil && found != nil {
+			active = found
+		}
+	}
+	helpCmd := "ncc-orchestrator --help"
+	if active != nil && active != root {
+		helpCmd = active.CommandPath() + " --help"
+	}
+	if strings.Contains(lower, "unknown command") {
+		bad := extractQuotedValue(msg)
+		suggestion := closestToken(bad, knownCommandNames(root))
+		if suggestion != "" {
+			return fmt.Sprintf("unknown command %q. Did you mean `%s`?\nHint: run `%s` for available commands.", bad, suggestion, helpCmd)
+		}
+		return fmt.Sprintf("%s\nHint: run `%s` for available commands.", msg, helpCmd)
+	}
+	if strings.Contains(lower, "unknown flag") {
+		bad := extractQuotedValue(msg)
+		if bad == "" {
+			if idx := strings.Index(lower, "unknown flag:"); idx >= 0 {
+				raw := strings.TrimSpace(msg[idx+len("unknown flag:"):])
+				if raw != "" {
+					bad = strings.Fields(raw)[0]
+				}
+			}
+		}
+		suggestion := closestToken(bad, knownFlagNames(active))
+		if strings.EqualFold(strings.TrimSpace(suggestion), strings.TrimSpace(bad)) {
+			suggestion = ""
+		}
+		if suggestion != "" {
+			return fmt.Sprintf("%s\nDid you mean `%s`?\nHint: run `%s` to view supported flags.", msg, suggestion, helpCmd)
+		}
+		return fmt.Sprintf("%s\nHint: run `%s` to view supported flags.", msg, helpCmd)
+	}
+	return msg
 }
 
 func readLineValuesFile(path string) ([]string, error) {
@@ -676,6 +831,55 @@ func parseClusterFileLine(line string) (cluster string, username string, passwor
 	}
 }
 
+func normalizeClusterAddress(raw string) (string, error) {
+	cluster := strings.TrimSpace(raw)
+	if cluster == "" {
+		return "", errors.New("cluster address cannot be empty")
+	}
+	if strings.Contains(cluster, "://") {
+		parsed, err := url.Parse(cluster)
+		if err != nil {
+			return "", fmt.Errorf("invalid cluster URL: %w", err)
+		}
+		host := strings.TrimSpace(parsed.Hostname())
+		if host == "" {
+			return "", errors.New("cluster URL must include a host")
+		}
+		cluster = host
+	}
+	// Accept host:port/IP:port shorthand; NCC always targets 9440 internally.
+	if host, port, err := net.SplitHostPort(cluster); err == nil {
+		if port == "" {
+			return "", errors.New("cluster port is empty")
+		}
+		cluster = strings.Trim(host, "[]")
+	} else {
+		if last := strings.LastIndex(cluster, ":"); last > 0 && strings.Count(cluster, ":") == 1 {
+			port := strings.TrimSpace(cluster[last+1:])
+			if _, pErr := strconv.Atoi(port); pErr == nil {
+				cluster = strings.TrimSpace(cluster[:last])
+			}
+		}
+	}
+	cluster = strings.Trim(cluster, "[]")
+	if cluster == "" {
+		return "", errors.New("cluster address cannot be empty")
+	}
+	return cluster, nil
+}
+
+func normalizeClusters(clusters []string) ([]string, error) {
+	out := make([]string, 0, len(clusters))
+	for i, cluster := range clusters {
+		norm, err := normalizeClusterAddress(cluster)
+		if err != nil {
+			return nil, fmt.Errorf("cluster %d (%s): %w", i+1, cluster, err)
+		}
+		out = append(out, norm)
+	}
+	return out, nil
+}
+
 func credentialsForCluster(cfg Config, cluster string) (string, string) {
 	user := strings.TrimSpace(cfg.Username)
 	pass := cfg.Password
@@ -731,8 +935,9 @@ func mustParseDur(s string, def time.Duration) time.Duration {
 
 // validateClusterAddress validates cluster IP or hostname
 func validateClusterAddress(cluster string) error {
-	if cluster == "" {
-		return errors.New("cluster address cannot be empty")
+	cluster, err := normalizeClusterAddress(cluster)
+	if err != nil {
+		return err
 	}
 	if len(cluster) > maxClusterNameLen {
 		return fmt.Errorf("cluster address too long (max %d chars)", maxClusterNameLen)
@@ -767,13 +972,17 @@ func validateClusters(clusters []string) error {
 
 	seen := make(map[string]bool)
 	for i, cluster := range clusters {
-		if err := validateClusterAddress(cluster); err != nil {
+		norm, err := normalizeClusterAddress(cluster)
+		if err != nil {
 			return fmt.Errorf("cluster %d (%s): %w", i+1, cluster, err)
 		}
-		if seen[cluster] {
-			return fmt.Errorf("duplicate cluster address: %s", cluster)
+		if err := validateClusterAddress(norm); err != nil {
+			return fmt.Errorf("cluster %d (%s): %w", i+1, cluster, err)
 		}
-		seen[cluster] = true
+		if seen[norm] {
+			return fmt.Errorf("duplicate cluster address: %s", norm)
+		}
+		seen[norm] = true
 	}
 
 	return nil
@@ -904,7 +1113,7 @@ func validateConfig(cfg Config) error {
 			return errors.New("username is required in pc mode")
 		}
 		for i, pc := range cfg.PCs {
-			if _, err := normalizePCBaseURL(pc); err != nil {
+			if _, err := normalizePCBaseURL(pc, cfg.InsecureSkipVerify); err != nil {
 				return fmt.Errorf("pc target %d (%s): %w", i+1, pc, err)
 			}
 		}
@@ -1025,8 +1234,8 @@ func validateConfig(cfg Config) error {
 	if strings.TrimSpace(cfg.LogFile) == "" {
 		return errors.New("log-file cannot be empty")
 	}
-	if strings.TrimSpace(cfg.PromDir) == "" {
-		return errors.New("prom-dir cannot be empty")
+	if cfg.PromEnabled && strings.TrimSpace(cfg.PromDir) == "" {
+		return errors.New("prom-dir cannot be empty when prom-enabled=true")
 	}
 	if cfg.RetainLastRuns < 0 {
 		return errors.New("retain-last must be >= 0")
@@ -1471,7 +1680,7 @@ func validateConfigFileRawTypes() error {
 		"flaky-lookback-runs": true, "flaky-min-transitions": true,
 		"log-file": true, "log-level": true, "log-http": true,
 		"retry-max-attempts": true, "retry-base-delay": true, "retry-max-delay": true, "retry-circuit-breaker": true,
-		"prom-dir": true, "severity-filter": true, "exclude-alert-titles": true, "exclude-alert-titles-file": true, "exclude-alert-match-mode": true, "dry-run": true, "replay": true,
+		"prom-enabled": true, "prom-dir": true, "severity-filter": true, "exclude-alert-titles": true, "exclude-alert-titles-file": true, "exclude-alert-match-mode": true, "dry-run": true, "replay": true,
 		"max-idle-conns": true, "max-idle-conns-per-host": true, "max-conns-per-host": true, "idle-conn-timeout": true,
 		"gen-test-agg":  true,
 		"email-enabled": true, "email-attach-html": true, "notify-digest": true,
@@ -1515,6 +1724,7 @@ func validateConfigFileRawTypes() error {
 		"update",
 		"skip-preflight-check",
 		"insecure-skip-verify", "dry-run", "replay", "log-http",
+		"prom-enabled",
 		"run-history", "single-report", "notify-on-regression", "adaptive-parallelism",
 		"email-enabled", "email-attach-html", "notify-digest", "email-use-tls",
 		"webhook-enabled", "webhook-include-html", "slack-enabled",
@@ -1611,6 +1821,30 @@ func bindConfig() (Config, error) {
 			clustersFromFlag = lines
 		}
 		clusterCreds = fileCreds
+	}
+	if len(clustersFromFlag) > 0 {
+		normalizedClusters, err := normalizeClusters(clustersFromFlag)
+		if err != nil {
+			return Config{}, err
+		}
+		clustersFromFlag = normalizedClusters
+	}
+	if len(clusterCreds) > 0 {
+		normalizedCreds := make(map[string]ClusterCredential, len(clusterCreds))
+		for cluster, cred := range clusterCreds {
+			norm, err := normalizeClusterAddress(cluster)
+			if err != nil {
+				return Config{}, fmt.Errorf("clusters-file credential key %s: %w", cluster, err)
+			}
+			if existing, ok := normalizedCreds[norm]; ok {
+				if (strings.TrimSpace(existing.Username) != "" && strings.TrimSpace(cred.Username) != "" && existing.Username != cred.Username) ||
+					(strings.TrimSpace(existing.Password) != "" && strings.TrimSpace(cred.Password) != "" && existing.Password != cred.Password) {
+					return Config{}, fmt.Errorf("clusters-file has conflicting credentials for %s after normalization", norm)
+				}
+			}
+			normalizedCreds[norm] = cred
+		}
+		clusterCreds = normalizedCreds
 	}
 	if pcsFile != "" {
 		lines, err := readLineValuesFile(pcsFile)
@@ -1717,6 +1951,11 @@ func bindConfig() (Config, error) {
 	if cfg.LogFile == "" {
 		cfg.LogFile = defaultLogFile
 	}
+	if viper.IsSet("prom-enabled") {
+		cfg.PromEnabled = viper.GetBool("prom-enabled")
+	} else {
+		cfg.PromEnabled = false
+	}
 	cfg.PromDir = viper.GetString("prom-dir")
 	if cfg.PromDir == "" {
 		cfg.PromDir = defaultPromDir
@@ -1802,7 +2041,14 @@ func checkOutputPermissions(cfg *Config) error {
 		{"output dir (raw logs)", filepath.Join(cfg.OutputDirLogs, probeName), true, false},
 		{"output dir (filtered)", filepath.Join(cfg.OutputDirFiltered, probeName), true, false},
 		{"aggregated index.html", indexHTML, false, true},
-		{"prom dir", filepath.Join(cfg.PromDir, probeName), true, false},
+	}
+	if cfg.PromEnabled {
+		checks = append(checks, struct {
+			label    string
+			path     string
+			remove   bool
+			truncate bool
+		}{"prom dir", filepath.Join(cfg.PromDir, probeName), true, false})
 	}
 	for _, c := range checks {
 		dir := filepath.Dir(c.path)
@@ -1895,10 +2141,36 @@ func isRetryableStatus(code int) bool {
 // maxRateLimitBackoff caps Retry-After / computed backoff for HTTP 429 so a misbehaving server cannot sleep unbounded.
 const maxRateLimitBackoff = 2 * time.Minute
 
+const (
+	maxRetryRequestBodyBytes  int64 = 2 << 20  // 2 MiB
+	maxRetryResponseBodyBytes int64 = 64 << 20 // 64 MiB
+)
+
 var (
 	adaptiveCurrentParallel int32
 	adaptiveMaxParallel     int32
+	adaptiveNotifyMu        sync.Mutex
+	adaptiveNotifyCh        chan struct{}
 )
+
+func setAdaptiveParallelismNotify(ch chan struct{}) {
+	adaptiveNotifyMu.Lock()
+	defer adaptiveNotifyMu.Unlock()
+	adaptiveNotifyCh = ch
+}
+
+func notifyAdaptiveParallelismChanged() {
+	adaptiveNotifyMu.Lock()
+	ch := adaptiveNotifyCh
+	adaptiveNotifyMu.Unlock()
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
 
 func resetAdaptiveParallelism(maxParallel int) {
 	if maxParallel < 1 {
@@ -1937,6 +2209,7 @@ func noteHTTPStatusForAdaptiveParallelism(status int, cfg Config) {
 			next := cur - 1
 			if atomic.CompareAndSwapInt32(&adaptiveCurrentParallel, cur, next) {
 				log.Warn().Int("adaptive_parallel", int(next)).Int("max_parallel", maxP).Msg("adaptive parallelism reduced after 429")
+				notifyAdaptiveParallelismChanged()
 				return
 			}
 		}
@@ -1950,6 +2223,7 @@ func noteHTTPStatusForAdaptiveParallelism(status int, cfg Config) {
 				}
 				next := cur + 1
 				if atomic.CompareAndSwapInt32(&adaptiveCurrentParallel, cur, next) {
+					notifyAdaptiveParallelismChanged()
 					return
 				}
 			}
@@ -1976,6 +2250,18 @@ func logRateLimitHeaders(op string, resp *http.Response) {
 	}
 	log.Warn().Str("op", op).Str("X-RateLimit-Remaining", rem).Str("X-RateLimit-Reset", reset).
 		Str("X-Api-Ratelimit-Remaining", apiRem).Msg("rate limit headers")
+}
+
+func readBodyWithLimit(body io.ReadCloser, maxBytes int64, context string) ([]byte, error) {
+	defer body.Close()
+	data, err := io.ReadAll(io.LimitReader(body, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("%s exceeds max size (%d bytes)", context, maxBytes)
+	}
+	return data, nil
 }
 
 func retryAfterDelay(resp *http.Response) (time.Duration, bool) {
@@ -2212,6 +2498,32 @@ func writePrometheusFile(fs FS, promDir, cluster string, blocks []ParsedBlock) e
 	b.WriteString(`# TYPE nutanix_ncc_check_summary_total gauge` + "\n")
 	b.WriteString(`# HELP nutanix_ncc_check_total Total NCC checks for this cluster` + "\n")
 	b.WriteString(`# TYPE nutanix_ncc_check_total gauge` + "\n")
+	b.WriteString(`# HELP nutanix_ncc_check_problem_total Total non-INFO checks (FAIL+WARN+ERR)` + "\n")
+	b.WriteString(`# TYPE nutanix_ncc_check_problem_total gauge` + "\n")
+	b.WriteString(`# HELP nutanix_ncc_check_problem_ratio Ratio of non-INFO checks to total checks` + "\n")
+	b.WriteString(`# TYPE nutanix_ncc_check_problem_ratio gauge` + "\n")
+	b.WriteString(`# HELP nutanix_ncc_run_has_failures 1 when at least one FAIL exists in this run` + "\n")
+	b.WriteString(`# TYPE nutanix_ncc_run_has_failures gauge` + "\n")
+	b.WriteString(`# HELP nutanix_ncc_run_has_warnings 1 when at least one WARN exists in this run` + "\n")
+	b.WriteString(`# TYPE nutanix_ncc_run_has_warnings gauge` + "\n")
+	b.WriteString(`# HELP nutanix_ncc_run_has_errors 1 when at least one ERR exists in this run` + "\n")
+	b.WriteString(`# TYPE nutanix_ncc_run_has_errors gauge` + "\n")
+	b.WriteString(`# HELP nutanix_ncc_run_has_problems 1 when at least one non-INFO check exists` + "\n")
+	b.WriteString(`# TYPE nutanix_ncc_run_has_problems gauge` + "\n")
+	b.WriteString(`# HELP nutanix_ncc_run_health_score Cluster run health score (0-100)` + "\n")
+	b.WriteString(`# TYPE nutanix_ncc_run_health_score gauge` + "\n")
+	b.WriteString(`# HELP nutanix_ncc_check_unique_total Number of unique check names in the run` + "\n")
+	b.WriteString(`# TYPE nutanix_ncc_check_unique_total gauge` + "\n")
+	b.WriteString(`# HELP nutanix_ncc_check_duplicate_total Number of duplicate check rows (total - unique)` + "\n")
+	b.WriteString(`# TYPE nutanix_ncc_check_duplicate_total gauge` + "\n")
+	b.WriteString(`# HELP nutanix_ncc_check_detail_bytes_total Total UTF-8 bytes across check details` + "\n")
+	b.WriteString(`# TYPE nutanix_ncc_check_detail_bytes_total gauge` + "\n")
+	b.WriteString(`# HELP nutanix_ncc_check_detail_bytes_avg Average UTF-8 detail bytes per check row` + "\n")
+	b.WriteString(`# TYPE nutanix_ncc_check_detail_bytes_avg gauge` + "\n")
+	b.WriteString(`# HELP nutanix_ncc_check_severity_ratio Ratio of checks by severity` + "\n")
+	b.WriteString(`# TYPE nutanix_ncc_check_severity_ratio gauge` + "\n")
+	b.WriteString(`# HELP nutanix_ncc_last_run_timestamp_seconds Unix timestamp when metrics were generated` + "\n")
+	b.WriteString(`# TYPE nutanix_ncc_last_run_timestamp_seconds gauge` + "\n")
 
 	// Per-check result metrics.
 	counts := map[string]int{
@@ -2221,6 +2533,8 @@ func writePrometheusFile(fs FS, promDir, cluster string, blocks []ParsedBlock) e
 		"INFO": 0,
 		"PASS": 0, // in case parser ever maps PASS
 	}
+	uniqueChecks := map[string]bool{}
+	detailBytesTotal := 0
 
 	for _, pb := range blocks {
 		sev := pb.Severity
@@ -2231,6 +2545,10 @@ func writePrometheusFile(fs FS, promDir, cluster string, blocks []ParsedBlock) e
 			counts[sev] = 0
 		}
 		counts[sev]++
+		if name := strings.TrimSpace(pb.CheckName); name != "" {
+			uniqueChecks[name] = true
+		}
+		detailBytesTotal += len(pb.DetailRaw)
 
 		// one sample per check
 		b.WriteString(fmt.Sprintf(
@@ -2242,10 +2560,8 @@ func writePrometheusFile(fs FS, promDir, cluster string, blocks []ParsedBlock) e
 	}
 
 	// Summary per severity.
-	for sev, c := range counts {
-		if c == 0 {
-			continue
-		}
+	for _, sev := range []string{"FAIL", "WARN", "ERR", "INFO", "PASS"} {
+		c := counts[sev]
 		b.WriteString(fmt.Sprintf(
 			`nutanix_ncc_check_summary_total{cluster="%s",severity="%s"} %d`+"\n",
 			sanitizeLabel(cluster),
@@ -2255,10 +2571,112 @@ func writePrometheusFile(fs FS, promDir, cluster string, blocks []ParsedBlock) e
 	}
 
 	// Total checks.
+	totalChecks := len(blocks)
 	b.WriteString(fmt.Sprintf(
 		`nutanix_ncc_check_total{cluster="%s"} %d`+"\n",
 		sanitizeLabel(cluster),
-		len(blocks),
+		totalChecks,
+	))
+	problemTotal := counts["FAIL"] + counts["WARN"] + counts["ERR"]
+	problemRatio := 0.0
+	if totalChecks > 0 {
+		problemRatio = float64(problemTotal) / float64(totalChecks)
+	}
+	hasFailures := 0
+	if counts["FAIL"] > 0 {
+		hasFailures = 1
+	}
+	hasWarnings := 0
+	if counts["WARN"] > 0 {
+		hasWarnings = 1
+	}
+	hasErrors := 0
+	if counts["ERR"] > 0 {
+		hasErrors = 1
+	}
+	hasProblems := 0
+	if problemTotal > 0 {
+		hasProblems = 1
+	}
+	uniqueTotal := len(uniqueChecks)
+	duplicateTotal := totalChecks - uniqueTotal
+	detailBytesAvg := 0.0
+	if totalChecks > 0 {
+		detailBytesAvg = float64(detailBytesTotal) / float64(totalChecks)
+	}
+	healthScore := clusterHealthScore(counts["FAIL"], counts["WARN"], counts["ERR"], totalChecks)
+	nowUnix := time.Now().Unix()
+	b.WriteString(fmt.Sprintf(
+		`nutanix_ncc_check_problem_total{cluster="%s"} %d`+"\n",
+		sanitizeLabel(cluster),
+		problemTotal,
+	))
+	b.WriteString(fmt.Sprintf(
+		`nutanix_ncc_check_problem_ratio{cluster="%s"} %.6f`+"\n",
+		sanitizeLabel(cluster),
+		problemRatio,
+	))
+	b.WriteString(fmt.Sprintf(
+		`nutanix_ncc_run_has_failures{cluster="%s"} %d`+"\n",
+		sanitizeLabel(cluster),
+		hasFailures,
+	))
+	b.WriteString(fmt.Sprintf(
+		`nutanix_ncc_run_has_warnings{cluster="%s"} %d`+"\n",
+		sanitizeLabel(cluster),
+		hasWarnings,
+	))
+	b.WriteString(fmt.Sprintf(
+		`nutanix_ncc_run_has_errors{cluster="%s"} %d`+"\n",
+		sanitizeLabel(cluster),
+		hasErrors,
+	))
+	b.WriteString(fmt.Sprintf(
+		`nutanix_ncc_run_has_problems{cluster="%s"} %d`+"\n",
+		sanitizeLabel(cluster),
+		hasProblems,
+	))
+	b.WriteString(fmt.Sprintf(
+		`nutanix_ncc_run_health_score{cluster="%s"} %d`+"\n",
+		sanitizeLabel(cluster),
+		healthScore,
+	))
+	b.WriteString(fmt.Sprintf(
+		`nutanix_ncc_check_unique_total{cluster="%s"} %d`+"\n",
+		sanitizeLabel(cluster),
+		uniqueTotal,
+	))
+	b.WriteString(fmt.Sprintf(
+		`nutanix_ncc_check_duplicate_total{cluster="%s"} %d`+"\n",
+		sanitizeLabel(cluster),
+		duplicateTotal,
+	))
+	b.WriteString(fmt.Sprintf(
+		`nutanix_ncc_check_detail_bytes_total{cluster="%s"} %d`+"\n",
+		sanitizeLabel(cluster),
+		detailBytesTotal,
+	))
+	b.WriteString(fmt.Sprintf(
+		`nutanix_ncc_check_detail_bytes_avg{cluster="%s"} %.6f`+"\n",
+		sanitizeLabel(cluster),
+		detailBytesAvg,
+	))
+	for _, sev := range []string{"FAIL", "WARN", "ERR", "INFO", "PASS"} {
+		ratio := 0.0
+		if totalChecks > 0 {
+			ratio = float64(counts[sev]) / float64(totalChecks)
+		}
+		b.WriteString(fmt.Sprintf(
+			`nutanix_ncc_check_severity_ratio{cluster="%s",severity="%s"} %.6f`+"\n",
+			sanitizeLabel(cluster),
+			sanitizeLabel(sev),
+			ratio,
+		))
+	}
+	b.WriteString(fmt.Sprintf(
+		`nutanix_ncc_last_run_timestamp_seconds{cluster="%s"} %d`+"\n",
+		sanitizeLabel(cluster),
+		nowUnix,
 	))
 
 	return fs.WriteFile(filename, []byte(b.String()), 0644)
@@ -2402,13 +2820,14 @@ func validateParsedAlertsAgainstPluginResults(raw string, blocks []ParsedBlock) 
 }
 
 func parseNCCHeader(path string) (HTMLMeta, error) {
-	b, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return HTMLMeta{}, err
 	}
+	defer f.Close()
 
 	var meta HTMLMeta
-	scanner := bufio.NewScanner(bytes.NewReader(b))
+	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 
@@ -3295,43 +3714,46 @@ func buildChecksSnapshot(results []ClusterResult) ChecksSnapshotJSON {
 		Clusters:  make([]ClusterChecksSnapshot, 0, len(results)),
 	}
 	for _, r := range results {
-		cluster := ClusterChecksSnapshot{Address: r.Cluster}
-		if r.Err != nil {
-			snap.Clusters = append(snap.Clusters, cluster)
-			continue
-		}
-		counts := map[string]int{"FAIL": 0, "WARN": 0, "ERR": 0, "INFO": 0}
-		cluster.Checks = make([]CheckSnapshotEntry, 0, len(r.Blocks))
-		for _, b := range r.Blocks {
-			sev := strings.ToUpper(strings.TrimSpace(b.Severity))
-			if sev == "" {
-				sev = "INFO"
-			}
-			if _, ok := counts[sev]; !ok {
-				sev = "INFO"
-			}
-			counts[sev]++
-			cluster.Checks = append(cluster.Checks, CheckSnapshotEntry{
-				CheckName: strings.TrimSpace(b.CheckName),
-				Severity:  sev,
-			})
-		}
-		sort.Slice(cluster.Checks, func(i, j int) bool {
-			if cluster.Checks[i].CheckName == cluster.Checks[j].CheckName {
-				return cluster.Checks[i].Severity < cluster.Checks[j].Severity
-			}
-			return cluster.Checks[i].CheckName < cluster.Checks[j].CheckName
-		})
-		cluster.FailCount = counts["FAIL"]
-		cluster.WarnCount = counts["WARN"]
-		cluster.ErrCount = counts["ERR"]
-		cluster.InfoCount = counts["INFO"]
-		cluster.ChecksTotal = len(r.Blocks)
-		cluster.HealthScore = clusterHealthScore(cluster.FailCount, cluster.WarnCount, cluster.ErrCount, cluster.ChecksTotal)
-		snap.Clusters = append(snap.Clusters, cluster)
+		snap.Clusters = append(snap.Clusters, buildClusterChecksSnapshotFromResult(r))
 	}
 	sort.Slice(snap.Clusters, func(i, j int) bool { return snap.Clusters[i].Address < snap.Clusters[j].Address })
 	return snap
+}
+
+func buildClusterChecksSnapshotFromResult(r ClusterResult) ClusterChecksSnapshot {
+	cluster := ClusterChecksSnapshot{Address: r.Cluster}
+	if r.Err != nil {
+		return cluster
+	}
+	counts := map[string]int{"FAIL": 0, "WARN": 0, "ERR": 0, "INFO": 0}
+	cluster.Checks = make([]CheckSnapshotEntry, 0, len(r.Blocks))
+	for _, b := range r.Blocks {
+		sev := strings.ToUpper(strings.TrimSpace(b.Severity))
+		if sev == "" {
+			sev = "INFO"
+		}
+		if _, ok := counts[sev]; !ok {
+			sev = "INFO"
+		}
+		counts[sev]++
+		cluster.Checks = append(cluster.Checks, CheckSnapshotEntry{
+			CheckName: strings.TrimSpace(b.CheckName),
+			Severity:  sev,
+		})
+	}
+	sort.Slice(cluster.Checks, func(i, j int) bool {
+		if cluster.Checks[i].CheckName == cluster.Checks[j].CheckName {
+			return cluster.Checks[i].Severity < cluster.Checks[j].Severity
+		}
+		return cluster.Checks[i].CheckName < cluster.Checks[j].CheckName
+	})
+	cluster.FailCount = counts["FAIL"]
+	cluster.WarnCount = counts["WARN"]
+	cluster.ErrCount = counts["ERR"]
+	cluster.InfoCount = counts["INFO"]
+	cluster.ChecksTotal = len(r.Blocks)
+	cluster.HealthScore = clusterHealthScore(cluster.FailCount, cluster.WarnCount, cluster.ErrCount, cluster.ChecksTotal)
+	return cluster
 }
 
 func checksMapForCluster(c ClusterChecksSnapshot) map[string]string {
@@ -3794,6 +4216,16 @@ func writeRunHistorySnapshot(cfg Config) (string, error) {
 	return runDir, nil
 }
 
+// classifyClusterError maps a failed cluster's error chain into one of the
+// canonical buckets surfaced in run-summary.json's `failure_classes`.
+//
+// IMPORTANT: the order matters. Network signals (no-such-host, dial tcp,
+// connection refused) are evaluated BEFORE the "retry circuit breaker opened"
+// match, because the retry circuit breaker opens on *any* repeated transport
+// failure — including DNS resolution failures. If we matched the breaker first
+// we would misclassify a DNS lookup failure as `rate_limit`, falsely
+// implicating max-parallel/throttling when the real fix is "configure DNS or
+// use an IP address".
 func classifyClusterError(err error) string {
 	if err == nil {
 		return ""
@@ -3804,11 +4236,36 @@ func classifyClusterError(err error) string {
 		return "timeout"
 	case strings.Contains(msg, "http 401"), strings.Contains(msg, "http 403"), strings.Contains(msg, "unauthorized"), strings.Contains(msg, "forbidden"), strings.Contains(msg, "authentication"):
 		return "auth"
-	case strings.Contains(msg, "retry circuit breaker opened"), strings.Contains(msg, "http 429"), strings.Contains(msg, "rate limit"):
+	// Network-layer signals first so DNS/refused/unreachable errors are not
+	// swallowed by a downstream circuit-breaker match below.
+	case strings.Contains(msg, "no such host"),
+		strings.Contains(msg, "connection refused"),
+		strings.Contains(msg, "no route to host"),
+		strings.Contains(msg, "network is unreachable"),
+		strings.Contains(msg, "host is down"),
+		strings.Contains(msg, "tls"),
+		strings.Contains(msg, "x509"):
+		return "network"
+	// Only classify as rate-limit when there's a *real* rate-limit signal —
+	// HTTP 429, an explicit "rate limit" phrase, "too many requests", or a
+	// Retry-After header. A circuit breaker that opened because the TCP dial
+	// kept failing is NOT a rate-limit problem.
+	case strings.Contains(msg, "http 429"),
+		strings.Contains(msg, "too many requests"),
+		strings.Contains(msg, "rate limit"),
+		strings.Contains(msg, "rate-limit"),
+		strings.Contains(msg, "retry-after"):
 		return "rate_limit"
 	case strings.Contains(msg, "parse filtered"), strings.Contains(msg, "parse summary"), strings.Contains(msg, "parser"):
 		return "parser"
-	case strings.Contains(msg, "transport error"), strings.Contains(msg, "connection refused"), strings.Contains(msg, "no such host"), strings.Contains(msg, "dial tcp"), strings.Contains(msg, "tls"):
+	// Generic transport bucket: circuit breakers triggered by repeated
+	// transport failures (without an explicit rate-limit signal) land here.
+	case strings.Contains(msg, "retry circuit breaker opened"),
+		strings.Contains(msg, "transport error"),
+		strings.Contains(msg, "dial tcp"),
+		strings.Contains(msg, "i/o timeout"),
+		strings.Contains(msg, "broken pipe"),
+		strings.Contains(msg, "connection reset"):
 		return "network"
 	case strings.Contains(msg, "http 4"), strings.Contains(msg, "http 5"), strings.Contains(msg, "start checks failed"), strings.Contains(msg, "get summary failed"), strings.Contains(msg, "poll failed"):
 		return "api"
@@ -3873,6 +4330,61 @@ func failureClassCounts(results []ClusterResult) map[string]int {
 		counts[class]++
 	}
 	return counts
+}
+
+func newFailureClassCounts() map[string]int {
+	return map[string]int{
+		"timeout":    0,
+		"auth":       0,
+		"network":    0,
+		"api":        0,
+		"parser":     0,
+		"rate_limit": 0,
+		"unknown":    0,
+	}
+}
+
+func incrementFailureClassCount(counts map[string]int, r ClusterResult) {
+	if r.Err == nil {
+		return
+	}
+	class := strings.TrimSpace(r.ErrorClass)
+	if class == "" {
+		class = classifyClusterError(r.Err)
+	}
+	if _, ok := counts[class]; !ok {
+		class = "unknown"
+	}
+	counts[class]++
+}
+
+func printFailureResolutionHints(counts map[string]int) {
+	if counts == nil {
+		return
+	}
+	hints := []string{}
+	if counts["auth"] > 0 {
+		hints = append(hints, "Auth failures detected: verify username/password or secret:// source and Prism account lock state. Command: ncc-orchestrator preflight-check --config <config.yaml>")
+	}
+	if counts["timeout"] > 0 || counts["network"] > 0 {
+		hints = append(hints, "Timeout/network failures detected: reduce --max-parallel, increase --timeout/--request-timeout, verify routing/firewall. Command: ncc-orchestrator --auto --automation-level full-auto --config <config.yaml>")
+	}
+	if counts["rate_limit"] > 0 {
+		hints = append(hints, "Rate-limit failures detected: lower --max-parallel and tune retry/backoff settings. Command: ncc-orchestrator --max-parallel 4 --retry-max-attempts 8 --config <config.yaml>")
+	}
+	if counts["api"] > 0 {
+		hints = append(hints, "API failures detected: verify API version flags and Prism service health. Command: ncc-orchestrator discover-clusters --discover-api-version v4 --prism-central-url <pc-url>")
+	}
+	if counts["parser"] > 0 {
+		hints = append(hints, "Parser failures detected: inspect raw NCC logs under output-dir-logs for unexpected payload formats. Command: ncc-orchestrator preflight-check --config <config.yaml>")
+	}
+	if len(hints) == 0 {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "Failure resolution recommendations:")
+	for _, h := range hints {
+		fmt.Fprintf(os.Stderr, "- %s\n", h)
+	}
 }
 
 func generateJSON(fs FS, blocks []ParsedBlock, filename string, meta HTMLMeta) error {
@@ -4039,13 +4551,19 @@ type ExcludedAlert struct {
 	MatchValue string `json:"match_value"`
 }
 
-func filterBlocksByTitle(blocks []ParsedBlock, excludedTitles []string, matchMode string) ([]ParsedBlock, []ExcludedAlert, error) {
-	if len(excludedTitles) == 0 {
-		return blocks, nil, nil
-	}
+type excludeTitleMatcher struct {
+	mode          string
+	cleanedTitles []string
+	lowerTitles   []string
+	regexPatterns []*regexp.Regexp
+}
+
+var excludeTitleMatcherCache sync.Map
+
+func buildExcludeTitleMatcher(excludedTitles []string, matchMode string) (*excludeTitleMatcher, error) {
 	mode, err := normalizeExcludeAlertMatchMode(matchMode)
 	if err != nil {
-		return blocks, nil, err
+		return nil, err
 	}
 	cleanedTitles := make([]string, 0, len(excludedTitles))
 	for _, title := range excludedTitles {
@@ -4056,52 +4574,82 @@ func filterBlocksByTitle(blocks []ParsedBlock, excludedTitles []string, matchMod
 		cleanedTitles = append(cleanedTitles, t)
 	}
 	if len(cleanedTitles) == 0 {
-		return blocks, nil, nil
+		return nil, nil
 	}
-	regexPatterns := make([]*regexp.Regexp, 0, len(cleanedTitles))
+	cacheKey := mode + "\x00" + strings.Join(cleanedTitles, "\x00")
+	if cached, ok := excludeTitleMatcherCache.Load(cacheKey); ok {
+		if m, ok := cached.(*excludeTitleMatcher); ok {
+			return m, nil
+		}
+	}
+	m := &excludeTitleMatcher{
+		mode:          mode,
+		cleanedTitles: cleanedTitles,
+		lowerTitles:   make([]string, 0, len(cleanedTitles)),
+	}
+	for _, title := range cleanedTitles {
+		m.lowerTitles = append(m.lowerTitles, strings.ToLower(title))
+	}
 	if mode == "regex" {
+		m.regexPatterns = make([]*regexp.Regexp, 0, len(cleanedTitles))
 		for _, pattern := range cleanedTitles {
 			re, err := regexp.Compile(pattern)
 			if err != nil {
-				return blocks, nil, fmt.Errorf("exclude-alert-titles regex %q: %w", pattern, err)
+				return nil, fmt.Errorf("exclude-alert-titles regex %q: %w", pattern, err)
 			}
-			regexPatterns = append(regexPatterns, re)
+			m.regexPatterns = append(m.regexPatterns, re)
 		}
 	}
-	match := func(checkName string) (bool, string) {
-		checkLower := strings.ToLower(strings.TrimSpace(checkName))
-		switch mode {
-		case "exact":
-			for _, title := range cleanedTitles {
-				if checkLower == strings.ToLower(title) {
-					return true, title
-				}
-			}
-		case "contains":
-			for _, title := range cleanedTitles {
-				if strings.Contains(checkLower, strings.ToLower(title)) {
-					return true, title
-				}
-			}
-		case "regex":
-			for i, re := range regexPatterns {
-				if re.MatchString(checkName) {
-					return true, cleanedTitles[i]
-				}
+	excludeTitleMatcherCache.Store(cacheKey, m)
+	return m, nil
+}
+
+func (m *excludeTitleMatcher) match(checkName string) (bool, string) {
+	if m == nil {
+		return false, ""
+	}
+	checkLower := strings.ToLower(strings.TrimSpace(checkName))
+	switch m.mode {
+	case "exact":
+		for i, titleLower := range m.lowerTitles {
+			if checkLower == titleLower {
+				return true, m.cleanedTitles[i]
 			}
 		}
-		return false, ""
+	case "contains":
+		for i, titleLower := range m.lowerTitles {
+			if strings.Contains(checkLower, titleLower) {
+				return true, m.cleanedTitles[i]
+			}
+		}
+	case "regex":
+		for i, re := range m.regexPatterns {
+			if re.MatchString(checkName) {
+				return true, m.cleanedTitles[i]
+			}
+		}
+	}
+	return false, ""
+}
+
+func filterBlocksByTitle(blocks []ParsedBlock, excludedTitles []string, matchMode string) ([]ParsedBlock, []ExcludedAlert, error) {
+	matcher, err := buildExcludeTitleMatcher(excludedTitles, matchMode)
+	if err != nil {
+		return blocks, nil, err
+	}
+	if matcher == nil {
+		return blocks, nil, nil
 	}
 
 	filtered := make([]ParsedBlock, 0, len(blocks))
 	excluded := make([]ExcludedAlert, 0)
 	for _, b := range blocks {
-		if ok, matchedBy := match(b.CheckName); ok {
+		if ok, matchedBy := matcher.match(b.CheckName); ok {
 			excluded = append(excluded, ExcludedAlert{
 				Severity:   b.Severity,
 				CheckName:  b.CheckName,
 				Detail:     b.DetailRaw,
-				MatchMode:  mode,
+				MatchMode:  matcher.mode,
 				MatchValue: matchedBy,
 			})
 			continue
@@ -5094,6 +5642,8 @@ button, .cluster-display, .cluster-toggle {
 	<script>
 
 	const AGG = {{.JSON}};
+	let AGG_ROWS = AGG;
+	const AGG_DATA_URL = "{{.AggDataURL}}";
 	var CLUSTER_LINKS = {{.ClusterLinksJSON}};
 	const DIFF_FLAGS = {{.DiffFlagsJSON}};
 	const FLAKY_KEYS = {{.FlakyKeysJSON}};
@@ -5125,7 +5675,16 @@ button, .cluster-display, .cluster-toggle {
 	const sevRank = { FAIL: 1, WARN: 2, ERR: 3, INFO: 4 };
 	let selIndex = -1;
 
-function init() {
+async function init() {
+  if (AGG_ROWS.length === 0 && AGG_DATA_URL) {
+    try {
+      const resp = await fetch(AGG_DATA_URL, { cache: "no-store" });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      AGG_ROWS = await resp.json();
+    } catch (e) {
+      console.error("failed to load aggregated data sidecar", e);
+    }
+  }
   initClusters();
   renderMetadata();
   renderHealthWidget();
@@ -5213,7 +5772,7 @@ function renderHealthWidget() {
   // Keep health widget aligned with currently selected cluster filters.
   if (state && state.filterClusters) {
     var selectedAddresses = new Set();
-    (AGG || []).forEach(function(r) {
+    (AGG_ROWS || []).forEach(function(r) {
       var clusterLabel = displayClusterName(r);
       if (state.filterClusters.has(clusterLabel)) {
         selectedAddresses.add((r.cluster || "").trim());
@@ -5300,7 +5859,7 @@ function displayClusterName(r) {
 
 function getSelectedClusterAddresses() {
   var selectedAddresses = new Set();
-  (AGG || []).forEach(function(r) {
+  (AGG_ROWS || []).forEach(function(r) {
     var label = displayClusterName(r);
     if (state.filterClusters.has(label)) {
       selectedAddresses.add((r.cluster || "").trim());
@@ -5310,13 +5869,13 @@ function getSelectedClusterAddresses() {
 }
 
 function getClusterFilteredRows() {
-  return (AGG || []).filter(function(r) {
+  return (AGG_ROWS || []).filter(function(r) {
     return state.filterClusters.has(displayClusterName(r));
   });
 }
 
 function initClusters() {
-  const clusters = Array.from(new Set(AGG.map(function(r) { 
+  const clusters = Array.from(new Set(AGG_ROWS.map(function(r) { 
     return displayClusterName(r);
   }))).sort();
   console.log("Found clusters:", clusters); 
@@ -5570,7 +6129,7 @@ function renderClusterList() {
 	
 function filterData() {
   const q = parseSearchQuery(state.search);
-  return AGG.filter(r => {
+  return AGG_ROWS.filter(r => {
     if (!state.filterSev.has(r.severity)) return false;
     const clusterId = displayClusterName(r);
     if (!state.filterClusters.has(clusterId)) return false;
@@ -6179,9 +6738,19 @@ function initTooltips() {
 		})
 	}
 
+	const maxEmbeddedAggRows = 20000
+	aggDataURL := ""
 	jsonBytes, err := json.Marshal(aggRows)
 	if err != nil {
 		return fmt.Errorf("marshal agg json: %w", err)
+	}
+	if len(aggRows) > maxEmbeddedAggRows {
+		sidecarPath := filepath.Join(outDir, "aggregated-data.json")
+		if err := fs.WriteFile(sidecarPath, jsonBytes, 0644); err != nil {
+			return fmt.Errorf("write aggregated data sidecar: %w", err)
+		}
+		aggDataURL = filepath.Base(sidecarPath)
+		jsonBytes = []byte("[]")
 	}
 
 	clusterLinksJSON, _ := json.Marshal(perCluster)
@@ -6331,6 +6900,18 @@ function initTooltips() {
 		"quiet_hours":         strings.TrimSpace(cfg.QuietHours),
 		"maintenance_windows": strings.Join(cfg.MaintenanceWindows, ","),
 	}
+	if hn, err := os.Hostname(); err == nil && strings.TrimSpace(hn) != "" {
+		reportMeta["hostname"] = hn
+	}
+	schedulerSource := strings.TrimSpace(os.Getenv("NCC_SCHEDULER_SOURCE"))
+	if schedulerSource == "" {
+		schedulerSource = "manual"
+	}
+	reportMeta["scheduler_source"] = schedulerSource
+	if aggDataURL != "" {
+		reportMeta["aggregated_data_sidecar"] = aggDataURL
+		reportMeta["aggregated_rows"] = strconv.Itoa(len(aggRows))
+	}
 	if bi, ok := debug.ReadBuildInfo(); ok {
 		for _, s := range bi.Settings {
 			if s.Key == "vcs.revision" && s.Value != "" {
@@ -6346,6 +6927,7 @@ function initTooltips() {
 
 	data := struct {
 		JSON                 template.JS
+		AggDataURL           string
 		ClusterLinksJSON     template.JS
 		DiffFlagsJSON        template.JS
 		FlakyKeysJSON        template.JS
@@ -6361,6 +6943,7 @@ function initTooltips() {
 		NCCVersion           string
 	}{
 		JSON:                 template.JS(jsonBytes),
+		AggDataURL:           aggDataURL,
 		ClusterLinksJSON:     template.JS(clusterLinksJSON),
 		DiffFlagsJSON:        template.JS(diffFlagsJSON),
 		FlakyKeysJSON:        template.JS(flakyKeysJSON),
@@ -6406,11 +6989,10 @@ func doWithRetry(ctx context.Context, client HTTPClient, req *http.Request, cfg 
 	var origBody []byte
 	var hasBody bool
 	if req.Body != nil {
-		b, err := io.ReadAll(req.Body)
+		b, err := readBodyWithLimit(req.Body, maxRetryRequestBodyBytes, "request body")
 		if err != nil {
 			return nil, nil, err
 		}
-		_ = req.Body.Close()
 		origBody = b
 		hasBody = true
 		req.Body = io.NopCloser(bytes.NewReader(origBody))
@@ -6448,9 +7030,8 @@ func doWithRetry(ctx context.Context, client HTTPClient, req *http.Request, cfg 
 
 		func() {
 			defer cancel()
-			defer resp.Body.Close()
 			var err error
-			body, err = io.ReadAll(resp.Body)
+			body, err = readBodyWithLimit(resp.Body, maxRetryResponseBodyBytes, "response body")
 			if err != nil {
 				lastErr = err
 			} else {
@@ -7129,22 +7710,34 @@ SUMMARY:
 		counts[sev]++
 	}
 	// Write Prometheus file and output formats (HTML/CSV/JSON) before notifications so we can attach HTML
-	if err := writePrometheusFile(fs, cfg.PromDir, cluster, blocks); err != nil {
-		l.Error().Err(err).Msg("write Prometheus .prom failed")
+	if cfg.PromEnabled {
+		if err := writePrometheusFile(fs, cfg.PromDir, cluster, blocks); err != nil {
+			l.Error().Err(err).Msg("write Prometheus .prom failed")
+		} else {
+			log.Info().Str("cluster", cluster).Str("prom_dir", cfg.PromDir).Msg("Prometheus .prom written")
+		}
 	} else {
-		log.Info().Str("cluster", cluster).Str("prom_dir", cfg.PromDir).Msg("Prometheus .prom written")
+		log.Debug().Str("cluster", cluster).Msg("Prometheus metrics export disabled")
 	}
 
 	var htmlPathForNotify string
 	base := filteredPath
+	rawPath := filepath.Join(cfg.OutputDirLogs, fmt.Sprintf("%s.log", cluster))
+	var meta HTMLMeta
+	metaLoaded := false
+	loadMeta := func() HTMLMeta {
+		if !metaLoaded {
+			meta, _ = parseNCCHeader(rawPath) // best effort
+			metaLoaded = true
+		}
+		return meta
+	}
 	for _, f := range cfg.OutputFormats {
 		switch strings.ToLower(strings.TrimSpace(f)) {
 		case "html":
 			htmlFile := base + ".html"
-			rawPath := filepath.Join(cfg.OutputDirLogs, fmt.Sprintf("%s.log", cluster))
-			meta, _ := parseNCCHeader(rawPath) // ignore error if file missing
 			rows := rowsFromBlocks(blocks)
-			if err := generateHTML(fs, rows, htmlFile, meta); err != nil {
+			if err := generateHTML(fs, rows, htmlFile, loadMeta()); err != nil {
 				l.Error().Err(err).Str("file", htmlFile).Msg("write HTML failed")
 				return ClusterRunOutput{}, err
 			}
@@ -7159,18 +7752,14 @@ SUMMARY:
 			l.Info().Str("file", csvFile).Msg("CSV generated")
 		case "json":
 			jsonFile := base + ".json"
-			rawPath := filepath.Join(cfg.OutputDirLogs, fmt.Sprintf("%s.log", cluster))
-			meta, _ := parseNCCHeader(rawPath) // ignore error if file missing
-			if err := generateJSON(fs, blocks, jsonFile, meta); err != nil {
+			if err := generateJSON(fs, blocks, jsonFile, loadMeta()); err != nil {
 				l.Error().Err(err).Str("file", jsonFile).Msg("write JSON failed")
 				return ClusterRunOutput{}, err
 			}
 			l.Info().Str("file", jsonFile).Msg("JSON generated")
 		case "markdown":
 			mdFile := base + ".md"
-			rawPath := filepath.Join(cfg.OutputDirLogs, fmt.Sprintf("%s.log", cluster))
-			meta, _ := parseNCCHeader(rawPath)
-			if err := generateMarkdown(fs, blocks, mdFile, meta); err != nil {
+			if err := generateMarkdown(fs, blocks, mdFile, loadMeta()); err != nil {
 				l.Error().Err(err).Str("file", mdFile).Msg("write Markdown failed")
 				return ClusterRunOutput{}, err
 			}
@@ -7280,10 +7869,13 @@ func promptPasswordIfEmpty(p string, Username string) (string, error) {
 	if p != "" {
 		return p, nil
 	}
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return "", errors.New("password is empty and stdin is not interactive; set password in config/clusters-file or export NCC_PASSWORD")
+	}
 	fmt.Printf("Prism Password (%s): ", Username)
 	bytePw, err := term.ReadPassword(int(os.Stdin.Fd()))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("read password from terminal: %w", err)
 	}
 	return strings.TrimSpace(string(bytePw)), nil
 }
@@ -7368,7 +7960,7 @@ var (
 func init() {
 	// Defaults
 	if Version == "" {
-		Version = "1.1.0"
+		Version = "2.0.0"
 	}
 	if BuildDate == "" {
 		BuildDate = "unknown"
@@ -7419,6 +8011,7 @@ type updateOptions struct {
 	AllowMajorUpgrade bool
 	Repo              string
 	BinaryURL         string
+	BinarySHA256      string
 	TargetVersion     string
 }
 
@@ -7468,6 +8061,20 @@ func normalizeGitHubRepo(repo string) (string, error) {
 func isArchiveAssetURL(raw string) bool {
 	u := strings.ToLower(strings.TrimSpace(raw))
 	return strings.HasSuffix(u, ".tar.gz") || strings.HasSuffix(u, ".zip")
+}
+
+func normalizeSHA256Hex(raw string) (string, error) {
+	sum := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(raw, "sha256:")))
+	if len(sum) != 64 {
+		return "", fmt.Errorf("sha256 must be 64 hex characters, got %d", len(sum))
+	}
+	for _, r := range sum {
+		if (r >= 'a' && r <= 'f') || (r >= '0' && r <= '9') {
+			continue
+		}
+		return "", fmt.Errorf("sha256 contains invalid character %q", r)
+	}
+	return sum, nil
 }
 
 func printV1ToV2MigrationSteps() {
@@ -7637,14 +8244,67 @@ type v2BootstrapOptions struct {
 }
 
 type v2StartOptions struct {
-	InstallDir      string
+	InstallDir                  string
+	ConfigPath                  string
+	OutputDir                   string
+	LogDir                      string
+	OrchestratorBin             string
+	APIListen                   string
+	UIListen                    string
+	APIAdvertiseURL             string
+	UIAdvertiseURL              string
+	UIBackendURL                string
+	APICORSOrigins              string
+	UIAllowedOrigins            string
+	TokenFile                   string
+	APIAuthMode                 string
+	APISessionTTL               time.Duration
+	APISessionSecret            string
+	APISessionSecretFile        string
+	APIRunTimeout               time.Duration
+	APIRateLimitPerMinute       int
+	APIReadTimeout              time.Duration
+	APIWriteTimeout             time.Duration
+	APIIdleTimeout              time.Duration
+	APITLSCertFile              string
+	APITLSKeyFile               string
+	APITLSClientCAFile          string
+	UITLSCertFile               string
+	UITLSKeyFile                string
+	UIBackendCAFile             string
+	UIBackendClientCertFile     string
+	UIBackendClientKeyFile      string
+	UIBackendInsecureSkipVerify bool
+	WaitReady                   bool
+	ReadyTimeout                time.Duration
+	Detach                      bool
+	APIOnly                     bool
+	APILogFile                  string
+	UILogFile                   string
+	APIPIDFile                  string
+	UIPIDFile                   string
+	SelfHeal                    bool
+	SelfHealMaxRestarts         int
+	SelfHealWindow              time.Duration
+}
+
+type v2StopOptions struct {
+	InstallDir  string
+	APIPIDFile  string
+	UIPIDFile   string
+	Force       bool
+	StopTimeout time.Duration
+}
+
+type uninstallOptions struct {
 	ConfigPath      string
-	OutputDir       string
-	LogDir          string
-	OrchestratorBin string
-	APIListen       string
-	UIListen        string
-	TokenFile       string
+	InstallDir      string
+	TaskName        string
+	Force           bool
+	DryRun          bool
+	RemoveLocal     bool
+	RemoveSchedule  bool
+	RemoveV2Runtime bool
 }
 
 func findAsset(rel githubRelease, pred func(name string) bool) (githubAsset, bool) {
@@ -7672,6 +8332,131 @@ func binaryPathInInstallDir(installDir, base string) string {
 	return path
 }
 
+func existingFile(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && !st.IsDir()
+}
+
+func existingDir(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.IsDir()
+}
+
+func v2BinaryNameCandidates(base string) []string {
+	names := []string{
+		base,
+		fmt.Sprintf("%s-%s-%s", base, runtime.GOOS, runtime.GOARCH),
+	}
+	if runtime.GOOS == "windows" {
+		withExe := make([]string, 0, len(names)*2)
+		for _, n := range names {
+			withExe = append(withExe, n, n+".exe")
+		}
+		return withExe
+	}
+	return names
+}
+
+func firstExistingBinary(searchDirs []string, base string) string {
+	candidates := v2BinaryNameCandidates(base)
+	for _, dir := range searchDirs {
+		d := strings.TrimSpace(dir)
+		if d == "" {
+			continue
+		}
+		for _, name := range candidates {
+			p := filepath.Join(d, name)
+			if existingFile(p) {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
+func resolveV2RuntimeLayout(installDir string) (string, string, string, string) {
+	installDir = strings.TrimSpace(installDir)
+	if installDir == "" {
+		installDir = ".ncc-v2"
+	}
+	cwd, _ := os.Getwd()
+	exeDir := ""
+	if exe, err := os.Executable(); err == nil {
+		exeDir = filepath.Dir(exe)
+	}
+
+	// Preferred layout from v2-bootstrap: <install>/bin/* + <install>/frontend-dist
+	apiBoot := binaryPathInInstallDir(installDir, "ncc-api-server")
+	uiBoot := binaryPathInInstallDir(installDir, "ncc-ui-server")
+	frontBoot := filepath.Join(installDir, "frontend-dist")
+	if existingFile(apiBoot) && existingFile(uiBoot) && existingDir(frontBoot) {
+		return apiBoot, uiBoot, frontBoot, "install-dir"
+	}
+
+	// Fallback for release asset folders (flat binaries + frontend-dist).
+	searchDirs := []string{installDir, cwd, exeDir}
+	apiFlat := firstExistingBinary(searchDirs, "ncc-api-server")
+	uiFlat := firstExistingBinary(searchDirs, "ncc-ui-server")
+	if apiFlat != "" && uiFlat != "" {
+		for _, d := range []string{
+			filepath.Join(installDir, "frontend-dist"),
+			filepath.Join(cwd, "frontend-dist"),
+			filepath.Join(exeDir, "frontend-dist"),
+			filepath.Join(cwd, "frontend", "dist"),
+			filepath.Join(exeDir, "frontend", "dist"),
+		} {
+			if existingDir(d) {
+				return apiFlat, uiFlat, d, "local-release-assets"
+			}
+		}
+	}
+	return "", "", "", ""
+}
+
+func resolveV2APIBinary(installDir string) (string, string) {
+	installDir = strings.TrimSpace(installDir)
+	if installDir == "" {
+		installDir = ".ncc-v2"
+	}
+	apiBoot := binaryPathInInstallDir(installDir, "ncc-api-server")
+	if existingFile(apiBoot) {
+		return apiBoot, "install-dir"
+	}
+	cwd, _ := os.Getwd()
+	exeDir := ""
+	if exe, err := os.Executable(); err == nil {
+		exeDir = filepath.Dir(exe)
+	}
+	apiFlat := firstExistingBinary([]string{installDir, cwd, exeDir}, "ncc-api-server")
+	if apiFlat != "" {
+		return apiFlat, "local-release-assets"
+	}
+	return "", ""
+}
+
+func resolveV2OrchestratorBin(preferred string) string {
+	clean := strings.TrimSpace(preferred)
+	if clean != "" && existingFile(clean) {
+		return clean
+	}
+	cwd, _ := os.Getwd()
+	exePath, _ := os.Executable()
+	exeDir := filepath.Dir(exePath)
+	for _, p := range []string{
+		clean,
+		filepath.Join(cwd, "ncc-orchestrator"),
+		filepath.Join(cwd, fmt.Sprintf("ncc-orchestrator-%s-%s", runtime.GOOS, runtime.GOARCH)),
+		filepath.Join(exeDir, "ncc-orchestrator"),
+		filepath.Join(exeDir, fmt.Sprintf("ncc-orchestrator-%s-%s", runtime.GOOS, runtime.GOARCH)),
+		exePath,
+	} {
+		if strings.TrimSpace(p) != "" && existingFile(p) {
+			return p
+		}
+	}
+	return clean
+}
+
 func localHTTPURLFromListen(listenAddr, defaultPort string) string {
 	addr := strings.TrimSpace(listenAddr)
 	if addr == "" {
@@ -7685,6 +8470,27 @@ func localHTTPURLFromListen(listenAddr, defaultPort string) string {
 		return "http://localhost:" + port
 	}
 	return "http://" + addr
+}
+
+func mergeAllowedOriginsCSV(baseOrigin string, extraCSV string) string {
+	seen := map[string]bool{}
+	out := make([]string, 0, 4)
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return
+		}
+		if seen[v] {
+			return
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	add(baseOrigin)
+	for _, part := range strings.Split(extraCSV, ",") {
+		add(part)
+	}
+	return strings.Join(out, ",")
 }
 
 func waitForFile(path string, timeout time.Duration) bool {
@@ -7709,22 +8515,515 @@ func signalProcessStop(cmd *exec.Cmd) {
 	_ = cmd.Process.Signal(syscall.SIGTERM)
 }
 
+func readPIDFromFile(path string) (int, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	raw := strings.TrimSpace(string(b))
+	if raw == "" {
+		return 0, fmt.Errorf("pid file %s is empty", path)
+	}
+	pid, err := strconv.Atoi(raw)
+	if err != nil || pid <= 0 {
+		return 0, fmt.Errorf("invalid pid %q in %s", raw, path)
+	}
+	return pid, nil
+}
+
+func signalPIDStop(pid int, force bool) error {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	if runtime.GOOS == "windows" || force {
+		return proc.Kill()
+	}
+	return proc.Signal(syscall.SIGTERM)
+}
+
+func readTrimmedFile(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(b)), nil
+}
+
+func waitForHTTPReady(url string, timeout time.Duration) error {
+	if strings.TrimSpace(url) == "" {
+		return nil
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := client.Do(req)
+		if err == nil && resp != nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode >= 200 && resp.StatusCode < 500 {
+				return nil
+			}
+			lastErr = fmt.Errorf("status %d", resp.StatusCode)
+		} else {
+			lastErr = err
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if lastErr == nil {
+		lastErr = errors.New("timed out")
+	}
+	return fmt.Errorf("endpoint %s not ready: %w", url, lastErr)
+}
+
+func isExecutableFile(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	return info.Mode()&0o111 != 0
+}
+
+func canBindListenAddress(listenAddr string) error {
+	addr := strings.TrimSpace(listenAddr)
+	if addr == "" {
+		return errors.New("empty listen address")
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	_ = ln.Close()
+	return nil
+}
+
+func runV2Check(opts v2StartOptions) error {
+	installDir := strings.TrimSpace(opts.InstallDir)
+	if installDir == "" {
+		installDir = ".ncc-v2"
+	}
+	if absInstallDir, err := filepath.Abs(installDir); err == nil {
+		installDir = absInstallDir
+	}
+	if absConfigPath, err := filepath.Abs(opts.ConfigPath); err == nil {
+		opts.ConfigPath = absConfigPath
+	}
+	if absOutputDir, err := filepath.Abs(opts.OutputDir); err == nil {
+		opts.OutputDir = absOutputDir
+	}
+	if absLogDir, err := filepath.Abs(opts.LogDir); err == nil {
+		opts.LogDir = absLogDir
+	}
+	if absTokenPath, err := filepath.Abs(opts.TokenFile); err == nil {
+		opts.TokenFile = absTokenPath
+	}
+	opts.OrchestratorBin = resolveV2OrchestratorBin(opts.OrchestratorBin)
+	apiBin, uiBin, frontDir, _ := resolveV2RuntimeLayout(installDir)
+	failures := make([]string, 0)
+	warnings := make([]string, 0)
+	if !isExecutableFile(opts.OrchestratorBin) {
+		failures = append(failures, fmt.Sprintf("orchestrator-bin not executable: %s", opts.OrchestratorBin))
+	}
+	if apiBin == "" || !isExecutableFile(apiBin) {
+		failures = append(failures, fmt.Sprintf("api-server binary not executable under install dir: %s", installDir))
+	}
+	if !opts.APIOnly {
+		if uiBin == "" || !isExecutableFile(uiBin) {
+			failures = append(failures, fmt.Sprintf("ui-server binary not executable under install dir: %s", installDir))
+		}
+		if strings.TrimSpace(frontDir) == "" || !existingDir(frontDir) {
+			failures = append(failures, fmt.Sprintf("frontend-dist missing under install dir: %s", installDir))
+		}
+	}
+	if _, err := os.Stat(opts.ConfigPath); err != nil {
+		failures = append(failures, fmt.Sprintf("config-path not readable: %s (%v)", opts.ConfigPath, err))
+	}
+	if err := os.MkdirAll(opts.OutputDir, 0o755); err != nil {
+		failures = append(failures, fmt.Sprintf("output-dir not writable: %s (%v)", opts.OutputDir, err))
+	}
+	if err := os.MkdirAll(opts.LogDir, 0o755); err != nil {
+		failures = append(failures, fmt.Sprintf("log-dir not writable: %s (%v)", opts.LogDir, err))
+	}
+	if err := os.MkdirAll(filepath.Dir(opts.TokenFile), 0o755); err != nil {
+		failures = append(failures, fmt.Sprintf("token-file parent dir not writable: %s (%v)", filepath.Dir(opts.TokenFile), err))
+	}
+	if err := canBindListenAddress(opts.APIListen); err != nil {
+		failures = append(failures, fmt.Sprintf("api-listen bind failed (%s): %v", opts.APIListen, err))
+	}
+	if !opts.APIOnly {
+		if err := canBindListenAddress(opts.UIListen); err != nil {
+			failures = append(failures, fmt.Sprintf("ui-listen bind failed (%s): %v", opts.UIListen, err))
+		}
+	}
+	if cfg, err := loadConfigForValidation(opts.ConfigPath); err == nil {
+		pwd := strings.TrimSpace(cfg.Password)
+		if pwd != "" && !strings.HasPrefix(strings.ToLower(pwd), "secret://") {
+			warnings = append(warnings, "config contains plaintext password; prefer NCC_PASSWORD env or secret:// source")
+		}
+	}
+	fmt.Println("v2-check results")
+	fmt.Println("---------------")
+	fmt.Printf("install-dir: %s\n", installDir)
+	fmt.Printf("config-path: %s\n", opts.ConfigPath)
+	fmt.Printf("output-dir:  %s\n", opts.OutputDir)
+	fmt.Printf("log-dir:     %s\n", opts.LogDir)
+	fmt.Printf("token-file:  %s\n", opts.TokenFile)
+	if len(warnings) > 0 {
+		fmt.Println("warnings:")
+		for _, w := range warnings {
+			fmt.Printf("- %s\n", w)
+		}
+	}
+	if len(failures) > 0 {
+		fmt.Println("failures:")
+		for _, f := range failures {
+			fmt.Printf("- %s\n", f)
+		}
+		return fmt.Errorf("v2-check failed (%d issues)", len(failures))
+	}
+	fmt.Println("status: ok (all checks passed)")
+	return nil
+}
+
+func waitForPIDExit(pid int, timeout time.Duration) bool {
+	if pid <= 0 {
+		return true
+	}
+	if runtime.GOOS == "windows" {
+		time.Sleep(timeout)
+		return false
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		proc, err := os.FindProcess(pid)
+		if err != nil {
+			return true
+		}
+		if err := proc.Signal(syscall.Signal(0)); err != nil {
+			return true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return false
+}
+
+func startSelfHealSupervisor(serviceName string, bin string, args []string, pidPath string, logPath string, maxRestarts int, window time.Duration) (int, error) {
+	if runtime.GOOS == "windows" {
+		return 0, fmt.Errorf("self-heal supervisor is currently unsupported on windows")
+	}
+	if maxRestarts <= 0 {
+		maxRestarts = 3
+	}
+	if window <= 0 {
+		window = 5 * time.Minute
+	}
+	windowSeconds := int(window.Seconds())
+	if windowSeconds < 30 {
+		windowSeconds = 30
+	}
+	quotedArgs := make([]string, 0, len(args))
+	for _, a := range args {
+		quotedArgs = append(quotedArgs, shellQuote(a))
+	}
+	cmdLine := shellQuote(bin)
+	if len(quotedArgs) > 0 {
+		cmdLine += " " + strings.Join(quotedArgs, " ")
+	}
+	script := strings.Join([]string{
+		"set -eu",
+		"MAX_RESTARTS=" + strconv.Itoa(maxRestarts),
+		"WINDOW_SECONDS=" + strconv.Itoa(windowSeconds),
+		"PID_FILE=" + shellQuote(pidPath),
+		"LOG_FILE=" + shellQuote(logPath),
+		"CMD=" + shellQuote(cmdLine),
+		"restarts=0",
+		"window_start=$(date +%s)",
+		"while true; do",
+		"  pid=\"\"",
+		"  if [ -f \"$PID_FILE\" ]; then",
+		"    pid=$(sed -n '1p' \"$PID_FILE\" | tr -d '\\r\\n ' || true)",
+		"  fi",
+		"  if [ -n \"$pid\" ] && kill -0 \"$pid\" 2>/dev/null; then",
+		"    sleep 2",
+		"    continue",
+		"  fi",
+		"  now=$(date +%s)",
+		"  if [ $((now-window_start)) -gt $WINDOW_SECONDS ]; then",
+		"    window_start=$now",
+		"    restarts=0",
+		"  fi",
+		"  restarts=$((restarts+1))",
+		"  if [ $restarts -gt $MAX_RESTARTS ]; then",
+		"    echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) " + serviceName + " self-heal exhausted restarts\" >> \"$LOG_FILE\"",
+		"    exit 1",
+		"  fi",
+		"  sh -c \"$CMD\" >> \"$LOG_FILE\" 2>&1 &",
+		"  newpid=$!",
+		"  echo \"$newpid\" > \"$PID_FILE\"",
+		"  echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) " + serviceName + " self-heal restart #$restarts pid=$newpid\" >> \"$LOG_FILE\"",
+		"  sleep 2",
+		"done",
+	}, "\n")
+	monitorCmd := exec.Command("sh", "-c", script)
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		return 0, err
+	}
+	defer devNull.Close()
+	monitorCmd.Stdin = devNull
+	monitorCmd.Stdout = devNull
+	monitorCmd.Stderr = devNull
+	if err := monitorCmd.Start(); err != nil {
+		return 0, err
+	}
+	pid := monitorCmd.Process.Pid
+	_ = monitorCmd.Process.Release()
+	return pid, nil
+}
+
+func runV2Stop(opts v2StopOptions) error {
+	installDir := strings.TrimSpace(opts.InstallDir)
+	if installDir == "" {
+		installDir = ".ncc-v2"
+	}
+	stopTimeout := opts.StopTimeout
+	if stopTimeout <= 0 {
+		stopTimeout = 5 * time.Second
+	}
+	runDir := filepath.Join(installDir, "run")
+	apiPIDPath := strings.TrimSpace(opts.APIPIDFile)
+	if apiPIDPath == "" {
+		apiPIDPath = filepath.Join(runDir, "v2-api.pid")
+	}
+	uiPIDPath := strings.TrimSpace(opts.UIPIDFile)
+	if uiPIDPath == "" {
+		uiPIDPath = filepath.Join(runDir, "v2-ui.pid")
+	}
+	targets := []struct {
+		name    string
+		pidPath string
+	}{
+		{name: "api-supervisor", pidPath: filepath.Join(runDir, "v2-api-supervisor.pid")},
+		{name: "ui-supervisor", pidPath: filepath.Join(runDir, "v2-ui-supervisor.pid")},
+		{name: "api", pidPath: apiPIDPath},
+		{name: "ui", pidPath: uiPIDPath},
+	}
+
+	foundAny := false
+	stoppedAny := false
+	cleanedStaleAny := false
+	for _, t := range targets {
+		pid, err := readPIDFromFile(t.pidPath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "skip %s: %v\n", t.name, err)
+			continue
+		}
+		foundAny = true
+		if err := signalPIDStop(pid, opts.Force); err != nil {
+			if errors.Is(err, os.ErrProcessDone) {
+				_ = os.Remove(t.pidPath)
+				cleanedStaleAny = true
+				fmt.Fprintf(os.Stderr, "removed stale %s pid file (pid=%d already exited)\n", t.name, pid)
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "failed to stop %s (pid=%d): %v\n", t.name, pid, err)
+			continue
+		}
+		if !opts.Force && !waitForPIDExit(pid, stopTimeout) {
+			if err := signalPIDStop(pid, true); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to force-kill %s (pid=%d): %v\n", t.name, pid, err)
+				continue
+			}
+		}
+		stoppedAny = true
+		_ = os.Remove(t.pidPath)
+		fmt.Fprintf(os.Stderr, "stopped %s (pid=%d)\n", t.name, pid)
+	}
+	if !foundAny {
+		return fmt.Errorf("no detached pid files found under %s", runDir)
+	}
+	if !stoppedAny && !cleanedStaleAny {
+		return errors.New("found detached pid files but failed to stop services")
+	}
+	if !stoppedAny && cleanedStaleAny {
+		fmt.Fprintln(os.Stderr, "detached services were already stopped; stale pid files cleaned.")
+	}
+	return nil
+}
+
+func runUninstallCommand(cmd *cobra.Command, args []string) error {
+	configPath, _ := cmd.Flags().GetString("config")
+	installDir, _ := cmd.Flags().GetString("install-dir")
+	taskName, _ := cmd.Flags().GetString("task-name")
+	force, _ := cmd.Flags().GetBool("force")
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	removeLocal, _ := cmd.Flags().GetBool("remove-local")
+	removeSchedule, _ := cmd.Flags().GetBool("remove-schedule")
+	removeV2Runtime, _ := cmd.Flags().GetBool("remove-v2-runtime")
+
+	opts := uninstallOptions{
+		ConfigPath:      strings.TrimSpace(configPath),
+		InstallDir:      strings.TrimSpace(installDir),
+		TaskName:        strings.TrimSpace(taskName),
+		Force:           force,
+		DryRun:          dryRun,
+		RemoveLocal:     removeLocal,
+		RemoveSchedule:  removeSchedule,
+		RemoveV2Runtime: removeV2Runtime,
+	}
+	if opts.InstallDir == "" {
+		opts.InstallDir = ".ncc-v2"
+	}
+	if opts.TaskName == "" {
+		opts.TaskName = "ncc-orchestrator"
+	}
+	fmt.Fprintf(os.Stderr, "Uninstall plan:\n")
+	fmt.Fprintf(os.Stderr, "  remove-local    : %t\n", opts.RemoveLocal)
+	fmt.Fprintf(os.Stderr, "  remove-schedule : %t\n", opts.RemoveSchedule)
+	fmt.Fprintf(os.Stderr, "  remove-v2-runtime: %t\n", opts.RemoveV2Runtime)
+	fmt.Fprintf(os.Stderr, "  dry-run         : %t\n", opts.DryRun)
+
+	if opts.RemoveSchedule {
+		if opts.DryRun {
+			fmt.Fprintf(os.Stderr, "[dry-run] would remove scheduler task marker %q\n", scheduleMarker(opts.TaskName))
+		} else {
+			if runtime.GOOS == "windows" {
+				if err := removeWindowsSchedule(opts.TaskName); err != nil {
+					fmt.Fprintf(os.Stderr, "schedule remove warning: %v\n", err)
+				}
+			} else {
+				if err := removeCronSchedule(opts.TaskName); err != nil {
+					fmt.Fprintf(os.Stderr, "schedule remove warning: %v\n", err)
+				}
+			}
+		}
+	}
+
+	if opts.RemoveV2Runtime {
+		if opts.DryRun {
+			fmt.Fprintf(os.Stderr, "[dry-run] would stop detached v2 services from install-dir %s\n", opts.InstallDir)
+		} else {
+			stopErr := runV2Stop(v2StopOptions{
+				InstallDir:  opts.InstallDir,
+				Force:       opts.Force,
+				StopTimeout: 5 * time.Second,
+			})
+			if stopErr != nil {
+				fmt.Fprintf(os.Stderr, "v2-stop warning: %v\n", stopErr)
+			}
+		}
+	}
+
+	if opts.RemoveLocal {
+		dirsToRemove := map[string]bool{}
+		filesToRemove := map[string]bool{
+			".ncc-api-token":              true,
+			".ncc-api-schedule.json":      true,
+			".ncc-api-notifications.json": true,
+			"ncc-orchestrator.new.exe":    true,
+			".ncc-preflight-check":        true,
+			".ncc-prefight-check":         true,
+		}
+		if opts.RemoveV2Runtime {
+			dirsToRemove[opts.InstallDir] = true
+		}
+
+		// Defaults used by runner.
+		dirsToRemove["nccfiles"] = true
+		dirsToRemove["outputfiles"] = true
+		dirsToRemove["promfiles"] = true
+		dirsToRemove["logs"] = true
+
+		if opts.ConfigPath != "" {
+			cfg, err := loadConfigForValidation(opts.ConfigPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "config parse warning (%s): %v\n", opts.ConfigPath, err)
+			} else {
+				if strings.TrimSpace(cfg.OutputDirLogs) != "" {
+					dirsToRemove[cfg.OutputDirLogs] = true
+				}
+				if strings.TrimSpace(cfg.OutputDirFiltered) != "" {
+					dirsToRemove[cfg.OutputDirFiltered] = true
+				}
+				if strings.TrimSpace(cfg.PromDir) != "" {
+					dirsToRemove[cfg.PromDir] = true
+				}
+				if strings.TrimSpace(cfg.RunHistoryDir) != "" {
+					dirsToRemove[cfg.RunHistoryDir] = true
+				}
+				if strings.TrimSpace(cfg.LogFile) != "" {
+					dirsToRemove[filepath.Dir(cfg.LogFile)] = true
+				}
+			}
+		}
+
+		for f := range filesToRemove {
+			if opts.DryRun {
+				fmt.Fprintf(os.Stderr, "[dry-run] would remove file %s\n", f)
+				continue
+			}
+			if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
+				fmt.Fprintf(os.Stderr, "remove file warning (%s): %v\n", f, err)
+			}
+		}
+		for d := range dirsToRemove {
+			clean := strings.TrimSpace(d)
+			if clean == "" || clean == "." || clean == "/" {
+				continue
+			}
+			if opts.DryRun {
+				fmt.Fprintf(os.Stderr, "[dry-run] would remove directory %s\n", clean)
+				continue
+			}
+			if err := os.RemoveAll(clean); err != nil {
+				fmt.Fprintf(os.Stderr, "remove directory warning (%s): %v\n", clean, err)
+			}
+		}
+	}
+
+	fmt.Fprintln(os.Stderr, "Uninstall completed.")
+	return nil
+}
+
 func runV2Start(opts v2StartOptions) error {
 	installDir := strings.TrimSpace(opts.InstallDir)
 	if installDir == "" {
 		installDir = ".ncc-v2"
 	}
-	apiBin := binaryPathInInstallDir(installDir, "ncc-api-server")
-	uiBin := binaryPathInInstallDir(installDir, "ncc-ui-server")
-	frontendDir := filepath.Join(installDir, "frontend-dist")
-	if _, err := os.Stat(apiBin); err != nil {
-		return fmt.Errorf("missing API binary %s (run `ncc-orchestrator v2-bootstrap` first)", apiBin)
+	if absInstallDir, err := filepath.Abs(installDir); err == nil {
+		installDir = absInstallDir
 	}
-	if _, err := os.Stat(uiBin); err != nil {
-		return fmt.Errorf("missing UI binary %s (run `ncc-orchestrator v2-bootstrap` first)", uiBin)
-	}
-	if st, err := os.Stat(frontendDir); err != nil || !st.IsDir() {
-		return fmt.Errorf("missing frontend bundle directory %s (run `ncc-orchestrator v2-bootstrap` first)", frontendDir)
+	apiOnly := opts.APIOnly
+	var (
+		apiBin      string
+		uiBin       string
+		frontendDir string
+		layout      string
+	)
+	if apiOnly {
+		apiBin, layout = resolveV2APIBinary(installDir)
+		if apiBin == "" {
+			return fmt.Errorf("could not locate API runtime binary. expected either %s (from v2-bootstrap), or local release asset ncc-api-server-%s-%s (run `ncc-orchestrator v2-bootstrap` first)",
+				binaryPathInInstallDir(installDir, "ncc-api-server"), runtime.GOOS, runtime.GOARCH,
+			)
+		}
+	} else {
+		apiBin, uiBin, frontendDir, layout = resolveV2RuntimeLayout(installDir)
+		if apiBin == "" || uiBin == "" || frontendDir == "" {
+			return fmt.Errorf("could not locate v2 runtime assets. expected either %s + %s + %s (from v2-bootstrap), or local release assets like ncc-api-server-%s-%s, ncc-ui-server-%s-%s, and frontend-dist/ (run `ncc-orchestrator v2-bootstrap` first)",
+				binaryPathInInstallDir(installDir, "ncc-api-server"),
+				binaryPathInInstallDir(installDir, "ncc-ui-server"),
+				filepath.Join(installDir, "frontend-dist"),
+				runtime.GOOS, runtime.GOARCH, runtime.GOOS, runtime.GOARCH,
+			)
+		}
 	}
 
 	if strings.TrimSpace(opts.ConfigPath) == "" {
@@ -7739,6 +9038,7 @@ func runV2Start(opts v2StartOptions) error {
 	if strings.TrimSpace(opts.OrchestratorBin) == "" {
 		opts.OrchestratorBin = "./ncc-orchestrator"
 	}
+	opts.OrchestratorBin = resolveV2OrchestratorBin(opts.OrchestratorBin)
 	if strings.TrimSpace(opts.APIListen) == "" {
 		opts.APIListen = ":8081"
 	}
@@ -7748,9 +9048,96 @@ func runV2Start(opts v2StartOptions) error {
 	if strings.TrimSpace(opts.TokenFile) == "" {
 		opts.TokenFile = ".ncc-api-token"
 	}
+	if absConfigPath, err := filepath.Abs(opts.ConfigPath); err == nil {
+		opts.ConfigPath = absConfigPath
+	}
+	if absOutputDir, err := filepath.Abs(opts.OutputDir); err == nil {
+		opts.OutputDir = absOutputDir
+	}
+	if absLogDir, err := filepath.Abs(opts.LogDir); err == nil {
+		opts.LogDir = absLogDir
+	}
+	if absTokenPath, err := filepath.Abs(opts.TokenFile); err == nil {
+		opts.TokenFile = absTokenPath
+	}
+	if cfg, err := loadConfigForValidation(opts.ConfigPath); err == nil {
+		pwd := strings.TrimSpace(cfg.Password)
+		if pwd != "" && !strings.HasPrefix(strings.ToLower(pwd), "secret://") {
+			fmt.Fprintln(os.Stderr, "warning: config contains plaintext password; prefer NCC_PASSWORD env or secret:// source")
+		}
+	}
+	if strings.TrimSpace(opts.APIAuthMode) == "" {
+		opts.APIAuthMode = "token"
+	}
+	if opts.APISessionTTL <= 0 {
+		opts.APISessionTTL = 10 * time.Minute
+	}
+	if opts.APIRunTimeout <= 0 {
+		opts.APIRunTimeout = 90 * time.Minute
+	}
+	if opts.APIRateLimitPerMinute < 0 {
+		return fmt.Errorf("api-rate-limit-per-minute must be >= 0")
+	}
+	if opts.APIReadTimeout <= 0 {
+		opts.APIReadTimeout = 15 * time.Second
+	}
+	if opts.APIWriteTimeout <= 0 {
+		opts.APIWriteTimeout = 60 * time.Second
+	}
+	if opts.APIIdleTimeout <= 0 {
+		opts.APIIdleTimeout = 60 * time.Second
+	}
+	if opts.ReadyTimeout <= 0 {
+		opts.ReadyTimeout = 20 * time.Second
+	}
+	if opts.SelfHealMaxRestarts <= 0 {
+		opts.SelfHealMaxRestarts = 3
+	}
+	if opts.SelfHealWindow <= 0 {
+		opts.SelfHealWindow = 10 * time.Minute
+	}
+	if opts.SelfHeal && !opts.Detach {
+		fmt.Fprintln(os.Stderr, "warning: --self-heal is effective only with --detach; continuing without detached self-heal monitor")
+	}
+	if strings.TrimSpace(opts.APISessionSecret) != "" && strings.TrimSpace(opts.APISessionSecretFile) != "" {
+		return fmt.Errorf("only one of api-session-secret or api-session-secret-file may be set")
+	}
+	if strings.TrimSpace(opts.APISessionSecretFile) != "" {
+		secret, err := readTrimmedFile(opts.APISessionSecretFile)
+		if err != nil {
+			return fmt.Errorf("read api-session-secret-file: %w", err)
+		}
+		if secret == "" {
+			return fmt.Errorf("api-session-secret-file is empty")
+		}
+		opts.APISessionSecret = secret
+	}
+	if opts.APIAuthMode != "token" && opts.APIAuthMode != "session" && opts.APIAuthMode != "hybrid" {
+		return fmt.Errorf("api-auth-mode must be one of token, session, hybrid")
+	}
 	repoRoot, _ := os.Getwd()
-	backendURL := localHTTPURLFromListen(opts.APIListen, "8081")
+	backendURL := strings.TrimSpace(opts.UIBackendURL)
+	if backendURL == "" {
+		if strings.TrimSpace(opts.APITLSCertFile) != "" && strings.TrimSpace(opts.APITLSKeyFile) != "" {
+			backendURL = strings.Replace(localHTTPURLFromListen(opts.APIListen, "8081"), "http://", "https://", 1)
+		} else {
+			backendURL = localHTTPURLFromListen(opts.APIListen, "8081")
+		}
+	}
 	uiOrigin := localHTTPURLFromListen(opts.UIListen, "8080")
+	allowedOrigins := mergeAllowedOriginsCSV(uiOrigin, opts.UIAllowedOrigins)
+	apiCORSOrigins := strings.TrimSpace(opts.APICORSOrigins)
+	if apiCORSOrigins == "" {
+		apiCORSOrigins = allowedOrigins
+	}
+	displayAPIURL := strings.TrimSpace(opts.APIAdvertiseURL)
+	if displayAPIURL == "" {
+		displayAPIURL = backendURL
+	}
+	displayUIURL := strings.TrimSpace(opts.UIAdvertiseURL)
+	if displayUIURL == "" {
+		displayUIURL = uiOrigin
+	}
 
 	apiArgs := []string{
 		"--listen", opts.APIListen,
@@ -7759,19 +9146,121 @@ func runV2Start(opts v2StartOptions) error {
 		"--output-dir", opts.OutputDir,
 		"--log-dir", opts.LogDir,
 		"--orchestrator-bin", opts.OrchestratorBin,
+		"--token-file-path", opts.TokenFile,
+		"--cors-origin", apiCORSOrigins,
+		"--auth-mode", opts.APIAuthMode,
+		"--session-ttl", opts.APISessionTTL.String(),
+		"--run-timeout", opts.APIRunTimeout.String(),
+		"--rate-limit-per-minute", strconv.Itoa(opts.APIRateLimitPerMinute),
+		"--read-timeout", opts.APIReadTimeout.String(),
+		"--write-timeout", opts.APIWriteTimeout.String(),
+		"--idle-timeout", opts.APIIdleTimeout.String(),
 	}
-	uiArgs := []string{
-		"--listen", opts.UIListen,
-		"--dir", frontendDir,
-		"--backend-url", backendURL,
-		"--api-token-file", opts.TokenFile,
-		"--api-auth-mode", "token",
-		"--allowed-origins", uiOrigin,
+	if strings.TrimSpace(opts.APISessionSecret) != "" {
+		apiArgs = append(apiArgs, "--session-secret", opts.APISessionSecret)
+	}
+	if strings.TrimSpace(opts.APITLSCertFile) != "" || strings.TrimSpace(opts.APITLSKeyFile) != "" {
+		apiArgs = append(apiArgs, "--tls-cert-file", opts.APITLSCertFile, "--tls-key-file", opts.APITLSKeyFile)
+	}
+	if strings.TrimSpace(opts.APITLSClientCAFile) != "" {
+		apiArgs = append(apiArgs, "--tls-client-ca-file", opts.APITLSClientCAFile)
 	}
 
 	apiCmd := exec.Command(apiBin, apiArgs...)
-	apiCmd.Stdout = os.Stdout
-	apiCmd.Stderr = os.Stderr
+	var uiCmd *exec.Cmd
+	var uiArgs []string
+	if !apiOnly {
+		uiAuthMode := "token"
+		if opts.APIAuthMode == "session" {
+			uiAuthMode = "session"
+		}
+		uiArgs = []string{
+			"--listen", opts.UIListen,
+			"--dir", frontendDir,
+			"--backend-url", backendURL,
+			"--api-token-file", opts.TokenFile,
+			"--api-auth-mode", uiAuthMode,
+			"--allowed-origins", allowedOrigins,
+		}
+		if strings.TrimSpace(opts.UITLSCertFile) != "" || strings.TrimSpace(opts.UITLSKeyFile) != "" {
+			uiArgs = append(uiArgs, "--tls-cert-file", opts.UITLSCertFile, "--tls-key-file", opts.UITLSKeyFile)
+		}
+		if strings.TrimSpace(opts.UIBackendCAFile) != "" {
+			uiArgs = append(uiArgs, "--backend-ca-file", opts.UIBackendCAFile)
+		}
+		if strings.TrimSpace(opts.UIBackendClientCertFile) != "" {
+			uiArgs = append(uiArgs, "--backend-client-cert-file", opts.UIBackendClientCertFile)
+		}
+		if strings.TrimSpace(opts.UIBackendClientKeyFile) != "" {
+			uiArgs = append(uiArgs, "--backend-client-key-file", opts.UIBackendClientKeyFile)
+		}
+		if opts.UIBackendInsecureSkipVerify {
+			uiArgs = append(uiArgs, "--backend-insecure-skip-verify")
+		}
+		uiCmd = exec.Command(uiBin, uiArgs...)
+	}
+	if opts.Detach {
+		runDir := filepath.Join(installDir, "run")
+		detachedLogDir := filepath.Join(installDir, "logs")
+		if err := os.MkdirAll(runDir, 0755); err != nil {
+			return fmt.Errorf("prepare detached run dir: %w", err)
+		}
+		if err := os.MkdirAll(detachedLogDir, 0755); err != nil {
+			return fmt.Errorf("prepare detached log dir: %w", err)
+		}
+		apiLogPath := strings.TrimSpace(opts.APILogFile)
+		if apiLogPath == "" {
+			apiLogPath = filepath.Join(detachedLogDir, "v2-api.log")
+		}
+		if absPath, err := filepath.Abs(apiLogPath); err == nil {
+			apiLogPath = absPath
+		}
+		opts.APILogFile = apiLogPath
+		if err := os.MkdirAll(filepath.Dir(apiLogPath), 0755); err != nil {
+			return fmt.Errorf("prepare api detached log parent dir: %w", err)
+		}
+		apiLogFile, err := os.OpenFile(apiLogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			return fmt.Errorf("open api detached log: %w", err)
+		}
+		defer apiLogFile.Close()
+		devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+		if err != nil {
+			return fmt.Errorf("open devnull: %w", err)
+		}
+		defer devNull.Close()
+		apiCmd.Stdin = devNull
+		apiCmd.Stdout = apiLogFile
+		apiCmd.Stderr = apiLogFile
+		if uiCmd != nil {
+			uiLogPath := strings.TrimSpace(opts.UILogFile)
+			if uiLogPath == "" {
+				uiLogPath = filepath.Join(detachedLogDir, "v2-ui.log")
+			}
+			if absPath, err := filepath.Abs(uiLogPath); err == nil {
+				uiLogPath = absPath
+			}
+			opts.UILogFile = uiLogPath
+			if err := os.MkdirAll(filepath.Dir(uiLogPath), 0755); err != nil {
+				return fmt.Errorf("prepare ui detached log parent dir: %w", err)
+			}
+			uiLogFile, err := os.OpenFile(uiLogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+			if err != nil {
+				return fmt.Errorf("open ui detached log: %w", err)
+			}
+			defer uiLogFile.Close()
+			uiCmd.Stdin = devNull
+			uiCmd.Stdout = uiLogFile
+			uiCmd.Stderr = uiLogFile
+		}
+	} else {
+		apiCmd.Stdout = os.Stdout
+		apiCmd.Stderr = os.Stderr
+		if uiCmd != nil {
+			uiCmd.Stdout = os.Stdout
+			uiCmd.Stderr = os.Stderr
+		}
+	}
 	if err := apiCmd.Start(); err != nil {
 		return fmt.Errorf("start api server: %w", err)
 	}
@@ -7780,18 +9269,175 @@ func runV2Start(opts v2StartOptions) error {
 		waitForFile(opts.TokenFile, 5*time.Second)
 	}
 
-	uiCmd := exec.Command(uiBin, uiArgs...)
-	uiCmd.Stdout = os.Stdout
-	uiCmd.Stderr = os.Stderr
-	if err := uiCmd.Start(); err != nil {
-		signalProcessStop(apiCmd)
-		return fmt.Errorf("start ui server: %w", err)
+	if uiCmd != nil {
+		if err := uiCmd.Start(); err != nil {
+			signalProcessStop(apiCmd)
+			return fmt.Errorf("start ui server: %w", err)
+		}
 	}
 
-	fmt.Fprintf(os.Stderr, "v2 services started (api pid=%d, ui pid=%d)\n", apiCmd.Process.Pid, uiCmd.Process.Pid)
-	fmt.Fprintf(os.Stderr, "API: %s\n", backendURL)
-	fmt.Fprintf(os.Stderr, "UI : %s\n", uiOrigin)
-	fmt.Fprintln(os.Stderr, "Press Ctrl+C to stop both services.")
+	if uiCmd != nil {
+		fmt.Fprintf(os.Stderr, "v2 services started (api pid=%d, ui pid=%d)\n", apiCmd.Process.Pid, uiCmd.Process.Pid)
+	} else {
+		fmt.Fprintf(os.Stderr, "v2 api service started (api pid=%d)\n", apiCmd.Process.Pid)
+	}
+	if strings.TrimSpace(layout) != "" {
+		fmt.Fprintf(os.Stderr, "Asset layout: %s\n", layout)
+	}
+	fmt.Fprintf(os.Stderr, "API binary: %s\n", apiBin)
+	if uiCmd != nil {
+		fmt.Fprintf(os.Stderr, "UI binary : %s\n", uiBin)
+		fmt.Fprintf(os.Stderr, "Frontend  : %s\n", frontendDir)
+	}
+	fmt.Fprintf(os.Stderr, "Orchestrator binary for API runs: %s\n", opts.OrchestratorBin)
+	fmt.Fprintf(os.Stderr, "Config path: %s\n", opts.ConfigPath)
+	fmt.Fprintf(os.Stderr, "Token file: %s\n", opts.TokenFile)
+	fmt.Fprintf(os.Stderr, "API: %s\n", displayAPIURL)
+	if uiCmd != nil {
+		fmt.Fprintf(os.Stderr, "UI : %s\n", displayUIURL)
+		fmt.Fprintf(os.Stderr, "UI allowed origins: %s\n", allowedOrigins)
+	} else {
+		fmt.Fprintf(os.Stderr, "API docs: %s/\n", displayAPIURL)
+	}
+	if opts.WaitReady {
+		healthURL := strings.TrimRight(backendURL, "/") + "/api/v1/health"
+		if err := waitForHTTPReady(healthURL, opts.ReadyTimeout); err != nil {
+			signalProcessStop(apiCmd)
+			if uiCmd != nil {
+				signalProcessStop(uiCmd)
+			}
+			return fmt.Errorf("wait-ready api health check failed: %w", err)
+		}
+		if uiCmd != nil {
+			if err := waitForHTTPReady(uiOrigin, opts.ReadyTimeout); err != nil {
+				signalProcessStop(apiCmd)
+				signalProcessStop(uiCmd)
+				return fmt.Errorf("wait-ready ui check failed: %w", err)
+			}
+		}
+		fmt.Fprintf(os.Stderr, "Readiness checks passed (timeout=%s).\n", opts.ReadyTimeout)
+	}
+	if opts.Detach {
+		runDir := filepath.Join(installDir, "run")
+		apiPIDPath := strings.TrimSpace(opts.APIPIDFile)
+		if apiPIDPath == "" {
+			apiPIDPath = filepath.Join(runDir, "v2-api.pid")
+		}
+		if absPath, err := filepath.Abs(apiPIDPath); err == nil {
+			apiPIDPath = absPath
+		}
+		if err := os.MkdirAll(filepath.Dir(apiPIDPath), 0755); err != nil {
+			signalProcessStop(apiCmd)
+			if uiCmd != nil {
+				signalProcessStop(uiCmd)
+			}
+			return fmt.Errorf("prepare api pid parent dir: %w", err)
+		}
+		if err := os.WriteFile(apiPIDPath, []byte(fmt.Sprintf("%d\n", apiCmd.Process.Pid)), 0644); err != nil {
+			signalProcessStop(apiCmd)
+			return fmt.Errorf("write api pid file: %w", err)
+		}
+		uiPIDPath := ""
+		if uiCmd != nil {
+			uiPIDPath = strings.TrimSpace(opts.UIPIDFile)
+			if uiPIDPath == "" {
+				uiPIDPath = filepath.Join(runDir, "v2-ui.pid")
+			}
+			if absPath, err := filepath.Abs(uiPIDPath); err == nil {
+				uiPIDPath = absPath
+			}
+			if err := os.MkdirAll(filepath.Dir(uiPIDPath), 0755); err != nil {
+				signalProcessStop(apiCmd)
+				signalProcessStop(uiCmd)
+				return fmt.Errorf("prepare ui pid parent dir: %w", err)
+			}
+			if err := os.WriteFile(uiPIDPath, []byte(fmt.Sprintf("%d\n", uiCmd.Process.Pid)), 0644); err != nil {
+				signalProcessStop(apiCmd)
+				signalProcessStop(uiCmd)
+				return fmt.Errorf("write ui pid file: %w", err)
+			}
+		}
+		var apiSupervisorPID int
+		var uiSupervisorPID int
+		if opts.SelfHeal {
+			if runtime.GOOS == "windows" {
+				return fmt.Errorf("self-heal is currently unsupported on windows detached mode")
+			}
+			apiLogPath := strings.TrimSpace(opts.APILogFile)
+			if apiLogPath == "" {
+				apiLogPath = filepath.Join(installDir, "logs", "v2-api.log")
+			}
+			pid, err := startSelfHealSupervisor("api", apiBin, apiArgs, apiPIDPath, apiLogPath, opts.SelfHealMaxRestarts, opts.SelfHealWindow)
+			if err != nil {
+				return fmt.Errorf("start api self-heal supervisor: %w", err)
+			}
+			apiSupervisorPID = pid
+			apiSupPIDPath := filepath.Join(runDir, "v2-api-supervisor.pid")
+			_ = os.WriteFile(apiSupPIDPath, []byte(fmt.Sprintf("%d\n", apiSupervisorPID)), 0644)
+			if uiCmd != nil {
+				uiLogPath := strings.TrimSpace(opts.UILogFile)
+				if uiLogPath == "" {
+					uiLogPath = filepath.Join(installDir, "logs", "v2-ui.log")
+				}
+				pid, err := startSelfHealSupervisor("ui", uiBin, uiArgs, uiPIDPath, uiLogPath, opts.SelfHealMaxRestarts, opts.SelfHealWindow)
+				if err != nil {
+					return fmt.Errorf("start ui self-heal supervisor: %w", err)
+				}
+				uiSupervisorPID = pid
+				uiSupPIDPath := filepath.Join(runDir, "v2-ui-supervisor.pid")
+				_ = os.WriteFile(uiSupPIDPath, []byte(fmt.Sprintf("%d\n", uiSupervisorPID)), 0644)
+			}
+		}
+		_ = apiCmd.Process.Release()
+		if uiCmd != nil {
+			_ = uiCmd.Process.Release()
+		}
+		fmt.Fprintf(os.Stderr, "Detached mode enabled.\n")
+		if uiCmd != nil {
+			fmt.Fprintf(os.Stderr, "PID files: %s, %s\n", apiPIDPath, uiPIDPath)
+			apiLogPath := strings.TrimSpace(opts.APILogFile)
+			if apiLogPath == "" {
+				apiLogPath = filepath.Join(installDir, "logs", "v2-api.log")
+			}
+			uiLogPath := strings.TrimSpace(opts.UILogFile)
+			if uiLogPath == "" {
+				uiLogPath = filepath.Join(installDir, "logs", "v2-ui.log")
+			}
+			fmt.Fprintf(os.Stderr, "Logs: %s, %s\n", apiLogPath, uiLogPath)
+			if runtime.GOOS == "windows" {
+				fmt.Fprintf(os.Stderr, "Kill cmd: taskkill /PID %d /PID %d /T\n", apiCmd.Process.Pid, uiCmd.Process.Pid)
+			} else {
+				fmt.Fprintf(os.Stderr, "Kill cmd: kill \"$(cat %s)\" \"$(cat %s)\"\n", shellQuote(apiPIDPath), shellQuote(uiPIDPath))
+			}
+			if opts.SelfHeal {
+				fmt.Fprintf(os.Stderr, "Self-heal: enabled (max_restarts=%d window=%s)\n", opts.SelfHealMaxRestarts, opts.SelfHealWindow)
+				fmt.Fprintf(os.Stderr, "Self-heal supervisor pids: api=%d ui=%d\n", apiSupervisorPID, uiSupervisorPID)
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "PID file: %s\n", apiPIDPath)
+			apiLogPath := strings.TrimSpace(opts.APILogFile)
+			if apiLogPath == "" {
+				apiLogPath = filepath.Join(installDir, "logs", "v2-api.log")
+			}
+			fmt.Fprintf(os.Stderr, "Log: %s\n", apiLogPath)
+			if runtime.GOOS == "windows" {
+				fmt.Fprintf(os.Stderr, "Kill cmd: taskkill /PID %d /T\n", apiCmd.Process.Pid)
+			} else {
+				fmt.Fprintf(os.Stderr, "Kill cmd: kill \"$(cat %s)\"\n", shellQuote(apiPIDPath))
+			}
+			if opts.SelfHeal {
+				fmt.Fprintf(os.Stderr, "Self-heal: enabled (max_restarts=%d window=%s)\n", opts.SelfHealMaxRestarts, opts.SelfHealWindow)
+				fmt.Fprintf(os.Stderr, "Self-heal supervisor pid: api=%d\n", apiSupervisorPID)
+			}
+		}
+		fmt.Fprintf(os.Stderr, "Recommended stop cmd: ncc-orchestrator v2-stop --install-dir %s\n", shellQuote(installDir))
+		return nil
+	}
+	if uiCmd != nil {
+		fmt.Fprintln(os.Stderr, "Press Ctrl+C to stop both services.")
+	} else {
+		fmt.Fprintln(os.Stderr, "Press Ctrl+C to stop API service.")
+	}
 
 	type procExit struct {
 		name string
@@ -7799,7 +9445,9 @@ func runV2Start(opts v2StartOptions) error {
 	}
 	exitCh := make(chan procExit, 2)
 	go func() { exitCh <- procExit{name: "api", err: apiCmd.Wait()} }()
-	go func() { exitCh <- procExit{name: "ui", err: uiCmd.Wait()} }()
+	if uiCmd != nil {
+		go func() { exitCh <- procExit{name: "ui", err: uiCmd.Wait()} }()
+	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -7807,21 +9455,33 @@ func runV2Start(opts v2StartOptions) error {
 
 	select {
 	case sig := <-sigCh:
-		fmt.Fprintf(os.Stderr, "received %s, stopping services...\n", sig.String())
+		if uiCmd != nil {
+			fmt.Fprintf(os.Stderr, "received %s, stopping services...\n", sig.String())
+		} else {
+			fmt.Fprintf(os.Stderr, "received %s, stopping API service...\n", sig.String())
+		}
 		signalProcessStop(apiCmd)
-		signalProcessStop(uiCmd)
+		if uiCmd != nil {
+			signalProcessStop(uiCmd)
+		}
 		<-exitCh
-		<-exitCh
+		if uiCmd != nil {
+			<-exitCh
+		}
 		return nil
 	case first := <-exitCh:
 		signalProcessStop(apiCmd)
-		signalProcessStop(uiCmd)
-		second := <-exitCh
+		if uiCmd != nil {
+			signalProcessStop(uiCmd)
+		}
 		if first.err != nil {
 			return fmt.Errorf("%s server exited with error: %w", first.name, first.err)
 		}
-		if second.err != nil {
-			return fmt.Errorf("%s server exited with error: %w", second.name, second.err)
+		if uiCmd != nil {
+			second := <-exitCh
+			if second.err != nil {
+				return fmt.Errorf("%s server exited with error: %w", second.name, second.err)
+			}
 		}
 		return fmt.Errorf("%s server exited", first.name)
 	}
@@ -8201,6 +9861,14 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 func runUpdate(opts updateOptions) error {
 	currentVer := stripGoBuildGitSuffix(Version)
 	client := &http.Client{Timeout: 20 * time.Second}
+	providedSHA256 := strings.TrimSpace(opts.BinarySHA256)
+	if providedSHA256 != "" {
+		normalized, err := normalizeSHA256Hex(providedSHA256)
+		if err != nil {
+			return fmt.Errorf("invalid --binary-sha256: %w", err)
+		}
+		providedSHA256 = normalized
+	}
 
 	if strings.TrimSpace(opts.BinaryURL) != "" {
 		if isArchiveAssetURL(opts.BinaryURL) {
@@ -8234,11 +9902,20 @@ func runUpdate(opts updateOptions) error {
 			}
 			return nil
 		}
+		if providedSHA256 == "" {
+			return errors.New("--binary-sha256 is required when using --binary-url")
+		}
 		fmt.Fprintf(os.Stderr, "Downloading %s ...\n", opts.BinaryURL)
 		body, err := downloadBinaryURL(client, opts.BinaryURL)
 		if err != nil {
 			return err
 		}
+		sum := sha256.Sum256(body)
+		got := hex.EncodeToString(sum[:])
+		if !strings.EqualFold(got, providedSHA256) {
+			return fmt.Errorf("checksum mismatch: expected %s, got %s", providedSHA256, got)
+		}
+		fmt.Fprintln(os.Stderr, "Checksum verified.")
 		targetVer := strings.TrimSpace(opts.TargetVersion)
 		if targetVer == "" {
 			targetVer = "custom"
@@ -8340,25 +10017,35 @@ func runUpdate(opts updateOptions) error {
 		return err
 	}
 	if chosenAssetName != "" {
+		checksumVerified := false
+		checksumAssetFound := false
 		for _, a := range targetRelease.Assets {
 			an := strings.ToLower(a.Name)
 			if strings.Contains(an, "checksum") || strings.Contains(an, "sha256") || strings.HasSuffix(an, ".sha256") {
+				checksumAssetFound = true
 				csBody, err := fetchURL(a.BrowserDownloadURL, client)
 				if err != nil {
-					log.Debug().Err(err).Str("asset", a.Name).Msg("skip checksum verification")
-					break
+					return fmt.Errorf("fetch checksum asset %s: %w", a.Name, err)
 				}
 				expectedHash := parseChecksumFile(csBody, chosenAssetName)
-				if expectedHash != "" {
-					sum := sha256.Sum256(body)
-					got := hex.EncodeToString(sum[:])
-					if !strings.EqualFold(got, expectedHash) {
-						return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedHash, got)
-					}
-					fmt.Fprintln(os.Stderr, "Checksum verified.")
+				if expectedHash == "" {
+					return fmt.Errorf("checksum entry for %s not found in %s", chosenAssetName, a.Name)
 				}
+				sum := sha256.Sum256(body)
+				got := hex.EncodeToString(sum[:])
+				if !strings.EqualFold(got, expectedHash) {
+					return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedHash, got)
+				}
+				checksumVerified = true
+				fmt.Fprintln(os.Stderr, "Checksum verified.")
 				break
 			}
+		}
+		if !checksumAssetFound {
+			return fmt.Errorf("no checksum asset found for release %s", targetRelease.TagName)
+		}
+		if !checksumVerified {
+			return fmt.Errorf("checksum verification did not complete for asset %s", chosenAssetName)
 		}
 	}
 	return installDownloadedBinary(body, targetVer)
@@ -8433,7 +10120,7 @@ func discoverHTTPClient(insecure bool) *http.Client {
 	}
 }
 
-func normalizePCBaseURL(raw string) (string, error) {
+func normalizePCBaseURL(raw string, insecureSkipVerify bool) (string, error) {
 	target := strings.TrimSpace(raw)
 	if target == "" {
 		return "", errors.New("pc target is empty")
@@ -8447,6 +10134,9 @@ func normalizePCBaseURL(raw string) (string, error) {
 	}
 	if u.Scheme != "https" && u.Scheme != "http" {
 		return "", fmt.Errorf("PC target must use http or https scheme, got %q", u.Scheme)
+	}
+	if u.Scheme == "http" && !insecureSkipVerify {
+		return "", errors.New("PC target with http:// requires --insecure-skip-verify")
 	}
 	if strings.TrimSpace(u.Host) == "" {
 		return "", fmt.Errorf("PC target %q has no host", raw)
@@ -8478,7 +10168,7 @@ func discoverClustersFromPCTargets(cfg Config) ([]string, error) {
 	seen := make(map[string]bool)
 	out := make([]string, 0)
 	for _, pc := range cfg.PCs {
-		pcURL, err := normalizePCBaseURL(pc)
+		pcURL, err := normalizePCBaseURL(pc, cfg.InsecureSkipVerify)
 		if err != nil {
 			return nil, err
 		}
@@ -9196,9 +10886,23 @@ func runScheduleCommandNow(runCmd string) error {
 	return c.Run()
 }
 
-func installCronSchedule(taskName, cronSpec, runCmd, logPath string) error {
+func buildCronScheduleLine(cronSpec, runCmd, logPath, marker string, withLock bool) string {
+	if withLock {
+		lockFile := filepath.Join(filepath.Dir(logPath), ".ncc-scheduler.lock")
+		return fmt.Sprintf("%s flock -n %s -c %s >> %s 2>&1 # %s",
+			cronSpec,
+			shellQuotePOSIX(lockFile),
+			shellQuotePOSIX(runCmd),
+			shellQuotePOSIX(logPath),
+			marker,
+		)
+	}
+	return fmt.Sprintf("%s %s >> %s 2>&1 # %s", cronSpec, runCmd, shellQuotePOSIX(logPath), marker)
+}
+
+func installCronSchedule(taskName, cronSpec, runCmd, logPath string, withLock bool) error {
 	marker := scheduleMarker(taskName)
-	line := fmt.Sprintf("%s %s >> %s 2>&1 # %s", cronSpec, runCmd, shellQuotePOSIX(logPath), marker)
+	line := buildCronScheduleLine(cronSpec, runCmd, logPath, marker, withLock)
 
 	existingBytes, err := exec.Command("crontab", "-l").CombinedOutput()
 	existing := string(existingBytes)
@@ -9269,10 +10973,22 @@ func runCreateSchedule(cmd *cobra.Command, args []string) error {
 	if strings.TrimSpace(logPath) == "" {
 		logPath = "logs/ncc-scheduler.log"
 	}
+	logPath = strings.TrimSpace(logPath)
+	if !filepath.IsAbs(logPath) {
+		if absLogPath, absErr := filepath.Abs(logPath); absErr == nil {
+			logPath = absLogPath
+		}
+	}
 
 	runCmd, _ := cmd.Flags().GetString("command")
 	if strings.TrimSpace(runCmd) == "" {
 		configPath, _ := cmd.Flags().GetString("config")
+		configPath = strings.TrimSpace(configPath)
+		if configPath != "" && !filepath.IsAbs(configPath) {
+			if absConfigPath, absErr := filepath.Abs(configPath); absErr == nil {
+				configPath = absConfigPath
+			}
+		}
 		runCmd, err = defaultScheduleCommand(configPath)
 		if err != nil {
 			return fmt.Errorf("build schedule command: %w", err)
@@ -9284,6 +11000,7 @@ func runCreateSchedule(cmd *cobra.Command, args []string) error {
 	}
 
 	printOnly, _ := cmd.Flags().GetBool("print-only")
+	withLock, _ := cmd.Flags().GetBool("with-lock")
 	every, _ := cmd.Flags().GetDuration("every")
 	action, _ := cmd.Flags().GetString("action")
 	action = strings.ToLower(strings.TrimSpace(action))
@@ -9318,12 +11035,12 @@ func runCreateSchedule(cmd *cobra.Command, args []string) error {
 				return exitConfig(fmt.Errorf("derive cron from --every: %w", err))
 			}
 		}
-		line := fmt.Sprintf("%s %s >> %s 2>&1 # %s", cronSpec, runCmd, shellQuotePOSIX(logPath), scheduleMarker(taskName))
+		line := buildCronScheduleLine(cronSpec, runCmd, logPath, scheduleMarker(taskName), withLock)
 		if printOnly {
 			fmt.Printf("Cron entry preview:\n%s\n", line)
 			return nil
 		}
-		return installCronSchedule(taskName, cronSpec, runCmd, logPath)
+		return installCronSchedule(taskName, cronSpec, runCmd, logPath, withLock)
 	case "windows":
 		switch action {
 		case "list":
@@ -9392,6 +11109,7 @@ func configJSONSchema() map[string]interface{} {
 		"retry-base-delay":          map[string]interface{}{"type": "string"},
 		"retry-max-delay":           map[string]interface{}{"type": "string"},
 		"retry-circuit-breaker":     map[string]interface{}{"type": "integer", "minimum": 1},
+		"prom-enabled":              map[string]interface{}{"type": "boolean"},
 		"prom-dir":                  map[string]interface{}{"type": "string"},
 		"run-history":               map[string]interface{}{"type": "boolean"},
 		"run-history-dir":           map[string]interface{}{"type": "string"},
@@ -9508,7 +11226,7 @@ func validateSecretsForPath(cfgPath string) (int, string, error) {
 	if err != nil {
 		return 0, "", fmt.Errorf("config path %s: %w", cfgPath, err)
 	}
-	secretRefs := strings.Count(string(raw), "secret://")
+	secretRefs := bytes.Count(raw, []byte("secret://"))
 	viper.Set("config", cfgPath)
 	cfg, err := bindConfig()
 	if err != nil {
@@ -9521,13 +11239,27 @@ func validateSecretsForPath(cfgPath string) (int, string, error) {
 	return secretRefs, provider, nil
 }
 
+func validateSecretsWithConfig(cfgPath string, cfg Config) (int, string, error) {
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return 0, "", fmt.Errorf("config path %s: %w", cfgPath, err)
+	}
+	secretRefs := bytes.Count(raw, []byte("secret://"))
+	provider := strings.TrimSpace(cfg.SecretsProvider)
+	if secretRefs > 0 && provider == "" {
+		return secretRefs, provider, errors.New("secret:// references found but secrets-provider is empty")
+	}
+	return secretRefs, provider, nil
+}
+
 type preflightCheck struct {
-	ID      string `json:"id"`
-	Status  string `json:"status"`
-	Title   string `json:"title"`
-	Message string `json:"message"`
-	Hint    string `json:"hint,omitempty"`
-	Output  string `json:"output,omitempty"`
+	ID              string `json:"id"`
+	Status          string `json:"status"`
+	Title           string `json:"title"`
+	Message         string `json:"message"`
+	RemediationCode string `json:"remediation_code,omitempty"`
+	Hint            string `json:"hint,omitempty"`
+	Output          string `json:"output,omitempty"`
 }
 
 type preflightReport struct {
@@ -9539,15 +11271,63 @@ type preflightReport struct {
 	ActionableHints []string         `json:"actionableHints"`
 }
 
+func defaultPreflightRemediationCode(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "NCC_PREFLIGHT_GENERIC"
+	}
+	replacer := strings.NewReplacer(".", "_", "-", "_", "/", "_", " ", "_")
+	return "NCC_PREFLIGHT_" + strings.ToUpper(replacer.Replace(id))
+}
+
 func preflightProbePath(path string) error {
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		return err
 	}
-	probe := filepath.Join(path, ".ncc-prefight-check")
-	if err := os.WriteFile(probe, []byte(time.Now().UTC().Format(time.RFC3339)), 0o600); err != nil {
+	// Keep a persistent probe sentinel and validate RW access on each preflight run.
+	probe := filepath.Join(path, ".ncc-preflight-check")
+	f, err := os.OpenFile(probe, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
 		return err
 	}
-	return os.Remove(probe)
+	defer f.Close()
+	// Write one byte at offset 0 (fixed-size probe), then read it back to verify RW.
+	if _, err := f.WriteAt([]byte{'1'}, 0); err != nil {
+		return err
+	}
+	buf := make([]byte, 1)
+	if _, err := f.ReadAt(buf, 0); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	if buf[0] != '1' {
+		return fmt.Errorf("preflight probe verification failed for %s", probe)
+	}
+	// Backward-compat cleanup for older typo probe file name.
+	legacyProbe := filepath.Join(path, ".ncc-prefight-check")
+	if err := os.Remove(legacyProbe); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func preflightResolveClusterTarget(cluster string) error {
+	target, err := normalizeClusterAddress(cluster)
+	if err != nil {
+		return err
+	}
+	if net.ParseIP(target) != nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, target)
+	if err != nil {
+		return err
+	}
+	if len(addrs) == 0 {
+		return errors.New("resolver returned no addresses")
+	}
+	return nil
 }
 
 func buildPreflightReport(cfgPath string) preflightReport {
@@ -9558,6 +11338,9 @@ func buildPreflightReport(cfgPath string) preflightReport {
 	}
 	hints := []string{}
 	add := func(c preflightCheck) {
+		if c.Status != "pass" && strings.TrimSpace(c.RemediationCode) == "" {
+			c.RemediationCode = defaultPreflightRemediationCode(c.ID)
+		}
 		report.Checks = append(report.Checks, c)
 		switch c.Status {
 		case "fail":
@@ -9583,6 +11366,8 @@ func buildPreflightReport(cfgPath string) preflightReport {
 		return report
 	}
 
+	var loadedCfg Config
+	cfgLoaded := false
 	if cfg, err := loadConfigForValidation(cfgPath); err != nil {
 		add(preflightCheck{
 			ID:      "validate-config",
@@ -9592,6 +11377,8 @@ func buildPreflightReport(cfgPath string) preflightReport {
 			Hint:    "Fix configuration schema/values and rerun preflight.",
 		})
 	} else {
+		loadedCfg = cfg
+		cfgLoaded = true
 		add(preflightCheck{ID: "validate-config", Status: "pass", Title: "validate-config", Message: "config is valid"})
 		dirs := []struct {
 			id    string
@@ -9602,7 +11389,14 @@ func buildPreflightReport(cfgPath string) preflightReport {
 			{"path.output-dir-logs", cfg.OutputDirLogs, "Output logs path permission", "Grant write permission to output-dir-logs."},
 			{"path.output-dir-filtered", cfg.OutputDirFiltered, "Output filtered path permission", "Grant write permission to output-dir-filtered."},
 			{"path.log-file-dir", filepath.Dir(cfg.LogFile), "Log file directory permission", "Grant write permission to log-file directory."},
-			{"path.prom-dir", cfg.PromDir, "Prometheus path permission", "Grant write permission to prom-dir."},
+		}
+		if cfg.PromEnabled {
+			dirs = append(dirs, struct {
+				id    string
+				path  string
+				title string
+				hint  string
+			}{"path.prom-dir", cfg.PromDir, "Prometheus path permission", "Grant write permission to prom-dir."})
 		}
 		if cfg.RunHistoryEnabled {
 			dirs = append(dirs, struct {
@@ -9662,6 +11456,21 @@ func buildPreflightReport(cfgPath string) preflightReport {
 		checkFile("file.clusters-file", "Clusters file", cfg.ClustersFile, false)
 		checkFile("file.exclude-alert-titles-file", "Exclude alert titles file", cfg.ExcludeAlertTitlesFile, false)
 		checkFile("file.secrets-file", "Secrets file", cfg.SecretsFile, strings.EqualFold(strings.TrimSpace(cfg.SecretsProvider), "file"))
+		for i, cluster := range cfg.Clusters {
+			id := fmt.Sprintf("cluster.target.%d", i+1)
+			title := fmt.Sprintf("Cluster target %d resolution", i+1)
+			if err := preflightResolveClusterTarget(cluster); err != nil {
+				add(preflightCheck{
+					ID:      id,
+					Status:  "fail",
+					Title:   title,
+					Message: fmt.Sprintf("%s: %v", cluster, err),
+					Hint:    "Use a reachable IP/FQDN, or verify DNS/network from this runtime.",
+				})
+			} else {
+				add(preflightCheck{ID: id, Status: "pass", Title: title, Message: cluster})
+			}
+		}
 		// Security posture advisories.
 		if cfg.InsecureSkipVerify {
 			add(preflightCheck{
@@ -9692,7 +11501,16 @@ func buildPreflightReport(cfgPath string) preflightReport {
 		}
 	}
 
-	secretRefs, provider, secErr := validateSecretsForPath(cfgPath)
+	var (
+		secretRefs int
+		provider   string
+		secErr     error
+	)
+	if cfgLoaded {
+		secretRefs, provider, secErr = validateSecretsWithConfig(cfgPath, loadedCfg)
+	} else {
+		secretRefs, provider, secErr = validateSecretsForPath(cfgPath)
+	}
 	if secErr != nil {
 		add(preflightCheck{
 			ID:      "validate-secrets",
@@ -9727,6 +11545,790 @@ func runPreflightCheckCommand(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 	return exitConfig(fmt.Errorf("unsupported format: %s (supported: json)", format))
+}
+
+type automationLevel string
+
+const (
+	automationLevelAdvisory automationLevel = "advisory"
+	automationLevelSafeFix  automationLevel = "safe-fix"
+	automationLevelFullAuto automationLevel = "full-auto"
+)
+
+func parseAutomationLevel(raw string) (automationLevel, error) {
+	v := automationLevel(strings.ToLower(strings.TrimSpace(raw)))
+	if v == "" {
+		return automationLevelSafeFix, nil
+	}
+	switch v {
+	case automationLevelAdvisory, automationLevelSafeFix, automationLevelFullAuto:
+		return v, nil
+	default:
+		return "", fmt.Errorf("invalid automation-level %q (valid: advisory, safe-fix, full-auto)", raw)
+	}
+}
+
+func recommendationForPreflightCheck(c preflightCheck) string {
+	msg := strings.TrimSpace(c.Message)
+	switch c.ID {
+	case "validate-config":
+		return "Fix config schema/values, then rerun with --auto for guided retries."
+	case "validate-secrets":
+		return "Set secrets-provider and verify secret sources are reachable."
+	case "path.output-dir-logs", "path.output-dir-filtered", "path.log-file-dir", "path.prom-dir", "path.run-history-dir":
+		return "Grant write permissions or let safe automation create/repair directory permissions."
+	case "file.clusters-file", "file.exclude-alert-titles-file", "file.secrets-file":
+		return "Create the configured file or update config path; safe automation can create a starter file."
+	}
+	if strings.Contains(strings.ToLower(msg), "permission") {
+		return "Check file ownership and writable permissions for configured paths."
+	}
+	return "Review check output and apply the listed hint."
+}
+
+func printAutomationRunbook(report preflightReport, level automationLevel) {
+	if report.Failed == 0 {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "Automation runbook:")
+	for _, c := range report.Checks {
+		if c.Status != "fail" {
+			continue
+		}
+		code := c.RemediationCode
+		if strings.TrimSpace(code) == "" {
+			code = defaultPreflightRemediationCode(c.ID)
+		}
+		fmt.Fprintf(os.Stderr, "- [%s] %s\n", code, recommendationForPreflightCheck(c))
+	}
+	if level == automationLevelAdvisory {
+		fmt.Fprintln(os.Stderr, "Next step: re-run with --auto --automation-level safe-fix to allow automatic safe repairs.")
+	}
+}
+
+func applySafePreflightFixes(cfg Config, cfgPath string, report preflightReport, level automationLevel) (int, []string) {
+	if level == automationLevelAdvisory {
+		return 0, nil
+	}
+	fixed := 0
+	actions := []string{}
+	fixPath := func(id string, path string) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return
+		}
+		if err := os.MkdirAll(path, 0o755); err == nil {
+			fixed++
+			actions = append(actions, fmt.Sprintf("%s -> ensured dir %s", id, path))
+		}
+	}
+	fixFile := func(id string, path string, content string) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return
+		}
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+			if err := os.WriteFile(path, []byte(content), 0o600); err == nil {
+				fixed++
+				actions = append(actions, fmt.Sprintf("%s -> created file %s", id, path))
+			}
+		}
+	}
+	for _, c := range report.Checks {
+		if c.Status != "fail" {
+			continue
+		}
+		switch c.ID {
+		case "validate-config":
+			if strings.TrimSpace(cfgPath) != "" {
+				if _, err := os.Stat(cfgPath); errors.Is(err, os.ErrNotExist) {
+					if err := writeDummyConfig(cfgPath); err == nil {
+						fixed++
+						actions = append(actions, fmt.Sprintf("%s -> generated starter config %s", c.ID, cfgPath))
+					}
+				}
+			}
+		case "path.output-dir-logs":
+			fixPath(c.ID, cfg.OutputDirLogs)
+		case "path.output-dir-filtered":
+			fixPath(c.ID, cfg.OutputDirFiltered)
+		case "path.log-file-dir":
+			fixPath(c.ID, filepath.Dir(cfg.LogFile))
+		case "path.prom-dir":
+			fixPath(c.ID, cfg.PromDir)
+		case "path.run-history-dir":
+			fixPath(c.ID, cfg.RunHistoryDir)
+		case "file.clusters-file":
+			fixFile(c.ID, cfg.ClustersFile, "# one cluster per line\n")
+		case "file.exclude-alert-titles-file":
+			fixFile(c.ID, cfg.ExcludeAlertTitlesFile, "# one alert title per line\n")
+		case "file.secrets-file":
+			fixFile(c.ID, cfg.SecretsFile, "{}\n")
+		case "validate-secrets":
+			if strings.TrimSpace(cfgPath) != "" {
+				b, err := os.ReadFile(cfgPath)
+				if err == nil {
+					content := string(b)
+					updated := upsertYAMLScalar(content, "secrets-provider", "env")
+					if updated != content {
+						if err := os.WriteFile(cfgPath, []byte(updated), 0644); err == nil {
+							fixed++
+							actions = append(actions, fmt.Sprintf("%s -> set secrets-provider to %q in %s", c.ID, "env", cfgPath))
+						}
+					}
+				}
+			}
+		}
+	}
+	return fixed, actions
+}
+
+func applyFullAutoRuntimeTuning(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	changes := []string{}
+	if cfg.MaxParallel > 12 {
+		old := cfg.MaxParallel
+		cfg.MaxParallel = 12
+		changes = append(changes, fmt.Sprintf("max-parallel %d -> %d", old, cfg.MaxParallel))
+	}
+	if cfg.Timeout < 20*time.Minute {
+		old := cfg.Timeout
+		cfg.Timeout = 20 * time.Minute
+		changes = append(changes, fmt.Sprintf("timeout %s -> %s", old, cfg.Timeout))
+	}
+	if cfg.RequestTimeout < 30*time.Second {
+		old := cfg.RequestTimeout
+		cfg.RequestTimeout = 30 * time.Second
+		changes = append(changes, fmt.Sprintf("request-timeout %s -> %s", old, cfg.RequestTimeout))
+	}
+	if cfg.RetryMaxAttempts < 8 {
+		old := cfg.RetryMaxAttempts
+		cfg.RetryMaxAttempts = 8
+		changes = append(changes, fmt.Sprintf("retry-max-attempts %d -> %d", old, cfg.RetryMaxAttempts))
+	}
+	if cfg.RetryCircuitBreaker < 4 {
+		old := cfg.RetryCircuitBreaker
+		cfg.RetryCircuitBreaker = 4
+		changes = append(changes, fmt.Sprintf("retry-circuit-breaker %d -> %d", old, cfg.RetryCircuitBreaker))
+	}
+	if !cfg.AdaptiveParallelism {
+		cfg.AdaptiveParallelism = true
+		changes = append(changes, "adaptive-parallelism false -> true")
+	}
+	return changes
+}
+
+func quickstartPrompt(reader *bufio.Reader, prompt string, defaultValue string) (string, error) {
+	renderPrompt := func() {
+		if strings.TrimSpace(defaultValue) != "" {
+			fmt.Printf("%s [%s]: ", prompt, defaultValue)
+		} else {
+			fmt.Printf("%s: ", prompt)
+		}
+	}
+	renderPrompt()
+	raw, err := reader.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	v := strings.TrimSpace(raw)
+	if v != "" {
+		return v, nil
+	}
+	fmt.Println("Input is empty. Press Enter again to continue, or type a value.")
+	renderPrompt()
+	raw, err = reader.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	v = strings.TrimSpace(raw)
+	if v == "" {
+		return strings.TrimSpace(defaultValue), nil
+	}
+	return v, nil
+}
+
+func quickstartWarnOnEmptyTargets(mode, clusters, pcs string) {
+	if mode == "clusters" && strings.TrimSpace(clusters) == "" {
+		fmt.Println("Warning: cluster targets are empty; preflight will fail until clusters (or clusters-file) is set.")
+	}
+	if mode == "pc" && strings.TrimSpace(pcs) == "" {
+		fmt.Println("Warning: Prism Central targets are empty; discovery will rely on prism-central-url.")
+	}
+}
+
+func quickstartPromptChoice(reader *bufio.Reader, prompt string, defaultValue string, allowed []string) (string, error) {
+	allowSet := map[string]bool{}
+	for _, a := range allowed {
+		allowSet[strings.ToLower(strings.TrimSpace(a))] = true
+	}
+	v, err := quickstartPrompt(reader, prompt, defaultValue)
+	if err != nil {
+		return "", err
+	}
+	normalized := strings.ToLower(strings.TrimSpace(v))
+	if allowSet[normalized] {
+		return normalized, nil
+	}
+	fmt.Printf("Invalid value %q. Allowed values: %s\n", v, strings.Join(allowed, ", "))
+	v, err = quickstartPrompt(reader, prompt, defaultValue)
+	if err != nil {
+		return "", err
+	}
+	normalized = strings.ToLower(strings.TrimSpace(v))
+	if !allowSet[normalized] {
+		return strings.ToLower(strings.TrimSpace(defaultValue)), nil
+	}
+	return normalized, nil
+}
+
+func upsertYAMLScalar(content string, key string, value string) string {
+	quoted := fmt.Sprintf("%s: %q", key, value)
+	pattern := fmt.Sprintf(`(?m)^\s*%s:\s*.*$`, regexp.QuoteMeta(key))
+	re := regexp.MustCompile(pattern)
+	if re.MatchString(content) {
+		return re.ReplaceAllString(content, quoted)
+	}
+	if !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	return content + quoted + "\n"
+}
+
+func yamlScalarValue(content, key string) string {
+	pattern := fmt.Sprintf(`(?m)^\s*%s:\s*(.*)$`, regexp.QuoteMeta(key))
+	re := regexp.MustCompile(pattern)
+	m := re.FindStringSubmatch(content)
+	if len(m) != 2 {
+		return ""
+	}
+	v := strings.TrimSpace(m[1])
+	if i := strings.Index(v, "#"); i >= 0 {
+		v = strings.TrimSpace(v[:i])
+	}
+	v = strings.TrimSpace(strings.Trim(v, `"'`))
+	return v
+}
+
+func repairConfigInlineCommentValues(cfgPath string) (bool, error) {
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return false, err
+	}
+	lines := strings.Split(string(raw), "\n")
+	changed := false
+	repairableKey := func(k string) bool {
+		switch strings.TrimSpace(k) {
+		case "timeout", "request-timeout", "poll-interval", "poll-jitter", "retry-base-delay", "retry-max-delay", "idle-conn-timeout":
+			return true
+		default:
+			return false
+		}
+	}
+	stripCommentTailForKey := func(k string) bool {
+		switch strings.TrimSpace(k) {
+		case "username", "cluster-source-mode", "discover-api-version", "nutanix-v4-api-version", "insecure-skip-verify", "timeout", "request-timeout":
+			return true
+		default:
+			return false
+		}
+	}
+	for i, ln := range lines {
+		trim := strings.TrimSpace(ln)
+		if trim == "" || strings.HasPrefix(trim, "#") {
+			continue
+		}
+		colon := strings.Index(ln, ":")
+		if colon <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(ln[:colon])
+		prefix := ln[:colon+1]
+		rest := strings.TrimSpace(ln[colon+1:])
+		if len(rest) < 2 || rest[0] != '"' || rest[len(rest)-1] != '"' {
+			continue
+		}
+		if stripCommentTailForKey(key) {
+			body := strings.TrimPrefix(rest, `"`)
+			body = strings.TrimSuffix(body, `"`)
+			if hash := strings.Index(body, "#"); hash >= 0 {
+				body = body[:hash]
+			}
+			body = strings.TrimSpace(body)
+			for strings.HasSuffix(body, `\"`) {
+				body = strings.TrimSpace(strings.TrimSuffix(body, `\"`))
+			}
+			body = strings.TrimRight(body, `\`)
+			fixedLine := prefix + " " + strconv.Quote(body)
+			if strings.TrimSpace(fixedLine) != strings.TrimSpace(ln) {
+				lines[i] = fixedLine
+				changed = true
+			}
+			continue
+		}
+		inner := rest[1 : len(rest)-1]
+		orig := inner
+		legacyIdx := strings.Index(inner, `\"`)
+		if legacyIdx >= 0 {
+			legacyTail := inner[legacyIdx+2:]
+			if strings.Contains(legacyTail, "#") {
+				inner = strings.TrimSpace(inner[:legacyIdx])
+			}
+		}
+		if repairableKey(key) {
+			inner = strings.TrimRight(inner, `\`)
+		}
+		inner = strings.TrimSpace(inner)
+		if inner != strings.TrimSpace(orig) {
+			lines[i] = prefix + " " + strconv.Quote(inner)
+			changed = true
+		}
+	}
+	if !changed {
+		return false, nil
+	}
+	out := strings.Join(lines, "\n")
+	if err := os.WriteFile(cfgPath, []byte(out), 0644); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func maskQuickstartValue(key, value string) string {
+	if strings.EqualFold(strings.TrimSpace(key), "password") {
+		if strings.TrimSpace(value) == "" {
+			return `""`
+		}
+		return `"********"`
+	}
+	return strconv.Quote(value)
+}
+
+func runQuickstartInteractive(cfgPath string) error {
+	reader := bufio.NewReader(os.Stdin)
+	contentBytes, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return err
+	}
+	content := string(contentBytes)
+	original := content
+	updates := map[string]string{}
+	defaultMode := yamlScalarValue(original, "cluster-source-mode")
+	if defaultMode == "" {
+		defaultMode = "clusters"
+	}
+	mode, err := quickstartPromptChoice(reader, "Cluster source mode (clusters|pc)", defaultMode, []string{"clusters", "pc"})
+	if err != nil {
+		return err
+	}
+	updates["cluster-source-mode"] = mode
+	content = upsertYAMLScalar(content, "cluster-source-mode", mode)
+	if mode == "pc" {
+		pcURLDefault := yamlScalarValue(original, "prism-central-url")
+		pcURL, err := quickstartPrompt(reader, "Prism Central URL (optional, e.g. https://pc:9440)", pcURLDefault)
+		if err != nil {
+			return err
+		}
+		updates["prism-central-url"] = pcURL
+		content = upsertYAMLScalar(content, "prism-central-url", pcURL)
+		pcs := ""
+		if strings.TrimSpace(pcURL) == "" {
+			pcsDefault := yamlScalarValue(original, "pcs")
+			pcs, err = quickstartPrompt(reader, "Prism Central targets (comma-separated)", pcsDefault)
+			if err != nil {
+				return err
+			}
+			updates["pcs"] = pcs
+			content = upsertYAMLScalar(content, "pcs", pcs)
+			quickstartWarnOnEmptyTargets(mode, "", pcs)
+		} else {
+			updates["pcs"] = yamlScalarValue(original, "pcs")
+		}
+		updates["clusters"] = ""
+		content = upsertYAMLScalar(content, "clusters", "")
+	} else {
+		clusterDefault := yamlScalarValue(original, "clusters")
+		clusters, err := quickstartPrompt(reader, "Cluster targets (comma-separated)", clusterDefault)
+		if err != nil {
+			return err
+		}
+		updates["clusters"] = clusters
+		updates["pcs"] = ""
+		content = upsertYAMLScalar(content, "clusters", clusters)
+		content = upsertYAMLScalar(content, "pcs", "")
+		quickstartWarnOnEmptyTargets(mode, clusters, "")
+	}
+	defaultUser := yamlScalarValue(original, "username")
+	if strings.TrimSpace(defaultUser) == "" {
+		defaultUser = "admin"
+	}
+	username, err := quickstartPrompt(reader, "Prism username", defaultUser)
+	if err != nil {
+		return err
+	}
+	updates["username"] = username
+	content = upsertYAMLScalar(content, "username", username)
+	insecureDefault := strings.ToLower(strings.TrimSpace(yamlScalarValue(original, "insecure-skip-verify")))
+	if insecureDefault != "true" && insecureDefault != "false" {
+		insecureDefault = "false"
+	}
+	insecureValue, err := quickstartPromptChoice(reader, "Skip TLS certificate verification? (true|false)", insecureDefault, []string{"true", "false"})
+	if err != nil {
+		return err
+	}
+	updates["insecure-skip-verify"] = insecureValue
+	content = upsertYAMLScalar(content, "insecure-skip-verify", insecureValue)
+	advanced, err := quickstartConfirm(reader, "Configure advanced network/runtime options (timeouts/api version)?", false)
+	if err != nil {
+		return err
+	}
+	if advanced {
+		timeoutDefault := yamlScalarValue(original, "timeout")
+		if timeoutDefault == "" {
+			timeoutDefault = "15m"
+		}
+		timeoutValue, err := quickstartPrompt(reader, "Overall cluster timeout (e.g. 15m)", timeoutDefault)
+		if err != nil {
+			return err
+		}
+		updates["timeout"] = timeoutValue
+		content = upsertYAMLScalar(content, "timeout", timeoutValue)
+		reqTimeoutDefault := yamlScalarValue(original, "request-timeout")
+		if reqTimeoutDefault == "" {
+			reqTimeoutDefault = "20s"
+		}
+		reqTimeoutValue, err := quickstartPrompt(reader, "Per-request timeout (e.g. 20s)", reqTimeoutDefault)
+		if err != nil {
+			return err
+		}
+		updates["request-timeout"] = reqTimeoutValue
+		content = upsertYAMLScalar(content, "request-timeout", reqTimeoutValue)
+		if mode == "pc" {
+			discoverDefault := yamlScalarValue(original, "discover-api-version")
+			if discoverDefault == "" {
+				discoverDefault = defaultDiscoverAPIVersion
+			}
+			discoverVer, err := quickstartPromptChoice(reader, "Discover API version (v4|v3)", discoverDefault, []string{"v4", "v3"})
+			if err != nil {
+				return err
+			}
+			updates["discover-api-version"] = discoverVer
+			content = upsertYAMLScalar(content, "discover-api-version", discoverVer)
+
+			v4PathDefault := yamlScalarValue(original, "nutanix-v4-api-version")
+			if v4PathDefault == "" {
+				v4PathDefault = defaultNutanixV4APIVersion
+			}
+			v4PathValue, err := quickstartPrompt(reader, "Nutanix v4 API path version (e.g. v4.2)", v4PathDefault)
+			if err != nil {
+				return err
+			}
+			updates["nutanix-v4-api-version"] = v4PathValue
+			content = upsertYAMLScalar(content, "nutanix-v4-api-version", v4PathValue)
+		}
+	}
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		setPasswordNow, err := quickstartConfirm(reader, "Set Prism password now?", false)
+		if err != nil {
+			return err
+		}
+		if setPasswordNow {
+			fmt.Print("Prism password (input hidden): ")
+			bytePw, err := term.ReadPassword(int(os.Stdin.Fd()))
+			fmt.Println()
+			if err != nil {
+				return fmt.Errorf("read quickstart password: %w", err)
+			}
+			pw := strings.TrimSpace(string(bytePw))
+			updates["password"] = pw
+			content = upsertYAMLScalar(content, "password", pw)
+		}
+	}
+	fmt.Println("Planned config updates:")
+	orderedKeys := []string{
+		"cluster-source-mode", "clusters", "pcs", "prism-central-url",
+		"username", "password", "insecure-skip-verify",
+		"timeout", "request-timeout", "discover-api-version", "nutanix-v4-api-version",
+	}
+	changed := 0
+	for _, key := range orderedKeys {
+		newVal, ok := updates[key]
+		if !ok {
+			continue
+		}
+		oldVal := yamlScalarValue(original, key)
+		if oldVal == newVal {
+			continue
+		}
+		changed++
+		fmt.Printf("- %s: %s -> %s\n", key, maskQuickstartValue(key, oldVal), maskQuickstartValue(key, newVal))
+	}
+	if changed == 0 {
+		fmt.Println("- No effective value changes detected.")
+	}
+	applyChanges, err := quickstartConfirm(reader, "Apply these changes to config?", true)
+	if err != nil {
+		return err
+	}
+	if !applyChanges {
+		fmt.Printf("Interactive quickstart did not modify %s\n", cfgPath)
+		return nil
+	}
+	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+		return err
+	}
+	fmt.Printf("Interactive quickstart saved updates to %s\n", cfgPath)
+	return nil
+}
+
+func quickstartConfirm(reader *bufio.Reader, prompt string, defaultYes bool) (bool, error) {
+	suffix := "[y/N]"
+	if defaultYes {
+		suffix = "[Y/n]"
+	}
+	renderPrompt := func() {
+		fmt.Printf("%s %s ", prompt, suffix)
+	}
+	renderPrompt()
+	raw, err := reader.ReadString('\n')
+	if err != nil {
+		return false, err
+	}
+	v := strings.ToLower(strings.TrimSpace(raw))
+	if v == "" {
+		fmt.Println("Input is empty. Press Enter again to continue, or type y/n.")
+		renderPrompt()
+		raw, err = reader.ReadString('\n')
+		if err != nil {
+			return false, err
+		}
+		v = strings.ToLower(strings.TrimSpace(raw))
+		if v == "" {
+			return defaultYes, nil
+		}
+	}
+	if v == "y" || v == "yes" {
+		return true, nil
+	}
+	if v == "n" || v == "no" {
+		return false, nil
+	}
+	return defaultYes, nil
+}
+
+func quickstartV2Status(installDir string) (bool, string, string, string, string) {
+	apiBin, uiBin, frontendDir, layout := resolveV2RuntimeLayout(installDir)
+	if strings.TrimSpace(apiBin) == "" || strings.TrimSpace(uiBin) == "" || strings.TrimSpace(frontendDir) == "" {
+		return false, "", "", "", ""
+	}
+	return true, apiBin, uiBin, frontendDir, layout
+}
+
+func quickstartStatusSummary(report preflightReport) (pass, warn, fail int) {
+	for _, c := range report.Checks {
+		switch strings.ToLower(strings.TrimSpace(c.Status)) {
+		case "pass":
+			pass++
+		case "warn":
+			warn++
+		case "fail":
+			fail++
+		}
+	}
+	return pass, warn, fail
+}
+
+func printQuickstartWarningHighlights(report preflightReport, limit int) {
+	if limit <= 0 {
+		limit = 3
+	}
+	printed := 0
+	for _, c := range report.Checks {
+		if strings.ToLower(strings.TrimSpace(c.Status)) != "warn" {
+			continue
+		}
+		msg := strings.TrimSpace(c.Message)
+		title := strings.TrimSpace(c.Title)
+		switch strings.ToLower(msg) {
+		case "", "not set":
+			if title != "" {
+				msg = fmt.Sprintf("%s: %s", title, strings.TrimSpace(c.Message))
+			}
+		}
+		if strings.TrimSpace(msg) == "" {
+			msg = c.ID
+		}
+		fmt.Printf("- [warn] %s", strings.TrimSpace(msg))
+		if h := strings.TrimSpace(c.Hint); h != "" {
+			fmt.Printf(" | hint: %s", h)
+		}
+		fmt.Println()
+		printed++
+		if printed >= limit {
+			break
+		}
+	}
+	if report.Warn > printed {
+		fmt.Printf("- ... %d more warnings (run `ncc-orchestrator preflight-check --config %s` for full details)\n", report.Warn-printed, report.ConfigPath)
+	}
+}
+
+func runQuickstartCommand(cmd *cobra.Command, args []string) error {
+	cfgPath, _ := cmd.Flags().GetString("config")
+	if strings.TrimSpace(cfgPath) == "" {
+		cfgPath = "config.yaml"
+	}
+	autoFix, _ := cmd.Flags().GetBool("auto-fix")
+	interactive, _ := cmd.Flags().GetBool("interactive")
+	assumeYes, _ := cmd.Flags().GetBool("assume-yes")
+	setupV2, _ := cmd.Flags().GetString("setup-v2")
+	installDir, _ := cmd.Flags().GetString("install-dir")
+	repo, _ := cmd.Flags().GetString("repo")
+	levelRaw, _ := cmd.Flags().GetString("automation-level")
+	level, err := parseAutomationLevel(levelRaw)
+	if err != nil {
+		return err
+	}
+	setupV2 = strings.ToLower(strings.TrimSpace(setupV2))
+	if setupV2 == "" {
+		setupV2 = "ask"
+	}
+	switch setupV2 {
+	case "ask", "download", "skip":
+	default:
+		return fmt.Errorf("invalid --setup-v2 %q (valid: ask, download, skip)", setupV2)
+	}
+	if strings.TrimSpace(installDir) == "" {
+		installDir = ".ncc-v2"
+	}
+	if strings.TrimSpace(repo) == "" {
+		repo = defaultGitHubRepo
+	}
+	cfgPath = strings.TrimSpace(cfgPath)
+	if cfgPath == "" {
+		cfgPath = "config.yaml"
+	}
+	fmt.Println("Quickstart mode: beginner-friendly setup")
+	fmt.Println("Step 1/3: checking config")
+	if _, err := os.Stat(cfgPath); errors.Is(err, os.ErrNotExist) {
+		if err := writeDummyConfig(cfgPath); err != nil {
+			return fmt.Errorf("quickstart: create dummy config: %w", err)
+		}
+		fmt.Printf("Created starter config: %s\n", cfgPath)
+	}
+	if autoFix {
+		repairedAny := false
+		for i := 0; i < 3; i++ {
+			fixed, err := repairConfigInlineCommentValues(cfgPath)
+			if err != nil {
+				break
+			}
+			if !fixed {
+				break
+			}
+			repairedAny = true
+		}
+		if repairedAny {
+			fmt.Println("Auto-fix: repaired malformed quoted config values.")
+		}
+	}
+	if interactive {
+		if err := runQuickstartInteractive(cfgPath); err != nil {
+			return fmt.Errorf("quickstart interactive: %w", err)
+		}
+	}
+	fmt.Println("Step 2/3: running safety checks")
+	report := buildPreflightReport(cfgPath)
+	pass, warn, fail := quickstartStatusSummary(report)
+	fmt.Printf("Quickstart preflight: pass=%d warn=%d failed=%d\n", pass, warn, fail)
+	if warn > 0 {
+		fmt.Println("Preflight warnings:")
+		printQuickstartWarningHighlights(report, 3)
+	}
+	if report.Failed > 0 && autoFix {
+		cfg, cfgErr := loadConfigForValidation(cfgPath)
+		if cfgErr == nil {
+			fixed, actions := applySafePreflightFixes(cfg, cfgPath, report, level)
+			for _, a := range actions {
+				fmt.Printf("Auto-fix: %s\n", a)
+			}
+			if fixed > 0 {
+				report = buildPreflightReport(cfgPath)
+				pass, warn, fail = quickstartStatusSummary(report)
+				fmt.Printf("After auto-fix: pass=%d warn=%d failed=%d\n", pass, warn, fail)
+				if warn > 0 {
+					fmt.Println("Remaining warnings:")
+					printQuickstartWarningHighlights(report, 3)
+				}
+			}
+		}
+	}
+	if report.Failed > 0 {
+		printAutomationRunbook(report, level)
+		return fmt.Errorf("quickstart preflight failed (%d failures)", report.Failed)
+	}
+	fmt.Println("Step 3/3: checking optional v2 API/UI components")
+	v2Ready, apiBin, uiBin, frontendDir, layout := quickstartV2Status(installDir)
+	webComponentsInstalled := v2Ready
+	if v2Ready {
+		fmt.Println("v2 components are ready.")
+		fmt.Printf("- API binary : %s\n", apiBin)
+		fmt.Printf("- UI binary  : %s\n", uiBin)
+		fmt.Printf("- Frontend   : %s\n", frontendDir)
+		fmt.Printf("- Layout     : %s\n", layout)
+	} else {
+		downloadV2 := false
+		switch setupV2 {
+		case "download":
+			downloadV2 = true
+		case "ask":
+			if assumeYes {
+				downloadV2 = true
+			} else if term.IsTerminal(int(os.Stdin.Fd())) {
+				reader := bufio.NewReader(os.Stdin)
+				ok, err := quickstartConfirm(reader, "Install optional API/UI components now?", true)
+				if err == nil {
+					downloadV2 = ok
+				}
+			}
+		case "skip":
+			downloadV2 = false
+		}
+		if downloadV2 {
+			fmt.Println("Downloading v2 components...")
+			err := runV2Bootstrap(v2BootstrapOptions{
+				Repo:       repo,
+				InstallDir: installDir,
+			})
+			if err != nil {
+				fmt.Printf("Could not auto-download v2 components: %v\n", err)
+				fmt.Printf("You can download manually from: https://github.com/%s/releases/latest\n", repo)
+				fmt.Printf("Command: ncc-orchestrator v2-bootstrap --repo %s --install-dir %s\n", repo, installDir)
+			} else {
+				fmt.Println("v2 components downloaded successfully.")
+				webComponentsInstalled = true
+			}
+		} else {
+			fmt.Println("v2 components are not installed yet (this is okay for CLI-only use).")
+			fmt.Printf("Download link: https://github.com/%s/releases/latest\n", repo)
+			fmt.Printf("Command: ncc-orchestrator v2-bootstrap --repo %s --install-dir %s\n", repo, installDir)
+		}
+	}
+	fmt.Println("Quickstart complete.")
+	fmt.Println("Next:")
+	fmt.Printf("1) Edit config if needed: %s\n", cfgPath)
+	fmt.Printf("2) Run checks: ncc-orchestrator --auto --config %s\n", cfgPath)
+	if webComponentsInstalled {
+		fmt.Println("3) (Optional) Start web UI: ncc-orchestrator v2-start")
+	} else {
+		fmt.Printf("3) (Optional) Install API/UI components: ncc-orchestrator v2-bootstrap --repo %s --install-dir %s\n", repo, installDir)
+	}
+	return nil
 }
 
 // extractClusterAddressV4 returns a reachable cluster address from clustermgmt v4 config cluster JSON.
@@ -9875,7 +12477,10 @@ func extractClusterAddressV3(entity map[string]interface{}) string {
 }
 
 func versionInfoString() string {
-	return fmt.Sprintf("Version: %s\nStream: %s\nBuild Date: %s\nGo Version: %s", Version, Stream, BuildDate, GoVersion)
+	return fmt.Sprintf(
+		"Version: %s\nStream: %s\nBuild Date: %s\nGo Version: %s\nOS: %s\nArch: %s",
+		Version, Stream, BuildDate, GoVersion, runtime.GOOS, runtime.GOARCH,
+	)
 }
 
 func printEnvInfo() {
@@ -10023,8 +12628,19 @@ Run 'ncc-orchestrator --help' for a full list of options.
 
 			cfg, err := bindConfig()
 			if err != nil {
-				consoleLogger.Error().Err(err).Msg("configuration error")
 				return exitConfig(fmt.Errorf("configuration: %w", err))
+			}
+			autoMode, _ := cmd.Flags().GetBool("auto")
+			autoLevelRaw, _ := cmd.Flags().GetString("automation-level")
+			autoLevel, err := parseAutomationLevel(autoLevelRaw)
+			if err != nil {
+				return exitConfig(err)
+			}
+			if autoMode && autoLevel == automationLevelFullAuto {
+				changes := applyFullAutoRuntimeTuning(&cfg)
+				for _, change := range changes {
+					consoleLogger.Warn().Str("auto_tuning", change).Msg("full-auto runtime tuning applied")
+				}
 			}
 
 			lvl := parseLogLevel(cfg.LogLevel)
@@ -10073,7 +12689,17 @@ Run 'ncc-orchestrator --help' for a full list of options.
 			if !skipPreflight {
 				preflightCfgPath := strings.TrimSpace(viper.GetString("config"))
 				report := buildPreflightReport(preflightCfgPath)
+				if report.Failed > 0 && autoMode && autoLevel != automationLevelAdvisory {
+					fixed, actions := applySafePreflightFixes(cfg, preflightCfgPath, report, autoLevel)
+					for _, action := range actions {
+						log.Info().Str("auto_fix", action).Msg("automation applied safe fix")
+					}
+					if fixed > 0 {
+						report = buildPreflightReport(preflightCfgPath)
+					}
+				}
 				if report.Failed > 0 {
+					printAutomationRunbook(report, autoLevel)
 					hintMsg := ""
 					if len(report.ActionableHints) > 0 {
 						hintMsg = " hints: " + strings.Join(report.ActionableHints, "; ")
@@ -10173,8 +12799,10 @@ Run 'ncc-orchestrator --help' for a full list of options.
 			if err := fs.MkdirAll(cfg.OutputDirFiltered, 0755); err != nil {
 				return err
 			}
-			if err := fs.MkdirAll(cfg.PromDir, 0755); err != nil {
-				return err
+			if cfg.PromEnabled {
+				if err := fs.MkdirAll(cfg.PromDir, 0755); err != nil {
+					return err
+				}
 			}
 
 			previousSummaryPath := filepath.Join(cfg.OutputDirFiltered, "run-summary.json")
@@ -10291,38 +12919,47 @@ Run 'ncc-orchestrator --help' for a full list of options.
 					// Per-cluster outputs: generate HTML and CSV before notifications so we can attach HTML to email
 					base := filtered
 					var replayHTMLPath string
+					rawPath := filepath.Join(cfg.OutputDirLogs, fmt.Sprintf("%s.log", cluster))
+					var meta HTMLMeta
+					metaLoaded := false
+					loadMeta := func() HTMLMeta {
+						if !metaLoaded {
+							m, mErr := parseNCCHeader(rawPath)
+							if mErr != nil {
+								log.Warn().Err(mErr).Str("rawPath", rawPath).Msg("replay: parseNCCHeader failed, using empty meta")
+								meta = HTMLMeta{}
+							} else {
+								meta = m
+							}
+							metaLoaded = true
+						}
+						return meta
+					}
+					if cfg.PromEnabled {
+						if err := writePrometheusFile(OSFS{}, cfg.PromDir, cluster, blocks); err != nil {
+							log.Error().Str("cluster", cluster).Err(err).Msg("replay write Prometheus .prom failed")
+						} else {
+							log.Info().Str("cluster", cluster).Str("prom_dir", cfg.PromDir).Msg("replay: Prometheus .prom written")
+						}
+					}
 					for _, f := range cfg.OutputFormats {
 						switch strings.ToLower(strings.TrimSpace(f)) {
 						case "html":
 							htmlFile := base + ".html"
 							replayHTMLPath = htmlFile
-							rawPath := filepath.Join(cfg.OutputDirLogs, fmt.Sprintf("%s.log", cluster))
-							meta, err := parseNCCHeader(rawPath)
-							if err != nil {
-								log.Warn().Err(err).Str("rawPath", rawPath).Msg("replay: parseNCCHeader failed, using empty meta")
-								meta = HTMLMeta{}
-							}
-							if err := generateHTML(OSFS{}, rowsFromBlocks(blocks), htmlFile, meta); err != nil {
+							if err := generateHTML(OSFS{}, rowsFromBlocks(blocks), htmlFile, loadMeta()); err != nil {
 								log.Error().Err(err).Str("file", htmlFile).Msg("replay: write HTML failed")
 								replayHTMLPath = ""
 							}
 						case "csv":
 							_ = generateCSV(OSFS{}, blocks, base+".csv")
 						case "json":
-							rawPath := filepath.Join(cfg.OutputDirLogs, fmt.Sprintf("%s.log", cluster))
-							meta, _ := parseNCCHeader(rawPath)
-							_ = generateJSON(OSFS{}, blocks, base+".json", meta)
+							_ = generateJSON(OSFS{}, blocks, base+".json", loadMeta())
 						case "markdown":
-							rawPath := filepath.Join(cfg.OutputDirLogs, fmt.Sprintf("%s.log", cluster))
-							meta, _ := parseNCCHeader(rawPath)
-							_ = generateMarkdown(OSFS{}, blocks, base+".md", meta)
+							_ = generateMarkdown(OSFS{}, blocks, base+".md", loadMeta())
 						case "sarif":
 							_ = generateSARIF(OSFS{}, blocks, base+".sarif")
 						}
-						if err := writePrometheusFile(OSFS{}, cfg.PromDir, cluster, blocks); err != nil {
-							log.Error().Str("cluster", cluster).Err(err).Msg("replay write Prometheus .prom failed")
-						}
-						log.Info().Str("cluster", cluster).Str("prom_dir", cfg.PromDir).Msg("replay: Prometheus .prom written")
 					}
 
 					attachPath := ""
@@ -10354,8 +12991,7 @@ Run 'ncc-orchestrator --help' for a full list of options.
 						HTML:    filepath.Base(base + ".html"),
 						CSV:     filepath.Base(base + ".csv"),
 					})
-					rawPath := filepath.Join(cfg.OutputDirLogs, fmt.Sprintf("%s.log", cluster))
-					meta, _ := parseNCCHeader(rawPath) // ignore error
+					meta = loadMeta()
 
 					for _, b := range blocks {
 						agg = append(agg, AggBlock{
@@ -10398,24 +13034,12 @@ Run 'ncc-orchestrator --help' for a full list of options.
 			// Setup graceful shutdown signal handling
 			sigChan := make(chan os.Signal, 1)
 			signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+			defer signal.Stop(sigChan)
 			go func() {
 				sig := <-sigChan
 				log.Warn().Str("signal", sig.String()).Msg("received shutdown signal, initiating graceful shutdown")
 				fmt.Fprintf(os.Stderr, "\n⚠️  Received %s signal. Initiating graceful shutdown...\n", sig.String())
 				cancel() // Cancel root context to stop all operations
-
-				// Give operations time to finish
-				shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
-				defer shutdownCancel()
-
-				select {
-				case <-shutdownCtx.Done():
-					log.Warn().Msg("graceful shutdown timeout exceeded, forcing exit")
-					fmt.Fprintln(os.Stderr, "⚠️  Graceful shutdown timeout exceeded")
-					os.Exit(1)
-				case <-time.After(100 * time.Millisecond):
-					// Allow time for cleanup
-				}
 			}()
 
 			p := mpb.New(mpb.WithWidth(80))
@@ -10424,6 +13048,15 @@ Run 'ncc-orchestrator --help' for a full list of options.
 				p.Wait()
 			}()
 			resetAdaptiveParallelism(cfg.MaxParallel)
+			gateChanged := make(chan struct{}, 1)
+			setAdaptiveParallelismNotify(gateChanged)
+			defer setAdaptiveParallelismNotify(nil)
+			notifyGateChange := func() {
+				select {
+				case gateChanged <- struct{}{}:
+				default:
+				}
+			}
 			sem := make(chan struct{}, cfg.MaxParallel)
 			var activeWorkers int32
 			var wg sync.WaitGroup
@@ -10433,16 +13066,22 @@ Run 'ncc-orchestrator --help' for a full list of options.
 			for _, cluster := range cfg.Clusters {
 				clusterUser, clusterPass := credentialsForCluster(cfg, cluster)
 				wg.Add(1)
+			waitForWorkerSlot:
 				for {
 					limit := currentAdaptiveParallel(cfg.MaxParallel)
 					curActive := int(atomic.LoadInt32(&activeWorkers))
 					if curActive < limit {
 						break
 					}
-					if ctx.Err() != nil {
-						break
+					select {
+					case <-ctx.Done():
+						break waitForWorkerSlot
+					case <-gateChanged:
 					}
-					time.Sleep(250 * time.Millisecond)
+				}
+				if ctx.Err() != nil {
+					wg.Done()
+					break
 				}
 				sem <- struct{}{}
 				atomic.AddInt32(&activeWorkers, 1)
@@ -10474,6 +13113,7 @@ Run 'ncc-orchestrator --help' for a full list of options.
 					defer func() {
 						<-sem
 						atomic.AddInt32(&activeWorkers, -1)
+						notifyGateChange()
 					}()
 					defer func() {
 						if r := recover(); r != nil {
@@ -10557,11 +13197,18 @@ Run 'ncc-orchestrator --help' for a full list of options.
 			var failed []string
 			var agg []AggBlock
 			var clusterFiles []struct{ Cluster, HTML, CSV string }
-			var allResults []ClusterResult
+			perCluster := make([]RunClusterSummary, 0, len(cfg.Clusters))
+			checksSnapshot := ChecksSnapshotJSON{
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+				Clusters:  make([]ClusterChecksSnapshot, 0, len(cfg.Clusters)),
+			}
+			failureCounts := newFailureClassCounts()
 			excludedByCluster := make(map[string][]ExcludedAlert)
 
 			for r := range results {
-				allResults = append(allResults, r)
+				perCluster = append(perCluster, buildRunClusterSummary(r))
+				checksSnapshot.Clusters = append(checksSnapshot.Clusters, buildClusterChecksSnapshotFromResult(r))
+				incrementFailureClassCount(failureCounts, r)
 				if r.Err != nil {
 					failed = append(failed, r.Cluster)
 					continue
@@ -10592,7 +13239,10 @@ Run 'ncc-orchestrator --help' for a full list of options.
 					HTML:    filepath.Base(htmlPath),
 					CSV:     filepath.Base(csvPath),
 				})
+				// Release per-cluster parsed blocks after aggregation to limit peak memory.
+				r.Blocks = nil
 			}
+			sort.Slice(checksSnapshot.Clusters, func(i, j int) bool { return checksSnapshot.Clusters[i].Address < checksSnapshot.Clusters[j].Address })
 
 			runDuration := time.Since(runStart)
 			indexPath := filepath.Join(cfg.OutputDirFiltered, "index.html")
@@ -10610,10 +13260,6 @@ Run 'ncc-orchestrator --help' for a full list of options.
 				} else {
 					exitCode = 1
 				}
-			}
-			perCluster := make([]RunClusterSummary, 0, len(allResults))
-			for _, r := range allResults {
-				perCluster = append(perCluster, buildRunClusterSummary(r))
 			}
 			avgHealth := 0
 			minHealth := 100
@@ -10646,12 +13292,11 @@ Run 'ncc-orchestrator --help' for a full list of options.
 				TotalChecks:    len(agg),
 				AvgHealthScore: avgHealth,
 				MinHealthScore: minHealth,
-				FailureClasses: failureClassCounts(allResults),
+				FailureClasses: failureCounts,
 			}
 			if err := writeRunSummaryJSON(fs, cfg.OutputDirFiltered, runSummary); err != nil {
 				log.Error().Err(err).Msg("write run-summary.json failed (non-fatal)")
 			}
-			checksSnapshot := buildChecksSnapshot(allResults)
 			if err := writeChecksSnapshotJSON(fs, cfg.OutputDirFiltered, checksSnapshot); err != nil {
 				log.Error().Err(err).Msg("write checks-snapshot.json failed (non-fatal)")
 			}
@@ -10796,7 +13441,6 @@ Run 'ncc-orchestrator --help' for a full list of options.
 				}
 				return fmt.Errorf("operation cancelled: %w", ctx.Err())
 			}
-			failureCounts := failureClassCounts(allResults)
 			policyMetrics := map[string]float64{
 				"new-fails":            float64(drillDownDiff.NewFailCount),
 				"resolved-fails":       float64(drillDownDiff.ResolvedFailCount),
@@ -10833,6 +13477,7 @@ Run 'ncc-orchestrator --help' for a full list of options.
 			}
 
 			if len(failed) > 0 {
+				printFailureResolutionHints(failureCounts)
 				if len(clusterFiles) > 0 {
 					log.Warn().Strs("failedClusters", failed).Int("succeeded", len(clusterFiles)).Msg("some clusters failed; aggregated report written for successful clusters")
 					fmt.Fprintf(os.Stderr, "Some clusters failed: %v (report written for %d successful cluster(s)). Exit code 3.\n", failed, len(clusterFiles))
@@ -10847,11 +13492,18 @@ Run 'ncc-orchestrator --help' for a full list of options.
 			return nil
 		},
 	}
-
+	cmd.SilenceErrors = true
 	cmd.SilenceUsage = true
+	cmd.SuggestionsMinimumDistance = 2
 
 	cmd.PersistentFlags().String("nutanix-v4-api-version", defaultNutanixV4APIVersion, "Nutanix v4 REST API path revision for clustermgmt and monitoring (e.g. v4.2, v4.1, v4.0.a1)")
 	_ = viper.BindPFlag("nutanix-v4-api-version", cmd.PersistentFlags().Lookup("nutanix-v4-api-version"))
+	cmd.PersistentFlags().String("config", "", "Config file path (yaml/json)")
+	_ = viper.BindPFlag("config", cmd.PersistentFlags().Lookup("config"))
+	cmd.PersistentFlags().Bool("insecure-skip-verify", false, "Skip TLS verify (only for trusted labs)")
+	_ = viper.BindPFlag("insecure-skip-verify", cmd.PersistentFlags().Lookup("insecure-skip-verify"))
+	cmd.PersistentFlags().String("request-timeout", "20s", "Per-request timeout")
+	_ = viper.BindPFlag("request-timeout", cmd.PersistentFlags().Lookup("request-timeout"))
 
 	// Deprecated root aliases (kept hidden for backward compatibility).
 	cmd.Flags().BoolP("update", "u", false, "Fetch latest release from GitHub and update this binary if a matching asset exists")
@@ -10869,7 +13521,8 @@ Run 'ncc-orchestrator --help' for a full list of options.
 
 	// flags
 	cmd.Flags().Bool("skip-preflight-check", false, "Skip default preflight-check before run (not recommended)")
-	cmd.Flags().String("config", "", "Config file path (yaml/json)")
+	cmd.Flags().Bool("auto", false, "Enable guided automation: apply safe self-healing fixes before failing")
+	cmd.Flags().String("automation-level", "safe-fix", "Automation policy: advisory, safe-fix, full-auto")
 	cmd.Flags().String("cluster-source-mode", defaultClusterSourceMode, "Cluster source mode: clusters (direct PE list) or pc (discover PEs from Prism Central targets)")
 	cmd.Flags().String("clusters", "", "Comma-separated cluster IPs or FQDNs")
 	cmd.Flags().String("clusters-file", "", "Path to cluster file (cluster or cluster,username[,password] per line; overrides clusters when set)")
@@ -10880,9 +13533,7 @@ Run 'ncc-orchestrator --help' for a full list of options.
 	cmd.Flags().String("username", "admin", "Username for Prism Gateway")
 	cmd.Flags().String("password", "", "Password (omit to be prompted)")
 	cmd.Flags().String("ncc-api-version", "v4", "NCC API mode: v4 (default) or Legacy (Prism Gateway v1 start-checks only; v1 accepted as alias); use --nutanix-v4-api-version for v4.2 vs v4.0.a1 etc.")
-	cmd.Flags().Bool("insecure-skip-verify", false, "Skip TLS verify (only for trusted labs)")
 	cmd.Flags().String("timeout", "15m", "Overall per-cluster timeout")
-	cmd.Flags().String("request-timeout", "20s", "Per-request timeout")
 	cmd.Flags().String("poll-interval", "15s", "Polling interval for task status")
 	cmd.Flags().String("poll-jitter", "2s", "Additive jitter to polling interval")
 	cmd.Flags().Int("max-parallel", 4, "Max concurrent clusters")
@@ -10906,7 +13557,8 @@ Run 'ncc-orchestrator --help' for a full list of options.
 	cmd.Flags().Int("gen-test-agg", 0, "Generate a test index.html with N clusters for scalability testing (no API calls)")
 	_ = cmd.Flags().MarkDeprecated("gen-test-agg", "use `ncc-orchestrator gen-test-agg --clusters <N>`")
 	_ = cmd.Flags().MarkHidden("gen-test-agg")
-	cmd.Flags().String("prom-dir", "promfiles", "Directory for Prometheus metrics")
+	cmd.Flags().Bool("prom-enabled", true, "Enable writing Prometheus textfile metrics")
+	cmd.Flags().String("prom-dir", "promfiles", "Directory for Prometheus metrics (used when prom-enabled=true)")
 	cmd.Flags().Bool("run-history", false, "Store each run snapshot in run-history-dir")
 	cmd.Flags().String("run-history-dir", "", "Run history directory (default: <output-dir-filtered>/runs)")
 	cmd.Flags().Int("retain-last", 0, "When run-history is enabled, keep only the last N runs (0 = unlimited)")
@@ -10942,6 +13594,8 @@ Run 'ncc-orchestrator --help' for a full list of options.
 
 	// viper bindings
 	_ = viper.BindPFlag("skip-preflight-check", cmd.Flags().Lookup("skip-preflight-check"))
+	_ = viper.BindPFlag("auto", cmd.Flags().Lookup("auto"))
+	_ = viper.BindPFlag("automation-level", cmd.Flags().Lookup("automation-level"))
 	_ = viper.BindPFlag("config", cmd.Flags().Lookup("config"))
 	_ = viper.BindPFlag("cluster-source-mode", cmd.Flags().Lookup("cluster-source-mode"))
 	_ = viper.BindPFlag("clusters", cmd.Flags().Lookup("clusters"))
@@ -10971,6 +13625,7 @@ Run 'ncc-orchestrator --help' for a full list of options.
 	_ = viper.BindPFlag("retry-max-delay", cmd.Flags().Lookup("retry-max-delay"))
 	_ = viper.BindPFlag("retry-circuit-breaker", cmd.Flags().Lookup("retry-circuit-breaker"))
 	_ = viper.BindPFlag("replay", cmd.Flags().Lookup("replay"))
+	_ = viper.BindPFlag("prom-enabled", cmd.Flags().Lookup("prom-enabled"))
 	_ = viper.BindPFlag("prom-dir", cmd.Flags().Lookup("prom-dir"))
 	_ = viper.BindPFlag("run-history", cmd.Flags().Lookup("run-history"))
 	_ = viper.BindPFlag("run-history-dir", cmd.Flags().Lookup("run-history-dir"))
@@ -11039,18 +13694,21 @@ Default behavior follows the current major track (v1.x stays on latest v1.x).
 To cross major versions (for example v1 -> v2), pass --allow-major-upgrade.
 
 Use --check to only validate availability/version without downloading.
-Use --binary-url to work with non-GitHub/custom binary repositories.`,
+Use --binary-url to work with non-GitHub/custom binary repositories.
+When using --binary-url for install, --binary-sha256 is required.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			checkOnly, _ := cmd.Flags().GetBool("check")
 			allowMajorUpgrade, _ := cmd.Flags().GetBool("allow-major-upgrade")
 			repo, _ := cmd.Flags().GetString("repo")
 			binaryURL, _ := cmd.Flags().GetString("binary-url")
+			binarySHA256, _ := cmd.Flags().GetString("binary-sha256")
 			targetVersion, _ := cmd.Flags().GetString("target-version")
 			return runUpdate(updateOptions{
 				CheckOnly:         checkOnly,
 				AllowMajorUpgrade: allowMajorUpgrade,
 				Repo:              repo,
 				BinaryURL:         binaryURL,
+				BinarySHA256:      binarySHA256,
 				TargetVersion:     targetVersion,
 			})
 		},
@@ -11059,6 +13717,7 @@ Use --binary-url to work with non-GitHub/custom binary repositories.`,
 	updateCmd.Flags().Bool("allow-major-upgrade", false, "Allow major upgrades (for example v1.x to v2.x)")
 	updateCmd.Flags().String("repo", defaultGitHubRepo, "GitHub repo in owner/repo or GitHub URL format")
 	updateCmd.Flags().String("binary-url", "", "Direct binary URL for non-GitHub/custom repositories")
+	updateCmd.Flags().String("binary-sha256", "", "Expected SHA256 for --binary-url (required for install)")
 	updateCmd.Flags().String("target-version", "", "Target version hint (recommended with --binary-url)")
 	cmd.AddCommand(updateCmd)
 
@@ -11118,10 +13777,16 @@ Then it writes startup scripts under --install-dir.`,
 
 	v2StartCmd := &cobra.Command{
 		Use:   "v2-start",
-		Short: "Start v2 API and UI services together",
-		Long: `Starts both ncc-api-server and ncc-ui-server from bootstrapped binaries.
+		Short: "Start v2 services (API + optional UI)",
+		Long: `Starts ncc-api-server and, by default, ncc-ui-server from bootstrapped binaries.
 
-Run "ncc-orchestrator v2-bootstrap" once before using this command.`,
+Run "ncc-orchestrator v2-bootstrap" once before using this command.
+
+Use --api-only to start only the backend API service (for custom UI integrations).
+
+Use --detach to run services in the background.
+
+Use --self-heal with --detach to auto-restart services on unexpected exits.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			installDir, _ := cmd.Flags().GetString("install-dir")
 			configPath, _ := cmd.Flags().GetString("config-path")
@@ -11130,16 +13795,84 @@ Run "ncc-orchestrator v2-bootstrap" once before using this command.`,
 			orchestratorBin, _ := cmd.Flags().GetString("orchestrator-bin")
 			apiListen, _ := cmd.Flags().GetString("api-listen")
 			uiListen, _ := cmd.Flags().GetString("ui-listen")
+			apiAdvertiseURL, _ := cmd.Flags().GetString("api-advertise-url")
+			uiAdvertiseURL, _ := cmd.Flags().GetString("ui-advertise-url")
+			uiBackendURL, _ := cmd.Flags().GetString("ui-backend-url")
+			apiCORSOrigins, _ := cmd.Flags().GetString("api-cors-origins")
+			uiAllowedOrigins, _ := cmd.Flags().GetString("ui-allowed-origins")
 			tokenFile, _ := cmd.Flags().GetString("token-file")
+			apiAuthMode, _ := cmd.Flags().GetString("api-auth-mode")
+			apiSessionTTL, _ := cmd.Flags().GetDuration("api-session-ttl")
+			apiSessionSecret, _ := cmd.Flags().GetString("api-session-secret")
+			apiSessionSecretFile, _ := cmd.Flags().GetString("api-session-secret-file")
+			apiRunTimeout, _ := cmd.Flags().GetDuration("api-run-timeout")
+			apiRateLimitPerMinute, _ := cmd.Flags().GetInt("api-rate-limit-per-minute")
+			apiReadTimeout, _ := cmd.Flags().GetDuration("api-read-timeout")
+			apiWriteTimeout, _ := cmd.Flags().GetDuration("api-write-timeout")
+			apiIdleTimeout, _ := cmd.Flags().GetDuration("api-idle-timeout")
+			apiTLSCertFile, _ := cmd.Flags().GetString("api-tls-cert-file")
+			apiTLSKeyFile, _ := cmd.Flags().GetString("api-tls-key-file")
+			apiTLSClientCAFile, _ := cmd.Flags().GetString("api-tls-client-ca-file")
+			uiTLSCertFile, _ := cmd.Flags().GetString("ui-tls-cert-file")
+			uiTLSKeyFile, _ := cmd.Flags().GetString("ui-tls-key-file")
+			uiBackendCAFile, _ := cmd.Flags().GetString("ui-backend-ca-file")
+			uiBackendClientCertFile, _ := cmd.Flags().GetString("ui-backend-client-cert-file")
+			uiBackendClientKeyFile, _ := cmd.Flags().GetString("ui-backend-client-key-file")
+			uiBackendInsecureSkipVerify, _ := cmd.Flags().GetBool("ui-backend-insecure-skip-verify")
+			waitReady, _ := cmd.Flags().GetBool("wait-ready")
+			readyTimeout, _ := cmd.Flags().GetDuration("ready-timeout")
+			detach, _ := cmd.Flags().GetBool("detach")
+			apiOnly, _ := cmd.Flags().GetBool("api-only")
+			apiLogFile, _ := cmd.Flags().GetString("api-log-file")
+			uiLogFile, _ := cmd.Flags().GetString("ui-log-file")
+			apiPIDFile, _ := cmd.Flags().GetString("api-pid-file")
+			uiPIDFile, _ := cmd.Flags().GetString("ui-pid-file")
+			selfHeal, _ := cmd.Flags().GetBool("self-heal")
+			selfHealMaxRestarts, _ := cmd.Flags().GetInt("self-heal-max-restarts")
+			selfHealWindow, _ := cmd.Flags().GetDuration("self-heal-window")
 			return runV2Start(v2StartOptions{
-				InstallDir:      installDir,
-				ConfigPath:      configPath,
-				OutputDir:       outputDir,
-				LogDir:          logDir,
-				OrchestratorBin: orchestratorBin,
-				APIListen:       apiListen,
-				UIListen:        uiListen,
-				TokenFile:       tokenFile,
+				InstallDir:                  installDir,
+				ConfigPath:                  configPath,
+				OutputDir:                   outputDir,
+				LogDir:                      logDir,
+				OrchestratorBin:             orchestratorBin,
+				APIListen:                   apiListen,
+				UIListen:                    uiListen,
+				APIAdvertiseURL:             apiAdvertiseURL,
+				UIAdvertiseURL:              uiAdvertiseURL,
+				UIBackendURL:                uiBackendURL,
+				APICORSOrigins:              apiCORSOrigins,
+				UIAllowedOrigins:            uiAllowedOrigins,
+				TokenFile:                   tokenFile,
+				APIAuthMode:                 apiAuthMode,
+				APISessionTTL:               apiSessionTTL,
+				APISessionSecret:            apiSessionSecret,
+				APISessionSecretFile:        apiSessionSecretFile,
+				APIRunTimeout:               apiRunTimeout,
+				APIRateLimitPerMinute:       apiRateLimitPerMinute,
+				APIReadTimeout:              apiReadTimeout,
+				APIWriteTimeout:             apiWriteTimeout,
+				APIIdleTimeout:              apiIdleTimeout,
+				APITLSCertFile:              apiTLSCertFile,
+				APITLSKeyFile:               apiTLSKeyFile,
+				APITLSClientCAFile:          apiTLSClientCAFile,
+				UITLSCertFile:               uiTLSCertFile,
+				UITLSKeyFile:                uiTLSKeyFile,
+				UIBackendCAFile:             uiBackendCAFile,
+				UIBackendClientCertFile:     uiBackendClientCertFile,
+				UIBackendClientKeyFile:      uiBackendClientKeyFile,
+				UIBackendInsecureSkipVerify: uiBackendInsecureSkipVerify,
+				WaitReady:                   waitReady,
+				ReadyTimeout:                readyTimeout,
+				Detach:                      detach,
+				APIOnly:                     apiOnly,
+				APILogFile:                  apiLogFile,
+				UILogFile:                   uiLogFile,
+				APIPIDFile:                  apiPIDFile,
+				UIPIDFile:                   uiPIDFile,
+				SelfHeal:                    selfHeal,
+				SelfHealMaxRestarts:         selfHealMaxRestarts,
+				SelfHealWindow:              selfHealWindow,
 			})
 		},
 	}
@@ -11150,8 +13883,108 @@ Run "ncc-orchestrator v2-bootstrap" once before using this command.`,
 	v2StartCmd.Flags().String("orchestrator-bin", "./ncc-orchestrator", "Path to ncc-orchestrator binary used by API server")
 	v2StartCmd.Flags().String("api-listen", ":8081", "Listen address for API server")
 	v2StartCmd.Flags().String("ui-listen", ":8080", "Listen address for UI server")
+	v2StartCmd.Flags().String("api-advertise-url", "", "Optional externally reachable API URL printed in startup output")
+	v2StartCmd.Flags().String("ui-advertise-url", "", "Optional externally reachable UI URL printed in startup output")
+	v2StartCmd.Flags().String("ui-backend-url", "", "Backend URL for ncc-ui-server to proxy to (default derived from --api-listen)")
+	v2StartCmd.Flags().String("api-cors-origins", "", "Comma-separated API CORS origins (default derived from UI origin + --ui-allowed-origins)")
+	v2StartCmd.Flags().String("ui-allowed-origins", "", "Additional comma-separated UI origins to allow (e.g. http://192.168.1.50:8080); default localhost origin is always included")
 	v2StartCmd.Flags().String("token-file", ".ncc-api-token", "Token file path used by UI/API servers")
+	v2StartCmd.Flags().String("api-auth-mode", "token", "API auth mode passed to ncc-api-server: token, session, hybrid")
+	v2StartCmd.Flags().Duration("api-session-ttl", 10*time.Minute, "Session TTL passed to ncc-api-server")
+	v2StartCmd.Flags().String("api-session-secret", "", "Session HMAC secret passed to ncc-api-server (use file flag in production)")
+	v2StartCmd.Flags().String("api-session-secret-file", "", "Read API session secret from file and pass to ncc-api-server")
+	v2StartCmd.Flags().Duration("api-run-timeout", 90*time.Minute, "Run timeout passed to ncc-api-server")
+	v2StartCmd.Flags().Int("api-rate-limit-per-minute", 60, "Per-client API rate limit passed to ncc-api-server (0 disables)")
+	v2StartCmd.Flags().Duration("api-read-timeout", 15*time.Second, "HTTP read timeout passed to ncc-api-server")
+	v2StartCmd.Flags().Duration("api-write-timeout", 60*time.Second, "HTTP write timeout passed to ncc-api-server")
+	v2StartCmd.Flags().Duration("api-idle-timeout", 60*time.Second, "HTTP idle timeout passed to ncc-api-server")
+	v2StartCmd.Flags().String("api-tls-cert-file", "", "TLS cert file for ncc-api-server")
+	v2StartCmd.Flags().String("api-tls-key-file", "", "TLS key file for ncc-api-server")
+	v2StartCmd.Flags().String("api-tls-client-ca-file", "", "mTLS client CA bundle for ncc-api-server")
+	v2StartCmd.Flags().String("ui-tls-cert-file", "", "TLS cert file for ncc-ui-server")
+	v2StartCmd.Flags().String("ui-tls-key-file", "", "TLS key file for ncc-ui-server")
+	v2StartCmd.Flags().String("ui-backend-ca-file", "", "Custom CA bundle for ncc-ui-server backend TLS")
+	v2StartCmd.Flags().String("ui-backend-client-cert-file", "", "Client cert for ncc-ui-server backend mTLS")
+	v2StartCmd.Flags().String("ui-backend-client-key-file", "", "Client key for ncc-ui-server backend mTLS")
+	v2StartCmd.Flags().Bool("ui-backend-insecure-skip-verify", false, "Skip TLS verification for ncc-ui-server backend connection")
+	v2StartCmd.Flags().Bool("wait-ready", false, "Wait for API health (and UI root when enabled) before returning")
+	v2StartCmd.Flags().Duration("ready-timeout", 20*time.Second, "Timeout for wait-ready checks")
+	v2StartCmd.Flags().Bool("api-only", false, "Start only ncc-api-server (skip ncc-ui-server/frontend); useful when building a custom frontend")
+	v2StartCmd.Flags().Bool("detach", false, "Run started services in background; writes PID/log files under <install-dir>/run and <install-dir>/logs")
+	v2StartCmd.Flags().String("api-log-file", "", "Detached mode API log file path (default <install-dir>/logs/v2-api.log)")
+	v2StartCmd.Flags().String("ui-log-file", "", "Detached mode UI log file path (default <install-dir>/logs/v2-ui.log)")
+	v2StartCmd.Flags().String("api-pid-file", "", "Detached mode API PID file path (default <install-dir>/run/v2-api.pid)")
+	v2StartCmd.Flags().String("ui-pid-file", "", "Detached mode UI PID file path (default <install-dir>/run/v2-ui.pid)")
+	v2StartCmd.Flags().Bool("self-heal", false, "Detached mode only: monitor and auto-restart API/UI if they exit unexpectedly")
+	v2StartCmd.Flags().Int("self-heal-max-restarts", 3, "Maximum auto-restarts allowed within self-heal window")
+	v2StartCmd.Flags().Duration("self-heal-window", 10*time.Minute, "Rolling window used for self-heal restart budget")
 	cmd.AddCommand(v2StartCmd)
+
+	v2CheckCmd := &cobra.Command{
+		Use:   "v2-check",
+		Short: "Run lightweight self-check for v2 paths and ports",
+		Long:  `Validates v2 runtime prerequisites (binaries, config, dirs, and listen port availability) before running v2-start.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			installDir, _ := cmd.Flags().GetString("install-dir")
+			configPath, _ := cmd.Flags().GetString("config-path")
+			outputDir, _ := cmd.Flags().GetString("output-dir")
+			logDir, _ := cmd.Flags().GetString("log-dir")
+			orchestratorBin, _ := cmd.Flags().GetString("orchestrator-bin")
+			apiListen, _ := cmd.Flags().GetString("api-listen")
+			uiListen, _ := cmd.Flags().GetString("ui-listen")
+			tokenFile, _ := cmd.Flags().GetString("token-file")
+			apiOnly, _ := cmd.Flags().GetBool("api-only")
+			return runV2Check(v2StartOptions{
+				InstallDir:      installDir,
+				ConfigPath:      configPath,
+				OutputDir:       outputDir,
+				LogDir:          logDir,
+				OrchestratorBin: orchestratorBin,
+				APIListen:       apiListen,
+				UIListen:        uiListen,
+				TokenFile:       tokenFile,
+				APIOnly:         apiOnly,
+			})
+		},
+	}
+	v2CheckCmd.Flags().String("install-dir", ".ncc-v2", "Installation directory used by v2-bootstrap")
+	v2CheckCmd.Flags().String("config-path", "config.yaml", "Config file path passed to API server")
+	v2CheckCmd.Flags().String("output-dir", "outputfiles", "Output directory passed to API server")
+	v2CheckCmd.Flags().String("log-dir", "nccfiles", "Log directory passed to API server")
+	v2CheckCmd.Flags().String("orchestrator-bin", "./ncc-orchestrator", "Path to ncc-orchestrator binary used by API server")
+	v2CheckCmd.Flags().String("api-listen", ":8081", "Listen address for API server")
+	v2CheckCmd.Flags().String("ui-listen", ":8080", "Listen address for UI server")
+	v2CheckCmd.Flags().String("token-file", ".ncc-api-token", "Token file path used by UI/API servers")
+	v2CheckCmd.Flags().Bool("api-only", false, "Validate only API prerequisites (skip UI/frontend checks)")
+	cmd.AddCommand(v2CheckCmd)
+
+	v2StopCmd := &cobra.Command{
+		Use:   "v2-stop",
+		Short: "Stop detached v2 API/UI services",
+		Long: `Stops v2 services started with "v2-start --detach" using PID files under <install-dir>/run.
+
+Use --force to send a hard kill signal.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			installDir, _ := cmd.Flags().GetString("install-dir")
+			apiPIDFile, _ := cmd.Flags().GetString("api-pid-file")
+			uiPIDFile, _ := cmd.Flags().GetString("ui-pid-file")
+			force, _ := cmd.Flags().GetBool("force")
+			stopTimeout, _ := cmd.Flags().GetDuration("stop-timeout")
+			return runV2Stop(v2StopOptions{
+				InstallDir:  installDir,
+				APIPIDFile:  apiPIDFile,
+				UIPIDFile:   uiPIDFile,
+				Force:       force,
+				StopTimeout: stopTimeout,
+			})
+		},
+	}
+	v2StopCmd.Flags().String("install-dir", ".ncc-v2", "Installation directory used by v2-start --detach")
+	v2StopCmd.Flags().String("api-pid-file", "", "Detached API PID file path override")
+	v2StopCmd.Flags().String("ui-pid-file", "", "Detached UI PID file path override")
+	v2StopCmd.Flags().Bool("force", false, "Force kill processes instead of graceful stop")
+	v2StopCmd.Flags().Duration("stop-timeout", 5*time.Second, "Graceful stop timeout before force-kill (ignored when --force)")
+	cmd.AddCommand(v2StopCmd)
 
 	genTestAggCmd := &cobra.Command{
 		Use:   "gen-test-agg",
@@ -11207,7 +14040,6 @@ Use --output to write to a file (e.g. for --clusters-file).`,
 	discoverCmd.Flags().String("password", "", "Prism password (or NCC_PASSWORD)")
 	discoverCmd.Flags().String("output", "", "Write cluster list to file (one per line)")
 	discoverCmd.Flags().String("format", "lines", "Output format: lines (address per line), table (NAME EXT_ID ADDRESS API), or json")
-	discoverCmd.Flags().Bool("insecure-skip-verify", false, "Skip TLS verify for Prism Central")
 	discoverCmd.Flags().String("discover-api-version", "v4", "Cluster list API: v4 (GET clustermgmt) or v3 (legacy POST); v4 path uses --nutanix-v4-api-version")
 	_ = viper.BindPFlag("prism-central-url", discoverCmd.Flags().Lookup("prism-central-url"))
 	// Do not BindPFlag username, password, or insecure-skip-verify here — they share keys
@@ -11234,13 +14066,29 @@ Examples:
 	createScheduleCmd.Flags().String("type", "auto", "Scheduler type: auto, cron, or windows")
 	createScheduleCmd.Flags().String("action", "create", "Action: create, list, remove, or run-now")
 	createScheduleCmd.Flags().String("task-name", "ncc-orchestrator", "Schedule/task name marker")
-	createScheduleCmd.Flags().String("config", "", "Config file path passed to ncc-orchestrator --config")
 	createScheduleCmd.Flags().String("command", "", "Override full command used by scheduler (advanced)")
 	createScheduleCmd.Flags().String("cron", "", "Cron expression (for --type cron). If empty, derived from --every")
 	createScheduleCmd.Flags().Duration("every", 4*time.Hour, "Periodic interval used for cron derivation or Windows schedule (e.g. 30m, 4h, 24h)")
 	createScheduleCmd.Flags().String("log-path", "logs/ncc-scheduler.log", "Log file path for cron redirect")
+	createScheduleCmd.Flags().Bool("with-lock", true, "Use flock lock file for cron runs to prevent overlap")
 	createScheduleCmd.Flags().Bool("print-only", true, "Preview action without applying changes (used by create/remove)")
 	cmd.AddCommand(createScheduleCmd)
+
+	quickstartCmd := &cobra.Command{
+		Use:   "quickstart",
+		Short: "Guided setup and automated preflight",
+		Long: `Quickstart bootstraps a starter config when missing, runs preflight checks,
+and can apply safe self-healing actions for common setup issues.`,
+		RunE: runQuickstartCommand,
+	}
+	quickstartCmd.Flags().Bool("auto-fix", true, "Apply safe auto-fixes during quickstart")
+	quickstartCmd.Flags().Bool("interactive", false, "Prompt for common configuration values and write them to config")
+	quickstartCmd.Flags().String("setup-v2", "ask", "v2 component setup mode: ask, download, skip")
+	quickstartCmd.Flags().String("install-dir", ".ncc-v2", "Installation directory used by v2-bootstrap")
+	quickstartCmd.Flags().String("repo", defaultGitHubRepo, "GitHub repo for v2 component downloads")
+	quickstartCmd.Flags().Bool("assume-yes", false, "Auto-confirm quickstart prompts")
+	quickstartCmd.Flags().String("automation-level", "safe-fix", "Automation policy: advisory, safe-fix, full-auto")
+	cmd.AddCommand(quickstartCmd)
 
 	configSchemaCmd := &cobra.Command{
 		Use:   "config-schema",
@@ -11252,28 +14100,45 @@ Examples:
 
 	validateConfigCmd := &cobra.Command{
 		Use:   "validate-config",
-		Short: "Validate configuration file and exit",
+		Short: "Validate configuration file and exit (use preflight-check for full guidance)",
 		RunE:  runValidateConfigCommand,
 	}
-	validateConfigCmd.Flags().String("config", "", "Config file path (yaml/json)")
 	cmd.AddCommand(validateConfigCmd)
 
 	validateSecretsCmd := &cobra.Command{
 		Use:   "validate-secrets",
-		Short: "Validate secret:// references and secret source accessibility",
+		Short: "Validate secret:// references and secret source accessibility (use preflight-check for full guidance)",
 		RunE:  runValidateSecretsCommand,
 	}
-	validateSecretsCmd.Flags().String("config", "", "Config file path (yaml/json)")
 	cmd.AddCommand(validateSecretsCmd)
 
 	preflightCmd := &cobra.Command{
 		Use:   "preflight-check",
-		Short: "Run preflight checks before trigger-run",
+		Short: "Run combined config/secrets/path preflight checks",
 		RunE:  runPreflightCheckCommand,
 	}
-	preflightCmd.Flags().String("config", "", "Config file path (yaml/json)")
 	preflightCmd.Flags().String("format", "json", "Output format (json)")
 	cmd.AddCommand(preflightCmd)
+
+	uninstallCmd := &cobra.Command{
+		Use:   "uninstall",
+		Short: "Uninstall NCC-created local runtime artifacts/state",
+		Long: `Uninstall removes local artifacts/state generated by ncc-orchestrator.
+Kubernetes uninstall is intentionally script-only (use scripts/uninstall-v2-clean.sh).
+
+Examples:
+  ncc-orchestrator uninstall --dry-run
+  ncc-orchestrator uninstall --config config.yaml --force`,
+		RunE: runUninstallCommand,
+	}
+	uninstallCmd.Flags().String("install-dir", ".ncc-v2", "v2 install directory created by bootstrap/start")
+	uninstallCmd.Flags().String("task-name", "ncc-orchestrator", "Scheduler task marker name to remove")
+	uninstallCmd.Flags().Bool("remove-local", true, "Remove local NCC artifacts/state (outputfiles, nccfiles, promfiles, logs, token/state files)")
+	uninstallCmd.Flags().Bool("remove-schedule", true, "Remove scheduler entry created by create-schedule")
+	uninstallCmd.Flags().Bool("remove-v2-runtime", true, "Stop detached v2 services and remove install-dir")
+	uninstallCmd.Flags().Bool("force", false, "Force stop behavior and non-interactive uninstall where applicable")
+	uninstallCmd.Flags().Bool("dry-run", false, "Print actions without deleting")
+	cmd.AddCommand(uninstallCmd)
 
 	return cmd
 }
@@ -11285,9 +14150,9 @@ func main() {
 		time.Sleep(100 * time.Millisecond)
 	}()
 
-	if err := newRootCmd().Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		log.Error().Err(err).Msg("application error")
+	root := newRootCmd()
+	if err := root.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", humanizeCLIError(root, os.Args[1:], err))
 		code := 1
 		var exitErr *exitCodeError
 		if errors.As(err, &exitErr) {

@@ -1,8 +1,8 @@
-# Features and Config Flags (v1.1.0)
+# Features and Config Flags (v2.0.0)
 
 Comprehensive reference for NCC Orchestrator features, configuration keys, and CLI flags.
 
-> Scope note (v1): this repository branch is Go-only for runtime components. The v2 API/UI servers and React frontend are intentionally not part of this scope.
+> Scope: covers the runtime configuration of the `ncc-orchestrator` CLI. For the v2 API/UI servers and React frontend, see [`../README.md`](../README.md) and [`../docs/ARCHITECTURE_AND_HANDOVER.md`](./ARCHITECTURE_AND_HANDOVER.md). For a ready-to-edit YAML template, see [`../example_config.yaml`](../example_config.yaml).
 
 ## 1) What this tool does
 
@@ -205,8 +205,14 @@ Check/update local binary from GitHub or custom binary URLs:
 ncc-orchestrator update
 ncc-orchestrator update --check
 ncc-orchestrator update --check --binary-url https://artifacts.example.com/ncc-orchestrator-linux-amd64 --target-version 1.2.4
+ncc-orchestrator update --binary-url https://artifacts.example.com/ncc-orchestrator-linux-amd64 --binary-sha256 <sha256-hex>
 ncc-orchestrator update --allow-major-upgrade
 ```
+
+Notes:
+
+- `--binary-sha256` is required for `--binary-url` install operations.
+- GitHub release updates verify downloaded binaries against release checksum assets before replace.
 
 ### 2.19 Test dashboard generation (no API calls)
 
@@ -215,6 +221,16 @@ Generate synthetic aggregate dashboard and artifacts:
 ```bash
 ncc-orchestrator gen-test-agg --clusters 25 --output-dir dist/test/outputfiles
 ```
+
+### 2.20 Preflight check output (automation-friendly)
+
+Run full preflight with structured JSON output:
+
+```bash
+ncc-orchestrator preflight-check --config config.yaml --format json
+```
+
+Each non-pass check includes a machine-readable `remediation_code` field so UI/automation can map failures to fix playbooks.
 
 ## 3) Configuration precedence
 
@@ -256,6 +272,7 @@ Highest to lowest precedence:
 | `retry-base-delay` | duration | `400ms` | `"500ms"` |
 | `retry-max-delay` | duration | `8s` | `"12s"` |
 | `retry-circuit-breaker` | int | `3` | `2` |
+| `prom-enabled` | bool | `true` | `false` |
 | `prom-dir` | string | `promfiles` | `"metrics"` |
 | `run-history` | bool | `false` | `true` |
 | `run-history-dir` | string | `<output-dir-filtered>/runs` | `"outputfiles/runs"` |
@@ -344,7 +361,8 @@ ncc-orchestrator [flags]
 | `--pcs-file` | string | Path to text file | none | Alternate PC target source for `pc` mode (one PC per line; `#` comments allowed). |
 | `--prism-central-url` | string | URL/IP/FQDN | none | Single-PC fallback target for `pc` mode when `--pcs`/`--pcs-file` are not set. |
 | `--discover-api-version` | string | `v4`, `v3` | `v4` | API used for PC cluster discovery in `pc` mode. `v4` uses clustermgmt API and auto-falls back to `v3` on 404. |
-| `--prom-dir` | string | Writable directory path | `promfiles` | Directory for Prometheus `.prom` metric files used by pull-based monitoring stacks. |
+| `--prom-enabled` | bool | `true`, `false` | `false` | Enables/disables writing Prometheus textfile metrics. |
+| `--prom-dir` | string | Writable directory path | `promfiles` | Directory for Prometheus `.prom` metric files (used only when `--prom-enabled=true`). |
 | `--quiet-hours` | string | `HH:MM-HH:MM` local-time range | none | Recurring daily notification suppression window. Ideal for predictable off-hours operations. |
 | `--replay` | bool | `true`, `false` | `false` | Rebuilds reports/artifacts from existing logs without invoking NCC APIs. Useful for debugging and template iterations. |
 | `--request-timeout` | duration string | Go duration (`5s`, `20s`, `60s`) | `20s` | Per-request HTTP timeout. Must be lower than overall run timeout; increase for slow links or overloaded control planes. |
@@ -362,6 +380,9 @@ ncc-orchestrator [flags]
 | `--secrets-file` | string | Path to YAML/JSON key-value map | none | Secret map source when `--secrets-provider=file` is selected. |
 | `--secrets-provider` | string | `env`, `file` | none | Enables `secret://` value resolution from process environment or file-backed key map. |
 | `--severity-filter` | string | CSV subset of `FAIL,WARN,ERR,INFO` | empty (all) | Limits output rows/artifacts to selected severities. Useful for alert-focused reports but can hide context. |
+| `--skip-preflight-check` | bool | `true`, `false` | `false` | Skips default preflight execution in run path. Keep `false` for production safety. |
+| `--auto` | bool | `true`, `false` | `false` | Enables guided automation in run path: prints remediation runbooks and applies safe self-healing fixes before failing. |
+| `--automation-level` | string | `advisory`, `safe-fix`, `full-auto` | `safe-fix` | Automation policy for run/quickstart. `advisory` suggests fixes only; `safe-fix` applies low-risk repairs; `full-auto` additionally tunes runtime knobs (`max-parallel`, timeout/retry settings) for stability. |
 | `--exclude-alert-titles` | string | CSV list of alert titles | empty | Excludes matching alert titles from generated outputs/notifications. |
 | `--exclude-alert-titles-file` | string | Path to line-delimited title file | empty | Loads exclusion titles from file (`#` comments and blank lines are ignored). |
 | `--exclude-alert-match-mode` | string | `exact`, `contains`, `regex` | `exact` | Controls how exclusion titles are matched against alert names. |
@@ -395,7 +416,7 @@ ncc-orchestrator discover-clusters [flags]
 |---|---|---|---|---|
 | `--discover-api-version` | string | `v4`, `v3` | `v4` | Selects discovery endpoint family. `v4` uses clustermgmt GET with pagination; `v3` uses legacy list API. |
 | `--format` | string | `lines`, `table`, `json` | `lines` | Output renderer: `lines` for direct `clusters-file` usage, `table` for human review, `json` for automation pipelines. |
-| `--insecure-skip-verify` | bool | `true`, `false` | `false` | Disables TLS verification for Prism Central API calls. |
+| `--insecure-skip-verify` | bool | `true`, `false` | `false` | Disables TLS verification for Prism Central API calls. Also required if `--prism-central-url` uses `http://` instead of `https://`. |
 | `--output` | string | File path | none | Writes discovered addresses to file (one per line), useful to bootstrap `clusters-file`. |
 | `--password` | string | Plain string or env-injected value | prompt/none | Prism Central password for discovery operation only. |
 | `--prism-central-url` | string | URL such as `https://pc:9440` | none | Required Prism Central endpoint for cluster list queries. |
@@ -432,6 +453,7 @@ By default, updates remain in the current major track (for example `v1.x` -> lat
 | `--allow-major-upgrade` | bool | `true`, `false` | `false` | Explicitly permits major-version upgrades. Required for `v1.x` -> `v2.x` transitions. |
 | `--repo` | string | `owner/repo` or GitHub repo URL | `lTSPV75BRO/Nutanix-ncc-orchestrator` | GitHub source repo used for release discovery/check/update. |
 | `--binary-url` | string | Direct binary URL | empty | Use a non-GitHub/custom artifact URL for check/update operations. |
+| `--binary-sha256` | string | 64-char SHA256 hex | empty | Required when installing via `--binary-url` (ignored for `--check`). Used to enforce artifact integrity. |
 | `--target-version` | string | Semver-like value | empty | Target version hint, recommended with `--binary-url` for track comparisons/safety checks. |
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
 
@@ -514,6 +536,7 @@ ncc-orchestrator create-schedule [flags]
 | `--cron` | string | Standard 5-field cron expression | derived from `--every` when empty | Explicit cron schedule for `--type cron`. Takes precedence over `--every` derivation. |
 | `--every` | duration | Go duration (`30m`, `4h`, `24h`) | `4h` | Used to derive schedule intervals (cron or Windows task cadence). |
 | `--log-path` | string | File path | `logs/ncc-scheduler.log` | Output redirection path for scheduled command logs. |
+| `--with-lock` | bool | `true`, `false` | `true` | Enables `flock`-based overlap protection for cron runs to prevent concurrent schedule collisions. |
 | `--print-only` | bool | `true`, `false` | `true` | Safety preview mode. Keep true to inspect planned scheduler changes before applying. |
 | `--task-name` | string | Task/marker name string | `ncc-orchestrator` | Identifier used in cron marker comments or Windows task naming. |
 | `--type` | string | `auto`, `cron`, `windows` | `auto` | Scheduler backend. `auto` picks platform-appropriate implementation. |
@@ -527,7 +550,7 @@ ncc-orchestrator validate-config --config config.yaml
 
 | Flag | Type | Possible values | Default | Detailed explanation |
 |---|---|---|---|---|
-| `--config` | string | Path to YAML/JSON config | none | Validates config keys/types/constraints and exits without running NCC checks. |
+| `--config` | string | Path to YAML/JSON config | none | Legacy helper for config-only validation. Prefer `preflight-check` for full checks + remediation hints. |
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
 
 ### 6.11 `config-schema`
@@ -549,7 +572,7 @@ ncc-orchestrator validate-secrets --config config.yaml
 
 | Flag | Type | Possible values | Default | Detailed explanation |
 |---|---|---|---|---|
-| `--config` | string | Path to YAML/JSON config | none | Validates `secret://` references and secret-source accessibility (`env`/`file`) without running NCC checks. |
+| `--config` | string | Path to YAML/JSON config | none | Legacy helper for secrets-only validation. Prefer `preflight-check` for full checks + remediation hints. |
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
 
 ### 6.13 `preflight-check`
@@ -558,13 +581,170 @@ ncc-orchestrator validate-secrets --config config.yaml
 ncc-orchestrator preflight-check --config config.yaml --format json
 ```
 
-Runs preflight checks used before trigger-run execution and returns structured status output.
+| Flag | Type | Possible values | Default | Detailed explanation |
+|---|---|---|---|---|
+| `--config` | string | Path to YAML/JSON config | none | Runs preflight checks against this config. If omitted, report includes a warning that file-based checks are skipped. |
+| `--format` | string | `json` | `json` | Structured output for UI/automation. Includes `checks[]`, `actionableHints[]`, and machine-readable `remediation_code` on non-pass checks. |
+| `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
+
+### 6.13a `quickstart`
+
+```bash
+ncc-orchestrator quickstart --config config.yaml --auto-fix
+```
 
 | Flag | Type | Possible values | Default | Detailed explanation |
 |---|---|---|---|---|
-| `--config` | string | Path to YAML/JSON config | empty | Optional config path to validate; when omitted, command still performs baseline checks and reports warnings. |
-| `--format` | string | `json` | `json` | Output format for automation/UI integration. |
+| `--config` | string | Path to YAML/JSON config | `config.yaml` | Config path to initialize/validate. Creates starter config if missing. |
+| `--auto-fix` | bool | `true`, `false` | `true` | Applies safe setup fixes (missing dirs/files, starter config generation). |
+| `--interactive` | bool | `true`, `false` | `false` | Prompts for common values (cluster mode/targets/username) and writes them to config before preflight. |
+| `--setup-v2` | string | `ask`, `download`, `skip` | `ask` | Controls what quickstart does when v2 web components are missing. `ask` prompts user permission, `download` auto-downloads, `skip` prints manual link/command only. |
+| `--install-dir` | string | Path | `.ncc-v2` | Target directory for v2 component bootstrap/download. |
+| `--repo` | string | `owner/repo` or GitHub URL | `lTSPV75BRO/Nutanix-ncc-orchestrator` | Source repository for v2 release assets used by quickstart bootstrap. |
+| `--assume-yes` | bool | `true`, `false` | `false` | Automatically accepts quickstart prompts (useful for hands-free onboarding scripts). |
+| `--automation-level` | string | `advisory`, `safe-fix`, `full-auto` | `safe-fix` | Controls how aggressive quickstart automation should be. |
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
+
+Bare-minimum first-time flow:
+
+1. Creates starter `config.yaml` if missing.
+2. Runs preflight and applies safe fixes.
+3. Checks v2 components (API/UI/frontend).
+4. Asks permission before downloading v2 assets (or prints direct release link + command).
+
+### 6.14 v2 service runtime flags (API/UI)
+
+These are runtime flags for v2 services (`cmd/ncc-api-server`, `cmd/ncc-ui-server`), commonly used in production deployments:
+
+| Service | Flag | Default | Purpose |
+|---|---|---|---|
+| `ncc-api-server` | `--rate-limit-per-minute` | `60` | Per-client rate limit for sensitive mutation/auth routes (`0` disables). |
+| `ncc-api-server` | `--auth-mode` | `token` | API auth mode: `token`, `session`, `hybrid`. |
+| `ncc-api-server` | `--token-file-path` | `.ncc-api-token` | Token file used by UI proxy and local tooling. |
+| `ncc-ui-server` | `--allowed-origins` | `http://localhost:8080` | Browser origin allowlist for proxied API calls. |
+| `ncc-ui-server` | `--api-auth-mode` | `token` | Backend auth forwarding mode (`token` or `session`). |
+
+`v2-start` convenience mode flags (must-have operator controls):
+
+| Group | Flag | Default | Purpose |
+|---|---|---|---|
+| Throughput/Stability | `--api-run-timeout` | `90m` | Maximum runtime for backend `runs/trigger` orchestration command. |
+| Throughput/Stability | `--api-rate-limit-per-minute` | `60` | Per-client limiter for auth and mutation endpoints (`0` disables). |
+| Throughput/Stability | `--api-read-timeout` | `15s` | API HTTP server read timeout. |
+| Throughput/Stability | `--api-write-timeout` | `60s` | API HTTP server write timeout. |
+| Throughput/Stability | `--api-idle-timeout` | `60s` | API HTTP keep-alive idle timeout. |
+| Auth/Security | `--api-auth-mode` | `token` | API auth mode: `token`, `session`, `hybrid`. |
+| Auth/Security | `--api-session-ttl` | `10m` | Session token TTL for `session`/`hybrid` mode. |
+| Auth/Security | `--api-session-secret` | empty | Inline HMAC session secret (prefer file in production). |
+| Auth/Security | `--api-session-secret-file` | empty | Reads session secret from file and passes to API process. |
+| Auth/Security | `--api-cors-origins` | derived | Explicit API CORS allowlist (comma-separated). |
+| Network/Topology | `--ui-backend-url` | derived from `--api-listen` | UI proxy target URL for API traffic (useful with LB/ingress). |
+| Network/Topology | `--api-advertise-url` | empty | External API URL to print at startup for operators/users. |
+| Network/Topology | `--ui-advertise-url` | empty | External UI URL to print at startup for operators/users. |
+| TLS/mTLS | `--api-tls-cert-file`, `--api-tls-key-file` | empty | Enable HTTPS for API listener. |
+| TLS/mTLS | `--api-tls-client-ca-file` | empty | Enable API mTLS client verification. |
+| TLS/mTLS | `--ui-tls-cert-file`, `--ui-tls-key-file` | empty | Enable HTTPS for UI listener. |
+| TLS/mTLS | `--ui-backend-ca-file` | empty | Custom CA trust for UI->API TLS connection. |
+| TLS/mTLS | `--ui-backend-client-cert-file`, `--ui-backend-client-key-file` | empty | UI client certificate pair for API mTLS. |
+| TLS/mTLS | `--ui-backend-insecure-skip-verify` | `false` | Skip UI->API certificate verification (dev/troubleshooting only). |
+| Operability | `--wait-ready` | `false` | Block until API health (and UI root if enabled) is reachable. |
+| Operability | `--ready-timeout` | `20s` | Max wait time for readiness checks. |
+| Operability | `--detach` | `false` | Run services in background with PID/log files. |
+| Operability | `--api-log-file`, `--ui-log-file` | under `<install-dir>/logs/` | Custom detached log paths. |
+| Operability | `--api-pid-file`, `--ui-pid-file` | under `<install-dir>/run/` | Custom detached PID file paths. |
+| Operability | `--self-heal` | `false` | Detached mode only: monitor API/UI and auto-restart on unexpected process exits. |
+| Operability | `--self-heal-max-restarts` | `3` | Maximum restart attempts within self-heal window before monitor stops. |
+| Operability | `--self-heal-window` | `10m` | Rolling restart budget window for detached self-heal monitor. |
+| Mode | `--api-only` | `false` | Start only API (no UI server/frontend). |
+| Existing | `--ui-allowed-origins` | empty | Additional browser origins for UI CORS checks (localhost always included). |
+
+`v2-stop` operability flags:
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--stop-timeout` | `5s` | Grace period after `SIGTERM` before force-kill. |
+| `--api-pid-file`, `--ui-pid-file` | empty | PID path overrides when custom PID files are used. |
+| `--force` | `false` | Immediate hard kill, no graceful wait. |
+
+### 6.14a `v2-check`
+
+```bash
+ncc-orchestrator v2-check --config-path /abs/config.yaml --api-listen :8081 --ui-listen :8080
+```
+
+| Flag | Type | Default | Detailed explanation |
+|---|---|---|---|
+| `--install-dir` | string | `.ncc-v2` | Runtime layout root used to validate API/UI binaries and frontend assets. |
+| `--config-path` | string | `config.yaml` | Config file that must exist/read successfully for v2 startup. |
+| `--output-dir` | string | `outputfiles` | Directory validated for write access before v2 runtime start. |
+| `--log-dir` | string | `nccfiles` | NCC raw log directory validated for write access. |
+| `--token-file` | string | `.ncc-api-token` | Token path parent is validated for write access. |
+| `--orchestrator-bin` | string | `./ncc-orchestrator` | Runner binary path validated for existence + executability. |
+| `--api-listen` | string | `:8081` | API listen address bind check to catch "address already in use". |
+| `--ui-listen` | string | `:8080` | UI listen address bind check (skipped when `--api-only=true`). |
+| `--api-only` | bool | `false` | Limits checks to API prerequisites only. |
+
+Use this command before `v2-start` in production automation to fail fast on path/port misconfiguration.
+
+Production-style startup example:
+
+```bash
+ncc-orchestrator v2-start \
+  --api-listen :8081 \
+  --ui-listen :8080 \
+  --api-auth-mode hybrid \
+  --api-session-secret-file /etc/ncc/session-secret.txt \
+  --api-session-ttl 30m \
+  --api-rate-limit-per-minute 300 \
+  --api-read-timeout 20s \
+  --api-write-timeout 75s \
+  --api-idle-timeout 90s \
+  --api-cors-origins https://ncc.example.com \
+  --ui-backend-url https://ncc-api.internal:8443 \
+  --ui-backend-ca-file /etc/ncc/ca.pem \
+  --wait-ready --ready-timeout 45s
+```
+
+When `--api-only` is enabled, open `http://localhost:8081/` for backend status and API docs links (`openapi.json`, `meta/routes`).
+
+Rate limiter operational metrics endpoint:
+
+- `GET /api/v1/metrics/rate-limit`
+- Returns:
+  - configured limit/window
+  - `allowed_total`
+  - `blocked_total`
+  - `evicted_total`
+  - `active_buckets`
+
+Large payload control for report endpoint:
+
+- `GET /api/v1/report/data?limit=<n>&offset=<m>`
+- Applies to large array fields (`checks_snapshot`, `agg_rows`) and returns per-field pagination metadata.
+
+Machine-readable API errors:
+
+Scheduler health endpoint:
+
+- `GET /api/v1/schedule/health`
+- Returns scheduler configuration and operational hints:
+  - `last_run`
+  - `last_success`
+  - `last_error`
+  - `log_path`, `lock_path`, `with_lock`
+
+- All non-success API responses include a stable `error_code` field for automation/UI handling.
+- Examples:
+  - `NCC_API_BAD_REQUEST`
+  - `NCC_API_UNAUTHORIZED`
+  - `NCC_API_RATE_LIMITED`
+  - `NCC_API_INTERNAL`
+
+For complete v2 deployment examples, see:
+- `README.md` (Run backend / Run frontend)
+- `docs/V2_BACKEND_FRONTEND_MVP.md`
+- `k8s/README.md`
+- `Prometheus.md` (generalized monitoring patterns for CLI, v2, and Kubernetes)
 
 ## 7) Full config example
 
@@ -603,6 +783,7 @@ max-conns-per-host: 0
 idle-conn-timeout: "90s"
 
 prom-dir: "promfiles"
+prom-enabled: true
 
 run-history: false
 run-history-dir: "outputfiles/runs"

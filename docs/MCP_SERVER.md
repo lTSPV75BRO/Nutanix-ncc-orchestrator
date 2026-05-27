@@ -2,6 +2,8 @@
 
 The **NCC MCP server** exposes the Nutanix NCC Orchestrator to AI assistants (Cursor, Claude Desktop, etc.) via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). The AI can run NCC checks, discover clusters from Prism Central, read run summaries, and replay reports.
 
+Current server implementation version: **`2.0.0`**.
+
 ## Prerequisites
 
 - **Go 1.26+** (same as the main orchestrator; see `go.mod`)
@@ -24,9 +26,9 @@ go install ./cmd/ncc-mcp-server/
 ## Tools Exposed to the AI
 
 | Tool | Description |
-|------|-------------|
+| --- | --- |
 | **run_ncc** | Run NCC across clusters. Options: `config_path`, `clusters`, `username`, `password`, `insecure_skip_verify` (skip TLS verify for lab/self-signed certs), `dry_run`. Returns CLI output and run summary when available. |
-| **discover_clusters** | List cluster IPs from Prism Central (default v4 `clustermgmt` API; optional `discover_api_version`: `v4` or `v3`; optional `nutanix_v4_api_version` e.g. `v4.2`, `v4.0.a1`). Requires `prism_central_url`; optional `config_path`, `username`, `password`, `insecure_skip_verify`, `output_path`. |
+| **discover_clusters** | List cluster IPs from Prism Central (default v4 `clustermgmt` API; optional `discover_api_version`: `v4` or `v3`; optional `nutanix_v4_api_version` such as `v4.2`, `v4.0.a1`). Requires `prism_central_url`; optional `config_path`, `username`, `password`, `insecure_skip_verify`, `output_path`. |
 | **get_run_summary** | Read `run-summary.json` from a previous run (per-cluster `clusters[]`, `exit_code`, `health_score` rollups). Optional `output_dir` (default `outputfiles`). |
 | **replay_reports** | Regenerate HTML/CSV from existing logs (no NCC API). Requires `config_path`. |
 | **list_run_artifacts** | List files in an NCC run output directory (run-summary.json, ncc-run-record.json, regression-summary.json, checks-snapshot.json, drilldown-diff.json, flaky-checks.json, slo-dashboard.json, index.html, per-cluster .log/.html/.csv/.sarif). Optional `output_dir` (default `outputfiles`). |
@@ -40,7 +42,7 @@ go install ./cmd/ncc-mcp-server/
 The server exposes two **resources** that clients can list and read via MCP resources/list and resources/read:
 
 | URI | Description |
-|-----|-------------|
+| --- | --- |
 | **ncc://run-summary** | Latest `run-summary.json` from the default output directory (`outputfiles`). MIME: `application/json`. |
 | **ncc://report** | Latest aggregated NCC report (`index.html`) from the default output directory. MIME: `text/html`. Large content may be truncated. |
 
@@ -117,11 +119,16 @@ So the easiest setup is: build both binaries in the project root, and in Cursor 
 ## Environment Variables
 
 | Variable | Description |
-|----------|-------------|
+| --- | --- |
 | `NCC_ORCHESTRATOR_BIN` | Path to the `ncc-orchestrator` binary. If unset, the server looks next to its own executable, then on PATH. |
 | `NCC_PASSWORD` | Prism password (used by the orchestrator when you don’t pass `password` in tool args). |
 
 Credentials are best supplied via config file or env; avoid putting passwords in tool arguments when possible.
+
+### Important discovery security behavior
+
+- `https://` Prism Central URLs are the default and recommended mode.
+- `http://` Prism Central URLs are accepted only when `insecure_skip_verify=true` is explicitly set.
 
 ## Security Notes
 
@@ -139,6 +146,9 @@ Credentials are best supplied via config file or env; avoid putting passwords in
 
 - **No run summary in run_ncc output**  
   The server looks for `outputfiles/run-summary.json` (relative to the process cwd) or, if `config_path` is set, `<config_dir>/outputfiles/run-summary.json`. Ensure the orchestrator wrote to that path (check `output-dir-filtered` in config).
+
+- **discover_clusters returns HTTP URL policy errors**  
+  Use an `https://` Prism Central URL, or set `insecure_skip_verify: true` intentionally for trusted lab-only `http://` endpoints.
 
 ## Possible future additions
 

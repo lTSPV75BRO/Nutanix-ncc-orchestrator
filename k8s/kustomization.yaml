@@ -1,21 +1,18 @@
-# Apply all manifests in this directory with a shared namespace and labels.
+# Canonical Kubernetes entrypoint.
 # Usage: kubectl apply -k k8s/
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-
-namespace: ncc-orchestrator
 
 resources:
   - namespace.yaml
   - configmap.yaml
   - secret.yaml
   - pvc.yaml
-  - cronjob.yaml
-  - deployment.yaml
-  - service.yaml
-  - nginx-configmap.yaml
-
-labels:
-  - pairs:
-      app.kubernetes.io/managed-by: kustomize
-    includeSelectors: false
+  - runner-cronjob.yaml
+  - api-deployment.yaml
+  - api-service.yaml
+  - ui-deployment.yaml
+  - ui-service.yaml
+  - networkpolicy-default-deny-ingress.yaml
+  - networkpolicy-ui-ingress.yaml
+  - networkpolicy-api-ingress.yaml

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/csv"
@@ -9,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,6 +86,114 @@ func TestSplitCSV(t *testing.T) {
 	}
 }
 
+func TestQuickstartPrompt_EmptyThenDefault(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("\n\n"))
+	got, err := quickstartPrompt(reader, "Cluster targets", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("quickstartPrompt returned error: %v", err)
+	}
+	if got != "10.0.0.1" {
+		t.Fatalf("expected default value, got %q", got)
+	}
+}
+
+func TestQuickstartConfirm_EmptyThenDefault(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("\n\n"))
+	got, err := quickstartConfirm(reader, "Apply?", true)
+	if err != nil {
+		t.Fatalf("quickstartConfirm returned error: %v", err)
+	}
+	if !got {
+		t.Fatal("expected default yes on double empty input")
+	}
+}
+
+func TestQuickstartPromptChoice_InvalidThenDefault(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("wrong\n\n\n"))
+	got, err := quickstartPromptChoice(reader, "Mode", "clusters", []string{"clusters", "pc"})
+	if err != nil {
+		t.Fatalf("quickstartPromptChoice returned error: %v", err)
+	}
+	if got != "clusters" {
+		t.Fatalf("expected fallback to default, got %q", got)
+	}
+}
+
+func TestRepairConfigInlineCommentValues(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	bad := []byte("timeout: \"15m\\\"                            # Per-cluster overall timeout\"\nrequest-timeout: \"20s\"\n")
+	if err := os.WriteFile(cfgPath, bad, 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	changed, err := repairConfigInlineCommentValues(cfgPath)
+	if err != nil {
+		t.Fatalf("repairConfigInlineCommentValues error: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected repair to report changes")
+	}
+	gotRaw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(gotRaw)
+	if !strings.Contains(got, "timeout: \"15m\"") {
+		t.Fatalf("expected repaired timeout value, got: %s", got)
+	}
+	if strings.Contains(got, "\\\"                            #") {
+		t.Fatalf("expected legacy malformed suffix to be removed, got: %s", got)
+	}
+}
+
+func TestRepairConfigInlineCommentValues_TrailingBackslashes(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	bad := []byte("timeout: \"15m\\\\\"\nrequest-timeout: \"20s\\\\\"\n")
+	if err := os.WriteFile(cfgPath, bad, 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	changed, err := repairConfigInlineCommentValues(cfgPath)
+	if err != nil {
+		t.Fatalf("repairConfigInlineCommentValues error: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected trailing backslash repair to report changes")
+	}
+	gotRaw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(gotRaw)
+	if !strings.Contains(got, "timeout: \"15m\"") || !strings.Contains(got, "request-timeout: \"20s\"") {
+		t.Fatalf("expected cleaned duration values, got: %s", got)
+	}
+}
+
+func TestRepairConfigInlineCommentValues_StripsInlineCommentTailForKnownKeys(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	bad := []byte("nutanix-v4-api-version: \"v4.2              # v4 path revision\"\n")
+	if err := os.WriteFile(cfgPath, bad, 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	changed, err := repairConfigInlineCommentValues(cfgPath)
+	if err != nil {
+		t.Fatalf("repairConfigInlineCommentValues error: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected inline comment tail repair to report changes")
+	}
+	gotRaw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	got := string(gotRaw)
+	if !strings.Contains(got, "nutanix-v4-api-version: \"v4.2\"") {
+		t.Fatalf("expected cleaned v4 api version value, got: %s", got)
+	}
+}
+
 func TestValidateSecretsFileHardening(t *testing.T) {
 	tmpDir := t.TempDir()
 	okPath := filepath.Join(tmpDir, "secrets.yaml")
@@ -143,6 +253,14 @@ func TestClassifyClusterError(t *testing.T) {
 		{"parse filtered failed", "parser"},
 		{"dial tcp 10.0.0.1:9440: connect: connection refused", "network"},
 		{"start checks failed: get summary failed: HTTP 500", "api"},
+		// Regression: a DNS-failure-driven circuit-breaker must classify as
+		// `network`, not `rate_limit`. The breaker opens on transport errors
+		// for unresolved hosts, but the underlying problem is DNS.
+		{"start checks failed: get cluster uuid v4 retry circuit breaker opened after 3 consecutive transport failures: dial tcp: lookup PC-Rushmore: no such host", "network"},
+		{"retry circuit breaker opened after 3 consecutive transport failures: dial tcp 10.0.0.1:9440: connect: no route to host", "network"},
+		{"tls: handshake failure", "network"},
+		{"x509: certificate signed by unknown authority", "network"},
+		{"HTTP 429 Too Many Requests; Retry-After 5", "rate_limit"},
 	}
 	for _, tt := range tests {
 		got := classifyClusterError(errors.New(tt.msg))
@@ -1427,6 +1545,79 @@ func TestBindConfigWithFlags(t *testing.T) {
 	}
 }
 
+func TestBindConfigPCModeWithPcsFile(t *testing.T) {
+	viper.Reset()
+	viper.SetEnvPrefix("ncc")
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+	viper.AutomaticEnv()
+
+	tmpDir := t.TempDir()
+	pcsFile := filepath.Join(tmpDir, "pcs.txt")
+	content := "# pcs list\n10.10.10.10\npc-lab.local\n"
+	if err := os.WriteFile(pcsFile, []byte(content), 0o600); err != nil {
+		t.Fatalf("write pcs file: %v", err)
+	}
+
+	viper.Set("cluster-source-mode", "pc")
+	viper.Set("pcs-file", pcsFile)
+	viper.Set("username", "admin")
+
+	cfg, err := bindConfig()
+	if err != nil {
+		t.Fatalf("bindConfig() failed: %v", err)
+	}
+	if cfg.ClusterSourceMode != "pc" {
+		t.Fatalf("expected cluster-source-mode pc, got %q", cfg.ClusterSourceMode)
+	}
+	if len(cfg.PCs) != 2 {
+		t.Fatalf("expected 2 pc targets, got %d (%v)", len(cfg.PCs), cfg.PCs)
+	}
+	if cfg.PCs[0] != "10.10.10.10" || cfg.PCs[1] != "pc-lab.local" {
+		t.Fatalf("unexpected pcs list: %v", cfg.PCs)
+	}
+}
+
+func TestDiscoverClustersFromPCTargetsV3(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/nutanix/v3/clusters/list" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != "admin" || pass != "secret" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"entities":[{"spec":{"resources":{"network":{"external_ip":"10.20.30.40"}}}},{"spec":{"resources":{"network":{"external_ip":"10.20.30.41"}}}}]}`))
+	}))
+	defer srv.Close()
+
+	cfg := Config{
+		ClusterSourceMode:   "pc",
+		PCs:                 []string{srv.URL},
+		Username:            "admin",
+		Password:            "secret",
+		InsecureSkipVerify:  true,
+		DiscoverAPIVersion:  "v3",
+		NutanixV4APIVersion: defaultNutanixV4APIVersion,
+	}
+	clusters, err := discoverClustersFromPCTargets(cfg)
+	if err != nil {
+		t.Fatalf("discoverClustersFromPCTargets() failed: %v", err)
+	}
+	if len(clusters) != 2 {
+		t.Fatalf("expected 2 discovered clusters, got %d (%v)", len(clusters), clusters)
+	}
+	if clusters[0] != "10.20.30.40" || clusters[1] != "10.20.30.41" {
+		t.Fatalf("unexpected discovered clusters: %v", clusters)
+	}
+}
+
 func contains(slice []string, item string) bool {
 	for _, s := range slice {
 		if s == item {
@@ -2303,6 +2494,8 @@ func TestValidateClusterAddress(t *testing.T) {
 		{"Valid IPv4 another", "192.168.0.1", false},
 		{"Valid hostname", "prism.example.com", false},
 		{"Valid hostname with hyphen", "prism-element-01", false},
+		{"Valid URL target", "https://prism.example.com:9440/api", false},
+		{"Valid host with port", "prism.example.com:9440", false},
 		{"Empty", "", true},
 		{"Double dot", "10.0..1", true},
 		{"Leading dot", ".host", true},
@@ -2381,6 +2574,42 @@ func TestReadClusterFile(t *testing.T) {
 	}
 }
 
+func TestNormalizeClusterAddress(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		want    string
+		wantErr bool
+	}{
+		{name: "ip", raw: "10.0.1.1", want: "10.0.1.1"},
+		{name: "hostname", raw: "prism.example.com", want: "prism.example.com"},
+		{name: "url", raw: "https://prism.example.com:9440/api/v1", want: "prism.example.com"},
+		{name: "host and port", raw: "prism.example.com:9440", want: "prism.example.com"},
+		{name: "ipv4 and port", raw: "10.0.1.1:9440", want: "10.0.1.1"},
+		{name: "empty", raw: "", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeClusterAddress(tt.raw)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("normalizeClusterAddress(%q) err=%v wantErr=%v", tt.raw, err, tt.wantErr)
+			}
+			if err == nil && got != tt.want {
+				t.Fatalf("normalizeClusterAddress(%q)=%q want=%q", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPreflightResolveClusterTarget(t *testing.T) {
+	if err := preflightResolveClusterTarget("127.0.0.1"); err != nil {
+		t.Fatalf("expected IP target to pass preflight resolution, got %v", err)
+	}
+	if err := preflightResolveClusterTarget("nonexistent-preflight-target.invalid"); err == nil {
+		t.Fatal("expected invalid FQDN to fail preflight resolution")
+	}
+}
+
 func TestReadClusterFileInvalidLine(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "clusters.txt")
@@ -2413,6 +2642,35 @@ func TestValidateURL(t *testing.T) {
 				t.Errorf("validateURL(%q) err = %v, wantOk %v", tt.urlStr, err, tt.wantOk)
 			}
 		})
+	}
+}
+
+func TestClosestToken(t *testing.T) {
+	candidates := []string{"discover-clusters", "preflight-check", "validate-config"}
+	if got := closestToken("discovr-clusters", candidates); got != "discover-clusters" {
+		t.Fatalf("closestToken mismatch: got=%q want=%q", got, "discover-clusters")
+	}
+	if got := closestToken("zzzz", candidates); got != "" {
+		t.Fatalf("expected no suggestion for distant token, got=%q", got)
+	}
+}
+
+func TestHumanizeCLIError(t *testing.T) {
+	root := newRootCmd()
+	msg := humanizeCLIError(root, []string{"discovr-clusters"}, errors.New(`unknown command "discovr-clusters" for "ncc-orchestrator"`))
+	if !strings.Contains(msg, "Did you mean `discover-clusters`?") {
+		t.Fatalf("expected command suggestion, got: %s", msg)
+	}
+	flagMsg := humanizeCLIError(root, []string{"--max-paralel"}, errors.New(`unknown flag: --max-paralel`))
+	if !strings.Contains(flagMsg, "Did you mean `--max-parallel`?") {
+		t.Fatalf("expected flag suggestion, got: %s", flagMsg)
+	}
+	subcmdFlagMsg := humanizeCLIError(root, []string{"gen-test-agg", "--autr"}, errors.New(`unknown flag: --autr`))
+	if strings.Contains(subcmdFlagMsg, "`--auto`") {
+		t.Fatalf("did not expect root-only flag suggestion for subcommand, got: %s", subcmdFlagMsg)
+	}
+	if !strings.Contains(subcmdFlagMsg, "ncc-orchestrator gen-test-agg --help") {
+		t.Fatalf("expected subcommand help hint, got: %s", subcmdFlagMsg)
 	}
 }
 
@@ -2456,6 +2714,7 @@ func TestValidateConfig(t *testing.T) {
 			OutputDirLogs:     "nccfiles",
 			OutputDirFiltered: "outputfiles",
 			LogFile:           "logs/ncc-runner.log",
+			PromEnabled:       true,
 			PromDir:           "promfiles",
 		}
 	}
@@ -2477,6 +2736,27 @@ func TestValidateConfig(t *testing.T) {
 		cfg.Username = ""
 		if err := validateConfig(cfg); err == nil {
 			t.Error("expected error for empty username")
+		}
+	})
+	t.Run("PC mode valid", func(t *testing.T) {
+		cfg := validPaths()
+		cfg.ClusterSourceMode = "pc"
+		cfg.Clusters = nil
+		cfg.PCs = []string{"10.10.10.10"}
+		cfg.DiscoverAPIVersion = "v4"
+		if err := validateConfig(cfg); err != nil {
+			t.Errorf("validateConfig should accept pc mode: %v", err)
+		}
+	})
+	t.Run("PC mode requires targets", func(t *testing.T) {
+		cfg := validPaths()
+		cfg.ClusterSourceMode = "pc"
+		cfg.Clusters = nil
+		cfg.PCs = nil
+		cfg.PrismCentralURL = ""
+		cfg.DiscoverAPIVersion = "v4"
+		if err := validateConfig(cfg); err == nil {
+			t.Error("expected error for pc mode without targets")
 		}
 	})
 	t.Run("Per-cluster username in clusters-file map", func(t *testing.T) {
@@ -2527,6 +2807,122 @@ func TestValidateConfig(t *testing.T) {
 			t.Error("expected error for empty prom-dir")
 		}
 	})
+	t.Run("Empty prom-dir allowed when prom disabled", func(t *testing.T) {
+		cfg := validPaths()
+		cfg.PromEnabled = false
+		cfg.PromDir = ""
+		if err := validateConfig(cfg); err != nil {
+			t.Errorf("expected no error when prom is disabled, got %v", err)
+		}
+	})
+}
+
+func getPreflightCheckByID(t *testing.T, checks []preflightCheck, id string) preflightCheck {
+	t.Helper()
+	for _, c := range checks {
+		if c.ID == id {
+			return c
+		}
+	}
+	t.Fatalf("preflight check %q not found in %+v", id, checks)
+	return preflightCheck{}
+}
+
+func TestBuildPreflightReportWithoutConfigPath(t *testing.T) {
+	viper.Reset()
+	report := buildPreflightReport("")
+	if report.Failed != 0 {
+		t.Fatalf("expected no failures without config path, got %d", report.Failed)
+	}
+	c := getPreflightCheckByID(t, report.Checks, "validate-config")
+	if c.Status != "warn" {
+		t.Fatalf("expected validate-config warn, got %q", c.Status)
+	}
+}
+
+func TestBuildPreflightReportPathPermissionFailure(t *testing.T) {
+	viper.Reset()
+	tmpDir := t.TempDir()
+	blockPath := filepath.Join(tmpDir, "not-a-dir")
+	if err := os.WriteFile(blockPath, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write blocker file: %v", err)
+	}
+	cfgPath := filepath.Join(tmpDir, "config.yaml")
+	cfg := fmt.Sprintf(`
+clusters: "10.0.0.1"
+username: "admin"
+output-dir-logs: "%s"
+output-dir-filtered: "%s"
+log-file: "%s"
+prom-dir: "%s"
+`, blockPath, filepath.Join(tmpDir, "out"), filepath.Join(tmpDir, "logs", "ncc-runner.log"), filepath.Join(tmpDir, "prom"))
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	report := buildPreflightReport(cfgPath)
+	c := getPreflightCheckByID(t, report.Checks, "path.output-dir-logs")
+	if c.Status != "fail" {
+		t.Fatalf("expected output-dir-logs permission check to fail, got %q", c.Status)
+	}
+	if report.Failed == 0 {
+		t.Fatal("expected failures in preflight report")
+	}
+}
+
+func TestBuildPreflightReportIncludesSecurityWarnings(t *testing.T) {
+	viper.Reset()
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.yaml")
+	cfg := fmt.Sprintf(`
+clusters: "10.0.0.1"
+username: "admin"
+insecure-skip-verify: true
+log-http: true
+max-parallel: 25
+output-dir-logs: "%s"
+output-dir-filtered: "%s"
+log-file: "%s"
+prom-dir: "%s"
+`, filepath.Join(tmpDir, "raw"), filepath.Join(tmpDir, "out"), filepath.Join(tmpDir, "logs", "ncc-runner.log"), filepath.Join(tmpDir, "prom"))
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	report := buildPreflightReport(cfgPath)
+	if getPreflightCheckByID(t, report.Checks, "safety.insecure-skip-verify").Status != "warn" {
+		t.Fatal("expected safety.insecure-skip-verify warning")
+	}
+	if getPreflightCheckByID(t, report.Checks, "safety.log-http").Status != "warn" {
+		t.Fatal("expected safety.log-http warning")
+	}
+	if getPreflightCheckByID(t, report.Checks, "safety.max-parallel").Status != "warn" {
+		t.Fatal("expected safety.max-parallel warning")
+	}
+}
+
+func TestBuildPreflightReportSecretsFailure(t *testing.T) {
+	viper.Reset()
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.yaml")
+	cfg := fmt.Sprintf(`
+clusters: "10.0.0.1"
+username: "admin"
+password: "secret://MISSING_PASSWORD"
+output-dir-logs: "%s"
+output-dir-filtered: "%s"
+log-file: "%s"
+prom-dir: "%s"
+`, filepath.Join(tmpDir, "raw"), filepath.Join(tmpDir, "out"), filepath.Join(tmpDir, "logs", "ncc-runner.log"), filepath.Join(tmpDir, "prom"))
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	report := buildPreflightReport(cfgPath)
+	sec := getPreflightCheckByID(t, report.Checks, "validate-secrets")
+	if sec.Status != "fail" {
+		t.Fatalf("expected validate-secrets fail, got %q", sec.Status)
+	}
+	if report.Failed == 0 {
+		t.Fatal("expected failures in report")
+	}
 }
 
 func TestCheckOutputPermissions(t *testing.T) {
@@ -2866,6 +3262,64 @@ func TestVersionLessSemver(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("versionLess(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
 		}
+	}
+}
+
+func TestNormalizeGitHubRepo(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{in: "owner/repo", want: "owner/repo"},
+		{in: "https://github.com/owner/repo", want: "owner/repo"},
+		{in: "https://github.com/owner/repo.git", want: "owner/repo"},
+		{in: "https://example.com/owner/repo", wantErr: true},
+		{in: "owner-only", wantErr: true},
+	}
+	for _, tc := range tests {
+		got, err := normalizeGitHubRepo(tc.in)
+		if tc.wantErr {
+			if err == nil {
+				t.Fatalf("normalizeGitHubRepo(%q) expected error", tc.in)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("normalizeGitHubRepo(%q) unexpected err: %v", tc.in, err)
+		}
+		if got != tc.want {
+			t.Fatalf("normalizeGitHubRepo(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestEnforceMajorUpgradePolicy(t *testing.T) {
+	if err := enforceMajorUpgradePolicy("1.1.0", "1.9.0", false); err != nil {
+		t.Fatalf("same-major upgrade should be allowed, got err: %v", err)
+	}
+	if err := enforceMajorUpgradePolicy("1.1.0", "2.0.0", false); err == nil {
+		t.Fatalf("expected major-upgrade block error")
+	}
+	if err := enforceMajorUpgradePolicy("1.1.0", "2.0.0", true); err != nil {
+		t.Fatalf("major-upgrade should pass with explicit opt-in, got err: %v", err)
+	}
+}
+
+func TestPickLatestSemverRelease(t *testing.T) {
+	releases := []githubRelease{
+		{TagName: "v2.0.0"},
+		{TagName: "v1.3.0"},
+		{TagName: "v1.2.9"},
+		{TagName: "v2.1.0-rc1", Prerelease: true},
+	}
+	gotV1 := pickLatestSemverRelease(releases, 1)
+	if gotV1 == nil || gotV1.TagName != "v1.3.0" {
+		t.Fatalf("pickLatestSemverRelease(v1) got %+v", gotV1)
+	}
+	gotAny := pickLatestSemverRelease(releases, 0)
+	if gotAny == nil || gotAny.TagName != "v2.0.0" {
+		t.Fatalf("pickLatestSemverRelease(any) got %+v", gotAny)
 	}
 }
 

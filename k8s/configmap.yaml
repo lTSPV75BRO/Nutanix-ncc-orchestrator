@@ -1,77 +1,53 @@
-# config.yaml for NCC orchestrator (clusters, options).
-# Password: leave empty here and set via Secret + env NCC_PASSWORD (see secret.yaml and cronjob.yaml).
-# Any option can be overridden by env NCC_<KEY> (e.g. NCC_CLUSTERS, NCC_LOG_LEVEL). Run with --env-info to list.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: ncc-orchestrator-config
-  namespace: ncc-orchestrator
-  labels:
-    app.kubernetes.io/name: ncc-orchestrator
+  name: ncc-v2-config
+  namespace: ncc-orchestrator-v2
 data:
   config.yaml: |
-    # Cluster list (comma-separated IPs or hostnames); replace with your Prism IPs
+    cluster-source-mode: "clusters"
     clusters: "10.48.XX.XX,10.48.XX.XX"
     username: "admin"
     password: ""
-    ncc-api-version: v4         # v4 (default) or Legacy (Prism Gateway v1 start-checks); v1 is an alias for Legacy
-    nutanix-v4-api-version: v4.2  # clustermgmt/monitoring path revision (v4.2 default; e.g. v4.0.a1)
-    insecure-skip-verify: false   # Set true for lab/self-signed Prism certs
+    ncc-api-version: "v4"
+    nutanix-v4-api-version: "v4.2"
+    insecure-skip-verify: false
+
     timeout: "15m"
-    request-timeout: "30s"    # Code default 20s; increase if needed for slow clusters
+    request-timeout: "20s"
     poll-interval: "15s"
     poll-jitter: "2s"
     max-parallel: 4
-    outputs: "html"
-    single-report: false
-    run-history: false
-    run-history-dir: "/data/outputfiles/runs"
-    retain-last: 0
-    retain-days: 0
-    notify-on-regression: false
     adaptive-parallelism: true
-    policy-gates: ""
-    quiet-hours: ""
-    maintenance-windows: ""
-    flaky-lookback-runs: 6
-    flaky-min-transitions: 2
-    # Paths inside the container; PVC is mounted at /data in the CronJob
+
+    outputs: "html,csv"
     output-dir-logs: "/data/nccfiles"
     output-dir-filtered: "/data/outputfiles"
     log-file: "/data/logs/ncc-runner.log"
-    log-level: "2"
+    log-level: "info"
     log-http: false
+    prom-dir: "/data/promfiles"
+
+    run-history: true
+    run-history-dir: "/data/outputfiles/runs"
+    retain-last: 20
+    retain-days: 0
+
+    artifact-retain-days: 0
+    artifact-retain-max-files: 0
+    severity-filter: ""
+    exclude-alert-titles: ""
+    exclude-alert-match-mode: "exact"
+
+    policy-gates: ""
+    notify-on-regression: false
+    quiet-hours: ""
+    maintenance-windows: ""
+
     retry-max-attempts: 6
     retry-base-delay: "400ms"
     retry-max-delay: "8s"
-    prom-dir: "/data/promfiles"
-    # Severity filter: comma-separated FAIL,WARN,ERR,INFO; empty = all
-    severity-filter: ""
-    # HTTP connection pool (optional)
-    max-idle-conns: 100
-    max-idle-conns-per-host: 10
-    max-conns-per-host: 0
-    idle-conn-timeout: "90s"
-    # Email notifications (optional)
-    email-enabled: false
-    email-attach-html: false   # Attach per-cluster or digest HTML report to email
-    notify-digest: false       # If true: one email/webhook/slack per run (overview + optional index.html) instead of per-cluster
-    smtp-server: "smtp.example.com"
-    smtp-port: 587
-    smtp-user: "ncc@example.com"
-    smtp-password: ""
-    email-from: "ncc@example.com"
-    email-to: "ops@example.com,sre@example.com"
-    email-use-tls: true
-    # Webhook notifications (optional)
-    webhook-enabled: false
-    webhook-include-html: false   # Include per-cluster HTML report as base64 in webhook JSON (overview always included)
-    webhook-url: "https://hooks.example.com/ncc"
-    webhook-headers:
-      X-Auth-Token: "changeme"
-    # Slack notifications (optional)
-    slack-enabled: false
-    slack-webhook-url: ""
-    slack-channel: ""
-    secrets-provider: ""  # env or file
-    secrets-file: ""      # mounted YAML/JSON map when secrets-provider=file
+    retry-circuit-breaker: 3
+
+    secrets-provider: "env"
+    secrets-file: ""

@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ncc-v2-ui
+  namespace: ncc-orchestrator-v2
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ncc-orchestrator-v2
+      component: ui
+  template:
+    metadata:
+      labels:
+        app: ncc-orchestrator-v2
+        component: ui
+    spec:
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: "OnRootMismatch"
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ui
+          # Replace with your v2 ui image that contains ncc-ui-server + frontend-dist.
+          image: docker.io/prajwalnutant/ncc-ui-server:2.0.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--listen"
+            - ":8080"
+            - "--dir"
+            - "/app/frontend/dist"
+            - "--backend-url"
+            - "http://ncc-v2-api:8081"
+            - "--api-token-file"
+            - "/data/auth/.ncc-api-token"
+            - "--api-auth-mode"
+            - "token"
+            - "--allowed-origins"
+            - "http://localhost:8080"
+          ports:
+            - containerPort: 8080
+              name: http
+          startupProbe:
+            httpGet:
+              path: /
+              port: 8080
+            periodSeconds: 5
+            failureThreshold: 12
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            failureThreshold: 3
+            timeoutSeconds: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ncc-v2-data

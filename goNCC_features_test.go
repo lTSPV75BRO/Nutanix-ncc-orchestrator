@@ -115,4 +115,3 @@ PLUGIN RESULTS
 		t.Fatal("expected mismatch error, got nil")
 	}
 }
-

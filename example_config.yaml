@@ -1,0 +1,187 @@
+# =============================================================================
+# Nutanix NCC Orchestrator - example configuration  (v2.0.0)
+# =============================================================================
+#
+# This file is a reference template. Copy it to `config.yaml` and edit the
+# values for your environment, or pass `--config /path/to/your.yaml` to the
+# orchestrator binary.
+#
+# Conventions:
+#   - All top-level keys also work as CLI flags (e.g. `--max-parallel 4`).
+#   - Values commented out are at their built-in default and are shown here
+#     only for discoverability.
+#   - Secrets should NEVER be committed in plain text. Use one of:
+#       * Environment variables (`NCC_PASSWORD`, `SMTP_PASSWORD`, etc.)
+#       * `secret://VAR_NAME` references with `secrets-provider: env`
+#       * A secrets file with `secrets-provider: file` and `secrets-file: ...`
+#
+# Generate a fresh template at any time with:
+#     ncc-orchestrator quickstart --interactive
+#   or
+#     ncc-orchestrator config-schema --output config.schema.json
+#
+# Run with this config:
+#     ncc-orchestrator --config example_config.yaml run
+#
+# Validate the config without running:
+#     ncc-orchestrator validate-config --config example_config.yaml
+#     ncc-orchestrator validate-secrets --config example_config.yaml
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# Minimal start (uncomment and edit these to get a working run quickly)
+# -----------------------------------------------------------------------------
+# clusters: "10.2.0.10,10.2.0.11"
+# username: "admin"
+# password: "secret://NCC_PASSWORD"   # then `export NCC_PASSWORD=...`
+# secrets-provider: env
+# outputs: "html,csv"
+# insecure-skip-verify: false        # set true only for self-signed lab clusters
+
+
+# -----------------------------------------------------------------------------
+# Cluster targets
+# -----------------------------------------------------------------------------
+clusters: "10.2.XX.XX,10.0.XX.XX"          # Comma-separated PE cluster IPs/FQDNs
+# clusters-file: ""                        # Optional: one `cluster[,username[,password]]` per line; overrides `clusters`
+# cluster-source-mode: "auto"              # auto | clusters | clusters-file | pcs | pcs-file
+# pcs: ""                                  # Optional Prism Central IPs for discovery
+# pcs-file: ""                             # Optional Prism Central list file
+# prism-central-url: ""                    # Optional explicit PC URL when discovering
+# discover-api-version: "v4"               # v4 (default) or Legacy
+
+username: "admin"                          # Prism Element username
+password: "secret://NCC_PASSWORD"          # Prefer secret:// + env, never plain text
+ncc-api-version: v4                        # v4 (default) or Legacy (Prism Gateway v1 only)
+nutanix-v4-api-version: v4.2               # v4 path revision (e.g. v4.1, v4.0.a1)
+
+
+# -----------------------------------------------------------------------------
+# TLS and timeouts
+# -----------------------------------------------------------------------------
+insecure-skip-verify: false                # true only for lab/self-signed clusters
+timeout: "15m"                             # Per-cluster overall budget
+request-timeout: "30s"                     # Per-HTTP-request budget
+poll-interval: "15s"                       # NCC task poll interval
+poll-jitter: "2s"                          # Random jitter to avoid stampedes
+
+
+# -----------------------------------------------------------------------------
+# Concurrency and outputs
+# -----------------------------------------------------------------------------
+max-parallel: 4                            # Parallel clusters processed
+outputs: "html,csv"                        # Any subset of: html,csv,json,markdown,sarif
+output-dir-logs: "nccfiles"                # Raw NCC summary text
+output-dir-filtered: "outputfiles"         # Generated HTML/CSV/JSON reports
+single-report: false                       # Also emit ncc-report-single.html
+run-history: false                         # Save per-run snapshots
+run-history-dir: "outputfiles/runs"        # Snapshot base directory
+retain-last: 0                             # Keep last N snapshots (0 = unlimited)
+retain-days: 0                             # Keep snapshots newer than N days (0 = unlimited)
+artifact-retain-days: 0                    # Prune generated artifacts older than N days (0 = unlimited)
+artifact-retain-max-files: 0               # Keep only N newest generated artifacts (0 = unlimited)
+adaptive-parallelism: true                 # Reduce/increase concurrency on 429s
+notify-on-regression: false                # Notify only when FAIL count increases
+
+# Policy gates: short DSL of comma-separated thresholds. Violations are written
+# to policy-gates.txt and surface in `run-summary.json`.
+# Examples:
+#   policy-gates: "new-fails>0,fail-rate>2,min-health-score<90,flaky-checks>0,timeout-clusters>0,auth-failures>0"
+policy-gates: ""
+
+
+# -----------------------------------------------------------------------------
+# Flaky/regression analysis
+# -----------------------------------------------------------------------------
+flaky-lookback-runs: 6                     # Runs to inspect for severity transitions
+flaky-min-transitions: 2                   # Minimum transitions to mark a check flaky
+
+
+# -----------------------------------------------------------------------------
+# Alert exclusions
+# -----------------------------------------------------------------------------
+exclude-alert-titles: ""                   # Comma-separated NCC alert titles to drop
+exclude-alert-titles-file: ""              # Optional file, one title per line
+exclude-alert-match-mode: "exact"          # exact (default) | contains | regex
+
+
+# -----------------------------------------------------------------------------
+# Quiet hours and maintenance windows (notifications)
+# -----------------------------------------------------------------------------
+quiet-hours: ""                            # Local HH:MM-HH:MM window to suppress notifications
+maintenance-windows: ""                    # RFC3339 windows `start/end[,start/end...]`
+
+
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+log-file: "logs/ncc-runner.log"            # Rotated JSON logs path
+log-level: "2"                             # 0 trace | 1 debug | 2 info | 3 warn | 4 error
+log-http: false                            # true ONLY for debugging (logs request/response dumps)
+
+
+# -----------------------------------------------------------------------------
+# Retry / circuit breaker
+# -----------------------------------------------------------------------------
+retry-max-attempts: 6                      # Max attempts per HTTP request
+retry-base-delay: "400ms"                  # Base backoff delay
+retry-max-delay: "8s"                      # Max jittered backoff
+retry-circuit-breaker: 3                   # Fail-fast after N consecutive retryable failures
+
+
+# -----------------------------------------------------------------------------
+# Email notifications
+# -----------------------------------------------------------------------------
+email-enabled: false
+email-attach-html: false
+notify-digest: false
+smtp-server: "smtp.example.com"
+smtp-port: 587
+smtp-user: "ncc@example.com"
+smtp-password: "secret://SMTP_PASSWORD"    # then `export SMTP_PASSWORD=...`
+email-from: "ncc@example.com"
+email-to: "ops@example.com,sre@example.com"
+email-use-tls: true
+
+
+# -----------------------------------------------------------------------------
+# Webhook notifications
+# -----------------------------------------------------------------------------
+webhook-enabled: false
+webhook-include-html: false
+webhook-url: "https://hooks.example.com/ncc"
+webhook-headers:
+  X-Auth-Token: "secret://WEBHOOK_TOKEN"   # prefer secret:// references
+
+
+# -----------------------------------------------------------------------------
+# Slack notifications
+# -----------------------------------------------------------------------------
+slack-enabled: false
+slack-webhook-url: ""                      # use secret://SLACK_WEBHOOK_URL in production
+slack-channel: ""
+
+
+# -----------------------------------------------------------------------------
+# Secrets resolution  (REQUIRED when any value above uses secret://NAME)
+# -----------------------------------------------------------------------------
+# Tells the orchestrator how to resolve `secret://NAME` references above.
+#   env:   read NAME from process environment (recommended for CLI/CI)
+#   file:  read NAME from `secrets-file` (a YAML/JSON map of name -> value)
+#
+# Default below is `env`, matching the secret:// refs used in this template.
+# Export the variables before running, for example:
+#     export NCC_PASSWORD='...'
+#     export SMTP_PASSWORD='...'
+#     export WEBHOOK_TOKEN='...'
+#     ncc-orchestrator --config example_config.yaml run
+secrets-provider: "env"                    # "" disables resolution; "env" or "file" to enable
+secrets-file: ""                           # Path to YAML/JSON key->value map when provider=file
+
+
+# -----------------------------------------------------------------------------
+# Prometheus exposition (optional)
+# -----------------------------------------------------------------------------
+# prom-enabled: false                      # Skip .prom emission entirely when false
+# prom-dir: "outputfiles/prom"             # Directory for textfile-collector .prom files

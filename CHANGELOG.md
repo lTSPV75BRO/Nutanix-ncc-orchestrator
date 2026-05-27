@@ -4,19 +4,73 @@ All notable changes to the Nutanix NCC Orchestrator are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-**Release checklist (for maintainers):** Ensure [`VERSION`](VERSION) matches the intended tag; default `main.Version` in code is `1.1.0` when not set via ldflags. Run `go vet ./...`, `go test ./...`, and `go build ./...` (and `go build ./cmd/ncc-mcp-server`). Confirm `k8s/` and `helm/` image tags match `VERSION`. Tag `v1.1.0` and create a GitHub release using [RELEASE_NOTES_v1.1.0.md](RELEASE_NOTES_v1.1.0.md); attach binaries and `checksums.txt` per [docs/RELEASE_CHECKSUMS.md](docs/RELEASE_CHECKSUMS.md) so `--update` can verify downloads.
+**Release checklist (for maintainers):** Ensure [`VERSION`](VERSION) matches the intended tag; default `main.Version` in code is `2.0.0` when not set via ldflags. Run `go vet ./...`, `go test ./...`, and `go build ./...` (and `go build ./cmd/ncc-mcp-server`). Confirm `k8s/` and `helm/` image tags match `VERSION`. Tag `v2.0.0` and create a GitHub release using [RELEASE_NOTES_v2.0.0.md](RELEASE_NOTES_v2.0.0.md); attach binaries and `checksums.txt` per [docs/RELEASE_CHECKSUMS.md](docs/RELEASE_CHECKSUMS.md) so `--update` can verify downloads.
 
 ---
 
-## [Unreleased]
+## [2.0.0] - 2026-05-05 (release-candidate hardening through 2026-05-27)
+
+### Added (late-cycle hardening, 2026-05)
+
+- **`example_config.yaml`** — Repo-rooted, validator-clean (`ncc-orchestrator validate-config`) reference config that ships in `dist/` and inside every `ncc-v2-stack-*.tar.gz`/`.zip` archive. Uses `secret://NAME` references with `secrets-provider: env` so it works out-of-the-box once `NCC_PASSWORD` (and optionally `SMTP_PASSWORD`, `WEBHOOK_TOKEN`) are exported.
+- **`DELETE /api/v1/runs/active`** — Cancel a stuck/in-flight orchestrator run from the UI; returns `409` with structured `error_code` when no run is active.
+- **`GET /api/v1/runs/{id}`** — Single archived run metadata + embedded summary, including artifact bodies (`run-summary.json`, `ncc-run-record.json`, `regression-summary.json`, `checks-snapshot.json`, `run-meta.json`); rejects path traversal (`..`/`/`).
+- **Header trigger button with live elapsed time** — Top-ribbon Run control now shows a pulsing primary-tinted button with spinning icon and `Running · Xm Ys` elapsed time, mirroring the Settings → Runs indicator.
+- **Context-aware Dashboard empty states** — Alerts table now distinguishes "Run in progress" (with live output link), "All clusters clean", and onboarding "No alerts yet" states based on the active-run query and last summary.
+- **Schedule input validator** — `action=create` now requires at least one of `cron` or `every`; covered by `TestValidateScheduleInput` table-driven test.
+- **Audit + meta route surface** — Audit query params (`limit`, `since`, `source`) are validated server-side with structured `400` on bad input; CORS `Access-Control-Allow-Methods` now includes `DELETE`.
+
+### Security (late-cycle hardening)
+
+- **Go toolchain upgraded 1.26.2 → 1.26.3** — Fixes five Go standard-library CVEs surfaced by `govulncheck`:
+  - `GO-2026-4976` ReverseProxy query forwarding (`net/http/httputil`)
+  - `GO-2026-4971` `net.Dial` / `LookupPort` NUL-byte panic
+  - `GO-2026-4918` HTTP/2 transport infinite loop on bad `SETTINGS_MAX_FRAME_SIZE`
+  - `GO-2026-4977` and the related stdlib advisories
+  - After upgrade: `govulncheck ./...` → **No vulnerabilities found**.
+- **npm DOMPurify override `^3.4.7`** — Pinned via `package.json#overrides` to clear 5 transitive DOMPurify advisories in `monaco-editor` (ADD_TAGS/FORBID_TAGS bypasses, SAFE_FOR_TEMPLATES bypass, prototype pollution, mutation-XSS) without downgrading Monaco; after override: `npm audit --omit=dev` → **found 0 vulnerabilities**.
+- **`yaml` patch update** via `npm audit fix` — Closes deeply-nested-collection stack-overflow advisory (`GHSA-48c2-rrv3-qjmp`).
+
+### Frontend / UX (late-cycle hardening)
+
+- **Theme overhaul** — Dark mode rewritten to a near-black neutral charcoal palette; light mode rewritten to a clean zinc palette with crisp white cards; Ant Design and `styles.css` variables aligned through `theme.tsx`.
+- **Monaco editor local + themed** — `@monaco-editor/react` now loads `monaco-editor` locally (resolves CSP `script-src 'self'` violation that was blocking the editor from the CDN). Workers bundled via Vite `?worker` imports. Custom Monaco themes (`ncc-light`, `ncc-dark`, `ncc-it-pro`) registered to mirror the app palette; fallback `<textarea>` styled to match.
+- **Form/Accessibility cleanup** — Added `id`, `name`, `htmlFor`, `aria-label`, and `autoComplete` across `ConfigSection`, `RunsSection`, `ScheduleSection`, `PolicyGateBuilderSection`, `AuditLogSection`, `LogsSection`, `DashboardPage`, `ApiExplorerSection`, `JsonOutputsSection`, `RawOutputsSection`, and `SecretsMigrationModal`; trigger-run password field is now wrapped in a real `<form>`; eliminates the DOM warnings for unassociated labels, missing `id`/`name`, password-not-in-form, and missing autocomplete.
+- **Runs table redesign** — Replaced often-blank "Index" column with `Type`, `Status`, `Duration`, `Clusters`, and `Issues` columns; cells degrade to `—` for trigger entries.
+- **Sparkline correctness** — Fixed timezone bug in `RecentRunsSparkline` (mixed UTC and local dates) via `localDateKey` helper; filtered to count only `history`/`summary` sources so trigger events no longer inflate the "runs in last 7 days" count.
+
+### Build / Release
+
+- **`binaryGO.txt` overhaul** — Preflight checks, consolidated variable declarations, local-arch symlinks, example-file copy, cleaner tar/zip archives, and end-to-end verification (`api/health` filter, version assertion).
+- **Production verification (2026-05-27)** — `govulncheck ./...` clean, `npm audit --omit=dev` clean, `go test -race -count=1 ./...` clean, `gofmt -l .` clean, `go vet ./...` clean, `tsc --noEmit` clean, `vite build` clean.
 
 ### Added
 
-- None yet.
+- **Full v2 application stack in 2.0.0** — Release scope now explicitly includes API (`cmd/ncc-api-server`), UI (`cmd/ncc-ui-server` + `frontend`), and UI-integrated API proxy surface for `/api/v1/*`.
+- **Build-from-scratch documentation** - Added `docs/BUILD_FROM_SCRATCH.md` with full setup flow for clean machines, including local build, frontend build, v2 stack startup, tests, packaging, and Kubernetes verification.
+- **Release validation suite for v2.0.0** — Production checks and edge-case verification documented with reproducible command evidence.
+- **CodeQL workflow alignment** — Added repository workflow that analyzes only `go` and `actions`, preventing JS/TS language-detection failures in this branch scope.
+- **v2.0.0 release documentation set** — Added release notes, production-readiness checklist, and milestone summary documents for the v2 train.
+- **Build and handover guides** — Added `docs/BUILD_FROM_SCRATCH.md` and `docs/ARCHITECTURE_AND_HANDOVER.md` for end-to-end onboarding, operations, and ownership transfer.
+- **Clean v2 uninstall tooling** — Added `scripts/uninstall-v2-clean.sh` as the canonical Kubernetes/runtime cleanup entrypoint; legacy `scripts/uninstall-ncc-orchestrator.sh` now delegates to it.
+- **CLI local uninstall command** — Added `ncc-orchestrator uninstall` for standalone local cleanup of artifacts/state created by the binary.
+- **`v2-check` preflight command** — Added lightweight v2 runtime self-check for binary executability, config/path readiness, directory writability, and API/UI port bind availability before `v2-start`.
+- **Scheduler health API** — Added `GET /api/v1/schedule/health` to expose scheduler runtime hints (`last_run`, `last_success`, `last_error`) and lock/log path metadata.
 
 ### Changed
 
-- None yet.
+- **Version baselines** — `VERSION`, default `main.Version`, Helm chart/appVersion, Helm values image tag, and Kubernetes manifest image tags aligned to `2.0.0`.
+- **README release pointers** — Updated current release status links to `v2.0.0` documents and clarified current branch scope.
+- **Documentation alignment across v2 docs** - Updated README, CONTRIBUTING, migration guide, and v2 architecture doc for consistent source-build and deployment instructions.
+- **Kubernetes architecture docs** - Clarified API runner binary staging model (runner image -> API init container -> shared tools path) in design docs and release notes.
+- **Kubernetes runtime model** — API now stages the runner binary via init container (`runner image -> /tools/ncc-orchestrator`) and validates `--orchestrator-bin` at startup (exists + executable).
+- **Production readiness manifests** — Added startup/readiness/liveness probes to API and UI deployments to improve rollout safety and self-healing behavior.
+- **Preflight probe handling** — `.ncc-preflight-check` moved to a persistent read/write sentinel approach (no create/delete churn) with legacy typo cleanup.
+- **Performance and reliability optimizations** — Cached exclude-title matchers/regex, reduced config re-parse and allocations in secret validation, de-duplicated replay metadata parsing, and eliminated redundant Prometheus writes during replay.
+- **Console error UX** — Consolidated duplicate startup error logging to a single user-facing error path.
+- **Scheduler overlap safety** — `create-schedule` now supports lock-enabled cron generation with `--with-lock` (default true) to prevent overlapping scheduled runs.
+- **Security response handling** — Added redacted-safe config response content and startup warning for plaintext config passwords.
+- **Logs UX operability** — Added UI `Follow tail` and `Jump to latest` controls for Runner Logs and Live Logs.
 
 ---
 
@@ -155,6 +209,7 @@ See git history and [Releases](https://github.com/lTSPV75BRO/Nutanix-ncc-orchest
 
 ---
 
+[2.0.0]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.0.0
 [1.1.0]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v1.1.0
 [1.0.0]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v1.0.0
 [0.1.13]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v0.1.13

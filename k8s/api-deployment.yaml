@@ -1,0 +1,130 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ncc-v2-api
+  namespace: ncc-orchestrator-v2
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ncc-orchestrator-v2
+      component: api
+  template:
+    metadata:
+      labels:
+        app: ncc-orchestrator-v2
+        component: api
+    spec:
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: "OnRootMismatch"
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: stage-orchestrator-binary
+          # Pull ncc-orchestrator from the runner image and share it with API container.
+          image: docker.io/prajwalnutant/nutanix-ncc-orchestrator:2.0.0
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "cp /usr/local/bin/ncc-orchestrator /tools/ncc-orchestrator && chmod 0755 /tools/ncc-orchestrator"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tools
+              mountPath: /tools
+      containers:
+        - name: api
+          # Replace with your v2 api image that contains ncc-api-server.
+          image: docker.io/prajwalnutant/ncc-api-server:2.0.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--listen"
+            - ":8081"
+            - "--repo-root"
+            - "/"
+            - "--config-path"
+            - "/config/config.yaml"
+            - "--output-dir"
+            - "/data/outputfiles"
+            - "--log-dir"
+            - "/data/nccfiles"
+            - "--runner-log-path"
+            - "/data/logs/ncc-runner.log"
+            - "--orchestrator-bin"
+            - "/tools/ncc-orchestrator"
+            - "--token-file-path"
+            - "/data/auth/.ncc-api-token"
+            - "--auth-mode"
+            - "token"
+            - "--cors-origin"
+            - "http://localhost:8080"
+          env:
+            - name: NCC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ncc-v2-secrets
+                  key: prism-password
+            - name: NCC_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ncc-v2-secrets
+                  key: api-token
+          ports:
+            - containerPort: 8081
+              name: http
+          startupProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8081
+            periodSeconds: 5
+            failureThreshold: 12
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8081
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8081
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            failureThreshold: 3
+            timeoutSeconds: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: tools
+              mountPath: /tools
+              readOnly: true
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+      volumes:
+        - name: config
+          configMap:
+            name: ncc-v2-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: ncc-v2-data
+        - name: tools
+          emptyDir: {}
