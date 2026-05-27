@@ -21,6 +21,12 @@ export type FieldDef = {
   max?: number;
   step?: number;
   required?: boolean;
+  /**
+   * Optional explicit autoComplete attribute for browser hints. Defaults to
+   * "off" for non-username/email/password fields so browsers don't silently
+   * suggest the user's email for "PC IP" or similar config text inputs.
+   */
+  autoComplete?: string;
 };
 
 export type SectionDef = {
@@ -86,6 +92,7 @@ export const SECTIONS: SectionDef[] = [
         type: "string",
         required: true,
         placeholder: "admin",
+        autoComplete: "username",
       },
       {
         key: "password",

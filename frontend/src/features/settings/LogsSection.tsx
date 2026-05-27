@@ -139,10 +139,14 @@ export function LogsSection({ onError }: Props) {
       <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
         <Col xs={24} md={14}>
           <Input
+            id="logs-filter"
+            name="logs-filter"
+            aria-label="Filter log lines"
             allowClear
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Filter lines (regex or substring)…"
+            autoComplete="off"
             prefix={<FilterOutlined />}
             suffix={
               <Tooltip title="Case sensitive">
@@ -160,12 +164,16 @@ export function LogsSection({ onError }: Props) {
         <Col xs={24} md={10}>
           <Space size={8} wrap style={{ display: "flex", justifyContent: "flex-end" }}>
             <Space size={6}>
-              <Switch checked={auto} onChange={setAuto} size="small" />
-              <Typography.Text type="secondary">Auto-refresh</Typography.Text>
+              <Switch id="logs-auto-refresh" aria-label="Auto-refresh logs" checked={auto} onChange={setAuto} size="small" />
+              <Typography.Text type="secondary">
+                <label htmlFor="logs-auto-refresh">Auto-refresh</label>
+              </Typography.Text>
             </Space>
             <Space size={6}>
-              <Switch checked={followTail} onChange={setFollowTail} size="small" />
-              <Typography.Text type="secondary">Follow tail</Typography.Text>
+              <Switch id="logs-follow-tail" aria-label="Follow tail" checked={followTail} onChange={setFollowTail} size="small" />
+              <Typography.Text type="secondary">
+                <label htmlFor="logs-follow-tail">Follow tail</label>
+              </Typography.Text>
             </Space>
             <Tooltip title="Jump to latest line">
               <Button icon={<ToTopOutlined rotate={180} />} onClick={() => setJumpToLastSignal((n) => n + 1)} />

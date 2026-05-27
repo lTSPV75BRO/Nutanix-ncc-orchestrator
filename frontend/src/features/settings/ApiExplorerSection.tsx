@@ -356,6 +356,8 @@ export function ApiExplorerSection({ onError }: Props) {
 
       <Space size={8} wrap style={{ marginTop: 12, marginBottom: 12 }}>
         <Select
+          id="api-explorer-preset"
+          aria-label="Quick presets"
           style={{ minWidth: 220 }}
           placeholder="Quick presets…"
           onChange={applyPreset}
@@ -373,9 +375,9 @@ export function ApiExplorerSection({ onError }: Props) {
         />
         <Tooltip title="Allow sending requests to absolute http(s) URLs (off by default)">
           <Space size={6}>
-            <Switch checked={allowExternalURL} onChange={setAllowExternalURL} size="small" />
+            <Switch id="api-explorer-allow-external" aria-label="Allow external URLs" checked={allowExternalURL} onChange={setAllowExternalURL} size="small" />
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              Allow external URLs
+              <label htmlFor="api-explorer-allow-external">Allow external URLs</label>
             </Typography.Text>
             {allowExternalURL ? <WarningOutlined style={{ color: "#f59e0b" }} /> : null}
           </Space>
@@ -385,6 +387,8 @@ export function ApiExplorerSection({ onError }: Props) {
       <Row gutter={[8, 8]} align="middle">
         <Col xs={8} sm={5}>
           <Select<HttpMethod>
+            id="api-explorer-method"
+            aria-label="HTTP method"
             value={method}
             onChange={setMethod}
             style={{ width: "100%" }}
@@ -396,10 +400,14 @@ export function ApiExplorerSection({ onError }: Props) {
         </Col>
         <Col xs={16} sm={13}>
           <Input
+            id="api-explorer-path"
+            name="api-path"
+            aria-label="API request path"
             value={path}
             onChange={(e) => setPath(e.target.value)}
             placeholder="/api/v1/health"
             prefix={<ApiOutlined style={{ color: "rgba(226,232,240,0.6)" }} />}
+            autoComplete="off"
           />
         </Col>
         <Col xs={24} sm={6}>
@@ -421,21 +429,29 @@ export function ApiExplorerSection({ onError }: Props) {
             (one per line, <code>Key: Value</code>)
           </Typography.Text>
           <Input.TextArea
+            id="api-explorer-headers"
+            name="headers"
+            aria-label="Request headers"
             value={headerLines}
             onChange={(e) => setHeaderLines(e.target.value)}
             rows={5}
             placeholder={"Authorization: Bearer <token>\nX-Custom-Header: value"}
             style={{ marginTop: 6, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: 12 }}
+            autoComplete="off"
           />
         </Col>
         <Col xs={24} md={12}>
           <Typography.Text strong style={{ fontSize: 13 }}>Body (JSON)</Typography.Text>
           <Input.TextArea
+            id="api-explorer-body"
+            name="body"
+            aria-label="Request body (JSON)"
             value={body}
             onChange={(e) => setBody(e.target.value)}
             rows={5}
             placeholder='{"example":"value"}'
             style={{ marginTop: 6, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: 12 }}
+            autoComplete="off"
           />
         </Col>
       </Row>
@@ -505,12 +521,16 @@ export function ApiExplorerSection({ onError }: Props) {
         styles={{ body: { padding: 16 } }}
       >
         <Input
+          id="api-routes-filter"
+          name="route-filter"
+          aria-label="Filter routes"
           allowClear
           value={routeFilter}
           onChange={(e) => setRouteFilter(e.target.value)}
           placeholder="Filter by path, method, or description…"
           prefix={<SearchOutlined />}
           style={{ marginBottom: 12 }}
+          autoComplete="off"
         />
         {routesError ? (
           <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={routesError} />

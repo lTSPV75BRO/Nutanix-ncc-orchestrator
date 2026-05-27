@@ -4,90 +4,131 @@
 
 :root {
   --app-font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  /* Dark theme: near-black neutral charcoal with very subtle purple/cyan
+     glow accents in the corners. Replaces the previous navy palette so the
+     surface reads as truly dark (a la VS Code Dark+ / IntelliJ Darcula). */
   --app-bg:
-    radial-gradient(1200px 700px at 5% -10%, rgba(139, 92, 246, 0.35), transparent 55%),
-    radial-gradient(1000px 600px at 95% 0%, rgba(56, 189, 248, 0.24), transparent 52%),
-    linear-gradient(180deg, #070b1b 0%, #0b1224 100%);
-  --app-text: #e5e7eb;
-  --card-bg: linear-gradient(180deg, rgba(17, 24, 39, 0.94) 0%, rgba(15, 23, 42, 0.94) 100%);
-  --card-border: rgba(139, 92, 246, 0.35);
-  --card-hover-border: rgba(56, 189, 248, 0.55);
-  --layout-bg: #0b1224;
-  --header-bg: linear-gradient(90deg, rgba(17, 24, 39, 0.93), rgba(30, 41, 59, 0.92), rgba(15, 23, 42, 0.93));
-  --header-border: rgba(139, 92, 246, 0.35);
-  --pre-bg: linear-gradient(180deg, rgba(2, 6, 23, 0.95), rgba(15, 23, 42, 0.95));
-  --pre-border: rgba(56, 189, 248, 0.28);
-  --table-head-bg: rgba(30, 41, 59, 0.95);
-  --table-head-text: #e2e8f0;
-  --table-row-even: rgba(15, 23, 42, 0.5);
-  --table-row-odd: rgba(30, 41, 59, 0.35);
-  --table-row-hover: rgba(71, 85, 105, 0.3);
-  --control-bg: rgba(15, 23, 42, 0.8);
-  --control-border: #334155;
-  --control-text: #e2e8f0;
-  --menu-selected-bg: linear-gradient(90deg, rgba(139, 92, 246, 0.45), rgba(56, 189, 248, 0.35));
+    radial-gradient(1100px 650px at 8% -8%, rgba(139, 92, 246, 0.18), transparent 55%),
+    radial-gradient(900px 550px at 92% 0%, rgba(56, 189, 248, 0.12), transparent 50%),
+    linear-gradient(180deg, #0a0a0a 0%, #050505 100%);
+  --app-text: #ededed;
+  --card-bg: linear-gradient(180deg, rgba(20, 20, 20, 0.96) 0%, rgba(16, 16, 16, 0.96) 100%);
+  --card-border: rgba(139, 92, 246, 0.25);
+  --card-hover-border: rgba(139, 92, 246, 0.45);
+  --layout-bg: #0a0a0a;
+  --header-bg: linear-gradient(90deg, rgba(15, 15, 15, 0.95), rgba(20, 20, 20, 0.93), rgba(15, 15, 15, 0.95));
+  --header-border: rgba(139, 92, 246, 0.22);
+  --pre-bg: linear-gradient(180deg, rgba(8, 8, 8, 0.97), rgba(16, 16, 16, 0.97));
+  --pre-border: rgba(139, 92, 246, 0.2);
+  --table-head-bg: rgba(26, 26, 26, 0.96);
+  --table-head-text: #ededed;
+  --table-row-even: rgba(16, 16, 16, 0.6);
+  --table-row-odd: rgba(20, 20, 20, 0.45);
+  --table-row-hover: rgba(38, 38, 38, 0.55);
+  --control-bg: rgba(20, 20, 20, 0.9);
+  --control-border: #262626;
+  --control-text: #ededed;
+  --menu-selected-bg: rgba(139, 92, 246, 0.2);
   --menu-selected-border: #8b5cf6;
   --menu-hover-text: #c4b5fd;
-  --menu-text: #e2e8f0;
-  --subtitle-text: rgba(226, 232, 240, 0.78);
-  --shadow-color: rgba(5, 10, 25, 0.36);
-  --table-head-border: rgba(71, 85, 105, 0.75);
-  --table-cell-border: rgba(51, 65, 85, 0.45);
-  --alerts-card-bg: rgba(17, 24, 39, 0.94);
-  --alerts-card-border: rgba(71, 85, 105, 0.6);
-  --tag-bg: #111827;
-  --tag-text: #cbd5e1;
-  --tag-border: #334155;
-  --tag-checked-bg: linear-gradient(90deg, #8b5cf6, #3b82f6);
-  --table-meta-text: rgba(226, 232, 240, 0.78);
-  --link-color: #93c5fd;
-  --btn-primary-bg: linear-gradient(90deg, #8b5cf6, #06b6d4);
-  --btn-primary-bg-hover: linear-gradient(90deg, #a78bfa, #22d3ee);
+  --menu-text: #ededed;
+  --subtitle-text: rgba(237, 237, 237, 0.72);
+  --shadow-color: rgba(0, 0, 0, 0.5);
+  --table-head-border: rgba(38, 38, 38, 0.85);
+  --table-cell-border: rgba(31, 31, 31, 0.7);
+  --alerts-card-bg: rgba(20, 20, 20, 0.96);
+  --alerts-card-border: rgba(38, 38, 38, 0.7);
+  --tag-bg: #1a1a1a;
+  --tag-text: #d4d4d8;
+  --tag-border: #262626;
+  --tag-checked-bg: #3b82f6;
+  --table-meta-text: rgba(237, 237, 237, 0.72);
+  --link-color: #a5b4fc;
+  /* Solid primary so left/right edges of buttons match (no diagonal split). */
+  --btn-primary-bg: #7c3aed;
+  --btn-primary-bg-hover: #8b5cf6;
+  /* Dark-theme brand chrome — purple→cyan gradient on near-black surface. */
+  --brand-name-grad: linear-gradient(90deg, #c4b5fd, #67e8f9);
+  --brand-version-bg: linear-gradient(90deg, rgba(139, 92, 246, 0.22), rgba(56, 189, 248, 0.22));
+  --brand-version-border: rgba(139, 92, 246, 0.45);
+  --brand-version-color: #c4b5fd;
+  --brand-logo-bg: linear-gradient(135deg, rgba(139, 92, 246, 0.22), rgba(56, 189, 248, 0.22));
+  --brand-logo-inner: rgba(255, 255, 255, 0.04);
+  --brand-logo-glow: linear-gradient(135deg, rgba(139, 92, 246, 0.55), rgba(56, 189, 248, 0.55));
+  /* Header chrome (dark) */
+  --header-shadow: 0 1px 0 rgba(255, 255, 255, 0.04), 0 8px 24px rgba(0, 0, 0, 0.45);
+  --header-underglow: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, #8b5cf6 35%, transparent) 25%,
+    color-mix(in srgb, #38bdf8 35%, transparent) 75%,
+    transparent 100%
+  );
+  /* Nav pill (dark) */
+  --nav-pill-active-color: #c4b5fd;
+  --nav-pill-active-shadow: rgba(139, 92, 246, 0.28);
+  /* Header health pills — readable on dark */
+  --health-ok-bg: rgba(34, 197, 94, 0.16);
+  --health-ok-border: rgba(34, 197, 94, 0.45);
+  --health-ok-color: #86efac;
+  --health-ok-dot: #22c55e;
+  --health-warn-bg: rgba(245, 158, 11, 0.18);
+  --health-warn-border: rgba(245, 158, 11, 0.45);
+  --health-warn-color: #fcd34d;
+  --health-warn-dot: #f59e0b;
+  --health-err-bg: rgba(244, 63, 94, 0.18);
+  --health-err-border: rgba(244, 63, 94, 0.5);
+  --health-err-color: #fda4af;
+  --health-err-dot: #f43f5e;
   --anim-fast: 140ms;
   --anim-normal: 220ms;
   --anim-ease: cubic-bezier(0.2, 0, 0.2, 1);
 }
 
 html[data-theme="light"] {
+  /* Light theme: clean neutral zinc palette (very faint cool tint) instead
+     of the previous slate-blue. Reads as a "professional product" surface
+     similar to GitHub / Linear / Vercel light themes. */
   --app-bg:
-    radial-gradient(1200px 700px at 5% -10%, rgba(14, 116, 144, 0.15), transparent 55%),
-    radial-gradient(1000px 600px at 95% 0%, rgba(37, 99, 235, 0.12), transparent 52%),
-    linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
-  --app-text: #0f172a;
-  --card-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(248, 250, 252, 0.96) 100%);
-  --card-border: rgba(59, 130, 246, 0.3);
-  --card-hover-border: rgba(14, 116, 144, 0.45);
-  --layout-bg: #f1f5f9;
-  --header-bg: linear-gradient(90deg, rgba(255, 255, 255, 0.95), rgba(241, 245, 249, 0.95), rgba(255, 255, 255, 0.95));
-  --header-border: rgba(59, 130, 246, 0.28);
-  --pre-bg: linear-gradient(180deg, rgba(241, 245, 249, 0.98), rgba(226, 232, 240, 0.98));
-  --pre-border: rgba(59, 130, 246, 0.25);
-  --table-head-bg: rgba(203, 213, 225, 0.95);
-  --table-head-text: #0f172a;
-  --table-row-even: rgba(255, 255, 255, 0.95);
-  --table-row-odd: rgba(248, 250, 252, 0.95);
-  --table-row-hover: rgba(219, 234, 254, 0.85);
-  --control-bg: rgba(255, 255, 255, 0.98);
-  --control-border: #cbd5e1;
-  --control-text: #0f172a;
-  --menu-selected-bg: linear-gradient(90deg, rgba(37, 99, 235, 0.2), rgba(14, 165, 233, 0.18));
+    radial-gradient(1200px 700px at 5% -10%, rgba(37, 99, 235, 0.05), transparent 55%),
+    radial-gradient(1000px 600px at 95% 0%, rgba(14, 165, 233, 0.04), transparent 52%),
+    linear-gradient(180deg, #fafafa 0%, #f4f4f5 100%);
+  --app-text: #18181b;
+  --card-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(252, 252, 253, 0.98) 100%);
+  --card-border: rgba(228, 228, 231, 1);
+  --card-hover-border: rgba(37, 99, 235, 0.35);
+  --layout-bg: #f4f4f5;
+  --header-bg: linear-gradient(90deg, rgba(255, 255, 255, 0.98), rgba(250, 250, 250, 0.98), rgba(255, 255, 255, 0.98));
+  --header-border: rgba(228, 228, 231, 1);
+  --pre-bg: linear-gradient(180deg, rgba(250, 250, 250, 0.98), rgba(244, 244, 245, 0.98));
+  --pre-border: rgba(228, 228, 231, 1);
+  --table-head-bg: rgba(244, 244, 245, 0.98);
+  --table-head-text: #18181b;
+  --table-row-even: rgba(255, 255, 255, 1);
+  --table-row-odd: rgba(250, 250, 250, 1);
+  --table-row-hover: rgba(244, 244, 245, 0.95);
+  --control-bg: rgba(255, 255, 255, 1);
+  --control-border: #e4e4e7;
+  --control-text: #18181b;
+  --menu-selected-bg: rgba(37, 99, 235, 0.1);
   --menu-selected-border: #2563eb;
   --menu-hover-text: #1d4ed8;
-  --menu-text: #0f172a;
-  --subtitle-text: rgba(51, 65, 85, 0.85);
-  --shadow-color: rgba(15, 23, 42, 0.12);
-  --table-head-border: rgba(148, 163, 184, 0.8);
-  --table-cell-border: rgba(203, 213, 225, 0.85);
-  --alerts-card-bg: rgba(255, 255, 255, 0.98);
-  --alerts-card-border: rgba(148, 163, 184, 0.45);
-  --tag-bg: #f8fafc;
-  --tag-text: #1e293b;
-  --tag-border: #cbd5e1;
-  --tag-checked-bg: linear-gradient(90deg, #2563eb, #0ea5e9);
-  --table-meta-text: rgba(51, 65, 85, 0.95);
+  --menu-text: #18181b;
+  --subtitle-text: rgba(82, 82, 91, 0.95);
+  --shadow-color: rgba(24, 24, 27, 0.08);
+  --table-head-border: rgba(228, 228, 231, 1);
+  --table-cell-border: rgba(244, 244, 245, 0.95);
+  --alerts-card-bg: rgba(255, 255, 255, 1);
+  --alerts-card-border: rgba(228, 228, 231, 1);
+  --tag-bg: #fafafa;
+  --tag-text: #27272a;
+  --tag-border: #e4e4e7;
+  --tag-checked-bg: #2563eb;
+  --table-meta-text: rgba(82, 82, 91, 0.95);
   --link-color: #1d4ed8;
-  --btn-primary-bg: linear-gradient(90deg, #2563eb, #0ea5e9);
-  --btn-primary-bg-hover: linear-gradient(90deg, #1d4ed8, #0284c7);
+  /* Solid primary so left/right edges of buttons match (no diagonal split). */
+  --btn-primary-bg: #2563eb;
+  --btn-primary-bg-hover: #1d4ed8;
   /* Header brand */
   --brand-name-grad: linear-gradient(90deg, #1d4ed8, #0e7490);
   --brand-version-bg: linear-gradient(90deg, rgba(37, 99, 235, 0.12), rgba(14, 165, 233, 0.12));
@@ -145,7 +186,7 @@ html[data-theme="it-pro"] {
   --control-bg: rgba(15, 23, 42, 0.88);
   --control-border: #334155;
   --control-text: #dbeafe;
-  --menu-selected-bg: linear-gradient(90deg, rgba(20, 184, 166, 0.28), rgba(2, 132, 199, 0.24));
+  --menu-selected-bg: rgba(20, 184, 166, 0.22);
   --menu-selected-border: #14b8a6;
   --menu-hover-text: #5eead4;
   --menu-text: #dbeafe;
@@ -158,11 +199,12 @@ html[data-theme="it-pro"] {
   --tag-bg: #0f172a;
   --tag-text: #dbeafe;
   --tag-border: #334155;
-  --tag-checked-bg: linear-gradient(90deg, #14b8a6, #0284c7);
+  --tag-checked-bg: #0d9488;
   --table-meta-text: rgba(191, 219, 254, 0.9);
   --link-color: #38bdf8;
-  --btn-primary-bg: linear-gradient(90deg, #14b8a6, #0284c7);
-  --btn-primary-bg-hover: linear-gradient(90deg, #0d9488, #0369a1);
+  /* Solid primary so left/right edges of buttons match (no diagonal split). */
+  --btn-primary-bg: #0d9488;
+  --btn-primary-bg-hover: #0f766e;
   /* Header brand — teal/cyan accent */
   --brand-name-grad: linear-gradient(90deg, #5eead4, #38bdf8);
   --brand-version-bg: linear-gradient(90deg, rgba(20, 184, 166, 0.32), rgba(2, 132, 199, 0.32));
@@ -703,6 +745,51 @@ a {
 .header-trigger-btn.ant-btn:not(.ant-btn-primary) {
   background: color-mix(in srgb, var(--control-bg) 80%, transparent);
   border: 1px solid color-mix(in srgb, var(--control-border) 70%, transparent);
+}
+
+/*
+ * While a run is active, give the header trigger button the same accented
+ * "processing" treatment that the Settings → Runs <Tag color="processing">
+ * pill uses: a subtle blue-tinted surface, blue border, and a soft pulsing
+ * glow that matches Ant's processing-tag aesthetic. Re-uses Ant's primary
+ * color so the accent automatically follows the active app theme (purple
+ * in dark, blue in light, teal in it-pro).
+ */
+.header-trigger-btn.ant-btn.header-trigger-btn-running {
+  /* The button class is `.ant-btn-default` here — drop the muted background
+     applied above and replace with a primary-tinted one. */
+  background: color-mix(in srgb, var(--ant-color-primary, #1677ff) 12%, var(--control-bg));
+  border-color: color-mix(in srgb, var(--ant-color-primary, #1677ff) 60%, transparent);
+  color: var(--ant-color-primary-text-active, var(--ant-color-primary, #1677ff));
+  cursor: default;
+  animation: header-trigger-pulse 1.6s ease-in-out infinite;
+}
+
+.header-trigger-btn.ant-btn.header-trigger-btn-running:disabled,
+.header-trigger-btn.ant-btn.header-trigger-btn-running[disabled] {
+  /* Override Ant's disabled-state desaturation so the running tint stays
+     visible — disabled merely indicates the button is non-interactive while
+     the run is in flight. */
+  background: color-mix(in srgb, var(--ant-color-primary, #1677ff) 12%, var(--control-bg));
+  border-color: color-mix(in srgb, var(--ant-color-primary, #1677ff) 60%, transparent);
+  color: var(--ant-color-primary-text-active, var(--ant-color-primary, #1677ff));
+  opacity: 1;
+}
+
+@keyframes header-trigger-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ant-color-primary, #1677ff) 35%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--ant-color-primary, #1677ff) 0%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .header-trigger-btn.ant-btn.header-trigger-btn-running {
+    animation: none;
+  }
 }
 
 .recent-runs-spark {

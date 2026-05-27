@@ -151,10 +151,11 @@ export function PolicyGateBuilderSection({ configContent, onApplyPolicyGates }: 
         </div>
       </Space>
 
-      <Form layout="vertical" style={{ marginTop: 16 }}>
+      <Form layout="vertical" style={{ marginTop: 16 }} onSubmitCapture={(e) => e.preventDefault()}>
         <Space size={8} wrap align="end" style={{ width: "100%" }}>
-          <Form.Item label="Metric" style={{ marginBottom: 0, minWidth: 240 }}>
+          <Form.Item label="Metric" htmlFor="policy-metric" style={{ marginBottom: 0, minWidth: 240 }}>
             <Select
+              id="policy-metric"
               value={metric}
               onChange={setMetric}
               showSearch
@@ -170,11 +171,13 @@ export function PolicyGateBuilderSection({ configContent, onApplyPolicyGates }: 
               }))}
             />
           </Form.Item>
-          <Form.Item label="Operator" style={{ marginBottom: 0 }}>
-            <Select value={op} onChange={setOp} options={OPERATORS} style={{ width: 88 }} />
+          <Form.Item label="Operator" htmlFor="policy-op" style={{ marginBottom: 0 }}>
+            <Select id="policy-op" value={op} onChange={setOp} options={OPERATORS} style={{ width: 88 }} />
           </Form.Item>
-          <Form.Item label="Value" style={{ marginBottom: 0 }}>
+          <Form.Item label="Value" htmlFor="policy-value" style={{ marginBottom: 0 }}>
             <InputNumber
+              id="policy-value"
+              name="policy-value"
               value={value}
               onChange={(v) => setValue(Number(v ?? 0))}
               style={{ width: 120 }}

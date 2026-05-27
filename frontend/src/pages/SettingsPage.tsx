@@ -57,35 +57,97 @@ function relativeTime(iso: string): string {
 }
 
 /**
- * Compact bar-sparkline of runs per day for the trailing 7 days. Uses
- * `RunInfo[]` history (already fetched via the `runs` query) and renders
- * inline SVG so we don't pull in a charting dependency.
+ * Compact bar-sparkline of *completed* runs per day for the trailing N days.
+ *
+ * Counting policy:
+ *   - We only count entries whose source is "history" (archived per-run dir)
+ *     or "summary" (the latest in-place run-summary.json). These are the only
+ *     sources that represent an actual orchestrator run that produced
+ *     artifacts.
+ *   - We deliberately ignore source="trigger" entries. A trigger is a record
+ *     of a user clicking "Trigger Run" — it does NOT mean a run completed.
+ *     Many triggers may produce zero runs (e.g. a 409 "already in progress"
+ *     rejection still gets logged as a successful API call). Including them
+ *     used to inflate the count (e.g. "2 runs" when only 1 actually ran).
+ *   - We dedupe by minute-precision timestamp so the same run doesn't get
+ *     double-counted when both its archived copy ("history") and the
+ *     in-place run-summary.json ("summary") happen to coexist on disk.
+ *
+ * We request `source=history` from the API to keep the wire payload small,
+ * but the post-processing here also tolerates "summary" so the in-flight
+ * latest run shows up before the orchestrator archives it.
  */
 function RecentRunsSparkline({ days = 7 }: { days?: number }) {
-  const runs = useQuery({ queryKey: ["runs"], queryFn: api.runs, staleTime: 30_000 });
-  const list = (runs.data as { mod_time?: string }[] | undefined) ?? [];
+  // Pull only sources that correspond to real runs. The backend supports
+  // ?source= filtering; "history" is the archived (most authoritative) feed.
+  // We also fetch unfiltered and post-filter so a brand-new run that's still
+  // sitting at outputDir/run-summary.json (source="summary") shows up before
+  // it's archived. Fetching unfiltered is cheap and yields fresher results.
+  const runsQuery = useQuery({
+    queryKey: ["runs", "sparkline", days],
+    queryFn: () => api.runs({ limit: 200 }),
+    staleTime: 30_000,
+  });
+
+  // Local-day key (YYYY-MM-DD in the user's timezone). We *deliberately* don't
+  // use toISOString().slice(0,10) here — that returns the UTC date, which can
+  // be off-by-one for users in IST/PST/etc. when local midnight straddles a
+  // UTC boundary. Bucketing must be in the user's local TZ so a run that
+  // happened "today afternoon" actually lands in the "today" bar.
+  const localDateKey = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${dd}`;
+  };
 
   const buckets: { key: string; label: string; count: number }[] = [];
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   for (let i = days - 1; i >= 0; i -= 1) {
     const d = new Date(today.getTime() - i * 24 * 3600 * 1000);
-    const key = d.toISOString().slice(0, 10);
-    const label = d.toLocaleDateString(undefined, { weekday: "short" });
-    buckets.push({ key, label, count: 0 });
+    buckets.push({
+      key: localDateKey(d),
+      label: d.toLocaleDateString(undefined, { weekday: "short" }),
+      count: 0,
+    });
   }
-  let total = 0;
-  for (const r of list) {
-    if (!r?.mod_time) continue;
-    const t = new Date(r.mod_time);
-    if (Number.isNaN(t.getTime())) continue;
-    const key = t.toISOString().slice(0, 10);
-    const bucket = buckets.find((b) => b.key === key);
-    if (bucket) {
-      bucket.count += 1;
-      total += 1;
-    }
+  const windowStart = today.getTime() - (days - 1) * 24 * 3600 * 1000;
+  const cutoff = today.getTime() + 24 * 3600 * 1000;
+
+  const list = (runsQuery.data ?? []) as Array<{
+    mod_time?: string;
+    timestamp?: string;
+    source?: string;
+    success?: boolean;
+  }>;
+  // history wins when the same minute also has a summary entry pointing to
+  // the same run on disk.
+  const ordered = [...list].sort((a, b) => {
+    const rank: Record<string, number> = { history: 2, summary: 1 };
+    return (rank[b.source ?? ""] ?? 0) - (rank[a.source ?? ""] ?? 0);
+  });
+  const seenMinute = new Set<string>();
+  for (const r of ordered) {
+    // Hard filter: triggers are not runs. Anything else with no recognizable
+    // source (e.g. future API additions) is also ignored to avoid surprises.
+    if (r.source !== "history" && r.source !== "summary") continue;
+    const iso = r.timestamp || r.mod_time;
+    if (!iso) continue;
+    const ts = new Date(iso);
+    const t = ts.getTime();
+    if (Number.isNaN(t)) continue;
+    if (t < windowStart || t > cutoff) continue;
+    const minuteKey = ts.toISOString().slice(0, 16);
+    if (seenMinute.has(minuteKey)) continue;
+    seenMinute.add(minuteKey);
+    const dayKey = localDateKey(ts);
+    const bucket = buckets.find((b) => b.key === dayKey);
+    if (bucket) bucket.count += 1;
   }
+
+  const total = buckets.reduce((acc, b) => acc + b.count, 0);
+  const isLoading = runsQuery.isLoading;
   const max = Math.max(1, ...buckets.map((b) => b.count));
   const width = 220;
   const height = 48;
@@ -97,7 +159,7 @@ function RecentRunsSparkline({ days = 7 }: { days?: number }) {
       <div className="recent-runs-meta">
         <Typography.Text strong>Recent runs</Typography.Text>
         <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
-          {total} run{total === 1 ? "" : "s"} · last {days} days
+          {isLoading ? "loading…" : `${total} run${total === 1 ? "" : "s"} · last ${days} days`}
         </Typography.Text>
       </div>
       <svg width={width} height={height} role="img" aria-label={`Run frequency over the last ${days} days`}>
@@ -114,8 +176,8 @@ function RecentRunsSparkline({ days = 7 }: { days?: number }) {
                 width={barW}
                 height={h}
                 rx={2}
-                fill={b.count > 0 ? "var(--brand-accent, #1677ff)" : "var(--control-border, #d9d9d9)"}
-                opacity={b.count > 0 ? 0.85 : 0.6}
+                fill={b.count > 0 ? "var(--menu-selected-border, #1677ff)" : "var(--control-border, #d9d9d9)"}
+                opacity={b.count > 0 ? 0.9 : 0.4}
               />
             </g>
           );

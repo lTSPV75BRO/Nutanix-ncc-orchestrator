@@ -8,6 +8,8 @@ import type {
   HealthData,
   ReportData,
   ReportTrendsData,
+  RunByIdData,
+  RunCancelData,
   RunPreflightData,
   RunActiveData,
   RunnerLogData,
@@ -16,6 +18,21 @@ import type {
   ScheduleHealthData,
   TriggerRunData,
 } from "./types";
+
+// ApiError preserves both the human-readable message and the structured `data`
+// payload from a failed API response. Callers that want to react to specific
+// failure modes (e.g. 409 "run in progress") can read `status` and `data`
+// directly instead of regex-parsing a flattened message.
+export class ApiError extends Error {
+  status: number;
+  data: unknown;
+  constructor(message: string, status: number, data: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.data = data;
+  }
+}
 
 async function callApi<T>(path: string, init?: RequestInit): Promise<T> {
   const ctl = new AbortController();
@@ -34,12 +51,15 @@ async function callApi<T>(path: string, init?: RequestInit): Promise<T> {
   if (!contentType.includes("application/json")) {
     const textBody = (await response.text().catch(() => "")).trim();
     const snippet = textBody ? `\n${textBody.slice(0, 600)}` : "";
-    throw new Error(`unexpected response content-type: ${contentType || "unknown"}${snippet}`);
+    throw new ApiError(
+      `unexpected response content-type: ${contentType || "unknown"}${snippet}`,
+      response.status,
+      undefined,
+    );
   }
   const payload = (await response.json().catch(() => ({}))) as Envelope<T>;
   if (!response.ok || !payload.success) {
-    const details = typeof payload.data === "object" ? JSON.stringify(payload.data, null, 2) : "";
-    throw new Error([payload.error ?? response.statusText, details].filter(Boolean).join("\n"));
+    throw new ApiError(payload.error ?? response.statusText, response.status, payload.data);
   }
   return (payload.data ?? ({} as T)) as T;
 }
@@ -107,9 +127,21 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   scheduleHealth: () => callApi<ScheduleHealthData>("/api/v1/schedule/health"),
-  runs: () => callApi<RunInfo[]>("/api/v1/runs"),
+  runs: (opts?: { limit?: number; source?: "history" | "summary" | "trigger"; since?: string }) => {
+    const params = new URLSearchParams();
+    if (typeof opts?.limit === "number" && opts.limit > 0) params.set("limit", String(opts.limit));
+    if (opts?.source) params.set("source", opts.source);
+    if (opts?.since) params.set("since", opts.since);
+    const path = params.size > 0 ? `/api/v1/runs?${params.toString()}` : "/api/v1/runs";
+    return callApi<RunInfo[]>(path);
+  },
+  runById: (id: string) => callApi<RunByIdData>(`/api/v1/runs/${encodeURIComponent(id)}`),
   runSummary: () => callApi<unknown>("/api/v1/runs/summary"),
   runActive: () => callApi<RunActiveData>("/api/v1/runs/active"),
+  runCancel: () =>
+    callApi<RunCancelData>("/api/v1/runs/active", {
+      method: "DELETE",
+    }),
   runPreflight: (payload: { config_path?: string }) =>
     callApi<RunPreflightData>("/api/v1/runs/preflight", {
       method: "POST",

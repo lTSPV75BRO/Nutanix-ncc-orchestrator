@@ -188,22 +188,29 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
         </Typography.Text>
 
         <div style={{ marginTop: 16, marginBottom: 16 }}>
-          <Radio.Group value={mode} onChange={(e) => setMode(e.target.value)}>
+          <Radio.Group
+            id="sched-mode"
+            name="sched-mode"
+            aria-label="Schedule editor mode"
+            value={mode}
+            onChange={(e) => setMode(e.target.value)}
+          >
             <Radio.Button value="simple">Simple</Radio.Button>
             <Radio.Button value="advanced">Advanced</Radio.Button>
           </Radio.Group>
         </div>
 
-        <Form layout="vertical">
+        <Form layout="vertical" onSubmitCapture={(e) => e.preventDefault()}>
           <Row gutter={16}>
             <Col xs={12} md={6}>
-              <Form.Item label="Run every">
-                <InputNumber min={1} value={everyValue} onChange={(v) => setEveryValue(Number(v || 1))} style={{ width: "100%" }} />
+              <Form.Item label="Run every" htmlFor="sched-every-value">
+                <InputNumber id="sched-every-value" name="every-value" min={1} value={everyValue} onChange={(v) => setEveryValue(Number(v || 1))} style={{ width: "100%" }} />
               </Form.Item>
             </Col>
             <Col xs={12} md={6}>
-              <Form.Item label="Unit">
+              <Form.Item label="Unit" htmlFor="sched-every-unit">
                 <Select
+                  id="sched-every-unit"
                   value={everyUnit}
                   onChange={setEveryUnit}
                   options={[
@@ -216,8 +223,8 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
-              <Form.Item label="Config file">
-                <Input value={config} onChange={(e) => setConfig(e.target.value)} placeholder="config.yaml" />
+              <Form.Item label="Config file" htmlFor="sched-config">
+                <Input id="sched-config" name="config-path" value={config} onChange={(e) => setConfig(e.target.value)} placeholder="config.yaml" autoComplete="off" />
               </Form.Item>
             </Col>
           </Row>
@@ -234,8 +241,9 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
             <>
               <Row gutter={16}>
                 <Col xs={24} md={8}>
-                  <Form.Item label="Scheduler type">
+                  <Form.Item label="Scheduler type" htmlFor="sched-type">
                     <Select
+                      id="sched-type"
                       value={type}
                       onChange={setType}
                       options={[
@@ -248,8 +256,9 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={8}>
-                  <Form.Item label="Action">
+                  <Form.Item label="Action" htmlFor="sched-action">
                     <Select
+                      id="sched-action"
                       value={action}
                       onChange={setAction}
                       options={[
@@ -263,20 +272,20 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={8}>
-                  <Form.Item label="Custom cron expression" tooltip="5-field cron, leave empty to derive from interval">
-                    <Input value={cron} onChange={(e) => setCron(e.target.value)} placeholder="e.g. 15 */4 * * *" />
+                  <Form.Item label="Custom cron expression" tooltip="5-field cron, leave empty to derive from interval" htmlFor="sched-cron">
+                    <Input id="sched-cron" name="cron" value={cron} onChange={(e) => setCron(e.target.value)} placeholder="e.g. 15 */4 * * *" autoComplete="off" />
                   </Form.Item>
                 </Col>
               </Row>
               <Row gutter={16}>
                 <Col xs={24} md={12}>
-                  <Form.Item label="Task name">
-                    <Input value={taskName} onChange={(e) => setTaskName(e.target.value)} />
+                  <Form.Item label="Task name" htmlFor="sched-task-name">
+                    <Input id="sched-task-name" name="task-name" value={taskName} onChange={(e) => setTaskName(e.target.value)} autoComplete="off" />
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={12}>
-                  <Form.Item label="Scheduler log file">
-                    <Input value={logPath} onChange={(e) => setLogPath(e.target.value)} />
+                  <Form.Item label="Scheduler log file" htmlFor="sched-log-path">
+                    <Input id="sched-log-path" name="log-path" value={logPath} onChange={(e) => setLogPath(e.target.value)} autoComplete="off" />
                   </Form.Item>
                 </Col>
               </Row>
@@ -285,16 +294,22 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
 
           <Space size={24} wrap style={{ marginTop: 4, marginBottom: 12 }}>
             <Space size={8}>
-              <Switch checked={printOnly} onChange={setPrintOnly} />
-              <Typography.Text>Preview only (no system changes)</Typography.Text>
+              <Switch id="sched-print-only" aria-label="Preview only (no system changes)" checked={printOnly} onChange={setPrintOnly} />
+              <Typography.Text>
+                <label htmlFor="sched-print-only">Preview only (no system changes)</label>
+              </Typography.Text>
             </Space>
             <Space size={8}>
-              <Switch checked={apply} onChange={setApply} />
-              <Typography.Text>Apply changes immediately</Typography.Text>
+              <Switch id="sched-apply" aria-label="Apply changes immediately" checked={apply} onChange={setApply} />
+              <Typography.Text>
+                <label htmlFor="sched-apply">Apply changes immediately</label>
+              </Typography.Text>
             </Space>
             <Space size={8}>
-              <Switch checked={withLock} onChange={setWithLock} />
-              <Typography.Text>Prevent overlapping runs (file lock)</Typography.Text>
+              <Switch id="sched-with-lock" aria-label="Prevent overlapping runs" checked={withLock} onChange={setWithLock} />
+              <Typography.Text>
+                <label htmlFor="sched-with-lock">Prevent overlapping runs (file lock)</label>
+              </Typography.Text>
             </Space>
           </Space>
 

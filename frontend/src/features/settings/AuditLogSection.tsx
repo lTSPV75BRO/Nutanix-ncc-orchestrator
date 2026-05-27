@@ -219,12 +219,16 @@ export function AuditLogSection({ onError }: Props) {
 
       <Space size={[8, 8]} wrap style={{ marginTop: 12, width: "100%" }}>
         <Select
+          id="audit-action-filter"
+          aria-label="Filter audit entries by action"
           value={actionFilter}
           onChange={setActionFilter}
           options={ACTION_PRESETS}
           style={{ width: 220 }}
         />
         <Select
+          id="audit-limit"
+          aria-label="Audit entries limit"
           value={limit}
           onChange={setLimit}
           options={[
@@ -236,18 +240,22 @@ export function AuditLogSection({ onError }: Props) {
           style={{ width: 140 }}
         />
         <Space size={6} align="center">
-          <Switch checked={onlyFailures} onChange={setOnlyFailures} />
+          <Switch id="audit-failures-only" aria-label="Show failures only" checked={onlyFailures} onChange={setOnlyFailures} />
           <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-            Failures only
+            <label htmlFor="audit-failures-only">Failures only</label>
           </Typography.Text>
         </Space>
         <Input
+          id="audit-search"
+          name="audit-search"
+          aria-label="Search audit entries"
           allowClear
           prefix={<SearchOutlined />}
           placeholder="Search entries…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           style={{ width: 240 }}
+          autoComplete="off"
         />
         <Tooltip title="Refresh">
           <Button icon={<ReloadOutlined />} onClick={() => void audit.refetch()} loading={audit.isFetching} />

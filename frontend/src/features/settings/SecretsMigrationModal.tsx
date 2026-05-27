@@ -143,7 +143,14 @@ export function SecretsMigrationModal({
             plaintext value with a <Typography.Text code>secret://</Typography.Text> reference, and
             keep your config file safe to commit / share.
           </Typography.Paragraph>
-          <Radio.Group value={mode} onChange={(e) => setMode(e.target.value)} style={{ width: "100%" }}>
+          <Radio.Group
+            id="secrets-migration-mode"
+            name="secrets-mode"
+            aria-label="Secrets storage mode"
+            value={mode}
+            onChange={(e) => setMode(e.target.value)}
+            style={{ width: "100%" }}
+          >
             <Space direction="vertical" size={10} style={{ width: "100%" }}>
               <Radio value="env" style={{ alignItems: "flex-start" }}>
                 <div>

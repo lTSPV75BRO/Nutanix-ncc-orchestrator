@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Badge, Button, Card, Col, Descriptions, Empty, Input, List, Row, Space, Switch, Table, Tag, Typography } from "antd";
+import { Alert, Badge, Button, Card, Col, Descriptions, Empty, Input, List, Row, Space, Switch, Table, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
   ReloadOutlined,
@@ -12,8 +12,8 @@ import {
   PlayCircleOutlined,
   StopOutlined,
 } from "@ant-design/icons";
-import { api } from "../../api/client";
-import type { ArtifactInfo, RunActiveData, RunInfo, RunPreflightData } from "../../api/types";
+import { api, ApiError } from "../../api/client";
+import type { ArtifactInfo, RunActiveData, RunConflictData, RunInfo, RunPreflightData } from "../../api/types";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { CodeEditor } from "../../components/CodeEditor";
 import { notify } from "../../notify";
@@ -237,6 +237,78 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
     } catch (e) {
       notify.close(RUN_TOAST_KEY);
       justTriggeredRef.current = false;
+      // Backend rejected because another run is in flight — surface the
+      // running run's metadata so the user can decide whether to wait or
+      // investigate a stuck run.
+      if (e instanceof ApiError && e.status === 409 && e.data && typeof e.data === "object") {
+        const d = e.data as Partial<RunConflictData>;
+        const startedAt = d.started_at ? new Date(d.started_at).toLocaleString() : "—";
+        const elapsed = d.elapsed_human || (d.elapsed_seconds != null ? `${d.elapsed_seconds}s` : "—");
+        notify.warning({
+          message: "Cannot start another run — one is already in progress",
+          description: (
+            <Space direction="vertical" size={2}>
+              <span>
+                Started <Typography.Text>{startedAt}</Typography.Text> · Elapsed{" "}
+                <Typography.Text code>{elapsed}</Typography.Text>
+                {d.pid && d.pid > 0 ? (
+                  <>
+                    {" "}
+                    · PID <Typography.Text code>{d.pid}</Typography.Text>
+                  </>
+                ) : null}
+              </span>
+              {d.overdue ? (
+                <Typography.Text type="warning">
+                  Active run has exceeded its expected duration — check the runner log.
+                </Typography.Text>
+              ) : null}
+              {d.runner_log ? (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Runner log: {d.runner_log}
+                </Typography.Text>
+              ) : null}
+              {d.hint ? (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {d.hint}
+                </Typography.Text>
+              ) : null}
+            </Space>
+          ),
+          duration: 10,
+        });
+        await loadRunActive();
+        return;
+      }
+      onError(e);
+    }
+  };
+
+  const cancelRun = async () => {
+    notify.loading({
+      key: RUN_TOAST_KEY,
+      message: "Cancelling run…",
+      description: "Signalling the orchestrator process to exit.",
+    });
+    try {
+      const out = await api.runCancel();
+      notify.success({
+        message: "Cancellation requested",
+        description: `PID ${out.pid} signalled after ${out.elapsed_human}. The run will exit shortly.`,
+        duration: 6,
+      });
+      await loadRunActive();
+    } catch (e) {
+      notify.close(RUN_TOAST_KEY);
+      // 409 means no run is active anymore — surface a softer info toast.
+      if (e instanceof ApiError && e.status === 409) {
+        notify.info({
+          message: "No run to cancel",
+          description: "The run already finished before the cancel request arrived.",
+        });
+        await loadRunActive();
+        return;
+      }
       onError(e);
     }
   };
@@ -273,15 +345,123 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
   // Reference elapsedTick so React picks up the second-by-second update.
   void elapsedTick;
 
+  // Format a duration in seconds as "5m 51s" / "1h 12m" / "42s".
+  const formatDurationS = (s?: number): string => {
+    if (typeof s !== "number" || !Number.isFinite(s) || s <= 0) return "—";
+    const total = Math.round(s);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const sec = total % 60;
+    if (h > 0) return `${h}h ${m}m`;
+    if (m > 0) return `${m}m ${sec}s`;
+    return `${sec}s`;
+  };
+
+  // Compact issue summary for runs that have summary data, e.g. "1F · 17W · 6E".
+  // Empty string for trigger entries (which don't carry any counts) so the cell
+  // gracefully renders as "—".
+  const renderIssueCounts = (row: RunInfo) => {
+    const f = row.fail_total ?? 0;
+    const w = row.warn_total ?? 0;
+    const e = row.err_total ?? 0;
+    if (row.source === "trigger" || (f === 0 && w === 0 && e === 0 && row.total_checks == null)) {
+      return <Typography.Text type="secondary">—</Typography.Text>;
+    }
+    return (
+      <Space size={6} wrap>
+        {f > 0 ? <Tag color="error" style={{ marginInlineEnd: 0 }}>F {f}</Tag> : null}
+        {w > 0 ? <Tag color="warning" style={{ marginInlineEnd: 0 }}>W {w}</Tag> : null}
+        {e > 0 ? <Tag color="default" style={{ marginInlineEnd: 0 }}>E {e}</Tag> : null}
+        {f === 0 && w === 0 && e === 0 ? (
+          <Tag color="success" style={{ marginInlineEnd: 0 }}>clean</Tag>
+        ) : null}
+      </Space>
+    );
+  };
+
+  // Source tag — communicates whether the row is an archived run, the latest
+  // in-place summary, or just a trigger event from the audit log.
+  const renderSource = (src?: RunInfo["source"]) => {
+    if (src === "history") return <Tag color="blue" style={{ marginInlineEnd: 0 }}>Run</Tag>;
+    if (src === "summary") return <Tag color="cyan" style={{ marginInlineEnd: 0 }}>Latest</Tag>;
+    if (src === "trigger") return <Tag style={{ marginInlineEnd: 0 }}>Trigger</Tag>;
+    return <Tag style={{ marginInlineEnd: 0 }}>—</Tag>;
+  };
+
+  // Status tag — for runs with a known success outcome, show pass/fail with
+  // exit code; for triggers, indicate "Triggered" (with a soft warning tone if
+  // the trigger itself failed at the API layer).
+  const renderStatus = (row: RunInfo) => {
+    if (row.source === "trigger") {
+      return row.success === false
+        ? <Tag color="error" style={{ marginInlineEnd: 0 }}>Trigger failed</Tag>
+        : <Tag color="processing" style={{ marginInlineEnd: 0 }}>Triggered</Tag>;
+    }
+    if (row.success === true) {
+      return <Tag color="success" style={{ marginInlineEnd: 0 }}>Success</Tag>;
+    }
+    if (row.success === false) {
+      const ec = typeof row.exit_code === "number" && row.exit_code !== 0 ? ` · exit ${row.exit_code}` : "";
+      return <Tag color="error" style={{ marginInlineEnd: 0 }}>{`Failed${ec}`}</Tag>;
+    }
+    return <Tag style={{ marginInlineEnd: 0 }}>—</Tag>;
+  };
+
   const runColumns: ColumnsType<RunInfo> = [
-    { title: "Run ID", dataIndex: "id", key: "id", render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
-    { title: "Modified", dataIndex: "mod_time", key: "mod_time", width: 200, render: formatTime },
     {
-      title: "Index",
-      dataIndex: "has_index",
-      key: "has_index",
+      title: "Run ID",
+      dataIndex: "id",
+      key: "id",
+      render: (v: string) => <Typography.Text code>{v}</Typography.Text>,
+    },
+    { title: "Started", dataIndex: "mod_time", key: "mod_time", width: 200, render: formatTime },
+    {
+      title: "Type",
+      dataIndex: "source",
+      key: "source",
       width: 100,
-      render: (v: boolean) => (v ? <Tag color="success">available</Tag> : <Tag>missing</Tag>),
+      render: (_v, row) => renderSource(row.source),
+    },
+    {
+      title: "Status",
+      key: "status",
+      width: 150,
+      render: (_v, row) => renderStatus(row),
+    },
+    {
+      title: "Duration",
+      dataIndex: "duration_s",
+      key: "duration_s",
+      width: 100,
+      render: (v: number | undefined, row) =>
+        row.source === "trigger" ? (
+          <Typography.Text type="secondary">—</Typography.Text>
+        ) : (
+          <Typography.Text>{formatDurationS(v)}</Typography.Text>
+        ),
+    },
+    {
+      title: "Clusters",
+      key: "clusters",
+      width: 110,
+      render: (_v, row) => {
+        const ok = row.clusters_ok ?? 0;
+        const failed = row.clusters_failed ?? 0;
+        const total = ok + failed;
+        if (row.source === "trigger" || total === 0) {
+          return <Typography.Text type="secondary">—</Typography.Text>;
+        }
+        return (
+          <Tooltip title={`${ok} reachable, ${failed} failed`}>
+            <Typography.Text>{`${ok}/${total} OK`}</Typography.Text>
+          </Tooltip>
+        );
+      },
+    },
+    {
+      title: "Issues",
+      key: "issues",
+      render: (_v, row) => renderIssueCounts(row),
     },
   ];
 
@@ -324,32 +504,77 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
         <Typography.Text type="secondary" className="section-subtitle">
           Run NCC against the configured clusters. Use Preflight to validate before triggering.
         </Typography.Text>
-        <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
-          <Col xs={24} md={12}>
-            <Typography.Text type="secondary">Config file</Typography.Text>
-            <Input
-              value={runConfigPath}
-              onChange={(e) => setRunConfigPath(e.target.value)}
-              placeholder={backendConfigPath || "config.yaml"}
-            />
-          </Col>
-          <Col xs={24} md={12}>
-            <Typography.Text type="secondary">One-off password (optional)</Typography.Text>
-            <Input.Password value={runPassword} onChange={(e) => setRunPassword(e.target.value)} placeholder="overrides config" />
-          </Col>
-          <Col xs={24}>
-            <Typography.Text type="secondary">Additional flags (optional)</Typography.Text>
-            <Input
-              value={extraArgs}
-              onChange={(e) => setExtraArgs(e.target.value)}
-              placeholder="e.g. --no-html --output-dir outputfiles"
-            />
-          </Col>
-        </Row>
+        {/*
+          Wrap the trigger inputs in a real <form> so:
+            1) Chrome stops emitting "Password field is not contained in a form"
+               (it heuristically downgrades autofill/security if it's loose).
+            2) Pressing Enter in any field triggers the run, matching user
+               expectation for a one-action form.
+          autoComplete="off" because these are session-scoped lab credentials,
+          not user account credentials we want browsers to remember.
+        */}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!active?.active) {
+              void triggerRun();
+            }
+          }}
+          autoComplete="off"
+        >
+          <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
+            <Col xs={24} md={12}>
+              <label htmlFor="run-config-path" style={{ display: "block", marginBottom: 4 }}>
+                <Typography.Text type="secondary">Config file</Typography.Text>
+              </label>
+              <Input
+                id="run-config-path"
+                name="config-path"
+                value={runConfigPath}
+                onChange={(e) => setRunConfigPath(e.target.value)}
+                placeholder={backendConfigPath || "config.yaml"}
+                autoComplete="off"
+              />
+            </Col>
+            <Col xs={24} md={12}>
+              <label htmlFor="run-password" style={{ display: "block", marginBottom: 4 }}>
+                <Typography.Text type="secondary">One-off password (optional)</Typography.Text>
+              </label>
+              <Input.Password
+                id="run-password"
+                name="run-password"
+                value={runPassword}
+                onChange={(e) => setRunPassword(e.target.value)}
+                placeholder="overrides config"
+                autoComplete="new-password"
+              />
+            </Col>
+            <Col xs={24}>
+              <label htmlFor="run-extra-args" style={{ display: "block", marginBottom: 4 }}>
+                <Typography.Text type="secondary">Additional flags (optional)</Typography.Text>
+              </label>
+              <Input
+                id="run-extra-args"
+                name="extra-args"
+                value={extraArgs}
+                onChange={(e) => setExtraArgs(e.target.value)}
+                placeholder="e.g. --no-html --output-dir outputfiles"
+                autoComplete="off"
+              />
+            </Col>
+          </Row>
+          {/* Hidden submit button so Enter-key submission works on every browser. */}
+          <button type="submit" style={{ display: "none" }} aria-hidden="true" tabIndex={-1} />
+        </form>
         <Space size={8} wrap style={{ marginTop: 12 }}>
           <Button type="primary" icon={<ThunderboltOutlined />} onClick={triggerRun} disabled={Boolean(active?.active)}>
             {active?.active ? "Run in progress" : "Trigger Run"}
           </Button>
+          {active?.active ? (
+            <Button danger icon={<StopOutlined />} onClick={cancelRun}>
+              Cancel Run
+            </Button>
+          ) : null}
           <Button icon={<FileSearchOutlined />} onClick={runPreflight}>
             Run Preflight
           </Button>
@@ -450,8 +675,10 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
         <div style={{ marginTop: 16 }}>
           <Space size={8} style={{ marginBottom: 8 }}>
             <Typography.Text strong>Live Output</Typography.Text>
-            <Switch checked={followTail} onChange={setFollowTail} size="small" />
-            <Typography.Text type="secondary">Follow tail</Typography.Text>
+            <Switch id="runs-follow-tail" aria-label="Follow tail" checked={followTail} onChange={setFollowTail} size="small" />
+            <Typography.Text type="secondary">
+              <label htmlFor="runs-follow-tail">Follow tail</label>
+            </Typography.Text>
             <Button size="small" onClick={() => setJumpToLastSignal((n) => n + 1)}>
               Jump to latest
             </Button>

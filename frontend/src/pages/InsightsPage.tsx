@@ -28,7 +28,6 @@ import {
   ExclamationCircleOutlined,
   LinkOutlined,
   MinusOutlined,
-  ReloadOutlined,
   SafetyCertificateOutlined,
 } from "@ant-design/icons";
 import { asArray, asRecord, buildClusterNameMap, resolveClusterName, toNumber } from "../utils/report";
@@ -138,6 +137,23 @@ type DrillRow = {
   sample: Record<string, unknown>;
 };
 
+// Module-level fallback so each render doesn't allocate a fresh empty object —
+// otherwise downstream `useMemo` hooks that depend on `data` re-execute on
+// every render, defeating their memoization.
+const EMPTY_REPORT_DATA = Object.freeze({
+  run_summary: {},
+  ncc_summary_counts: {},
+  ncc_cluster_summary: [],
+  checks_snapshot: [],
+  agg_rows: [],
+  drilldown_diff: {},
+  flaky_checks: {},
+  regression_summary: {},
+  slo_dashboard: {},
+  report_meta: {},
+  artifact_links: {},
+}) as Record<string, unknown>;
+
 export function InsightsPage() {
   const report = useQuery({ queryKey: ["report-data"], queryFn: api.reportData });
   const trends = useQuery({ queryKey: ["report-trends"], queryFn: () => api.reportTrends(24) });
@@ -150,19 +166,7 @@ export function InsightsPage() {
     if (trends.error) notifyError(trends.error, "Failed to load trends");
   }, [trends.error]);
 
-  const data = report.data ?? {
-    run_summary: {},
-    ncc_summary_counts: {},
-    ncc_cluster_summary: [],
-    checks_snapshot: [],
-    agg_rows: [],
-    drilldown_diff: {},
-    flaky_checks: {},
-    regression_summary: {},
-    slo_dashboard: {},
-    report_meta: {},
-    artifact_links: {},
-  };
+  const data = report.data ?? EMPTY_REPORT_DATA;
 
   const meta = asRecord(data.report_meta);
   const summaryCounts = asRecord(data.ncc_summary_counts);
@@ -174,6 +178,7 @@ export function InsightsPage() {
   const totalPlugins = toNumber(summaryCounts.total_plugins);
   const passCount = toNumber(summaryCounts.pass);
   const failCount = toNumber(summaryCounts.fail);
+  const warnCount = toNumber(summaryCounts.warn);
   const errorCount = toNumber(summaryCounts.error);
   const infoCount = toNumber(summaryCounts.info);
   const unknownCount = toNumber(summaryCounts.unknown);
@@ -181,10 +186,12 @@ export function InsightsPage() {
   const weightedPenalty =
     (totalPlugins > 0 ? (failCount / totalPlugins) * 100 : 0) * 8.0 +
     (totalPlugins > 0 ? (errorCount / totalPlugins) * 100 : 0) * 5.5 +
+    (totalPlugins > 0 ? (warnCount / totalPlugins) * 100 : 0) * 3.5 +
     (totalPlugins > 0 ? (infoCount / totalPlugins) * 100 : 0) * 2.2 +
     (totalPlugins > 0 ? (unknownCount / totalPlugins) * 100 : 0) * 3.0;
   const weightedHealth = Math.max(0, Math.min(100, rawPassRate - weightedPenalty));
-  const consistencyOk = passCount + failCount + errorCount + infoCount + unknownCount === totalPlugins;
+  const consistencyOk =
+    passCount + failCount + warnCount + errorCount + infoCount + unknownCount === totalPlugins;
   const affectedClusters = clusterSummary.filter((c) => toNumber(c.fail) > 0 || toNumber(c.error) > 0);
 
   const clusterNameMap = useMemo(
@@ -295,6 +302,7 @@ export function InsightsPage() {
       .map((c) => {
         const total = toNumber(c.total_plugins);
         const fail = toNumber(c.fail);
+        const warn = toNumber(c.warn);
         const err = toNumber(c.error);
         const pass = toNumber(c.pass);
         const info = toNumber(c.info);
@@ -303,6 +311,7 @@ export function InsightsPage() {
         const penalty =
           (total > 0 ? (fail / total) * 100 : 0) * 8.0 +
           (total > 0 ? (err / total) * 100 : 0) * 5.5 +
+          (total > 0 ? (warn / total) * 100 : 0) * 3.5 +
           (total > 0 ? (info / total) * 100 : 0) * 2.2 +
           (total > 0 ? (unknown / total) * 100 : 0) * 3.0;
         const health = Math.max(0, Math.min(100, passRate - penalty));
@@ -311,6 +320,7 @@ export function InsightsPage() {
           name: resolveClusterName(String(c.address || ""), clusterNameMap),
           total,
           fail,
+          warn,
           err,
           pass,
           info,
@@ -322,6 +332,21 @@ export function InsightsPage() {
       .filter((x) => x.total > 0)
       .sort((a, b) => a.health - b.health);
   }, [clusterSummary, clusterNameMap]);
+
+  // Per-cluster occurrences for the currently drilled check. MUST be declared
+  // before any conditional early-return below — otherwise the loading branch
+  // renders 5 hooks and the data branch renders 6, which React rejects with
+  // error #310 ("Rendered more hooks than during the previous render").
+  const drillOccurrences = useMemo(() => {
+    if (!drillCheck) return [] as Record<string, unknown>[];
+    return aggRows
+      .filter((r) => {
+        const sev = String(r.severity || "").toUpperCase();
+        const nm = normalizeCheckTitle(String(r.check || r.check_name || "Unnamed check"));
+        return sev === drillCheck.severity && nm === drillCheck.name;
+      })
+      .slice(0, 50);
+  }, [aggRows, drillCheck]);
 
   // ---------- render skeleton ----------
 
@@ -342,6 +367,7 @@ export function InsightsPage() {
   const severityRows = [
     { label: "PASS", count: passCount, color: "#22c55e" },
     { label: "FAIL", count: failCount, color: "#f43f5e" },
+    { label: "WARN", count: warnCount, color: "#f59e0b" },
     { label: "ERR", count: errorCount, color: "#f97316" },
     { label: "INFO", count: infoCount, color: "#38bdf8" },
     { label: "UNKNOWN", count: unknownCount, color: "#94a3b8" },
@@ -396,18 +422,6 @@ export function InsightsPage() {
         ),
     },
   ];
-
-  // Build a list of per-cluster occurrences for the currently drilled check.
-  const drillOccurrences = useMemo(() => {
-    if (!drillCheck) return [] as Record<string, unknown>[];
-    return aggRows
-      .filter((r) => {
-        const sev = String(r.severity || "").toUpperCase();
-        const nm = normalizeCheckTitle(String(r.check || r.check_name || "Unnamed check"));
-        return sev === drillCheck.severity && nm === drillCheck.name;
-      })
-      .slice(0, 50);
-  }, [aggRows, drillCheck]);
 
   return (
     <>
@@ -483,7 +497,7 @@ export function InsightsPage() {
                   suffix={runDuration > 0 ? "s" : ""}
                 />
               </Col>
-              <Col xs={12} md={6}>
+              <Col xs={12} md={4}>
                 <Statistic
                   title="FAIL"
                   value={failCount}
@@ -491,21 +505,28 @@ export function InsightsPage() {
                   prefix={<ExclamationCircleOutlined />}
                 />
               </Col>
-              <Col xs={12} md={6}>
+              <Col xs={12} md={4}>
+                <Statistic
+                  title="WARN"
+                  value={warnCount}
+                  valueStyle={{ color: warnCount > 0 ? "#f59e0b" : undefined }}
+                />
+              </Col>
+              <Col xs={12} md={4}>
                 <Statistic
                   title="ERR"
                   value={errorCount}
                   valueStyle={{ color: errorCount > 0 ? "#f97316" : undefined }}
                 />
               </Col>
-              <Col xs={12} md={6}>
+              <Col xs={12} md={4}>
                 <Statistic
                   title="INFO"
                   value={infoCount}
                   valueStyle={{ color: infoCount > 0 ? "#38bdf8" : undefined }}
                 />
               </Col>
-              <Col xs={12} md={6}>
+              <Col xs={12} md={8}>
                 <Statistic
                   title="PASS"
                   value={passCount}
@@ -522,7 +543,7 @@ export function InsightsPage() {
             showIcon
             style={{ marginTop: 16 }}
             message="Summary count mismatch"
-            description="The sum of PASS/FAIL/ERR/INFO/UNKNOWN does not equal total plugins. Re-run NCC if the numbers look off."
+            description="The sum of PASS/FAIL/WARN/ERR/INFO/UNKNOWN does not equal total plugins. Re-run NCC if the numbers look off."
           />
         ) : null}
       </Card>
@@ -682,6 +703,7 @@ export function InsightsPage() {
                         <Typography.Text strong>{c.name}</Typography.Text>
                         {c.fail > 0 ? <Tag color="error">FAIL {c.fail}</Tag> : null}
                         {c.err > 0 ? <Tag color="volcano">ERR {c.err}</Tag> : null}
+                        {c.warn > 0 ? <Tag color="warning">WARN {c.warn}</Tag> : null}
                         {c.info > 0 ? <Tag color="processing">INFO {c.info}</Tag> : null}
                       </Space>
                       <Typography.Text strong style={{ color: healthGradeColor(c.health) }}>
@@ -874,18 +896,6 @@ export function InsightsPage() {
             <Descriptions.Item label="Source">{String(meta.scheduler_source || "-")}</Descriptions.Item>
           </Descriptions>
         )}
-        {Object.keys((data.artifact_links || {}) as Record<string, unknown>).length > 0 ? (
-          <div style={{ marginTop: 12 }}>
-            <Typography.Text type="secondary">Artifacts: </Typography.Text>
-            <Space size={[6, 6]} wrap>
-              {Object.entries((data.artifact_links || {}) as Record<string, string>).map(([name, href]) => (
-                <a key={name} href={href} target="_blank" rel="noreferrer">
-                  <Tag icon={<ReloadOutlined />}>{name}</Tag>
-                </a>
-              ))}
-            </Space>
-          </div>
-        ) : null}
       </Card>
     </Space>
 

@@ -91,16 +91,19 @@ type apiServer struct {
 	writeTimeout          time.Duration
 	idleTimeout           time.Duration
 
-	mu      sync.Mutex
-	active  bool
-	started time.Time
-	lastErr string
-	lastOut string
-	lastCfg string
-	lastCmd []string
-	lastCwd string
-	lastEnv map[string]string
-	liveOut *tailBuffer
+	mu        sync.Mutex
+	active    bool
+	started   time.Time
+	lastErr   string
+	lastOut   string
+	lastCfg   string
+	lastCmd   []string
+	lastCwd   string
+	lastEnv   map[string]string
+	lastPID   int
+	cancelRun context.CancelFunc
+	cancelled bool
+	liveOut   *tailBuffer
 }
 
 type envelope struct {
@@ -177,11 +180,42 @@ type artifactInfo struct {
 	ModTime string `json:"mod_time"`
 }
 
+// runInfo is a single entry in the /api/v1/runs feed. The list combines:
+//
+//   - "history" entries archived under outputDir/runs/<id>/
+//   - the current outputDir/run-summary.json + ncc-run-record.json ("summary")
+//   - audit-log `runs.trigger` events that have no artifacts yet ("trigger")
+//
+// All numeric/metric fields are omitted from JSON when zero so a "trigger"-only
+// record stays small and clients can detect the absence of full data.
 type runInfo struct {
 	ID       string `json:"id"`
-	Path     string `json:"path"`
+	Path     string `json:"path,omitempty"`
 	ModTime  string `json:"mod_time"`
 	HasIndex bool   `json:"has_index"`
+
+	// Where this row came from. One of: "history" | "summary" | "trigger".
+	Source string `json:"source,omitempty"`
+
+	// Enrichment fields (populated from run-summary.json when available).
+	Timestamp      string  `json:"timestamp,omitempty"`
+	DurationS      float64 `json:"duration_s,omitempty"`
+	ClustersOK     int     `json:"clusters_ok,omitempty"`
+	ClustersFailed int     `json:"clusters_failed,omitempty"`
+	TotalChecks    int     `json:"total_checks,omitempty"`
+	AvgHealthScore int     `json:"avg_health_score,omitempty"`
+	MinHealthScore int     `json:"min_health_score,omitempty"`
+	FailTotal      int     `json:"fail_total,omitempty"`
+	WarnTotal      int     `json:"warn_total,omitempty"`
+	ErrTotal       int     `json:"err_total,omitempty"`
+	InfoTotal      int     `json:"info_total,omitempty"`
+	ExitCode       *int    `json:"exit_code,omitempty"`
+	Success        *bool   `json:"success,omitempty"`
+
+	// Optional provenance for "trigger"-only rows.
+	Client    string `json:"client,omitempty"`
+	UserAgent string `json:"user_agent,omitempty"`
+	AuthMode  string `json:"auth_mode,omitempty"`
 }
 
 func isInternalArtifactName(name string) bool {
@@ -301,6 +335,7 @@ func main() {
 	mux.HandleFunc("/api/v1/artifacts", s.handleArtifacts)
 	mux.HandleFunc("/api/v1/artifacts/", s.handleArtifactByName)
 	mux.HandleFunc("/api/v1/runs", s.handleRuns)
+	mux.HandleFunc("/api/v1/runs/", s.handleRunsRouter)
 	mux.HandleFunc("/api/v1/runs/summary", s.handleRunSummary)
 	mux.HandleFunc("/api/v1/runs/active", s.handleRunActive)
 	mux.HandleFunc("/api/v1/runs/preflight", s.handleRunPreflight)
@@ -409,7 +444,7 @@ func (s *apiServer) withCORS(next http.Handler) http.Handler {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-API-Token, Authorization")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -461,9 +496,15 @@ func (s *apiServer) handleAudit(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit := 100
 	if raw := strings.TrimSpace(q.Get("limit")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-			limit = n
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "invalid limit: must be a positive integer"})
+			return
 		}
+		if n > 10000 {
+			n = 10000
+		}
+		limit = n
 	}
 	actionPrefix := strings.TrimSpace(q.Get("action"))
 	onlyFailures := q.Get("failures") == "1" || strings.EqualFold(q.Get("failures"), "true")
@@ -483,13 +524,13 @@ func (s *apiServer) handleAudit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
-		"path":       abs,
-		"size":       size,
-		"mod_time":   modTime,
-		"limit":      limit,
-		"count":      len(entries),
-		"max_bytes":  s.auditLogMaxBytes,
-		"entries":    entries,
+		"path":      abs,
+		"size":      size,
+		"mod_time":  modTime,
+		"limit":     limit,
+		"count":     len(entries),
+		"max_bytes": s.auditLogMaxBytes,
+		"entries":   entries,
 		"filters": map[string]interface{}{
 			"action":   actionPrefix,
 			"failures": onlyFailures,
@@ -707,18 +748,22 @@ func (s *apiServer) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !isLoopbackRequest(r) {
+		s.audit(r, "auth.session.issue", false, map[string]interface{}{"reason": "non_loopback"})
 		writeJSON(w, http.StatusForbidden, envelope{Success: false, Error: "session bootstrap allowed only from loopback"})
 		return
 	}
 	if !secureCompare(strings.TrimSpace(r.Header.Get("X-API-Token")), s.authToken) {
+		s.audit(r, "auth.session.issue", false, map[string]interface{}{"reason": "bad_token"})
 		writeJSON(w, http.StatusUnauthorized, envelope{Success: false, Error: "unauthorized"})
 		return
 	}
 	token, exp, err := s.issueSessionToken(cleanClientIP(r))
 	if err != nil {
+		s.audit(r, "auth.session.issue", false, map[string]interface{}{"reason": "issue_failed", "error": err.Error()})
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: err.Error()})
 		return
 	}
+	s.audit(r, "auth.session.issue", true, map[string]interface{}{"ttl_sec": int(s.sessionTTL.Seconds())})
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
 		"token":      token,
 		"expires_at": exp.Format(time.RFC3339),
@@ -732,19 +777,23 @@ func (s *apiServer) handleAuthRotate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !secureCompare(strings.TrimSpace(r.Header.Get("X-API-Token")), s.authToken) {
+		s.audit(r, "auth.token.rotate", false, map[string]interface{}{"reason": "bad_token"})
 		writeJSON(w, http.StatusUnauthorized, envelope{Success: false, Error: "unauthorized"})
 		return
 	}
 	b := make([]byte, 32)
 	if _, err := crand.Read(b); err != nil {
+		s.audit(r, "auth.token.rotate", false, map[string]interface{}{"reason": "rand_failed", "error": err.Error()})
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: fmt.Sprintf("generate token: %v", err)})
 		return
 	}
 	s.authToken = base64.RawURLEncoding.EncodeToString(b)
 	if err := s.ensureAuthToken(); err != nil {
+		s.audit(r, "auth.token.rotate", false, map[string]interface{}{"reason": "persist_failed", "error": err.Error()})
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: err.Error()})
 		return
 	}
+	s.audit(r, "auth.token.rotate", true, nil)
 	writeJSON(w, http.StatusOK, envelope{Success: true, Message: "token rotated"})
 }
 
@@ -1259,6 +1308,7 @@ func (s *apiServer) handleSchedule(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		resp := map[string]interface{}{"schedule": st, "applied": false}
+		applyErr := error(nil)
 		if req.Apply {
 			args := []string{"create-schedule", "--type", st.Type, "--action", st.Action, "--config", st.Config, "--print-only=" + fmt.Sprintf("%t", st.PrintOnly)}
 			if st.Cron != "" {
@@ -1277,12 +1327,27 @@ func (s *apiServer) handleSchedule(w http.ResponseWriter, r *http.Request) {
 			out, err := s.runOrchestrator(args, 60*time.Second)
 			resp["applied"] = err == nil
 			resp["command"] = append(s.orchestratorBaseCommand(), args...)
-			resp["output"] = out
+			resp["output"] = tailString(strings.TrimSpace(out), 4000)
 			if err != nil {
 				resp["apply_error"] = err.Error()
+				applyErr = err
 			}
 		}
-		s.audit(r, "schedule.update", true, map[string]interface{}{"applied": req.Apply, "type": st.Type, "action": st.Action})
+		s.audit(r, "schedule.update", applyErr == nil, map[string]interface{}{
+			"applied": req.Apply,
+			"type":    st.Type,
+			"action":  st.Action,
+		})
+		// State was saved, but the apply step failed — surface that at the
+		// envelope level instead of pretending the whole call succeeded.
+		if applyErr != nil {
+			writeJSON(w, http.StatusBadGateway, envelope{
+				Success: false,
+				Error:   fmt.Sprintf("schedule saved but apply failed: %v", applyErr),
+				Data:    resp,
+			})
+			return
+		}
 		writeJSON(w, http.StatusOK, envelope{Success: true, Message: "schedule updated", Data: resp})
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
@@ -1327,11 +1392,15 @@ func (s *apiServer) handleScheduleHealth(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
+	// loadSchedule returns a default state when no file is present, so we
+	// cannot infer existence from a load error alone — stat the path directly
+	// to give the UI an honest "state_file_exists" signal.
+	stateFileExists := false
+	if st, statErr := os.Stat(s.absPath(s.scheduleStatePath)); statErr == nil && !st.IsDir() {
+		stateFileExists = true
+	}
 	st, err := s.loadSchedule()
-	saved := false
-	stateFileExists := true
 	if err != nil {
-		stateFileExists = false
 		writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
 			"configured":        false,
 			"saved":             false,
@@ -1341,6 +1410,7 @@ func (s *apiServer) handleScheduleHealth(w http.ResponseWriter, r *http.Request)
 		}})
 		return
 	}
+	saved := false
 	if strings.TrimSpace(st.UpdatedAt) != "" {
 		saved = true
 	}
@@ -1469,6 +1539,13 @@ func (s *apiServer) handleArtifacts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: out})
 }
 
+// artifactInlineMaxBytes caps the size of artifact bodies returned inline as
+// JSON. Anything bigger is served as a truncated tail with a `truncated: true`
+// flag so the UI can prompt the user to download instead. Direct downloads
+// (?download=1) stream the full file via http.ServeFile and aren't subject to
+// this cap.
+const artifactInlineMaxBytes = 5 * 1024 * 1024
+
 func (s *apiServer) handleArtifactByName(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
@@ -1484,9 +1561,9 @@ func (s *apiServer) handleArtifactByName(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	path := filepath.Join(s.absPath(s.outputDir), name)
-	b, err := os.ReadFile(path)
-	if err != nil {
-		writeJSON(w, http.StatusNotFound, envelope{Success: false, Error: err.Error()})
+	info, statErr := os.Stat(path)
+	if statErr != nil || info.IsDir() {
+		writeJSON(w, http.StatusNotFound, envelope{Success: false, Error: "artifact not found"})
 		return
 	}
 	if r.URL.Query().Get("download") == "1" {
@@ -1496,50 +1573,325 @@ func (s *apiServer) handleArtifactByName(w http.ResponseWriter, r *http.Request)
 		}
 		w.Header().Set("Content-Type", ct)
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name))
-		_, _ = w.Write(b)
+		// http.ServeFile streams the response and supports Range requests,
+		// avoiding an arbitrary-size buffer for large artifacts (NCC logs can
+		// easily be tens of megabytes).
+		http.ServeFile(w, r, path)
 		return
 	}
+	// Inline JSON view: read up to the cap. Truncate large files so a
+	// careless click on a huge log file can't OOM the server.
+	f, openErr := os.Open(path)
+	if openErr != nil {
+		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: openErr.Error()})
+		return
+	}
+	defer f.Close()
+	limited := io.LimitReader(f, artifactInlineMaxBytes+1)
+	b, readErr := io.ReadAll(limited)
+	if readErr != nil {
+		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: readErr.Error()})
+		return
+	}
+	truncated := false
+	if int64(len(b)) > artifactInlineMaxBytes {
+		b = b[:artifactInlineMaxBytes]
+		truncated = true
+	}
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
-		"name":    name,
-		"content": string(b),
+		"name":      name,
+		"size":      info.Size(),
+		"mod_time":  info.ModTime().UTC().Format(time.RFC3339),
+		"content":   string(b),
+		"truncated": truncated,
+		"max_bytes": int64(artifactInlineMaxBytes),
 	}})
 }
 
+// handleRuns returns a merged, enriched feed of historical orchestrator runs.
+//
+// Query params:
+//   - limit (default 200, max 1000) — cap on entries returned (newest first).
+//   - source=history|summary|trigger — keep only one source kind.
+//   - since=RFC3339|2006-01-02 — drop entries older than this instant.
+//
+// Sources merged (deduped by minute-precision timestamp; "history" > "summary"
+// > "trigger" when keeping a single representative for the same run):
+//   - outputDir/runs/<id>/run-summary.json  (archived, full metrics)
+//   - outputDir/run-summary.json            (the latest run on disk)
+//   - audit-log runs.trigger events         (trigger-only, no artifacts)
 func (s *apiServer) handleRuns(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
-	runsDir := filepath.Join(s.absPath(s.outputDir), "runs")
-	entries, err := os.ReadDir(runsDir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			writeJSON(w, http.StatusOK, envelope{Success: true, Data: []runInfo{}})
+
+	q := r.URL.Query()
+	limit := 200
+	if raw := strings.TrimSpace(q.Get("limit")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "invalid limit: must be a positive integer"})
 			return
 		}
-		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: err.Error()})
+		limit = n
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	sourceFilter := strings.TrimSpace(q.Get("source"))
+	if sourceFilter != "" && sourceFilter != "history" && sourceFilter != "summary" && sourceFilter != "trigger" {
+		writeJSON(w, http.StatusBadRequest, envelope{
+			Success: false,
+			Error:   "invalid source: must be one of history, summary, trigger",
+		})
 		return
 	}
-	out := make([]runInfo, 0, len(entries))
-	for _, e := range entries {
-		if !e.IsDir() {
+	var sinceTS time.Time
+	if raw := strings.TrimSpace(q.Get("since")); raw != "" {
+		if t, err := time.Parse(time.RFC3339, raw); err == nil {
+			sinceTS = t
+		} else if t, err := time.Parse("2006-01-02", raw); err == nil {
+			sinceTS = t
+		} else {
+			writeJSON(w, http.StatusBadRequest, envelope{
+				Success: false,
+				Error:   "invalid since: expected RFC3339 timestamp or YYYY-MM-DD date",
+			})
+			return
+		}
+	}
+
+	outDir := s.absPath(s.outputDir)
+	collected := []runInfo{}
+
+	// 1) Archived history directories.
+	runsDir := filepath.Join(outDir, "runs")
+	if entries, err := os.ReadDir(runsDir); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			info, infoErr := e.Info()
+			if infoErr != nil {
+				continue
+			}
+			runPath := filepath.Join(runsDir, e.Name())
+			ri := runInfo{
+				ID:      e.Name(),
+				Path:    runPath,
+				ModTime: info.ModTime().UTC().Format(time.RFC3339),
+				Source:  "history",
+			}
+			if _, err := os.Stat(filepath.Join(runPath, "index.html")); err == nil {
+				ri.HasIndex = true
+			}
+			enrichRunInfoFromSummary(&ri, filepath.Join(runPath, "run-summary.json"))
+			collected = append(collected, ri)
+		}
+	}
+
+	// 2) Latest top-level run-summary.json (the in-place "current" run).
+	latestSummary := filepath.Join(outDir, "run-summary.json")
+	if info, err := os.Stat(latestSummary); err == nil {
+		latestID := info.ModTime().UTC().Format("20060102T150405Z")
+		latest := runInfo{
+			ID:      latestID,
+			Path:    outDir,
+			ModTime: info.ModTime().UTC().Format(time.RFC3339),
+			Source:  "summary",
+		}
+		if _, err := os.Stat(filepath.Join(outDir, "index.html")); err == nil {
+			latest.HasIndex = true
+		}
+		enrichRunInfoFromSummary(&latest, latestSummary)
+		collected = append(collected, latest)
+	}
+
+	// 3) Audit-log `runs.trigger` events for triggers that may not have
+	//    produced any artifacts (run still in flight, ephemeral storage, etc).
+	if auditEntries, err := s.auditEntries(500, "runs.trigger", false); err == nil {
+		for _, e := range auditEntries {
+			act, _ := e["action"].(string)
+			if act != "runs.trigger" {
+				continue
+			}
+			ts, _ := e["ts"].(string)
+			if strings.TrimSpace(ts) == "" {
+				continue
+			}
+			ri := runInfo{
+				ID:      "trigger-" + ts,
+				ModTime: ts,
+				Source:  "trigger",
+			}
+			if ts != "" {
+				ri.Timestamp = ts
+			}
+			if ok, present := e["success"].(bool); present {
+				ri.Success = &ok
+			}
+			if v, _ := e["client"].(string); v != "" {
+				ri.Client = v
+			}
+			if v, _ := e["user_agent"].(string); v != "" {
+				ri.UserAgent = v
+			}
+			if v, _ := e["auth_mode"].(string); v != "" {
+				ri.AuthMode = v
+			}
+			collected = append(collected, ri)
+		}
+	}
+
+	// Dedupe by minute-precision timestamp; prefer richer sources.
+	priority := map[string]int{"history": 3, "summary": 2, "trigger": 1}
+	type dedupedEntry struct {
+		ri  runInfo
+		pri int
+	}
+	bucket := map[string]dedupedEntry{}
+	bucketKey := func(ri runInfo) string {
+		raw := ri.Timestamp
+		if raw == "" {
+			raw = ri.ModTime
+		}
+		if t, err := time.Parse(time.RFC3339, raw); err == nil {
+			return t.UTC().Format("2006-01-02T15:04")
+		}
+		return raw
+	}
+	for _, ri := range collected {
+		k := bucketKey(ri)
+		if k == "" {
 			continue
 		}
-		info, err := e.Info()
-		if err != nil {
+		p := priority[ri.Source]
+		if existing, ok := bucket[k]; !ok || p > existing.pri {
+			bucket[k] = dedupedEntry{ri: ri, pri: p}
+		}
+	}
+
+	out := make([]runInfo, 0, len(bucket))
+	for _, v := range bucket {
+		if sourceFilter != "" && v.ri.Source != sourceFilter {
 			continue
 		}
-		runPath := filepath.Join(runsDir, e.Name())
-		_, hasIndexErr := os.Stat(filepath.Join(runPath, "index.html"))
-		out = append(out, runInfo{
-			ID:       e.Name(),
-			Path:     runPath,
-			ModTime:  info.ModTime().UTC().Format(time.RFC3339),
-			HasIndex: hasIndexErr == nil,
-		})
+		if !sinceTS.IsZero() {
+			ref := v.ri.Timestamp
+			if ref == "" {
+				ref = v.ri.ModTime
+			}
+			if t, err := time.Parse(time.RFC3339, ref); err == nil && t.Before(sinceTS) {
+				continue
+			}
+		}
+		out = append(out, v.ri)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ModTime > out[j].ModTime })
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: out})
+}
+
+// handleRunsRouter dispatches /api/v1/runs/<id> requests that are not
+// already claimed by more-specific routes ("summary", "active", "preflight",
+// "trigger"). It supports GET (return archived run metadata + summary) and
+// returns a clear 404 for unknown IDs. Path traversal is rejected.
+func (s *apiServer) handleRunsRouter(w http.ResponseWriter, r *http.Request) {
+	tail := strings.TrimPrefix(r.URL.Path, "/api/v1/runs/")
+	if tail == "" {
+		s.handleRuns(w, r)
+		return
+	}
+	// Reserved sub-routes are claimed by their explicit registrations above;
+	// anything else is treated as an archived run ID lookup.
+	if strings.Contains(tail, "/") || strings.Contains(tail, "..") {
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "invalid run id"})
+		return
+	}
+	s.handleRunByID(w, r, tail)
+}
+
+// handleRunByID returns metadata + summary for a single archived run under
+// outputDir/runs/<id>/. Only GET is supported.
+func (s *apiServer) handleRunByID(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	runPath := filepath.Join(s.absPath(s.outputDir), "runs", id)
+	info, err := os.Stat(runPath)
+	if err != nil || !info.IsDir() {
+		writeJSON(w, http.StatusNotFound, envelope{Success: false, Error: fmt.Sprintf("run %q not found", id)})
+		return
+	}
+	ri := runInfo{
+		ID:      id,
+		Path:    runPath,
+		ModTime: info.ModTime().UTC().Format(time.RFC3339),
+		Source:  "history",
+	}
+	if _, err := os.Stat(filepath.Join(runPath, "index.html")); err == nil {
+		ri.HasIndex = true
+	}
+	enrichRunInfoFromSummary(&ri, filepath.Join(runPath, "run-summary.json"))
+
+	// Embed the artifacts we can find — keeps the UI from making N follow-up
+	// requests for a single drill-down.
+	artifacts := map[string]interface{}{}
+	for _, name := range []string{"run-summary.json", "ncc-run-record.json", "regression-summary.json", "checks-snapshot.json", "run-meta.json"} {
+		if b, rerr := os.ReadFile(filepath.Join(runPath, name)); rerr == nil {
+			var v interface{}
+			if json.Unmarshal(b, &v) == nil {
+				artifacts[name] = v
+			} else {
+				artifacts[name] = string(b)
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
+		"run":       ri,
+		"artifacts": artifacts,
+	}})
+}
+
+// enrichRunInfoFromSummary fills the metric fields on ri by parsing a
+// run-summary.json file. Missing/invalid files are silently ignored.
+func enrichRunInfoFromSummary(ri *runInfo, summaryPath string) {
+	b, err := os.ReadFile(summaryPath)
+	if err != nil {
+		return
+	}
+	var s trendRunSummary
+	if err := json.Unmarshal(b, &s); err != nil {
+		return
+	}
+	if strings.TrimSpace(s.Timestamp) != "" {
+		ri.Timestamp = s.Timestamp
+		if ri.ModTime == "" {
+			ri.ModTime = s.Timestamp
+		}
+	}
+	ri.DurationS = s.DurationS
+	ri.ClustersOK = s.ClustersOK
+	ri.ClustersFailed = s.ClustersFailed
+	ri.TotalChecks = s.TotalChecks
+	ri.AvgHealthScore = s.AvgHealthScore
+	ri.MinHealthScore = s.MinHealthScore
+	for _, c := range s.Clusters {
+		ri.FailTotal += c.FailCount
+		ri.WarnTotal += c.WarnCount
+		ri.ErrTotal += c.ErrCount
+		ri.InfoTotal += c.InfoCount
+	}
+	if s.ExitCode != nil {
+		v := *s.ExitCode
+		ri.ExitCode = &v
+		success := v == 0
+		ri.Success = &success
+	}
 }
 
 func (s *apiServer) handleRunSummary(w http.ResponseWriter, r *http.Request) {
@@ -1558,25 +1910,55 @@ func (s *apiServer) handleRunSummary(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: err.Error()})
 		return
 	}
+	// Apply the same on-read error-classification healing as
+	// /api/v1/report/data so /runs/summary stays consistent.
+	if m, ok := raw.(map[string]interface{}); ok {
+		reclassifyRunSummaryInPlace(m)
+		raw = m
+	}
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: raw})
 }
 
 func (s *apiServer) handleRunActive(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		// fallthrough to snapshot code below
+	case http.MethodDelete:
+		s.cancelActiveRun(w, r)
+		return
+	default:
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var elapsedSeconds int
+	var elapsedHuman string
+	var overdue bool
+	var deadlineISO string
+	if s.active && !s.started.IsZero() {
+		elapsed := time.Since(s.started).Round(time.Second)
+		elapsedSeconds = int(elapsed.Seconds())
+		elapsedHuman = elapsed.String()
+		if s.runTimeout > 0 {
+			deadlineISO = s.started.Add(s.runTimeout).UTC().Format(time.RFC3339)
+			overdue = time.Now().After(s.started.Add(s.runTimeout))
+		}
+	}
 	data := map[string]interface{}{
-		"active":      s.active,
-		"started_at":  s.started.UTC().Format(time.RFC3339),
-		"last_error":  s.lastErr,
-		"last_output": s.lastOut,
-		"live_output": s.currentLiveOutput(),
-		"runner_log":  s.absPath(s.runnerLogPath),
-		"output_dir":  s.absPath(s.outputDir),
-		"config_path": defaultIfEmpty(s.lastCfg, s.absPath(s.configPath)),
+		"active":            s.active,
+		"started_at":        s.started.UTC().Format(time.RFC3339),
+		"elapsed_seconds":   elapsedSeconds,
+		"elapsed_human":     elapsedHuman,
+		"expected_deadline": deadlineISO,
+		"overdue":           overdue,
+		"pid":               s.lastPID,
+		"last_error":        s.lastErr,
+		"last_output":       s.lastOut,
+		"live_output":       s.currentLiveOutput(),
+		"runner_log":        s.absPath(s.runnerLogPath),
+		"output_dir":        s.absPath(s.outputDir),
+		"config_path":       defaultIfEmpty(s.lastCfg, s.absPath(s.configPath)),
 	}
 	if s.debugExpose {
 		data["command"] = s.lastCmd
@@ -1584,6 +1966,52 @@ func (s *apiServer) handleRunActive(w http.ResponseWriter, r *http.Request) {
 		data["env"] = s.lastEnv
 	}
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: data})
+}
+
+// cancelActiveRun cancels the in-flight orchestrator run, if any, by invoking
+// the saved context.CancelFunc. The goroutine running cmd.Wait() observes the
+// context cancellation, reaps the child process, and routes the result through
+// setRunDone()/archiveRunArtifacts() exactly as it would for a normal exit.
+//
+// This is the user-facing escape hatch for runs that are stuck on a slow
+// cluster, broken DNS, etc., without forcing the operator to restart the API
+// server (which the previous error hint suggested).
+func (s *apiServer) cancelActiveRun(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	if !s.active {
+		s.mu.Unlock()
+		writeJSON(w, http.StatusConflict, envelope{
+			Success: false,
+			Error:   "no run is currently active",
+			Data:    map[string]interface{}{"active": false},
+		})
+		return
+	}
+	startedAt := s.started
+	pid := s.lastPID
+	cancel := s.cancelRun
+	s.cancelled = true
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	elapsed := time.Since(startedAt).Round(time.Second)
+	s.audit(r, "runs.cancel", true, map[string]interface{}{
+		"pid":             pid,
+		"elapsed_seconds": int(elapsed.Seconds()),
+	})
+	writeJSON(w, http.StatusAccepted, envelope{
+		Success: true,
+		Message: "cancellation signalled",
+		Data: map[string]interface{}{
+			"pid":             pid,
+			"started_at":      startedAt.UTC().Format(time.RFC3339),
+			"elapsed_seconds": int(elapsed.Seconds()),
+			"elapsed_human":   elapsed.String(),
+			"poll_endpoint":   "/api/v1/runs/active",
+		},
+	})
 }
 
 func (s *apiServer) handleRunPreflight(w http.ResponseWriter, r *http.Request) {
@@ -1613,6 +2041,11 @@ func (s *apiServer) handleRunPreflight(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := s.runOrchestrator([]string{"preflight-check", "--config", resolvedCfgPath, "--format", "json"}, 120*time.Second)
 	if err != nil {
+		s.audit(r, "runs.preflight", false, map[string]interface{}{
+			"config_path": resolvedCfgPath,
+			"reason":      "orchestrator_failed",
+			"error":       err.Error(),
+		})
 		writeJSON(w, http.StatusBadRequest, envelope{
 			Success: false,
 			Error:   fmt.Sprintf("preflight-check failed: %v", err),
@@ -1622,6 +2055,11 @@ func (s *apiServer) handleRunPreflight(w http.ResponseWriter, r *http.Request) {
 	}
 	var payload map[string]interface{}
 	if uerr := json.Unmarshal([]byte(strings.TrimSpace(out)), &payload); uerr != nil {
+		s.audit(r, "runs.preflight", false, map[string]interface{}{
+			"config_path": resolvedCfgPath,
+			"reason":      "parse_failed",
+			"error":       uerr.Error(),
+		})
 		writeJSON(w, http.StatusInternalServerError, envelope{
 			Success: false,
 			Error:   fmt.Sprintf("parse preflight-check output failed: %v", uerr),
@@ -1629,7 +2067,16 @@ func (s *apiServer) handleRunPreflight(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	s.audit(r, "runs.preflight", true, map[string]interface{}{"config_path": resolvedCfgPath})
+	// Surface ok/failed counts in the audit entry so admins can spot
+	// preflight-failure trends without re-running.
+	successFields := map[string]interface{}{"config_path": resolvedCfgPath}
+	if v, present := payload["ok"]; present {
+		successFields["ok"] = v
+	}
+	if v, present := payload["failed"]; present {
+		successFields["failed"] = v
+	}
+	s.audit(r, "runs.preflight", true, successFields)
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: payload})
 }
 
@@ -1644,8 +2091,56 @@ func (s *apiServer) handleRunTrigger(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	if s.active {
+		// Capture a snapshot of the active run so the caller learns *why* the
+		// trigger was rejected — when it started, how long it's been running,
+		// the PID/log path/config it's running against, and whether it has
+		// already exceeded any expected duration. This turns an opaque 409
+		// into an actionable error.
+		startedAt := s.started
+		pid := s.lastPID
+		cfg := defaultIfEmpty(s.lastCfg, s.absPath(s.configPath))
+		runnerLog := s.absPath(s.runnerLogPath)
+		runTimeout := s.runTimeout
 		s.mu.Unlock()
-		writeJSON(w, http.StatusConflict, envelope{Success: false, Error: "a run is already active"})
+
+		elapsed := time.Since(startedAt).Round(time.Second)
+		var deadlineISO string
+		var overdue bool
+		if runTimeout > 0 {
+			deadlineISO = startedAt.Add(runTimeout).UTC().Format(time.RFC3339)
+			overdue = time.Now().After(startedAt.Add(runTimeout))
+		}
+		hint := "Wait for it to finish, or watch live progress on Settings → Runs (runner log: " + runnerLog + ")."
+		if overdue {
+			hint = "The active run has exceeded the configured timeout; check the runner log to confirm it isn't stuck, or restart the API server to clear the lock."
+		}
+		writeJSON(w, http.StatusConflict, envelope{
+			Success: false,
+			Error: fmt.Sprintf(
+				"a run is already active (started %s, running for %s) — cannot start another until it finishes",
+				startedAt.UTC().Format(time.RFC3339), elapsed,
+			),
+			Data: map[string]interface{}{
+				"active":            true,
+				"started_at":        startedAt.UTC().Format(time.RFC3339),
+				"elapsed_seconds":   int(elapsed.Seconds()),
+				"elapsed_human":     elapsed.String(),
+				"pid":               pid,
+				"config_path":       cfg,
+				"runner_log":        runnerLog,
+				"run_timeout":       runTimeout.String(),
+				"expected_deadline": deadlineISO,
+				"overdue":           overdue,
+				"hint":              hint,
+				"poll_endpoint":     "/api/v1/runs/active",
+			},
+		})
+		s.audit(r, "runs.trigger", false, map[string]interface{}{
+			"reason":          "run_in_progress",
+			"active_started":  startedAt.UTC().Format(time.RFC3339),
+			"elapsed_seconds": int(elapsed.Seconds()),
+			"pid":             pid,
+		})
 		return
 	}
 	s.active = true
@@ -1655,6 +2150,9 @@ func (s *apiServer) handleRunTrigger(w http.ResponseWriter, r *http.Request) {
 	s.lastCmd = nil
 	s.lastCwd = ""
 	s.lastEnv = nil
+	s.lastPID = 0
+	s.cancelRun = nil
+	s.cancelled = false
 	s.liveOut = nil
 	s.mu.Unlock()
 
@@ -1730,13 +2228,28 @@ func (s *apiServer) handleRunTrigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pid := cmd.Process.Pid
+	s.mu.Lock()
+	s.lastPID = pid
+	s.cancelRun = cancel
+	runStarted := s.started
+	s.mu.Unlock()
 	go func() {
 		defer cancel()
 		err := cmd.Wait()
-		if ctx.Err() == context.DeadlineExceeded {
+		// Distinguish "user pressed cancel" from "timed out" from "exited
+		// non-zero": context.Canceled means somebody called s.cancelRun(),
+		// DeadlineExceeded means the run timeout hit.
+		s.mu.Lock()
+		cancelled := s.cancelled
+		s.mu.Unlock()
+		switch {
+		case cancelled:
+			err = errors.New("run cancelled by user")
+		case ctx.Err() == context.DeadlineExceeded:
 			err = fmt.Errorf("run timed out after %s", s.runTimeout)
 		}
 		s.setRunDone(err, runOut.String())
+		s.archiveRunArtifacts(runStarted, err)
 		go s.notifyRunFinished(err)
 	}()
 	s.audit(r, "runs.trigger", true, map[string]interface{}{"config_path": resolvedCfgPath, "extra_args_count": len(cleanExtraArgs)})
@@ -1787,6 +2300,15 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 	}
 	outDir := s.selectBestReportOutDir()
 	runSummary := readJSONArtifact(filepath.Join(outDir, "run-summary.json"), map[string]interface{}{})
+	// Heal `error_class` / `failure_classes` for runs persisted by older
+	// orchestrator builds that misclassified DNS-driven circuit-breaker errors
+	// as `rate_limit`. The fix in goNCC.go covers future runs; this read-side
+	// re-classification surfaces correct buckets for existing on-disk data
+	// without forcing the user to re-trigger.
+	if m, ok := runSummary.(map[string]interface{}); ok {
+		reclassifyRunSummaryInPlace(m)
+		runSummary = m
+	}
 	checksSnapshot := readJSONArtifact(filepath.Join(outDir, "checks-snapshot.json"), []interface{}{})
 	drilldownDiff := readJSONArtifact(filepath.Join(outDir, "drilldown-diff.json"), map[string]interface{}{})
 	flakyChecks := readJSONArtifact(filepath.Join(outDir, "flaky-checks.json"), map[string]interface{}{})
@@ -1815,25 +2337,25 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 		pagination["agg_rows"] = meta
 	}
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
-		"run_summary":        runSummary,
-		"checks_snapshot":    checksSnapshot,
-		"drilldown_diff":     drilldownDiff,
-		"flaky_checks":       flakyChecks,
-		"regression_summary": regressionSummary,
-		"slo_dashboard":      sloDashboard,
-		"policy_violations":  policyViolations,
-		"agg_rows":           aggRows,
-		"diff_flags":         readInlineJSONVar(filepath.Join(outDir, "index.html"), "DIFF_FLAGS", map[string]interface{}{}),
-		"flaky_keys":         readInlineJSONVar(filepath.Join(outDir, "index.html"), "FLAKY_KEYS", map[string]interface{}{}),
-		"cluster_links":      readInlineJSONVar(filepath.Join(outDir, "index.html"), "CLUSTER_LINKS", []interface{}{}),
-		"artifact_links":     readInlineJSONVar(filepath.Join(outDir, "index.html"), "ARTIFACT_LINKS", map[string]interface{}{}),
-		"report_meta":        readInlineJSONVar(filepath.Join(outDir, "index.html"), "REPORT_META", map[string]interface{}{}),
-		"ncc_logs":           listNCCLogs(s.absPath(s.logDir)),
-		"ncc_summary_counts": parseNCCSummaryCounts(s.absPath(s.logDir)),
+		"run_summary":         runSummary,
+		"checks_snapshot":     checksSnapshot,
+		"drilldown_diff":      drilldownDiff,
+		"flaky_checks":        flakyChecks,
+		"regression_summary":  regressionSummary,
+		"slo_dashboard":       sloDashboard,
+		"policy_violations":   policyViolations,
+		"agg_rows":            aggRows,
+		"diff_flags":          readInlineJSONVar(filepath.Join(outDir, "index.html"), "DIFF_FLAGS", map[string]interface{}{}),
+		"flaky_keys":          readInlineJSONVar(filepath.Join(outDir, "index.html"), "FLAKY_KEYS", map[string]interface{}{}),
+		"cluster_links":       readInlineJSONVar(filepath.Join(outDir, "index.html"), "CLUSTER_LINKS", []interface{}{}),
+		"artifact_links":      readInlineJSONVar(filepath.Join(outDir, "index.html"), "ARTIFACT_LINKS", map[string]interface{}{}),
+		"report_meta":         loadReportMeta(outDir),
+		"ncc_logs":            listNCCLogs(s.absPath(s.logDir)),
+		"ncc_summary_counts":  parseNCCSummaryCounts(s.absPath(s.logDir)),
 		"ncc_cluster_summary": parseNCCClusterSummary(s.absPath(s.logDir)),
-		"trends":             collectTrendPoints(outDir, 30),
-		"report_source_dir":  outDir,
-		"pagination":         pagination,
+		"trends":              collectTrendPoints(outDir, 30),
+		"report_source_dir":   outDir,
+		"pagination":          pagination,
 	}})
 }
 
@@ -1907,6 +2429,7 @@ type trendRunSummary struct {
 	TotalChecks    int                   `json:"total_checks"`
 	AvgHealthScore int                   `json:"avg_health_score"`
 	MinHealthScore int                   `json:"min_health_score"`
+	ExitCode       *int                  `json:"exit_code,omitempty"`
 	Clusters       []trendClusterSummary `json:"clusters"`
 }
 
@@ -2041,11 +2564,12 @@ func (s *apiServer) handleMetaRoutes(w http.ResponseWriter, r *http.Request) {
 		{Path: "/api/v1/schedule/health", Methods: []string{http.MethodGet}, Description: "Scheduler health snapshot (last run/success/error hints)"},
 		{Path: "/api/v1/artifacts", Methods: []string{http.MethodGet}, Description: "List available artifacts"},
 		{Path: "/api/v1/artifacts/{name}", Methods: []string{http.MethodGet}, Description: "Read artifact by name"},
-		{Path: "/api/v1/runs", Methods: []string{http.MethodGet}, Description: "List historical runs"},
-		{Path: "/api/v1/runs/summary", Methods: []string{http.MethodGet}, Description: "Read latest run summary"},
-		{Path: "/api/v1/runs/active", Methods: []string{http.MethodGet}, Description: "Read active run state"},
+		{Path: "/api/v1/runs", Methods: []string{http.MethodGet}, Description: "List historical runs with metrics (limit, source, since filters; merges archived runs, latest summary, and audit triggers)"},
+		{Path: "/api/v1/runs/{id}", Methods: []string{http.MethodGet}, Description: "Read one archived run's metadata + embedded artifacts"},
+		{Path: "/api/v1/runs/summary", Methods: []string{http.MethodGet}, Description: "Read latest run summary (with on-read error-class healing)"},
+		{Path: "/api/v1/runs/active", Methods: []string{http.MethodGet, http.MethodDelete}, Description: "GET: read active run state. DELETE: cancel the in-flight run (signals the orchestrator process to exit)."},
 		{Path: "/api/v1/runs/preflight", Methods: []string{http.MethodPost}, Description: "Run preflight checks (config/secrets/path permissions)", SampleBody: "{\n  \"config_path\": \"config.yaml\"\n}"},
-		{Path: "/api/v1/runs/trigger", Methods: []string{http.MethodPost}, Description: "Trigger orchestrator run", SampleBody: "{\n  \"config_path\": \"config.yaml\",\n  \"password\": \"\",\n  \"extra_args\": [\"--no-html\"]\n}"},
+		{Path: "/api/v1/runs/trigger", Methods: []string{http.MethodPost}, Description: "Trigger orchestrator run (returns 409 with active-run details if one is already in flight)", SampleBody: "{\n  \"config_path\": \"config.yaml\",\n  \"password\": \"\",\n  \"extra_args\": [\"--no-html\"]\n}"},
 		{Path: "/api/v1/report/data", Methods: []string{http.MethodGet}, Description: "Aggregated report payload (supports optional limit/offset pagination for large arrays)"},
 		{Path: "/api/v1/report/trends", Methods: []string{http.MethodGet}, Description: "Historical trends from run summaries"},
 		{Path: "/api/v1/logs/runner", Methods: []string{http.MethodGet}, Description: "Read tail of runner log"},
@@ -2085,7 +2609,14 @@ func (s *apiServer) buildOpenAPISpec() map[string]interface{} {
 				"get": map[string]interface{}{"summary": "Backend health, version, build_date, and resolved paths"},
 			},
 			"/api/v1/audit": map[string]interface{}{
-				"get": map[string]interface{}{"summary": "Recent audit log entries (filters: limit, action, failures)"},
+				"get": map[string]interface{}{
+					"summary": "Recent audit log entries (newest first).",
+					"parameters": []map[string]interface{}{
+						{"name": "limit", "in": "query", "required": false, "schema": map[string]interface{}{"type": "integer", "minimum": 1, "maximum": 10000, "default": 100}},
+						{"name": "action", "in": "query", "required": false, "schema": map[string]interface{}{"type": "string", "description": "Filter to entries whose action starts with this string (e.g. \"settings\", \"runs.trigger\")"}},
+						{"name": "failures", "in": "query", "required": false, "schema": map[string]interface{}{"type": "string", "enum": []string{"1", "true"}, "description": "Return only failed entries"}},
+					},
+				},
 			},
 			"/api/v1/metrics/rate-limit": map[string]interface{}{
 				"get": map[string]interface{}{"summary": "Rate limiter configuration and counters"},
@@ -2195,13 +2726,29 @@ func (s *apiServer) buildOpenAPISpec() map[string]interface{} {
 				"get": map[string]interface{}{"summary": "Read artifact by name"},
 			},
 			"/api/v1/runs": map[string]interface{}{
-				"get": map[string]interface{}{"summary": "List historical runs"},
+				"get": map[string]interface{}{
+					"summary": "List historical runs with metrics; merges archived runs, latest summary, and audit triggers.",
+					"parameters": []map[string]interface{}{
+						{"name": "limit", "in": "query", "required": false, "schema": map[string]interface{}{"type": "integer", "minimum": 1, "maximum": 1000, "default": 200}},
+						{"name": "source", "in": "query", "required": false, "schema": map[string]interface{}{"type": "string", "enum": []string{"history", "summary", "trigger"}}},
+						{"name": "since", "in": "query", "required": false, "schema": map[string]interface{}{"type": "string", "description": "RFC3339 timestamp or YYYY-MM-DD date"}},
+					},
+				},
+			},
+			"/api/v1/runs/{id}": map[string]interface{}{
+				"get": map[string]interface{}{
+					"summary": "Read one archived run's metadata + embedded artifacts (run-summary.json, ncc-run-record.json, regression-summary.json, checks-snapshot.json, run-meta.json).",
+					"parameters": []map[string]interface{}{
+						{"name": "id", "in": "path", "required": true, "schema": map[string]interface{}{"type": "string"}},
+					},
+				},
 			},
 			"/api/v1/runs/summary": map[string]interface{}{
-				"get": map[string]interface{}{"summary": "Read latest run summary"},
+				"get": map[string]interface{}{"summary": "Read latest run summary (with on-read error_class healing for legacy entries)"},
 			},
 			"/api/v1/runs/active": map[string]interface{}{
-				"get": map[string]interface{}{"summary": "Read active run state"},
+				"get":    map[string]interface{}{"summary": "Read active run state (started_at, elapsed, pid, overdue flag)"},
+				"delete": map[string]interface{}{"summary": "Cancel the in-flight run. Returns 409 if no run is active."},
 			},
 			"/api/v1/runs/preflight": map[string]interface{}{
 				"post": map[string]interface{}{
@@ -2257,6 +2804,77 @@ func (s *apiServer) buildOpenAPISpec() map[string]interface{} {
 				"get": map[string]interface{}{"summary": "List available REST routes for API explorer"},
 			},
 		},
+	}
+}
+
+// archiveRunArtifacts snapshots the orchestrator's most recent run-summary,
+// ncc-run-record, and regression-summary into outputDir/runs/<id>/ so that the
+// /api/v1/runs endpoint can return real historical entries even when the
+// orchestrator writes its artifacts in-place. The ID is derived from the
+// run-summary's `timestamp` field when present, otherwise from startedAt.
+//
+// Failures are non-fatal — archiving is best-effort and must not break the
+// run completion path or trigger error responses (logging only).
+func (s *apiServer) archiveRunArtifacts(startedAt time.Time, runErr error) {
+	outDir := s.absPath(s.outputDir)
+	id := startedAt.UTC().Format("20060102T150405Z")
+	exitCode := 0
+	if runErr != nil {
+		exitCode = -1
+	}
+
+	sumPath := filepath.Join(outDir, "run-summary.json")
+	sumBytes, sumErr := os.ReadFile(sumPath)
+	if sumErr == nil {
+		var probe struct {
+			Timestamp string `json:"timestamp"`
+			ExitCode  *int   `json:"exit_code"`
+		}
+		if json.Unmarshal(sumBytes, &probe) == nil {
+			if strings.TrimSpace(probe.Timestamp) != "" {
+				if t, err := time.Parse(time.RFC3339, probe.Timestamp); err == nil {
+					id = t.UTC().Format("20060102T150405Z")
+				}
+			}
+			if probe.ExitCode != nil {
+				exitCode = *probe.ExitCode
+			}
+		}
+	}
+
+	target := filepath.Join(outDir, "runs", id)
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		log.Printf("archive run: mkdir %s: %v", target, err)
+		return
+	}
+	copyIfExists := func(src, dstName string) {
+		b, err := os.ReadFile(src)
+		if err != nil {
+			return
+		}
+		if err := os.WriteFile(filepath.Join(target, dstName), b, 0o644); err != nil {
+			log.Printf("archive run: write %s: %v", dstName, err)
+		}
+	}
+	if sumErr == nil {
+		_ = os.WriteFile(filepath.Join(target, "run-summary.json"), sumBytes, 0o644)
+	}
+	copyIfExists(filepath.Join(outDir, "ncc-run-record.json"), "ncc-run-record.json")
+	copyIfExists(filepath.Join(outDir, "regression-summary.json"), "regression-summary.json")
+	copyIfExists(filepath.Join(outDir, "checks-snapshot.json"), "checks-snapshot.json")
+
+	meta := map[string]interface{}{
+		"started_at":  startedAt.UTC().Format(time.RFC3339),
+		"finished_at": time.Now().UTC().Format(time.RFC3339),
+		"duration_s":  time.Since(startedAt).Seconds(),
+		"success":     runErr == nil,
+		"exit_code":   exitCode,
+	}
+	if runErr != nil {
+		meta["error"] = runErr.Error()
+	}
+	if b, err := json.MarshalIndent(meta, "", "  "); err == nil {
+		_ = os.WriteFile(filepath.Join(target, "run-meta.json"), b, 0o644)
 	}
 }
 
@@ -2462,6 +3080,43 @@ func readJSONArtifact(path string, fallback interface{}) interface{} {
 	return out
 }
 
+// loadReportMeta reads REPORT_META embedded in index.html and enriches it with
+// fields from ncc-run-record.json (hostname, scheduler_source, git_revision,
+// orchestrator_version) when they are missing or empty. Older reports — produced
+// before reportMeta carried these fields — are upgraded transparently.
+func loadReportMeta(outDir string) map[string]interface{} {
+	out := map[string]interface{}{}
+	if v, ok := readInlineJSONVar(filepath.Join(outDir, "index.html"), "REPORT_META", map[string]interface{}{}).(map[string]interface{}); ok {
+		for k, val := range v {
+			out[k] = val
+		}
+	}
+	recPath := filepath.Join(outDir, "ncc-run-record.json")
+	if b, err := os.ReadFile(recPath); err == nil {
+		var rec map[string]interface{}
+		if err := json.Unmarshal(b, &rec); err == nil {
+			fill := func(key string, recKey string) {
+				if cur, ok := out[key].(string); ok && strings.TrimSpace(cur) != "" {
+					return
+				}
+				if v, ok := rec[recKey].(string); ok && strings.TrimSpace(v) != "" {
+					out[key] = v
+				}
+			}
+			fill("hostname", "hostname")
+			fill("scheduler_source", "scheduler_source")
+			fill("git_revision", "git_revision")
+			fill("stream", "stream")
+			if cur, ok := out["version"].(string); !ok || strings.TrimSpace(cur) == "" {
+				if v, ok := rec["orchestrator_version"].(string); ok && strings.TrimSpace(v) != "" {
+					out["version"] = v
+				}
+			}
+		}
+	}
+	return out
+}
+
 func readInlineJSONVar(path, varName string, fallback interface{}) interface{} {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -2542,9 +3197,100 @@ func listNCCLogs(logDir string) []map[string]string {
 	return out
 }
 
+// classifyClusterErrorMessage mirrors goncc.classifyClusterError so the
+// API server can heal stale `error_class` values written by older binaries.
+// Keep this in sync with the orchestrator implementation in goNCC.go.
+func classifyClusterErrorMessage(raw string) string {
+	msg := strings.ToLower(strings.TrimSpace(raw))
+	if msg == "" {
+		return ""
+	}
+	switch {
+	case strings.Contains(msg, "context deadline exceeded"), strings.Contains(msg, "timed out"), strings.Contains(msg, "timeout"):
+		return "timeout"
+	case strings.Contains(msg, "http 401"), strings.Contains(msg, "http 403"), strings.Contains(msg, "unauthorized"), strings.Contains(msg, "forbidden"), strings.Contains(msg, "authentication"):
+		return "auth"
+	case strings.Contains(msg, "no such host"),
+		strings.Contains(msg, "connection refused"),
+		strings.Contains(msg, "no route to host"),
+		strings.Contains(msg, "network is unreachable"),
+		strings.Contains(msg, "host is down"),
+		strings.Contains(msg, "tls"),
+		strings.Contains(msg, "x509"):
+		return "network"
+	case strings.Contains(msg, "http 429"),
+		strings.Contains(msg, "too many requests"),
+		strings.Contains(msg, "rate limit"),
+		strings.Contains(msg, "rate-limit"),
+		strings.Contains(msg, "retry-after"):
+		return "rate_limit"
+	case strings.Contains(msg, "parse filtered"), strings.Contains(msg, "parse summary"), strings.Contains(msg, "parser"):
+		return "parser"
+	case strings.Contains(msg, "retry circuit breaker opened"),
+		strings.Contains(msg, "transport error"),
+		strings.Contains(msg, "dial tcp"),
+		strings.Contains(msg, "i/o timeout"),
+		strings.Contains(msg, "broken pipe"),
+		strings.Contains(msg, "connection reset"):
+		return "network"
+	case strings.Contains(msg, "http 4"), strings.Contains(msg, "http 5"), strings.Contains(msg, "start checks failed"), strings.Contains(msg, "get summary failed"), strings.Contains(msg, "poll failed"):
+		return "api"
+	default:
+		return "unknown"
+	}
+}
+
+// reclassifyRunSummaryInPlace walks the parsed run-summary map and rewrites
+// each failed cluster's `error_class` using the current classifier, then
+// rebuilds the top-level `failure_classes` histogram so the Insights "Run
+// Reliability" panel reflects the corrected buckets even for legacy runs.
+func reclassifyRunSummaryInPlace(m map[string]interface{}) {
+	clusters, ok := m["clusters"].([]interface{})
+	if !ok {
+		return
+	}
+	counts := map[string]int{
+		"timeout": 0, "auth": 0, "network": 0, "parser": 0,
+		"rate_limit": 0, "api": 0, "unknown": 0,
+	}
+	for _, raw := range clusters {
+		c, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if okFlag, _ := c["ok"].(bool); okFlag {
+			continue
+		}
+		errMsg, _ := c["error"].(string)
+		if strings.TrimSpace(errMsg) == "" {
+			continue
+		}
+		class := classifyClusterErrorMessage(errMsg)
+		if class == "" {
+			class = "unknown"
+		}
+		c["error_class"] = class
+		counts[class]++
+	}
+	m["failure_classes"] = map[string]interface{}{
+		"timeout":    counts["timeout"],
+		"auth":       counts["auth"],
+		"network":    counts["network"],
+		"parser":     counts["parser"],
+		"rate_limit": counts["rate_limit"],
+		"api":        counts["api"],
+		"unknown":    counts["unknown"],
+	}
+}
+
+// parseNCCSummaryCounts aggregates per-state counts from every *.log file in
+// logDir, recognising the NCC summary table. The "Warning" row was previously
+// omitted, which caused the UI to show a spurious "summary count mismatch"
+// banner whenever NCC reported any WARN rows.
 func parseNCCSummaryCounts(logDir string) map[string]int {
 	totals := map[string]int{
 		"fail":          0,
+		"warn":          0,
 		"pass":          0,
 		"info":          0,
 		"error":         0,
@@ -2564,6 +3310,14 @@ func parseNCCSummaryCounts(logDir string) map[string]int {
 		v, _ := strconv.Atoi(m[1])
 		return v
 	}
+	// Some NCC variants emit "Warning", others "Warn". Try both and take the
+	// first that produced a non-zero value (or the last one, to be safe).
+	parseWarn := func(content string) int {
+		if v := parseCount(content, "Warning"); v > 0 {
+			return v
+		}
+		return parseCount(content, "Warn")
+	}
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -2578,6 +3332,7 @@ func parseNCCSummaryCounts(logDir string) map[string]int {
 		}
 		content := string(b)
 		totals["fail"] += parseCount(content, "Fail")
+		totals["warn"] += parseWarn(content)
 		totals["pass"] += parseCount(content, "Pass")
 		totals["info"] += parseCount(content, "Info")
 		totals["error"] += parseCount(content, "Error")
@@ -2616,6 +3371,10 @@ func parseNCCClusterSummary(logDir string) []map[string]interface{} {
 		}
 		content := string(b)
 		fail := parseCount(content, "Fail")
+		warn := parseCount(content, "Warning")
+		if warn == 0 {
+			warn = parseCount(content, "Warn")
+		}
 		pass := parseCount(content, "Pass")
 		info := parseCount(content, "Info")
 		errCount := parseCount(content, "Error")
@@ -2630,6 +3389,7 @@ func parseNCCClusterSummary(logDir string) []map[string]interface{} {
 			"address":       addr,
 			"log_name":      name,
 			"fail":          fail,
+			"warn":          warn,
 			"pass":          pass,
 			"info":          info,
 			"error":         errCount,

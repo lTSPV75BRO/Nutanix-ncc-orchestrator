@@ -253,6 +253,14 @@ func TestClassifyClusterError(t *testing.T) {
 		{"parse filtered failed", "parser"},
 		{"dial tcp 10.0.0.1:9440: connect: connection refused", "network"},
 		{"start checks failed: get summary failed: HTTP 500", "api"},
+		// Regression: a DNS-failure-driven circuit-breaker must classify as
+		// `network`, not `rate_limit`. The breaker opens on transport errors
+		// for unresolved hosts, but the underlying problem is DNS.
+		{"start checks failed: get cluster uuid v4 retry circuit breaker opened after 3 consecutive transport failures: dial tcp: lookup PC-Rushmore: no such host", "network"},
+		{"retry circuit breaker opened after 3 consecutive transport failures: dial tcp 10.0.0.1:9440: connect: no route to host", "network"},
+		{"tls: handshake failure", "network"},
+		{"x509: certificate signed by unknown authority", "network"},
+		{"HTTP 429 Too Many Requests; Retry-After 5", "rate_limit"},
 	}
 	for _, tt := range tests {
 		got := classifyClusterError(errors.New(tt.msg))

@@ -27,10 +27,12 @@ import {
   CloseCircleOutlined,
   ExclamationCircleOutlined,
   InfoCircleOutlined,
+  PlayCircleOutlined,
   ReloadOutlined,
   SearchOutlined,
   WarningOutlined,
 } from "@ant-design/icons";
+import type { RunActiveData } from "../api/types";
 import { api } from "../api/client";
 import { notify, notifyError } from "../notify";
 import { ClusterTable } from "../features/report/ClusterTable";
@@ -108,6 +110,17 @@ export function DashboardPage() {
     queryFn: () => api.reportData(),
     enabled: loadFullReport,
     staleTime: 30_000,
+  });
+
+  // Reuse the same query key the header trigger button uses so react-query
+  // dedupes and we don't double-poll the orchestrator. Lets the empty-state
+  // card distinguish "no data yet, but a run is in flight" from "no run has
+  // ever produced data".
+  const runActiveQuery = useQuery({
+    queryKey: ["runs-active"],
+    queryFn: api.runActive,
+    refetchInterval: (q) => ((q.state.data as RunActiveData | undefined)?.active ? 3000 : 30000),
+    staleTime: 1500,
   });
 
   useEffect(() => {
@@ -206,6 +219,7 @@ export function DashboardPage() {
   const weightedPenalty =
     (totalPlugins > 0 ? (failCount / totalPlugins) * 100 : 0) * 8.0 +
     (totalPlugins > 0 ? (errorCount / totalPlugins) * 100 : 0) * 5.5 +
+    (totalPlugins > 0 ? (warnCount / totalPlugins) * 100 : 0) * 3.5 +
     (totalPlugins > 0 ? (infoCount / totalPlugins) * 100 : 0) * 2.2 +
     (totalPlugins > 0 ? (unknownCount / totalPlugins) * 100 : 0) * 3.0;
   const weightedHealth = Math.max(0, Math.min(100, rawPassRate - weightedPenalty));
@@ -426,16 +440,22 @@ export function DashboardPage() {
               }
             >
               <Input
+                id="alerts-search"
+                name="alerts-search"
+                aria-label="Search alerts"
                 allowClear
                 prefix={<SearchOutlined />}
                 value={filterText}
                 onChange={(e) => setFilterText(e.target.value)}
                 placeholder="Search alerts… try sev:FAIL, cluster:10.1, changed:true"
+                autoComplete="off"
               />
             </Tooltip>
           </Col>
           <Col xs={24} md={12} lg={8}>
             <Select
+              id="dashboard-cluster-filter"
+              aria-label="Filter alerts by cluster"
               mode="multiple"
               allowClear
               placeholder="Filter by cluster"
@@ -448,6 +468,8 @@ export function DashboardPage() {
           </Col>
           <Col xs={24} md={12} lg={4}>
             <Select
+              id="dashboard-compare-mode"
+              aria-label="Compare mode"
               style={{ width: "100%" }}
               value={compareMode}
               onChange={(value) => setCompareMode(value as CompareMode)}
@@ -494,16 +516,81 @@ export function DashboardPage() {
       {/* MAIN ALERTS TABLE */}
       {aggRows.length === 0 && asArray(reportData.checks_snapshot).length === 0 ? (
         <Card className="page-card">
-          <Empty
-            description={
-              <Space direction="vertical" size={4} align="center">
-                <Typography.Text strong>No alerts in current run</Typography.Text>
-                <Typography.Text type="secondary">
-                  Trigger a run from Settings → Runs to populate this view.
-                </Typography.Text>
-              </Space>
+          {(() => {
+            // Empty-state copy is contextual:
+            //   1) A run is currently in progress → tell the user to wait,
+            //      not "trigger another run". Show a spinning indicator that
+            //      mirrors the header pill.
+            //   2) A previous run completed cleanly → no alerts is good news.
+            //   3) No prior run on disk → onboarding hint.
+            const runActive = runActiveQuery.data?.active === true;
+            const hasPriorRun = Boolean(runTimestamp);
+            const priorRunWasSuccessful =
+              hasPriorRun && (runSummary.success === true || (failCount === 0 && errorCount === 0 && warnCount === 0));
+
+            if (runActive) {
+              const startedAt = runActiveQuery.data?.started_at
+                ? new Date(runActiveQuery.data.started_at).toLocaleTimeString()
+                : "moments ago";
+              return (
+                <Empty
+                  image={<PlayCircleOutlined spin style={{ fontSize: 48, color: "var(--ant-color-primary, #1677ff)" }} />}
+                  imageStyle={{ height: 56 }}
+                  description={
+                    <Space direction="vertical" size={4} align="center">
+                      <Typography.Text strong>Run in progress · alerts will populate when it completes</Typography.Text>
+                      <Typography.Text type="secondary">
+                        Started {startedAt}. The dashboard will refresh automatically — there's nothing to do.
+                      </Typography.Text>
+                      <Link to="/settings?tab=runs">
+                        <Button size="small" type="link">
+                          View live output →
+                        </Button>
+                      </Link>
+                    </Space>
+                  }
+                />
+              );
             }
-          />
+
+            if (priorRunWasSuccessful) {
+              return (
+                <Empty
+                  image={<CheckCircleOutlined style={{ fontSize: 48, color: "#22c55e" }} />}
+                  imageStyle={{ height: 56 }}
+                  description={
+                    <Space direction="vertical" size={4} align="center">
+                      <Typography.Text strong>All clusters clean — no alerts in the latest run</Typography.Text>
+                      <Typography.Text type="secondary">
+                        {hasPriorRun
+                          ? `Last run finished ${new Date(runTimestamp).toLocaleString()} with no findings.`
+                          : "The most recent run found no failures, errors, or warnings."}
+                      </Typography.Text>
+                    </Space>
+                  }
+                />
+              );
+            }
+
+            // Either no run yet, or last run produced an error before any
+            // alerts were collected (e.g. orchestrator failed pre-flight).
+            return (
+              <Empty
+                description={
+                  <Space direction="vertical" size={4} align="center">
+                    <Typography.Text strong>
+                      {hasPriorRun ? "Latest run produced no alerts data" : "No alerts yet"}
+                    </Typography.Text>
+                    <Typography.Text type="secondary">
+                      {hasPriorRun
+                        ? "The most recent run completed but didn't generate per-check findings. Re-run from Settings → Runs."
+                        : "Trigger a run from Settings → Runs to populate this view."}
+                    </Typography.Text>
+                  </Space>
+                }
+              />
+            );
+          })()}
         </Card>
       ) : (
         <ClusterTable

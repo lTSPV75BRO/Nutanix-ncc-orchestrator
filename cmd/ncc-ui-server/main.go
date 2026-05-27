@@ -1,6 +1,7 @@
 package main
 
 import (
+	"compress/gzip"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -14,10 +15,94 @@ import (
 	"os"
 	pathpkg "path"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+// gzipResponseWriter wraps an http.ResponseWriter and transparently compresses
+// the body when the client advertised `gzip` in Accept-Encoding. Compression is
+// applied lazily on the first Write so handlers that produce no body (304/204)
+// don't incur the overhead.
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	gz          *gzip.Writer
+	wroteHeader bool
+}
+
+func (g *gzipResponseWriter) WriteHeader(status int) {
+	if !g.wroteHeader {
+		g.wroteHeader = true
+		// Content-Length is wrong once we gzip; remove it so chunked transfer is
+		// used and add the encoding/vary headers.
+		g.Header().Del("Content-Length")
+		g.Header().Set("Content-Encoding", "gzip")
+		existingVary := g.Header().Get("Vary")
+		if existingVary == "" {
+			g.Header().Set("Vary", "Accept-Encoding")
+		} else if !strings.Contains(existingVary, "Accept-Encoding") {
+			g.Header().Set("Vary", existingVary+", Accept-Encoding")
+		}
+	}
+	g.ResponseWriter.WriteHeader(status)
+}
+
+func (g *gzipResponseWriter) Write(b []byte) (int, error) {
+	if !g.wroteHeader {
+		g.WriteHeader(http.StatusOK)
+	}
+	return g.gz.Write(b)
+}
+
+func (g *gzipResponseWriter) Close() error {
+	if g.gz == nil {
+		return nil
+	}
+	return g.gz.Close()
+}
+
+// shouldGzipPath returns true for text-y assets that compress well. We avoid
+// gzipping already-compressed payloads (images, fonts in woff2, etc.) since
+// the CPU cost outweighs the byte savings.
+func shouldGzipPath(p string) bool {
+	ext := strings.ToLower(filepath.Ext(p))
+	switch ext {
+	case ".js", ".mjs", ".css", ".html", ".htm", ".json", ".map",
+		".txt", ".svg", ".xml", ".wasm":
+		return true
+	}
+	return false
+}
+
+func acceptsGzip(r *http.Request) bool {
+	return strings.Contains(strings.ToLower(r.Header.Get("Accept-Encoding")), "gzip")
+}
+
+// hashedAssetRe matches Vite's content-hashed filenames such as
+// `index-Dv80tUhd.css` or `SettingsPage-tCNUHCQx.js`. These files are immutable
+// for the lifetime of a build, so we can cache them aggressively.
+var hashedAssetRe = regexp.MustCompile(`-[A-Za-z0-9_-]{6,}\.(js|mjs|css|map|woff2?|ttf|otf|svg|png|jpg|jpeg|gif|webp|wasm)$`)
+
+// setStaticCacheHeaders chooses a cache strategy based on the URL path:
+//   - hashed asset under /assets/ → 1-year immutable
+//   - index.html / SPA shell      → no-cache (so the new build is picked up)
+//   - everything else             → short max-age with revalidation
+func setStaticCacheHeaders(w http.ResponseWriter, urlPath string) {
+	if existing := w.Header().Get("Cache-Control"); existing != "" {
+		return
+	}
+	base := pathpkg.Base(urlPath)
+	switch {
+	case strings.HasPrefix(urlPath, "/assets/") && hashedAssetRe.MatchString(base):
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	case urlPath == "/" || urlPath == "/index.html" || filepath.Ext(base) == "":
+		w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+	default:
+		w.Header().Set("Cache-Control", "public, max-age=300, must-revalidate")
+	}
+}
 
 type apiErrorEnvelope struct {
 	Success bool   `json:"success"`
@@ -37,6 +122,14 @@ func writeAPIError(w http.ResponseWriter, status int, message string, isTLS bool
 	}
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(apiErrorEnvelope{Success: false, Error: message})
+}
+
+func fileExists(p string) bool {
+	if strings.TrimSpace(p) == "" {
+		return false
+	}
+	st, err := os.Stat(p)
+	return err == nil && !st.IsDir()
 }
 
 func inferRequestOrigin(r *http.Request) string {
@@ -92,6 +185,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// Resolve the absolute token-file path once so log lines, error messages,
+	// and the periodic warning all agree on what file the UI server is
+	// actually consulting (very common bug: UI server started from a
+	// different cwd than the API server → references different .ncc-api-token).
+	absTokenFile, absErr := filepath.Abs(tokenFile)
+	if absErr != nil {
+		absTokenFile = tokenFile
+	}
 	transport, err := buildBackendTransport(backendCAFile, backendClientCertFile, backendClientKeyFile, backendInsecureSkipVerify)
 	if err != nil {
 		log.Fatal(err)
@@ -107,6 +208,27 @@ func main() {
 			return strings.TrimSpace(string(b))
 		}
 		return ""
+	}
+	// Loud startup check so the operator sees the misconfig before users do.
+	if apiToken == "" {
+		if _, sErr := os.Stat(tokenFile); sErr != nil {
+			log.Printf("WARNING: API token file %q does not exist and --api-token is unset; every /api/* request will receive 401 until this is fixed.", absTokenFile)
+			// Re-warn periodically so the operator notices even if they
+			// missed the startup line.
+			go func() {
+				t := time.NewTicker(60 * time.Second)
+				defer t.Stop()
+				for range t.C {
+					if _, err := os.Stat(tokenFile); err == nil {
+						log.Printf("INFO: API token file %q now present.", absTokenFile)
+						return
+					}
+					log.Printf("WARNING: API token file %q still missing; /api/* requests are 401.", absTokenFile)
+				}
+			}()
+		} else if b, rErr := os.ReadFile(tokenFile); rErr != nil || strings.TrimSpace(string(b)) == "" {
+			log.Printf("WARNING: API token file %q is empty or unreadable; every /api/* request will receive 401 until this is fixed.", absTokenFile)
+		}
 	}
 	mintSession := func() string {
 		sessionMu.Lock()
@@ -171,6 +293,36 @@ func main() {
 		resp.Header.Set("Referrer-Policy", "no-referrer")
 		resp.Header.Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
 		resp.Header.Set("Content-Security-Policy", apiCSP)
+		// Rewrite a backend 401 into a diagnostic envelope so the UI shows
+		// "the UI server's token doesn't match the API server's token" instead
+		// of a bare "unauthorized" message. This is the single most common
+		// failure mode when the two servers start from different working
+		// directories or one was rotated after the other started.
+		if resp.StatusCode == http.StatusUnauthorized {
+			cause := "token mismatch or empty token"
+			if tok := getBackendToken(); tok == "" {
+				cause = "UI server has no API token available (token file is empty or missing)"
+			}
+			body := map[string]interface{}{
+				"success":    false,
+				"error":      "Backend rejected the UI server's API token: " + cause + ". Confirm that " + absTokenFile + " contains the same token the ncc-api-server is using (or set NCC_API_TOKEN to the same value for both processes), then restart this UI server.",
+				"error_code": "NCC_UI_TOKEN_MISMATCH",
+				"data": map[string]interface{}{
+					"backend_status":     401,
+					"token_file":         absTokenFile,
+					"token_file_present": fileExists(tokenFile),
+					"token_override_set": apiToken != "",
+				},
+			}
+			b, _ := json.Marshal(body)
+			resp.Body = io.NopCloser(strings.NewReader(string(b)))
+			resp.ContentLength = int64(len(b))
+			resp.Header.Set("Content-Type", "application/json")
+			resp.Header.Set("Content-Length", strconv.Itoa(len(b)))
+			// Drop the Content-Encoding header in case backend sent gzipped
+			// JSON — we wrote a plain UTF-8 body.
+			resp.Header.Del("Content-Encoding")
+		}
 		return nil
 	}
 	origDirector := proxy.Director
@@ -231,16 +383,29 @@ func main() {
 	}))
 	staticFS := http.Dir(dir)
 	fileServer := http.FileServer(staticFS)
+	// serveStatic adds Cache-Control and transparent gzip compression for
+	// text-y assets, then delegates to the underlying http.FileServer.
+	serveStatic := func(w http.ResponseWriter, r *http.Request) {
+		setStaticCacheHeaders(w, r.URL.Path)
+		if shouldGzipPath(r.URL.Path) && acceptsGzip(r) {
+			gz := gzip.NewWriter(w)
+			grw := &gzipResponseWriter{ResponseWriter: w, gz: gz}
+			defer grw.Close()
+			fileServer.ServeHTTP(grw, r)
+			return
+		}
+		fileServer.ServeHTTP(w, r)
+	}
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
-			fileServer.ServeHTTP(w, r)
+			serveStatic(w, r)
 			return
 		}
 		cleanPath := pathpkg.Clean("/" + r.URL.Path)
 		if f, err := staticFS.Open(cleanPath); err == nil {
 			if st, statErr := f.Stat(); statErr == nil && !st.IsDir() {
 				_ = f.Close()
-				fileServer.ServeHTTP(w, r)
+				serveStatic(w, r)
 				return
 			}
 			_ = f.Close()
@@ -252,7 +417,7 @@ func main() {
 		}
 		clone := r.Clone(r.Context())
 		clone.URL.Path = "/"
-		fileServer.ServeHTTP(w, clone)
+		serveStatic(w, clone)
 	}))
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {

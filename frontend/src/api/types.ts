@@ -126,14 +126,36 @@ export type ArtifactInfo = {
 
 export type RunInfo = {
   id: string;
-  path: string;
+  path?: string;
   mod_time: string;
   has_index: boolean;
+  source?: "history" | "summary" | "trigger";
+  timestamp?: string;
+  duration_s?: number;
+  clusters_ok?: number;
+  clusters_failed?: number;
+  total_checks?: number;
+  avg_health_score?: number;
+  min_health_score?: number;
+  fail_total?: number;
+  warn_total?: number;
+  err_total?: number;
+  info_total?: number;
+  exit_code?: number;
+  success?: boolean;
+  client?: string;
+  user_agent?: string;
+  auth_mode?: string;
 };
 
 export type RunActiveData = {
   active: boolean;
   started_at: string;
+  elapsed_seconds?: number;
+  elapsed_human?: string;
+  expected_deadline?: string;
+  overdue?: boolean;
+  pid?: number;
   last_error: string;
   last_output?: string;
   live_output?: string;
@@ -143,6 +165,34 @@ export type RunActiveData = {
   command?: string[];
   work_dir?: string;
   env?: Record<string, string>;
+};
+
+export type RunConflictData = {
+  active: boolean;
+  started_at: string;
+  elapsed_seconds: number;
+  elapsed_human: string;
+  pid: number;
+  config_path: string;
+  runner_log: string;
+  run_timeout: string;
+  expected_deadline: string;
+  overdue: boolean;
+  hint: string;
+  poll_endpoint: string;
+};
+
+export type RunCancelData = {
+  pid: number;
+  started_at: string;
+  elapsed_seconds: number;
+  elapsed_human: string;
+  poll_endpoint: string;
+};
+
+export type RunByIdData = {
+  run: RunInfo;
+  artifacts: Record<string, unknown>;
 };
 
 export type TriggerRunData = {

@@ -137,12 +137,16 @@ export function RawOutputsSection({ onError }: Props) {
       <Row gutter={[16, 16]}>
         <Col xs={24} md={9}>
           <Input
+            id="raw-outputs-filter"
+            name="raw-filter"
+            aria-label="Search raw output artifacts"
             allowClear
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Search artifacts…"
             prefix={<SearchOutlined />}
             style={{ marginBottom: 10 }}
+            autoComplete="off"
           />
           {filtered.length === 0 ? (
             <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No artifacts" />

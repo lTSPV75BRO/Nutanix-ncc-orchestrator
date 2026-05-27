@@ -24,6 +24,10 @@ export const THEME_OPTIONS: Array<{ value: AppThemeSelection; label: string }> =
 
 function toAntThemeConfig(theme: AppThemeKey): ThemeConfig {
   if (theme === "light") {
+    // Cleaner, neutral light: warm-tinted off-white surface, white containers,
+    // softer slate borders. Replaces the previous cool blue-tinted slate which
+    // looked washed-out on bright displays and didn't read as a neutral
+    // "professional product" backdrop.
     return {
       algorithm: antdTheme.defaultAlgorithm,
       token: {
@@ -32,15 +36,19 @@ function toAntThemeConfig(theme: AppThemeKey): ThemeConfig {
         colorSuccess: "#16a34a",
         colorWarning: "#d97706",
         colorError: "#dc2626",
-        colorBgBase: "#f8fafc",
+        colorBgBase: "#fafafa",
         colorBgContainer: "#ffffff",
-        colorText: "#0f172a",
-        colorBorder: "#cbd5e1",
+        colorBgLayout: "#f4f4f5",
+        colorText: "#18181b",
+        colorTextSecondary: "#52525b",
+        colorBorder: "#e4e4e7",
+        colorBorderSecondary: "#f4f4f5",
         borderRadius: 10,
       },
       components: {
-        Card: { headerBg: "#f8fafc" },
-        Table: { headerBg: "#e2e8f0", rowHoverBg: "#eff6ff" },
+        Card: { headerBg: "#fafafa" },
+        Table: { headerBg: "#f4f4f5", rowHoverBg: "#f8fafc" },
+        Layout: { bodyBg: "#f4f4f5", headerBg: "#ffffff" },
       },
     };
   }
@@ -65,6 +73,10 @@ function toAntThemeConfig(theme: AppThemeKey): ThemeConfig {
       },
     };
   }
+  // Dark: near-black neutral surface with purple accent. Previous palette was
+  // navy (#070b1b) which looked blue rather than dark. Now the base reads as
+  // true black, container as deep charcoal — like VS Code Dark+ / IntelliJ
+  // Darcula — while keeping the purple primary for brand continuity.
   return {
     algorithm: antdTheme.darkAlgorithm,
     token: {
@@ -73,15 +85,19 @@ function toAntThemeConfig(theme: AppThemeKey): ThemeConfig {
       colorSuccess: "#22c55e",
       colorWarning: "#f59e0b",
       colorError: "#f43f5e",
-      colorBgBase: "#070b1b",
-      colorBgContainer: "#111831",
-      colorText: "#e2e8f0",
-      colorBorder: "#2a355c",
+      colorBgBase: "#0a0a0a",
+      colorBgContainer: "#141414",
+      colorBgLayout: "#0a0a0a",
+      colorText: "#ededed",
+      colorTextSecondary: "#a1a1aa",
+      colorBorder: "#262626",
+      colorBorderSecondary: "#1f1f1f",
       borderRadius: 10,
     },
     components: {
-      Card: { headerBg: "#141d3a" },
-      Table: { headerBg: "#182349", rowHoverBg: "#1a2856" },
+      Card: { headerBg: "#171717" },
+      Table: { headerBg: "#1a1a1a", rowHoverBg: "#1f1f1f" },
+      Layout: { bodyBg: "#0a0a0a", headerBg: "#0f0f0f" },
     },
   };
 }

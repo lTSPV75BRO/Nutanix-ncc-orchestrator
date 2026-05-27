@@ -124,12 +124,16 @@ function safeParse(yaml: string): { doc: Document; error: string | null } {
 
 /** Friendly secret indicator for password-typed fields. */
 function SecretInput({
+  id,
+  name,
   value,
   onChange,
   placeholder,
   isWeakPlaintext,
   onMigrate,
 }: {
+  id?: string;
+  name?: string;
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
@@ -139,6 +143,8 @@ function SecretInput({
   return (
     <Space direction="vertical" size={4} style={{ width: "100%" }}>
       <Input.Password
+        id={id}
+        name={name}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
@@ -161,6 +167,13 @@ function SecretInput({
   );
 }
 
+/** Stable DOM id for a config field — used to wire the Form.Item label's
+ *  htmlFor to the actual input id and to give the input a name= attribute
+ *  for browser autofill heuristics. */
+function fieldDomId(key: string) {
+  return `cfg-${key}`;
+}
+
 function FieldControl({
   field,
   doc,
@@ -172,11 +185,17 @@ function FieldControl({
   onChange: () => void;
   onMigrateSecret?: () => void;
 }) {
+  // Stable id/name on every control so:
+  //   1) The wrapping <label> can be linked via htmlFor (a11y + autofill UX).
+  //   2) Browser DevTools stops reporting "form field has neither id nor
+  //      name attribute".
+  const id = fieldDomId(field.key);
   switch (field.type) {
     case "boolean": {
       const v = readBoolean(doc, field.key);
       return (
         <Switch
+          id={id}
           checked={v}
           onChange={(checked) => {
             writeKey(doc, field.key, checked);
@@ -189,6 +208,8 @@ function FieldControl({
       const v = readNumber(doc, field.key);
       return (
         <InputNumber
+          id={id}
+          name={field.key}
           value={v ?? undefined}
           min={field.min}
           max={field.max}
@@ -206,6 +227,7 @@ function FieldControl({
       const v = readString(doc, field.key);
       return (
         <Select
+          id={id}
           value={v}
           options={field.options ?? []}
           style={{ width: "100%" }}
@@ -222,6 +244,8 @@ function FieldControl({
       const isPlaintextPassword = field.key === "password" && v.trim().length > 0 && !looksLikeSecretRef;
       return (
         <SecretInput
+          id={id}
+          name={field.key}
           value={v}
           placeholder={field.placeholder}
           onChange={(next) => {
@@ -240,8 +264,15 @@ function FieldControl({
       const v = readString(doc, field.key);
       return (
         <Input
+          id={id}
+          name={field.key}
           value={v}
           placeholder={field.placeholder}
+          // Default to "off" so browsers don't try to autofill emails/usernames
+          // into config text inputs (e.g. "PC IP", "Webhook URL"). Explicit
+          // `autoComplete` on the FieldDef wins (e.g. "username" for the
+          // Username field).
+          autoComplete={field.autoComplete ?? "off"}
           onChange={(e) => {
             writeKey(doc, field.key, e.target.value);
             onChange();
@@ -283,7 +314,26 @@ function SectionForm({
         </div>
       </Space>
 
-      <Form layout="vertical" colon={false} style={{ marginTop: 16 }}>
+      {/*
+        Each section renders its own <form> on purpose so:
+          1) The contained Input.Password fields have a form ancestor (Chrome
+             warns "Password field is not contained in a form" otherwise and
+             downgrades autofill/security UX).
+          2) Browsers can scope autofill correctly per section.
+
+        `onSubmitCapture` swallows accidental Enter-key submits — there is no
+        explicit Save button per section; saving is handled by the page-level
+        toolbar — but the form element itself still needs to exist for the
+        password-autofill heuristics above. Chrome's softer "Multiple forms
+        should be contained in their own form elements" recommendation is a
+        hint, not an error, and is the correct trade-off here.
+      */}
+      <Form
+        layout="vertical"
+        colon={false}
+        style={{ marginTop: 16 }}
+        onSubmitCapture={(e) => e.preventDefault()}
+      >
         <Row gutter={[20, 4]}>
           {section.fields.map((field) => {
             const help = field.help ? (
@@ -311,6 +361,12 @@ function SectionForm({
             return (
               <Col {...colProps} key={field.key}>
                 <Form.Item
+                  // htmlFor links the rendered <label> to the FieldControl's
+                  // input id (set in fieldDomId(field.key)), so a11y tools and
+                  // browser autofill can associate them. Without this, Chrome
+                  // emits "No label associated with a form field" for every
+                  // field on the page.
+                  htmlFor={fieldDomId(field.key)}
                   label={
                     <Space size={6}>
                       <span>{field.label}</span>
@@ -585,7 +641,14 @@ export function ConfigSection({ onError }: Props) {
           </Col>
           <Col xs={24} md={12}>
             <Space size={8} wrap style={{ display: "flex", justifyContent: "flex-end" }}>
-              <Radio.Group value={mode} onChange={(e) => setMode(e.target.value)} buttonStyle="solid">
+              <Radio.Group
+                id="config-edit-mode"
+                name="config-edit-mode"
+                aria-label="Config editor mode"
+                value={mode}
+                onChange={(e) => setMode(e.target.value)}
+                buttonStyle="solid"
+              >
                 <Radio.Button value="form">Form</Radio.Button>
                 <Radio.Button value="yaml">YAML</Radio.Button>
               </Radio.Group>

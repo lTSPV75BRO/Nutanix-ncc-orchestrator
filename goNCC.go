@@ -4216,6 +4216,16 @@ func writeRunHistorySnapshot(cfg Config) (string, error) {
 	return runDir, nil
 }
 
+// classifyClusterError maps a failed cluster's error chain into one of the
+// canonical buckets surfaced in run-summary.json's `failure_classes`.
+//
+// IMPORTANT: the order matters. Network signals (no-such-host, dial tcp,
+// connection refused) are evaluated BEFORE the "retry circuit breaker opened"
+// match, because the retry circuit breaker opens on *any* repeated transport
+// failure — including DNS resolution failures. If we matched the breaker first
+// we would misclassify a DNS lookup failure as `rate_limit`, falsely
+// implicating max-parallel/throttling when the real fix is "configure DNS or
+// use an IP address".
 func classifyClusterError(err error) string {
 	if err == nil {
 		return ""
@@ -4226,11 +4236,36 @@ func classifyClusterError(err error) string {
 		return "timeout"
 	case strings.Contains(msg, "http 401"), strings.Contains(msg, "http 403"), strings.Contains(msg, "unauthorized"), strings.Contains(msg, "forbidden"), strings.Contains(msg, "authentication"):
 		return "auth"
-	case strings.Contains(msg, "retry circuit breaker opened"), strings.Contains(msg, "http 429"), strings.Contains(msg, "rate limit"):
+	// Network-layer signals first so DNS/refused/unreachable errors are not
+	// swallowed by a downstream circuit-breaker match below.
+	case strings.Contains(msg, "no such host"),
+		strings.Contains(msg, "connection refused"),
+		strings.Contains(msg, "no route to host"),
+		strings.Contains(msg, "network is unreachable"),
+		strings.Contains(msg, "host is down"),
+		strings.Contains(msg, "tls"),
+		strings.Contains(msg, "x509"):
+		return "network"
+	// Only classify as rate-limit when there's a *real* rate-limit signal —
+	// HTTP 429, an explicit "rate limit" phrase, "too many requests", or a
+	// Retry-After header. A circuit breaker that opened because the TCP dial
+	// kept failing is NOT a rate-limit problem.
+	case strings.Contains(msg, "http 429"),
+		strings.Contains(msg, "too many requests"),
+		strings.Contains(msg, "rate limit"),
+		strings.Contains(msg, "rate-limit"),
+		strings.Contains(msg, "retry-after"):
 		return "rate_limit"
 	case strings.Contains(msg, "parse filtered"), strings.Contains(msg, "parse summary"), strings.Contains(msg, "parser"):
 		return "parser"
-	case strings.Contains(msg, "transport error"), strings.Contains(msg, "connection refused"), strings.Contains(msg, "no such host"), strings.Contains(msg, "dial tcp"), strings.Contains(msg, "tls"):
+	// Generic transport bucket: circuit breakers triggered by repeated
+	// transport failures (without an explicit rate-limit signal) land here.
+	case strings.Contains(msg, "retry circuit breaker opened"),
+		strings.Contains(msg, "transport error"),
+		strings.Contains(msg, "dial tcp"),
+		strings.Contains(msg, "i/o timeout"),
+		strings.Contains(msg, "broken pipe"),
+		strings.Contains(msg, "connection reset"):
 		return "network"
 	case strings.Contains(msg, "http 4"), strings.Contains(msg, "http 5"), strings.Contains(msg, "start checks failed"), strings.Contains(msg, "get summary failed"), strings.Contains(msg, "poll failed"):
 		return "api"
@@ -6865,6 +6900,14 @@ function initTooltips() {
 		"quiet_hours":         strings.TrimSpace(cfg.QuietHours),
 		"maintenance_windows": strings.Join(cfg.MaintenanceWindows, ","),
 	}
+	if hn, err := os.Hostname(); err == nil && strings.TrimSpace(hn) != "" {
+		reportMeta["hostname"] = hn
+	}
+	schedulerSource := strings.TrimSpace(os.Getenv("NCC_SCHEDULER_SOURCE"))
+	if schedulerSource == "" {
+		schedulerSource = "manual"
+	}
+	reportMeta["scheduler_source"] = schedulerSource
 	if aggDataURL != "" {
 		reportMeta["aggregated_data_sidecar"] = aggDataURL
 		reportMeta["aggregated_rows"] = strconv.Itoa(len(aggRows))

@@ -1,8 +1,9 @@
-import { lazy, Suspense, useEffect, useRef } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   BgColorsOutlined,
   BarChartOutlined,
   DashboardOutlined,
+  PlayCircleOutlined,
   SettingOutlined,
   ThunderboltOutlined,
   WifiOutlined,
@@ -11,8 +12,8 @@ import { Button, Dropdown, Layout, Spin, Tooltip } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { THEME_OPTIONS, useAppTheme, type AppThemeSelection } from "./theme";
-import { api } from "./api/client";
-import type { RunActiveData } from "./api/types";
+import { api, ApiError } from "./api/client";
+import type { RunActiveData, RunConflictData } from "./api/types";
 import { notify, notifyError } from "./notify";
 
 const { Header, Content } = Layout;
@@ -123,6 +124,19 @@ function BrandVersionTag({
   );
 }
 
+/** Format milliseconds as "5m 23s" / "1h 12m 4s" / "42s". Mirrors the helper
+ *  used by the Settings → Runs section so the header pill reads the same way. */
+function formatElapsedShort(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "0s";
+  const totalSec = Math.floor(ms / 1000);
+  const s = totalSec % 60;
+  const m = Math.floor(totalSec / 60) % 60;
+  const h = Math.floor(totalSec / 3600);
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
 function HeaderTriggerRunButton() {
   const queryClient = useQueryClient();
   const active = useQuery({
@@ -140,9 +154,26 @@ function HeaderTriggerRunButton() {
   const startMsRef = useRef<number | null>(null);
   const wasActiveRef = useRef<boolean | null>(null);
 
+  // Tick once per second while active so the rendered "Running · Xs" label
+  // updates smoothly even though the polled `active` data is only refreshed
+  // every 3s. Mirrors RunsSection's elapsed-tick.
+  const [, setElapsedTick] = useState(0);
+  useEffect(() => {
+    if (!isActive) return;
+    const id = window.setInterval(() => setElapsedTick((n) => n + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [isActive]);
+
   // Detect transitions and emit lifecycle toasts mirroring the Runs page.
   useEffect(() => {
     if (wasActiveRef.current === null) {
+      // First poll: if a run was already in progress when the page loaded
+      // (e.g. user refreshed mid-run), seed startMsRef from the API so the
+      // header pill can display elapsed time without waiting for the next
+      // transition.
+      if (isActive && active.data?.started_at) {
+        startMsRef.current = new Date(active.data.started_at).getTime();
+      }
       wasActiveRef.current = isActive;
       return;
     }
@@ -204,20 +235,50 @@ function HeaderTriggerRunButton() {
       void active.refetch();
     } catch (e) {
       notify.close(RUN_TOAST_KEY);
+      // If the backend rejected because a run is already in flight, render a
+      // structured warning toast with the running run's start time, elapsed
+      // duration, PID and runner log path instead of a generic error.
+      if (e instanceof ApiError && e.status === 409 && e.data && typeof e.data === "object") {
+        const d = e.data as Partial<RunConflictData>;
+        const startedAt = d.started_at ? new Date(d.started_at).toLocaleString() : "—";
+        const elapsed = d.elapsed_human || (d.elapsed_seconds != null ? `${d.elapsed_seconds}s` : "—");
+        const lines: string[] = [
+          `Started: ${startedAt}`,
+          `Elapsed: ${elapsed}`,
+        ];
+        if (d.pid && d.pid > 0) lines.push(`PID: ${d.pid}`);
+        if (d.overdue) lines.push("Status: exceeded expected duration");
+        if (d.hint) lines.push(d.hint);
+        notify.warning({
+          message: "Cannot start another run — one is already in progress",
+          description: lines.join(" · "),
+          duration: 10,
+        });
+        void active.refetch();
+        return;
+      }
       notifyError(e, "Failed to trigger run");
     }
   };
 
+  // While a run is active, show a spinning <PlayCircleOutlined /> + live
+  // elapsed time so the header matches the "Running · 5m 23s" pill rendered
+  // on Settings → Runs. When idle, show the lightning bolt + "Trigger".
+  const elapsedMs = isActive && startMsRef.current ? Date.now() - startMsRef.current : 0;
+  const tooltipTitle = isActive
+    ? `A run is currently in progress · ${formatElapsedShort(elapsedMs)} elapsed`
+    : "Trigger NCC run with the active config";
+
   return (
-    <Tooltip title={isActive ? "A run is currently in progress" : "Trigger NCC run with the active config"}>
+    <Tooltip title={tooltipTitle}>
       <Button
         type={isActive ? "default" : "primary"}
-        icon={<ThunderboltOutlined spin={isActive} />}
+        icon={isActive ? <PlayCircleOutlined spin /> : <ThunderboltOutlined />}
         onClick={triggerNow}
         disabled={isActive}
-        className="header-trigger-btn"
+        className={`header-trigger-btn${isActive ? " header-trigger-btn-running" : ""}`}
       >
-        {isActive ? "Running…" : "Trigger"}
+        {isActive ? `Running · ${formatElapsedShort(elapsedMs)}` : "Trigger"}
       </Button>
     </Tooltip>
   );

@@ -158,12 +158,16 @@ export function JsonOutputsSection({ onError }: Props) {
         </Space>
         <Space size={6}>
           <Input
+            id="json-outputs-filter"
+            name="json-filter"
+            aria-label="Filter JSON output lines"
             allowClear
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Filter lines…"
             prefix={<SearchOutlined />}
             style={{ width: 220 }}
+            autoComplete="off"
           />
           <Tooltip title="Copy JSON">
             <Button icon={<CopyOutlined />} onClick={copy} />
