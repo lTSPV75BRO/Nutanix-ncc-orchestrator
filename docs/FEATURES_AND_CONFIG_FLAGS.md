@@ -2,7 +2,7 @@
 
 Comprehensive reference for NCC Orchestrator features, configuration keys, and CLI flags.
 
-> Scope note (v1): this repository branch is Go-only for runtime components. The v2 API/UI servers and React frontend are intentionally not part of this scope.
+> Scope: covers the runtime configuration of the `ncc-orchestrator` CLI. For the v2 API/UI servers and React frontend, see [`../README.md`](../README.md) and [`../docs/ARCHITECTURE_AND_HANDOVER.md`](./ARCHITECTURE_AND_HANDOVER.md). For a ready-to-edit YAML template, see [`../example_config.yaml`](../example_config.yaml).
 
 ## 1) What this tool does
 
