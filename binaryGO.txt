@@ -6,7 +6,7 @@ if [ -n "${ZSH_VERSION:-}" ]; then setopt nonomatch; fi
 # Note: git revision is picked up automatically by Go's build info (-buildvcs=true,
 # default), surfaced as `gitRevision` inside the binaries. We only thread the
 # `-dirty` suffix into Version so support tickets can spot uncommitted builds.
-export VERSION=2.0.0 STREAM=Release BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ') GO_VER=$(go version | awk '{print $3}') GIT_DIRTY=$(git diff --quiet 2>/dev/null || echo "-dirty"); LDFLAGS="-w -s -X main.Version=${VERSION}${GIT_DIRTY} -X main.BuildDate=${BUILD_DATE} -X main.Stream=${STREAM} -X main.GoVersion=${GO_VER}"; mkdir -p dist
+export VERSION=2.0.1 STREAM=Release BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ') GO_VER=$(go version | awk '{print $3}') GIT_DIRTY=$(git diff --quiet 2>/dev/null || echo "-dirty"); export LDFLAGS="-w -s -X main.Version=${VERSION}${GIT_DIRTY} -X main.BuildDate=${BUILD_DATE} -X main.Stream=${STREAM} -X main.GoVersion=${GO_VER}"; mkdir -p dist
 
 # 1) Preflight: module integrity, vet, unit tests, frontend typecheck. Fails fast.
 go mod download && go mod verify && go vet ./... && go test ./cmd/... ./... -count=1 -short 2>&1 | tail -20 && (cd frontend && npm ci && npx tsc --noEmit -p tsconfig.json) && echo "PREFLIGHT_OK"
@@ -28,7 +28,15 @@ cp example_config.yaml dist/ 2>/dev/null; [ -f RELEASE_NOTES_v${VERSION}.md ] &&
 rm -rf dist/.stack && mkdir -p dist/.stack && for goos in linux darwin windows; do for goarch in amd64 arm64; do root="dist/.stack/${goos}-${goarch}"; rm -rf "$root"; mkdir -p "$root/bin"; ext=""; [ "$goos" = "windows" ] && ext=".exe"; cp "dist/ncc-orchestrator-${goos}-${goarch}${ext}" "$root/bin/" || exit 1; cp "dist/ncc-api-server-${goos}-${goarch}${ext}" "$root/bin/" || exit 1; cp "dist/ncc-ui-server-${goos}-${goarch}${ext}" "$root/bin/" || exit 1; cp -R dist/frontend-dist "$root/frontend-dist"; [ -f dist/example_config.yaml ] && cp dist/example_config.yaml "$root/"; if [ "$goos" = "windows" ]; then (cd "$root" && zip -qr "../../ncc-v2-stack-${goos}-${goarch}.zip" bin frontend-dist example_config.yaml 2>/dev/null) || (cd "$root" && zip -qr "../../ncc-v2-stack-${goos}-${goarch}.zip" .); else (cd "$root" && tar -czf "../../ncc-v2-stack-${goos}-${goarch}.tar.gz" bin frontend-dist $([ -f example_config.yaml ] && echo example_config.yaml)); fi; done; done
 
 # 7) Generate checksums for every publishable release asset (macOS/BSD + GNU fallback).
-(cd dist && : > checksums.txt && for f in ncc-orchestrator-* ncc-api-server-* ncc-ui-server-* ncc-v2-stack-* example_config.yaml RELEASE_NOTES_v${VERSION}.md; do [ -e "$f" ] || continue; (shasum -a 256 "$f" 2>/dev/null || sha256sum "$f") >> checksums.txt; done; sort -o checksums.txt checksums.txt)
+# IMPORTANT: standalone ncc-api-server-* and ncc-ui-server-* binaries are intentionally
+# EXCLUDED from publishable assets (and therefore from this manifest). v1.x self-updaters
+# pick the first asset whose name contains the GOOS/GOARCH strings, and would silently
+# overwrite the orchestrator binary with the api-server binary if those standalone files
+# were published alongside ncc-orchestrator-*. See pickAssetForPlatform tests + the
+# v2.0.0 known-issues section in RELEASE_NOTES_v2.0.0.md. The api-server and ui-server
+# binaries continue to ship inside ncc-v2-stack-* archives where the v1.x updater cannot
+# see them (archive assets take the install-by-extraction code path).
+(cd dist && : > checksums.txt && for f in ncc-orchestrator-* ncc-v2-stack-* example_config.yaml RELEASE_NOTES_v${VERSION}.md; do [ -e "$f" ] || continue; (shasum -a 256 "$f" 2>/dev/null || sha256sum "$f") >> checksums.txt; done; sort -o checksums.txt checksums.txt)
 
 # 8) Verification: print the 6 stack archives, list cross-arch binaries, then assert counts.
 ls -1 dist/ncc-v2-stack-* 2>/dev/null; ls -1 dist/ncc-orchestrator-* dist/ncc-api-server-* dist/ncc-ui-server-* 2>/dev/null

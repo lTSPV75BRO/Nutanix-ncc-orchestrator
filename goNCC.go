@@ -7960,7 +7960,7 @@ var (
 func init() {
 	// Defaults
 	if Version == "" {
-		Version = "2.0.0"
+		Version = "2.0.1"
 	}
 	if BuildDate == "" {
 		BuildDate = "unknown"
@@ -8157,22 +8157,90 @@ func fetchGitHubReleases(repo string, client *http.Client) ([]githubRelease, err
 }
 
 func pickAssetForCurrentPlatform(rel githubRelease) (downloadURL string, assetName string) {
-	goos := runtime.GOOS
-	goarch := runtime.GOARCH
+	return pickAssetForPlatform(rel, runtime.GOOS, runtime.GOARCH, currentExecutableBasename())
+}
+
+// currentExecutableBasename returns the basename of the running executable
+// with any ".exe" suffix stripped, lowercased. Empty string if it cannot be
+// determined (callers fall back to the legacy first-match behavior).
+func currentExecutableBasename() string {
+	p, err := os.Executable()
+	if err != nil || p == "" {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSuffix(filepath.Base(p), ".exe"))
+}
+
+// pickAssetForPlatform selects the most appropriate release asset for the
+// given GOOS/GOARCH and the running executable's basename (e.g.
+// "ncc-orchestrator"). Preference order:
+//
+//  1. Non-archive asset whose name starts with "<exeBase>-" AND contains both
+//     goos and goarch. This guards against silent corruption when a release
+//     ships multiple binaries per platform (regression that affected the
+//     v1.x→v2.0.0 self-updater, see RELEASE_NOTES_v2.0.0 known-issues
+//     section).
+//  2. Any other non-archive asset whose name contains both goos and goarch
+//     (legacy v1.x behavior, preserved for binaries renamed by the user or
+//     custom forks).
+//  3. Archive asset (.tar.gz / .zip) whose name contains both goos and
+//     goarch, returned for inspection by the caller — the install path then
+//     emits a "download and extract" hint rather than overwriting.
+//
+// Returns empty strings when no asset matches.
+func pickAssetForPlatform(rel githubRelease, goos, goarch, exeBase string) (downloadURL string, assetName string) {
+	goos = strings.ToLower(strings.TrimSpace(goos))
+	goarch = strings.ToLower(strings.TrimSpace(goarch))
+	exeBase = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(exeBase), ".exe"))
+
+	var (
+		prefixedURL, prefixedName string
+		fallbackURL, fallbackName string
+		archiveURL, archiveName   string
+	)
 	for _, a := range rel.Assets {
 		name := strings.ToLower(a.Name)
-		if strings.Contains(name, goos) && strings.Contains(name, goarch) {
-			if isArchiveAssetURL(a.BrowserDownloadURL) {
-				if downloadURL == "" {
-					downloadURL = a.BrowserDownloadURL
-					assetName = a.Name
+		if !strings.Contains(name, goos) || !strings.Contains(name, goarch) {
+			continue
+		}
+		isArchive := isArchiveAssetURL(a.BrowserDownloadURL)
+
+		if exeBase != "" && strings.HasPrefix(name, exeBase+"-") {
+			if isArchive {
+				if archiveURL == "" {
+					archiveURL = a.BrowserDownloadURL
+					archiveName = a.Name
 				}
 				continue
 			}
-			return a.BrowserDownloadURL, a.Name
+			if prefixedURL == "" {
+				prefixedURL = a.BrowserDownloadURL
+				prefixedName = a.Name
+			}
+			continue
+		}
+
+		if isArchive {
+			if archiveURL == "" {
+				archiveURL = a.BrowserDownloadURL
+				archiveName = a.Name
+			}
+			continue
+		}
+
+		if fallbackURL == "" {
+			fallbackURL = a.BrowserDownloadURL
+			fallbackName = a.Name
 		}
 	}
-	return downloadURL, assetName
+
+	if prefixedURL != "" {
+		return prefixedURL, prefixedName
+	}
+	if fallbackURL != "" {
+		return fallbackURL, fallbackName
+	}
+	return archiveURL, archiveName
 }
 
 func downloadBinaryURL(client *http.Client, downloadURL string) ([]byte, error) {

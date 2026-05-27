@@ -4,7 +4,34 @@ All notable changes to the Nutanix NCC Orchestrator are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-**Release checklist (for maintainers):** Ensure [`VERSION`](VERSION) matches the intended tag; default `main.Version` in code is `2.0.0` when not set via ldflags. Run `go vet ./...`, `go test ./...`, and `go build ./...` (and `go build ./cmd/ncc-mcp-server`). Confirm `k8s/` and `helm/` image tags match `VERSION`. Tag `v2.0.0` and create a GitHub release using [RELEASE_NOTES_v2.0.0.md](RELEASE_NOTES_v2.0.0.md); attach binaries and `checksums.txt` per [docs/RELEASE_CHECKSUMS.md](docs/RELEASE_CHECKSUMS.md) so `--update` can verify downloads.
+**Release checklist (for maintainers):** Ensure [`VERSION`](VERSION) matches the intended tag; default `main.Version` in code is `2.0.1` when not set via ldflags. Run `go vet ./...`, `go test ./...`, and `go build ./...` (and `go build ./cmd/ncc-mcp-server`). Confirm `k8s/` and `helm/` image tags match `VERSION`. Tag `v2.0.1` and create a GitHub release using the matching `RELEASE_NOTES_v*.md`; attach `ncc-orchestrator-*` standalone binaries, `ncc-v2-stack-*` archives, and `checksums.txt` only — **do not** attach standalone `ncc-api-server-*` / `ncc-ui-server-*` binaries (the v1.x self-updater would silently mis-select them; see [2.0.0] known-issue note below and the v2.0.1 selector fix).
+
+---
+
+## [2.0.1] - 2026-05-27
+
+Patch release. Single user-visible change: a critical fix for the `update --allow-major-upgrade` path that affected users moving from v1.x to v2.0.0. **All v1.x users should upgrade via this release rather than v2.0.0.**
+
+### Fixed
+
+- **`pickAssetForCurrentPlatform` regression on multi-binary releases** ([#9]) — When a GitHub release shipped multiple binaries per platform (e.g. `ncc-orchestrator-…`, `ncc-api-server-…`, `ncc-ui-server-…`), the v1.x self-updater selected the first asset whose name contained the GOOS+GOARCH strings. GitHub returns assets alphabetically, so `ncc-api-server-…` was picked and silently overwrote `ncc-orchestrator` with the api-server binary. The api-server boots an HTTP listener on `:8081` regardless of CLI arguments, so users running `update --check` or any subsequent command would see the listener start instead of the expected command.
+  - The selector now prefers assets whose name starts with the running executable's basename (e.g. `ncc-orchestrator-*`) before falling back to the legacy first-match behavior (preserves compatibility with renamed binaries and forks).
+  - Archive assets (`.tar.gz` / `.zip`) continue to take the "download and extract" code path rather than overwriting in place.
+  - Locked in by four new regression tests in `goNCC_test.go` — `TestPickAssetForPlatform_PrefersExeBasenamePrefix` (7 sub-cases), `TestPickAssetForPlatform_ArchiveOnlyRelease`, `TestPickAssetForPlatform_NoMatch`, `TestPickAssetForPlatform_TrimmedV200Release`.
+- **v2.0.0 release-asset layout hotfix (2026-05-27 19:35Z)** — As an immediate mitigation for users still on v1.x updaters, the 12 standalone `ncc-api-server-*` and `ncc-ui-server-*` assets were removed from the v2.0.0 release; the api-server and ui-server binaries continue to ship inside `ncc-v2-stack-*` archives. `binaryGO.txt` step 7 was updated to enforce this asset-layout policy at build time (standalone server binaries are intentionally excluded from `checksums.txt` and therefore from publishable assets).
+
+### Changed
+
+- `binaryGO.txt` step 0 now exports `LDFLAGS` so the variable survives across step-by-step shell invocations. (Previously LDFLAGS was a plain shell variable; running steps as separate shell calls would lose the LDFLAGS value and produce binaries with `Stream: dev` and `Build Date: unknown` defaults.)
+- Version metadata bumped to `2.0.1` across `VERSION`, `goNCC.go` (default `Version`), `cmd/ncc-api-server/main.go` (default `Version` + OpenAPI `info.version`), `cmd/ncc-mcp-server/main.go` (`serverVersion`), `helm/ncc-orchestrator/Chart.yaml` (`version` + `appVersion`), `helm/ncc-orchestrator/values.yaml` (`image.tag`), and the three k8s manifests (`api-deployment.yaml`, `ui-deployment.yaml`, `runner-cronjob.yaml`).
+
+### Migration
+
+- **From v1.x:** Run `ncc-orchestrator update --allow-major-upgrade` against v2.0.1 (or v2.0.0 since the hotfix). The fixed selector picks `ncc-orchestrator-*` correctly.
+- **From v2.0.0:** Run `ncc-orchestrator update`. No major upgrade flag needed.
+- **From a corrupted v2.0.0 install** (api-server downloaded in place of orchestrator): Re-download `ncc-orchestrator-<os>-<arch>` directly from the v2.0.1 release page or run the recovery `curl` snippet documented in `RELEASE_NOTES_v2.0.0.md` → Known issues.
+
+[#9]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/issues/9
 
 ---
 

@@ -1,8 +1,40 @@
 # Release notes - v2.0.0
 
 **Date:** 2026-05-05
+**Last asset update:** 2026-05-27 (asset-layout hotfix; see [Known issues](#known-issues-post-publication-hotfix))
 
 This release finalizes the v2.0.0 production baseline for the full v2 stack (orchestrator runtime + API + UI + UI-integrated proxy) and aligns release/version assets across docs, manifests, and packaging.
+
+> **Important for v1.x users:** Do **not** run `ncc-orchestrator update --allow-major-upgrade` against this release with a v1.x binary built before 2026-05-27. The v1.x self-updater contains a release-asset selector bug that picks the wrong binary when a release ships multiple binaries per platform. See [Known issues](#known-issues-post-publication-hotfix) below for the mitigation already applied to this release and recovery instructions if you ran the buggy path.
+
+## Known issues (post-publication hotfix)
+
+**Issue:** The v1.x self-updater (`pickAssetForCurrentPlatform` in `goNCC.go`) selects the first release asset whose name contains both the GOOS and GOARCH strings. v2.0.0 originally shipped three binaries per platform (`ncc-orchestrator-…`, `ncc-api-server-…`, `ncc-ui-server-…`); GitHub returns assets in alphabetical order, so the selector matched `ncc-api-server-…` first and silently overwrote the orchestrator binary with the api-server binary. The replaced binary boots an HTTP listener on `:8081` regardless of CLI arguments.
+
+**Impact:** Any v1.x user who ran `ncc-orchestrator update --allow-major-upgrade` against v2.0.0 between 2026-05-27 19:05Z and 2026-05-27 19:35Z received an api-server binary in place of the orchestrator. Stack archives (`ncc-v2-stack-*`) and `ncc-orchestrator-…` standalone assets were always correct.
+
+**Mitigation applied to this release (2026-05-27 19:35Z):** The 12 standalone `ncc-api-server-*` and `ncc-ui-server-*` assets have been removed from the v2.0.0 release. The v1.x selector now picks `ncc-orchestrator-*` as the first match. The api-server and ui-server binaries remain available **inside the stack archives** (`ncc-v2-stack-{linux,darwin,windows}-{amd64,arm64}.{tar.gz,zip}`) — extract them from `bin/` inside the archive.
+
+**Permanent fix:** Shipped as v2.0.1 — `pickAssetForCurrentPlatform` now prefers assets whose name starts with the running executable's basename, so future multi-binary releases cannot trigger the same regression.
+
+**Recovery for users who already ran the buggy update:** Re-download the correct orchestrator binary directly:
+
+```bash
+# Replace darwin-arm64 with your platform
+curl -fL -o ncc-orchestrator \
+  https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/v2.0.0/ncc-orchestrator-darwin-arm64
+chmod +x ncc-orchestrator
+xattr -c ncc-orchestrator 2>/dev/null    # macOS only, clears quarantine
+
+# Verify checksum
+shasum -a 256 ncc-orchestrator
+# expected (darwin-arm64): 9f2361c911912e8a30b96d374a0bfbed2538954027e95488a7b68084d9d0e66f
+# Full manifest: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/v2.0.0/checksums.txt
+
+./ncc-orchestrator version   # should report "Stream: Release" and the canonical SHA
+```
+
+If the recovered binary still misbehaves, inspect its embedded Go buildinfo: `go version -m ./ncc-orchestrator` must show `path goncc` (the orchestrator), **not** `path goncc/cmd/ncc-api-server` (the api-server). If you see the latter, the file is still the wrong asset — re-download.
 
 ## Highlights
 

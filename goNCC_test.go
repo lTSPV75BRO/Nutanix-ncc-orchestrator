@@ -3369,3 +3369,186 @@ func TestExtractCVMIPv4sFromClusterEntity(t *testing.T) {
 		t.Fatalf("extractCVMIPv4sFromClusterEntity = %#v", got)
 	}
 }
+
+// TestPickAssetForPlatform_PrefersExeBasenamePrefix locks in the fix for the
+// v1.x→v2.0.0 self-updater regression where a release that shipped multiple
+// binaries per platform (e.g. ncc-orchestrator-*, ncc-api-server-*,
+// ncc-ui-server-*) caused the first-match selector to pick the wrong asset
+// (alphabetically: api-server) and silently overwrite the orchestrator
+// binary with the api-server binary. See RELEASE_NOTES_v2.0.0 known-issues
+// section.
+func TestPickAssetForPlatform_PrefersExeBasenamePrefix(t *testing.T) {
+	// Asset list mirroring the original (pre-hotfix) v2.0.0 release order,
+	// which is the order GitHub's API returns assets (alphabetical by name).
+	v200Layout := githubRelease{
+		TagName: "v2.0.0",
+		Assets: []githubAsset{
+			{Name: "checksums.txt", BrowserDownloadURL: "https://example.com/checksums.txt"},
+			{Name: "example_config.yaml", BrowserDownloadURL: "https://example.com/example_config.yaml"},
+			{Name: "ncc-api-server-darwin-amd64", BrowserDownloadURL: "https://example.com/ncc-api-server-darwin-amd64"},
+			{Name: "ncc-api-server-darwin-arm64", BrowserDownloadURL: "https://example.com/ncc-api-server-darwin-arm64"},
+			{Name: "ncc-api-server-linux-amd64", BrowserDownloadURL: "https://example.com/ncc-api-server-linux-amd64"},
+			{Name: "ncc-api-server-linux-arm64", BrowserDownloadURL: "https://example.com/ncc-api-server-linux-arm64"},
+			{Name: "ncc-api-server-windows-amd64.exe", BrowserDownloadURL: "https://example.com/ncc-api-server-windows-amd64.exe"},
+			{Name: "ncc-api-server-windows-arm64.exe", BrowserDownloadURL: "https://example.com/ncc-api-server-windows-arm64.exe"},
+			{Name: "ncc-orchestrator-darwin-amd64", BrowserDownloadURL: "https://example.com/ncc-orchestrator-darwin-amd64"},
+			{Name: "ncc-orchestrator-darwin-arm64", BrowserDownloadURL: "https://example.com/ncc-orchestrator-darwin-arm64"},
+			{Name: "ncc-orchestrator-linux-amd64", BrowserDownloadURL: "https://example.com/ncc-orchestrator-linux-amd64"},
+			{Name: "ncc-orchestrator-linux-arm64", BrowserDownloadURL: "https://example.com/ncc-orchestrator-linux-arm64"},
+			{Name: "ncc-orchestrator-windows-amd64.exe", BrowserDownloadURL: "https://example.com/ncc-orchestrator-windows-amd64.exe"},
+			{Name: "ncc-orchestrator-windows-arm64.exe", BrowserDownloadURL: "https://example.com/ncc-orchestrator-windows-arm64.exe"},
+			{Name: "ncc-ui-server-darwin-amd64", BrowserDownloadURL: "https://example.com/ncc-ui-server-darwin-amd64"},
+			{Name: "ncc-ui-server-darwin-arm64", BrowserDownloadURL: "https://example.com/ncc-ui-server-darwin-arm64"},
+			{Name: "ncc-ui-server-linux-amd64", BrowserDownloadURL: "https://example.com/ncc-ui-server-linux-amd64"},
+			{Name: "ncc-ui-server-linux-arm64", BrowserDownloadURL: "https://example.com/ncc-ui-server-linux-arm64"},
+			{Name: "ncc-ui-server-windows-amd64.exe", BrowserDownloadURL: "https://example.com/ncc-ui-server-windows-amd64.exe"},
+			{Name: "ncc-ui-server-windows-arm64.exe", BrowserDownloadURL: "https://example.com/ncc-ui-server-windows-arm64.exe"},
+			{Name: "ncc-v2-stack-darwin-amd64.tar.gz", BrowserDownloadURL: "https://example.com/ncc-v2-stack-darwin-amd64.tar.gz"},
+			{Name: "ncc-v2-stack-darwin-arm64.tar.gz", BrowserDownloadURL: "https://example.com/ncc-v2-stack-darwin-arm64.tar.gz"},
+			{Name: "ncc-v2-stack-linux-amd64.tar.gz", BrowserDownloadURL: "https://example.com/ncc-v2-stack-linux-amd64.tar.gz"},
+			{Name: "ncc-v2-stack-linux-arm64.tar.gz", BrowserDownloadURL: "https://example.com/ncc-v2-stack-linux-arm64.tar.gz"},
+			{Name: "ncc-v2-stack-windows-amd64.zip", BrowserDownloadURL: "https://example.com/ncc-v2-stack-windows-amd64.zip"},
+			{Name: "ncc-v2-stack-windows-arm64.zip", BrowserDownloadURL: "https://example.com/ncc-v2-stack-windows-arm64.zip"},
+		},
+	}
+
+	cases := []struct {
+		name        string
+		goos        string
+		goarch      string
+		exeBase     string
+		wantName    string
+		description string
+	}{
+		{
+			name:        "orchestrator on darwin/arm64 must pick orchestrator binary",
+			goos:        "darwin",
+			goarch:      "arm64",
+			exeBase:     "ncc-orchestrator",
+			wantName:    "ncc-orchestrator-darwin-arm64",
+			description: "regression guard: pre-fix selector wrongly picked ncc-api-server-darwin-arm64",
+		},
+		{
+			name:     "orchestrator on linux/amd64",
+			goos:     "linux",
+			goarch:   "amd64",
+			exeBase:  "ncc-orchestrator",
+			wantName: "ncc-orchestrator-linux-amd64",
+		},
+		{
+			name:     "orchestrator on windows/arm64 (exe suffix tolerated)",
+			goos:     "windows",
+			goarch:   "arm64",
+			exeBase:  "ncc-orchestrator.exe",
+			wantName: "ncc-orchestrator-windows-arm64.exe",
+		},
+		{
+			name:     "api-server invoked directly picks api-server",
+			goos:     "linux",
+			goarch:   "amd64",
+			exeBase:  "ncc-api-server",
+			wantName: "ncc-api-server-linux-amd64",
+		},
+		{
+			name:     "ui-server invoked directly picks ui-server",
+			goos:     "darwin",
+			goarch:   "arm64",
+			exeBase:  "ncc-ui-server",
+			wantName: "ncc-ui-server-darwin-arm64",
+		},
+		{
+			name:        "renamed binary falls back to first non-archive match (legacy behavior)",
+			goos:        "darwin",
+			goarch:      "arm64",
+			exeBase:     "ncc-fork",
+			wantName:    "ncc-api-server-darwin-arm64", // first non-archive that matches; legacy semantics
+			description: "preserves v1.x behavior for forks/renamed binaries",
+		},
+		{
+			name:     "empty exeBase falls back to first non-archive match",
+			goos:     "linux",
+			goarch:   "arm64",
+			exeBase:  "",
+			wantName: "ncc-api-server-linux-arm64",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, gotName := pickAssetForPlatform(v200Layout, tc.goos, tc.goarch, tc.exeBase)
+			if gotName != tc.wantName {
+				t.Fatalf("pickAssetForPlatform(%s/%s, exeBase=%q) = %q; want %q (%s)",
+					tc.goos, tc.goarch, tc.exeBase, gotName, tc.wantName, tc.description)
+			}
+		})
+	}
+}
+
+// TestPickAssetForPlatform_ArchiveOnlyRelease verifies that when only archive
+// assets exist for a platform, the function returns the archive (so the
+// caller can emit a "download and extract" hint rather than overwriting the
+// binary in place).
+func TestPickAssetForPlatform_ArchiveOnlyRelease(t *testing.T) {
+	rel := githubRelease{
+		TagName: "v2.0.0-archives-only",
+		Assets: []githubAsset{
+			{Name: "checksums.txt", BrowserDownloadURL: "https://example.com/checksums.txt"},
+			{Name: "ncc-v2-stack-darwin-arm64.tar.gz", BrowserDownloadURL: "https://example.com/ncc-v2-stack-darwin-arm64.tar.gz"},
+			{Name: "ncc-v2-stack-linux-amd64.tar.gz", BrowserDownloadURL: "https://example.com/ncc-v2-stack-linux-amd64.tar.gz"},
+		},
+	}
+	url, name := pickAssetForPlatform(rel, "darwin", "arm64", "ncc-orchestrator")
+	if name != "ncc-v2-stack-darwin-arm64.tar.gz" {
+		t.Fatalf("archive-only release should surface .tar.gz, got name=%q url=%q", name, url)
+	}
+	if !isArchiveAssetURL(url) {
+		t.Fatalf("expected isArchiveAssetURL(%q) = true", url)
+	}
+}
+
+// TestPickAssetForPlatform_NoMatch ensures empty strings are returned when no
+// asset matches the requested platform.
+func TestPickAssetForPlatform_NoMatch(t *testing.T) {
+	rel := githubRelease{
+		TagName: "v2.0.0-darwin-only",
+		Assets: []githubAsset{
+			{Name: "ncc-orchestrator-darwin-arm64", BrowserDownloadURL: "https://example.com/x"},
+		},
+	}
+	url, name := pickAssetForPlatform(rel, "linux", "amd64", "ncc-orchestrator")
+	if url != "" || name != "" {
+		t.Fatalf("expected empty results for unsupported platform; got url=%q name=%q", url, name)
+	}
+}
+
+// TestPickAssetForPlatform_TrimmedV200Release simulates the post-hotfix v2.0.0
+// release (12 standalone api-server/ui-server assets removed). The v1.x
+// selector must now find ncc-orchestrator-* as the first match purely by
+// alphabetical order — the test pins this asset-layout policy.
+func TestPickAssetForPlatform_TrimmedV200Release(t *testing.T) {
+	rel := githubRelease{
+		TagName: "v2.0.0-trimmed",
+		Assets: []githubAsset{
+			{Name: "checksums.txt", BrowserDownloadURL: "https://example.com/checksums.txt"},
+			{Name: "example_config.yaml", BrowserDownloadURL: "https://example.com/example_config.yaml"},
+			{Name: "ncc-orchestrator-darwin-amd64", BrowserDownloadURL: "https://example.com/ncc-orchestrator-darwin-amd64"},
+			{Name: "ncc-orchestrator-darwin-arm64", BrowserDownloadURL: "https://example.com/ncc-orchestrator-darwin-arm64"},
+			{Name: "ncc-orchestrator-linux-amd64", BrowserDownloadURL: "https://example.com/ncc-orchestrator-linux-amd64"},
+			{Name: "ncc-orchestrator-linux-arm64", BrowserDownloadURL: "https://example.com/ncc-orchestrator-linux-arm64"},
+			{Name: "ncc-orchestrator-windows-amd64.exe", BrowserDownloadURL: "https://example.com/ncc-orchestrator-windows-amd64.exe"},
+			{Name: "ncc-orchestrator-windows-arm64.exe", BrowserDownloadURL: "https://example.com/ncc-orchestrator-windows-arm64.exe"},
+			{Name: "ncc-v2-stack-darwin-amd64.tar.gz", BrowserDownloadURL: "https://example.com/ncc-v2-stack-darwin-amd64.tar.gz"},
+			{Name: "ncc-v2-stack-darwin-arm64.tar.gz", BrowserDownloadURL: "https://example.com/ncc-v2-stack-darwin-arm64.tar.gz"},
+		},
+	}
+	// Even with the legacy empty-exeBase code path, the trimmed layout
+	// resolves correctly because no other binary collides alphabetically.
+	_, name := pickAssetForPlatform(rel, "darwin", "arm64", "")
+	if name != "ncc-orchestrator-darwin-arm64" {
+		t.Fatalf("trimmed layout should yield orchestrator binary even with empty exeBase; got %q", name)
+	}
+	// And with the fix's prefix-match path:
+	_, name2 := pickAssetForPlatform(rel, "darwin", "arm64", "ncc-orchestrator")
+	if name2 != "ncc-orchestrator-darwin-arm64" {
+		t.Fatalf("trimmed layout + exeBase should yield orchestrator binary; got %q", name2)
+	}
+}

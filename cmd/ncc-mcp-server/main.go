@@ -20,7 +20,7 @@ import (
 
 const (
 	serverName    = "ncc-orchestrator"
-	serverVersion = "2.0.0"
+	serverVersion = "2.0.1"
 )
 
 // orchestratorBin returns the path to the ncc-orchestrator binary (env, same-dir, or PATH).
