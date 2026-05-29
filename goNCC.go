@@ -8726,6 +8726,46 @@ func firstExistingBinary(searchDirs []string, base string) string {
 	return ""
 }
 
+// defaultV2InstallDir returns the install directory used by run-time consumer
+// commands (v2-check, v2-start, v2-stop, uninstall) when the user does not
+// pass an explicit --install-dir. The detection mirrors
+// resolvePackageInstallDir so that running from inside an extracted/
+// bootstrapped stack layout (`<X>/bin/<exe>`) "just works" without forcing
+// the user to type `--install-dir <X>` every time.
+//
+// Resolution:
+//
+//  1. If os.Executable() is at <X>/bin/<exe> AND <X> contains the v2 layout
+//     (frontend-dist/ present, or bin/ncc-api-server present under either
+//     canonical or platform-suffixed naming) → return <X>.
+//  2. Otherwise → return ".ncc-v2" (the historic default; preserves backward
+//     compatibility with existing scripts, docs, and CI invocations that
+//     bootstrap into ./.ncc-v2 from a project root).
+func defaultV2InstallDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ".ncc-v2"
+	}
+	return defaultV2InstallDirForExeDir(filepath.Dir(exe))
+}
+
+// defaultV2InstallDirForExeDir is the testable inner of defaultV2InstallDir.
+// Split out so unit tests can drive the helper without having to redirect
+// os.Executable() at runtime.
+func defaultV2InstallDirForExeDir(exeDir string) string {
+	if exeDir == "" || filepath.Base(exeDir) != "bin" {
+		return ".ncc-v2"
+	}
+	parent := filepath.Dir(exeDir)
+	if existingDir(filepath.Join(parent, "frontend-dist")) {
+		return parent
+	}
+	if existingBinaryInInstallDir(parent, "ncc-api-server") != "" {
+		return parent
+	}
+	return ".ncc-v2"
+}
+
 func resolveV2RuntimeLayout(installDir string) (string, string, string, string) {
 	installDir = strings.TrimSpace(installDir)
 	if installDir == "" {
@@ -8958,10 +8998,30 @@ func canBindListenAddress(listenAddr string) error {
 func runV2Check(opts v2StartOptions) error {
 	installDir := strings.TrimSpace(opts.InstallDir)
 	if installDir == "" {
-		installDir = ".ncc-v2"
+		installDir = defaultV2InstallDir()
 	}
 	if absInstallDir, err := filepath.Abs(installDir); err == nil {
 		installDir = absInstallDir
+	}
+	// Secondary paths default to <install-dir>/<conventional-name> when
+	// the user did not pass an explicit value. This makes `v2-check` (and
+	// `v2-start`) "just work" when run from inside a bootstrapped stack
+	// layout: ./bin/ncc-orchestrator v2-check now finds config, output,
+	// log, and token paths colocated with the install instead of relative
+	// to bin/.
+	failures := make([]string, 0)
+	warnings := make([]string, 0)
+	if strings.TrimSpace(opts.ConfigPath) == "" {
+		opts.ConfigPath = filepath.Join(installDir, "config.yaml")
+	}
+	if strings.TrimSpace(opts.OutputDir) == "" {
+		opts.OutputDir = filepath.Join(installDir, "outputfiles")
+	}
+	if strings.TrimSpace(opts.LogDir) == "" {
+		opts.LogDir = filepath.Join(installDir, "nccfiles")
+	}
+	if strings.TrimSpace(opts.TokenFile) == "" {
+		opts.TokenFile = filepath.Join(installDir, ".ncc-api-token")
 	}
 	if absConfigPath, err := filepath.Abs(opts.ConfigPath); err == nil {
 		opts.ConfigPath = absConfigPath
@@ -8975,10 +9035,19 @@ func runV2Check(opts v2StartOptions) error {
 	if absTokenPath, err := filepath.Abs(opts.TokenFile); err == nil {
 		opts.TokenFile = absTokenPath
 	}
+	// If config.yaml is missing but the install ships an example_config.yaml
+	// (every published v2 stack does), fall back to it with a warning rather
+	// than failing v2-check outright. This is the common "user just extracted
+	// the stack and ran v2-check" path.
+	if _, err := os.Stat(opts.ConfigPath); err != nil {
+		exampleCfg := filepath.Join(installDir, "example_config.yaml")
+		if _, exErr := os.Stat(exampleCfg); exErr == nil {
+			warnings = append(warnings, fmt.Sprintf("config-path %s not found; falling back to %s for the v2-check (replace with your own config before running v2-start in production)", opts.ConfigPath, exampleCfg))
+			opts.ConfigPath = exampleCfg
+		}
+	}
 	opts.OrchestratorBin = resolveV2OrchestratorBin(opts.OrchestratorBin)
 	apiBin, uiBin, frontDir, _ := resolveV2RuntimeLayout(installDir)
-	failures := make([]string, 0)
-	warnings := make([]string, 0)
 	if !isExecutableFile(opts.OrchestratorBin) {
 		failures = append(failures, fmt.Sprintf("orchestrator-bin not executable: %s", opts.OrchestratorBin))
 	}
@@ -9142,7 +9211,7 @@ func startSelfHealSupervisor(serviceName string, bin string, args []string, pidP
 func runV2Stop(opts v2StopOptions) error {
 	installDir := strings.TrimSpace(opts.InstallDir)
 	if installDir == "" {
-		installDir = ".ncc-v2"
+		installDir = defaultV2InstallDir()
 	}
 	stopTimeout := opts.StopTimeout
 	if stopTimeout <= 0 {
@@ -9233,7 +9302,7 @@ func runUninstallCommand(cmd *cobra.Command, args []string) error {
 		RemoveV2Runtime: removeV2Runtime,
 	}
 	if opts.InstallDir == "" {
-		opts.InstallDir = ".ncc-v2"
+		opts.InstallDir = defaultV2InstallDir()
 	}
 	if opts.TaskName == "" {
 		opts.TaskName = "ncc-orchestrator"
@@ -9349,7 +9418,7 @@ func runUninstallCommand(cmd *cobra.Command, args []string) error {
 func runV2Start(opts v2StartOptions) error {
 	installDir := strings.TrimSpace(opts.InstallDir)
 	if installDir == "" {
-		installDir = ".ncc-v2"
+		installDir = defaultV2InstallDir()
 	}
 	if absInstallDir, err := filepath.Abs(installDir); err == nil {
 		installDir = absInstallDir
@@ -9380,14 +9449,17 @@ func runV2Start(opts v2StartOptions) error {
 		}
 	}
 
+	// Default the runtime paths relative to the resolved install-dir (so
+	// `bin/ncc-orchestrator v2-start` from inside a stack picks colocated
+	// config/outputs/logs instead of paths under bin/).
 	if strings.TrimSpace(opts.ConfigPath) == "" {
-		opts.ConfigPath = "config.yaml"
+		opts.ConfigPath = filepath.Join(installDir, "config.yaml")
 	}
 	if strings.TrimSpace(opts.OutputDir) == "" {
-		opts.OutputDir = "outputfiles"
+		opts.OutputDir = filepath.Join(installDir, "outputfiles")
 	}
 	if strings.TrimSpace(opts.LogDir) == "" {
-		opts.LogDir = "nccfiles"
+		opts.LogDir = filepath.Join(installDir, "nccfiles")
 	}
 	if strings.TrimSpace(opts.OrchestratorBin) == "" {
 		opts.OrchestratorBin = "./ncc-orchestrator"
@@ -9400,7 +9472,7 @@ func runV2Start(opts v2StartOptions) error {
 		opts.UIListen = ":8080"
 	}
 	if strings.TrimSpace(opts.TokenFile) == "" {
-		opts.TokenFile = ".ncc-api-token"
+		opts.TokenFile = filepath.Join(installDir, ".ncc-api-token")
 	}
 	if absConfigPath, err := filepath.Abs(opts.ConfigPath); err == nil {
 		opts.ConfigPath = absConfigPath
@@ -9413,6 +9485,16 @@ func runV2Start(opts v2StartOptions) error {
 	}
 	if absTokenPath, err := filepath.Abs(opts.TokenFile); err == nil {
 		opts.TokenFile = absTokenPath
+	}
+	// Same example_config.yaml fallback as v2-check: if config.yaml is
+	// missing but the install ships an example, prefer that with a
+	// stderr warning rather than failing on a fresh extraction.
+	if _, err := os.Stat(opts.ConfigPath); err != nil {
+		exampleCfg := filepath.Join(installDir, "example_config.yaml")
+		if _, exErr := os.Stat(exampleCfg); exErr == nil {
+			fmt.Fprintf(os.Stderr, "warning: config-path %s not found; falling back to %s (replace with your own config before production use)\n", opts.ConfigPath, exampleCfg)
+			opts.ConfigPath = exampleCfg
+		}
 	}
 	if cfg, err := loadConfigForValidation(opts.ConfigPath); err == nil {
 		pwd := strings.TrimSpace(cfg.Password)
@@ -14232,11 +14314,11 @@ Use --self-heal with --detach to auto-restart services on unexpected exits.`,
 			})
 		},
 	}
-	v2StartCmd.Flags().String("install-dir", ".ncc-v2", "Installation directory used by v2-bootstrap")
-	v2StartCmd.Flags().String("config-path", "config.yaml", "Config file path passed to API server")
-	v2StartCmd.Flags().String("output-dir", "outputfiles", "Output directory passed to API server")
-	v2StartCmd.Flags().String("log-dir", "nccfiles", "Log directory passed to API server")
-	v2StartCmd.Flags().String("orchestrator-bin", "./ncc-orchestrator", "Path to ncc-orchestrator binary used by API server")
+	v2StartCmd.Flags().String("install-dir", "", "Installation directory used by v2-bootstrap (default: auto-detect from running binary's stack layout, fallback .ncc-v2)")
+	v2StartCmd.Flags().String("config-path", "", "Config file path passed to API server (default <install-dir>/config.yaml; falls back to <install-dir>/example_config.yaml with a warning when missing)")
+	v2StartCmd.Flags().String("output-dir", "", "Output directory passed to API server (default <install-dir>/outputfiles)")
+	v2StartCmd.Flags().String("log-dir", "", "Log directory passed to API server (default <install-dir>/nccfiles)")
+	v2StartCmd.Flags().String("orchestrator-bin", "", "Path to ncc-orchestrator binary used by API server (default: running executable, then <install-dir>/bin/ncc-orchestrator)")
 	v2StartCmd.Flags().String("api-listen", ":8081", "Listen address for API server")
 	v2StartCmd.Flags().String("ui-listen", ":8080", "Listen address for UI server")
 	v2StartCmd.Flags().String("api-advertise-url", "", "Optional externally reachable API URL printed in startup output")
@@ -14244,7 +14326,7 @@ Use --self-heal with --detach to auto-restart services on unexpected exits.`,
 	v2StartCmd.Flags().String("ui-backend-url", "", "Backend URL for ncc-ui-server to proxy to (default derived from --api-listen)")
 	v2StartCmd.Flags().String("api-cors-origins", "", "Comma-separated API CORS origins (default derived from UI origin + --ui-allowed-origins)")
 	v2StartCmd.Flags().String("ui-allowed-origins", "", "Additional comma-separated UI origins to allow (e.g. http://192.168.1.50:8080); default localhost origin is always included")
-	v2StartCmd.Flags().String("token-file", ".ncc-api-token", "Token file path used by UI/API servers")
+	v2StartCmd.Flags().String("token-file", "", "Token file path used by UI/API servers (default <install-dir>/.ncc-api-token)")
 	v2StartCmd.Flags().String("api-auth-mode", "token", "API auth mode passed to ncc-api-server: token, session, hybrid")
 	v2StartCmd.Flags().Duration("api-session-ttl", 10*time.Minute, "Session TTL passed to ncc-api-server")
 	v2StartCmd.Flags().String("api-session-secret", "", "Session HMAC secret passed to ncc-api-server (use file flag in production)")
@@ -14303,14 +14385,14 @@ Use --self-heal with --detach to auto-restart services on unexpected exits.`,
 			})
 		},
 	}
-	v2CheckCmd.Flags().String("install-dir", ".ncc-v2", "Installation directory used by v2-bootstrap")
-	v2CheckCmd.Flags().String("config-path", "config.yaml", "Config file path passed to API server")
-	v2CheckCmd.Flags().String("output-dir", "outputfiles", "Output directory passed to API server")
-	v2CheckCmd.Flags().String("log-dir", "nccfiles", "Log directory passed to API server")
-	v2CheckCmd.Flags().String("orchestrator-bin", "./ncc-orchestrator", "Path to ncc-orchestrator binary used by API server")
+	v2CheckCmd.Flags().String("install-dir", "", "Installation directory used by v2-bootstrap (default: auto-detect from running binary's stack layout, fallback .ncc-v2)")
+	v2CheckCmd.Flags().String("config-path", "", "Config file path passed to API server (default <install-dir>/config.yaml; falls back to <install-dir>/example_config.yaml with a warning when missing)")
+	v2CheckCmd.Flags().String("output-dir", "", "Output directory passed to API server (default <install-dir>/outputfiles)")
+	v2CheckCmd.Flags().String("log-dir", "", "Log directory passed to API server (default <install-dir>/nccfiles)")
+	v2CheckCmd.Flags().String("orchestrator-bin", "", "Path to ncc-orchestrator binary used by API server (default: running executable, then <install-dir>/bin/ncc-orchestrator)")
 	v2CheckCmd.Flags().String("api-listen", ":8081", "Listen address for API server")
 	v2CheckCmd.Flags().String("ui-listen", ":8080", "Listen address for UI server")
-	v2CheckCmd.Flags().String("token-file", ".ncc-api-token", "Token file path used by UI/API servers")
+	v2CheckCmd.Flags().String("token-file", "", "Token file path used by UI/API servers (default <install-dir>/.ncc-api-token)")
 	v2CheckCmd.Flags().Bool("api-only", false, "Validate only API prerequisites (skip UI/frontend checks)")
 	cmd.AddCommand(v2CheckCmd)
 
@@ -14335,7 +14417,7 @@ Use --force to send a hard kill signal.`,
 			})
 		},
 	}
-	v2StopCmd.Flags().String("install-dir", ".ncc-v2", "Installation directory used by v2-start --detach")
+	v2StopCmd.Flags().String("install-dir", "", "Installation directory used by v2-start --detach (default: auto-detect from running binary's stack layout, fallback .ncc-v2)")
 	v2StopCmd.Flags().String("api-pid-file", "", "Detached API PID file path override")
 	v2StopCmd.Flags().String("ui-pid-file", "", "Detached UI PID file path override")
 	v2StopCmd.Flags().Bool("force", false, "Force kill processes instead of graceful stop")
@@ -14487,7 +14569,7 @@ Examples:
   ncc-orchestrator uninstall --config config.yaml --force`,
 		RunE: runUninstallCommand,
 	}
-	uninstallCmd.Flags().String("install-dir", ".ncc-v2", "v2 install directory created by bootstrap/start")
+	uninstallCmd.Flags().String("install-dir", "", "v2 install directory created by bootstrap/start (default: auto-detect from running binary's stack layout, fallback .ncc-v2)")
 	uninstallCmd.Flags().String("task-name", "ncc-orchestrator", "Scheduler task marker name to remove")
 	uninstallCmd.Flags().Bool("remove-local", true, "Remove local NCC artifacts/state (outputfiles, nccfiles, promfiles, logs, token/state files)")
 	uninstallCmd.Flags().Bool("remove-schedule", true, "Remove scheduler entry created by create-schedule")

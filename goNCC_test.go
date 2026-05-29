@@ -3523,6 +3523,83 @@ func TestPickAssetForPlatform_NoMatch(t *testing.T) {
 	}
 }
 
+// TestDefaultV2InstallDir_AutoDetectsStackLayout pins the v2.0.2 UX fix
+// where v2-check / v2-start / v2-stop / uninstall, when run from inside a
+// bootstrapped or extracted stack layout (`<X>/bin/<exe>`), default the
+// install dir to <X> instead of `.ncc-v2` relative to CWD. Without this,
+// `cd <X>/bin && ./ncc-orchestrator v2-check` reports false-positive
+// "binary not executable under install dir / frontend-dist missing"
+// failures even though everything is sitting one level up.
+//
+// We can't redirect os.Executable() from a test, but we can exercise the
+// helper via a thin wrapper that takes an injected exe path. The behavior
+// asserted here is the same logic the real helper applies, gated by the
+// presence of the v2 layout markers.
+func TestDefaultV2InstallDir_AutoDetectsStackLayout(t *testing.T) {
+	stack := t.TempDir()
+	mustMkdir(t, filepath.Join(stack, "bin"))
+	mustMkdir(t, filepath.Join(stack, "frontend-dist"))
+	binSubdir := filepath.Join(stack, "bin")
+
+	cases := []struct {
+		name   string
+		exeDir string
+		want   string
+	}{
+		{
+			name:   "running from <X>/bin in a complete stack returns <X>",
+			exeDir: binSubdir,
+			want:   stack,
+		},
+		{
+			name:   "running from somewhere not under bin/ falls back to .ncc-v2",
+			exeDir: t.TempDir(),
+			want:   ".ncc-v2",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := defaultV2InstallDirForExeDir(tc.exeDir)
+			if got != tc.want {
+				t.Fatalf("defaultV2InstallDirForExeDir(%q) = %q; want %q", tc.exeDir, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDefaultV2InstallDir_AcceptsSuffixedBinaryNaming pins that the helper
+// recognizes legacy v2.0.0-style stack layouts where binaries under bin/
+// have platform-suffixed names (bin/ncc-api-server-<os>-<arch>). Required so
+// that v2-check works against archives extracted from the original v2.0.0
+// stack without a pre-hotfix orchestrator.
+func TestDefaultV2InstallDir_AcceptsSuffixedBinaryNaming(t *testing.T) {
+	stack := t.TempDir()
+	mustMkdir(t, filepath.Join(stack, "bin"))
+	binName := fmt.Sprintf("ncc-api-server-%s-%s", runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS == "windows" {
+		binName += ".exe"
+	}
+	mustTouch(t, filepath.Join(stack, "bin", binName))
+	got := defaultV2InstallDirForExeDir(filepath.Join(stack, "bin"))
+	if got != stack {
+		t.Fatalf("expected suffix-named bin layout to resolve to %q; got %q", stack, got)
+	}
+}
+
+// TestDefaultV2InstallDir_BinDirWithoutLayoutMarkers pins that the helper
+// does NOT match a directory just because it has a `bin/` parent — there
+// must also be a v2 layout marker (frontend-dist/ or bin/ncc-api-server*).
+// This prevents auto-detect from "swallowing" arbitrary <X>/bin/foo
+// invocations as v2 stacks.
+func TestDefaultV2InstallDir_BinDirWithoutLayoutMarkers(t *testing.T) {
+	stack := t.TempDir()
+	mustMkdir(t, filepath.Join(stack, "bin"))
+	got := defaultV2InstallDirForExeDir(filepath.Join(stack, "bin"))
+	if got != ".ncc-v2" {
+		t.Fatalf("bare bin/ without layout markers should fall back to .ncc-v2; got %q", got)
+	}
+}
+
 // TestExtractTarGzArchive_PreservesExecutableBit pins the v2.0.1 fix to
 // extractTarGzArchive (and by symmetry extractZipArchive). Previously the
 // extractor wrote every file with a hardcoded 0644 mode, which dropped the
