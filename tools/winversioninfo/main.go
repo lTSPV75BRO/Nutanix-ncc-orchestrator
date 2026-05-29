@@ -51,8 +51,17 @@ import (
 // (see README + LICENSE). The companyName field surfaces in the
 // Windows file Properties dialog as the string most user-facing,
 // so we set it to the project name itself.
+// companyName is the publisher string surfaced as "Company" in the
+// Windows file Properties → Details tab and via
+// (Get-Item file).VersionInfo.CompanyName. It is intentionally the
+// project's own identity (not a corporate vendor) and is kept in
+// lock-step with the subject CN used by scripts/sign-windows.* so that
+// an (optionally) self-signed Authenticode signature names the same
+// publisher the VERSIONINFO already advertises. NOTE: this string does
+// NOT control the SmartScreen "Publisher" line — that comes solely from
+// an Authenticode certificate subject; see docs/SECURITY_AND_TRUST.md.
 const (
-	companyName    = "ncc-orchestrator (open-source project)"
+	companyName    = "NCC Orchestrator (open-source project)"
 	productName    = "NCC Orchestrator"
 	copyrightLine  = "(c) 2025-2026 Prajwal Vernekar and contributors. MIT licensed; see LICENSE."
 	trademarksLine = "NCC and Nutanix are trademarks of their respective owners; this project is not affiliated with or endorsed by Nutanix, Inc."

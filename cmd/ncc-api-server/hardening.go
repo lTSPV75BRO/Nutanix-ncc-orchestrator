@@ -22,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"goncc/internal/v2layout"
 )
 
 const (
@@ -452,7 +454,12 @@ func (s *apiServer) validatePathConfig() error {
 		if st.IsDir() {
 			return fmt.Errorf("orchestrator binary path is a directory: %s", binPath)
 		}
-		if st.Mode()&0o111 == 0 {
+		// Windows has no Unix executable bit, so a mode&0o111 test would
+		// reject a perfectly valid ncc-orchestrator.exe and make the
+		// api-server exit 1 during v2-start. v2layout.IsExecutable
+		// branches on GOOS: PATHEXT-extension check on Windows, the
+		// strict bit check on Unix.
+		if !v2layout.IsExecutable(binPath) {
 			return fmt.Errorf("orchestrator binary is not executable: %s", binPath)
 		}
 	}

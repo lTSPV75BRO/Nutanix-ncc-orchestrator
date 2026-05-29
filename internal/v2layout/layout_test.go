@@ -118,6 +118,80 @@ func TestConfigPath(t *testing.T) {
 	}
 }
 
+// TestHasWindowsExecutableExt validates the PATHEXT-based extension
+// check directly (OS-independent: the function only inspects the path
+// string + PATHEXT env var, so it runs the same on every platform).
+// This is the logic that prevents Windows from rejecting ncc-*.exe as
+// "not executable".
+func TestHasWindowsExecutableExt(t *testing.T) {
+	// Force the default PATHEXT so the test is deterministic regardless
+	// of the host environment.
+	t.Setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{`C:\stack\bin\ncc-orchestrator.exe`, true},
+		{`C:\stack\bin\ncc-api-server.EXE`, true}, // case-insensitive
+		{"ncc-ui-server.exe", true},
+		{"run.bat", true},
+		{"run.cmd", true},
+		{"legacy.com", true},
+		{"ncc-orchestrator", false}, // no extension (Unix-style name)
+		{"report.yaml", false},
+		{"archive.tar.gz", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := HasWindowsExecutableExt(c.path); got != c.want {
+			t.Errorf("HasWindowsExecutableExt(%q) = %v, want %v", c.path, got, c.want)
+		}
+	}
+}
+
+// TestHasWindowsExecutableExt_RespectsPATHEXT confirms a custom PATHEXT
+// (e.g. one that adds .PS1) is honored and that an extension absent
+// from PATHEXT is rejected.
+func TestHasWindowsExecutableExt_RespectsPATHEXT(t *testing.T) {
+	t.Setenv("PATHEXT", ".EXE;.PS1")
+	if !HasWindowsExecutableExt("script.ps1") {
+		t.Error("expected .ps1 to be executable when present in PATHEXT")
+	}
+	if HasWindowsExecutableExt("legacy.com") {
+		t.Error("expected .com to be rejected when absent from PATHEXT")
+	}
+}
+
+// TestIsExecutable_RegularFile checks the cross-platform contract: a
+// shipped binary in the stack is reported executable on the host OS,
+// a directory never is, and a missing path never is.
+func TestIsExecutable(t *testing.T) {
+	tmp := t.TempDir()
+
+	// A directory is never executable.
+	if IsExecutable(tmp) {
+		t.Error("IsExecutable(dir) = true, want false")
+	}
+	// A missing path is never executable.
+	if IsExecutable(filepath.Join(tmp, "does-not-exist")) {
+		t.Error("IsExecutable(missing) = true, want false")
+	}
+
+	// A real on-disk binary named like the shipped artifact for this
+	// platform should be reported executable. On Windows that requires
+	// the .exe suffix (PATHEXT); on Unix it requires the +x bit, which
+	// mustWriteExe sets.
+	name := "ncc-orchestrator"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	exe := filepath.Join(tmp, name)
+	mustWriteExe(t, exe)
+	if !IsExecutable(exe) {
+		t.Errorf("IsExecutable(%q) = false, want true on %s", exe, runtime.GOOS)
+	}
+}
+
 func mustMkdir(t *testing.T, p string) {
 	t.Helper()
 	if err := os.MkdirAll(p, 0o755); err != nil {

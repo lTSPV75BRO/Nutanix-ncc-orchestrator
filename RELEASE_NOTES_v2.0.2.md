@@ -93,6 +93,21 @@ Pinned by `TestLocalHTTPURLFromListen`, `TestLoopbackAltOriginFromListen`.
 
 Verified live by hitting `/api/v1/health` and checking the reported `orchestrator_bin` is executable.
 
+### Windows: `.exe` binaries are no longer rejected as "not executable"
+
+`v2-check`, `v2-start`, and the api-server's startup guard tested the Unix executable bit (`mode & 0o111`) to decide whether a binary was runnable. Windows files have no such bit, so every shipped `ncc-*.exe` was wrongly flagged. On Windows this surfaced as:
+
+- `v2-check` → `orchestrator-bin not executable` / `api-server binary not executable` / `ui-server binary not executable` (3 failures).
+- `v2-start` → the api-server child immediately exited 1 with `orchestrator binary is not executable: …\ncc-orchestrator.exe`.
+
+The executability test is now OS-aware (`v2layout.IsExecutable`): on Windows it checks the file extension against `PATHEXT` (default `.COM;.EXE;.BAT;.CMD`); on Unix it keeps the strict `mode & 0o111` bit check. `Unblock-File` is not required. Pinned by `TestIsExecutable`, `TestHasWindowsExecutableExt`, and `TestHasWindowsExecutableExt_RespectsPATHEXT` in `internal/v2layout/`.
+
+### Windows publisher metadata + self-signed signing helpers
+
+The embedded `VERSIONINFO` publisher string (`CompanyName`) is now a clean, properly-cased `NCC Orchestrator (open-source project)`, visible in **Properties → Details** and via `(Get-Item file).VersionInfo.CompanyName`. New `scripts/sign-windows.sh` (macOS/Linux build host) and `scripts/sign-windows.ps1` (native Windows) apply a **real Authenticode signature** with that publisher subject using a self-signed code-signing certificate, and export a public `.cer` so managed fleets can import it into *Trusted Publishers*.
+
+> **SmartScreen note:** the "Publisher" line in *"Windows protected your PC"* comes **only** from an Authenticode certificate subject — `VERSIONINFO` does not affect it. A self-signed certificate is trusted only on machines that import it; clearing SmartScreen for the general public still requires a CA-issued (OV/EV) code-signing certificate. The public v2.0.2 binaries remain **unsigned**; verify them with `ncc-orchestrator verify` + `checksums.txt`. See `docs/SECURITY_AND_TRUST.md`.
+
 ### Side fixes shipped alongside
 
 - **Extractor preserves the executable bit.** `extractTarGzArchive` / `extractZipArchive` use the mode in the archive header instead of hardcoded `0644`. Binaries inside `ncc-v2-stack-*.tar.gz` come out `0755` after `update`. Pinned by `TestExtractTarGzArchive_PreservesExecutableBit`.

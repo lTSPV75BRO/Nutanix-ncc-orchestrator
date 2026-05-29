@@ -141,6 +141,64 @@ When you double-click a blocked binary the first time, Windows shows a
 If your release is signed with a code-signing certificate (especially an
 EV certificate), SmartScreen accepts the binary without any of the above.
 
+#### What controls the SmartScreen "Publisher" line?
+
+The publisher name shown in the *"Windows protected your PC"* dialog and
+the UAC prompt comes **only** from an Authenticode digital signature's
+certificate subject. The embedded `VERSIONINFO` (CompanyName, ProductName,
+etc., visible in **Properties → Details** and via
+`(Get-Item file).VersionInfo.CompanyName`) is *not* used by SmartScreen.
+So there is no metadata-only way to replace "Unknown publisher" — it
+requires code-signing:
+
+| Certificate | SmartScreen result |
+| --- | --- |
+| **EV code-signing** (CA-issued) | Real publisher, no warning immediately (instant reputation). |
+| **OV / standard code-signing** (CA-issued) | Real publisher; warning persists until the cert/app builds download reputation. |
+| **Self-signed** | "Unknown publisher" for the public; trusted only on machines that import the cert (see below). |
+| **Unsigned** (default release) | "Unknown publisher"; verify via `verify` + `checksums.txt`. |
+
+#### Optional: self-signed signing for managed fleets
+
+For enterprises that deploy to machines they control, the repo ships
+helpers that apply a **real Authenticode signature** using a self-signed
+code-signing certificate, plus export the public certificate so it can be
+trusted fleet-wide:
+
+```bash
+# From a macOS/Linux build host (needs openssl + osslsigncode):
+./scripts/sign-windows.sh --dist dist
+# -> signs dist/*-windows-*.exe and writes dist/ncc-codesign-public.cer
+```
+
+```powershell
+# Or natively on Windows (PowerShell):
+.\scripts\sign-windows.ps1 -Dist dist
+# -> signs the .exe files and writes dist\ncc-codesign-public.cer
+```
+
+Then import `ncc-codesign-public.cer` into the **Trusted Publishers** (and,
+for SmartScreen/Defender, the **Trusted Root Certification Authorities**)
+store on the target machines:
+
+```powershell
+# Per machine (run elevated):
+Import-Certificate -FilePath ncc-codesign-public.cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher
+Import-Certificate -FilePath ncc-codesign-public.cer -CertStoreLocation Cert:\LocalMachine\Root
+
+# Or fleet-wide via certutil / GPO / Intune:
+certutil -addstore TrustedPublisher ncc-codesign-public.cer
+certutil -addstore Root ncc-codesign-public.cer
+```
+
+Once the certificate is trusted, the binaries' signature validates
+(`signtool verify /pa file.exe`, or **Properties → Digital Signatures**)
+and the publisher name from the certificate subject is shown instead of
+"Unknown publisher". Self-signed certificates are **not** trusted by
+machines that have not imported them, so this is unsuitable for public
+distribution — use a CA-issued (OV/EV) certificate for that, pointing
+`binaryGO.txt`'s `NCC_WINDOWS_PFX_PATH` hook at the issued `.pfx`.
+
 ### Linux — executable bit
 
 Linux does no signature verification by default. The only required

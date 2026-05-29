@@ -53,6 +53,7 @@ import (
 	"github.com/vbauerster/mpb/v7"
 	"github.com/vbauerster/mpb/v7/decor"
 	"golang.org/x/term"
+	"goncc/internal/v2layout"
 	lumberjack "gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -9123,12 +9124,14 @@ func waitForHTTPReady(url string, timeout time.Duration) error {
 	return fmt.Errorf("endpoint %s not ready: %w", url, lastErr)
 }
 
+// isExecutableFile reports whether path is a runnable binary on the
+// current OS. Delegates to v2layout.IsExecutable so the Unix
+// executable-bit check and the Windows PATHEXT-extension check stay in
+// one place (shared with the api-server's startup guard). On Windows
+// the Unix mode bits are meaningless, so a bit-only test wrongly
+// rejected every shipped ncc-*.exe with "not executable".
 func isExecutableFile(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil || info.IsDir() {
-		return false
-	}
-	return info.Mode()&0o111 != 0
+	return v2layout.IsExecutable(path)
 }
 
 func canBindListenAddress(listenAddr string) error {

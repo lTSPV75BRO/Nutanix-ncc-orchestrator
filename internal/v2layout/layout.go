@@ -34,6 +34,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // Marker file/dir names inside the stack root that identify a valid v2
@@ -195,4 +196,52 @@ func isDir(p string) bool {
 func isFile(p string) bool {
 	st, err := os.Stat(p)
 	return err == nil && !st.IsDir()
+}
+
+// IsExecutable reports whether path is a regular file that can be
+// executed on the current OS.
+//
+// On Unix this means the file exists, is not a directory, and has at
+// least one executable mode bit set (mode & 0o111).
+//
+// On Windows there is no executable permission bit: runnability is
+// decided entirely by the file extension against PATHEXT (default
+// ".COM;.EXE;.BAT;.CMD"). Applying the Unix bit test on Windows always
+// reports a perfectly valid ncc-*.exe as "not executable", which is
+// exactly what broke v2-check / v2-start / the api-server's startup
+// guard on Windows in v2.0.2 — every shipped .exe was rejected even
+// though it ran fine from the shell. Branching on runtime.GOOS keeps
+// the strict Unix bit check while making Windows extension-aware.
+func IsExecutable(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return HasWindowsExecutableExt(path)
+	}
+	return info.Mode()&0o111 != 0
+}
+
+// HasWindowsExecutableExt reports whether path ends in an extension
+// that Windows treats as directly executable. It honors the PATHEXT
+// environment variable when set (matching what cmd.exe / CreateProcess
+// would accept) and falls back to the canonical default list when it
+// is empty. Comparison is case-insensitive, as Windows file extensions
+// are.
+func HasWindowsExecutableExt(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext == "" {
+		return false
+	}
+	pathext := os.Getenv("PATHEXT")
+	if strings.TrimSpace(pathext) == "" {
+		pathext = ".COM;.EXE;.BAT;.CMD"
+	}
+	for _, e := range strings.Split(pathext, ";") {
+		if strings.ToLower(strings.TrimSpace(e)) == ext {
+			return true
+		}
+	}
+	return false
 }

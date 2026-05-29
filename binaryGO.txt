@@ -71,10 +71,19 @@ if [ -n "${NCC_MACOS_SIGN_IDENTITY:-}" ] && command -v codesign >/dev/null 2>&1;
   fi
 fi
 if [ -n "${NCC_WINDOWS_PFX_PATH:-}" ] && command -v osslsigncode >/dev/null 2>&1; then
+  # -n / -i embed a human description + publisher URL into the signature
+  # so signature inspectors (sigcheck, Properties → Digital Signatures)
+  # show meaningful publisher details alongside the certificate subject.
+  # Works with both CA-issued (OV/EV) and self-signed PFX files; only a
+  # CA-trusted cert changes the SmartScreen "Publisher" line, while a
+  # self-signed one is for fleets that import the cert into Trusted
+  # Publishers (see scripts/sign-windows.sh + docs/SECURITY_AND_TRUST.md).
   for f in dist/ncc-orchestrator-windows-*.exe dist/ncc-api-server-windows-*.exe dist/ncc-ui-server-windows-*.exe; do
     [ -f "$f" ] || continue
     osslsigncode sign -pkcs12 "$NCC_WINDOWS_PFX_PATH" -pass "${NCC_WINDOWS_PFX_PASSWORD:-}" \
       -h sha256 -t "${NCC_WINDOWS_TIMESTAMP_URL:-http://timestamp.digicert.com}" \
+      -n "NCC Orchestrator (open-source project)" \
+      -i "https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator" \
       -in "$f" -out "$f.signed" && mv "$f.signed" "$f" || exit 1
   done
 fi
