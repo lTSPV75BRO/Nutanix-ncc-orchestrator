@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -20,6 +21,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"goncc/internal/v2layout"
 )
 
 // gzipResponseWriter wraps an http.ResponseWriter and transparently compresses
@@ -132,6 +135,108 @@ func fileExists(p string) bool {
 	return err == nil && !st.IsDir()
 }
 
+// Build-time metadata; injected via -ldflags. Capitalized names
+// (Version / Stream / BuildDate / GoVersion) match the orchestrator
+// + api-server convention so binaryGO.txt's single
+// `-X main.Version=… -X main.Stream=… -X main.BuildDate=…
+// -X main.GoVersion=…` LDFLAGS string applies uniformly to every main
+// package. Without this match the ui-server would silently keep its
+// in-source defaults (e.g. `stream: dev`) even on a tagged release.
+var (
+	Version   = "2.0.2"
+	BuildDate = "unknown"
+	Stream    = "dev"
+	GoVersion = "unknown"
+)
+
+// uiHandleSubcommandArgs reacts to positional args left over after
+// flag.Parse. See the matching helper in cmd/ncc-api-server for the
+// motivation; the ui-server gets the same treatment so users who
+// type `./ncc-ui-server update --check` aren't silently surprised by
+// a UI proxy starting up on :8080.
+func uiHandleSubcommandArgs(args []string) {
+	if len(args) == 0 {
+		return
+	}
+	first := strings.ToLower(strings.TrimSpace(args[0]))
+	switch first {
+	case "version", "--version", "-version":
+		fmt.Printf("ncc-ui-server\n  version: %s\n  stream:  %s\n  build:   %s\n  go:      %s\n",
+			Version, Stream, BuildDate, GoVersion)
+		os.Exit(0)
+	case "help", "--help", "-help", "-h":
+		flag.Usage()
+		os.Exit(0)
+	}
+	fmt.Fprintf(os.Stderr,
+		"ncc-ui-server: unrecognized subcommand %q.\n"+
+			"This binary is a sub-component of the Nutanix NCC Orchestrator stack and only accepts --flags.\n",
+		args[0])
+	if root, ok := v2layout.DetectStackRootFromExe(); ok {
+		if orch := v2layout.FindBinary(root, "ncc-orchestrator"); orch != "" {
+			fmt.Fprintf(os.Stderr,
+				"For lifecycle commands like %q, run the orchestrator instead:\n  %s %s\n",
+				args[0], orch, strings.Join(args, " "))
+			os.Exit(2)
+		}
+	}
+	fmt.Fprintf(os.Stderr,
+		"For lifecycle commands like %q, run `ncc-orchestrator %s` instead.\n",
+		args[0], strings.Join(args, " "))
+	os.Exit(2)
+}
+
+// uiApplyStackAwareDefaults rewrites --dir and --api-token-file when
+// the ui-server is running from inside an extracted v2 stack and the
+// user has not explicitly set those flags. See the matching helper
+// in cmd/ncc-api-server for the rationale and detection model.
+func uiApplyStackAwareDefaults(dir, tokenFile *string, argv []string) {
+	root, ok := v2layout.DetectStackRootFromExe()
+	if !ok {
+		return
+	}
+	explicit := uiExplicitFlagSet(argv)
+	rewrote := []string{}
+
+	stackFrontend := v2layout.FrontendDir(root)
+	if !explicit["dir"] && *dir == "./frontend/dist" {
+		if st, err := os.Stat(stackFrontend); err == nil && st.IsDir() {
+			*dir = stackFrontend
+			rewrote = append(rewrote, "dir")
+		}
+	}
+	stackToken := v2layout.TokenFile(root)
+	if !explicit["api-token-file"] && *tokenFile == ".ncc-api-token" {
+		*tokenFile = stackToken
+		rewrote = append(rewrote, "api-token-file")
+	}
+	if len(rewrote) > 0 {
+		fmt.Fprintf(os.Stderr,
+			"[stack-aware] detected v2 stack at %s; auto-resolved %s\n",
+			root, strings.Join(rewrote, ", "))
+		fmt.Fprintln(os.Stderr,
+			"             pass any of those flags explicitly to override.")
+	}
+}
+
+func uiExplicitFlagSet(argv []string) map[string]bool {
+	out := map[string]bool{}
+	for _, a := range argv {
+		if !strings.HasPrefix(a, "-") {
+			continue
+		}
+		a = strings.TrimLeft(a, "-")
+		if i := strings.IndexByte(a, '='); i >= 0 {
+			a = a[:i]
+		}
+		if a == "" {
+			continue
+		}
+		out[a] = true
+	}
+	return out
+}
+
 func inferRequestOrigin(r *http.Request) string {
 	scheme := "http"
 	if r.TLS != nil {
@@ -172,6 +277,26 @@ func main() {
 	flag.StringVar(&backendClientCertFile, "backend-client-cert-file", "", "Optional client cert for backend mTLS")
 	flag.StringVar(&backendClientKeyFile, "backend-client-key-file", "", "Optional client key for backend mTLS")
 	flag.Parse()
+
+	// Reject stray positional args (e.g. user typed
+	// `./ncc-ui-server update`) with a redirect to the orchestrator.
+	// Without this, Go's flag package silently ignores the args and
+	// the UI server starts up anyway, leaving the user confused.
+	uiHandleSubcommandArgs(flag.Args())
+
+	// Stack-aware defaults: when the ui-server is launched from
+	// inside an extracted v2 stack (`<root>/bin/<self>`) and the
+	// user did not explicitly set --dir / --api-token-file, point
+	// them at the stack-relative `<root>/frontend-dist` and
+	// `<root>/.ncc-api-token` so the canonical
+	//
+	//     cd ncc-v2-stack-<os>-<arch>/bin && ./ncc-ui-server
+	//
+	// invocation works without forcing the user to retype every
+	// path. Outside a stack layout (Docker images, dev checkouts)
+	// this is a no-op and the original CWD-relative defaults stand.
+	uiApplyStackAwareDefaults(&dir, &tokenFile, os.Args[1:])
+
 	if strings.Contains(allowedOrigins, "*") {
 		log.Fatal("wildcard allowed-origins is not permitted")
 	}

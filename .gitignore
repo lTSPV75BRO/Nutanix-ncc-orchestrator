@@ -49,3 +49,8 @@ frontend/*.tsbuildinfo
 # Local packaged release bundles
 ncc-v2-stack-*.tar.gz
 ncc-v2-stack-*.zip
+
+# Generated Windows VERSIONINFO resource files (produced from
+# tools/winversioninfo as part of binaryGO.txt; arch-specific so
+# they need to be regenerated each release)
+*.syso

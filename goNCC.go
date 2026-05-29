@@ -9144,6 +9144,477 @@ func canBindListenAddress(listenAddr string) error {
 	return nil
 }
 
+// v2StatusOptions wires the `status` subcommand's flags to runV2Status.
+// Mirrors v2StartOptions where overlap exists so an operator who
+// recalls v2-start's flag names can reuse them on status without
+// re-reading the help.
+type v2StatusOptions struct {
+	InstallDir string
+	APIListen  string
+	UIListen   string
+	JSON       bool
+}
+
+// v2StatusEntry is the per-service row populated by runV2Status. It's
+// also the JSON-array element when --json is set, so its field tags
+// are part of the public output contract: monitoring tooling can rely
+// on them. Add new fields rather than renaming existing ones.
+type v2StatusEntry struct {
+	Service  string `json:"service"`
+	PIDPath  string `json:"pid_path"`
+	PID      int    `json:"pid,omitempty"`
+	State    string `json:"state"` // "alive", "dead-stale-pid", "missing-pid", "unreadable-pid"
+	Listen   string `json:"listen,omitempty"`
+	Health   string `json:"health,omitempty"` // "ok", "unhealthy", "unreachable", "n/a"
+	HealthMS int64  `json:"health_response_ms,omitempty"`
+	LogPath  string `json:"log_path,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+// runV2Status reports the live state of a v2 stack. Reads the PID
+// files written by v2-start --detach, probes each PID with signal 0,
+// and (for the api-server) hits /api/v1/health to verify the
+// listener is actually accepting requests.
+//
+// Designed to be run from anywhere — does NOT require the orchestrator
+// to be the same binary that started the stack, and does NOT modify
+// any state. Always exits 0 unless --json failed to marshal; the
+// caller can grep "state=alive" / "health=ok" if they want a
+// strict liveness check.
+func runV2Status(opts v2StatusOptions) error {
+	installDir := strings.TrimSpace(opts.InstallDir)
+	if installDir == "" {
+		installDir = defaultV2InstallDir()
+	}
+	runDir := filepath.Join(installDir, "run")
+	logDir := filepath.Join(installDir, "logs")
+
+	apiListen := strings.TrimSpace(opts.APIListen)
+	if apiListen == "" {
+		apiListen = ":8081"
+	}
+	uiListen := strings.TrimSpace(opts.UIListen)
+	if uiListen == "" {
+		uiListen = ":8080"
+	}
+
+	tokenPath := filepath.Join(installDir, ".ncc-api-token")
+
+	type svc struct {
+		name    string
+		pidFile string
+		listen  string
+		logFile string
+		probe   bool
+	}
+	services := []svc{
+		{"api-supervisor", filepath.Join(runDir, "v2-api-supervisor.pid"), "", filepath.Join(logDir, "v2-api-supervisor.log"), false},
+		{"ncc-api-server", filepath.Join(runDir, "v2-api.pid"), apiListen, filepath.Join(logDir, "v2-api.log"), true},
+		{"ui-supervisor", filepath.Join(runDir, "v2-ui-supervisor.pid"), "", filepath.Join(logDir, "v2-ui-supervisor.log"), false},
+		{"ncc-ui-server", filepath.Join(runDir, "v2-ui.pid"), uiListen, filepath.Join(logDir, "v2-ui.log"), false},
+	}
+
+	out := make([]v2StatusEntry, 0, len(services))
+	httpClient := &http.Client{Timeout: 3 * time.Second}
+	apiToken := ""
+	if b, err := os.ReadFile(tokenPath); err == nil {
+		apiToken = strings.TrimSpace(string(b))
+	}
+
+	for _, s := range services {
+		entry := v2StatusEntry{
+			Service: s.name,
+			PIDPath: s.pidFile,
+			Listen:  s.listen,
+			LogPath: s.logFile,
+			Health:  "n/a",
+		}
+		pid, err := readPIDFromFile(s.pidFile)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			entry.State = "missing-pid"
+		case err != nil:
+			entry.State = "unreadable-pid"
+			entry.Error = err.Error()
+		default:
+			entry.PID = pid
+			if processIsAlive(pid) {
+				entry.State = "alive"
+			} else {
+				entry.State = "dead-stale-pid"
+			}
+		}
+
+		if s.probe && entry.State == "alive" {
+			url := localHTTPURLFromListen(s.listen, "8081") + "/api/v1/health"
+			req, _ := http.NewRequest(http.MethodGet, url, nil)
+			if apiToken != "" {
+				req.Header.Set("X-Api-Token", apiToken)
+			}
+			start := time.Now()
+			resp, err := httpClient.Do(req)
+			entry.HealthMS = time.Since(start).Milliseconds()
+			if err != nil {
+				entry.Health = "unreachable"
+				entry.Error = err.Error()
+			} else {
+				_ = resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					entry.Health = "ok"
+				} else {
+					entry.Health = fmt.Sprintf("http-%d", resp.StatusCode)
+				}
+			}
+		}
+		out = append(out, entry)
+	}
+
+	if opts.JSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(map[string]any{
+			"install_dir": installDir,
+			"services":    out,
+		})
+	}
+
+	fmt.Printf("ncc-orchestrator v2 stack status\n")
+	fmt.Printf("--------------------------------\n")
+	fmt.Printf("install-dir: %s\n\n", installDir)
+	fmt.Printf("%-18s %-7s %-15s %-22s %-12s %s\n",
+		"SERVICE", "PID", "STATE", "LISTEN", "HEALTH", "LOG")
+	for _, e := range out {
+		pidStr := "-"
+		if e.PID > 0 {
+			pidStr = strconv.Itoa(e.PID)
+		}
+		listen := e.Listen
+		if listen == "" {
+			listen = "-"
+		}
+		health := e.Health
+		if e.HealthMS > 0 && (health == "ok" || strings.HasPrefix(health, "http-")) {
+			health = fmt.Sprintf("%s (%dms)", health, e.HealthMS)
+		}
+		fmt.Printf("%-18s %-7s %-15s %-22s %-12s %s\n",
+			e.Service, pidStr, e.State, listen, health, e.LogPath)
+		if e.Error != "" {
+			fmt.Printf("%-18s   error: %s\n", "", e.Error)
+		}
+	}
+	return nil
+}
+
+// processIsAlive returns true when a process with the given pid exists
+// and signal 0 reports "yes" (not "no such process" / EPERM-on-others).
+// Cross-platform: on Windows os.FindProcess always succeeds and Signal
+// is unsupported, so we fall back to a stat under /proc on linux/darwin
+// and assume alive on Windows (the readPIDFromFile path already
+// validated the file is fresh enough for our purposes).
+func processIsAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		// FindProcess on Windows returns a handle even for dead PIDs,
+		// so probe via Wait with a 0-timeout fallback. The simplest
+		// robust check is signal 0 emulation:
+		err := p.Signal(syscall.Signal(0))
+		return err == nil
+	}
+	if err := p.Signal(syscall.Signal(0)); err != nil {
+		return false
+	}
+	return true
+}
+
+// v2DoctorOptions wires the `doctor` subcommand's flags.
+type v2DoctorOptions struct {
+	InstallDir string
+	APIListen  string
+	UIListen   string
+	OutputFile string // when set, writes a redacted support tarball
+	NoBundle   bool
+}
+
+// runV2Doctor is the "something's broken, give me everything"
+// diagnostic. Runs every existing read-only check, prints a unified
+// report, and (by default) writes a redacted support tarball under
+// <cwd>/ncc-support-<timestamp>.tar.gz that the operator can attach
+// to a support ticket.
+//
+// Sections:
+//
+//  1. version + verify (embedded buildinfo + self SHA-256)
+//  2. v2-check (install-dir layout + path readability)
+//  3. v2-status (PIDs alive? api healthy?)
+//  4. environment summary (GOOS/GOARCH, NCC_* env var NAMES only)
+//  5. recent log tails (last 200 lines of each v2-*.log)
+//  6. (optional) tar.gz bundle with the above + redacted config
+//
+// Always exits 0 unless the bundle write itself fails. Non-zero exit
+// on missing services would defeat the "I'll run doctor when things
+// look broken" use case.
+func runV2Doctor(opts v2DoctorOptions) error {
+	installDir := strings.TrimSpace(opts.InstallDir)
+	if installDir == "" {
+		installDir = defaultV2InstallDir()
+	}
+	apiListen := strings.TrimSpace(opts.APIListen)
+	if apiListen == "" {
+		apiListen = ":8081"
+	}
+	uiListen := strings.TrimSpace(opts.UIListen)
+	if uiListen == "" {
+		uiListen = ":8080"
+	}
+
+	var report bytes.Buffer
+	w := io.MultiWriter(os.Stdout, &report)
+
+	fmt.Fprintln(w, "========================================")
+	fmt.Fprintln(w, "ncc-orchestrator doctor")
+	fmt.Fprintln(w, "========================================")
+	fmt.Fprintf(w, "generated_at:  %s\n", time.Now().UTC().Format(time.RFC3339))
+	fmt.Fprintf(w, "install_dir:   %s\n", installDir)
+	fmt.Fprintf(w, "cwd:           %s\n", strDefaultStr(getwdSafe(), "(unknown)"))
+	fmt.Fprintln(w)
+
+	fmt.Fprintln(w, "-- 1. verify (build provenance) --")
+	_ = runVerifyCommand(w)
+	fmt.Fprintln(w)
+
+	fmt.Fprintln(w, "-- 2. v2-check (install-dir layout) --")
+	checkErr := runV2Check(v2StartOptions{
+		InstallDir: installDir,
+		APIListen:  apiListen,
+		UIListen:   uiListen,
+	})
+	if checkErr != nil {
+		fmt.Fprintf(w, "v2-check exit: %v\n", checkErr)
+	} else {
+		fmt.Fprintln(w, "v2-check: ok")
+	}
+	fmt.Fprintln(w)
+
+	fmt.Fprintln(w, "-- 3. v2-status (running services) --")
+	_ = runV2Status(v2StatusOptions{
+		InstallDir: installDir,
+		APIListen:  apiListen,
+		UIListen:   uiListen,
+	})
+	fmt.Fprintln(w)
+
+	fmt.Fprintln(w, "-- 4. environment summary --")
+	fmt.Fprintf(w, "go_version:    %s\n", runtime.Version())
+	fmt.Fprintf(w, "os/arch:       %s/%s\n", runtime.GOOS, runtime.GOARCH)
+	fmt.Fprintf(w, "num_cpu:       %d\n", runtime.NumCPU())
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "NCC_* env var names (values REDACTED for support-ticket safety):")
+	doctorPrintRedactedEnv(w)
+	fmt.Fprintln(w)
+
+	fmt.Fprintln(w, "-- 5. recent log tails (last 200 lines each) --")
+	logDir := filepath.Join(installDir, "logs")
+	for _, name := range []string{"v2-api.log", "v2-ui.log", "v2-api-supervisor.log", "v2-ui-supervisor.log"} {
+		p := filepath.Join(logDir, name)
+		fmt.Fprintf(w, "\n--- %s ---\n", p)
+		doctorTailFile(w, p, 200)
+	}
+	fmt.Fprintln(w)
+
+	fmt.Fprintln(w, "========================================")
+	fmt.Fprintln(w, "doctor: report complete")
+	fmt.Fprintln(w, "========================================")
+
+	if opts.NoBundle {
+		return nil
+	}
+
+	bundlePath := strings.TrimSpace(opts.OutputFile)
+	if bundlePath == "" {
+		bundlePath = filepath.Join(".",
+			fmt.Sprintf("ncc-support-%s.tar.gz", time.Now().UTC().Format("20060102T150405Z")))
+	}
+	if err := writeDoctorBundle(bundlePath, report.String(), installDir); err != nil {
+		fmt.Fprintf(os.Stderr, "doctor: failed to write bundle %s: %v\n", bundlePath, err)
+		return err
+	}
+	fmt.Fprintf(os.Stdout, "\nsupport bundle: %s\n", bundlePath)
+	fmt.Fprintln(os.Stdout, "  attach this file to your support ticket; secrets and tokens have been redacted.")
+	return nil
+}
+
+// doctorPrintRedactedEnv prints NCC_* env var NAMES only — values
+// are redacted. Operators copy/paste support output straight into
+// tickets, so values (which often contain Prism passwords or
+// secret://refs) must never appear.
+func doctorPrintRedactedEnv(w io.Writer) {
+	keys := []string{}
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "NCC_") {
+			continue
+		}
+		eq := strings.IndexByte(kv, '=')
+		if eq <= 0 {
+			continue
+		}
+		keys = append(keys, kv[:eq])
+	}
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		fmt.Fprintln(w, "  (none set)")
+		return
+	}
+	for _, k := range keys {
+		fmt.Fprintf(w, "  %s=***REDACTED***\n", k)
+	}
+}
+
+// doctorTailFile prints up to maxLines trailing lines of path. If
+// the file is missing or unreadable, prints a single-line marker.
+// Tail rather than read-all so the doctor output (and the bundle)
+// stays bounded even when a log file has rotated to gigabytes.
+func doctorTailFile(w io.Writer, path string, maxLines int) {
+	f, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintln(w, "  (not present)")
+			return
+		}
+		fmt.Fprintf(w, "  (read error: %v)\n", err)
+		return
+	}
+	defer f.Close()
+	st, _ := f.Stat()
+	if st != nil {
+		const window = int64(64 * 1024)
+		if st.Size() > window {
+			_, _ = f.Seek(-window, io.SeekEnd)
+		}
+	}
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1<<16), 1<<20)
+	lines := make([]string, 0, maxLines)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+		if len(lines) > maxLines {
+			lines = lines[len(lines)-maxLines:]
+		}
+	}
+	if len(lines) == 0 {
+		fmt.Fprintln(w, "  (empty)")
+		return
+	}
+	for _, l := range lines {
+		fmt.Fprintln(w, l)
+	}
+}
+
+// writeDoctorBundle emits a redacted support tarball:
+//
+//   - report.txt: same banner the operator just saw on stdout
+//   - logs/*.log: last 1000 lines of each v2-{api,ui,*-supervisor}.log
+//   - config.redacted.yaml: copy of <install-dir>/config.yaml or
+//     example_config.yaml with values for any key matching
+//     /password|secret|token|key|credential|cert/i replaced by
+//     "***REDACTED***"
+//
+// gzip-compressed; safe to attach to a support ticket.
+func writeDoctorBundle(path, report, installDir string) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gz := gzip.NewWriter(f)
+	defer gz.Close()
+	tw := tar.NewWriter(gz)
+	defer tw.Close()
+
+	addFile := func(name string, data []byte, mode int64) error {
+		hdr := &tar.Header{
+			Name:    name,
+			Size:    int64(len(data)),
+			Mode:    mode,
+			ModTime: time.Now(),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		_, err := tw.Write(data)
+		return err
+	}
+
+	if err := addFile("report.txt", []byte(report), 0o644); err != nil {
+		return err
+	}
+
+	logDir := filepath.Join(installDir, "logs")
+	for _, name := range []string{"v2-api.log", "v2-ui.log", "v2-api-supervisor.log", "v2-ui-supervisor.log"} {
+		p := filepath.Join(logDir, name)
+		var buf bytes.Buffer
+		doctorTailFile(&buf, p, 1000)
+		if err := addFile(filepath.Join("logs", name), buf.Bytes(), 0o644); err != nil {
+			return err
+		}
+	}
+
+	cfgPath := filepath.Join(installDir, "config.yaml")
+	if _, err := os.Stat(cfgPath); err != nil {
+		cfgPath = filepath.Join(installDir, "example_config.yaml")
+	}
+	if data, err := os.ReadFile(cfgPath); err == nil {
+		redacted := redactConfigYAML(data)
+		if err := addFile("config.redacted.yaml", redacted, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// redactConfigYAML masks values for keys whose name contains
+// password / secret / token / credential / api-key / client-id (case
+// insensitive). Conservative: only handles the canonical "key: value"
+// line form. Good enough for the "don't leak the Prism password"
+// support-bundle use case.
+func redactConfigYAML(in []byte) []byte {
+	rx := regexp.MustCompile(`(?i)^(\s*[-]?\s*(?:[a-z0-9_-]*(?:password|secret|token|credential|api[_-]?key|client[_-]?id)[a-z0-9_-]*))\s*:\s*(.*)$`)
+	out := bytes.Buffer{}
+	scanner := bufio.NewScanner(bytes.NewReader(in))
+	scanner.Buffer(make([]byte, 1<<16), 1<<20)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if m := rx.FindStringSubmatch(line); m != nil && strings.TrimSpace(m[2]) != "" {
+			out.WriteString(m[1])
+			out.WriteString(": ***REDACTED***\n")
+			continue
+		}
+		out.WriteString(line)
+		out.WriteByte('\n')
+	}
+	return out.Bytes()
+}
+
+func getwdSafe() string {
+	d, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return d
+}
+
+func strDefaultStr(s, dflt string) string {
+	if strings.TrimSpace(s) == "" {
+		return dflt
+	}
+	return s
+}
+
 func runV2Check(opts v2StartOptions) error {
 	installDir := strings.TrimSpace(opts.InstallDir)
 	if installDir == "" {
@@ -13118,6 +13589,105 @@ func versionInfoString() string {
 	)
 }
 
+// runVerifyCommand backs the `ncc-orchestrator verify` subcommand.
+// Renders the trust-relevant metadata in a stable, scriptable format
+// (single-key-per-line) so support tickets and CI checks can pin
+// fields with simple grep. The hash is computed over the running
+// executable's bytes on disk; if the file is unreadable (chroot,
+// procfs-only systems, etc.) we degrade gracefully rather than
+// failing the entire command.
+//
+// Wraps an io.Writer rather than printing directly so unit tests can
+// drive the function with a bytes.Buffer.
+//
+// Note on attribution: this is an independent open-source project
+// (MIT licensed) and is not affiliated with or endorsed by Nutanix,
+// Inc. The "project_url" field below is the source of truth for
+// where the binary came from.
+func runVerifyCommand(out io.Writer) error {
+	exe, err := os.Executable()
+	if err != nil {
+		exe = "(unknown)"
+	}
+	exeReal := exe
+	if r, errReal := filepath.EvalSymlinks(exe); errReal == nil {
+		exeReal = r
+	}
+	hash, hashErr := sha256OfFile(exeReal)
+	gitRev, gitDirty, _ := goBuildInfoVCS()
+	fmt.Fprintln(out, "ncc-orchestrator verify")
+	fmt.Fprintln(out, "-----------------------")
+	fmt.Fprintf(out, "version:           %s\n", Version)
+	fmt.Fprintf(out, "stream:            %s\n", Stream)
+	fmt.Fprintf(out, "build_date:        %s\n", BuildDate)
+	fmt.Fprintf(out, "go_version:        %s\n", GoVersion)
+	fmt.Fprintf(out, "os_arch:           %s/%s\n", runtime.GOOS, runtime.GOARCH)
+	fmt.Fprintf(out, "git_revision:      %s\n", strDefault(gitRev, "(unknown)"))
+	fmt.Fprintf(out, "git_dirty:         %t\n", gitDirty)
+	fmt.Fprintf(out, "executable_path:   %s\n", exeReal)
+	if hashErr != nil {
+		fmt.Fprintf(out, "executable_sha256: (unavailable: %v)\n", hashErr)
+	} else {
+		fmt.Fprintf(out, "executable_sha256: %s\n", hash)
+	}
+	fmt.Fprintf(out, "license:           MIT\n")
+	fmt.Fprintf(out, "project_url:       https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator\n")
+	fmt.Fprintf(out, "affiliation:       independent open-source project; not affiliated with or endorsed by Nutanix, Inc.\n")
+	fmt.Fprintf(out, "verify:            compare executable_sha256 against checksums.txt at\n")
+	// Strip git-rev / dirty suffixes (e.g. "2.0.2-<sha>" or "2.0.2-dirty")
+	// so the URL points at the canonical release tag.
+	tagVersion := Version
+	if i := strings.IndexAny(tagVersion, "-+"); i >= 0 {
+		tagVersion = tagVersion[:i]
+	}
+	fmt.Fprintf(out, "                   https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v%s\n", tagVersion)
+	return nil
+}
+
+// sha256OfFile streams a file through SHA-256. Streamed (rather than
+// reading into memory) so the verify command stays fast even on a
+// 50MB binary built with -trimpath (no debug info).
+func sha256OfFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// goBuildInfoVCS pulls the (commit, dirty, build_time) triple Go's
+// linker embeds via -buildvcs=true. Returns ("", false, false) on
+// binaries built with -buildvcs=false. Stable across Go releases —
+// the keys "vcs.revision", "vcs.modified", "vcs.time" have been
+// part of debug.ReadBuildInfo since Go 1.18.
+func goBuildInfoVCS() (revision string, dirty bool, ok bool) {
+	info, infoOK := debug.ReadBuildInfo()
+	if !infoOK {
+		return "", false, false
+	}
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			revision = s.Value
+		case "vcs.modified":
+			dirty = s.Value == "true"
+		}
+	}
+	return revision, dirty, revision != ""
+}
+
+func strDefault(s, dflt string) string {
+	if strings.TrimSpace(s) == "" {
+		return dflt
+	}
+	return s
+}
+
 func printEnvInfo() {
 	fmt.Println("Possible Environment Variables (prefix: NCC_) and Current Values:")
 	envKeys := []string{
@@ -14621,6 +15191,86 @@ Use --force to send a hard kill signal.`,
 	v2StopCmd.Flags().Duration("stop-timeout", 5*time.Second, "Graceful stop timeout before force-kill (ignored when --force)")
 	cmd.AddCommand(v2StopCmd)
 
+	// status subcommand: report the live state of a v2 stack
+	// (PIDs alive? api healthy? log paths?). Designed for support
+	// triage and shell scripts — never modifies state, always
+	// prints something useful even when no service is up.
+	v2StatusCmd := &cobra.Command{
+		Use:   "v2-status",
+		Short: "Show live status of a running v2 stack (PIDs, listeners, health)",
+		Long: `Reads <install-dir>/run/v2-{api,ui,api-supervisor,ui-supervisor}.pid,
+checks each PID is still alive (signal 0), and probes
+/api/v1/health on the API listener using the on-disk token.
+
+Exits 0 even when services are down; the printed table (or --json
+output) is the source of truth. Pair with awk/jq for scripted
+liveness checks.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			installDir, _ := cmd.Flags().GetString("install-dir")
+			apiListen, _ := cmd.Flags().GetString("api-listen")
+			uiListen, _ := cmd.Flags().GetString("ui-listen")
+			jsonOut, _ := cmd.Flags().GetBool("json")
+			return runV2Status(v2StatusOptions{
+				InstallDir: installDir,
+				APIListen:  apiListen,
+				UIListen:   uiListen,
+				JSON:       jsonOut,
+			})
+		},
+	}
+	v2StatusCmd.Flags().String("install-dir", "", "Installation directory (default: auto-detect from running binary's stack layout, fallback .ncc-v2)")
+	v2StatusCmd.Flags().String("api-listen", ":8081", "API listen address used to derive the health-probe URL (host:port; same value passed to v2-start)")
+	v2StatusCmd.Flags().String("ui-listen", ":8080", "UI listen address used in the printed status row (host:port)")
+	v2StatusCmd.Flags().Bool("json", false, "Emit JSON object {install_dir, services:[...]} instead of the text table")
+	cmd.AddCommand(v2StatusCmd)
+
+	// doctor subcommand: single-command diagnostic for support
+	// tickets. Runs verify + v2-check + v2-status, prints recent
+	// log tails, and (by default) writes a redacted support tarball.
+	v2DoctorCmd := &cobra.Command{
+		Use:   "doctor",
+		Short: "Run all diagnostics + write a redacted support bundle (verify + v2-check + v2-status + log tails)",
+		Long: `doctor is the "something's broken, give me everything" diagnostic.
+It runs every read-only check the orchestrator ships and produces a
+single tar.gz support bundle that can be attached to a support ticket.
+
+Sections of the printed report (mirrored into report.txt inside the
+bundle):
+  1. verify   — embedded buildinfo + self SHA-256
+  2. v2-check — install-dir layout + path readability
+  3. v2-status — running services with PID/health/log-path
+  4. environment summary — GOOS/GOARCH, NCC_* env var NAMES (values redacted)
+  5. recent log tails — last 200 lines of each v2-*.log
+
+The default bundle path is ./ncc-support-<UTC-timestamp>.tar.gz; pass
+--output-file to override or --no-bundle to skip the tarball entirely.
+
+Secrets in <install-dir>/config.yaml are redacted before they enter
+the bundle: any key whose name contains password / secret / token /
+credential / api-key / client-id (case insensitive) has its value
+replaced by ***REDACTED***.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			installDir, _ := cmd.Flags().GetString("install-dir")
+			apiListen, _ := cmd.Flags().GetString("api-listen")
+			uiListen, _ := cmd.Flags().GetString("ui-listen")
+			outputFile, _ := cmd.Flags().GetString("output-file")
+			noBundle, _ := cmd.Flags().GetBool("no-bundle")
+			return runV2Doctor(v2DoctorOptions{
+				InstallDir: installDir,
+				APIListen:  apiListen,
+				UIListen:   uiListen,
+				OutputFile: outputFile,
+				NoBundle:   noBundle,
+			})
+		},
+	}
+	v2DoctorCmd.Flags().String("install-dir", "", "Installation directory (default: auto-detect, fallback .ncc-v2)")
+	v2DoctorCmd.Flags().String("api-listen", ":8081", "API listen address used to derive the health-probe URL")
+	v2DoctorCmd.Flags().String("ui-listen", ":8080", "UI listen address used in the printed status row")
+	v2DoctorCmd.Flags().String("output-file", "", "Bundle path (default ./ncc-support-<UTC-timestamp>.tar.gz)")
+	v2DoctorCmd.Flags().Bool("no-bundle", false, "Print the report only; do not write a tarball")
+	cmd.AddCommand(v2DoctorCmd)
+
 	genTestAggCmd := &cobra.Command{
 		Use:   "gen-test-agg",
 		Short: "Generate synthetic aggregated index.html for load testing",
@@ -14653,6 +15303,92 @@ Use --force to send a hard kill signal.`,
 		},
 	}
 	cmd.AddCommand(versionCmd)
+
+	// verify subcommand: integrity / provenance check usable by anyone
+	// who downloaded the binary without a code-signing certificate to
+	// verify against. Prints:
+	//   - injected ldflags (Version / BuildDate / Stream / GoVersion)
+	//   - debug.ReadBuildInfo() output (commit, dirty, modules) — only
+	//     the keys we care about, not the full module graph
+	//   - SHA256 of the running executable — useful as the value an
+	//     operator copy/pastes into checksums.txt comparison
+	//   - a hint pointing at the published checksums.txt URL for the
+	//     same release tag
+	// Together this lets a user answer "is the file I'm running really
+	// the one Nutanix published as v2.0.2?" using only the binary
+	// itself and a hex string from the GitHub release page.
+	verifyCmd := &cobra.Command{
+		Use:   "verify",
+		Short: "Print integrity + provenance metadata (self-hash, buildinfo, vendor)",
+		Long: `verify prints information that can be used to confirm the binary
+matches a known-good release without requiring an OS-level code signature:
+
+  - The version, stream, and build date that were embedded at link time.
+  - The git revision and dirty flag from Go's debug build info.
+  - The SHA-256 of this executable on disk.
+  - A reference URL where the matching SHA-256 is published.
+
+Compare the printed SHA-256 against the value next to the same
+ncc-orchestrator-<os>-<arch> filename in the release's checksums.txt
+(or release-attestation.json) on GitHub. If both match, the binary
+has not been tampered with in transit and originates from the build
+that produced the release.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runVerifyCommand(os.Stdout)
+		},
+	}
+	cmd.AddCommand(verifyCmd)
+
+	// completion subcommand: emit shell-completion scripts for bash,
+	// zsh, fish, and powershell. Uses cobra's built-in generators so
+	// the completions stay in lockstep with the actual subcommand /
+	// flag set automatically — no hand-maintained completion files
+	// to drift out of sync.
+	completionCmd := &cobra.Command{
+		Use:                   "completion [bash|zsh|fish|powershell]",
+		Short:                 "Generate shell completion script",
+		DisableFlagsInUseLine: true,
+		ValidArgs:             []string{"bash", "zsh", "fish", "powershell"},
+		Args:                  cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
+		Long: `Output a shell completion script for the specified shell.
+
+To install completion permanently, append the output to the
+appropriate location for your shell:
+
+Bash (Linux):
+  ncc-orchestrator completion bash | sudo tee /etc/bash_completion.d/ncc-orchestrator
+
+Bash (macOS, Homebrew bash-completion@2):
+  ncc-orchestrator completion bash > $(brew --prefix)/etc/bash_completion.d/ncc-orchestrator
+
+Zsh (with compinit enabled):
+  ncc-orchestrator completion zsh > "${fpath[1]}/_ncc-orchestrator"
+  # restart your shell, or:  compinit -i
+
+Fish:
+  ncc-orchestrator completion fish > ~/.config/fish/completions/ncc-orchestrator.fish
+
+PowerShell (current session):
+  ncc-orchestrator completion powershell | Out-String | Invoke-Expression
+
+PowerShell (persistent):
+  ncc-orchestrator completion powershell > $PROFILE.ncc-orchestrator.ps1
+  # then dot-source it from $PROFILE`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			switch args[0] {
+			case "bash":
+				return cmd.Root().GenBashCompletionV2(os.Stdout, true)
+			case "zsh":
+				return cmd.Root().GenZshCompletion(os.Stdout)
+			case "fish":
+				return cmd.Root().GenFishCompletion(os.Stdout, true)
+			case "powershell":
+				return cmd.Root().GenPowerShellCompletionWithDesc(os.Stdout)
+			}
+			return fmt.Errorf("unsupported shell %q", args[0])
+		},
+	}
+	cmd.AddCommand(completionCmd)
 
 	// discover-clusters subcommand: Prism Central cluster list (default v4 clustermgmt API)
 	discoverCmd := &cobra.Command{

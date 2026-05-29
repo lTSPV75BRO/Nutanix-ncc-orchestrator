@@ -1,0 +1,108 @@
+# One-command launch of the full v2 stack: API + UI together.
+#
+# Usage:
+#   1. Copy example_config.yaml to ./config/config.yaml and edit the
+#      cluster credentials block to match your environment.
+#   2. Optionally set NCC_PASSWORD in a .env file alongside this
+#      compose file (or export it in your shell).
+#   3. Build and run:
+#         docker compose up -d
+#   4. Open http://localhost:8080 in your browser. The api-server's
+#      --health-check probe gates compose's "depends_on: condition:
+#      service_healthy" so the UI only starts once the API is up.
+#
+# Notes:
+#   - The token file is written by the api-server on first start and
+#     shared with the ui-server via the named volume `ncc-api-token`.
+#     This avoids embedding the token in environment variables.
+#   - All persistent state (output reports, runner logs, audit logs,
+#     schedule + notification state) lives in named volumes so a
+#     `docker compose down` won't wipe history. Use `docker compose
+#     down -v` for a clean reset.
+#   - For a production deployment, replace the ALLOWED_ORIGINS /
+#     CORS_ORIGIN values with your real public hostnames and put the
+#     UI behind an HTTPS reverse proxy (nginx, Caddy, traefik).
+
+services:
+  ncc-api-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: ncc-orchestrator/api-server:local
+    restart: unless-stopped
+    networks: [ncc]
+    ports:
+      # bind only to loopback by default so the API isn't directly
+      # exposed; the UI proxies all browser traffic. Remove the
+      # "127.0.0.1:" prefix to expose the API to the host network.
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - ./config:/app/config:ro
+      - ncc-output:/app/outputfiles
+      - ncc-logs:/app/logs
+      - ncc-ncc:/app/nccfiles
+      - ncc-api-token:/app/data/auth
+    environment:
+      # NCC_PASSWORD picked up by the api-server when triggering
+      # runs that reference secret://NCC_PASSWORD in config.yaml.
+      - NCC_PASSWORD=${NCC_PASSWORD:-}
+    command:
+      - "--listen=:8081"
+      - "--repo-root=/app"
+      - "--config-path=/app/config/config.yaml"
+      - "--output-dir=/app/outputfiles"
+      - "--log-dir=/app/nccfiles"
+      - "--runner-log-path=/app/logs/ncc-runner.log"
+      - "--token-file-path=/app/data/auth/.ncc-api-token"
+      - "--orchestrator-bin=/usr/local/bin/ncc-orchestrator"
+      - "--auth-mode=token"
+      - "--cors-origin=http://localhost:8080"
+      # Prometheus scrapers can hit /metrics directly without a token
+      # because compose's `ncc` network is private. Drop this flag in
+      # production deployments unless you put the api-server behind a
+      # service mesh that authenticates scrapes.
+      - "--metrics-public"
+
+  ncc-ui-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+    image: ncc-orchestrator/ui-server:local
+    restart: unless-stopped
+    networks: [ncc]
+    depends_on:
+      ncc-api-server:
+        # Wait for the api-server's HEALTHCHECK CMD (which uses the
+        # new --health-check probe mode) to succeed before launching
+        # the UI. Eliminates the race where the UI starts before the
+        # API has written its token file.
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    volumes:
+      - ncc-api-token:/app/data/auth:ro
+    command:
+      - "--listen=:8080"
+      - "--dir=/app/frontend/dist"
+      - "--backend-url=http://ncc-api-server:8081"
+      - "--api-token-file=/app/data/auth/.ncc-api-token"
+      - "--api-auth-mode=token"
+      - "--allowed-origins=http://localhost:8080"
+
+networks:
+  ncc:
+    driver: bridge
+
+volumes:
+  # Output reports / per-run aggregated bundles. Persistent so users
+  # keep their report history across container rebuilds.
+  ncc-output:
+  # Raw NCC runner logs. Persistent for support-bundle and audit use.
+  ncc-logs:
+  # Per-run NCC tool stdout/stderr.
+  ncc-ncc:
+  # API token; written by the api-server on first start, mounted
+  # read-only into the ui-server. Surviving container rebuilds means
+  # browser sessions don't have to re-authenticate after `docker
+  # compose pull && docker compose up -d`.
+  ncc-api-token:

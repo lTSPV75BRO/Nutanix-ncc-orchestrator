@@ -13,7 +13,77 @@ go mod download && go mod verify && go vet ./... && go test ./cmd/... ./... -cou
 
 # 2) Build CLI/API/UI binaries for linux/darwin/windows × amd64/arm64.
 # -buildvcs=true (default) embeds git revision+dirty status accessible via debug.ReadBuildInfo().
-for goos in linux darwin windows; do for goarch in amd64 arm64; do ext=""; [ "$goos" = "windows" ] && ext=".exe"; for pkg in . ./cmd/ncc-api-server ./cmd/ncc-ui-server; do name=$(basename "$pkg"); [ "$pkg" = "." ] && name=ncc-orchestrator; CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch go build -trimpath -buildvcs=true -ldflags "$LDFLAGS" -o "dist/${name}-${goos}-${goarch}${ext}" "$pkg" || exit 1; done; done; done
+# Windows builds: tools/winversioninfo emits one resource_windows_<arch>.syso per package
+# directory (orchestrator at repo root, api/ui under cmd/...). Go's build system auto-picks
+# them up when GOOS=windows and the target GOARCH matches the file suffix; that embeds
+# product / copyright / version metadata into the .exe Properties dialog so administrators
+# can identify the binary's origin (this open-source project, MIT licensed) even before
+# any code-signing certificate is involved. The metadata explicitly disclaims any Nutanix
+# affiliation so the embedded fields cannot be misread as a vendor endorsement. The .syso
+# files are gitignored and regenerated each release.
+GIT_REV_SHORT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+for goos in linux darwin windows; do
+  if [ "$goos" = "windows" ]; then
+    for arch in amd64 arm64; do
+      go run ./tools/winversioninfo --version="$VERSION" --git-rev="$GIT_REV_SHORT" --output-dir=. --arch="$arch" || exit 1
+    done
+  fi
+  for goarch in amd64 arm64; do
+    ext=""; [ "$goos" = "windows" ] && ext=".exe"
+    for pkg in . ./cmd/ncc-api-server ./cmd/ncc-ui-server; do
+      name=$(basename "$pkg"); [ "$pkg" = "." ] && name=ncc-orchestrator
+      CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch go build -trimpath -buildvcs=true -ldflags "$LDFLAGS" -o "dist/${name}-${goos}-${goarch}${ext}" "$pkg" || exit 1
+    done
+  done
+done
+# Clean up generated .syso files so subsequent ad-hoc `go build` invocations
+# from the repo root don't accidentally pick up stale resources.
+rm -f resource_windows_*.syso cmd/ncc-api-server/resource_windows_*.syso cmd/ncc-ui-server/resource_windows_*.syso
+
+# 2b) Optional code signing. Each block is a no-op unless the matching env vars are set.
+#
+# macOS (Apple Developer ID, hardened runtime, notarization, stapling-not-applicable-to-bare-binaries):
+#   export NCC_MACOS_SIGN_IDENTITY="Developer ID Application: <Your Name> (TEAMID)"
+#   export NCC_MACOS_NOTARY_PROFILE=ncc-notary    # see `xcrun notarytool store-credentials`
+# Windows (Authenticode via osslsigncode; works on macOS/Linux build hosts):
+#   export NCC_WINDOWS_PFX_PATH=/path/to/cert.pfx
+#   export NCC_WINDOWS_PFX_PASSWORD="..."
+#   export NCC_WINDOWS_TIMESTAMP_URL="http://timestamp.digicert.com"
+# Linux (GPG detached signature alongside each binary):
+#   export NCC_LINUX_GPG_KEY_ID="0xDEADBEEF"
+#
+# Without these vars set, the build still succeeds and produces unsigned binaries; the
+# README's "Trust and verification" section explains how end users can verify the
+# release with SHA256 manifests + Go buildinfo even when binaries are unsigned.
+if [ -n "${NCC_MACOS_SIGN_IDENTITY:-}" ] && command -v codesign >/dev/null 2>&1; then
+  for f in dist/ncc-orchestrator-darwin-* dist/ncc-api-server-darwin-* dist/ncc-ui-server-darwin-*; do
+    [ -f "$f" ] || continue
+    codesign --force --options runtime --timestamp --sign "$NCC_MACOS_SIGN_IDENTITY" "$f" || exit 1
+    codesign --verify --strict --verbose=2 "$f" || exit 1
+  done
+  if [ -n "${NCC_MACOS_NOTARY_PROFILE:-}" ] && command -v xcrun >/dev/null 2>&1; then
+    for f in dist/ncc-orchestrator-darwin-* dist/ncc-api-server-darwin-* dist/ncc-ui-server-darwin-*; do
+      [ -f "$f" ] || continue
+      ditto -c -k --keepParent "$f" "$f.zip"
+      xcrun notarytool submit "$f.zip" --keychain-profile "$NCC_MACOS_NOTARY_PROFILE" --wait || exit 1
+      rm -f "$f.zip"
+    done
+  fi
+fi
+if [ -n "${NCC_WINDOWS_PFX_PATH:-}" ] && command -v osslsigncode >/dev/null 2>&1; then
+  for f in dist/ncc-orchestrator-windows-*.exe dist/ncc-api-server-windows-*.exe dist/ncc-ui-server-windows-*.exe; do
+    [ -f "$f" ] || continue
+    osslsigncode sign -pkcs12 "$NCC_WINDOWS_PFX_PATH" -pass "${NCC_WINDOWS_PFX_PASSWORD:-}" \
+      -h sha256 -t "${NCC_WINDOWS_TIMESTAMP_URL:-http://timestamp.digicert.com}" \
+      -in "$f" -out "$f.signed" && mv "$f.signed" "$f" || exit 1
+  done
+fi
+if [ -n "${NCC_LINUX_GPG_KEY_ID:-}" ] && command -v gpg >/dev/null 2>&1; then
+  for f in dist/ncc-orchestrator-linux-* dist/ncc-v2-stack-linux-*; do
+    [ -f "$f" ] || continue
+    gpg --batch --yes --local-user "$NCC_LINUX_GPG_KEY_ID" --detach-sign --armor --output "$f.asc" "$f" || exit 1
+  done
+fi
 
 # 3) Local-arch convenience symlinks at dist/ncc-{orchestrator,api-server,ui-server} for quick testing.
 LOCAL_OS=$(go env GOOS); LOCAL_ARCH=$(go env GOARCH); LOCAL_EXT=""; if [ "$LOCAL_OS" = "windows" ]; then LOCAL_EXT=".exe"; fi; for n in ncc-orchestrator ncc-api-server ncc-ui-server; do ln -sf "${n}-${LOCAL_OS}-${LOCAL_ARCH}${LOCAL_EXT}" "dist/${n}${LOCAL_EXT}"; done
@@ -35,6 +105,74 @@ cp example_config.yaml dist/ 2>/dev/null; [ -f RELEASE_NOTES_v${VERSION}.md ] &&
 # explicit so resource forks aren't included by selector anyway.
 rm -rf dist/.stack && mkdir -p dist/.stack && for goos in linux darwin windows; do for goarch in amd64 arm64; do root="dist/.stack/${goos}-${goarch}"; rm -rf "$root"; mkdir -p "$root/bin"; ext=""; [ "$goos" = "windows" ] && ext=".exe"; cp "dist/ncc-orchestrator-${goos}-${goarch}${ext}" "$root/bin/ncc-orchestrator${ext}" || exit 1; cp "dist/ncc-api-server-${goos}-${goarch}${ext}" "$root/bin/ncc-api-server${ext}" || exit 1; cp "dist/ncc-ui-server-${goos}-${goarch}${ext}" "$root/bin/ncc-ui-server${ext}" || exit 1; cp -R dist/frontend-dist "$root/frontend-dist"; [ -f dist/example_config.yaml ] && cp dist/example_config.yaml "$root/"; if [ "$goos" = "windows" ]; then (cd "$root" && zip -qr "../../ncc-v2-stack-${goos}-${goarch}.zip" bin frontend-dist example_config.yaml 2>/dev/null) || (cd "$root" && zip -qr "../../ncc-v2-stack-${goos}-${goarch}.zip" .); else (cd "$root" && COPYFILE_DISABLE=1 tar --no-mac-metadata -czf "../../ncc-v2-stack-${goos}-${goarch}.tar.gz" bin frontend-dist $([ -f example_config.yaml ] && echo example_config.yaml) 2>/dev/null || COPYFILE_DISABLE=1 tar -czf "../../ncc-v2-stack-${goos}-${goarch}.tar.gz" bin frontend-dist $([ -f example_config.yaml ] && echo example_config.yaml)); fi; done; done
 
+# 6b) Emit release-attestation.json — a single per-release provenance document
+# binding the artifact set to a build environment. Pairs with checksums.txt for
+# users / IT teams who want a one-stop "what is this release" answer:
+#   {
+#     "product": "...",  "version": "...",  "stream": "...",
+#     "build_date": "...", "git_revision": "...", "git_dirty": false,
+#     "go_version": "...", "build_host_os": "...", "build_host_arch": "...",
+#     "project_url": "...", "license": "...", "affiliation": "...",
+#     "artifacts": [{"name": "...", "size": <int>, "sha256": "..."}, ...]
+#   }
+# `affiliation` is hard-coded to a non-affiliation disclaimer so the manifest
+# itself cannot be mistakenly cited as a Nutanix endorsement.
+# This is intentionally hand-rolled (no jq dep) so the script stays portable.
+GIT_REV_FULL=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+GIT_DIRTY_BOOL=$([ -z "$GIT_DIRTY" ] && echo false || echo true)
+{
+  echo "{"
+  echo "  \"product\": \"NCC Orchestrator\","
+  echo "  \"version\": \"${VERSION}\","
+  echo "  \"stream\": \"${STREAM}\","
+  echo "  \"build_date\": \"${BUILD_DATE}\","
+  echo "  \"git_revision\": \"${GIT_REV_FULL}\","
+  echo "  \"git_dirty\": ${GIT_DIRTY_BOOL},"
+  echo "  \"go_version\": \"${GO_VER}\","
+  echo "  \"build_host_os\": \"$(go env GOHOSTOS)\","
+  echo "  \"build_host_arch\": \"$(go env GOHOSTARCH)\","
+  echo "  \"project_url\": \"https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator\","
+  echo "  \"license\": \"MIT (see LICENSE in the source repository)\","
+  echo "  \"affiliation\": \"independent open-source project; not affiliated with or endorsed by Nutanix, Inc.\","
+  echo "  \"artifacts\": ["
+  first=1
+  for f in dist/ncc-orchestrator-* dist/ncc-v2-stack-* dist/example_config.yaml "dist/RELEASE_NOTES_v${VERSION}.md"; do
+    [ -e "$f" ] || continue
+    base=$(basename "$f")
+    sz=$(wc -c < "$f" | tr -d ' ')
+    sha=$(shasum -a 256 "$f" 2>/dev/null | awk '{print $1}' || sha256sum "$f" | awk '{print $1}')
+    [ $first -eq 1 ] && first=0 || echo ","
+    printf "    {\"name\": \"%s\", \"size\": %s, \"sha256\": \"%s\"}" "$base" "$sz" "$sha"
+  done
+  echo
+  echo "  ]"
+  echo "}"
+} > dist/release-attestation.json
+echo "wrote dist/release-attestation.json"
+
+# 6c) Optional: emit a CycloneDX SBOM (Software Bill of Materials) per binary.
+# Uses cyclonedx-gomod, the canonical Go module SBOM generator
+# (https://github.com/CycloneDX/cyclonedx-gomod). Generates one
+# bom-<binary>.cdx.json file per main package; release consumers can feed
+# them to Trivy/Grype/Dependency-Track for CVE matching against the
+# exact Go module set baked into each artifact.
+#
+# Skips silently when cyclonedx-gomod is not installed so binaryGO.txt
+# remains usable on bare developer machines. Install with:
+#   go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest
+# Pinning a tagged version is recommended for reproducible builds:
+#   go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.7.0
+if command -v cyclonedx-gomod >/dev/null 2>&1; then
+  for spec in "ncc-orchestrator:." "ncc-api-server:./cmd/ncc-api-server" "ncc-ui-server:./cmd/ncc-ui-server"; do
+    name="${spec%%:*}"
+    pkg="${spec##*:}"
+    cyclonedx-gomod app -licenses -json -main "$pkg" -output "dist/bom-${name}.cdx.json" -output-version 1.5 || exit 1
+  done
+  echo "wrote dist/bom-*.cdx.json (CycloneDX 1.5)"
+else
+  echo "skip SBOM: cyclonedx-gomod not installed (go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.7.0)"
+fi
+
 # 7) Generate checksums for every publishable release asset (macOS/BSD + GNU fallback).
 # IMPORTANT: standalone ncc-api-server-* and ncc-ui-server-* binaries are intentionally
 # EXCLUDED from publishable assets (and therefore from this manifest). v1.x self-updaters
@@ -44,7 +182,7 @@ rm -rf dist/.stack && mkdir -p dist/.stack && for goos in linux darwin windows; 
 # v2.0.0 known-issues section in RELEASE_NOTES_v2.0.0.md. The api-server and ui-server
 # binaries continue to ship inside ncc-v2-stack-* archives where the v1.x updater cannot
 # see them (archive assets take the install-by-extraction code path).
-(cd dist && : > checksums.txt && for f in ncc-orchestrator-* ncc-v2-stack-* example_config.yaml RELEASE_NOTES_v${VERSION}.md; do [ -e "$f" ] || continue; (shasum -a 256 "$f" 2>/dev/null || sha256sum "$f") >> checksums.txt; done; sort -o checksums.txt checksums.txt)
+(cd dist && : > checksums.txt && for f in ncc-orchestrator-* ncc-v2-stack-* example_config.yaml RELEASE_NOTES_v${VERSION}.md release-attestation.json bom-*.cdx.json; do [ -e "$f" ] || continue; (shasum -a 256 "$f" 2>/dev/null || sha256sum "$f") >> checksums.txt; done; sort -o checksums.txt checksums.txt)
 
 # 8) Verification: print the 6 stack archives, list cross-arch binaries, then assert counts.
 ls -1 dist/ncc-v2-stack-* 2>/dev/null; ls -1 dist/ncc-orchestrator-* dist/ncc-api-server-* dist/ncc-ui-server-* 2>/dev/null

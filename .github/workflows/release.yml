@@ -1,0 +1,148 @@
+name: Release
+
+# Tag-driven release pipeline. Pushing a `v*` tag (e.g. v2.0.2) builds
+# every binary + every stack archive via binaryGO.txt, generates SBOMs
+# and a release-attestation.json, signs each artifact with a GitHub
+# Actions SLSA build-provenance attestation, and publishes the result
+# as a GitHub Release.
+#
+# What this gives release consumers:
+#
+#   1. SHA-256 manifest (checksums.txt) signed by the same provenance
+#      attestation, so a single `gh attestation verify` covers every
+#      artifact in the release.
+#
+#   2. CycloneDX 1.5 SBOMs (bom-*.cdx.json) for each binary; pluggable
+#      into Trivy / Grype / Dependency-Track for CVE alerts.
+#
+#   3. release-attestation.json — a hand-rolled provenance document
+#      that pairs with the SLSA attestation but is also human-readable
+#      and tool-friendly without `gh` (good for air-gapped IT review).
+#
+# All steps run on stock GitHub-hosted runners. No self-hosted runner
+# is involved at any point in the pipeline; that's a deliberate
+# constraint so the SLSA attestation chain remains auditable end-to-end
+# from a public, reproducible build environment.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or commit to build"
+        required: false
+        default: ""
+
+permissions:
+  contents: write          # create/update GitHub Release
+  id-token: write          # OIDC token for actions/attest-build-provenance
+  attestations: write      # write the attestation back to the repo
+
+jobs:
+  build:
+    name: Build, SBOM, attest, release
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout (tag or input ref)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          # Full history is required so binaryGO.txt's git rev / dirty
+          # detection matches what the developer would see locally.
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          check-latest: true
+
+      - name: Setup Node (for frontend build)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install cyclonedx-gomod (SBOM generator)
+        # Pinned version: bumping requires updating binaryGO.txt's
+        # install hint comment too. cyclonedx-gomod is the canonical
+        # CycloneDX SBOM tool maintained by the CycloneDX project.
+        run: |
+          go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.7.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Run binaryGO.txt (build + sign + SBOM + attestation)
+        env:
+          # binaryGO.txt's optional code-signing blocks are no-ops
+          # unless the matching env vars are set. We don't ship signing
+          # secrets to GHA by default; operators forking this workflow
+          # can wire repo Secrets to NCC_MACOS_*, NCC_WINDOWS_*,
+          # NCC_LINUX_GPG_KEY_ID and the blocks will activate.
+          NCC_MACOS_SIGN_IDENTITY: ${{ secrets.NCC_MACOS_SIGN_IDENTITY }}
+          NCC_MACOS_NOTARY_PROFILE: ${{ secrets.NCC_MACOS_NOTARY_PROFILE }}
+          NCC_WINDOWS_PFX_PATH: ${{ secrets.NCC_WINDOWS_PFX_PATH }}
+          NCC_WINDOWS_PFX_PASSWORD: ${{ secrets.NCC_WINDOWS_PFX_PASSWORD }}
+          NCC_LINUX_GPG_KEY_ID: ${{ secrets.NCC_LINUX_GPG_KEY_ID }}
+        run: |
+          set -euxo pipefail
+          # binaryGO.txt is a shell script; source it line-by-line so
+          # any failure short-circuits the workflow rather than
+          # silently producing partial dist/ contents.
+          bash -euxo pipefail binaryGO.txt
+
+      - name: Verify dist/ inventory
+        # Belt-and-suspenders: binaryGO.txt prints RELEASE_OK on
+        # success, but we re-check the count here so the workflow
+        # cannot accept a partial build that somehow snuck past.
+        run: |
+          test -f dist/checksums.txt
+          test -f dist/release-attestation.json
+          ls dist/ncc-v2-stack-* | wc -l | grep -q 6
+          ls dist/ncc-orchestrator-* dist/ncc-api-server-* dist/ncc-ui-server-* | wc -l | grep -q 18
+          echo "release inventory verified"
+
+      - name: Generate SLSA build-provenance attestation
+        # actions/attest-build-provenance@v2 generates an in-toto
+        # attestation that GitHub signs with a workload identity
+        # certificate via Sigstore. End users verify with:
+        #   gh attestation verify <file> --owner=<owner>
+        # Without `gh`, the bundled signature can be verified with
+        # cosign / cosign verify-blob-attestation. The attestation
+        # binds the artifact set to this exact workflow run, this
+        # repo, and this tag, providing supply-chain provenance that
+        # survives mirror sites and CDN caches.
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/ncc-orchestrator-*
+            dist/ncc-api-server-*
+            dist/ncc-ui-server-*
+            dist/ncc-v2-stack-*
+            dist/checksums.txt
+            dist/release-attestation.json
+            dist/bom-*.cdx.json
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        # Only fire on tag pushes, not on workflow_dispatch (manual
+        # rebuilds don't need a new Release; they regenerate
+        # attestations against the existing tag).
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          # body-path is the dist-bundled release notes that
+          # binaryGO.txt copies in step 5. Falls back to the auto-
+          # generated release body if the file isn't present.
+          body_path: dist/RELEASE_NOTES_v${{ github.ref_name }}.md
+          generate_release_notes: true
+          files: |
+            dist/ncc-orchestrator-*
+            dist/ncc-v2-stack-*
+            dist/example_config.yaml
+            dist/RELEASE_NOTES_*.md
+            dist/checksums.txt
+            dist/release-attestation.json
+            dist/bom-*.cdx.json

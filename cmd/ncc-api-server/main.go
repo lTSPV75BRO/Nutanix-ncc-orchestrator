@@ -27,9 +27,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	yaml "go.yaml.in/yaml/v3"
+	"goncc/internal/v2layout"
 )
 
 // Build-time metadata. These are set via -ldflags at link time, e.g.:
@@ -90,6 +92,16 @@ type apiServer struct {
 	readTimeout           time.Duration
 	writeTimeout          time.Duration
 	idleTimeout           time.Duration
+	metricsPublic         bool      // when true, /metrics bypasses token auth
+	startedAt             time.Time // server boot timestamp (set in main)
+
+	// Lifecycle counters surfaced on /metrics. Counters are
+	// monotonic; they're cleared only by a process restart, which
+	// matches Prometheus's expectation that counters reset to 0
+	// on target restart.
+	runsTriggeredTotal atomic.Int64
+	runsCompletedTotal atomic.Int64
+	runsFailedTotal    atomic.Int64
 
 	mu        sync.Mutex
 	active    bool
@@ -284,7 +296,50 @@ func main() {
 	flag.DurationVar(&s.readTimeout, "read-timeout", 15*time.Second, "HTTP server read timeout")
 	flag.DurationVar(&s.writeTimeout, "write-timeout", 60*time.Second, "HTTP server write timeout")
 	flag.DurationVar(&s.idleTimeout, "idle-timeout", 60*time.Second, "HTTP server idle timeout")
+	flag.BoolVar(&s.metricsPublic, "metrics-public", false, "Allow unauthenticated GET /metrics for Prometheus scrapers (off by default; on private networks behind a service mesh this is safe)")
+	// Probe mode: when --health-check is passed, the api-server does
+	// NOT bind a port. Instead it reads the on-disk token, hits its
+	// own /api/v1/health URL on --listen, and exits 0/1. Designed for
+	// Docker HEALTHCHECK and Kubernetes liveness/readiness probes so
+	// operators don't have to ship a separate curl/wget into the
+	// container image.
+	var healthCheckMode bool
+	var healthCheckTimeout time.Duration
+	flag.BoolVar(&healthCheckMode, "health-check", false, "Probe self at /api/v1/health and exit (0=healthy, 1=unhealthy); does NOT start a server")
+	flag.DurationVar(&healthCheckTimeout, "health-check-timeout", 5*time.Second, "Connect+read timeout for --health-check")
 	flag.Parse()
+
+	if healthCheckMode {
+		// Stack-aware defaults still apply here so a probe invocation
+		// from <root>/bin/ncc-api-server --health-check picks the
+		// matching token file without flags.
+		applyStackAwareDefaults(&s, os.Args[1:])
+		runHealthCheckProbe(&s, listen, healthCheckTimeout)
+		return
+	}
+
+	// Helpful subcommand handling. Without this, an invocation like
+	//
+	//     ./ncc-api-server update --check
+	//
+	// silently starts the server because Go's flag package treats
+	// "update" as a positional arg and ignores the trailing flags.
+	// We catch any positional arg here, special-case "version" to
+	// print buildinfo, and otherwise redirect the user to the
+	// orchestrator binary inside the same stack.
+	handleSubcommandArgs(flag.Args())
+
+	// Stack-aware defaults: if the api-server binary was launched from
+	// inside an extracted v2 stack (`<root>/bin/<self>`) AND the user
+	// did not pass an explicit value for a path flag, rewrite that
+	// flag to the install-dir-relative path. Mirrors the v2.0.2
+	// orchestrator auto-detect so that
+	//
+	//     cd ncc-v2-stack-<os>-<arch>/bin && ./ncc-api-server
+	//
+	// "just works" without the user having to re-derive every path
+	// from the stack root.
+	applyStackAwareDefaults(&s, os.Args[1:])
 
 	s.authToken = strings.TrimSpace(os.Getenv("NCC_API_TOKEN"))
 	if strings.Contains(s.corsOrigin, "*") {
@@ -318,11 +373,13 @@ func main() {
 	if s.rateLimitPerMinute > 0 {
 		s.rateLimiter = newFixedWindowRateLimiter(s.rateLimitPerMinute, time.Minute)
 	}
+	s.startedAt = time.Now().UTC()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/health", s.handleHealth)
 	mux.HandleFunc("/api/v1/audit", s.handleAudit)
 	mux.HandleFunc("/api/v1/metrics/rate-limit", s.handleRateLimitMetrics)
+	mux.HandleFunc("/metrics", s.handlePrometheusMetrics)
 	mux.HandleFunc("/api/v1/auth/session", s.handleAuthSession)
 	mux.HandleFunc("/api/v1/auth/rotate", s.handleAuthRotate)
 	mux.HandleFunc("/api/v1/settings/config", s.handleConfig)
@@ -391,6 +448,15 @@ func (s *apiServer) withAuth(next http.Handler) http.Handler {
 			return
 		}
 		if r.Method == http.MethodGet && (r.URL.Path == "/api/v1/openapi.json" || r.URL.Path == "/api/v1/meta/routes" || r.URL.Path == "/api/v1/metrics/rate-limit") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// /metrics is publicly readable when the operator explicitly
+		// opts in via --metrics-public so vanilla Prometheus scrapers
+		// (which don't easily set X-Api-Token) can ingest the
+		// endpoint. Off by default; same auth as everything else
+		// otherwise.
+		if r.Method == http.MethodGet && r.URL.Path == "/metrics" && s.metricsPublic {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -562,6 +628,117 @@ func (s *apiServer) handleRateLimitMetrics(w http.ResponseWriter, r *http.Reques
 		},
 		"metrics": st,
 	}})
+}
+
+// handlePrometheusMetrics emits Prometheus exposition format on
+// GET /metrics. Intentionally hand-rolled (no client_golang dep) so
+// the api-server stays at its current dependency footprint and the
+// scrape endpoint never needs reachability to a Prometheus library
+// for build-time updates.
+//
+// Metric naming follows the Prometheus best practices: snake_case,
+// `_total` suffix for monotonic counters, `_seconds` for time, and a
+// `ncc_` namespace prefix to avoid collisions when scraped alongside
+// other targets.
+//
+// HELP / TYPE comments are emitted so the endpoint passes
+// `promtool check metrics`. The response is text/plain;
+// version=0.0.4; charset=utf-8 — the canonical content type
+// Prometheus advertises in its scrape Accept header.
+func (s *apiServer) handlePrometheusMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+
+	now := time.Now().UTC()
+	uptime := now.Sub(s.startedAt).Seconds()
+
+	s.mu.Lock()
+	active := 0
+	if s.active {
+		active = 1
+	}
+	startedTS := float64(0)
+	if !s.started.IsZero() {
+		startedTS = float64(s.started.Unix())
+	}
+	s.mu.Unlock()
+
+	fmt.Fprintf(w, "# HELP ncc_build_info Build metadata for this api-server (always 1).\n")
+	fmt.Fprintf(w, "# TYPE ncc_build_info gauge\n")
+	fmt.Fprintf(w, "ncc_build_info{version=%q,stream=%q,go_version=%q,os=%q,arch=%q} 1\n",
+		Version, Stream, GoVersion, runtime.GOOS, runtime.GOARCH)
+
+	fmt.Fprintf(w, "# HELP ncc_process_start_time_seconds Unix epoch start time of the api-server process.\n")
+	fmt.Fprintf(w, "# TYPE ncc_process_start_time_seconds gauge\n")
+	fmt.Fprintf(w, "ncc_process_start_time_seconds %d\n", s.startedAt.Unix())
+
+	fmt.Fprintf(w, "# HELP ncc_process_uptime_seconds Seconds since the api-server started.\n")
+	fmt.Fprintf(w, "# TYPE ncc_process_uptime_seconds gauge\n")
+	fmt.Fprintf(w, "ncc_process_uptime_seconds %.3f\n", uptime)
+
+	fmt.Fprintf(w, "# HELP ncc_run_active 1 when an NCC run is currently executing, else 0.\n")
+	fmt.Fprintf(w, "# TYPE ncc_run_active gauge\n")
+	fmt.Fprintf(w, "ncc_run_active %d\n", active)
+
+	fmt.Fprintf(w, "# HELP ncc_run_started_seconds Unix epoch start time of the currently-running NCC run (0 when idle).\n")
+	fmt.Fprintf(w, "# TYPE ncc_run_started_seconds gauge\n")
+	fmt.Fprintf(w, "ncc_run_started_seconds %.0f\n", startedTS)
+
+	fmt.Fprintf(w, "# HELP ncc_runs_triggered_total Cumulative count of NCC runs triggered via /api/v1/runs/trigger since process start.\n")
+	fmt.Fprintf(w, "# TYPE ncc_runs_triggered_total counter\n")
+	fmt.Fprintf(w, "ncc_runs_triggered_total %d\n", s.runsTriggeredTotal.Load())
+
+	fmt.Fprintf(w, "# HELP ncc_runs_completed_total Cumulative count of NCC runs that completed (any exit code) since process start.\n")
+	fmt.Fprintf(w, "# TYPE ncc_runs_completed_total counter\n")
+	fmt.Fprintf(w, "ncc_runs_completed_total %d\n", s.runsCompletedTotal.Load())
+
+	fmt.Fprintf(w, "# HELP ncc_runs_failed_total Cumulative count of NCC runs that exited with a non-zero status since process start.\n")
+	fmt.Fprintf(w, "# TYPE ncc_runs_failed_total counter\n")
+	fmt.Fprintf(w, "ncc_runs_failed_total %d\n", s.runsFailedTotal.Load())
+
+	fmt.Fprintf(w, "# HELP ncc_go_goroutines Number of goroutines in the running api-server process.\n")
+	fmt.Fprintf(w, "# TYPE ncc_go_goroutines gauge\n")
+	fmt.Fprintf(w, "ncc_go_goroutines %d\n", runtime.NumGoroutine())
+
+	fmt.Fprintf(w, "# HELP ncc_go_memstats_alloc_bytes Currently allocated heap bytes (runtime.MemStats.Alloc).\n")
+	fmt.Fprintf(w, "# TYPE ncc_go_memstats_alloc_bytes gauge\n")
+	fmt.Fprintf(w, "ncc_go_memstats_alloc_bytes %d\n", ms.Alloc)
+
+	fmt.Fprintf(w, "# HELP ncc_go_memstats_sys_bytes Total bytes obtained from the OS (runtime.MemStats.Sys).\n")
+	fmt.Fprintf(w, "# TYPE ncc_go_memstats_sys_bytes gauge\n")
+	fmt.Fprintf(w, "ncc_go_memstats_sys_bytes %d\n", ms.Sys)
+
+	fmt.Fprintf(w, "# HELP ncc_go_memstats_heap_inuse_bytes Heap in-use bytes (runtime.MemStats.HeapInuse).\n")
+	fmt.Fprintf(w, "# TYPE ncc_go_memstats_heap_inuse_bytes gauge\n")
+	fmt.Fprintf(w, "ncc_go_memstats_heap_inuse_bytes %d\n", ms.HeapInuse)
+
+	fmt.Fprintf(w, "# HELP ncc_go_gc_total Total GC cycles since process start (runtime.MemStats.NumGC).\n")
+	fmt.Fprintf(w, "# TYPE ncc_go_gc_total counter\n")
+	fmt.Fprintf(w, "ncc_go_gc_total %d\n", ms.NumGC)
+
+	if s.rateLimiter != nil {
+		st := s.rateLimiter.stats(now)
+		fmt.Fprintf(w, "# HELP ncc_ratelimit_window_seconds Rate-limiter window length in seconds.\n")
+		fmt.Fprintf(w, "# TYPE ncc_ratelimit_window_seconds gauge\n")
+		fmt.Fprintf(w, "ncc_ratelimit_window_seconds %d\n", st.WindowSeconds)
+		fmt.Fprintf(w, "# HELP ncc_ratelimit_active_buckets Number of distinct (client, route) buckets tracked in the current window.\n")
+		fmt.Fprintf(w, "# TYPE ncc_ratelimit_active_buckets gauge\n")
+		fmt.Fprintf(w, "ncc_ratelimit_active_buckets %d\n", st.ActiveBuckets)
+		fmt.Fprintf(w, "# HELP ncc_ratelimit_allowed_total Cumulative requests allowed by the rate limiter.\n")
+		fmt.Fprintf(w, "# TYPE ncc_ratelimit_allowed_total counter\n")
+		fmt.Fprintf(w, "ncc_ratelimit_allowed_total %d\n", st.AllowedTotal)
+		fmt.Fprintf(w, "# HELP ncc_ratelimit_blocked_total Cumulative requests blocked by the rate limiter.\n")
+		fmt.Fprintf(w, "# TYPE ncc_ratelimit_blocked_total counter\n")
+		fmt.Fprintf(w, "ncc_ratelimit_blocked_total %d\n", st.BlockedTotal)
+	}
 }
 
 func (s *apiServer) handleAPIDocsHome(w http.ResponseWriter, r *http.Request) {
@@ -2145,6 +2322,7 @@ func (s *apiServer) handleRunTrigger(w http.ResponseWriter, r *http.Request) {
 	}
 	s.active = true
 	s.started = time.Now().UTC()
+	s.runsTriggeredTotal.Add(1)
 	s.lastErr = ""
 	s.lastOut = ""
 	s.lastCmd = nil
@@ -2882,6 +3060,10 @@ func (s *apiServer) setRunDone(err error, output string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.active = false
+	s.runsCompletedTotal.Add(1)
+	if err != nil {
+		s.runsFailedTotal.Add(1)
+	}
 	s.lastOut = tailString(strings.TrimSpace(output), 4000)
 	s.liveOut = nil
 	if err != nil {
@@ -3423,6 +3605,247 @@ func tokenSource(activeToken, envToken string) string {
 		return "env"
 	}
 	return "generated"
+}
+
+// runHealthCheckProbe implements the --health-check mode. It does
+// NOT bind a listening socket. Instead it:
+//
+//  1. Reads the on-disk token from --token-file-path (the api-server
+//     wrote this on its first start; stack-aware defaults will have
+//     pointed it at <root>/.ncc-api-token if applicable).
+//  2. Issues GET /api/v1/health to the URL derived from --listen,
+//     forcing IPv4 loopback when the bind addr is :PORT or
+//     0.0.0.0:PORT (avoids the macOS IPv6/IPv4 mismatch the
+//     orchestrator's wait-ready already works around).
+//  3. Exits 0 on a 200 with `data.status == "ok"`, 1 on any other
+//     outcome.
+//
+// Designed for `HEALTHCHECK CMD ["ncc-api-server", "--health-check"]`
+// in Docker images and `livenessProbe.exec.command` in Kubernetes
+// manifests, so operators don't have to ship curl/wget in the image.
+func runHealthCheckProbe(s *apiServer, listenAddr string, timeout time.Duration) {
+	tokenPath := s.tokenFilePath
+	if !filepath.IsAbs(tokenPath) {
+		tokenPath = filepath.Join(s.repoRoot, tokenPath)
+	}
+	tokenBytes, err := os.ReadFile(tokenPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "health-check: read token %s: %v\n", tokenPath, err)
+		os.Exit(1)
+	}
+	token := strings.TrimSpace(string(tokenBytes))
+
+	host, port, err := net.SplitHostPort(strings.TrimSpace(listenAddr))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "health-check: parse listen %q: %v\n", listenAddr, err)
+		os.Exit(1)
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	url := "http://" + net.JoinHostPort(host, port) + "/api/v1/health"
+
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	client := &http.Client{Timeout: timeout}
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "health-check: build request: %v\n", err)
+		os.Exit(1)
+	}
+	req.Header.Set("X-Api-Token", token)
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "health-check: GET %s: %v\n", url, err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "health-check: %s -> HTTP %d\n", url, resp.StatusCode)
+		os.Exit(1)
+	}
+	var env struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+		fmt.Fprintf(os.Stderr, "health-check: decode body: %v\n", err)
+		os.Exit(1)
+	}
+	if !env.Success || env.Data.Status != "ok" {
+		fmt.Fprintf(os.Stderr, "health-check: %s -> success=%v status=%q\n", url, env.Success, env.Data.Status)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stdout, "ncc-api-server health: ok (%s)\n", url)
+	os.Exit(0)
+}
+
+// handleSubcommandArgs reacts to positional arguments left over after
+// flag.Parse(). The api-server is a long-running daemon that takes
+// only flags, but users routinely confuse it with the orchestrator
+// (e.g. `./ncc-api-server update --check`) — without this guard,
+// Go's flag package silently ignores the trailing args and the
+// server starts up anyway, surprising the user. We:
+//
+//   - exit 0 with build metadata for `version` (so users get a quick
+//     way to identify which build of the api-server they have);
+//   - exit 2 with a redirect-to-orchestrator pointer for everything
+//     else, including a hint about the orchestrator binary inside the
+//     same v2 stack when one was detected.
+func handleSubcommandArgs(args []string) {
+	if len(args) == 0 {
+		return
+	}
+	first := strings.ToLower(strings.TrimSpace(args[0]))
+	switch first {
+	case "version", "--version", "-version":
+		fmt.Printf("ncc-api-server\n  version: %s\n  stream:  %s\n  build:   %s\n  go:      %s\n  os/arch: %s/%s\n",
+			Version, Stream, BuildDate, GoVersion, runtime.GOOS, runtime.GOARCH)
+		os.Exit(0)
+	case "help", "--help", "-help", "-h":
+		// flag.Parse already printed usage for "-h" / "--help"; treat
+		// bare "help" the same way.
+		flag.Usage()
+		os.Exit(0)
+	}
+	// Anything else (update, v2-start, run, ...): redirect to the
+	// orchestrator and exit 2 so scripts notice.
+	fmt.Fprintf(os.Stderr,
+		"ncc-api-server: unrecognized subcommand %q.\n"+
+			"This binary is a sub-component of the Nutanix NCC Orchestrator stack and only accepts --flags.\n",
+		args[0])
+	if root, ok := v2layout.DetectStackRootFromExe(); ok {
+		if orch := v2layout.FindBinary(root, "ncc-orchestrator"); orch != "" {
+			fmt.Fprintf(os.Stderr,
+				"For lifecycle commands like %q, run the orchestrator instead:\n  %s %s\n",
+				args[0], orch, strings.Join(args, " "))
+			os.Exit(2)
+		}
+	}
+	fmt.Fprintf(os.Stderr,
+		"For lifecycle commands like %q, run `ncc-orchestrator %s` instead.\n",
+		args[0], strings.Join(args, " "))
+	os.Exit(2)
+}
+
+// applyStackAwareDefaults rewrites the path flags on s when the
+// api-server is running from inside an extracted v2 stack and the
+// user did not provide an explicit value for the flag. Mirrors the
+// orchestrator's v2.0.2 install-dir auto-detect so users who copy
+// only the api-server out of the archive (or run it from
+// <root>/bin/) get sensible defaults without having to re-derive
+// every path.
+//
+// Detection is structural via internal/v2layout.DetectStackRootFromExe
+// and only fires when the executable's directory is named "bin" AND
+// the parent contains a v2 marker (frontend-dist/ or
+// bin/ncc-api-server*). All other invocations (Docker images that
+// just COPY bin/* into /usr/local/bin, manual extraction outside a
+// bin/ subdirectory, dev runs from a checkout) fall through to the
+// pre-existing CWD-relative defaults.
+//
+// argv is the post-program-name argv slice (i.e. os.Args[1:]); we use
+// it to identify which flags the user explicitly set so that an
+// explicit `--config-path /etc/foo.yaml` is never silently overridden
+// by the auto-detect.
+func applyStackAwareDefaults(s *apiServer, argv []string) {
+	root, ok := v2layout.DetectStackRootFromExe()
+	if !ok {
+		return
+	}
+	explicit := explicitFlagSet(argv)
+
+	// Only auto-redirect a flag that's still at its compile-time
+	// default. The flag package's default values match what the
+	// CWD-relative invocation would have produced.
+	type pathFlag struct {
+		flagName  string
+		current   *string
+		zeroValue string
+		stackPath string
+	}
+	// Pre-resolve every path through symlinks (matches the
+	// orchestrator v2-start fix). Without this, /var on macOS
+	// resolves to /private/var inside the api-server's path
+	// sandbox, but the un-resolved /var paths we pass for
+	// config-path/output-dir/log-dir get rejected as "path escapes
+	// repo root".
+	resolvedRoot := v2layout.ResolveToReal(root)
+	cfg := v2layout.ConfigPath(root)
+	if cfg == "" {
+		// no config.yaml AND no example_config.yaml in stack — leave
+		// the api-server's --config-path default alone so its existing
+		// "config not found" error message kicks in.
+		cfg = s.configPath
+	} else {
+		cfg = v2layout.ResolveToReal(cfg)
+	}
+	// Resolve the orchestrator binary inside <root>/bin (canonical
+	// or platform-suffixed). FindBinary returns "" when the
+	// orchestrator wasn't shipped (e.g. someone copied just the
+	// api-server binary into <root>/bin/) — in that case we leave
+	// --orchestrator-bin alone and the user gets the existing
+	// "orchestrator binary not found" error path when triggering a
+	// run.
+	orchBin := v2layout.FindBinary(root, "ncc-orchestrator")
+	if orchBin != "" {
+		orchBin = v2layout.ResolveToReal(orchBin)
+	}
+	flags := []pathFlag{
+		{"repo-root", &s.repoRoot, ".", resolvedRoot},
+		{"config-path", &s.configPath, "config.yaml", cfg},
+		{"output-dir", &s.outputDir, "outputfiles", v2layout.ResolveToReal(v2layout.OutputDir(root))},
+		{"log-dir", &s.logDir, "nccfiles", v2layout.ResolveToReal(v2layout.LogDir(root))},
+		{"token-file-path", &s.tokenFilePath, ".ncc-api-token", v2layout.ResolveToReal(v2layout.TokenFile(root))},
+		{"orchestrator-bin", &s.orchestratorBin, "./ncc-orchestrator", orchBin},
+	}
+	rewrote := []string{}
+	for _, f := range flags {
+		if explicit[f.flagName] {
+			continue
+		}
+		if *f.current != f.zeroValue {
+			continue
+		}
+		if f.stackPath == "" || f.stackPath == *f.current {
+			continue
+		}
+		*f.current = f.stackPath
+		rewrote = append(rewrote, f.flagName)
+	}
+	if len(rewrote) > 0 {
+		fmt.Fprintf(os.Stderr,
+			"[stack-aware] detected v2 stack at %s; auto-resolved %s\n",
+			root, strings.Join(rewrote, ", "))
+		fmt.Fprintln(os.Stderr,
+			"             pass any of those flags explicitly to override.")
+	}
+}
+
+// explicitFlagSet returns the set of flag names the user passed on
+// the command line. We reparse argv ourselves rather than using
+// flag.Visit because Visit reports flags whose values match the
+// default when set from environment variables in some workflows;
+// here we want strict "did the user type --foo on the command line".
+func explicitFlagSet(argv []string) map[string]bool {
+	out := map[string]bool{}
+	for _, a := range argv {
+		if !strings.HasPrefix(a, "-") {
+			continue
+		}
+		a = strings.TrimLeft(a, "-")
+		if i := strings.IndexByte(a, '='); i >= 0 {
+			a = a[:i]
+		}
+		if a == "" {
+			continue
+		}
+		out[a] = true
+	}
+	return out
 }
 
 func (s *apiServer) ensureAuthToken() error {

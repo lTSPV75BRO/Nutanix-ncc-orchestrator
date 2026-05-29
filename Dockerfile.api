@@ -29,7 +29,12 @@ RUN chmod 0755 /usr/local/bin/ncc-api-server /usr/local/bin/ncc-orchestrator \
 USER 10001:10001
 
 EXPOSE 8081
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD wget -qO- http://127.0.0.1:8081/api/v1/health >/dev/null || exit 1
+# HEALTHCHECK uses the api-server's own --health-check mode (added in
+# v2.0.2). Avoids needing wget/curl in the runtime image and reads the
+# token file the api-server itself wrote, so probe and server share
+# the same auth path.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["/usr/local/bin/ncc-api-server", "--health-check", "--listen", "127.0.0.1:8081", "--token-file-path", "/app/data/auth/.ncc-api-token"]
 
 ENTRYPOINT ["/usr/local/bin/ncc-api-server"]
 CMD ["--listen", ":8081", "--repo-root", "/app", "--config-path", "/app/config/config.yaml", "--output-dir", "/app/outputfiles", "--log-dir", "/app/nccfiles", "--runner-log-path", "/app/logs/ncc-runner.log", "--token-file-path", "/app/data/auth/.ncc-api-token", "--orchestrator-bin", "/usr/local/bin/ncc-orchestrator", "--auth-mode", "token", "--cors-origin", "http://localhost:8080"]

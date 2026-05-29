@@ -1,6 +1,6 @@
 # Nutanix NCC Orchestrator
 
-[![Version](https://img.shields.io/badge/version-2.0.0-blue)](RELEASE_NOTES_v2.0.0.md)
+[![Version](https://img.shields.io/badge/version-2.0.2-blue)](RELEASE_NOTES_v2.0.2.md)
 [![Go](https://img.shields.io/badge/go-1.26.3-00ADD8)](go.mod)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Status](https://img.shields.io/badge/release-GA-success)](docs/PRODUCTION_READINESS_v2.0.0.md)
@@ -11,14 +11,18 @@
 
 ## Table of contents
 
-- [What's in v2.0.0](#whats-in-v200)
+- [What's in this stack](#whats-in-this-stack)
 - [Quick start](#quick-start)
   - [From a binary release](#from-a-binary-release-recommended)
   - [From the full v2 stack](#from-the-full-v2-stack-cli--api--ui)
   - [From source](#from-source)
+- [Run on macOS / Windows / Linux (trust & verification)](#run-on-macos--windows--linux-trust--verification)
 - [Configuration](#configuration)
 - [The web UI](#the-web-ui)
 - [HTTP API](#http-api)
+- [Operability: status, doctor, metrics, completions](#operability-status-doctor-metrics-completions)
+- [Running individual components (API only / UI only)](#running-individual-components-api-only--ui-only)
+- [Run with Docker Compose](#run-with-docker-compose)
 - [Security posture](#security-posture)
 - [Kubernetes](#kubernetes)
 - [Exit codes and artifacts](#exit-codes-and-artifacts)
@@ -27,7 +31,7 @@
 
 ---
 
-## What's in v2.0.0
+## What's in this stack
 
 | Component                       | Path                       | Purpose                                                                 |
 | ------------------------------- | -------------------------- | ----------------------------------------------------------------------- |
@@ -48,10 +52,10 @@ Every release ships a self-contained `ncc-v2-stack-*` archive on the [Releases p
 
 ```bash
 # 1. Download for your platform (linux-amd64 shown here)
-curl -LO https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/v2.0.0/ncc-v2-stack-linux-amd64.tar.gz
+curl -LO https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/v2.0.2/ncc-v2-stack-linux-amd64.tar.gz
 
 # 2. Verify checksum (recommended)
-curl -LO https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/v2.0.0/checksums.txt
+curl -LO https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/v2.0.2/checksums.txt
 shasum -a 256 -c checksums.txt --ignore-missing | grep ncc-v2-stack-linux-amd64
 
 # 3. Extract
@@ -127,6 +131,86 @@ export NCC_PASSWORD='your-prism-password'
 ```
 
 Reproducible release build (cross-compile + archives + checksums): see [`binaryGO.txt`](binaryGO.txt) and [`docs/BUILD_FROM_SCRATCH.md`](docs/BUILD_FROM_SCRATCH.md).
+
+---
+
+## Run on macOS / Windows / Linux (trust & verification)
+
+The release binaries are not (yet) signed with an Apple Developer ID or
+Authenticode certificate, so on first launch your OS may flag them as
+"untrusted". This is a one-time speed-bump per file — you do **not** need
+to disable Gatekeeper / SmartScreen / AV system-wide.
+
+### Step 1 — verify the SHA-256 first
+
+Every release publishes `checksums.txt` (and `release-attestation.json`,
+which contains the same hashes plus full provenance metadata). **Always
+verify before running an unsigned binary.**
+
+```bash
+# macOS / Linux
+shasum -a 256 -c <(grep ncc-orchestrator-darwin-arm64 checksums.txt)
+# OK
+```
+
+```powershell
+# Windows
+Get-FileHash .\ncc-orchestrator-windows-amd64.exe -Algorithm SHA256
+# Compare against checksums.txt
+```
+
+If hashes do not match, **stop**. Re-download or report the discrepancy.
+
+### Step 2 — clear the OS warning
+
+| OS      | What you'll see | One-time fix |
+| ------- | --------------- | ------------ |
+| **macOS** | "cannot be opened because the developer cannot be verified" | `chmod +x ncc-orchestrator-darwin-arm64 && xattr -d com.apple.quarantine ncc-orchestrator-darwin-arm64` (or right-click in Finder → Open → Open) |
+| **Windows** | "Windows protected your PC" SmartScreen dialog | Right-click the `.exe` → Properties → tick **Unblock** → Apply. Or: `Unblock-File .\ncc-orchestrator-windows-amd64.exe` in PowerShell. Or click **More info → Run anyway** in the SmartScreen dialog. |
+| **Linux** | `Permission denied` | `chmod +x ncc-orchestrator-linux-amd64` |
+
+For an extracted full stack, recurse over the `bin/` directory:
+
+```bash
+# macOS
+xattr -dr com.apple.quarantine ncc-v2-stack-darwin-arm64/
+
+# Windows
+Get-ChildItem -Recurse .\ncc-v2-stack-windows-amd64 | Unblock-File
+
+# Linux
+chmod +x ncc-v2-stack-linux-amd64/bin/*
+```
+
+### Step 3 — confirm provenance with `verify`
+
+`ncc-orchestrator verify` prints the embedded build metadata plus the
+SHA-256 of the running executable. Cross-check against `checksums.txt`
+(and the matching tag URL printed at the bottom of the output):
+
+```text
+$ ncc-orchestrator verify
+version:           2.0.2
+git_revision:      914c71d27fb1...
+executable_sha256: 23ee3cad876c...
+license:           MIT
+project_url:       https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator
+affiliation:       independent open-source project; not affiliated with or endorsed by Nutanix, Inc.
+verify:            compare executable_sha256 against checksums.txt at
+                   https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.0.2
+```
+
+On Windows, the file Properties dialog also displays the project name
+("NCC Orchestrator"), the open-source maintainer copyright, and the
+embedded version — written into every `.exe` via VERSIONINFO at build
+time so administrators can identify the binary's origin (this project,
+MIT licensed) even before any code-signing certificate is involved. The
+embedded `LegalTrademarks` field explicitly states the project is not
+affiliated with or endorsed by Nutanix, Inc.
+
+For the full deep-dive (notarization caveats, EV vs OV signing, GPG
+detached signatures, troubleshooting AV quarantines), see
+[`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md).
 
 ---
 
@@ -227,6 +311,239 @@ curl -s -X POST http://localhost:8081/api/v1/runs/trigger \
 
 ---
 
+## Operability: status, doctor, metrics, completions
+
+v2.0.2 ships an opinionated set of operator-experience subcommands that
+remove the need for ad-hoc `ps | grep` / `lsof` / `curl` invocations
+when something looks wrong.
+
+### `ncc-orchestrator v2-status` — what's running, are they healthy
+
+```text
+$ ncc-orchestrator v2-status
+ncc-orchestrator v2 stack status
+--------------------------------
+install-dir: /opt/ncc-v2
+
+SERVICE            PID     STATE           LISTEN                 HEALTH       LOG
+api-supervisor     1234    alive           -                      n/a          /opt/ncc-v2/logs/v2-api-supervisor.log
+ncc-api-server     1235    alive           127.0.0.1:8081         ok (1ms)     /opt/ncc-v2/logs/v2-api.log
+ui-supervisor      1236    alive           -                      n/a          /opt/ncc-v2/logs/v2-ui-supervisor.log
+ncc-ui-server      1237    alive           0.0.0.0:8080           ok (2ms)     /opt/ncc-v2/logs/v2-ui.log
+```
+
+`--json` switches to a JSON object suitable for `jq` and monitoring
+scripts. Tolerant of missing PID files (reports `missing-pid` rather
+than failing) so it works on any partial state.
+
+### `ncc-orchestrator doctor` — single-command "give me everything"
+
+When you need to file a support ticket, run this. It produces a full
+diagnostic report on stdout AND writes a redacted tarball:
+
+```text
+$ ncc-orchestrator doctor
+========================================
+ncc-orchestrator doctor
+========================================
+generated_at:  2026-05-29T16:30:59Z
+install_dir:   /opt/ncc-v2
+
+-- 1. verify (build provenance) --
+  (full version + git revision + executable SHA-256)
+-- 2. v2-check (install-dir layout) --
+  (config readable? binaries executable? ports bindable?)
+-- 3. v2-status (running services) --
+  (the table above)
+-- 4. environment summary --
+  go_version: go1.26.3
+  os/arch:    linux/amd64
+  NCC_* env var names: (values REDACTED for support-ticket safety)
+-- 5. recent log tails (last 200 lines each) --
+  (v2-api.log, v2-ui.log, v2-*-supervisor.log)
+
+support bundle: ./ncc-support-20260529T163059Z.tar.gz
+  attach this file to your support ticket; secrets and tokens have been redacted.
+```
+
+The bundle contains `report.txt`, `logs/v2-*.log` (last 1000 lines
+each), and `config.redacted.yaml` (all values for keys matching
+`password / secret / token / credential / api-key / client-id` are
+replaced with `***REDACTED***`).
+
+Pass `--no-bundle` to skip the tarball when you just want the report
+on stdout.
+
+### `/metrics` — Prometheus exposition
+
+The api-server now exposes a Prometheus-compatible `/metrics` endpoint:
+
+```text
+ncc_build_info{version="2.0.2",stream="Release",go_version="go1.26.3",os="linux",arch="amd64"} 1
+ncc_process_uptime_seconds 3601.42
+ncc_run_active 0
+ncc_runs_triggered_total 42
+ncc_runs_completed_total 41
+ncc_runs_failed_total 3
+ncc_go_goroutines 18
+ncc_go_memstats_alloc_bytes 6291456
+ncc_ratelimit_allowed_total 1842
+ncc_ratelimit_blocked_total 0
+```
+
+Auth-gated by default (same `X-API-Token` as the rest of the API).
+Pass `--metrics-public` on the api-server to allow unauthenticated
+scraping — useful on private networks behind a service mesh, where
+vanilla Prometheus scrapers can't easily set custom headers.
+
+### `ncc-api-server --health-check` — Docker / K8s probe mode
+
+```bash
+ncc-api-server --health-check --listen 127.0.0.1:8081
+# exits 0 when /api/v1/health returns ok, 1 otherwise
+```
+
+Designed for `HEALTHCHECK` in Dockerfiles and `livenessProbe.exec.command`
+in Kubernetes manifests — no need to ship `curl` or `wget` in your
+runtime image. Reads the on-disk token automatically; works with
+stack-aware default resolution if invoked from `<stack>/bin/`.
+
+### Shell completions
+
+```bash
+# Bash (Linux)
+ncc-orchestrator completion bash | sudo tee /etc/bash_completion.d/ncc-orchestrator
+
+# Zsh (with compinit)
+ncc-orchestrator completion zsh > "${fpath[1]}/_ncc-orchestrator"
+
+# Fish
+ncc-orchestrator completion fish > ~/.config/fish/completions/ncc-orchestrator.fish
+
+# PowerShell
+ncc-orchestrator completion powershell > $PROFILE.ncc-orchestrator.ps1
+```
+
+Generated on demand from cobra's command tree, so they stay in lockstep
+with the actual subcommand / flag set automatically.
+
+---
+
+## Running individual components (API only / UI only)
+
+The orchestrator (`ncc-orchestrator v2-start`) is the recommended
+launcher because it manages both servers' lifecycles together. But each
+binary in the stack is independently runnable for advanced scenarios —
+running the API headless behind your own reverse proxy, hosting the SPA
+on a CDN, embedding only the API into Kubernetes, etc.
+
+Starting in v2.0.2, both `ncc-api-server` and `ncc-ui-server` detect
+when they're running from `<stack-root>/bin/<self>` and auto-resolve
+their path flags to the same install-dir the orchestrator would have
+picked. So the **simplest possible standalone launch** from inside an
+extracted stack is just:
+
+```bash
+cd ncc-v2-stack-linux-amd64/bin
+
+# API only
+./ncc-api-server --listen 127.0.0.1:8081 &
+# [stack-aware] detected v2 stack at <root>; auto-resolved
+#   repo-root, config-path, output-dir, log-dir, token-file-path,
+#   orchestrator-bin
+
+# UI only (point at the API you started above)
+./ncc-ui-server --listen 0.0.0.0:8080 --backend-url http://127.0.0.1:8081
+# [stack-aware] detected v2 stack at <root>; auto-resolved dir, api-token-file
+```
+
+Each server prints a `[stack-aware]` banner listing exactly which
+flags were auto-resolved, so you can override any of them explicitly
+without surprise (`--config-path /etc/ncc/config.yaml`, for example,
+keeps your override and still auto-resolves the rest).
+
+Outside a stack layout (Docker images that just `COPY` the binary
+into `/usr/local/bin/`, dev checkouts, manual installs not under a
+`bin/` directory), neither server activates stack-aware mode and the
+original CWD-relative defaults stand — so existing deployments that
+already pass explicit flags are unaffected.
+
+**Subcommand mistakes are caught early.** Because users sometimes
+confuse the binaries (e.g. `./ncc-api-server update --check`
+expecting an updater), each sub-binary now refuses unknown
+positional args with a clear redirect to the orchestrator:
+
+```text
+$ ./ncc-api-server update --check
+ncc-api-server: unrecognized subcommand "update".
+This binary is a sub-component of the Nutanix NCC Orchestrator stack and only accepts --flags.
+For lifecycle commands like "update", run the orchestrator instead:
+  /opt/ncc-v2-stack/bin/ncc-orchestrator update --check
+```
+
+Both sub-binaries accept `version` (prints buildinfo and exits 0) and
+`--help` for ergonomics. Everything else exits 2 with the redirect.
+
+### Use cases
+
+| Scenario | Command |
+| -------- | ------- |
+| API-only, headless behind your own ingress | `./ncc-api-server --listen :8081 --cors-origin https://your-ui.example.com` |
+| UI-only, pointing at a remote API | `./ncc-ui-server --listen :8080 --backend-url https://api.example.com --api-token-file /etc/ncc/token` |
+| Build your own SPA against the API | `./ncc-api-server --listen :8081 --cors-origin http://localhost:5173` (then run your dev server) |
+| Run only the orchestrator CLI for cron-driven runs | `ncc-orchestrator --config /etc/ncc/config.yaml run` |
+
+For the full flag reference, run any of the binaries with `-h`. For
+production deployment patterns (Kubernetes, behind an ingress, with
+mTLS), see [`docs/V2_BACKEND_FRONTEND_MVP.md`](docs/V2_BACKEND_FRONTEND_MVP.md).
+
+---
+
+## Run with Docker Compose
+
+The repo ships a `docker-compose.yml` that builds and runs the full v2
+stack on a private Docker bridge network. Lifecycle is managed by
+Compose's `service_healthy` gate, which uses the new
+`ncc-api-server --health-check` probe — so the UI starts only after
+the API has written its token file and is accepting requests.
+
+```bash
+git clone <this-repo>
+cd <this-repo>
+
+# 1. Provide a config (cluster credentials, secret references, etc.)
+mkdir -p config
+cp example_config.yaml config/config.yaml
+$EDITOR config/config.yaml
+
+# 2. (Optional) Set the password env var the API server forwards into runs:
+echo "NCC_PASSWORD=<your-prism-password>" > .env
+
+# 3. Build and start
+docker compose up -d
+# UI on http://localhost:8080 (proxies to ncc-api-server:8081)
+# API on 127.0.0.1:8081  (loopback-only by default)
+
+# 4. Verify
+docker compose ps
+docker compose logs -f ncc-api-server
+docker compose exec ncc-api-server ncc-api-server --health-check --listen 127.0.0.1:8081
+
+# 5. Tear down
+docker compose down            # keeps volumes (history, token)
+docker compose down -v         # nukes everything
+```
+
+Persistent state (output reports, runner logs, audit logs, schedule
+state) lives in named volumes so a `docker compose down` won't wipe
+history. The token file is shared between containers via a named
+volume — never via env vars.
+
+For Kubernetes deployment, see the [`Kubernetes`](#kubernetes) section
+below and the [`helm/`](helm/) chart.
+
+---
+
 ## Security posture
 
 | Area                  | Default                                                                                                                |
@@ -300,6 +617,7 @@ Raw NCC summaries land under `nccfiles/`. Runner JSON logs under `logs/ncc-runne
 | [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md)                                            | Wire the orchestrator into AI tools via MCP                           |
 | [`docs/PRODUCTION_READINESS_v2.0.0.md`](docs/PRODUCTION_READINESS_v2.0.0.md)          | Release gate evidence and checklists                                  |
 | [`docs/RELEASE_CHECKSUMS.md`](docs/RELEASE_CHECKSUMS.md)                              | How `--update` verifies downloads                                     |
+| [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md)                            | Verify SHA-256, run unsigned binaries on macOS/Windows/Linux, GPG     |
 | [`k8s/README.md`](k8s/README.md)                                                     | Kubernetes deployment guide                                           |
 | [`Prometheus.md`](Prometheus.md)                                                     | Prometheus textfile-collector setup                                   |
 | [`CHANGELOG.md`](CHANGELOG.md)                                                       | Full version history                                                  |
@@ -340,10 +658,10 @@ Add the resulting binary in your MCP client (Cursor, Claude Desktop, etc.) — s
 
 ## Release status
 
-- **Current GA:** [`v2.0.0`](RELEASE_NOTES_v2.0.0.md)
-- **Build provenance:** every binary embeds `Version`, `BuildDate`, `Stream`, `GoVersion`, and the git revision (via `-buildvcs=true`); inspect with `./ncc-orchestrator version`.
-- **Checksums:** `dist/checksums.txt` (or the `checksums.txt` attached to the GitHub release) — SHA-256, sorted, includes every binary, every stack archive, `example_config.yaml`, and `RELEASE_NOTES_v2.0.0.md`.
-- **Docker:** `prajwalnutant/nutanix-ncc-orchestrator:2.0.0` (and `:latest`).
+- **Current GA:** [`v2.0.2`](RELEASE_NOTES_v2.0.2.md). See [`RELEASE_NOTES_v2.0.0.md`](RELEASE_NOTES_v2.0.0.md), [`RELEASE_NOTES_v2.0.1.md`](RELEASE_NOTES_v2.0.1.md), [`RELEASE_NOTES_v2.0.2.md`](RELEASE_NOTES_v2.0.2.md) for the cumulative change log.
+- **Build provenance:** every binary embeds `Version`, `BuildDate`, `Stream`, `GoVersion`, and the git revision (via `-buildvcs=true`); inspect with `./ncc-orchestrator verify`. Releases additionally ship `release-attestation.json` (per-release manifest), CycloneDX SBOMs, and a SLSA build-provenance attestation produced by `.github/workflows/release.yml` (verify with `gh attestation verify`).
+- **Checksums:** `dist/checksums.txt` (or the `checksums.txt` attached to the GitHub release) — SHA-256, sorted, includes every binary, every stack archive, `example_config.yaml`, `release-attestation.json`, every `bom-*.cdx.json`, and the matching `RELEASE_NOTES_v*.md`.
+- **Docker:** `prajwalnutant/nutanix-ncc-orchestrator:2.0.2` (and `:latest`).
 
 ---
 
