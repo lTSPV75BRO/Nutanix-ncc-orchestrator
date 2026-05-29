@@ -40,7 +40,7 @@ spec:
                   mountPath: /data
           containers:
             - name: ncc-orchestrator
-              image: docker.io/prajwalnutant/nutanix-ncc-orchestrator:2.0.1
+              image: docker.io/prajwalnutant/nutanix-ncc-orchestrator:2.0.2
               imagePullPolicy: IfNotPresent
               securityContext:
                 runAsNonRoot: true

@@ -4,7 +4,41 @@ All notable changes to the Nutanix NCC Orchestrator are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-**Release checklist (for maintainers):** Ensure [`VERSION`](VERSION) matches the intended tag; default `main.Version` in code is `2.0.1` when not set via ldflags. Run `go vet ./...`, `go test ./...`, and `go build ./...` (and `go build ./cmd/ncc-mcp-server`). Confirm `k8s/` and `helm/` image tags match `VERSION`. Tag `v2.0.1` and create a GitHub release using the matching `RELEASE_NOTES_v*.md`; attach `ncc-orchestrator-*` standalone binaries, `ncc-v2-stack-*` archives, and `checksums.txt` only — **do not** attach standalone `ncc-api-server-*` / `ncc-ui-server-*` binaries (the v1.x self-updater would silently mis-select them; see [2.0.0] known-issue note below and the v2.0.1 selector fix).
+**Release checklist (for maintainers):** Ensure [`VERSION`](VERSION) matches the intended tag; default `main.Version` in code is `2.0.2` when not set via ldflags. Run `go vet ./...`, `go test -race ./...`, and `go build ./...` (and `go build ./cmd/ncc-mcp-server`). Confirm `k8s/` and `helm/` image tags match `VERSION`. Tag `v2.0.2` and create a GitHub release using the matching `RELEASE_NOTES_v*.md`; attach `ncc-orchestrator-*` standalone binaries, `ncc-v2-stack-*` archives, and `checksums.txt` only — **do not** attach standalone `ncc-api-server-*` / `ncc-ui-server-*` binaries (the v1.x self-updater would silently mis-select them; see [2.0.0] known-issue note below and the v2.0.1 selector fix).
+
+---
+
+## [2.0.2] - 2026-05-29
+
+Patch release with two production-impact UX fixes for the recommended `cd <stack>/bin && ./ncc-orchestrator v2-start` flow. v2.0.0 / v2.0.1 users running services from inside an extracted stack should upgrade.
+
+### Fixed
+
+- **`v2-check` / `v2-start` / `v2-stop` / `uninstall` now auto-detect the stack root from the running binary's location.** When invoked from `<X>/bin/<self>` and `<X>` looks like a v2 layout (contains `frontend-dist/` or `bin/ncc-api-server*`), the install-dir defaults to `<X>` instead of `<cwd>/.ncc-v2`. Secondary paths (`--config-path`, `--output-dir`, `--log-dir`, `--token-file`) default to `<install-dir>/<name>`. If `<install-dir>/config.yaml` is missing, falls back to `<install-dir>/example_config.yaml` with a warning. Resolves the user-reported `v2-check failed (5 issues)` when running from inside an extracted stack.
+- **`v2-start` against the recommended layout no longer fails with `path escapes repo root`.** The api-server's `--repo-root` (path-traversal sandbox) was hardcoded to `os.Getwd()`. When the user ran `./ncc-orchestrator v2-start` from `<X>/bin/`, repo-root would be `<X>/bin` but the auto-resolved config-path / output-dir / token-file landed under `<X>` — outside the jail. `runV2Start` and `runV2Bootstrap`'s start-script generator now compute repo-root as the install-dir-or-CWD ancestor (the directory that contains both) and pre-resolve macOS `/tmp` → `/private/tmp` symlinks so the api-server's internal EvalSymlinks comparison sees a consistent prefix.
+- **`v2-start` `--wait-ready` no longer hangs / times out when binding to a loopback IP.** `localHTTPURLFromListen` was rewriting `127.0.0.1:port` to `localhost:port` for both the wait-ready check and the UI→API backend URL. On macOS `localhost` resolves to `::1` (IPv6) first, but the api-server is bound IPv4-only, so the connection was refused even though the server was healthy. The helper now preserves the user-supplied host. The CORS allow-list separately gains the `http://localhost:port` form when the UI binds loopback so browsers reaching the UI under either name still succeed.
+- **`orchestrator_bin` reported by `/api/v1/health` is now an absolute path that exists on disk.** Previously `resolveV2OrchestratorBin` returned `./ncc-orchestrator` (correct relative to the orchestrator's CWD), but the api-server interpreted it relative to its own CWD (= repo-root), producing a non-existent path. API-triggered runs would have failed to spawn the orchestrator. Helper now returns absolute, symlink-resolved paths.
+- **Output extractor preserves executable mode bits** ([carry-over from in-flight 2.0.2 work]). `extractTarGzArchive` and `extractZipArchive` now use the mode in the archive header instead of hardcoded `0644`, so binaries inside `ncc-v2-stack-*.tar.gz` and `.zip` come out as `0755` after `update`.
+- **Uninstall sweeps both legacy and new layouts.** `uninstall --remove-local` now adds install-dir-relative `outputfiles/`, `nccfiles/`, `promfiles/`, `logs/`, `.ncc-api-token`, `.ncc-api-schedule.json`, `.ncc-api-notifications.json` to the cleanup set in addition to the existing CWD-relative entries. Belt-and-braces for the rare `--remove-v2-runtime=false` path.
+
+### Changed
+
+- **`v2-check` / `v2-start` / `v2-stop` / `uninstall` flag defaults are now empty strings** instead of hardcoded `.ncc-v2` / `config.yaml` / `outputfiles` / `nccfiles` / `.ncc-api-token`. Empty values are resolved at runtime via the auto-detect logic above. Explicit values are honored as before.
+- **README** quick-start updated to show the new no-flags flow first, with the explicit-flags form as the legacy / advanced fallback.
+
+### Tests
+
+- New unit tests: `TestResolveV2RepoRoot`, `TestIsPathAncestor`, `TestResolveV2PathToReal_NonExistentSuffix`, `TestLocalHTTPURLFromListen`, `TestLoopbackAltOriginFromListen` (in `goNCC_test.go`).
+- Smoke matrix re-run from a fresh extract of `ncc-v2-stack-darwin-arm64.tar.gz`: update v1→v2, legacy `v2-bootstrap` from project root, `v2-start --detach --wait-ready` from `<X>/bin/`, CORS preflight from both `localhost` and `127.0.0.1` origins, UI proxy reachability, `v2-stop`, `uninstall --dry-run`. All pass.
+
+### Upgrade
+
+```bash
+# from anywhere a v2.0.0 / v2.0.1 binary lives
+./ncc-orchestrator update --allow-major-upgrade
+```
+
+The package-level updater introduced in 2.0.1 handles 2.0.2 the same way: download `ncc-v2-stack-<os>-<arch>.tar.gz`, verify SHA-256, extract, and atomically install `bin/`, `frontend-dist/`, `example_config.yaml` over the resolved install-dir.
 
 ---
 

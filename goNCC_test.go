@@ -6,7 +6,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -3520,6 +3522,262 @@ func TestPickAssetForPlatform_NoMatch(t *testing.T) {
 	url, name := pickAssetForPlatform(rel, "linux", "amd64", "ncc-orchestrator")
 	if url != "" || name != "" {
 		t.Fatalf("expected empty results for unsupported platform; got url=%q name=%q", url, name)
+	}
+}
+
+// TestResolveV2PathToReal_NonExistentSuffix pins the v2.0.2 fix where the
+// resolver walks up to the first existing ancestor for paths that don't
+// exist yet (output-dir / log-dir / token-file before mkdir). Without this
+// the api-server's normalizeAndConfinePath check fails on macOS because
+// repo-root is resolved (/private/tmp/...) but output-dir stays
+// unresolved (/tmp/...) and the prefix check fails.
+func TestResolveV2PathToReal_NonExistentSuffix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows")
+	}
+	tmp := t.TempDir()
+	tmpReal, _ := filepath.EvalSymlinks(tmp)
+	if tmpReal == "" {
+		tmpReal = tmp
+	}
+
+	t.Run("existing path: returns symlink-resolved abs", func(t *testing.T) {
+		got := resolveV2PathToReal(tmp)
+		if got != tmpReal {
+			t.Fatalf("got %q; want %q", got, tmpReal)
+		}
+	})
+
+	t.Run("non-existent suffix: walks up + re-attaches", func(t *testing.T) {
+		nonexistent := filepath.Join(tmp, "outputfiles")
+		got := resolveV2PathToReal(nonexistent)
+		want := filepath.Join(tmpReal, "outputfiles")
+		if got != want {
+			t.Fatalf("got %q; want %q", got, want)
+		}
+	})
+
+	t.Run("deeply non-existent suffix: still resolves prefix", func(t *testing.T) {
+		nonexistent := filepath.Join(tmp, "a", "b", "c")
+		got := resolveV2PathToReal(nonexistent)
+		want := filepath.Join(tmpReal, "a", "b", "c")
+		if got != want {
+			t.Fatalf("got %q; want %q", got, want)
+		}
+	})
+}
+
+// TestVerifyAssetAgainstReleaseChecksum_TamperDetection pins the v2.0.2
+// supply-chain integrity property: a corrupted release artifact (e.g. MITM
+// tampering or a checksum-collision attempt) MUST be rejected by the
+// updater. Critical for the package-level update flow introduced in
+// v2.0.1.
+//
+// The test stands up an in-process HTTP server playing the role of
+// github.com/<repo>/releases/download/<tag>/checksums.txt, then exercises
+// three scenarios:
+//   - body matches checksums.txt entry  -> nil error
+//   - body's hash does NOT match        -> error mentions "checksum mismatch"
+//   - asset name absent from manifest   -> error mentions "not found"
+func TestVerifyAssetAgainstReleaseChecksum_TamperDetection(t *testing.T) {
+	assetName := "ncc-v2-stack-darwin-arm64.tar.gz"
+	body := []byte("legitimate stack contents")
+	good := sha256.Sum256(body)
+	goodHex := hex.EncodeToString(good[:])
+
+	manifestServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// classic checksums.txt format: "<hex>  <filename>" per line
+		fmt.Fprintf(w, "%s  %s\n", goodHex, assetName)
+		fmt.Fprint(w, "deadbeef00000000000000000000000000000000000000000000000000000000  some-other-asset\n")
+	}))
+	defer manifestServer.Close()
+
+	rel := &githubRelease{
+		TagName: "v2.0.2",
+		Assets: []githubAsset{
+			{Name: "checksums.txt", BrowserDownloadURL: manifestServer.URL + "/checksums.txt"},
+		},
+	}
+
+	t.Run("matching body verifies", func(t *testing.T) {
+		if err := verifyAssetAgainstReleaseChecksum(rel, assetName, body, manifestServer.Client()); err != nil {
+			t.Fatalf("verify expected success, got: %v", err)
+		}
+	})
+
+	t.Run("tampered body is rejected", func(t *testing.T) {
+		tampered := append([]byte(nil), body...)
+		tampered[0] ^= 0x01
+		err := verifyAssetAgainstReleaseChecksum(rel, assetName, tampered, manifestServer.Client())
+		if err == nil {
+			t.Fatalf("expected tamper detection, got nil")
+		}
+		if !strings.Contains(err.Error(), "checksum mismatch") {
+			t.Fatalf("expected error to mention 'checksum mismatch', got: %v", err)
+		}
+	})
+
+	t.Run("asset missing from manifest is rejected", func(t *testing.T) {
+		err := verifyAssetAgainstReleaseChecksum(rel, "not-in-manifest.tar.gz", body, manifestServer.Client())
+		if err == nil {
+			t.Fatalf("expected error for missing manifest entry, got nil")
+		}
+		if !strings.Contains(err.Error(), "not found") {
+			t.Fatalf("expected error to mention 'not found', got: %v", err)
+		}
+	})
+
+	t.Run("release without checksum asset is rejected", func(t *testing.T) {
+		emptyRel := &githubRelease{TagName: "v2.0.2", Assets: []githubAsset{}}
+		err := verifyAssetAgainstReleaseChecksum(emptyRel, assetName, body, manifestServer.Client())
+		if err == nil {
+			t.Fatalf("expected error for release without checksum manifest, got nil")
+		}
+		if !strings.Contains(err.Error(), "no checksum asset") {
+			t.Fatalf("expected error to mention 'no checksum asset', got: %v", err)
+		}
+	})
+}
+
+// TestLoopbackAltOriginFromListen pins the CORS-friendly alt-origin
+// derivation: when the UI binds to a loopback IP, the allow-list should
+// also include the http://localhost:port form so a browser can reach
+// the UI via either name (matching the v2.0.1 behavior, which had baked
+// the localhost-form into the connection URL itself — that's now reserved
+// for accurate IPv4/IPv6 disambiguation).
+func TestLoopbackAltOriginFromListen(t *testing.T) {
+	cases := []struct {
+		in   string
+		port string
+		want string
+	}{
+		{"127.0.0.1:18093", "8081", "http://localhost:18093"},
+		{"[::1]:9000", "8081", "http://localhost:9000"},
+		{":8081", "8081", ""},
+		{"", "8081", ""},
+		{"0.0.0.0:9000", "8081", ""},
+		{"192.168.1.5:9000", "8081", ""},
+		{"my-host:9000", "8081", ""},
+	}
+	for _, tc := range cases {
+		got := loopbackAltOriginFromListen(tc.in, tc.port)
+		if got != tc.want {
+			t.Errorf("loopbackAltOriginFromListen(%q, %q) = %q; want %q", tc.in, tc.port, got, tc.want)
+		}
+	}
+}
+
+// TestLocalHTTPURLFromListen pins the v2.0.2 fix where the helper preserved
+// the user-supplied host instead of always rewriting to "localhost". On
+// macOS the server may bind to 127.0.0.1 (IPv4 only) while `localhost`
+// resolves to ::1 (IPv6) first; without preserving the host, wait-ready
+// and the UI backend URL would target the wrong address family and fail.
+func TestLocalHTTPURLFromListen(t *testing.T) {
+	cases := []struct {
+		in   string
+		port string
+		want string
+	}{
+		{"127.0.0.1:18093", "8081", "http://127.0.0.1:18093"},
+		{":8081", "8081", "http://localhost:8081"},
+		{"", "8081", "http://localhost:8081"},
+		{"0.0.0.0:9000", "8081", "http://localhost:9000"},
+		{"[::]:9000", "8081", "http://localhost:9000"},
+		{"[::1]:9000", "8081", "http://[::1]:9000"},
+		{"192.168.1.5:8080", "8081", "http://192.168.1.5:8080"},
+		{"my-host:9000", "8081", "http://my-host:9000"},
+	}
+	for _, tc := range cases {
+		got := localHTTPURLFromListen(tc.in, tc.port)
+		if got != tc.want {
+			t.Errorf("localHTTPURLFromListen(%q, %q) = %q; want %q", tc.in, tc.port, got, tc.want)
+		}
+	}
+}
+
+// TestResolveV2RepoRoot pins the repo-root resolution that the api-server
+// uses as a path-traversal sandbox. The chosen root must contain both the
+// install-dir and the CWD so config-path / output-dir / log-dir / token-file
+// (all install-dir-relative under v2.0.2 defaults, possibly CWD-relative
+// under explicit user override) can pass the api-server's
+// normalizeAndConfinePath check.
+//
+// On platforms where /tmp is a symlink (macOS), we EvalSymlinks the chosen
+// root so it matches what the api-server does internally on its rootAbs;
+// otherwise the api-server compares an unresolved abs against a resolved
+// rootReal and fails legitimate paths.
+func TestResolveV2RepoRoot(t *testing.T) {
+	// We can't fake symlinks portably in this package without root, but
+	// we can construct real ones in a temp dir on unix.
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on windows; this test focuses on macOS/linux behavior")
+	}
+	tmp := t.TempDir()
+	stack := filepath.Join(tmp, "stack")
+	mustMkdir(t, filepath.Join(stack, "bin"))
+
+	cases := []struct {
+		name       string
+		installDir string
+		cwd        string
+		wantPrefix string
+	}{
+		{
+			name:       "cwd inside install-dir/bin -> repo-root is install-dir",
+			installDir: stack,
+			cwd:        filepath.Join(stack, "bin"),
+			wantPrefix: stack,
+		},
+		{
+			name:       "install-dir inside cwd -> repo-root is cwd",
+			installDir: filepath.Join(tmp, "x", ".ncc-v2"),
+			cwd:        filepath.Join(tmp, "x"),
+			wantPrefix: filepath.Join(tmp, "x"),
+		},
+		{
+			name:       "install-dir == cwd -> either is fine",
+			installDir: stack,
+			cwd:        stack,
+			wantPrefix: stack,
+		},
+	}
+	// Pre-create the install-dir for the second case so EvalSymlinks works.
+	mustMkdir(t, filepath.Join(tmp, "x"))
+	mustMkdir(t, filepath.Join(tmp, "x", ".ncc-v2"))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveV2RepoRoot(tc.installDir, tc.cwd)
+			// Use EvalSymlinks for the wantPrefix so the comparison is
+			// stable across macOS /tmp symlinks.
+			wantReal, _ := filepath.EvalSymlinks(tc.wantPrefix)
+			if wantReal == "" {
+				wantReal = tc.wantPrefix
+			}
+			if got != wantReal {
+				t.Fatalf("resolveV2RepoRoot(install=%q, cwd=%q) = %q; want %q", tc.installDir, tc.cwd, got, wantReal)
+			}
+		})
+	}
+}
+
+// TestIsPathAncestor pins the lexical ancestor predicate used by
+// resolveV2RepoRoot.
+func TestIsPathAncestor(t *testing.T) {
+	cases := []struct {
+		parent, child string
+		want          bool
+	}{
+		{"/a/b", "/a/b/c", true},
+		{"/a/b", "/a/b", true},
+		{"/a/b", "/a/bc", false},
+		{"/a/b", "/a", false},
+		{"/", "/anything", true},
+	}
+	for _, tc := range cases {
+		got := isPathAncestor(tc.parent, tc.child)
+		if got != tc.want {
+			t.Fatalf("isPathAncestor(%q, %q) = %v; want %v", tc.parent, tc.child, got, tc.want)
+		}
 	}
 }
 

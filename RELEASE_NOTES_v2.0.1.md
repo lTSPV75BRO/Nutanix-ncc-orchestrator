@@ -3,6 +3,38 @@
 **Date:** 2026-05-27
 **Type:** Patch release (P0 update-path fix + UX polish)
 
+> ## Superseded — please use [v2.0.2](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.0.2) (or newer) instead
+>
+> v2.0.1 fixed the v2.0.0 self-updater regression but **inherits one set of cumulative known issues fixed in v2.0.2**, all surfacing in the documented "extract the stack, run from `bin/`" flow:
+>
+> | Issue | Symptom | v2.0.2 fix |
+> |---|---|---|
+> | `v2-check` / `v2-start` defaulted `--install-dir` to `<cwd>/.ncc-v2` from inside an extracted stack | `v2-check failed (5 issues)`: api-server / ui-server binaries "not executable", `frontend-dist missing`, `config-path not readable` | Auto-detect install-dir from the running binary's location; secondary paths default to `<install-dir>/<name>`; `example_config.yaml` fallback when `config.yaml` is absent. |
+> | `v2-start` failed with `path escapes repo root` for the auto-resolved config | api-server exited immediately on startup | Repo-root resolves to `ancestor(install-dir, cwd)` with macOS `/tmp` → `/private/tmp` symlinks pre-resolved. |
+> | `wait-ready` failed with `connection refused` on macOS with `--api-listen 127.0.0.1:<port>` | `dial tcp [::1]:<port>: connect: connection refused` even though the server was healthy | `localHTTPURLFromListen` preserves the user-supplied IP for connection URLs; CORS allow-list separately gains the `localhost`-form so browsers can reach the UI under either name. |
+> | `/api/v1/health` reported a non-existent `orchestrator_bin` | API-triggered runs would have failed to spawn the orchestrator | `resolveV2OrchestratorBin` returns absolute, symlink-resolved paths. |
+> | `uninstall --remove-local` only swept legacy CWD-relative paths | data under `<install-dir>/{outputfiles,nccfiles,…}` could survive uninstall in some edge configurations | Cleanup set now covers both legacy CWD-relative and install-dir-relative locations. |
+>
+> **Upgrade in place from v2.0.1:**
+>
+> ```bash
+> # The package-level update flow shipped in this release will fetch the
+> # v2.0.2 stack archive, verify its SHA-256, and atomically replace every
+> # v2 component (orchestrator + api-server + ui-server + frontend-dist +
+> # example_config.yaml) in your install dir.
+> ./ncc-orchestrator update
+> ```
+>
+> After upgrade the recommended invocation simplifies to:
+>
+> ```bash
+> cd <install-dir>/bin
+> ./ncc-orchestrator v2-start --api-listen :8081 --ui-listen :8080
+> # (no --install-dir / --config-path / etc. needed; auto-detected)
+> ```
+>
+> Full details in the [v2.0.2 release notes](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.0.2).
+
 This release fixes the P0 silent-corruption regression in the v1.x → v2.0.0 self-updater **and** rebuilds the `update` semantics around a single, name-invariant abstraction: **`update` upgrades the v2 stack package as a whole, irrespective of which binary you invoke or how it was renamed**. All v1.x users should upgrade via this release.
 
 ## TL;DR
@@ -140,3 +172,22 @@ go version -m ./ncc-orchestrator | grep '^\s*path\s'
 ## Acknowledgements
 
 The regression was reported during the v2.0.0 release-day verification by the maintainer observing that `update --check` printed api-server startup logs instead of update output. Root-cause analysis traced the issue to alphabetical first-match selection in `pickAssetForCurrentPlatform`, fixed in this release.
+
+## Cumulative fixes shipped in v2.0.2
+
+After v2.0.1 shipped, exercising the documented `cd <stack>/bin && ./ncc-orchestrator v2-start` flow surfaced a chain of UX issues that don't affect the legacy `v2-bootstrap --install-dir .ncc-v2` flow but break the recommended path on macOS especially. v2.0.2 fixes all of them:
+
+1. **`v2-check` / `v2-start` / `v2-stop` / `uninstall` auto-detect the stack root** from the running binary's location. Install-dir now defaults to `<X>` when invoked from `<X>/bin/<self>` and `<X>` looks like a v2 stack (contains `frontend-dist/` or `bin/ncc-api-server*`). Secondary paths default to `<install-dir>/<name>`. Falls back to `<install-dir>/example_config.yaml` if `config.yaml` is missing.
+2. **`--repo-root` for the api-server now contains everything it touches.** Resolves to `ancestor(install-dir, cwd)` with macOS `/tmp` → `/private/tmp` symlinks pre-resolved so the api-server's path-traversal sandbox (`normalizeAndConfinePath`) admits config / output / log / token paths under the auto-detected install-dir.
+3. **`wait-ready` and the UI → API backend URL preserve the user-supplied IP.** Critical on macOS where the server binds 127.0.0.1 (IPv4) but `localhost` resolves to `::1` (IPv6) first. The CORS allow-list separately gains the `http://localhost:<port>` form when the UI binds loopback.
+4. **`orchestrator_bin` reported by `/api/v1/health` is an absolute, executable path.** Previously a relative path that broke API-triggered runs from a different CWD.
+5. **`extractTarGzArchive` / `extractZipArchive` preserve the executable bit** from archive headers (instead of hardcoded `0644`).
+6. **`uninstall --remove-local` sweeps both legacy and v2.0.2 layouts** — adds install-dir-relative entries to the cleanup set.
+
+Upgrade is one command:
+
+```bash
+./ncc-orchestrator update
+```
+
+The package-level update flow this release introduced handles v2.0.2 the same way: fetch the stack archive, verify SHA-256, atomically install. See the [v2.0.2 release notes](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.0.2) for the full breakdown.

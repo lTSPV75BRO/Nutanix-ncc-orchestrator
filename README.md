@@ -71,10 +71,30 @@ Reports land under `outputfiles/`. Open `outputfiles/index.html` for the aggrega
 
 ### From the full v2 stack (CLI + API + UI)
 
-After extracting the archive above, run from the archive root (the layout `bin/`, `frontend-dist/`, `example_config.yaml` is auto-discovered):
+After extracting the archive, the recommended flow (v2.0.2+) is to `cd` into the `bin/` directory and run with no path flags — `v2-check`, `v2-start`, `v2-stop`, and `uninstall` auto-detect the stack root, so config / output / log / token paths default to the archive root automatically:
 
 ```bash
-# Sanity check binaries, ports, config readability, output writability
+# extract once, then:
+cd ncc-v2-stack-linux-amd64/bin
+
+# sanity check (auto-detects install-dir from current binary location;
+# falls back to <install-dir>/example_config.yaml when config.yaml is absent)
+./ncc-orchestrator v2-check --api-listen :8081 --ui-listen :8080
+
+# start API + UI together (managed lifecycle, foreground)
+./ncc-orchestrator v2-start --api-listen :8081 --ui-listen :8080
+
+# or background with restart supervision (PID/log files under
+# <install-dir>/run and <install-dir>/logs)
+./ncc-orchestrator v2-start --detach --self-heal \
+  --api-listen :8081 --ui-listen :8080
+```
+
+When binding the API to a loopback IP (e.g. `--api-listen 127.0.0.1:8081`), the orchestrator now preserves the IP for connection URLs (so `wait-ready` and the UI backend hit the right address family on macOS, where `localhost` resolves to `::1` first) and additionally adds `http://localhost:port` to the CORS allow-list so browsers can reach the UI under either name.
+
+Older releases (v2.0.0 / v2.0.1) require the explicit form below; it still works in v2.0.2:
+
+```bash
 ./bin/ncc-orchestrator-linux-amd64 v2-check \
   --install-dir . \
   --orchestrator-bin ./bin/ncc-orchestrator-linux-amd64 \
@@ -82,18 +102,7 @@ After extracting the archive above, run from the archive root (the layout `bin/`
   --output-dir ./outputfiles \
   --log-dir ./nccfiles \
   --api-listen :8081 --ui-listen :8080
-
-# Start API + UI together (managed lifecycle, foreground)
-./bin/ncc-orchestrator-linux-amd64 v2-start \
-  --install-dir . \
-  --orchestrator-bin ./bin/ncc-orchestrator-linux-amd64 \
-  --config-path ./example_config.yaml \
-  --output-dir ./outputfiles \
-  --log-dir ./nccfiles \
-  --api-listen :8081 --ui-listen :8080
 ```
-
-Add `--detach --self-heal` to background the stack with restart supervision and PID/log files under `<install-dir>/run` and `<install-dir>/logs`.
 
 Open <http://localhost:8080> — the UI picks up the auto-generated `.ncc-api-token` and authenticates against the API server transparently.
 

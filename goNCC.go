@@ -7960,7 +7960,7 @@ var (
 func init() {
 	// Defaults
 	if Version == "" {
-		Version = "2.0.1"
+		Version = "2.0.2"
 	}
 	if BuildDate == "" {
 		BuildDate = "unknown"
@@ -8726,6 +8726,100 @@ func firstExistingBinary(searchDirs []string, base string) string {
 	return ""
 }
 
+// resolveV2RepoRoot picks the api-server's --repo-root value. The api-server
+// uses repo-root as the path-traversal sandbox boundary for every file it
+// touches (config, outputs, logs, token), so it must contain ALL of those
+// paths. We pick the directory that contains both the install-dir and the
+// CWD when one is an ancestor of the other; otherwise prefer install-dir
+// (since v2.0.2 defaults all secondary paths relative to install-dir).
+//
+// We also EvalSymlinks the chosen root so the api-server's
+// normalizeAndConfinePath comparison is consistent on platforms where /tmp
+// is a symlink to /private/tmp (macOS): the api-server EvalSymlinks the
+// rootAbs but compares against the user-supplied (unresolved) absolute
+// path. Without orchestrator-side resolution, /tmp/.../config.yaml would
+// fail the prefix check against /private/tmp/.../<repo-root>.
+func resolveV2RepoRoot(installDir, cwd string) string {
+	installAbs, err := filepath.Abs(installDir)
+	if err != nil {
+		installAbs = installDir
+	}
+	cwdAbs, err := filepath.Abs(cwd)
+	if err != nil {
+		cwdAbs = cwd
+	}
+	installAbs = filepath.Clean(installAbs)
+	cwdAbs = filepath.Clean(cwdAbs)
+
+	chosen := installAbs
+	switch {
+	case installAbs == cwdAbs:
+		chosen = installAbs
+	case isPathAncestor(installAbs, cwdAbs):
+		chosen = installAbs
+	case isPathAncestor(cwdAbs, installAbs):
+		chosen = cwdAbs
+	}
+	if real, err := filepath.EvalSymlinks(chosen); err == nil {
+		return filepath.Clean(real)
+	}
+	return chosen
+}
+
+// isPathAncestor reports whether parent is an ancestor of (or equal to)
+// child, using lexical path comparison after Clean. Caller is expected to
+// supply absolute paths. Handles the filesystem root ("/" on unix, "C:\"
+// on windows) where Clean(root) already ends in the separator and we must
+// not append a second separator before the prefix check.
+func isPathAncestor(parent, child string) bool {
+	parent = filepath.Clean(parent)
+	child = filepath.Clean(child)
+	if parent == child {
+		return true
+	}
+	sep := string(os.PathSeparator)
+	if strings.HasSuffix(parent, sep) {
+		return strings.HasPrefix(child, parent)
+	}
+	return strings.HasPrefix(child, parent+sep)
+}
+
+// resolveV2PathToReal returns p as an absolute, symlink-resolved path. If
+// the path doesn't exist (e.g. output-dir before mkdir, log-dir before
+// mkdir, token-file before write), it walks up to the first existing
+// ancestor, EvalSymlinks that, then re-attaches the non-existing suffix.
+// This is critical for the api-server's normalizeAndConfinePath sandbox
+// check on platforms where /tmp is a symlink (macOS): without consistent
+// resolution, repo-root would be /private/tmp/X but output-dir would
+// remain /tmp/X/outputfiles — failing the prefix check.
+func resolveV2PathToReal(p string) string {
+	if strings.TrimSpace(p) == "" {
+		return p
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+	abs = filepath.Clean(abs)
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		return filepath.Clean(real)
+	}
+	// Walk up until we find an existing ancestor, then re-attach the
+	// non-existing suffix. Bounded by the filesystem root.
+	parent := filepath.Dir(abs)
+	rest := filepath.Base(abs)
+	for {
+		if parent == filepath.Dir(parent) {
+			return abs // hit the root without finding an existing ancestor
+		}
+		if real, err := filepath.EvalSymlinks(parent); err == nil {
+			return filepath.Clean(filepath.Join(real, rest))
+		}
+		rest = filepath.Join(filepath.Base(parent), rest)
+		parent = filepath.Dir(parent)
+	}
+}
+
 // defaultV2InstallDir returns the install directory used by run-time consumer
 // commands (v2-check, v2-start, v2-stop, uninstall) when the user does not
 // pass an explicit --install-dir. The detection mirrors
@@ -8829,9 +8923,25 @@ func resolveV2APIBinary(installDir string) (string, string) {
 }
 
 func resolveV2OrchestratorBin(preferred string) string {
+	// Return an absolute (and symlink-resolved when possible) path so the
+	// api-server doesn't need to interpret it relative to its CWD
+	// (repo-root). Without this, "./ncc-orchestrator" would be valid for
+	// the orchestrator's own CWD but not for the api-server's CWD when
+	// they differ (e.g. running v2-start from <stack>/bin/ resolves
+	// repo-root to <stack>, where ncc-orchestrator is at bin/, not the
+	// repo-root itself).
+	asAbs := func(p string) string {
+		if abs, err := filepath.Abs(p); err == nil {
+			if real, err := filepath.EvalSymlinks(abs); err == nil {
+				return filepath.Clean(real)
+			}
+			return filepath.Clean(abs)
+		}
+		return p
+	}
 	clean := strings.TrimSpace(preferred)
 	if clean != "" && existingFile(clean) {
-		return clean
+		return asAbs(clean)
 	}
 	cwd, _ := os.Getwd()
 	exePath, _ := os.Executable()
@@ -8845,10 +8955,36 @@ func resolveV2OrchestratorBin(preferred string) string {
 		exePath,
 	} {
 		if strings.TrimSpace(p) != "" && existingFile(p) {
-			return p
+			return asAbs(p)
 		}
 	}
 	return clean
+}
+
+// loopbackAltOriginFromListen returns the "http://localhost:port" variant
+// for a listen address that's bound to an explicit loopback IP
+// (127.0.0.1 or ::1). Used to ensure CORS allow-list contains both forms
+// so browser clients that type either work, even though the connection
+// URL produced by localHTTPURLFromListen prefers the actual IP for
+// IPv4/IPv6 disambiguation.
+//
+// Returns empty string when the listen address is not loopback (e.g.
+// 0.0.0.0, ::, hostnames, or external IPs) — in those cases the
+// localhost-form would be misleading.
+func loopbackAltOriginFromListen(listenAddr, defaultPort string) string {
+	addr := strings.TrimSpace(listenAddr)
+	if addr == "" || strings.HasPrefix(addr, ":") {
+		return ""
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	switch host {
+	case "127.0.0.1", "::1", "[::1]":
+		return "http://localhost:" + port
+	}
+	return ""
 }
 
 func localHTTPURLFromListen(listenAddr, defaultPort string) string {
@@ -8857,13 +8993,26 @@ func localHTTPURLFromListen(listenAddr, defaultPort string) string {
 		addr = ":" + defaultPort
 	}
 	if strings.HasPrefix(addr, ":") {
+		// Server binds to all interfaces; "localhost" works for client.
 		return "http://localhost" + addr
 	}
-	if host, port, err := net.SplitHostPort(addr); err == nil {
-		_ = host
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "http://" + addr
+	}
+	// Preserve the user-supplied host so the derived URL targets the same
+	// address family the server bound to. Critical on macOS where the
+	// server binds 127.0.0.1 (IPv4) but `localhost` resolves to ::1 (IPv6)
+	// first, causing wait-ready / UI backend connections to fail with
+	// "connection refused" even though the server is healthy.
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
 		return "http://localhost:" + port
 	}
-	return "http://" + addr
+	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+		return "http://[" + host + "]:" + port
+	}
+	return "http://" + host + ":" + port
 }
 
 func mergeAllowedOriginsCSV(baseOrigin string, extraCSV string) string {
@@ -9358,11 +9507,26 @@ func runUninstallCommand(cmd *cobra.Command, args []string) error {
 			dirsToRemove[opts.InstallDir] = true
 		}
 
-		// Defaults used by runner.
+		// Defaults used by runner. Cover both layouts:
+		//   * legacy v2.0.0/v2.0.1: paths relative to CWD
+		//   * v2.0.2+: paths relative to install-dir (auto-detected when
+		//     running from inside a bootstrapped stack)
+		// In both modes RemoveV2Runtime=true nukes the install-dir wholesale
+		// so the install-dir-relative entries below are belt-and-braces for
+		// the rare --remove-v2-runtime=false invocation.
 		dirsToRemove["nccfiles"] = true
 		dirsToRemove["outputfiles"] = true
 		dirsToRemove["promfiles"] = true
 		dirsToRemove["logs"] = true
+		if installDirAbs := strings.TrimSpace(opts.InstallDir); installDirAbs != "" {
+			dirsToRemove[filepath.Join(installDirAbs, "nccfiles")] = true
+			dirsToRemove[filepath.Join(installDirAbs, "outputfiles")] = true
+			dirsToRemove[filepath.Join(installDirAbs, "promfiles")] = true
+			dirsToRemove[filepath.Join(installDirAbs, "logs")] = true
+			filesToRemove[filepath.Join(installDirAbs, ".ncc-api-token")] = true
+			filesToRemove[filepath.Join(installDirAbs, ".ncc-api-schedule.json")] = true
+			filesToRemove[filepath.Join(installDirAbs, ".ncc-api-notifications.json")] = true
+		}
 
 		if opts.ConfigPath != "" {
 			cfg, err := loadConfigForValidation(opts.ConfigPath)
@@ -9551,7 +9715,29 @@ func runV2Start(opts v2StartOptions) error {
 	if opts.APIAuthMode != "token" && opts.APIAuthMode != "session" && opts.APIAuthMode != "hybrid" {
 		return fmt.Errorf("api-auth-mode must be one of token, session, hybrid")
 	}
-	repoRoot, _ := os.Getwd()
+	cwd, _ := os.Getwd()
+	// repoRoot must contain config-path, output-dir, log-dir, token-file
+	// (api-server enforces this as a path-traversal sandbox). Use the
+	// install-dir-or-CWD ancestor and pre-resolve symlinks so /tmp vs
+	// /private/tmp on macOS doesn't break the check.
+	repoRoot := resolveV2RepoRoot(installDir, cwd)
+	// Also EvalSymlinks the secondary paths so they share the prefix the
+	// api-server compares against (it EvalSymlinks rootAbs but not abs).
+	if real := resolveV2PathToReal(opts.ConfigPath); real != "" {
+		opts.ConfigPath = real
+	}
+	if real := resolveV2PathToReal(opts.OutputDir); real != "" {
+		opts.OutputDir = real
+	}
+	if real := resolveV2PathToReal(opts.LogDir); real != "" {
+		opts.LogDir = real
+	}
+	if real := resolveV2PathToReal(opts.TokenFile); real != "" {
+		opts.TokenFile = real
+	}
+	if real := resolveV2PathToReal(installDir); real != "" {
+		installDir = real
+	}
 	backendURL := strings.TrimSpace(opts.UIBackendURL)
 	if backendURL == "" {
 		if strings.TrimSpace(opts.APITLSCertFile) != "" && strings.TrimSpace(opts.APITLSKeyFile) != "" {
@@ -9561,7 +9747,14 @@ func runV2Start(opts v2StartOptions) error {
 		}
 	}
 	uiOrigin := localHTTPURLFromListen(opts.UIListen, "8080")
-	allowedOrigins := mergeAllowedOriginsCSV(uiOrigin, opts.UIAllowedOrigins)
+	// When the UI listens on a loopback IP, browsers may reach it via
+	// either form (http://localhost:port OR http://127.0.0.1:port). Add
+	// the alternate form so CORS doesn't reject whichever the user types.
+	corsBase := uiOrigin
+	if alt := loopbackAltOriginFromListen(opts.UIListen, "8080"); alt != "" && alt != uiOrigin {
+		corsBase = uiOrigin + "," + alt
+	}
+	allowedOrigins := mergeAllowedOriginsCSV(corsBase, opts.UIAllowedOrigins)
 	apiCORSOrigins := strings.TrimSpace(opts.APICORSOrigins)
 	if apiCORSOrigins == "" {
 		apiCORSOrigins = allowedOrigins
@@ -10244,7 +10437,11 @@ func runV2Bootstrap(opts v2BootstrapOptions) error {
 		}
 	}
 
-	repoRoot, _ := os.Getwd()
+	cwd, _ := os.Getwd()
+	// Same repo-root resolution as runV2Start: must contain all the paths
+	// the api-server might touch, and must be EvalSymlinks-resolved so the
+	// api-server's normalize check is consistent on /tmp-vs-/private/tmp.
+	repoRoot := resolveV2RepoRoot(installDir, cwd)
 	if strings.TrimSpace(opts.OrchestratorBin) == "" {
 		opts.OrchestratorBin = "./ncc-orchestrator"
 	}

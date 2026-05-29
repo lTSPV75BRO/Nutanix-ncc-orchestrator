@@ -1,5 +1,5 @@
 # =============================================================================
-# Nutanix NCC Orchestrator - example configuration  (v2.0.1)
+# Nutanix NCC Orchestrator - example configuration  (v2.0.2)
 # =============================================================================
 #
 # This file is a reference template. Copy it to `config.yaml` and edit the
@@ -32,7 +32,7 @@
 # -----------------------------------------------------------------------------
 # Minimal start (uncomment and edit these to get a working run quickly)
 # -----------------------------------------------------------------------------
-# clusters: "10.2.0.10,10.2.0.11"
+# clusters: "10.2.0.20,10.2.0.21"
 # username: "admin"
 # password: "secret://NCC_PASSWORD"   # then `export NCC_PASSWORD=...`
 # secrets-provider: env

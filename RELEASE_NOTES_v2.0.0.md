@@ -3,6 +3,29 @@
 **Date:** 2026-05-05
 **Last asset update:** 2026-05-27 (asset-layout hotfix; see [Known issues](#known-issues-post-publication-hotfix))
 
+> ## Superseded — please use [v2.0.2](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.0.2) (or newer) instead
+>
+> v2.0.0 has **two cumulative known issues** fixed in later patch releases. New users should download v2.0.2; existing v2.0.0 users should upgrade in place.
+>
+> | Issue | Fixed in | Symptom |
+> |---|---|---|
+> | v1.x self-updater silently overwrites `ncc-orchestrator` with `ncc-api-server` | **v2.0.1** (selector + package-level update) | `ncc-orchestrator update` later prints `ncc-api-server listening on :8081` instead of update output. |
+> | `cd <stack>/bin && ./ncc-orchestrator v2-check`/`v2-start` reports `5 issues` (binaries not executable, frontend-dist missing, config not readable) and `wait-ready` fails with `connection refused`/`path escapes repo root` | **v2.0.2** (install-dir auto-detect + repo-root resolution + IPv4/IPv6 wait-ready + CORS loopback alt + orchestrator_bin abs path) | Affects the documented "extract the stack, run from `bin/`" flow on macOS especially. |
+>
+> **Upgrade in place from v2.0.0:**
+>
+> ```bash
+> # The v2.0.1 update path is package-level: it downloads the v2.0.2
+> # stack archive, verifies SHA-256 against checksums.txt, and atomically
+> # replaces orchestrator + api-server + ui-server + frontend-dist +
+> # example_config.yaml in your install dir.
+> ./ncc-orchestrator update
+> ```
+>
+> **Fresh install (preferred):** download `ncc-v2-stack-<os>-<arch>.tar.gz` from v2.0.2, verify its SHA-256 against the v2.0.2 `checksums.txt`, extract, then `cd bin && ./ncc-orchestrator v2-start --api-listen :8081 --ui-listen :8080`. No path flags needed.
+>
+> See [v2.0.1 release notes](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.0.1) for the self-updater/bootstrap fixes and [v2.0.2 release notes](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.0.2) for the install-dir / repo-root / wait-ready / CORS fixes.
+
 This release finalizes the v2.0.0 production baseline for the full v2 stack (orchestrator runtime + API + UI + UI-integrated proxy) and aligns release/version assets across docs, manifests, and packaging.
 
 > **Important for v1.x users:** Do **not** run `ncc-orchestrator update --allow-major-upgrade` against this release with a v1.x binary built before 2026-05-27. The v1.x self-updater contains a release-asset selector bug that picks the wrong binary when a release ships multiple binaries per platform. See [Known issues](#known-issues-post-publication-hotfix) below for the mitigation already applied to this release and recovery instructions if you ran the buggy path.
@@ -15,7 +38,35 @@ This release finalizes the v2.0.0 production baseline for the full v2 stack (orc
 
 **Mitigation applied to this release (2026-05-27 19:35Z):** The 12 standalone `ncc-api-server-*` and `ncc-ui-server-*` assets have been removed from the v2.0.0 release. The v1.x selector now picks `ncc-orchestrator-*` as the first match. The api-server and ui-server binaries remain available **inside the stack archives** (`ncc-v2-stack-{linux,darwin,windows}-{amd64,arm64}.{tar.gz,zip}`) — extract them from `bin/` inside the archive.
 
-**Permanent fix:** Shipped as v2.0.1 — `pickAssetForCurrentPlatform` now prefers assets whose name starts with the running executable's basename, so future multi-binary releases cannot trigger the same regression.
+**Permanent fix:** Shipped as v2.0.1 — `pickAssetForCurrentPlatform` now prefers assets whose name starts with the running executable's basename, so future multi-binary releases cannot trigger the same regression. v2.0.1 also reworked `update` to be a package-level operation (downloads the entire `ncc-v2-stack-*` archive and atomically reinstalls every component), which is name-invariant by construction.
+
+### Additional issues fixed in v2.0.2
+
+The following issues were identified after v2.0.1 shipped, while exercising the documented "extract `ncc-v2-stack-<os>-<arch>.tar.gz`, then `cd bin && ./ncc-orchestrator v2-start`" flow. They affect v2.0.0 and v2.0.1 equally; both are fixed in **v2.0.2**.
+
+| # | Issue | Symptom | v2.0.2 fix |
+|---|---|---|---|
+| 1 | `v2-check` / `v2-start` / `v2-stop` / `uninstall` defaulted `--install-dir` to `<cwd>/.ncc-v2` even when run from inside an extracted stack | `v2-check failed (5 issues)` listing missing binaries / frontend-dist / config-path | Auto-detect: when invoked from `<X>/bin/<self>` and `<X>` carries v2 layout markers, install-dir defaults to `<X>`. Secondary paths default to `<install-dir>/<name>`. Falls back to `example_config.yaml` if `config.yaml` is absent. |
+| 2 | `v2-start` from `<X>/bin/` failed with `path escapes repo root` | api-server immediately exited; logs showed the rejection | api-server's `--repo-root` (path-traversal sandbox) was hardcoded to `os.Getwd()`; v2.0.2 uses the `ancestor(install-dir, cwd)` and pre-resolves macOS `/tmp` → `/private/tmp` symlinks. |
+| 3 | `wait-ready` hung / failed with `connection refused` on macOS when binding API to `127.0.0.1:<port>` | health probe targeted `localhost:<port>` which resolved to `::1` (IPv6) but server was bound IPv4-only | `localHTTPURLFromListen` now preserves the user-supplied host. CORS allow-list separately gains the `http://localhost:<port>` form when the UI binds to a loopback IP. |
+| 4 | `/api/v1/health` reported `orchestrator_bin` as a non-existent path | API-triggered runs would have failed to spawn the orchestrator | `resolveV2OrchestratorBin` now returns absolute, symlink-resolved paths. |
+| 5 | Extracted binaries occasionally lost the executable bit | "binary not executable" errors after `update` | `extractTarGzArchive` / `extractZipArchive` now use the archive's stored mode bits instead of hardcoded `0644`. |
+| 6 | `uninstall --remove-local` only swept legacy CWD-relative paths | data under `<install-dir>/{outputfiles,nccfiles,…}` survived a non-`--remove-v2-runtime` uninstall | Cleanup set now includes both legacy CWD-relative and v2.0.2 install-dir-relative entries. |
+
+**Upgrade to v2.0.2:**
+
+```bash
+# Package-level update (works from any v2.0.0 / v2.0.1 install)
+./ncc-orchestrator update
+```
+
+The v2.0.1 updater downloads `ncc-v2-stack-<os>-<arch>.tar.gz` from the latest release, verifies SHA-256 against `checksums.txt`, and atomically replaces every v2 component in the install directory. After upgrade, the recommended invocation simplifies to:
+
+```bash
+cd <install-dir>/bin
+./ncc-orchestrator v2-start --api-listen :8081 --ui-listen :8080
+# (no path flags needed; install-dir is auto-detected)
+```
 
 **Recovery for users who already ran the buggy update:** Re-download the correct orchestrator binary directly:
 

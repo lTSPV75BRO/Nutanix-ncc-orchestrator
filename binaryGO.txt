@@ -6,7 +6,7 @@ if [ -n "${ZSH_VERSION:-}" ]; then setopt nonomatch; fi
 # Note: git revision is picked up automatically by Go's build info (-buildvcs=true,
 # default), surfaced as `gitRevision` inside the binaries. We only thread the
 # `-dirty` suffix into Version so support tickets can spot uncommitted builds.
-export VERSION=2.0.1 STREAM=Release BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ') GO_VER=$(go version | awk '{print $3}') GIT_DIRTY=$(git diff --quiet 2>/dev/null || echo "-dirty"); export LDFLAGS="-w -s -X main.Version=${VERSION}${GIT_DIRTY} -X main.BuildDate=${BUILD_DATE} -X main.Stream=${STREAM} -X main.GoVersion=${GO_VER}"; mkdir -p dist
+export VERSION=2.0.2 STREAM=Release BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ') GO_VER=$(go version | awk '{print $3}') GIT_DIRTY=$(git diff --quiet 2>/dev/null || echo "-dirty"); export LDFLAGS="-w -s -X main.Version=${VERSION}${GIT_DIRTY} -X main.BuildDate=${BUILD_DATE} -X main.Stream=${STREAM} -X main.GoVersion=${GO_VER}"; mkdir -p dist
 
 # 1) Preflight: module integrity, vet, unit tests, frontend typecheck. Fails fast.
 go mod download && go mod verify && go vet ./... && go test ./cmd/... ./... -count=1 -short 2>&1 | tail -20 && (cd frontend && npm ci && npx tsc --noEmit -p tsconfig.json) && echo "PREFLIGHT_OK"
