@@ -8,30 +8,36 @@ For the latest completed milestone summary, see [docs/MILESTONE_v2.0.0.md](docs/
 
 ## Top of backlog (next)
 
-**Extract `goNCC.go` into `internal/` packages.** `goNCC.go` is ~15.5k lines.
-Splitting notifications, the Prometheus textfile writer, and the parser into
-their own packages was attempted for v2.1.0 and **deferred**: those subsystems
-depend on pervasive shared types — `Config`, `FS`, `ParsedBlock`,
-`NotificationSummary`, `HTTPClient` — used throughout `goNCC.go` and the
-`cmd/*` servers, so a naive move does not compile and a parameterized move
-churns hundreds of call sites. Recommended sequencing for a dedicated release:
+**Extract `goNCC.go` into `internal/` packages (first wave done, v2.1.0).**
+`goNCC.go` is ~15.5k lines. The first wave of five leaf packages landed in
+v2.1.0. Each step kept behavior identical, moved the matching tests, and left
+`go test -race ./...` green before the next.
 
-1. **`internal/model` first.** Move the foundational shared types (`Config`,
-   `FS`, `ParsedBlock`, `Row`, `NotificationSummary`, `HTTPClient`, severity
-   constants) into a small leaf package with no project imports. This is the
-   enabling, highest-churn step — do it alone, behind a green `-race` suite.
-2. **`internal/promtext`** (Prometheus textfile). Smallest, cleanest surface
-   (`writePrometheusFile`, `sanitizeLabel`, `clusterHealthScore`); depends only
-   on `FS` + `ParsedBlock` from `internal/model`.
-3. **`internal/notify`** (email/webhook/slack + retry wrappers). Depends on
-   `Config`, `HTTPClient`, `NotificationSummary`, and the shared retry helpers
-   (`jitteredBackoff`, `isRetryableStatus`, `retryAfterDelay`) — move those
-   helpers too.
-4. **`internal/nccparse`** (parser → `ParsedBlock`) last, only if the surface
-   stays clean once `internal/model` exists.
+1. ✅ **`internal/model` (done, v2.1.0).** The foundational shared types
+   (`Config`, `ClusterCredential`, `NotificationSummary`, `ParsedBlock`, `FS`,
+   `HTTPClient`, `ClusterHealthScore`) live in a leaf package with only
+   stdlib imports, re-exported from `main` via type aliases (`type Config =
+   model.Config`) so existing references compile unchanged.
+2. ✅ **`internal/promtext` (done, v2.1.0).** The Prometheus textfile writers
+   (`WritePrometheusFile`, `WriteNotificationMetricsFile`, `SanitizeLabel`)
+   moved out, depending only on `internal/model`. `main` keeps thin aliases.
+3. ✅ **`internal/retryutil` (done, v2.1.0).** The shared retry helpers
+   (`JitteredBackoff`, `IsRetryableStatus`, `RetryAfterDelay`) moved into a
+   stdlib-only leaf so both `main` and `internal/notify` reuse them without an
+   import cycle; aliased in `main`.
+4. ✅ **`internal/notify` (done, v2.1.0).** The email/webhook/Slack senders,
+   retry wrappers, `text/template` overrides, and the notification-metrics
+   accumulator moved out (depends on `internal/model` + `internal/retryutil`).
+   The run-level counters are read via `notify.ResetMetrics` /
+   `notify.SnapshotMetrics`.
+5. ✅ **`internal/nccparse` (done, v2.1.0).** The NCC summary parser
+   (`SplitLines`, `ParseSummary`, `ValidateParsedAlertsAgainstPluginResults` →
+   `model.ParsedBlock`) moved out, aliased in `main`.
 
-Each step must keep behavior identical, move the matching tests, and leave
-`go test -race ./...` green before the next step.
+**Next wave (not started).** `goNCC.go` is still large; the report renderers
+(`generateHTML` / `generateCSV` / `generateMarkdown` / `generateJSON` /
+`generateSARIF`) and the HTTP client + filesystem layer are the next obvious
+candidates, following the same alias-backed, behavior-preserving pattern.
 
 ---
 
@@ -148,7 +154,7 @@ These rows in the sections below are now **done** and kept only for history:
 
 | Suggestion | Description |
 |------------|-------------|
-| **Split packages** | See **Top of backlog (next)** above — extract `internal/model`, then `internal/promtext`, `internal/notify`, `internal/nccparse`. This is the headline structural item. |
+| **Split packages** | First wave **done in v2.1.0** (`internal/model`, `internal/promtext`, `internal/retryutil`, `internal/notify`, `internal/nccparse`). See **Top of backlog** above for the next wave (report renderers, HTTP client). |
 | **HTTP dump allocation** | In redactHTTPDump, reduce allocations when truncating (e.g. single pass or buffer reuse). |
 
 ---
@@ -310,4 +316,4 @@ These rows in the sections below are now **done** and kept only for history:
 
 ---
 
-*Last updated: 2026-06 (post v2.1.0 release prep). The headline open item is the `goNCC.go` package extraction — see "Top of backlog (next)". Revisit as the project evolves.*
+*Last updated: 2026-06 (post v2.1.0 release prep). The first wave of the `goNCC.go` package extraction is complete (five `internal/` packages); the next wave (report renderers, HTTP client) is the headline structural item — see "Top of backlog". Revisit as the project evolves.*

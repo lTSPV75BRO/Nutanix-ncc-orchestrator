@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+
+	"goncc/internal/notify"
 )
 
 // ==================== Utility Function Tests ====================
@@ -886,33 +888,8 @@ func TestGenerateCSV(t *testing.T) {
 }
 
 // ==================== Parsing Tests ====================
-
-func TestDetectSeverity(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{"FAIL with colon", "FAIL: something", "FAIL"},
-		{"WARN with colon", "WARN: something", "WARN"},
-		{"ERR with colon", "ERR: something", "ERR"},
-		{"INFO with colon", "INFO: something", "INFO"},
-		{"FAIL without colon", "This is a FAIL message", "INFO"}, // detectSeverity requires colon
-		{"WARN without colon", "This is a WARN message", "INFO"}, // detectSeverity requires colon
-		{"No severity", "This is a normal message", "INFO"},
-		{"Empty string", "", "INFO"},
-		{"Multiple severities", "FAIL: but also WARN:", "FAIL"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := detectSeverity(tt.input)
-			if result != tt.expected {
-				t.Errorf("Expected %s, got %s", tt.expected, result)
-			}
-		})
-	}
-}
+// TestDetectSeverity moved to goncc/internal/nccparse (tests the unexported
+// detectSeverity alongside the extracted parser).
 
 func TestSplitLines(t *testing.T) {
 	tests := []struct {
@@ -1298,7 +1275,7 @@ func TestSendSlackDisabled(t *testing.T) {
 	ctx := context.Background()
 	client := &mockHTTPClient{}
 
-	err := sendSlack(ctx, client, cfg, NotificationSummary{})
+	err := notify.SendSlack(ctx, client, cfg, NotificationSummary{})
 	if err != nil {
 		t.Errorf("sendSlack should return nil when disabled, got %v", err)
 	}
@@ -1313,7 +1290,7 @@ func TestSendWebhookDisabled(t *testing.T) {
 	ctx := context.Background()
 	client := &mockHTTPClient{}
 
-	err := sendWebhook(ctx, client, cfg, NotificationSummary{})
+	err := notify.SendWebhook(ctx, client, cfg, NotificationSummary{})
 	if err != nil {
 		t.Errorf("sendWebhook should return nil when disabled, got %v", err)
 	}
@@ -3721,6 +3698,9 @@ func TestVerifyDownloadedAsset(t *testing.T) {
 		}
 	})
 }
+
+// Notification accumulator, template, and sender tests moved to the
+// goncc/internal/notify package alongside the extracted implementation.
 
 // TestLoopbackAltOriginFromListen pins the CORS-friendly alt-origin
 // derivation: when the UI binds to a loopback IP, the allow-list should

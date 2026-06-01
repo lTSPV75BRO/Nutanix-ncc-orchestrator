@@ -5,7 +5,7 @@
 
 > **Affiliation:** This is an independent open-source project. It is **not** affiliated with or endorsed by Nutanix, Inc. NCC and Nutanix are trademarks of their respective owners. The project is MIT licensed; see [`LICENSE`](LICENSE).
 
-v2.1.0 is a consolidation release. It closes a download-integrity gap in `v2-bootstrap`, improves the Windows self-update flow, refreshes dependencies, and refreshes the project backlog. There are no breaking changes — every v2.0.x invocation keeps working.
+v2.1.0 is a consolidation release. It closes a download-integrity gap in `v2-bootstrap`, adds notification observability and templating, improves the Windows self-update flow, refreshes dependencies, and begins splitting the monolithic `goNCC.go` into focused packages. There are no breaking changes — every v2.0.x invocation keeps working.
 
 ---
 
@@ -33,6 +33,33 @@ On Windows you cannot overwrite a running `.exe` in place, so `update` previousl
 
 Run it after exiting and the update completes with no manual file juggling. The helper is also added to the `uninstall` cleanup set. Pinned by `TestWriteWindowsUpdateSwapHelper`.
 
+### Notification delivery metrics
+
+Notification failures used to be visible only in the logs. v2.1.0 records per-channel outcomes for each run and, when `prom-enabled` is set, writes a run-level `notifications.prom` textfile:
+
+```
+nutanix_ncc_notification_attempts_total{channel="email"}  3
+nutanix_ncc_notification_failures_total{channel="email"}  1
+nutanix_ncc_notification_attempts_total{channel="webhook"} 3
+nutanix_ncc_notification_failures_total{channel="webhook"} 0
+nutanix_ncc_notification_attempts_total{channel="slack"}   0
+nutanix_ncc_notification_failures_total{channel="slack"}   0
+```
+
+A line is always emitted per channel (0 when unused), so an alert like `increase(nutanix_ncc_notification_failures_total[1h]) > 0` never breaks on a missing series. Disabled channels are not counted.
+
+### Custom notification templates
+
+Three optional config keys let you override the notification content with Go `text/template` strings:
+
+```yaml
+email-subject-template: "NCC {{.Cluster}}: {{.FailCount}} FAIL / {{.WarnCount}} WARN"
+email-body-template: "{{.Overview}}\nStarted: {{.StartedAt}}"
+webhook-template: '{"text":"NCC {{.Cluster}} FAIL={{.FailCount}}"}'
+```
+
+Templates render against the run summary (`.Cluster`, `.FailCount`, `.WarnCount`, `.ErrCount`, `.InfoCount`, `.TotalChecks`, `.Overview`, `.StartedAt`, `.FinishedAt`, `.OutputFiles`) and apply to the per-cluster, digest, and replay paths. Leave a key empty for the built-in default. A broken template logs and falls back to the default (it never drops a notification); the webhook body is sent verbatim, so it must render valid JSON.
+
 ### Dependency refresh
 
 - Go modules updated (`modelcontextprotocol/go-sdk` 1.6.0→1.6.1, `golang.org/x/sys` 0.44→0.45, `mattn/go-colorable`, `mattn/go-runewidth`). `go vet`, the `-race` test suite, and `govulncheck` are clean.
@@ -41,11 +68,17 @@ Run it after exiting and the update completes with no manual file juggling. The 
 
 ---
 
-## Deferred: `goNCC.go` package extraction
+## `goNCC.go` package extraction
 
-Splitting the ~15.5k-line `goNCC.go` into focused `internal/` packages (notifications, Prometheus textfile, parser) was scoped for this release but **deliberately deferred**. Those subsystems depend on pervasive shared types — `Config`, `FS`, `ParsedBlock`, `NotificationSummary`, `HTTPClient` — that are used throughout `goNCC.go` and the `cmd/*` servers. A clean extraction must first move those foundational types into a shared `internal/model` package and update hundreds of references.
+The first wave of splitting the ~15.5k-line `goNCC.go` into focused `internal/` leaf packages landed in this release. Five packages were carved out, each re-exported from `main` via type/function aliases so the thousands of existing references and call sites compile unchanged:
 
-Doing that under a maintenance bump carried significant regression risk for no user-facing benefit, so it now leads the backlog in [`IMPROVEMENTS.md`](IMPROVEMENTS.md) with a recommended sequencing (extract shared types first, then move one subsystem at a time, behind a green `-race` suite).
+- **`internal/model`** — foundational shared types (`Config`, `ClusterCredential`, `NotificationSummary`, `ParsedBlock`, `FS`, `HTTPClient`) and `ClusterHealthScore`.
+- **`internal/promtext`** — Prometheus textfile writers (`WritePrometheusFile`, `WriteNotificationMetricsFile`, `SanitizeLabel`).
+- **`internal/retryutil`** — the shared retry/backoff helpers (`JitteredBackoff`, `IsRetryableStatus`, `RetryAfterDelay`). Extracted first as a stdlib-only leaf so both `main` and `internal/notify` reuse them without an import cycle.
+- **`internal/notify`** — the email / webhook / Slack senders, retry wrappers, `text/template` overrides, and the per-channel delivery-metrics accumulator (run-level counters are read back via `notify.ResetMetrics` / `notify.SnapshotMetrics`).
+- **`internal/nccparse`** — the NCC summary parser (`SplitLines`, `ParseSummary`, `ValidateParsedAlertsAgainstPluginResults`) producing `model.ParsedBlock`.
+
+Behavior is identical — the orchestrator's existing test suite is unchanged and passes under `-race` — and each new package ships its own unit tests (the notification, template, and parser tests were relocated alongside their implementations). Further slimming of `goNCC.go` can follow the same alias-backed, behavior-preserving pattern; sequencing lives in [`IMPROVEMENTS.md`](IMPROVEMENTS.md).
 
 ---
 
@@ -65,7 +98,7 @@ Both `update` and `v2-bootstrap` now verify downloads against the release `check
 
 ## Tests
 
-- Full Go suite passes with `-race -count=1`, including new `TestVerifyDownloadedAsset` and `TestWriteWindowsUpdateSwapHelper`.
+- Full Go suite passes with `-race -count=1`, including new `TestVerifyDownloadedAsset` and `TestWriteWindowsUpdateSwapHelper`, plus the new `internal/` package suites: `internal/model`, `internal/promtext`, `internal/retryutil`, `internal/notify` (notification metrics, templates, and sender tests — `TestMetrics`, `TestRenderTemplate`, `TestApplyEmailTemplates`, `TestSendWebhook_TemplateBody`, `TestWrappers_SkipDisabled`, `TestWebhookWithRetry_RecordsSuccess`), and `internal/nccparse` (`TestParseSummary`, `TestDetectSeverity`, `TestSplitLines`, `TestValidateParsedAlertsAgainstPluginResults`).
 - `go vet`, `gofmt -l`, `govulncheck`, and frontend `npm audit` all clean.
 
 ---

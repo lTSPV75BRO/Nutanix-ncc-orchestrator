@@ -25,7 +25,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
-	"net/smtp"
 	"net/url"
 	"os"
 	"os/exec"
@@ -53,133 +52,29 @@ import (
 	"github.com/vbauerster/mpb/v7"
 	"github.com/vbauerster/mpb/v7/decor"
 	"golang.org/x/term"
+	"goncc/internal/model"
+	"goncc/internal/nccparse"
+	"goncc/internal/notify"
+	"goncc/internal/promtext"
+	"goncc/internal/retryutil"
 	"goncc/internal/v2layout"
 	lumberjack "gopkg.in/natefinch/lumberjack.v2"
 )
 
 // ==================== Configuration ====================
 
-type Config struct {
-	Clusters           []string
-	ClustersFile       string                       // Optional: cluster file; lines are cluster or cluster,username[,password] (overrides/supplements clusters when set)
-	ClusterCredentials map[string]ClusterCredential `mapstructure:"-"`
-	ClusterSourceMode  string                       `mapstructure:"cluster-source-mode"` // clusters (default) or pc
-	PCs                []string                     `mapstructure:"-"`
-	PCsFile            string                       `mapstructure:"pcs-file"` // Optional: one Prism Central IP/FQDN/URL per line
-	PrismCentralURL    string                       `mapstructure:"prism-central-url"`
-	DiscoverAPIVersion string                       `mapstructure:"discover-api-version"` // v4 (default) or v3 for PC cluster discovery
-	Username           string
-	Password           string
-	InsecureSkipVerify bool
-	Timeout            time.Duration // per-cluster overall timeout
-	RequestTimeout     time.Duration // per HTTP request timeout
-	PollInterval       time.Duration
-	PollJitter         time.Duration
-	OutputDirLogs      string
-	OutputDirFiltered  string
-	OutputFormats      []string // html,csv,json
-	MaxParallel        int
-	TLSMinVersion      uint16
-	LogFile            string
-
-	// Filtering
-	SeverityFilter         []string // Only include these severities (FAIL, WARN, ERR, INFO)
-	ExcludeAlertTitles     []string // Exclude findings whose alert title matches one of these values
-	ExcludeAlertTitlesFile string   // Optional file with one alert title per line to exclude
-	ExcludeAlertMatchMode  string   // exact (default), contains, regex
-
-	// Logging options
-	LogLevel string // 0..5 or names
-	LogHTTP  bool   // dump HTTP request/response
-
-	// Dry-run mode
-	DryRun bool // Don't actually run checks, just validate config
-
-	// History + regression
-	RunHistoryEnabled        bool
-	RunHistoryDir            string
-	RetainLastRuns           int
-	RetainDays               int
-	ArtifactRetainDays       int
-	ArtifactRetainMaxFiles   int
-	SingleReport             bool
-	NotifyOnRegression       bool
-	AdaptiveParallelism      bool
-	PreviousClusterFailCount map[string]int `mapstructure:"-"`
-	PolicyGates              []string
-	QuietHours               string
-	MaintenanceWindows       []string
-	FlakyLookbackRuns        int
-	FlakyMinTransitions      int
-
-	// Retry tuning
-	RetryMaxAttempts    int
-	RetryBaseDelay      time.Duration
-	RetryMaxDelay       time.Duration
-	RetryCircuitBreaker int // Fail fast after N consecutive retryable failures
-
-	// HTTP connection pooling
-	MaxIdleConns        int           // Max idle connections per host
-	MaxIdleConnsPerHost int           // Max idle connections per host
-	MaxConnsPerHost     int           // Max total connections per host
-	IdleConnTimeout     time.Duration // Idle connection timeout
-
-	// Prometheus metrics
-	PromEnabled bool   `mapstructure:"prom-enabled"`
-	PromDir     string `mapstructure:"prom-dir"`
-
-	// Email
-	EmailEnabled    bool
-	EmailAttachHTML bool // Attach per-cluster (or digest) HTML report to email
-	NotifyDigest    bool // When true: one email/webhook/slack per run (with run overview); when false: per-cluster
-	SMTPServer      string
-	SMTPPort        int
-	SMTPUser        string
-	SMTPPassword    string
-	EmailFrom       string
-	EmailTo         []string
-	EmailUseTLS     bool
-
-	// Webhook
-	WebhookEnabled     bool
-	WebhookIncludeHTML bool // Include per-cluster HTML report as base64 in webhook payload
-	WebhookURL         string
-	WebhookHeaders     map[string]string `mapstructure:"webhook-headers"`
-
-	// Slack
-	SlackEnabled    bool
-	SlackWebhookURL string `mapstructure:"slack-webhook-url"`
-	SlackChannel    string `mapstructure:"slack-channel"`
-
-	// Secrets
-	SecretsProvider string
-	SecretsFile     string
-
-	// NCCAPIVersion is normalized to "v4" or "v1" (Legacy). Config accepts v4, Legacy, or v1 (alias for Legacy).
-	NCCAPIVersion string `mapstructure:"ncc-api-version"`
-
-	// NutanixV4APIVersion is the v4 REST API path revision (e.g. v4.2, v4.1, v4.0.a1) for /api/clustermgmt/{ver}/ and /api/monitoring/{ver}/.
-	NutanixV4APIVersion string `mapstructure:"nutanix-v4-api-version"`
-}
-
-type ClusterCredential struct {
-	Username string
-	Password string
-}
-
-type NotificationSummary struct {
-	Cluster          string
-	StartedAt        time.Time
-	FinishedAt       time.Time
-	FailCount        int
-	WarnCount        int
-	ErrCount         int
-	InfoCount        int
-	TotalChecks      int
-	OutputFiles      []string
-	Overview         string // Brief text summary for email body and webhook
-	ReportHTMLBase64 string `json:"ReportHTMLBase64,omitempty"` // Optional: base64-encoded HTML when WebhookIncludeHTML
-}
+// The foundational shared types now live in goncc/internal/model so the
+// extracted subsystem packages (promtext, notify, parser) can depend on them
+// without importing package main. These aliases keep the thousands of
+// existing references in this package compiling unchanged.
+type (
+	Config              = model.Config
+	ClusterCredential   = model.ClusterCredential
+	NotificationSummary = model.NotificationSummary
+	ParsedBlock         = model.ParsedBlock
+	FS                  = model.FS
+	HTTPClient          = model.HTTPClient
+)
 
 type HTMLMeta struct {
 	ClusterName    string
@@ -1398,13 +1293,15 @@ smtp-password: ""
 email-from: "ncc@example.com"
 email-to: "ops@example.com,sre@example.com"
 email-use-tls: true
-
+# email-subject-template: ""              # Optional Go text/template, e.g. "NCC {{.Cluster}}: {{.FailCount}} FAIL"
+# email-body-template: ""                 # Optional Go text/template for the email body
 # Webhook notifications
 webhook-enabled: false
 webhook-include-html: false
 webhook-url: "https://hooks.example.com/ncc"
 webhook-headers:
   X-Auth-Token: "changeme"
+# webhook-template: ""                     # Optional Go text/template for the webhook body (must render valid JSON)
 
 # Slack notifications
 slack-enabled: false
@@ -1531,13 +1428,15 @@ smtp-password: ""
 email-from: "ncc@example.com"
 email-to: "ops@example.com,sre@example.com"
 email-use-tls: true
-
+# email-subject-template: ""              # Optional Go text/template, e.g. "NCC {{.Cluster}}: {{.FailCount}} FAIL"
+# email-body-template: ""                 # Optional Go text/template for the email body
 # Webhook notifications
 webhook-enabled: false
 webhook-include-html: false
 webhook-url: "https://hooks.example.com/ncc"
 webhook-headers:
   X-Auth-Token: "changeme"
+# webhook-template: ""                     # Optional Go text/template for the webhook body (must render valid JSON)
 
 # Slack notifications
 slack-enabled: false
@@ -1687,7 +1586,8 @@ func validateConfigFileRawTypes() error {
 		"email-enabled": true, "email-attach-html": true, "notify-digest": true,
 		"smtp-server": true, "smtp-port": true, "smtp-user": true, "smtp-password": true,
 		"email-from": true, "email-to": true, "email-use-tls": true,
-		"webhook-enabled": true, "webhook-include-html": true, "webhook-url": true, "webhook-headers": true,
+		"email-subject-template": true, "email-body-template": true,
+		"webhook-enabled": true, "webhook-include-html": true, "webhook-url": true, "webhook-headers": true, "webhook-template": true,
 		"slack-enabled": true, "slack-webhook-url": true, "slack-channel": true,
 		"secrets-provider": true, "secrets-file": true,
 	}
@@ -1710,7 +1610,8 @@ func validateConfigFileRawTypes() error {
 		"log-file", "log-level", "retry-base-delay", "retry-max-delay", "prom-dir",
 		"severity-filter", "exclude-alert-titles", "exclude-alert-titles-file", "exclude-alert-match-mode", "idle-conn-timeout", "policy-gates", "quiet-hours", "maintenance-windows",
 		"smtp-server", "smtp-user", "smtp-password", "email-from", "email-to",
-		"webhook-url", "slack-webhook-url", "slack-channel", "secrets-provider", "secrets-file",
+		"email-subject-template", "email-body-template",
+		"webhook-url", "webhook-template", "slack-webhook-url", "slack-channel", "secrets-provider", "secrets-file",
 	}
 	for _, key := range stringKeys {
 		if !viper.InConfig(key) {
@@ -1902,10 +1803,13 @@ func bindConfig() (Config, error) {
 		EmailFrom:              viper.GetString("email-from"),
 		EmailTo:                splitCSV(viper.GetString("email-to")),
 		EmailUseTLS:            viper.GetBool("email-use-tls"),
+		EmailSubjectTemplate:   viper.GetString("email-subject-template"),
+		EmailBodyTemplate:      viper.GetString("email-body-template"),
 		WebhookEnabled:         viper.GetBool("webhook-enabled"),
 		WebhookIncludeHTML:     viper.GetBool("webhook-include-html"),
 		WebhookURL:             viper.GetString("webhook-url"),
 		WebhookHeaders:         viper.GetStringMapString("webhook-headers"),
+		WebhookTemplate:        viper.GetString("webhook-template"),
 		SeverityFilter:         splitCSV(viper.GetString("severity-filter")),
 		ExcludeAlertTitles:     splitCSV(viper.GetString("exclude-alert-titles")),
 		ExcludeAlertTitlesFile: strings.TrimSpace(viper.GetString("exclude-alert-titles-file")),
@@ -2117,27 +2021,14 @@ func setupFileLogger(logPath string, lvl zerolog.Level) error {
 }
 
 // ==================== Retry Helpers ====================
-
-func jitteredBackoff(base, maxDelay time.Duration, attempt int) time.Duration {
-	exp := float64(base) * math.Pow(2, float64(attempt-1))
-	capDelay := time.Duration(exp)
-	if capDelay > maxDelay {
-		capDelay = maxDelay
-	}
-	if capDelay <= 0 {
-		return 0
-	}
-	return time.Duration(rand.Int63n(int64(capDelay)))
-}
-
-func isRetryableStatus(code int) bool {
-	switch code {
-	case 408, 429, 500, 502, 503, 504:
-		return true
-	default:
-		return false
-	}
-}
+// The shared retry/backoff helpers were extracted to goncc/internal/retryutil
+// (so goncc/internal/notify can reuse them without an import cycle). These
+// aliases keep the existing call sites in this package unchanged.
+var (
+	jitteredBackoff   = retryutil.JitteredBackoff
+	isRetryableStatus = retryutil.IsRetryableStatus
+	retryAfterDelay   = retryutil.RetryAfterDelay
+)
 
 // maxRateLimitBackoff caps Retry-After / computed backoff for HTTP 429 so a misbehaving server cannot sleep unbounded.
 const maxRateLimitBackoff = 2 * time.Minute
@@ -2265,32 +2156,7 @@ func readBodyWithLimit(body io.ReadCloser, maxBytes int64, context string) ([]by
 	return data, nil
 }
 
-func retryAfterDelay(resp *http.Response) (time.Duration, bool) {
-	if resp == nil {
-		return 0, false
-	}
-	ra := resp.Header.Get("Retry-After")
-	if ra == "" {
-		return 0, false
-	}
-	if secs, err := strconv.Atoi(ra); err == nil {
-		return time.Duration(secs) * time.Second, true
-	}
-	if t, err := http.ParseTime(ra); err == nil {
-		d := time.Until(t)
-		if d < 0 {
-			d = 0
-		}
-		return d, true
-	}
-	return 0, false
-}
-
 // ==================== HTTP Client and File System ====================
-
-type HTTPClient interface {
-	Do(req *http.Request) (*http.Response, error)
-}
 
 type LoggingTransport struct {
 	Base    http.RoundTripper
@@ -2456,14 +2322,6 @@ func NewHTTPClient(cfg Config) *http.Client {
 
 // ==================== File System Interface ====================
 
-type FS interface {
-	MkdirAll(path string, perm os.FileMode) error
-	WriteFile(path string, data []byte, perm os.FileMode) error
-	ReadFile(path string) ([]byte, error)
-	ReadDir(path string) ([]os.DirEntry, error)
-	Create(path string) (*os.File, error)
-}
-
 type OSFS struct{}
 
 func (OSFS) MkdirAll(path string, perm os.FileMode) error { return os.MkdirAll(path, perm) }
@@ -2475,212 +2333,19 @@ func (OSFS) ReadDir(path string) ([]os.DirEntry, error) { return os.ReadDir(path
 func (OSFS) Create(path string) (*os.File, error)       { return os.Create(path) }
 
 // ==================== Prometheus Metrics ====================
-// sanitizeLabel ensures Prometheus label values are safe-ish (no newlines, quotes escaped).
-func sanitizeLabel(s string) string {
-	s = strings.TrimSpace(s)
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	s = strings.ReplaceAll(s, "\n", " ")
-	return s
-}
+// The Prometheus textfile writers were extracted to goncc/internal/promtext.
+// sanitizeLabel/writePrometheusFile are aliases so existing call sites in this
+// package are unchanged.
+var (
+	sanitizeLabel       = promtext.SanitizeLabel
+	writePrometheusFile = promtext.WritePrometheusFile
+)
 
-func writePrometheusFile(fs FS, promDir, cluster string, blocks []ParsedBlock) error {
-	if err := fs.MkdirAll(promDir, 0755); err != nil {
-		return err
-	}
-	filename := filepath.Join(promDir, fmt.Sprintf("%s.prom", cluster))
-
-	var b strings.Builder
-
-	// Metric headers.
-	b.WriteString(`# HELP nutanix_ncc_check_result Result of an NCC check (1 = present)` + "\n")
-	b.WriteString(`# TYPE nutanix_ncc_check_result gauge` + "\n")
-	b.WriteString(`# HELP nutanix_ncc_check_summary_total Number of NCC checks per severity` + "\n")
-	b.WriteString(`# TYPE nutanix_ncc_check_summary_total gauge` + "\n")
-	b.WriteString(`# HELP nutanix_ncc_check_total Total NCC checks for this cluster` + "\n")
-	b.WriteString(`# TYPE nutanix_ncc_check_total gauge` + "\n")
-	b.WriteString(`# HELP nutanix_ncc_check_problem_total Total non-INFO checks (FAIL+WARN+ERR)` + "\n")
-	b.WriteString(`# TYPE nutanix_ncc_check_problem_total gauge` + "\n")
-	b.WriteString(`# HELP nutanix_ncc_check_problem_ratio Ratio of non-INFO checks to total checks` + "\n")
-	b.WriteString(`# TYPE nutanix_ncc_check_problem_ratio gauge` + "\n")
-	b.WriteString(`# HELP nutanix_ncc_run_has_failures 1 when at least one FAIL exists in this run` + "\n")
-	b.WriteString(`# TYPE nutanix_ncc_run_has_failures gauge` + "\n")
-	b.WriteString(`# HELP nutanix_ncc_run_has_warnings 1 when at least one WARN exists in this run` + "\n")
-	b.WriteString(`# TYPE nutanix_ncc_run_has_warnings gauge` + "\n")
-	b.WriteString(`# HELP nutanix_ncc_run_has_errors 1 when at least one ERR exists in this run` + "\n")
-	b.WriteString(`# TYPE nutanix_ncc_run_has_errors gauge` + "\n")
-	b.WriteString(`# HELP nutanix_ncc_run_has_problems 1 when at least one non-INFO check exists` + "\n")
-	b.WriteString(`# TYPE nutanix_ncc_run_has_problems gauge` + "\n")
-	b.WriteString(`# HELP nutanix_ncc_run_health_score Cluster run health score (0-100)` + "\n")
-	b.WriteString(`# TYPE nutanix_ncc_run_health_score gauge` + "\n")
-	b.WriteString(`# HELP nutanix_ncc_check_unique_total Number of unique check names in the run` + "\n")
-	b.WriteString(`# TYPE nutanix_ncc_check_unique_total gauge` + "\n")
-	b.WriteString(`# HELP nutanix_ncc_check_duplicate_total Number of duplicate check rows (total - unique)` + "\n")
-	b.WriteString(`# TYPE nutanix_ncc_check_duplicate_total gauge` + "\n")
-	b.WriteString(`# HELP nutanix_ncc_check_detail_bytes_total Total UTF-8 bytes across check details` + "\n")
-	b.WriteString(`# TYPE nutanix_ncc_check_detail_bytes_total gauge` + "\n")
-	b.WriteString(`# HELP nutanix_ncc_check_detail_bytes_avg Average UTF-8 detail bytes per check row` + "\n")
-	b.WriteString(`# TYPE nutanix_ncc_check_detail_bytes_avg gauge` + "\n")
-	b.WriteString(`# HELP nutanix_ncc_check_severity_ratio Ratio of checks by severity` + "\n")
-	b.WriteString(`# TYPE nutanix_ncc_check_severity_ratio gauge` + "\n")
-	b.WriteString(`# HELP nutanix_ncc_last_run_timestamp_seconds Unix timestamp when metrics were generated` + "\n")
-	b.WriteString(`# TYPE nutanix_ncc_last_run_timestamp_seconds gauge` + "\n")
-
-	// Per-check result metrics.
-	counts := map[string]int{
-		"FAIL": 0,
-		"WARN": 0,
-		"ERR":  0,
-		"INFO": 0,
-		"PASS": 0, // in case parser ever maps PASS
-	}
-	uniqueChecks := map[string]bool{}
-	detailBytesTotal := 0
-
-	for _, pb := range blocks {
-		sev := pb.Severity
-		if sev == "" {
-			sev = "INFO"
-		}
-		if _, ok := counts[sev]; !ok {
-			counts[sev] = 0
-		}
-		counts[sev]++
-		if name := strings.TrimSpace(pb.CheckName); name != "" {
-			uniqueChecks[name] = true
-		}
-		detailBytesTotal += len(pb.DetailRaw)
-
-		// one sample per check
-		b.WriteString(fmt.Sprintf(
-			`nutanix_ncc_check_result{cluster="%s",check="%s",severity="%s"} 1`+"\n",
-			sanitizeLabel(cluster),
-			sanitizeLabel(pb.CheckName),
-			sanitizeLabel(sev),
-		))
-	}
-
-	// Summary per severity.
-	for _, sev := range []string{"FAIL", "WARN", "ERR", "INFO", "PASS"} {
-		c := counts[sev]
-		b.WriteString(fmt.Sprintf(
-			`nutanix_ncc_check_summary_total{cluster="%s",severity="%s"} %d`+"\n",
-			sanitizeLabel(cluster),
-			sanitizeLabel(sev),
-			c,
-		))
-	}
-
-	// Total checks.
-	totalChecks := len(blocks)
-	b.WriteString(fmt.Sprintf(
-		`nutanix_ncc_check_total{cluster="%s"} %d`+"\n",
-		sanitizeLabel(cluster),
-		totalChecks,
-	))
-	problemTotal := counts["FAIL"] + counts["WARN"] + counts["ERR"]
-	problemRatio := 0.0
-	if totalChecks > 0 {
-		problemRatio = float64(problemTotal) / float64(totalChecks)
-	}
-	hasFailures := 0
-	if counts["FAIL"] > 0 {
-		hasFailures = 1
-	}
-	hasWarnings := 0
-	if counts["WARN"] > 0 {
-		hasWarnings = 1
-	}
-	hasErrors := 0
-	if counts["ERR"] > 0 {
-		hasErrors = 1
-	}
-	hasProblems := 0
-	if problemTotal > 0 {
-		hasProblems = 1
-	}
-	uniqueTotal := len(uniqueChecks)
-	duplicateTotal := totalChecks - uniqueTotal
-	detailBytesAvg := 0.0
-	if totalChecks > 0 {
-		detailBytesAvg = float64(detailBytesTotal) / float64(totalChecks)
-	}
-	healthScore := clusterHealthScore(counts["FAIL"], counts["WARN"], counts["ERR"], totalChecks)
-	nowUnix := time.Now().Unix()
-	b.WriteString(fmt.Sprintf(
-		`nutanix_ncc_check_problem_total{cluster="%s"} %d`+"\n",
-		sanitizeLabel(cluster),
-		problemTotal,
-	))
-	b.WriteString(fmt.Sprintf(
-		`nutanix_ncc_check_problem_ratio{cluster="%s"} %.6f`+"\n",
-		sanitizeLabel(cluster),
-		problemRatio,
-	))
-	b.WriteString(fmt.Sprintf(
-		`nutanix_ncc_run_has_failures{cluster="%s"} %d`+"\n",
-		sanitizeLabel(cluster),
-		hasFailures,
-	))
-	b.WriteString(fmt.Sprintf(
-		`nutanix_ncc_run_has_warnings{cluster="%s"} %d`+"\n",
-		sanitizeLabel(cluster),
-		hasWarnings,
-	))
-	b.WriteString(fmt.Sprintf(
-		`nutanix_ncc_run_has_errors{cluster="%s"} %d`+"\n",
-		sanitizeLabel(cluster),
-		hasErrors,
-	))
-	b.WriteString(fmt.Sprintf(
-		`nutanix_ncc_run_has_problems{cluster="%s"} %d`+"\n",
-		sanitizeLabel(cluster),
-		hasProblems,
-	))
-	b.WriteString(fmt.Sprintf(
-		`nutanix_ncc_run_health_score{cluster="%s"} %d`+"\n",
-		sanitizeLabel(cluster),
-		healthScore,
-	))
-	b.WriteString(fmt.Sprintf(
-		`nutanix_ncc_check_unique_total{cluster="%s"} %d`+"\n",
-		sanitizeLabel(cluster),
-		uniqueTotal,
-	))
-	b.WriteString(fmt.Sprintf(
-		`nutanix_ncc_check_duplicate_total{cluster="%s"} %d`+"\n",
-		sanitizeLabel(cluster),
-		duplicateTotal,
-	))
-	b.WriteString(fmt.Sprintf(
-		`nutanix_ncc_check_detail_bytes_total{cluster="%s"} %d`+"\n",
-		sanitizeLabel(cluster),
-		detailBytesTotal,
-	))
-	b.WriteString(fmt.Sprintf(
-		`nutanix_ncc_check_detail_bytes_avg{cluster="%s"} %.6f`+"\n",
-		sanitizeLabel(cluster),
-		detailBytesAvg,
-	))
-	for _, sev := range []string{"FAIL", "WARN", "ERR", "INFO", "PASS"} {
-		ratio := 0.0
-		if totalChecks > 0 {
-			ratio = float64(counts[sev]) / float64(totalChecks)
-		}
-		b.WriteString(fmt.Sprintf(
-			`nutanix_ncc_check_severity_ratio{cluster="%s",severity="%s"} %.6f`+"\n",
-			sanitizeLabel(cluster),
-			sanitizeLabel(sev),
-			ratio,
-		))
-	}
-	b.WriteString(fmt.Sprintf(
-		`nutanix_ncc_last_run_timestamp_seconds{cluster="%s"} %d`+"\n",
-		sanitizeLabel(cluster),
-		nowUnix,
-	))
-
-	return fs.WriteFile(filename, []byte(b.String()), 0644)
+// writeNotificationMetricsFile snapshots the run's notification accumulator
+// (owned by internal/notify) and delegates the textfile rendering to promtext.
+func writeNotificationMetricsFile(fs FS, promDir string) error {
+	attempts, failures := notify.SnapshotMetrics()
+	return promtext.WriteNotificationMetricsFile(fs, promDir, notify.Channels, attempts, failures)
 }
 
 // ==================== API Types ====================
@@ -2695,129 +2360,19 @@ type NCCSummary struct {
 }
 
 // ==================== Parser ====================
-
+// The NCC summary parser was extracted to goncc/internal/nccparse. These
+// aliases keep the existing call sites in this package unchanged. splitLines is
+// also used by non-parser code here, so it is aliased too.
 var (
-	reBlockStart = regexp.MustCompile(`^Detailed information for .*`)
-	reBlockEnd   = regexp.MustCompile(`^Refer to.*`)
-	reSeverity   = regexp.MustCompile(`\b(FAIL|WARN|INFO|ERR)\s*:`)
-	rePluginSev  = regexp.MustCompile(`\[\s*(FAIL|WARN|ERR|INFO)\s*\]`)
+	splitLines                               = nccparse.SplitLines
+	ParseSummary                             = nccparse.ParseSummary
+	validateParsedAlertsAgainstPluginResults = nccparse.ValidateParsedAlertsAgainstPluginResults
 )
 
 type Row struct {
 	Severity  string
 	CheckName string
 	Detail    template.HTML
-}
-
-type ParsedBlock struct {
-	Severity  string
-	CheckName string
-	DetailRaw string
-}
-
-func splitLines(s string) []string {
-	sc := bufio.NewScanner(strings.NewReader(s))
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	lines := []string{}
-	for sc.Scan() {
-		lines = append(lines, sc.Text())
-	}
-	if len(s) > 0 && strings.HasSuffix(s, "\n") {
-		lines = append(lines, "")
-	}
-	return lines
-}
-
-func detectSeverity(s string) string {
-	loc := reSeverity.FindStringSubmatch(s)
-	if len(loc) > 1 {
-		return loc[1]
-	}
-	switch {
-	case strings.Contains(s, "FAIL:"):
-		return "FAIL"
-	case strings.Contains(s, "WARN:"):
-		return "WARN"
-	case strings.Contains(s, "ERR:"):
-		return "ERR"
-	case strings.Contains(s, "INFO:"):
-		return "INFO"
-	default:
-		return "INFO"
-	}
-}
-
-func ParseSummary(text string) ([]ParsedBlock, error) {
-	lines := splitLines(text)
-	var blocks []ParsedBlock
-	for i := 0; i < len(lines); i++ {
-		if reBlockStart.MatchString(lines[i]) {
-			checkName := lines[i]
-			i++
-			var buf []string
-			for i < len(lines) && !reBlockEnd.MatchString(lines[i]) {
-				buf = append(buf, lines[i])
-				i++
-			}
-			if i < len(lines) {
-				buf = append(buf, lines[i])
-			}
-			joined := strings.Join(buf, "\n")
-			blocks = append(blocks, ParsedBlock{
-				Severity:  detectSeverity(joined),
-				CheckName: checkName,
-				DetailRaw: joined,
-			})
-		}
-	}
-	return blocks, nil
-}
-
-func countParsedSeverities(blocks []ParsedBlock) map[string]int {
-	counts := map[string]int{"FAIL": 0, "WARN": 0, "ERR": 0, "INFO": 0}
-	for _, b := range blocks {
-		sev := strings.ToUpper(strings.TrimSpace(b.Severity))
-		if _, ok := counts[sev]; !ok {
-			continue
-		}
-		counts[sev]++
-	}
-	return counts
-}
-
-func parsePluginResultsSeverities(raw string) map[string]int {
-	counts := map[string]int{"FAIL": 0, "WARN": 0, "ERR": 0, "INFO": 0}
-	for _, ln := range splitLines(raw) {
-		m := rePluginSev.FindStringSubmatch(strings.ToUpper(ln))
-		if len(m) != 2 {
-			continue
-		}
-		sev := m[1]
-		if _, ok := counts[sev]; ok {
-			counts[sev]++
-		}
-	}
-	return counts
-}
-
-// validateParsedAlertsAgainstPluginResults ensures parser output remains
-// aligned with NCC plugin-result severities in raw logs.
-func validateParsedAlertsAgainstPluginResults(raw string, blocks []ParsedBlock) error {
-	plugin := parsePluginResultsSeverities(raw)
-	totalPlugin := plugin["FAIL"] + plugin["WARN"] + plugin["ERR"] + plugin["INFO"]
-	if totalPlugin == 0 {
-		return nil
-	}
-	parsed := countParsedSeverities(blocks)
-	if parsed["FAIL"] != plugin["FAIL"] ||
-		parsed["WARN"] != plugin["WARN"] ||
-		parsed["ERR"] != plugin["ERR"] ||
-		parsed["INFO"] != plugin["INFO"] {
-		return fmt.Errorf("parsed alerts mismatch plugin results: parsed={FAIL:%d WARN:%d ERR:%d INFO:%d} plugin_results={FAIL:%d WARN:%d ERR:%d INFO:%d}",
-			parsed["FAIL"], parsed["WARN"], parsed["ERR"], parsed["INFO"],
-			plugin["FAIL"], plugin["WARN"], plugin["ERR"], plugin["INFO"])
-	}
-	return nil
 }
 
 func parseNCCHeader(path string) (HTMLMeta, error) {
@@ -2847,285 +2402,18 @@ func parseNCCHeader(path string) (HTMLMeta, error) {
 	return meta, nil
 }
 
-// ==================== Email Notifications ====================
-
-func sendEmail(cfg Config, subj string, body string, attachPath string) error {
-	if !cfg.EmailEnabled || cfg.SMTPServer == "" || len(cfg.EmailTo) == 0 {
-		return nil
-	}
-
-	addr := fmt.Sprintf("%s:%d", cfg.SMTPServer, cfg.SMTPPort)
-	auth := smtp.PlainAuth("", cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPServer)
-
-	var msg bytes.Buffer
-	attachHTML := cfg.EmailAttachHTML && attachPath != ""
-	if attachHTML {
-		attachBody, err := os.ReadFile(attachPath)
-		if err != nil {
-			return fmt.Errorf("read attachment %s: %w", attachPath, err)
-		}
-		boundary := "ncc-report-boundary"
-		msg.WriteString(fmt.Sprintf("From: %s\r\n", cfg.EmailFrom))
-		msg.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(cfg.EmailTo, ",")))
-		msg.WriteString(fmt.Sprintf("Subject: %s\r\n", subj))
-		msg.WriteString("MIME-Version: 1.0\r\n")
-		msg.WriteString(fmt.Sprintf("Content-Type: multipart/mixed; boundary=%s\r\n", boundary))
-		msg.WriteString("\r\n")
-		msg.WriteString(fmt.Sprintf("--%s\r\n", boundary))
-		msg.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
-		msg.WriteString("\r\n")
-		msg.WriteString(body)
-		msg.WriteString("\r\n")
-		msg.WriteString(fmt.Sprintf("--%s\r\n", boundary))
-		msg.WriteString("Content-Type: text/html; charset=UTF-8\r\n")
-		msg.WriteString("Content-Disposition: attachment; filename=\"" + filepath.Base(attachPath) + "\"\r\n")
-		msg.WriteString("\r\n")
-		msg.Write(attachBody)
-		msg.WriteString("\r\n")
-		msg.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
-	} else {
-		msg.WriteString(fmt.Sprintf("From: %s\r\n", cfg.EmailFrom))
-		msg.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(cfg.EmailTo, ",")))
-		msg.WriteString(fmt.Sprintf("Subject: %s\r\n", subj))
-		msg.WriteString("MIME-Version: 1.0\r\n")
-		msg.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
-		msg.WriteString("\r\n")
-		msg.WriteString(body)
-	}
-
-	if cfg.EmailUseTLS {
-		// STARTTLS-style connection:
-		c, err := smtp.Dial(addr)
-		if err != nil {
-			return err
-		}
-		defer c.Close()
-
-		if err := c.StartTLS(&tls.Config{ServerName: cfg.SMTPServer, InsecureSkipVerify: cfg.InsecureSkipVerify}); err != nil {
-			return err
-		}
-		if err := c.Auth(auth); err != nil {
-			return err
-		}
-		if err := c.Mail(cfg.EmailFrom); err != nil {
-			return err
-		}
-		for _, rcpt := range cfg.EmailTo {
-			if err := c.Rcpt(rcpt); err != nil {
-				return err
-			}
-		}
-		w, err := c.Data()
-		if err != nil {
-			return err
-		}
-		if _, err := w.Write(msg.Bytes()); err != nil {
-			return err
-		}
-		return w.Close()
-	}
-
-	return smtp.SendMail(addr, auth, cfg.EmailFrom, cfg.EmailTo, msg.Bytes())
-}
-
-const notificationRetryAttempts = 3
-
-func sendEmailWithRetry(cfg Config, subj string, body string, attachPath string) error {
-	var lastErr error
-	for attempt := 1; attempt <= notificationRetryAttempts; attempt++ {
-		lastErr = sendEmail(cfg, subj, body, attachPath)
-		if lastErr == nil {
-			return nil
-		}
-		if attempt < notificationRetryAttempts {
-			backoff := jitteredBackoff(cfg.RetryBaseDelay, cfg.RetryMaxDelay, attempt)
-			time.Sleep(backoff)
-		}
-	}
-	return lastErr
-}
-
-// ==================== Webhook Notifications ====================
-
-func sendWebhook(ctx context.Context, client HTTPClient, cfg Config, summary NotificationSummary) error {
-	if !cfg.WebhookEnabled || cfg.WebhookURL == "" {
-		return nil
-	}
-
-	payload, err := json.Marshal(summary)
-	if err != nil {
-		return err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.WebhookURL, bytes.NewReader(payload))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	for k, v := range cfg.WebhookHeaders {
-		req.Header.Set(k, v)
-	}
-
-	// simple retry loop using existing helpers
-	for attempt := 1; attempt <= cfg.RetryMaxAttempts; attempt++ {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		resp, err := client.Do(req)
-		if err != nil {
-			if attempt == cfg.RetryMaxAttempts {
-				return fmt.Errorf("webhook request failed: %w", err)
-			}
-		} else {
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
-			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				return nil
-			}
-			if !isRetryableStatus(resp.StatusCode) || attempt == cfg.RetryMaxAttempts {
-				return fmt.Errorf("webhook status %d", resp.StatusCode)
-			}
-			if d, ok := retryAfterDelay(resp); ok {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(d):
-					continue
-				}
-			}
-		}
-		backoff := jitteredBackoff(cfg.RetryBaseDelay, cfg.RetryMaxDelay, attempt)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(backoff):
-		}
-	}
-	return fmt.Errorf("webhook exhausted retries")
-}
-
-func sendWebhookWithRetry(ctx context.Context, client HTTPClient, cfg Config, summary NotificationSummary) error {
-	var lastErr error
-	for attempt := 1; attempt <= notificationRetryAttempts; attempt++ {
-		lastErr = sendWebhook(ctx, client, cfg, summary)
-		if lastErr == nil {
-			return nil
-		}
-		if attempt < notificationRetryAttempts {
-			backoff := jitteredBackoff(cfg.RetryBaseDelay, cfg.RetryMaxDelay, attempt)
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(backoff):
-			}
-		}
-	}
-	return lastErr
-}
-
-// ==================== Slack Notifications ====================
-
-func sendSlack(ctx context.Context, client HTTPClient, cfg Config, summary NotificationSummary) error {
-	if !cfg.SlackEnabled || cfg.SlackWebhookURL == "" {
-		return nil
-	}
-
-	// Determine color based on severity
-	color := "#36a64f" // green
-	if summary.FailCount > 0 {
-		color = "#ff0000" // red
-	} else if summary.WarnCount > 0 {
-		color = "#ffaa00" // orange
-	}
-
-	// Build Slack message
-	attachment := map[string]interface{}{
-		"color": color,
-		"title": fmt.Sprintf("NCC Report: %s", summary.Cluster),
-		"fields": []map[string]string{
-			{"title": "FAIL", "value": fmt.Sprintf("%d", summary.FailCount), "short": "true"},
-			{"title": "WARN", "value": fmt.Sprintf("%d", summary.WarnCount), "short": "true"},
-			{"title": "ERR", "value": fmt.Sprintf("%d", summary.ErrCount), "short": "true"},
-			{"title": "INFO", "value": fmt.Sprintf("%d", summary.InfoCount), "short": "true"},
-			{"title": "Total Checks", "value": fmt.Sprintf("%d", summary.TotalChecks), "short": "false"},
-		},
-		"footer": "NCC Orchestrator",
-		"ts":     summary.FinishedAt.Unix(),
-	}
-
-	payload := map[string]interface{}{
-		"attachments": []map[string]interface{}{attachment},
-	}
-
-	if cfg.SlackChannel != "" {
-		payload["channel"] = cfg.SlackChannel
-	}
-
-	jsonPayload, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("marshal slack payload: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.SlackWebhookURL, bytes.NewReader(jsonPayload))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	// Simple retry loop
-	for attempt := 1; attempt <= cfg.RetryMaxAttempts; attempt++ {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		resp, err := client.Do(req)
-		if err != nil {
-			if attempt == cfg.RetryMaxAttempts {
-				return fmt.Errorf("slack request failed: %w", err)
-			}
-		} else {
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
-			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				return nil
-			}
-			if !isRetryableStatus(resp.StatusCode) || attempt == cfg.RetryMaxAttempts {
-				return fmt.Errorf("slack status %d", resp.StatusCode)
-			}
-		}
-		backoff := jitteredBackoff(cfg.RetryBaseDelay, cfg.RetryMaxDelay, attempt)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(backoff):
-		}
-	}
-	return fmt.Errorf("slack exhausted retries")
-}
-
-func sendSlackWithRetry(ctx context.Context, client HTTPClient, cfg Config, summary NotificationSummary) error {
-	var lastErr error
-	for attempt := 1; attempt <= notificationRetryAttempts; attempt++ {
-		lastErr = sendSlack(ctx, client, cfg, summary)
-		if lastErr == nil {
-			return nil
-		}
-		if attempt < notificationRetryAttempts {
-			backoff := jitteredBackoff(cfg.RetryBaseDelay, cfg.RetryMaxDelay, attempt)
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(backoff):
-			}
-		}
-	}
-	return lastErr
-}
+// ==================== Notifications ====================
+// The email/webhook/slack senders, retry wrappers, text/template overrides,
+// and the per-channel delivery-metrics accumulator were extracted to
+// goncc/internal/notify. These aliases keep the existing call sites in this
+// package unchanged; the run-level accumulator now lives in that package and
+// is read via notify.ResetMetrics / notify.SnapshotMetrics.
+var (
+	sendEmailWithRetry   = notify.SendEmailWithRetry
+	sendWebhookWithRetry = notify.SendWebhookWithRetry
+	sendSlackWithRetry   = notify.SendSlackWithRetry
+	applyEmailTemplates  = notify.ApplyEmailTemplates
+)
 
 // ==================== Report Renderers ====================
 
@@ -3694,20 +2982,9 @@ func writeExcludedAlertsAuditJSON(fs FS, outDir string, matchMode string, titles
 	return fs.WriteFile(path, data, 0644)
 }
 
-func clusterHealthScore(failCount, warnCount, errCount, total int) int {
-	if total <= 0 {
-		return 100
-	}
-	penalty := (float64(failCount)*1.0 + float64(errCount)*0.8 + float64(warnCount)*0.3) / float64(total) * 100.0
-	score := int(math.Round(100.0 - penalty))
-	if score < 0 {
-		return 0
-	}
-	if score > 100 {
-		return 100
-	}
-	return score
-}
+// clusterHealthScore is an alias for model.ClusterHealthScore (moved to the
+// leaf model package); existing call sites in this package are unchanged.
+var clusterHealthScore = model.ClusterHealthScore
 
 func buildChecksSnapshot(results []ClusterResult) ChecksSnapshotJSON {
 	snap := ChecksSnapshotJSON{
@@ -7806,6 +7083,7 @@ SUMMARY:
 		summaryNotify.FailCount, summaryNotify.WarnCount)
 	bodyEmail := overview + "\n\n" + fmt.Sprintf("FAIL: %d | WARN: %d | Total: %d\nFiltered: %s",
 		summaryNotify.FailCount, summaryNotify.WarnCount, len(blocks), filteredPath)
+	subj, bodyEmail = applyEmailTemplates(cfg, subj, bodyEmail, summaryNotify, l)
 
 	if !cfg.NotifyDigest {
 		if suppressed, reason := notificationsSuppressedNow(cfg, time.Now()); suppressed {
@@ -14192,6 +13470,7 @@ Run 'ncc-orchestrator --help' for a full list of options.
 						replaySummary.Cluster, replaySummary.FailCount, replaySummary.WarnCount)
 					body := overviewReplay + "\n\n" + fmt.Sprintf("REPLAY MODE - From existing log:\nFAIL: %d | WARN: %d | Total: %d\nLog: %s",
 						replaySummary.FailCount, replaySummary.WarnCount, len(blocks), filtered)
+					subj, body = applyEmailTemplates(cfg, subj, body, replaySummary, log.Logger)
 
 					// Per-cluster outputs: generate HTML and CSV before notifications so we can attach HTML to email
 					base := filtered
@@ -14339,6 +13618,7 @@ Run 'ncc-orchestrator --help' for a full list of options.
 			var wg sync.WaitGroup
 			results := make(chan ClusterResult, len(cfg.Clusters))
 			runStart := time.Now()
+			notify.ResetMetrics()
 
 			for _, cluster := range cfg.Clusters {
 				clusterUser, clusterPass := credentialsForCluster(cfg, cluster)
@@ -14593,6 +13873,11 @@ Run 'ncc-orchestrator --help' for a full list of options.
 			if err := writeDrillDownDiffJSON(fs, cfg.OutputDirFiltered, drillDownDiff); err != nil {
 				log.Error().Err(err).Msg("write drilldown-diff.json failed (non-fatal)")
 			}
+			if cfg.PromEnabled {
+				if err := writeNotificationMetricsFile(fs, cfg.PromDir); err != nil {
+					log.Error().Err(err).Msg("write notifications.prom failed (non-fatal)")
+				}
+			}
 			historySnapshots, err := loadRecentCheckSnapshots(cfg.RunHistoryDir, cfg.FlakyLookbackRuns-1)
 			if err != nil {
 				log.Warn().Err(err).Str("history_dir", cfg.RunHistoryDir).Msg("load check snapshot history failed (non-fatal)")
@@ -14682,9 +13967,6 @@ Run 'ncc-orchestrator --help' for a full list of options.
 							attachPath = indexPath
 						}
 					}
-					if err := sendEmailWithRetry(cfg, subj, bodyEmail, attachPath); err != nil {
-						log.Error().Err(err).Msg("digest email failed")
-					}
 					digestSummary := NotificationSummary{
 						Cluster:     "run",
 						StartedAt:   runStart,
@@ -14695,6 +13977,10 @@ Run 'ncc-orchestrator --help' for a full list of options.
 						InfoCount:   digestCounts["INFO"],
 						TotalChecks: len(agg),
 						Overview:    overview,
+					}
+					subj, bodyEmail = applyEmailTemplates(cfg, subj, bodyEmail, digestSummary, log.Logger)
+					if err := sendEmailWithRetry(cfg, subj, bodyEmail, attachPath); err != nil {
+						log.Error().Err(err).Msg("digest email failed")
 					}
 					if cfg.WebhookIncludeHTML {
 						if b, err := os.ReadFile(indexPath); err == nil {

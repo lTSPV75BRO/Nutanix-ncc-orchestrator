@@ -10,22 +10,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [2.1.0] - 2026-06-01
 
-Maintenance and quality release. Closes a checksum-verification gap in `v2-bootstrap`, refreshes dependencies, improves the Windows self-update experience, and refreshes the project backlog. No breaking changes; all v2.0.x invocations keep working. **Affiliation note:** independent open-source project; not affiliated with or endorsed by Nutanix, Inc.
+Maintenance and quality release. Closes a checksum-verification gap in `v2-bootstrap`, adds notification observability and templating, refreshes dependencies, improves the Windows self-update experience, and carries out the first wave of the `goNCC.go` package extraction (five new `internal/` packages). No breaking changes; all v2.0.x invocations keep working. **Affiliation note:** independent open-source project; not affiliated with or endorsed by Nutanix, Inc.
 
 ### Added
 
 - **Checksum verification for `v2-bootstrap` downloads.** `v2-bootstrap` now verifies every downloaded asset (the `ncc-v2-stack-*` archive, or the api/ui binaries + frontend archive in the legacy fallback) against the release `checksums.txt` before extracting/installing, matching the strictness `update` already enforced. Pinned by `TestVerifyDownloadedAsset`.
 - **`--skip-checksum-verify` flag** on both `update` and `v2-bootstrap` as an explicit, clearly-warned escape hatch for air-gapped or internally-mirrored installs. Default is hard-fail on a missing checksum manifest or hash mismatch.
 - **Windows self-update helper.** On Windows, `update` now writes an `apply-ncc-update.cmd` next to the binary that waits for the running process to exit, swaps in the downloaded `.new.exe`, and self-deletes — replacing the previous "copy the file yourself" instruction with a single command. Pinned by `TestWriteWindowsUpdateSwapHelper`. The helper is added to the `uninstall` cleanup set.
+- **Notification delivery metrics.** Each run now records per-channel notification outcomes (email / webhook / slack) and, when `prom-enabled` is set, writes a run-level `notifications.prom` textfile exporting `nutanix_ncc_notification_attempts_total{channel=…}` and `nutanix_ncc_notification_failures_total{channel=…}`. Delivery failures were previously only logged; monitoring can now alert on them. A line is always emitted per channel (0 when unused) so alerting rules never break on a missing series. Pinned by `TestNotificationMetrics`, `TestWriteNotificationMetricsFile`, and `TestNotificationWrappers_SkipDisabled`.
+- **Custom notification templates.** New optional config keys `email-subject-template`, `email-body-template`, and `webhook-template` accept Go `text/template` strings rendered against the run summary (`.Cluster`, `.FailCount`, `.WarnCount`, `.ErrCount`, `.InfoCount`, `.TotalChecks`, `.Overview`, `.StartedAt`, `.FinishedAt`, `.OutputFiles`). Empty = the built-in defaults. A broken template falls back to the default (logged, never drops the notification); an unknown field fails the template rather than emitting `<no value>`. Applied across the per-cluster, digest, and replay notification paths. Pinned by `TestRenderNotificationTemplate`, `TestApplyEmailTemplates`, and `TestSendWebhook_TemplateBody`.
+
+### Refactored
+
+- **`goNCC.go` package extraction.** Five focused leaf packages were carved out of the ~15.5k-line `goNCC.go`, each re-exported from `main` via type/function aliases so the thousands of existing references and call sites compile unchanged:
+  - `internal/model` — foundational shared types (`Config`, `ClusterCredential`, `NotificationSummary`, `ParsedBlock`, `FS`, `HTTPClient`) and `ClusterHealthScore`.
+  - `internal/promtext` — Prometheus textfile writers (`WritePrometheusFile`, `WriteNotificationMetricsFile`, `SanitizeLabel`).
+  - `internal/retryutil` — the shared retry/backoff helpers (`JitteredBackoff`, `IsRetryableStatus`, `RetryAfterDelay`), a stdlib-only leaf so both `main` and `internal/notify` can reuse them without an import cycle.
+  - `internal/notify` — the email/webhook/Slack senders, retry wrappers, `text/template` overrides, and the per-channel delivery-metrics accumulator (run-level counters now read via `notify.ResetMetrics` / `notify.SnapshotMetrics`).
+  - `internal/nccparse` — the NCC summary parser (`SplitLines`, `ParseSummary`, `ValidateParsedAlertsAgainstPluginResults`) producing `model.ParsedBlock`.
+  Behavior is identical and each package ships its own unit tests (notification, template, and parser tests were relocated alongside their implementations). The full Go suite passes under `-race`.
 
 ### Changed
 
 - **Dependency refresh.** Go modules updated (`github.com/modelcontextprotocol/go-sdk` 1.6.0→1.6.1, `golang.org/x/sys` 0.44→0.45, `mattn/go-colorable`, `mattn/go-runewidth`); `go vet`, `go test`, and `govulncheck` clean. Frontend `npm audit` reports 0 vulnerabilities. GitHub Actions remain on current major pins (floating tags receive patches automatically).
 - Version bumped to `2.1.0` across `VERSION`, the orchestrator/api/ui `main.Version` defaults, the OpenAPI spec version, `binaryGO.txt`, `frontend/package.json`, the Helm chart, and the `k8s/` image tags.
 
-### Deferred (tracked in IMPROVEMENTS.md)
+### Remaining (tracked in IMPROVEMENTS.md)
 
-- **`goNCC.go` package extraction.** Splitting the ~15.5k-line `goNCC.go` into `internal/` packages (notify, prometheus textfile, parser) was scoped for this release but deferred: those subsystems depend on pervasive shared types (`Config`, `FS`, `ParsedBlock`, `NotificationSummary`, `HTTPClient`). A safe extraction must first move those foundational types into a shared `internal/model` package. Doing this under a maintenance bump carried too much regression risk for no user-facing benefit; it is now the top backlog item with a recommended sequencing.
+- **`goNCC.go` slimming (continued).** The headline extraction (`internal/model`, `internal/promtext`, `internal/retryutil`, `internal/notify`, `internal/nccparse`) is complete for v2.1.0. `goNCC.go` is still large; further increments (e.g. the report renderers and the HTTP client) can follow the same alias-backed, behavior-preserving pattern. See [`IMPROVEMENTS.md`](IMPROVEMENTS.md).
 
 ---
 

@@ -143,6 +143,11 @@ smtp-password: "secret://SMTP_PASSWORD"    # then `export SMTP_PASSWORD=...`
 email-from: "ncc@example.com"
 email-to: "ops@example.com,sre@example.com"
 email-use-tls: true
+# Optional Go text/template overrides for the email subject/body. Empty = built-in default.
+# Rendered against the run summary: .Cluster .FailCount .WarnCount .ErrCount .InfoCount
+# .TotalChecks .Overview .StartedAt .FinishedAt .OutputFiles
+email-subject-template: ""                 # e.g. "NCC {{.Cluster}}: {{.FailCount}} FAIL / {{.WarnCount}} WARN"
+email-body-template: ""                    # e.g. "{{.Overview}}\nStarted: {{.StartedAt}}"
 
 
 # -----------------------------------------------------------------------------
@@ -153,6 +158,9 @@ webhook-include-html: false
 webhook-url: "https://hooks.example.com/ncc"
 webhook-headers:
   X-Auth-Token: "secret://WEBHOOK_TOKEN"   # prefer secret:// references
+# Optional Go text/template for the webhook body. Empty = default JSON encoding of the
+# run summary. The rendered output is sent verbatim, so it must be valid JSON.
+webhook-template: ""                       # e.g. '{"text":"NCC {{.Cluster}} FAIL={{.FailCount}}"}'
 
 
 # -----------------------------------------------------------------------------
