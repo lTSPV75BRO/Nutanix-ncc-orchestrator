@@ -26,7 +26,7 @@ spec:
       initContainers:
         - name: stage-orchestrator-binary
           # Pull ncc-orchestrator from the runner image and share it with API container.
-          image: docker.io/prajwalnutant/nutanix-ncc-orchestrator:2.0.2
+          image: docker.io/prajwalnutant/nutanix-ncc-orchestrator:2.1.0
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "cp /usr/local/bin/ncc-orchestrator /tools/ncc-orchestrator && chmod 0755 /tools/ncc-orchestrator"]
           securityContext:
@@ -39,7 +39,7 @@ spec:
       containers:
         - name: api
           # Replace with your v2 api image that contains ncc-api-server.
-          image: docker.io/prajwalnutant/ncc-api-server:2.0.2
+          image: docker.io/prajwalnutant/ncc-api-server:2.1.0
           imagePullPolicy: IfNotPresent
           args:
             - "--listen"

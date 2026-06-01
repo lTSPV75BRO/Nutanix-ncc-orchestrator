@@ -338,6 +338,40 @@ blobs.
 
 ---
 
+## Automatic verification during `update` and `v2-bootstrap`
+
+The manual `checksums.txt` comparison in Step 1 is the canonical trust
+anchor, but the binary also performs it for you whenever it downloads
+release artifacts.
+
+- **`ncc-orchestrator update`** — every download path (single-binary,
+  the `ncc-v2-stack-*` package, and `--binary-url`) hashes the bytes it
+  received and compares them against the release `checksums.txt` (for
+  `--binary-url`, against the `--binary-sha256` you supply). It refuses
+  to install on a mismatch, and refuses to install at all if the release
+  ships no checksum manifest.
+- **`ncc-orchestrator v2-bootstrap`** — as of v2.1.0, this verifies the
+  `ncc-v2-stack-*` archive (or the api/ui binaries + frontend archive in
+  the legacy fallback) against the release `checksums.txt` before
+  extracting or installing, with the same hard-fail behavior.
+
+### `--skip-checksum-verify` (use sparingly)
+
+Both commands accept `--skip-checksum-verify` for air-gapped or
+internally-mirrored installs where the release `checksums.txt` is not
+reachable. When set, the command prints a clear warning that integrity
+was **not** verified:
+
+```text
+warning: --skip-checksum-verify set; NOT verifying ncc-v2-stack-linux-amd64.tar.gz against release checksums.txt
+```
+
+Prefer mirroring `checksums.txt` alongside the artifacts and leaving
+verification on. Only use the flag when you have already verified the
+bytes out-of-band.
+
+---
+
 ## Troubleshooting
 
 ### macOS: "killed: 9" right after launching

@@ -3639,6 +3639,89 @@ func TestVerifyAssetAgainstReleaseChecksum_TamperDetection(t *testing.T) {
 	})
 }
 
+// TestWriteWindowsUpdateSwapHelper checks the generated apply-ncc-update.cmd
+// swaps the downloaded .new.exe over the running binary, waits for the lock,
+// and self-deletes. The generator is pure, so this runs on any OS.
+func TestWriteWindowsUpdateSwapHelper(t *testing.T) {
+	tmp := t.TempDir()
+	selfPath := filepath.Join(tmp, "ncc-orchestrator.exe")
+	newPath := selfPath + ".new.exe"
+
+	helperPath, err := writeWindowsUpdateSwapHelper(selfPath, newPath)
+	if err != nil {
+		t.Fatalf("writeWindowsUpdateSwapHelper: %v", err)
+	}
+	if filepath.Base(helperPath) != "apply-ncc-update.cmd" {
+		t.Fatalf("unexpected helper name: %s", helperPath)
+	}
+	data, err := os.ReadFile(helperPath)
+	if err != nil {
+		t.Fatalf("read helper: %v", err)
+	}
+	script := string(data)
+	for _, want := range []string{
+		"move /y \"" + newPath + "\" \"" + selfPath + "\"",
+		"goto retry",
+		"del \"%~f0\"",
+		"\r\n", // CRLF line endings for cmd.exe
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("helper script missing %q\n---\n%s", want, script)
+		}
+	}
+}
+
+// TestVerifyDownloadedAsset covers the skip-vs-verify wrapper used by
+// `update` and `v2-bootstrap`. When skipVerify is false it must enforce the
+// release checksum (tamper detection); when true it must bypass verification
+// entirely (air-gapped/mirrored installs) even when the bytes would not
+// match — and even when the release carries no checksum manifest at all.
+func TestVerifyDownloadedAsset(t *testing.T) {
+	assetName := "ncc-v2-stack-linux-amd64.tar.gz"
+	body := []byte("legitimate stack contents")
+	good := sha256.Sum256(body)
+	goodHex := hex.EncodeToString(good[:])
+
+	manifestServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "%s  %s\n", goodHex, assetName)
+	}))
+	defer manifestServer.Close()
+
+	rel := &githubRelease{
+		TagName: "v2.1.0",
+		Assets:  []githubAsset{{Name: "checksums.txt", BrowserDownloadURL: manifestServer.URL + "/checksums.txt"}},
+	}
+
+	t.Run("verify enforced: matching body passes", func(t *testing.T) {
+		if err := verifyDownloadedAsset(rel, assetName, body, manifestServer.Client(), false); err != nil {
+			t.Fatalf("expected success, got: %v", err)
+		}
+	})
+
+	t.Run("verify enforced: tampered body rejected", func(t *testing.T) {
+		tampered := append([]byte(nil), body...)
+		tampered[0] ^= 0x01
+		if err := verifyDownloadedAsset(rel, assetName, tampered, manifestServer.Client(), false); err == nil {
+			t.Fatalf("expected tamper rejection, got nil")
+		}
+	})
+
+	t.Run("skip bypasses verification even for tampered body", func(t *testing.T) {
+		tampered := append([]byte(nil), body...)
+		tampered[0] ^= 0x01
+		if err := verifyDownloadedAsset(rel, assetName, tampered, manifestServer.Client(), true); err != nil {
+			t.Fatalf("skip should bypass verification, got: %v", err)
+		}
+	})
+
+	t.Run("skip bypasses even when release has no checksum manifest", func(t *testing.T) {
+		emptyRel := &githubRelease{TagName: "v2.1.0", Assets: []githubAsset{}}
+		if err := verifyDownloadedAsset(emptyRel, assetName, body, manifestServer.Client(), true); err != nil {
+			t.Fatalf("skip should bypass missing manifest, got: %v", err)
+		}
+	})
+}
+
 // TestLoopbackAltOriginFromListen pins the CORS-friendly alt-origin
 // derivation: when the UI binds to a loopback IP, the allow-list should
 // also include the http://localhost:port form so a browser can reach

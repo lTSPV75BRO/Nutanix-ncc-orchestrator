@@ -6,6 +6,35 @@ For the latest completed milestone summary, see [docs/MILESTONE_v2.0.0.md](docs/
 
 ---
 
+## Top of backlog (next)
+
+**Extract `goNCC.go` into `internal/` packages.** `goNCC.go` is ~15.5k lines.
+Splitting notifications, the Prometheus textfile writer, and the parser into
+their own packages was attempted for v2.1.0 and **deferred**: those subsystems
+depend on pervasive shared types — `Config`, `FS`, `ParsedBlock`,
+`NotificationSummary`, `HTTPClient` — used throughout `goNCC.go` and the
+`cmd/*` servers, so a naive move does not compile and a parameterized move
+churns hundreds of call sites. Recommended sequencing for a dedicated release:
+
+1. **`internal/model` first.** Move the foundational shared types (`Config`,
+   `FS`, `ParsedBlock`, `Row`, `NotificationSummary`, `HTTPClient`, severity
+   constants) into a small leaf package with no project imports. This is the
+   enabling, highest-churn step — do it alone, behind a green `-race` suite.
+2. **`internal/promtext`** (Prometheus textfile). Smallest, cleanest surface
+   (`writePrometheusFile`, `sanitizeLabel`, `clusterHealthScore`); depends only
+   on `FS` + `ParsedBlock` from `internal/model`.
+3. **`internal/notify`** (email/webhook/slack + retry wrappers). Depends on
+   `Config`, `HTTPClient`, `NotificationSummary`, and the shared retry helpers
+   (`jitteredBackoff`, `isRetryableStatus`, `retryAfterDelay`) — move those
+   helpers too.
+4. **`internal/nccparse`** (parser → `ParsedBlock`) last, only if the surface
+   stays clean once `internal/model` exists.
+
+Each step must keep behavior identical, move the matching tests, and leave
+`go test -race ./...` green before the next step.
+
+---
+
 ## Shipped through v1.1.0 (not exhaustive)
 
 The following backlog themes were partially or fully addressed by **v1.0.0** and **v1.1.0**; see [CHANGELOG.md](CHANGELOG.md), [RELEASE_NOTES_v1.0.0.md](RELEASE_NOTES_v1.0.0.md), and [RELEASE_NOTES_v1.1.0.md](RELEASE_NOTES_v1.1.0.md) for the canonical list.
@@ -24,7 +53,23 @@ The following backlog themes were partially or fully addressed by **v1.0.0** and
 | Helm / Kustomize | `helm/ncc-orchestrator`, `kubectl apply -k k8s/` |
 | Docs | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
 
-**Remaining** items in the sections below are still valid backlog (Helm, SARIF, resume, etc.).
+**Remaining** items in the sections below are still valid backlog (resume/checkpoint, cluster subset, templates, etc.).
+
+### Also shipped in v2.0.x – v2.1.0
+
+These rows in the sections below are now **done** and kept only for history:
+
+| Theme | Shipped in |
+|-------|-----------|
+| Checksum verification for `update` (single-binary, stack, `--binary-url`) | v2.0.x |
+| Checksum verification for `v2-bootstrap` + `--skip-checksum-verify` escape | **v2.1.0** |
+| Download size cap + timeout for updates | v2.0.x |
+| Windows-friendly self-update (`.new.exe`) → now an automated `apply-ncc-update.cmd` swap helper | v2.0.x → **v2.1.0** |
+| Semver comparison + `GITHUB_TOKEN` for updates | v1.x / v2.0.x |
+| Helm chart + Kustomize (`helm/ncc-orchestrator`, `k8s/`) | v1.1.0 / v2.0.x |
+| CI test/vet job, multi-platform release asset upload, version-from-tag | v2.0.x |
+| SHA-256 `checksums.txt`, CycloneDX SBOM, SLSA provenance, `release-attestation.json` | v2.0.2 |
+| Windows VERSIONINFO + optional self-signed code-signing hooks | v2.0.2 |
 
 ---
 
@@ -103,7 +148,7 @@ The following backlog themes were partially or fully addressed by **v1.0.0** and
 
 | Suggestion | Description |
 |------------|-------------|
-| **Split packages (optional)** | If goNCC.go grows further, extract e.g. internal/config, internal/notify, internal/update, internal/ncc; keep main as CLI wiring. |
+| **Split packages** | See **Top of backlog (next)** above — extract `internal/model`, then `internal/promtext`, `internal/notify`, `internal/nccparse`. This is the headline structural item. |
 | **HTTP dump allocation** | In redactHTTPDump, reduce allocations when truncating (e.g. single pass or buffer reuse). |
 
 ---
@@ -265,4 +310,4 @@ The following backlog themes were partially or fully addressed by **v1.0.0** and
 
 ---
 
-*Last updated: 2026-04 (post v1.1.0 release prep). Revisit as the project evolves.*
+*Last updated: 2026-06 (post v2.1.0 release prep). The headline open item is the `goNCC.go` package extraction — see "Top of backlog (next)". Revisit as the project evolves.*

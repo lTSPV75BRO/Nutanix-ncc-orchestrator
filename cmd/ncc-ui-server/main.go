@@ -143,7 +143,7 @@ func fileExists(p string) bool {
 // package. Without this match the ui-server would silently keep its
 // in-source defaults (e.g. `stream: dev`) even on a tagged release.
 var (
-	Version   = "2.0.2"
+	Version   = "2.1.0"
 	BuildDate = "unknown"
 	Stream    = "dev"
 	GoVersion = "unknown"

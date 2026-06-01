@@ -26,7 +26,7 @@ spec:
       containers:
         - name: ui
           # Replace with your v2 ui image that contains ncc-ui-server + frontend-dist.
-          image: docker.io/prajwalnutant/ncc-ui-server:2.0.2
+          image: docker.io/prajwalnutant/ncc-ui-server:2.1.0
           imagePullPolicy: IfNotPresent
           args:
             - "--listen"

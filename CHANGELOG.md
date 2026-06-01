@@ -4,7 +4,28 @@ All notable changes to the Nutanix NCC Orchestrator are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-**Release checklist (for maintainers):** Ensure [`VERSION`](VERSION) matches the intended tag; default `main.Version` in code is `2.0.2` when not set via ldflags. Run `go vet ./...`, `go test -race ./...`, and `go build ./...` (and `go build ./cmd/ncc-mcp-server`). Confirm `k8s/` and `helm/` image tags match `VERSION`. Tag `v2.0.2` and create a GitHub release using the matching `RELEASE_NOTES_v*.md`; attach `ncc-orchestrator-*` standalone binaries, `ncc-v2-stack-*` archives, and `checksums.txt` only — **do not** attach standalone `ncc-api-server-*` / `ncc-ui-server-*` binaries (the v1.x self-updater would silently mis-select them; see [2.0.0] known-issue note below and the v2.0.1 selector fix).
+**Release checklist (for maintainers):** Ensure [`VERSION`](VERSION) matches the intended tag; default `main.Version` in code is `2.1.0` when not set via ldflags. Run `go vet ./...`, `go test -race ./...`, and `go build ./...` (and `go build ./cmd/ncc-mcp-server`). Confirm `k8s/` and `helm/` image tags match `VERSION`. Tag `v2.1.0` and create a GitHub release using the matching `RELEASE_NOTES_v*.md`; attach `ncc-orchestrator-*` standalone binaries, `ncc-v2-stack-*` archives, and `checksums.txt` only — **do not** attach standalone `ncc-api-server-*` / `ncc-ui-server-*` binaries (the v1.x self-updater would silently mis-select them; see [2.0.0] known-issue note below and the v2.0.1 selector fix).
+
+---
+
+## [2.1.0] - 2026-06-01
+
+Maintenance and quality release. Closes a checksum-verification gap in `v2-bootstrap`, refreshes dependencies, improves the Windows self-update experience, and refreshes the project backlog. No breaking changes; all v2.0.x invocations keep working. **Affiliation note:** independent open-source project; not affiliated with or endorsed by Nutanix, Inc.
+
+### Added
+
+- **Checksum verification for `v2-bootstrap` downloads.** `v2-bootstrap` now verifies every downloaded asset (the `ncc-v2-stack-*` archive, or the api/ui binaries + frontend archive in the legacy fallback) against the release `checksums.txt` before extracting/installing, matching the strictness `update` already enforced. Pinned by `TestVerifyDownloadedAsset`.
+- **`--skip-checksum-verify` flag** on both `update` and `v2-bootstrap` as an explicit, clearly-warned escape hatch for air-gapped or internally-mirrored installs. Default is hard-fail on a missing checksum manifest or hash mismatch.
+- **Windows self-update helper.** On Windows, `update` now writes an `apply-ncc-update.cmd` next to the binary that waits for the running process to exit, swaps in the downloaded `.new.exe`, and self-deletes — replacing the previous "copy the file yourself" instruction with a single command. Pinned by `TestWriteWindowsUpdateSwapHelper`. The helper is added to the `uninstall` cleanup set.
+
+### Changed
+
+- **Dependency refresh.** Go modules updated (`github.com/modelcontextprotocol/go-sdk` 1.6.0→1.6.1, `golang.org/x/sys` 0.44→0.45, `mattn/go-colorable`, `mattn/go-runewidth`); `go vet`, `go test`, and `govulncheck` clean. Frontend `npm audit` reports 0 vulnerabilities. GitHub Actions remain on current major pins (floating tags receive patches automatically).
+- Version bumped to `2.1.0` across `VERSION`, the orchestrator/api/ui `main.Version` defaults, the OpenAPI spec version, `binaryGO.txt`, `frontend/package.json`, the Helm chart, and the `k8s/` image tags.
+
+### Deferred (tracked in IMPROVEMENTS.md)
+
+- **`goNCC.go` package extraction.** Splitting the ~15.5k-line `goNCC.go` into `internal/` packages (notify, prometheus textfile, parser) was scoped for this release but deferred: those subsystems depend on pervasive shared types (`Config`, `FS`, `ParsedBlock`, `NotificationSummary`, `HTTPClient`). A safe extraction must first move those foundational types into a shared `internal/model` package. Doing this under a maintenance bump carried too much regression risk for no user-facing benefit; it is now the top backlog item with a recommended sequencing.
 
 ---
 

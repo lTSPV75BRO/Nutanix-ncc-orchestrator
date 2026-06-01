@@ -7961,7 +7961,7 @@ var (
 func init() {
 	// Defaults
 	if Version == "" {
-		Version = "2.0.2"
+		Version = "2.1.0"
 	}
 	if BuildDate == "" {
 		BuildDate = "unknown"
@@ -8008,12 +8008,13 @@ type githubAsset struct {
 }
 
 type updateOptions struct {
-	CheckOnly         bool
-	AllowMajorUpgrade bool
-	Repo              string
-	BinaryURL         string
-	BinarySHA256      string
-	TargetVersion     string
+	CheckOnly          bool
+	AllowMajorUpgrade  bool
+	Repo               string
+	BinaryURL          string
+	BinarySHA256       string
+	TargetVersion      string
+	SkipChecksumVerify bool
 }
 
 func parseVersionMajor(raw string) (int64, error) {
@@ -8316,7 +8317,17 @@ func installDownloadedBinary(body []byte, targetVer string) error {
 		if err := os.WriteFile(newPath, body, 0755); err != nil {
 			return fmt.Errorf("write %s: %w", newPath, err)
 		}
-		fmt.Fprintf(os.Stderr, "Update saved as %s. Exit this program, then replace %s with it and run again.\n", newPath, selfPath)
+		// Windows cannot overwrite a running .exe in place. Generate a small
+		// helper .cmd that waits for this process to release the lock, swaps
+		// in the new binary, and self-deletes — turning the old manual
+		// copy-the-file dance into a single command.
+		if helperPath, herr := writeWindowsUpdateSwapHelper(selfPath, newPath); herr == nil {
+			fmt.Fprintf(os.Stderr, "Update downloaded to %s\n", newPath)
+			fmt.Fprintf(os.Stderr, "To finish: exit this program, then run:\n  %s\n", helperPath)
+			fmt.Fprintln(os.Stderr, "(it waits for the running binary to close, replaces it, then removes itself)")
+		} else {
+			fmt.Fprintf(os.Stderr, "Update saved as %s. Exit this program, then replace %s with it and run again.\n", newPath, selfPath)
+		}
 		return nil
 	}
 	tmpPath := filepath.Join(dir, ".ncc-orchestrator-update."+strconv.Itoa(os.Getpid()))
@@ -8334,6 +8345,35 @@ func installDownloadedBinary(body []byte, targetVer string) error {
 	}
 	fmt.Fprintln(os.Stderr, "Update complete. Run the binary again to use the new version.")
 	return nil
+}
+
+// writeWindowsUpdateSwapHelper writes an apply-ncc-update.cmd next to the
+// running executable. The script polls `move` until the old binary's lock is
+// released (i.e. this process has exited), swaps the freshly downloaded
+// `.new.exe` over it, and then deletes itself. This replaces the previous
+// "manually copy the file yourself" instruction with a single command and is
+// safe to re-run. The generator is pure (no Windows-only APIs) so it can be
+// unit-tested on any platform.
+func writeWindowsUpdateSwapHelper(selfPath, newPath string) (string, error) {
+	dir := filepath.Dir(selfPath)
+	base := filepath.Base(selfPath)
+	helperPath := filepath.Join(dir, "apply-ncc-update.cmd")
+	var b strings.Builder
+	b.WriteString("@echo off\r\n")
+	b.WriteString("setlocal\r\n")
+	b.WriteString("echo Waiting for " + base + " to close...\r\n")
+	b.WriteString(":retry\r\n")
+	b.WriteString("move /y \"" + newPath + "\" \"" + selfPath + "\" >nul 2>&1\r\n")
+	b.WriteString("if errorlevel 1 (\r\n")
+	b.WriteString("  timeout /t 1 /nobreak >nul\r\n")
+	b.WriteString("  goto retry\r\n")
+	b.WriteString(")\r\n")
+	b.WriteString("echo Update applied to " + selfPath + "\r\n")
+	b.WriteString("del \"%~f0\"\r\n")
+	if err := os.WriteFile(helperPath, []byte(b.String()), 0o755); err != nil {
+		return "", err
+	}
+	return helperPath, nil
 }
 
 // resolvePackageInstallDir returns the directory that should receive the
@@ -8371,13 +8411,13 @@ func resolvePackageInstallDir(selfPath string) string {
 // renamed variant of those). The selection is based on the running
 // executable's basename; if no match is found in the archive, the function
 // falls back to bin/ncc-orchestrator and emits a guidance message.
-func installPackageUpdate(stackURL, stackName string, rel *githubRelease, targetVer string, client *http.Client) error {
+func installPackageUpdate(stackURL, stackName string, rel *githubRelease, targetVer string, client *http.Client, skipChecksumVerify bool) error {
 	fmt.Fprintf(os.Stderr, "Downloading package %s ...\n", stackURL)
 	body, err := downloadBinaryURL(client, stackURL)
 	if err != nil {
 		return err
 	}
-	if err := verifyAssetAgainstReleaseChecksum(rel, stackName, body, client); err != nil {
+	if err := verifyDownloadedAsset(rel, stackName, body, client, skipChecksumVerify); err != nil {
 		return err
 	}
 
@@ -8426,6 +8466,21 @@ func installPackageUpdate(stackURL, stackName string, rel *githubRelease, target
 		return fmt.Errorf("read new binary %s: %w", newSelfPath, err)
 	}
 	return installDownloadedBinary(newBody, targetVer)
+}
+
+// verifyDownloadedAsset verifies `body` against the release's published
+// checksum for `assetName` unless skipVerify is set. When verification is
+// skipped it prints an explicit, support-friendly warning so the operator
+// knows the bytes were NOT authenticated (intended only for air-gapped or
+// internally-mirrored installs). When not skipped it delegates to
+// verifyAssetAgainstReleaseChecksum, which hard-fails on a missing checksum
+// asset or a hash mismatch.
+func verifyDownloadedAsset(rel *githubRelease, assetName string, body []byte, client *http.Client, skipVerify bool) error {
+	if skipVerify {
+		fmt.Fprintf(os.Stderr, "warning: --skip-checksum-verify set; NOT verifying %s against release checksums.txt\n", assetName)
+		return nil
+	}
+	return verifyAssetAgainstReleaseChecksum(rel, assetName, body, client)
 }
 
 // verifyAssetAgainstReleaseChecksum looks up `assetName` in the release's
@@ -8567,17 +8622,18 @@ func copyDir(src, dst string) error {
 }
 
 type v2BootstrapOptions struct {
-	Repo            string
-	Version         string
-	InstallDir      string
-	ConfigPath      string
-	OutputDir       string
-	LogDir          string
-	OrchestratorBin string
-	APIListen       string
-	UIListen        string
-	TokenFile       string
-	CheckOnly       bool
+	Repo               string
+	Version            string
+	InstallDir         string
+	ConfigPath         string
+	OutputDir          string
+	LogDir             string
+	OrchestratorBin    string
+	APIListen          string
+	UIListen           string
+	TokenFile          string
+	CheckOnly          bool
+	SkipChecksumVerify bool
 }
 
 type v2StartOptions struct {
@@ -9974,6 +10030,7 @@ func runUninstallCommand(cmd *cobra.Command, args []string) error {
 			".ncc-api-schedule.json":      true,
 			".ncc-api-notifications.json": true,
 			"ncc-orchestrator.new.exe":    true,
+			"apply-ncc-update.cmd":        true,
 			".ncc-preflight-check":        true,
 			".ncc-prefight-check":         true,
 		}
@@ -10877,6 +10934,9 @@ func runV2Bootstrap(opts v2BootstrapOptions) error {
 		if err != nil {
 			return fmt.Errorf("download v2 stack bundle: %w", err)
 		}
+		if err := verifyDownloadedAsset(rel, stackAsset.Name, stackArchive, client, opts.SkipChecksumVerify); err != nil {
+			return fmt.Errorf("verify v2 stack bundle: %w", err)
+		}
 		if err := extractArchiveByAssetName(stackArchive, stackAsset.Name, installDir); err != nil {
 			return fmt.Errorf("extract v2 stack bundle: %w", err)
 		}
@@ -10898,6 +10958,15 @@ func runV2Bootstrap(opts v2BootstrapOptions) error {
 		frontendArchive, err := downloadBinaryURL(client, frontendAsset.BrowserDownloadURL)
 		if err != nil {
 			return fmt.Errorf("download frontend archive: %w", err)
+		}
+		if err := verifyDownloadedAsset(rel, apiAsset.Name, apiBody, client, opts.SkipChecksumVerify); err != nil {
+			return fmt.Errorf("verify api binary: %w", err)
+		}
+		if err := verifyDownloadedAsset(rel, uiAsset.Name, uiBody, client, opts.SkipChecksumVerify); err != nil {
+			return fmt.Errorf("verify ui binary: %w", err)
+		}
+		if err := verifyDownloadedAsset(rel, frontendAsset.Name, frontendArchive, client, opts.SkipChecksumVerify); err != nil {
+			return fmt.Errorf("verify frontend archive: %w", err)
 		}
 
 		if err := writeExecutable(apiBin, apiBody); err != nil {
@@ -11135,7 +11204,7 @@ func runUpdate(opts updateOptions) error {
 	}
 
 	if stackURL != "" {
-		return installPackageUpdate(stackURL, stackName, targetRelease, targetVer, client)
+		return installPackageUpdate(stackURL, stackName, targetRelease, targetVer, client, opts.SkipChecksumVerify)
 	}
 
 	// Legacy single-binary update path (v1.x releases without a stack archive).
@@ -11154,7 +11223,7 @@ func runUpdate(opts updateOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := verifyAssetAgainstReleaseChecksum(targetRelease, chosenAssetName, body, client); err != nil {
+	if err := verifyDownloadedAsset(targetRelease, chosenAssetName, body, client, opts.SkipChecksumVerify); err != nil {
 		return err
 	}
 	return installDownloadedBinary(body, targetVer)
@@ -14911,13 +14980,15 @@ When using --binary-url for install, --binary-sha256 is required.`,
 			binaryURL, _ := cmd.Flags().GetString("binary-url")
 			binarySHA256, _ := cmd.Flags().GetString("binary-sha256")
 			targetVersion, _ := cmd.Flags().GetString("target-version")
+			skipChecksumVerify, _ := cmd.Flags().GetBool("skip-checksum-verify")
 			return runUpdate(updateOptions{
-				CheckOnly:         checkOnly,
-				AllowMajorUpgrade: allowMajorUpgrade,
-				Repo:              repo,
-				BinaryURL:         binaryURL,
-				BinarySHA256:      binarySHA256,
-				TargetVersion:     targetVersion,
+				CheckOnly:          checkOnly,
+				AllowMajorUpgrade:  allowMajorUpgrade,
+				Repo:               repo,
+				BinaryURL:          binaryURL,
+				BinarySHA256:       binarySHA256,
+				TargetVersion:      targetVersion,
+				SkipChecksumVerify: skipChecksumVerify,
 			})
 		},
 	}
@@ -14927,6 +14998,7 @@ When using --binary-url for install, --binary-sha256 is required.`,
 	updateCmd.Flags().String("binary-url", "", "Direct binary URL for non-GitHub/custom repositories")
 	updateCmd.Flags().String("binary-sha256", "", "Expected SHA256 for --binary-url (required for install)")
 	updateCmd.Flags().String("target-version", "", "Target version hint (recommended with --binary-url)")
+	updateCmd.Flags().Bool("skip-checksum-verify", false, "Skip SHA-256 verification of the downloaded asset against the release checksums.txt (not recommended; for air-gapped/mirrored installs)")
 	cmd.AddCommand(updateCmd)
 
 	v2BootstrapCmd := &cobra.Command{
@@ -14955,18 +15027,20 @@ Then it writes startup scripts under --install-dir.`,
 			uiListen, _ := cmd.Flags().GetString("ui-listen")
 			tokenFile, _ := cmd.Flags().GetString("token-file")
 			checkOnly, _ := cmd.Flags().GetBool("check")
+			skipChecksumVerify, _ := cmd.Flags().GetBool("skip-checksum-verify")
 			return runV2Bootstrap(v2BootstrapOptions{
-				Repo:            repo,
-				Version:         version,
-				InstallDir:      installDir,
-				ConfigPath:      configPath,
-				OutputDir:       outputDir,
-				LogDir:          logDir,
-				OrchestratorBin: orchestratorBin,
-				APIListen:       apiListen,
-				UIListen:        uiListen,
-				TokenFile:       tokenFile,
-				CheckOnly:       checkOnly,
+				Repo:               repo,
+				Version:            version,
+				InstallDir:         installDir,
+				ConfigPath:         configPath,
+				OutputDir:          outputDir,
+				LogDir:             logDir,
+				OrchestratorBin:    orchestratorBin,
+				APIListen:          apiListen,
+				UIListen:           uiListen,
+				TokenFile:          tokenFile,
+				CheckOnly:          checkOnly,
+				SkipChecksumVerify: skipChecksumVerify,
 			})
 		},
 	}
@@ -14981,6 +15055,7 @@ Then it writes startup scripts under --install-dir.`,
 	v2BootstrapCmd.Flags().String("ui-listen", ":8080", "Listen address for UI server")
 	v2BootstrapCmd.Flags().String("token-file", ".ncc-api-token", "Token file path used by UI/API servers")
 	v2BootstrapCmd.Flags().Bool("check", false, "Check required assets only; do not download")
+	v2BootstrapCmd.Flags().Bool("skip-checksum-verify", false, "Skip SHA-256 verification of downloaded assets against the release checksums.txt (not recommended; for air-gapped/mirrored installs)")
 	cmd.AddCommand(v2BootstrapCmd)
 
 	v2StartCmd := &cobra.Command{
