@@ -259,14 +259,42 @@ A caller's role can come from a static token or an interactive login:
   metadata URL `<root>/saml/metadata` to your IdP). Map IdP attribute values to
   roles with the role attribute + role map (default role). Endpoints:
   `/saml/metadata`, `/saml/login`, `/saml/acs`.
+- **LDAP / Active Directory** — users sign in on the normal username/password
+  form with their AD credentials. Login is **local-first, then AD fallback** (so
+  the built-in `admin` and break-glass local accounts work even if AD is down),
+  using a **service-account bind + search + rebind**; an empty password is
+  rejected before any bind. Configure via startup flags (`--ldap-url`
+  [comma-separated for failover], `--ldap-base-dn`, `--ldap-bind-dn`,
+  `--ldap-bind-password`, `--ldap-user-filter`, `--ldap-username-attribute`,
+  `--ldap-group-attribute`, `--ldap-role-map`, `--ldap-default-role`,
+  `--ldap-start-tls`, `--ldap-ca-file`, `--ldap-insecure-skip-verify`; read-only
+  at runtime) **or** runtime config in Settings → Access
+  (`GET/PUT /api/v1/settings/ldap`, with a **Test connection** check via
+  `POST /api/v1/settings/ldap/test`), hot-reloaded without a restart. Map AD
+  groups to roles by group DN or CN (case-insensitive, highest match wins;
+  newline/semicolon-separated, e.g.
+  `CN=NCC-Admins,OU=Groups,DC=corp,DC=example,DC=com=admin`). The bind password
+  is write-only (never returned by GET). SAML and LDAP can both be enabled at the
+  same time.
+- **Password recovery** — `ncc-orchestrator v2-reset-password [--user <name>]`
+  (wrapping `ncc-api-server --reset-password <name>` / `--reset-admin`) resets a
+  lost local password offline against either store backend, forcing a change at
+  next login. End users can request a reset from the login page's **Forgot
+  password?** link (public `POST /api/v1/auth/forgot-password`, always a generic
+  200, no account enumeration); admins resolve the queue from Settings → Access
+  (`GET`/`DELETE /api/v1/settings/password-resets[/<name>]`).
+- **Backup / restore** — `v2-backup` / `v2-restore` (Settings → Access in the UI,
+  or the CLI) capture and recover all stateful auth data (accounts, roles,
+  SAML/LDAP config, token, session policy) plus config and audit log. See §6.14a.
 
 Mutating cookie-session requests require a double-submit CSRF token
 (`X-CSRF-Token` header echoing the readable `ncc_csrf` cookie); static-token
-automation is exempt. When local accounts or SAML are configured, `auth-mode`
-auto-upgrades to `hybrid`, and the `ncc-ui-server` forwards each user's session
-cookie instead of injecting the shared admin token (`--login-mode auto|on|off`).
-`/api/v1/health` reports `rbac_enabled`, `login_enabled`, `local_login`, and
-`saml_enabled`. See `docs/SECURITY_AND_TRUST.md` for the full reference.
+automation is exempt. When local accounts, SAML, or LDAP are configured,
+`auth-mode` auto-upgrades to `hybrid`, and the `ncc-ui-server` forwards each
+user's session cookie instead of injecting the shared admin token
+(`--login-mode auto|on|off`). `/api/v1/health` reports `rbac_enabled`,
+`login_enabled`, `local_login`, `saml_enabled`, and `ldap_enabled`. See
+`docs/SECURITY_AND_TRUST.md` for the full reference.
 
 ### 2.11d Distributed tracing (opt-in OpenTelemetry)
 
@@ -817,7 +845,46 @@ These are runtime flags for v2 services (`cmd/ncc-api-server`, `cmd/ncc-ui-serve
 | `--api-pid-file`, `--ui-pid-file` | empty | PID path overrides when custom PID files are used. |
 | `--force` | `false` | Immediate hard kill, no graceful wait. |
 
-### 6.14a `v2-check`
+### 6.14a `v2-backup` / `v2-restore` / `v2-reset-password`
+
+```bash
+ncc-orchestrator v2-backup --install-dir .ncc-v2 --output-file ncc-backup.tar.gz
+ncc-orchestrator v2-restore ncc-backup.tar.gz --install-dir .ncc-v2 --force --restart
+ncc-orchestrator v2-reset-password --user admin --install-dir .ncc-v2
+```
+
+`v2-backup` writes a single `0600` `tar.gz` capturing the stateful contents of an
+install dir:
+
+- `config.yaml` and its referenced files (`clusters-file`,
+  `exclude-alert-titles-file`, `secrets-file`)
+- the local user database (`.ncc-api-users.json`: accounts, bcrypt hashes, roles,
+  runtime **SAML and LDAP** config, session policy)
+- the API token (`.ncc-api-token`) and first-run admin password if still present
+- scheduler/notifications state and any other `.ncc-api-*` state at the root
+- the JSONL audit log (`logs/ncc-audit.log`) when present
+
+The archive's `manifest.json` records the **ncc-orchestrator version** (plus
+stream, build date, Go toolchain) that created it. Regenerable artifacts
+(binaries, frontend bundle, run/ pid files, output/ncc files) are excluded.
+
+| Command | Flag | Default | Purpose |
+|---|---|---|---|
+| `v2-backup` | `--install-dir` | auto-detect (`.ncc-v2`) | Install dir to back up. |
+| `v2-backup` | `--output-file` | `./ncc-backup-<UTC>.tar.gz` | Output archive path. |
+| `v2-restore` | `--install-dir` | auto-detect (`.ncc-v2`) | Install dir to restore into. |
+| `v2-restore` | `--input-file` | — | Archive to restore (or first positional arg). |
+| `v2-restore` | `--force` | `false` | Overwrite existing files / proceed even if the stack is running. |
+| `v2-restore` | `--restart` | `false` | After restore, stop and re-start the stack (`v2-stop` then `v2-start --detach`), performed by the binary itself. |
+| `v2-reset-password` | `--user` | `admin` | Local account to reset. |
+| `v2-reset-password` | `--users-db` / `--users-db-secret[-namespace]` | `<install-dir>/.ncc-api-users.json` | User store to reset against (file or Kubernetes Secret). |
+
+`v2-restore` is confined to the install dir (unsafe archive paths rejected),
+reports the orchestrator version that produced the backup, and **warns when the
+restoring binary is older** than the backup's creator. Without `--restart`,
+restart the stack manually for the restored config/accounts/token to load.
+
+### 6.14b `v2-check`
 
 ```bash
 ncc-orchestrator v2-check --config-path /abs/config.yaml --api-listen :8081 --ui-listen :8080

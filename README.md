@@ -294,13 +294,14 @@ Major endpoints (full surface at `GET /api/v1/meta/routes`, OpenAPI at `GET /api
 | `/api/v1/logs/runner`               | GET        | Tail of `ncc-runner.log`                                          |
 | `/api/v1/metrics/rate-limit`        | GET        | Per-route rate-limiter counters                                   |
 | `/api/v1/auth/session`, `/rotate`   | POST       | Issue session token / rotate the API token                        |
-| `/api/v1/auth/login`, `/logout`     | POST       | Local password login / clear session (when `--users-file` set)    |
+| `/api/v1/auth/login`, `/logout`     | POST       | Username/password login (local or LDAP/AD) / clear session        |
 | `/api/v1/auth/me`                   | GET        | Current caller identity, role, and available login methods        |
+| `/api/v1/auth/forgot-password`      | POST       | Self-service password-reset request (queued for an admin)         |
 | `/saml/metadata`, `/login`, `/acs`  | GET/POST   | SAML SP endpoints (when SAML is configured)                       |
 
 All write/mutate routes require `X-API-Token: <token>` (or `Authorization: Bearer …` session token). Errors return a structured envelope with `success: false`, `error`, and `error_code` (e.g. `NCC_API_UNAUTHORIZED`, `NCC_API_BAD_REQUEST`, `NCC_API_NOT_FOUND`, `NCC_API_CONFLICT`).
 
-**RBAC, login & SSO:** the server enforces three roles — `viewer` (read-only), `operator` (also trigger/cancel runs), and `admin` (everything incl. `/api/v1/settings/*`). A role can be a static token (`NCC_API_TOKEN` = admin, `NCC_API_VIEWER_TOKEN` = viewer) or an interactive login: local password accounts (`--users-file`, bcrypt; hash with `ncc-api-server --hash-password`) and/or SAML SSO (`--saml-*`). Browser logins use an httpOnly, `SameSite=Strict` session cookie with double-submit CSRF protection; the UI shows a login screen and hides admin-only/operator-only controls per role. See [docs/SECURITY_AND_TRUST.md](docs/SECURITY_AND_TRUST.md). With no login configured, the single-token behavior is unchanged.
+**RBAC, login & SSO:** the server enforces three roles — `viewer` (read-only), `operator` (also trigger/cancel runs), and `admin` (everything incl. `/api/v1/settings/*`). A role can be a static token (`NCC_API_TOKEN` = admin, `NCC_API_VIEWER_TOKEN` = viewer) or an interactive login. Interactive login is on by default with a first-run **admin bootstrap** (random password + forced change); accounts live in a writable store (a `0600` file or a Kubernetes Secret). Login methods: local password accounts (managed in Settings → Access, bcrypt), **SAML SSO** (`--saml-*` or runtime), and **LDAP / Active Directory** (`--ldap-*` or runtime; local-first with AD fallback, AD group→role mapping) — all configurable together. Browser logins use an httpOnly, `SameSite=Strict` session cookie with double-submit CSRF protection; the UI shows a login screen and hides admin-only/operator-only controls per role. Lost passwords are recoverable offline (`ncc-orchestrator v2-reset-password`) or via a self-service request queue, and all auth state can be captured with `v2-backup` / restored with `v2-restore`. See [docs/SECURITY_AND_TRUST.md](docs/SECURITY_AND_TRUST.md). With no login configured, the single-token behavior is unchanged.
 
 Trigger a run from the API:
 
@@ -565,7 +566,7 @@ below and the [`helm/`](helm/) chart.
 
 | Area                  | Default                                                                                                                |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Authentication        | Token-based (`X-API-Token`) constant-time compare (`crypto/subtle`); HMAC-signed sessions; optional local password accounts (bcrypt) and SAML SSO |
+| Authentication        | Token-based (`X-API-Token`) constant-time compare (`crypto/subtle`); HMAC-signed sessions; optional local password accounts (bcrypt), SAML SSO, and LDAP / Active Directory |
 | Authorization (RBAC)  | Three roles `viewer < operator < admin`: viewers read non-settings `GET`s, operators also trigger/cancel runs, settings/rotation are admin-only |
 | Browser sessions      | Role-bearing httpOnly + `SameSite=Strict` session cookie with double-submit CSRF protection on mutations; ui-server forwards user sessions (no admin-token injection) |
 | CORS                  | Strict allowlist (default `http://localhost:8080`); wildcard origins rejected at startup                               |
