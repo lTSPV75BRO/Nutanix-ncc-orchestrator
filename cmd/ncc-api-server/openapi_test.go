@@ -20,6 +20,21 @@ func TestBuildOpenAPISpecIncludesCorePaths(t *testing.T) {
 		"/api/v1/report/data",
 		"/api/v1/report/trends",
 		"/api/v1/openapi.json",
+		"/api/v1/auth/login",
+		"/api/v1/auth/logout",
+		"/api/v1/auth/me",
+		"/api/v1/auth/change-password",
+		"/api/v1/auth/refresh",
+		"/api/v1/auth/forgot-password",
+		"/api/v1/settings/users",
+		"/api/v1/settings/users/{name}",
+		"/api/v1/settings/sso",
+		"/api/v1/settings/ldap",
+		"/api/v1/settings/session",
+		"/api/v1/settings/password-resets",
+		"/api/v1/settings/password-resets/{name}",
+		"/api/v1/settings/backup",
+		"/api/v1/settings/restore",
 	}
 	for _, p := range required {
 		if _, exists := paths[p]; !exists {

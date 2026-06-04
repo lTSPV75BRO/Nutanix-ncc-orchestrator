@@ -1,8 +1,12 @@
-// Package promtext renders the Prometheus textfile-collector outputs produced
-// by an NCC run: the per-cluster check metrics (<cluster>.prom) and the
-// run-level notification delivery metrics (notifications.prom). It depends
-// only on goncc/internal/model so it can be reused without pulling in package
-// main.
+// Package promtext renders the Prometheus exposition text produced by an NCC
+// run: the per-cluster check metrics (<cluster>.prom) and the run-level
+// notification delivery metrics (notifications.prom). It depends only on
+// goncc/internal/model so it can be reused without pulling in package main.
+//
+// The rendering is split from the file writing (Render* functions return the
+// exposition text) so the same metrics can be served over HTTP by the
+// api-server's /metrics endpoint, not only written to disk for the
+// node_exporter textfile collector.
 package promtext
 
 import (
@@ -24,14 +28,10 @@ func SanitizeLabel(s string) string {
 	return s
 }
 
-// WritePrometheusFile writes the per-cluster check metrics textfile
-// (<cluster>.prom) under promDir.
-func WritePrometheusFile(fs model.FS, promDir, cluster string, blocks []model.ParsedBlock) error {
-	if err := fs.MkdirAll(promDir, 0755); err != nil {
-		return err
-	}
-	filename := filepath.Join(promDir, fmt.Sprintf("%s.prom", cluster))
-
+// RenderClusterChecks returns the per-cluster check metrics exposition text
+// (the body of <cluster>.prom). Pure: no filesystem access, so it can also be
+// served over HTTP.
+func RenderClusterChecks(cluster string, blocks []model.ParsedBlock) string {
 	var b strings.Builder
 
 	// Metric headers.
@@ -222,18 +222,23 @@ func WritePrometheusFile(fs model.FS, promDir, cluster string, blocks []model.Pa
 		nowUnix,
 	))
 
-	return fs.WriteFile(filename, []byte(b.String()), 0644)
+	return b.String()
 }
 
-// WriteNotificationMetricsFile writes the run-level notifications.prom textfile
-// with per-channel attempt/failure counters. A line is always emitted for
-// every channel in channels (0 when unused) so alerting rules don't break on a
-// missing series.
-func WriteNotificationMetricsFile(fs model.FS, promDir string, channels []string, attempts, failures map[string]int) error {
+// WritePrometheusFile writes the per-cluster check metrics textfile
+// (<cluster>.prom) under promDir.
+func WritePrometheusFile(fs model.FS, promDir, cluster string, blocks []model.ParsedBlock) error {
 	if err := fs.MkdirAll(promDir, 0755); err != nil {
 		return err
 	}
+	filename := filepath.Join(promDir, fmt.Sprintf("%s.prom", cluster))
+	return fs.WriteFile(filename, []byte(RenderClusterChecks(cluster, blocks)), 0644)
+}
 
+// RenderNotificationMetrics returns the run-level notification delivery metrics
+// exposition text. A line is always emitted for every channel (0 when unused)
+// so alerting rules don't break on a missing series.
+func RenderNotificationMetrics(channels []string, attempts, failures map[string]int) string {
 	var b strings.Builder
 	b.WriteString(`# HELP nutanix_ncc_notification_attempts_total Notification deliveries attempted this run, per channel` + "\n")
 	b.WriteString(`# TYPE nutanix_ncc_notification_attempts_total gauge` + "\n")
@@ -243,7 +248,102 @@ func WriteNotificationMetricsFile(fs model.FS, promDir string, channels []string
 		b.WriteString(fmt.Sprintf(`nutanix_ncc_notification_attempts_total{channel="%s"} %d`+"\n", SanitizeLabel(ch), attempts[ch]))
 		b.WriteString(fmt.Sprintf(`nutanix_ncc_notification_failures_total{channel="%s"} %d`+"\n", SanitizeLabel(ch), failures[ch]))
 	}
+	return b.String()
+}
 
+// WriteNotificationMetricsFile writes the run-level notifications.prom textfile
+// with per-channel attempt/failure counters.
+func WriteNotificationMetricsFile(fs model.FS, promDir string, channels []string, attempts, failures map[string]int) error {
+	if err := fs.MkdirAll(promDir, 0755); err != nil {
+		return err
+	}
 	filename := filepath.Join(promDir, "notifications.prom")
-	return fs.WriteFile(filename, []byte(b.String()), 0644)
+	return fs.WriteFile(filename, []byte(RenderNotificationMetrics(channels, attempts, failures)), 0644)
+}
+
+// RunSummaryView is the subset of run-summary.json needed to render run-level
+// Prometheus metrics. The api-server unmarshals the latest run-summary.json
+// into this and serves RenderRunSummaryMetrics over HTTP, replacing the need
+// for a node_exporter textfile collector.
+type RunSummaryView struct {
+	Timestamp      string             `json:"timestamp"`
+	DurationS      float64            `json:"duration_s"`
+	ClustersOK     int                `json:"clusters_ok"`
+	ClustersFailed int                `json:"clusters_failed"`
+	ExitCode       int                `json:"exit_code"`
+	Clusters       []ClusterMetricRow `json:"clusters"`
+}
+
+// ClusterMetricRow mirrors the per-cluster fields of run-summary.json.
+type ClusterMetricRow struct {
+	Address     string `json:"address"`
+	OK          bool   `json:"ok"`
+	FailCount   int    `json:"fail_count"`
+	WarnCount   int    `json:"warn_count"`
+	ErrCount    int    `json:"err_count"`
+	InfoCount   int    `json:"info_count"`
+	ChecksTotal int    `json:"checks_total"`
+	HealthScore int    `json:"health_score"`
+}
+
+// RenderRunSummaryMetrics returns the exposition text for the last NCC run's
+// per-cluster and run-level metrics, using the ncc_ namespace so it sits
+// alongside the api-server's own ncc_* metrics on /metrics.
+func RenderRunSummaryMetrics(v RunSummaryView) string {
+	var b strings.Builder
+	b.WriteString("# HELP ncc_cluster_up 1 when the cluster's NCC run succeeded, else 0.\n")
+	b.WriteString("# TYPE ncc_cluster_up gauge\n")
+	b.WriteString("# HELP ncc_cluster_checks_total NCC checks for the cluster in the last run, by severity.\n")
+	b.WriteString("# TYPE ncc_cluster_checks_total gauge\n")
+	b.WriteString("# HELP ncc_cluster_checks_count Total NCC checks for the cluster in the last run.\n")
+	b.WriteString("# TYPE ncc_cluster_checks_count gauge\n")
+	b.WriteString("# HELP ncc_cluster_health_score Cluster health score (0-100) from the last run.\n")
+	b.WriteString("# TYPE ncc_cluster_health_score gauge\n")
+	for _, c := range v.Clusters {
+		lbl := SanitizeLabel(c.Address)
+		up := 0
+		if c.OK {
+			up = 1
+		}
+		b.WriteString(fmt.Sprintf("ncc_cluster_up{cluster=%q} %d\n", lbl, up))
+		for sev, n := range map[string]int{"FAIL": c.FailCount, "WARN": c.WarnCount, "ERR": c.ErrCount, "INFO": c.InfoCount} {
+			b.WriteString(fmt.Sprintf("ncc_cluster_checks_total{cluster=%q,severity=%q} %d\n", lbl, sev, n))
+		}
+		b.WriteString(fmt.Sprintf("ncc_cluster_checks_count{cluster=%q} %d\n", lbl, c.ChecksTotal))
+		b.WriteString(fmt.Sprintf("ncc_cluster_health_score{cluster=%q} %d\n", lbl, c.HealthScore))
+	}
+
+	b.WriteString("# HELP ncc_last_run_clusters_ok Clusters that succeeded in the last run.\n")
+	b.WriteString("# TYPE ncc_last_run_clusters_ok gauge\n")
+	b.WriteString(fmt.Sprintf("ncc_last_run_clusters_ok %d\n", v.ClustersOK))
+	b.WriteString("# HELP ncc_last_run_clusters_failed Clusters that failed in the last run.\n")
+	b.WriteString("# TYPE ncc_last_run_clusters_failed gauge\n")
+	b.WriteString(fmt.Sprintf("ncc_last_run_clusters_failed %d\n", v.ClustersFailed))
+	b.WriteString("# HELP ncc_last_run_exit_code Exit code of the last run.\n")
+	b.WriteString("# TYPE ncc_last_run_exit_code gauge\n")
+	b.WriteString(fmt.Sprintf("ncc_last_run_exit_code %d\n", v.ExitCode))
+	b.WriteString("# HELP ncc_last_run_duration_seconds Wall-clock duration of the last run.\n")
+	b.WriteString("# TYPE ncc_last_run_duration_seconds gauge\n")
+	b.WriteString(fmt.Sprintf("ncc_last_run_duration_seconds %.3f\n", v.DurationS))
+	if ts := parseRunTimestamp(v.Timestamp); ts > 0 {
+		b.WriteString("# HELP ncc_last_run_timestamp_seconds Unix epoch of the last run.\n")
+		b.WriteString("# TYPE ncc_last_run_timestamp_seconds gauge\n")
+		b.WriteString(fmt.Sprintf("ncc_last_run_timestamp_seconds %d\n", ts))
+	}
+	return b.String()
+}
+
+// parseRunTimestamp parses the run-summary timestamp (RFC3339) into Unix
+// seconds, returning 0 when it cannot be parsed.
+func parseRunTimestamp(s string) int64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05Z07:00", "2006-01-02 15:04:05"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.Unix()
+		}
+	}
+	return 0
 }

@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { App, notification as staticNotification } from "antd";
 import type { NotificationInstance } from "antd/es/notification/interface";
 import { LoadingOutlined } from "@ant-design/icons";
+import { ApiError } from "./api/client";
 
 type ToastVariant = "success" | "info" | "warning" | "error";
 
@@ -73,6 +74,21 @@ export const notify = {
   close: (key: string) => destroy(key),
 };
 
+// extractErrorDetail pulls the backend's verbose output (e.g. the exact
+// `validate-config` errors carried in `data.output`) out of an ApiError so the
+// toast can show the real problem instead of just "exit status 2".
+function extractErrorDetail(error: unknown): string {
+  if (!(error instanceof ApiError) || !error.data || typeof error.data !== "object") {
+    return "";
+  }
+  const data = error.data as Record<string, unknown>;
+  for (const key of ["output", "detail", "details", "stderr"]) {
+    const v = data[key];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return "";
+}
+
 export function notifyError(error: unknown, fallback = "Something went wrong"): void {
   const message =
     error instanceof Error
@@ -80,7 +96,36 @@ export function notifyError(error: unknown, fallback = "Something went wrong"): 
       : typeof error === "string"
         ? error
         : fallback;
-  notify.error({ message: "Request failed", description: message });
+  const detail = extractErrorDetail(error);
+  // When the backend includes detail, show it verbatim (monospace, scrollable)
+  // and keep the toast up longer so the user can read the actual error.
+  const description: ReactNode = detail ? (
+    <div>
+      <div>{message}</div>
+      <pre
+        style={{
+          margin: "8px 0 0",
+          padding: 8,
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+          maxHeight: 320,
+          overflow: "auto",
+          fontSize: 12,
+          background: "rgba(127,127,127,0.12)",
+          borderRadius: 4,
+        }}
+      >
+        {detail}
+      </pre>
+    </div>
+  ) : (
+    message
+  );
+  notify.error({
+    message: "Request failed",
+    description,
+    duration: detail ? 12 : COMMON_OPTS.duration,
+  });
 }
 
 export function NotifyBridge() {

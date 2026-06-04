@@ -61,6 +61,9 @@ nutanix-v4-api-version: v4.2               # v4 path revision (e.g. v4.1, v4.0.a
 # TLS and timeouts
 # -----------------------------------------------------------------------------
 insecure-skip-verify: false                # true only for lab/self-signed clusters
+# Safer alternatives to insecure-skip-verify for internal Prism CAs:
+# ca-bundle: "/etc/ncc/prism-ca.pem"       # PEM of extra trusted CA certs (verified against system roots + this)
+# pin-sha256: ""                           # comma-separated allowed server cert SHA-256 fingerprints (cert pinning)
 timeout: "15m"                             # Per-cluster overall budget
 request-timeout: "30s"                     # Per-HTTP-request budget
 poll-interval: "15s"                       # NCC task poll interval
@@ -143,6 +146,7 @@ smtp-password: "secret://SMTP_PASSWORD"    # then `export SMTP_PASSWORD=...`
 email-from: "ncc@example.com"
 email-to: "ops@example.com,sre@example.com"
 email-use-tls: true
+# smtp-insecure-skip-verify: false         # skip SMTP STARTTLS cert verification (independent of insecure-skip-verify)
 # Optional Go text/template overrides for the email subject/body. Empty = built-in default.
 # Rendered against the run summary: .Cluster .FailCount .WarnCount .ErrCount .InfoCount
 # .TotalChecks .Overview .StartedAt .FinishedAt .OutputFiles
@@ -161,6 +165,8 @@ webhook-headers:
 # Optional Go text/template for the webhook body. Empty = default JSON encoding of the
 # run summary. The rendered output is sent verbatim, so it must be valid JSON.
 webhook-template: ""                       # e.g. '{"text":"NCC {{.Cluster}} FAIL={{.FailCount}}"}'
+# webhook-secret: "secret://WEBHOOK_HMAC"  # when set, sign the body: header X-NCC-Signature: sha256=<hmac>
+# notification-deadletter-dir: "/var/lib/ncc/deadletter"  # persist payloads that fail to deliver after retries
 
 
 # -----------------------------------------------------------------------------

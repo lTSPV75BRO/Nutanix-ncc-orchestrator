@@ -54,6 +54,13 @@ services:
       - "--log-dir=/app/nccfiles"
       - "--runner-log-path=/app/logs/ncc-runner.log"
       - "--token-file-path=/app/data/auth/.ncc-api-token"
+      # Writable user database on the persistent auth volume. On first
+      # launch the api-server creates an `admin` account with a random
+      # password (printed to `docker compose logs ncc-api-server` and
+      # written to .ncc-initial-admin-password in the ncc-api-token
+      # volume); you must change it on first login. The ui-server detects
+      # login is enabled and forwards your browser session automatically.
+      - "--users-db=/app/data/auth/.ncc-api-users.json"
       - "--orchestrator-bin=/usr/local/bin/ncc-orchestrator"
       - "--auth-mode=token"
       - "--cors-origin=http://localhost:8080"

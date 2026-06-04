@@ -9,7 +9,7 @@ For the latest completed milestone summary, see [docs/MILESTONE_v2.0.0.md](docs/
 ## Top of backlog (next)
 
 **Extract `goNCC.go` into `internal/` packages (first wave done, v2.1.0).**
-`goNCC.go` is ~15.5k lines. The first wave of five leaf packages landed in
+`goNCC.go` is ~15.5k lines. The first wave of six leaf packages landed in
 v2.1.0. Each step kept behavior identical, moved the matching tests, and left
 `go test -race ./...` green before the next.
 
@@ -33,11 +33,41 @@ v2.1.0. Each step kept behavior identical, moved the matching tests, and left
 5. ✅ **`internal/nccparse` (done, v2.1.0).** The NCC summary parser
    (`SplitLines`, `ParseSummary`, `ValidateParsedAlertsAgainstPluginResults` →
    `model.ParsedBlock`) moved out, aliased in `main`.
+6. ✅ **`internal/httpclient` (done, v2.1.0).** The `*http.Client` builder
+   (`New`, aliased `NewHTTPClient`) — connection pooling, TLS policy, and the
+   redacting `LoggingTransport` — moved out (depends on `internal/model`). The
+   os-backed `OSFS` moved next to the `FS` interface in `internal/model`.
 
-**Next wave (not started).** `goNCC.go` is still large; the report renderers
-(`generateHTML` / `generateCSV` / `generateMarkdown` / `generateJSON` /
-`generateSARIF`) and the HTTP client + filesystem layer are the next obvious
-candidates, following the same alias-backed, behavior-preserving pattern.
+**Next wave (not started — intentionally held).** `goNCC.go` is still large;
+the report renderers (`generateHTML` / `generateCSV` / `generateMarkdown` /
+`generateJSON` / `generateSARIF`) are the next candidate, but they are coupled
+to the combined-HTML and drilldown report code (~1k interleaved lines) and need
+a coordinated move into an `internal/report` package — more involved than the
+leaf extractions above, so it was deferred. It can follow the same
+alias-backed, behavior-preserving pattern.
+
+### Hardening / observability / RBAC (done, v2.1.0)
+
+Beyond the extraction, v2.1.0 also shipped:
+
+- ✅ **TLS trust options** — `ca-bundle` (custom CA PEM) and `pin-sha256`
+  (certificate pinning) as safer alternatives to `insecure-skip-verify`.
+- ✅ **`smtp-insecure-skip-verify`** — SMTP STARTTLS verification decoupled from
+  the Prism flag.
+- ✅ **Webhook HMAC signing** (`webhook-secret` → `X-NCC-Signature`).
+- ✅ **Notification dead-lettering** (`notification-deadletter-dir`).
+- ✅ **Self-heal supervisor** shell-injection hardening (shell-quoted service
+  name).
+- ✅ **NCC run metrics on the api-server `/metrics`** endpoint
+  (`promtext.RenderRunSummaryMetrics` from the latest `run-summary.json`) so
+  Prometheus can scrape directly instead of via a textfile collector.
+- ✅ **Minimal opt-in RBAC** — `NCC_API_VIEWER_TOKEN` grants a read-only role;
+  settings + mutating endpoints require the admin token/session.
+- ✅ **Opt-in OpenTelemetry tracing** (`internal/trace`, per-cluster spans).
+- ✅ **Fuzz tests** (`FuzzParseSummary`, `FuzzRedactJSONPasswordValue` — the
+  latter found and fixed a real panic) and **mock-Prism integration tests**.
+- ✅ **CI gates** (`.github/workflows/ci.yml`): build/vet/gofmt/`-race`,
+  golangci-lint, govulncheck, Trivy.
 
 ---
 
@@ -154,7 +184,7 @@ These rows in the sections below are now **done** and kept only for history:
 
 | Suggestion | Description |
 |------------|-------------|
-| **Split packages** | First wave **done in v2.1.0** (`internal/model`, `internal/promtext`, `internal/retryutil`, `internal/notify`, `internal/nccparse`). See **Top of backlog** above for the next wave (report renderers, HTTP client). |
+| **Split packages** | First wave **done in v2.1.0** (`internal/model`, `internal/promtext`, `internal/retryutil`, `internal/notify`, `internal/nccparse`, `internal/httpclient`). See **Top of backlog** above for the next wave (report renderers → `internal/report`). |
 | **HTTP dump allocation** | In redactHTTPDump, reduce allocations when truncating (e.g. single pass or buffer reuse). |
 
 ---
@@ -316,4 +346,4 @@ These rows in the sections below are now **done** and kept only for history:
 
 ---
 
-*Last updated: 2026-06 (post v2.1.0 release prep). The first wave of the `goNCC.go` package extraction is complete (five `internal/` packages); the next wave (report renderers, HTTP client) is the headline structural item — see "Top of backlog". Revisit as the project evolves.*
+*Last updated: 2026-06 (post v2.1.0 release prep). The first wave of the `goNCC.go` package extraction is complete (six `internal/` packages); the next wave (report renderers → `internal/report`) is the headline structural item — see "Top of backlog". Revisit as the project evolves.*

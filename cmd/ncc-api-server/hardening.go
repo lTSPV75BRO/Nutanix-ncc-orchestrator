@@ -39,11 +39,14 @@ var (
 )
 
 type sessionClaims struct {
-	Exp int64  `json:"exp"`
-	Iat int64  `json:"iat"`
-	JTI string `json:"jti"`
-	CIP string `json:"cip"`
-	Iss string `json:"iss"`
+	Exp  int64  `json:"exp"`
+	Iat  int64  `json:"iat"`
+	JTI  string `json:"jti"`
+	CIP  string `json:"cip"`
+	Iss  string `json:"iss"`
+	Sub  string `json:"sub,omitempty"`  // subject (username / identity)
+	Role string `json:"role,omitempty"` // viewer|operator|admin
+	Gen  int    `json:"gen,omitempty"`  // token generation (bumped on password change/reset)
 }
 
 type fixedWindowRateLimiter struct {
@@ -401,19 +404,40 @@ func sanitizeExtraArgs(args []string) ([]string, error) {
 	return out, nil
 }
 
+// issueSessionToken mints a loopback-bootstrap admin session. It is kept for
+// backward compatibility with the /api/v1/auth/session endpoint, which already
+// gates issuance behind the admin token, so the resulting session is admin.
 func (s *apiServer) issueSessionToken(clientIP string) (string, time.Time, error) {
+	return s.issueRoleSessionToken(clientIP, "loopback-admin", RoleAdmin)
+}
+
+// issueRoleSessionToken mints a signed session token carrying a subject and a
+// role. Used by password login and SAML SSO so the session itself encodes the
+// caller's authorization level.
+func (s *apiServer) issueRoleSessionToken(clientIP, subject string, role Role) (string, time.Time, error) {
 	jb := make([]byte, 16)
 	if _, err := rand.Read(jb); err != nil {
 		return "", time.Time{}, fmt.Errorf("generate session id: %w", err)
 	}
 	now := time.Now().UTC()
-	exp := now.Add(s.sessionTTL)
+	exp := now.Add(s.effectiveSessionTTL())
+	// Stamp the subject's current token generation so a later password
+	// change/reset (which bumps the generation) invalidates this token.
+	gen := 0
+	if s.users != nil {
+		if acct, ok := s.users.lookup(strings.TrimSpace(subject)); ok {
+			gen = acct.TokenGen
+		}
+	}
 	claims := sessionClaims{
-		Exp: exp.Unix(),
-		Iat: now.Unix(),
-		JTI: base64.RawURLEncoding.EncodeToString(jb),
-		CIP: strings.TrimSpace(clientIP),
-		Iss: s.sessionIssuer,
+		Exp:  exp.Unix(),
+		Iat:  now.Unix(),
+		JTI:  base64.RawURLEncoding.EncodeToString(jb),
+		CIP:  strings.TrimSpace(clientIP),
+		Iss:  s.sessionIssuer,
+		Sub:  strings.TrimSpace(subject),
+		Role: role.String(),
+		Gen:  gen,
 	}
 	raw, err := json.Marshal(claims)
 	if err != nil {
@@ -467,42 +491,53 @@ func (s *apiServer) validatePathConfig() error {
 	return nil
 }
 
+// verifySessionToken validates a session token's signature and time/issuer/IP
+// bindings. It is kept as a boolean-style helper (error only) for existing
+// callers; verifySession returns the decoded claims as well.
 func (s *apiServer) verifySessionToken(token, clientIP string) error {
+	_, err := s.verifySession(token, clientIP)
+	return err
+}
+
+// verifySession validates a session token and returns its decoded claims
+// (including subject and role) on success.
+func (s *apiServer) verifySession(token, clientIP string) (sessionClaims, error) {
 	parts := strings.Split(strings.TrimSpace(token), ".")
 	if len(parts) != 2 {
-		return errors.New("invalid session token format")
+		return sessionClaims{}, errors.New("invalid session token format")
 	}
 	payload, sigHex := parts[0], parts[1]
 	mac := hmac.New(sha256.New, []byte(s.sessionSecret))
 	_, _ = mac.Write([]byte(payload))
 	expectedSig := hex.EncodeToString(mac.Sum(nil))
 	if !secureCompare(expectedSig, sigHex) {
-		return errors.New("invalid session token signature")
+		return sessionClaims{}, errors.New("invalid session token signature")
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(payload)
 	if err != nil {
-		return errors.New("invalid session token payload")
+		return sessionClaims{}, errors.New("invalid session token payload")
 	}
 	var claims sessionClaims
 	if err := json.Unmarshal(raw, &claims); err != nil {
-		return errors.New("invalid session token claims")
+		return sessionClaims{}, errors.New("invalid session token claims")
 	}
 	now := time.Now().UTC().Unix()
 	if claims.Exp <= now || claims.Iat > now+30 {
-		return errors.New("session token expired or invalid time")
+		return sessionClaims{}, errors.New("session token expired or invalid time")
 	}
 	if strings.TrimSpace(claims.Iss) != strings.TrimSpace(s.sessionIssuer) {
-		return errors.New("invalid session token issuer")
+		return sessionClaims{}, errors.New("invalid session token issuer")
 	}
 	if claims.CIP != "" && clientIP != "" && claims.CIP != clientIP {
-		return errors.New("session token client binding mismatch")
+		return sessionClaims{}, errors.New("session token client binding mismatch")
 	}
-	return nil
+	return claims, nil
 }
 
 func (s *apiServer) withRateLimit(next http.Handler) http.Handler {
 	limitedPaths := map[string]bool{
 		"/api/v1/auth/session":                true,
+		"/api/v1/auth/login":                  true,
 		"/api/v1/auth/rotate":                 true,
 		"/api/v1/runs/trigger":                true,
 		"/api/v1/settings/config":             true,
@@ -559,6 +594,18 @@ func (s *apiServer) audit(r *http.Request, action string, success bool, fields m
 			ua = ua[:200]
 		}
 		payload["user_agent"] = ua
+	}
+	// Attribute the action to the authenticated principal (user + role) when it
+	// was resolved by withAuth. Static-token automation surfaces as the
+	// synthetic subject (e.g. "static-admin-token"); local/SSO sessions carry
+	// the real username. The admin account always reports role "admin".
+	if p, ok := principalFromContext(r.Context()); ok {
+		if p.subject != "" {
+			payload["user"] = p.subject
+		}
+		if rs := p.role.String(); rs != "" {
+			payload["role"] = rs
+		}
 	}
 	for k, v := range fields {
 		payload[k] = v

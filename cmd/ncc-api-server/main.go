@@ -31,6 +31,7 @@ import (
 	"time"
 
 	yaml "go.yaml.in/yaml/v3"
+	"goncc/internal/promtext"
 	"goncc/internal/v2layout"
 )
 
@@ -76,24 +77,57 @@ type apiServer struct {
 	auditMu               sync.Mutex
 	orchestratorBin       string
 	authToken             string
-	tokenFilePath         string
-	corsOrigin            string
-	authMode              string
-	sessionSecret         string
-	sessionTTL            time.Duration
-	sessionIssuer         string
-	runTimeout            time.Duration
-	debugExpose           bool
-	tlsCertFile           string
-	tlsKeyFile            string
-	tlsClientCAFile       string
-	rateLimitPerMinute    int
-	rateLimiter           *fixedWindowRateLimiter
-	readTimeout           time.Duration
-	writeTimeout          time.Duration
-	idleTimeout           time.Duration
-	metricsPublic         bool      // when true, /metrics bypasses token auth
-	startedAt             time.Time // server boot timestamp (set in main)
+	// viewerToken, when set, grants a read-only role: holders can reach
+	// safe GET endpoints but are denied settings/* and all mutating
+	// requests (those require the full authToken / a session). When empty,
+	// RBAC is disabled and the single authToken keeps full access
+	// (backward compatible).
+	viewerToken   string
+	tokenFilePath string
+	corsOrigin    string
+	authMode      string
+	// Interactive login: local accounts (users file) and/or SAML SSO. When
+	// either is configured, browser cookie sessions carrying a role are
+	// honored and the UI shows a login screen. Static tokens keep working
+	// for automation.
+	usersFilePath    string // optional read-only YAML seed (--users-file)
+	usersDBPath      string // writable JSON file store (--users-db)
+	usersDBSecret    string // Kubernetes Secret name backing the store (--users-db-secret)
+	usersDBSecretKey string // data key inside that Secret (--users-db-secret-key)
+	usersDBSecretNS  string // namespace override (--users-db-secret-namespace)
+	// disableLocalAccounts opts out of the default-on user database. By
+	// default (no flag, env, secret, or stack path) the server falls back to a
+	// writable JSON file in the repo root so a bare run still bootstraps a
+	// first-run admin and enables login. Set --disable-local-accounts (or
+	// NCC_DISABLE_LOCAL_ACCOUNTS=1) for pure token-only automation.
+	disableLocalAccounts bool
+	users                *userDB
+	samlEnabled          bool
+	samlFromFlags        bool // SAML came from startup flags (not runtime-editable)
+	samlMu               sync.RWMutex
+	saml                 *samlProvider
+	ldapEnabled          bool
+	ldapFromFlags        bool // LDAP came from startup flags (not runtime-editable)
+	ldapMu               sync.RWMutex
+	ldap                 ldapAuthenticator
+	// cookieInsecure drops the Secure attribute on session cookies so the
+	// login flow works over plain http for local development. Off by default.
+	cookieInsecure     bool
+	sessionSecret      string
+	sessionTTL         time.Duration
+	sessionIssuer      string
+	runTimeout         time.Duration
+	debugExpose        bool
+	tlsCertFile        string
+	tlsKeyFile         string
+	tlsClientCAFile    string
+	rateLimitPerMinute int
+	rateLimiter        *fixedWindowRateLimiter
+	readTimeout        time.Duration
+	writeTimeout       time.Duration
+	idleTimeout        time.Duration
+	metricsPublic      bool      // when true, /metrics bypasses token auth
+	startedAt          time.Time // server boot timestamp (set in main)
 
 	// Lifecycle counters surfaced on /metrics. Counters are
 	// monotonic; they're cleared only by a process restart, which
@@ -285,7 +319,7 @@ func main() {
 	flag.StringVar(&s.corsOrigin, "cors-origin", "http://localhost:8080", "CORS allowed origin(s), comma-separated")
 	flag.StringVar(&s.authMode, "auth-mode", "token", "Auth mode: token, session, hybrid")
 	flag.StringVar(&s.sessionSecret, "session-secret", "", "Session token HMAC secret (required for session/hybrid unless generated)")
-	flag.DurationVar(&s.sessionTTL, "session-ttl", 10*time.Minute, "Session token TTL")
+	flag.DurationVar(&s.sessionTTL, "session-ttl", 6*time.Hour, "Session token TTL (default 6h; admins can override at runtime in Settings → Access)")
 	flag.StringVar(&s.sessionIssuer, "session-issuer", "ncc-api-server", "Session token issuer")
 	flag.DurationVar(&s.runTimeout, "run-timeout", 90*time.Minute, "Max runtime for trigger-run command")
 	flag.BoolVar(&s.debugExpose, "debug-expose", false, "Expose debug internals in APIs (off by default)")
@@ -297,6 +331,45 @@ func main() {
 	flag.DurationVar(&s.writeTimeout, "write-timeout", 60*time.Second, "HTTP server write timeout")
 	flag.DurationVar(&s.idleTimeout, "idle-timeout", 60*time.Second, "HTTP server idle timeout")
 	flag.BoolVar(&s.metricsPublic, "metrics-public", false, "Allow unauthenticated GET /metrics for Prometheus scrapers (off by default; on private networks behind a service mesh this is safe)")
+	flag.StringVar(&s.usersFilePath, "users-file", "", "Path to a read-only YAML seed of local accounts (imported into --users-db on first run)")
+	flag.StringVar(&s.usersDBPath, "users-db", "", "Path to the writable JSON user database file; enables login, first-run admin bootstrap, and runtime user/SSO management")
+	flag.StringVar(&s.usersDBSecret, "users-db-secret", "", "Kubernetes Secret name to store the user database in (encrypted at rest by etcd); mutually exclusive with --users-db. Requires in-cluster execution + RBAC to get/create/patch the Secret")
+	flag.StringVar(&s.usersDBSecretKey, "users-db-secret-key", "users.json", "Data key inside the Kubernetes Secret that holds the user-database JSON")
+	flag.StringVar(&s.usersDBSecretNS, "users-db-secret-namespace", "", "Namespace of the Kubernetes Secret (defaults to the pod's own namespace)")
+	flag.BoolVar(&s.disableLocalAccounts, "disable-local-accounts", false, "Opt out of the default-on user database (no first-run admin bootstrap, login disabled). Use for pure token-only automation")
+	flag.BoolVar(&s.cookieInsecure, "cookie-insecure", false, "Drop the Secure attribute on session cookies (local http dev only)")
+	var samlCfg samlConfig
+	flag.StringVar(&samlCfg.RootURL, "saml-root-url", "", "External base URL of this server for SAML (e.g. https://ncc.example.com); enables SAML when set together with cert/key/idp-metadata")
+	flag.StringVar(&samlCfg.IDPMetadata, "saml-idp-metadata", "", "SAML IdP metadata URL or local file path")
+	flag.StringVar(&samlCfg.CertFile, "saml-cert", "", "SAML SP certificate (PEM)")
+	flag.StringVar(&samlCfg.KeyFile, "saml-key", "", "SAML SP private key (PEM)")
+	flag.StringVar(&samlCfg.EntityID, "saml-entity-id", "", "Optional SAML SP entity ID (default <root>/saml/metadata)")
+	flag.StringVar(&samlCfg.UsernameAttr, "saml-username-attribute", "", "Assertion attribute used as username (default: NameID / common attrs)")
+	flag.StringVar(&samlCfg.RoleAttr, "saml-role-attribute", "Role", "Assertion attribute carrying role/group values")
+	flag.StringVar(&samlCfg.RoleMapRaw, "saml-role-map", "", "Mapping of IdP role/group values to local roles, e.g. 'ncc-admins=admin,ncc-ops=operator'")
+	flag.StringVar(&samlCfg.DefaultRole, "saml-default-role", "viewer", "Role assigned when no SAML role mapping matches")
+	flag.BoolVar(&samlCfg.AllowIDPInit, "saml-allow-idp-initiated", false, "Allow IdP-initiated SAML logins")
+
+	var ldapCfg ldapPersisted
+	var ldapCAFile string
+	flag.StringVar(&ldapCfg.URL, "ldap-url", "", "LDAP/AD server URL(s), e.g. ldaps://dc1.corp:636 (comma-separated for failover); enables AD login when set with --ldap-base-dn")
+	flag.StringVar(&ldapCfg.BaseDN, "ldap-base-dn", "", "LDAP search base DN for users, e.g. DC=corp,DC=example,DC=com")
+	flag.StringVar(&ldapCfg.BindDN, "ldap-bind-dn", "", "DN of the read-only service account used to search for users")
+	flag.StringVar(&ldapCfg.BindPassword, "ldap-bind-password", "", "Password for the LDAP service account (--ldap-bind-dn)")
+	flag.StringVar(&ldapCfg.UserFilter, "ldap-user-filter", "", "User search filter; %s is the login name (default: AD sAMAccountName filter)")
+	flag.StringVar(&ldapCfg.UsernameAttr, "ldap-username-attribute", "", "Attribute used as the canonical username (default: sAMAccountName)")
+	flag.StringVar(&ldapCfg.GroupAttr, "ldap-group-attribute", "", "Attribute carrying group membership (default: memberOf)")
+	flag.StringVar(&ldapCfg.RoleMapRaw, "ldap-role-map", "", "Mapping of group DNs/CNs to local roles, newline- or semicolon-separated, e.g. 'CN=NCC-Admins,OU=Groups,DC=corp,DC=com=admin'")
+	flag.StringVar(&ldapCfg.DefaultRole, "ldap-default-role", "viewer", "Role assigned when no LDAP group mapping matches")
+	flag.BoolVar(&ldapCfg.StartTLS, "ldap-start-tls", false, "Upgrade a plain ldap:// connection with StartTLS before binding")
+	flag.BoolVar(&ldapCfg.InsecureSkipVerify, "ldap-insecure-skip-verify", false, "Skip TLS certificate verification for LDAPS/StartTLS (discouraged)")
+	flag.StringVar(&ldapCAFile, "ldap-ca-file", "", "PEM file of CA certificate(s) used to verify the LDAP server certificate")
+	var hashPasswordMode bool
+	flag.BoolVar(&hashPasswordMode, "hash-password", false, "Read a password from stdin (or $NCC_PASSWORD) and print its bcrypt hash for the users file, then exit")
+	var resetPasswordUser string
+	var resetAdminMode bool
+	flag.StringVar(&resetPasswordUser, "reset-password", "", "Reset the named local account to a new random temporary password (forced change at next login), write it to the configured user store, print it, and exit. Recovery path for a lost password; restart the api-server afterward.")
+	flag.BoolVar(&resetAdminMode, "reset-admin", false, "Shortcut for --reset-password admin (recreates the built-in admin if it was wiped). Restart the api-server afterward.")
 	// Probe mode: when --health-check is passed, the api-server does
 	// NOT bind a port. Instead it reads the on-disk token, hits its
 	// own /api/v1/health URL on --listen, and exits 0/1. Designed for
@@ -315,6 +388,11 @@ func main() {
 		// matching token file without flags.
 		applyStackAwareDefaults(&s, os.Args[1:])
 		runHealthCheckProbe(&s, listen, healthCheckTimeout)
+		return
+	}
+
+	if hashPasswordMode {
+		runHashPassword()
 		return
 	}
 
@@ -342,11 +420,169 @@ func main() {
 	applyStackAwareDefaults(&s, os.Args[1:])
 
 	s.authToken = strings.TrimSpace(os.Getenv("NCC_API_TOKEN"))
+	s.viewerToken = strings.TrimSpace(os.Getenv("NCC_API_VIEWER_TOKEN"))
+	if s.viewerToken != "" && s.authToken != "" && secureCompare(s.viewerToken, s.authToken) {
+		log.Fatal("NCC_API_VIEWER_TOKEN must differ from the admin NCC_API_TOKEN")
+	}
 	if strings.Contains(s.corsOrigin, "*") {
 		log.Fatal("wildcard cors-origin is not allowed in strict mode")
 	}
 	if s.authMode != "token" && s.authMode != "session" && s.authMode != "hybrid" {
 		log.Fatal("auth-mode must be one of: token, session, hybrid")
+	}
+	if env := strings.TrimSpace(os.Getenv("NCC_USERS_FILE")); env != "" && strings.TrimSpace(s.usersFilePath) == "" {
+		s.usersFilePath = env
+	}
+	if env := strings.TrimSpace(os.Getenv("NCC_USERS_DB")); env != "" && strings.TrimSpace(s.usersDBPath) == "" {
+		s.usersDBPath = env
+	}
+	if env := strings.TrimSpace(os.Getenv("NCC_USERS_DB_SECRET")); env != "" && strings.TrimSpace(s.usersDBSecret) == "" {
+		s.usersDBSecret = env
+	}
+	if env := strings.TrimSpace(os.Getenv("NCC_USERS_DB_SECRET_NAMESPACE")); env != "" && strings.TrimSpace(s.usersDBSecretNS) == "" {
+		s.usersDBSecretNS = env
+	}
+	if strings.TrimSpace(s.usersDBSecret) != "" && strings.TrimSpace(s.usersDBPath) != "" {
+		log.Fatal("--users-db and --users-db-secret are mutually exclusive; pick one user-database backend")
+	}
+	if v := strings.TrimSpace(os.Getenv("NCC_DISABLE_LOCAL_ACCOUNTS")); v == "1" || strings.EqualFold(v, "true") {
+		s.disableLocalAccounts = true
+	}
+
+	// Default-on user database: when no backend was configured by a flag, env,
+	// or the stack-aware default, fall back to a writable 0600 JSON file in the
+	// repo root. This means a bare `./ncc-api-server` run still bootstraps a
+	// first-run admin and enables login out of the box. Operators who want
+	// pure token-only automation can opt out with --disable-local-accounts.
+	if !s.disableLocalAccounts && strings.TrimSpace(s.usersDBSecret) == "" && strings.TrimSpace(s.usersDBPath) == "" {
+		s.usersDBPath = defaultUsersDBPath(s.repoRoot)
+		log.Printf("user database not configured; defaulting to %s (login + first-run admin bootstrap on; use --disable-local-accounts to opt out)", s.usersDBPath)
+	}
+
+	// Reset-password mode: an offline recovery path. Resolve the same backend
+	// the server would use, reset the target account to a new random temporary
+	// password (forced change at next login), print it, and exit without
+	// binding a port. The admin must restart the api-server afterward so the
+	// in-memory copy reloads.
+	if resetAdminMode || strings.TrimSpace(resetPasswordUser) != "" {
+		target := strings.TrimSpace(resetPasswordUser)
+		if resetAdminMode {
+			target = reservedAdminUsername
+		}
+		runResetPassword(&s, target)
+		return
+	}
+
+	// Select the user-database backend. A Kubernetes Secret store (encrypted at
+	// rest by etcd) is preferred in-cluster; otherwise a local 0600 JSON file.
+	storeBackend, err := s.resolveUserStoreBackend()
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+
+	// When a backend is configured (explicitly, via env, or by the stack-aware
+	// default when launched from a v2 stack), the server manages local
+	// accounts: it imports an optional --users-file seed and, if still empty,
+	// bootstraps an initial admin with a random password that the operator must
+	// change on first login.
+	if storeBackend != nil {
+		db, err := openUserDBFromBackend(storeBackend)
+		if err != nil {
+			log.Fatalf("open user database (%s): %v", storeBackend.location(), err)
+		}
+		s.users = db
+		if db.count() == 0 && strings.TrimSpace(s.usersFilePath) != "" {
+			seed, err := loadUserStore(s.usersFilePath)
+			if err != nil {
+				log.Fatalf("load users seed file: %v", err)
+			}
+			if err := db.importSeed(seed); err != nil {
+				log.Fatalf("import users seed: %v", err)
+			}
+			log.Printf("imported %d local account(s) from seed %s into %s", db.count(), filepath.Clean(s.usersFilePath), db.location())
+		}
+		if db.count() == 0 {
+			pw, created, err := db.bootstrapAdminIfEmpty("admin")
+			if err != nil {
+				log.Fatalf("bootstrap admin: %v", err)
+			}
+			if created {
+				hint := db.setInitialPassword("admin", pw)
+				log.Printf("==================================================================")
+				log.Printf(" FIRST-RUN ADMIN CREATED (store: %s)", db.location())
+				log.Printf("   username: admin")
+				log.Printf("   password: %s", pw)
+				log.Printf("   You MUST change this password on first login.")
+				if hint != "" {
+					log.Printf("   retrieve it later via: %s", hint)
+				}
+				log.Printf("==================================================================")
+			}
+		}
+	} else if strings.TrimSpace(s.usersFilePath) != "" {
+		// Read-only seed without a writable db: load it in-memory (legacy
+		// --users-file behavior, no runtime management).
+		db, err := loadUserStore(s.usersFilePath)
+		if err != nil {
+			log.Fatalf("load users file: %v", err)
+		}
+		s.users = db
+		log.Printf("loaded %d local account(s) from %s (read-only)", db.count(), filepath.Clean(s.usersFilePath))
+	}
+
+	// SAML: startup flags take precedence (and lock the runtime SSO settings
+	// page) for backward compatibility. Otherwise, load any persisted runtime
+	// SAML config from the user database.
+	if samlCfg.configured() {
+		prov, err := newSAMLProvider(context.Background(), samlCfg)
+		if err != nil {
+			log.Fatalf("init SAML: %v", err)
+		}
+		s.saml = prov
+		s.samlEnabled = true
+		s.samlFromFlags = true
+		log.Printf("SAML SSO enabled via flags (root=%s)", strings.TrimSpace(samlCfg.RootURL))
+	} else if strings.TrimSpace(samlCfg.RootURL) != "" || strings.TrimSpace(samlCfg.IDPMetadata) != "" {
+		log.Fatal("SAML requires --saml-root-url, --saml-idp-metadata, --saml-cert, and --saml-key together")
+	} else if s.users.writable() {
+		if err := s.reloadSAMLFromStore(context.Background()); err != nil {
+			log.Printf("WARNING: persisted SAML config failed to load (SSO disabled until fixed): %v", err)
+		}
+	}
+
+	// LDAP/AD: startup flags take precedence (and lock the runtime settings
+	// page). Otherwise load any persisted runtime LDAP config from the store.
+	if strings.TrimSpace(ldapCfg.URL) != "" && strings.TrimSpace(ldapCfg.BaseDN) != "" {
+		ldapCfg.Enabled = true
+		if strings.TrimSpace(ldapCAFile) != "" {
+			pem, err := os.ReadFile(ldapCAFile)
+			if err != nil {
+				log.Fatalf("read --ldap-ca-file: %v", err)
+			}
+			ldapCfg.CACertPEM = string(pem)
+		}
+	}
+	if ldapCfg.configured() {
+		prov, _, err := buildLDAPProvider(&ldapCfg)
+		if err != nil {
+			log.Fatalf("init LDAP: %v", err)
+		}
+		s.ldap = prov
+		s.ldapEnabled = true
+		s.ldapFromFlags = true
+		log.Printf("LDAP/AD login enabled via flags (url=%s)", strings.TrimSpace(ldapCfg.URL))
+	} else if strings.TrimSpace(ldapCfg.URL) != "" || strings.TrimSpace(ldapCfg.BaseDN) != "" {
+		log.Fatal("LDAP requires --ldap-url and --ldap-base-dn together")
+	} else if s.users.writable() {
+		if err := s.reloadLDAPFromStore(context.Background()); err != nil {
+			log.Printf("WARNING: persisted LDAP config failed to load (AD login disabled until fixed): %v", err)
+		}
+	}
+	// Interactive login requires signed sessions. If the operator left
+	// auth-mode at the token default, transparently upgrade to hybrid so
+	// browser cookie sessions work alongside static tokens for automation.
+	if s.loginEnabled() && s.authMode == "token" {
+		s.authMode = "hybrid"
 	}
 	if s.sessionTTL <= 0 || s.sessionTTL > 24*time.Hour {
 		log.Fatal("session-ttl must be > 0 and <= 24h")
@@ -360,7 +596,7 @@ func main() {
 	if err := s.ensureAuthToken(); err != nil {
 		log.Fatal(err)
 	}
-	if (s.authMode == "session" || s.authMode == "hybrid") && strings.TrimSpace(s.sessionSecret) == "" {
+	if s.sessionsHonored() && strings.TrimSpace(s.sessionSecret) == "" {
 		b := make([]byte, 32)
 		if _, err := crand.Read(b); err != nil {
 			log.Fatalf("generate session secret: %v", err)
@@ -375,36 +611,7 @@ func main() {
 	}
 	s.startedAt = time.Now().UTC()
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/health", s.handleHealth)
-	mux.HandleFunc("/api/v1/audit", s.handleAudit)
-	mux.HandleFunc("/api/v1/metrics/rate-limit", s.handleRateLimitMetrics)
-	mux.HandleFunc("/metrics", s.handlePrometheusMetrics)
-	mux.HandleFunc("/api/v1/auth/session", s.handleAuthSession)
-	mux.HandleFunc("/api/v1/auth/rotate", s.handleAuthRotate)
-	mux.HandleFunc("/api/v1/settings/config", s.handleConfig)
-	mux.HandleFunc("/api/v1/settings/config-files", s.handleConfigFiles)
-	mux.HandleFunc("/api/v1/settings/config-file", s.handleConfigFile)
-	mux.HandleFunc("/api/v1/settings/notifications", s.handleNotifications)
-	mux.HandleFunc("/api/v1/settings/notifications/test", s.handleNotificationsTest)
-	mux.HandleFunc("/api/v1/schedule", s.handleSchedule)
-	mux.HandleFunc("/api/v1/schedule/health", s.handleScheduleHealth)
-	mux.HandleFunc("/api/v1/artifacts", s.handleArtifacts)
-	mux.HandleFunc("/api/v1/artifacts/", s.handleArtifactByName)
-	mux.HandleFunc("/api/v1/runs", s.handleRuns)
-	mux.HandleFunc("/api/v1/runs/", s.handleRunsRouter)
-	mux.HandleFunc("/api/v1/runs/summary", s.handleRunSummary)
-	mux.HandleFunc("/api/v1/runs/active", s.handleRunActive)
-	mux.HandleFunc("/api/v1/runs/preflight", s.handleRunPreflight)
-	mux.HandleFunc("/api/v1/runs/trigger", s.handleRunTrigger)
-	mux.HandleFunc("/api/v1/report/data", s.handleReportData)
-	mux.HandleFunc("/api/v1/report/trends", s.handleReportTrends)
-	mux.HandleFunc("/api/v1/logs/runner", s.handleRunnerLogs)
-	mux.HandleFunc("/api/v1/openapi.json", s.handleOpenAPI)
-	mux.HandleFunc("/api/v1/meta/routes", s.handleMetaRoutes)
-	mux.HandleFunc("/", s.handleAPIDocsHome)
-
-	handler := s.withCORS(s.withRateLimit(s.withAuth(mux)))
+	handler := s.buildHandler()
 	srv := &http.Server{
 		Addr:         listen,
 		Handler:      handler,
@@ -468,24 +675,46 @@ func (s *apiServer) withAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		tokenOK := false
-		if s.authMode == "token" || s.authMode == "hybrid" {
-			token := strings.TrimSpace(r.Header.Get("X-API-Token"))
-			tokenOK = secureCompare(token, s.authToken)
+		// Login/logout/me, password change, and the SAML SP endpoints
+		// authenticate (or report status) on their own and must be reachable
+		// without a fully-privileged session.
+		if r.URL.Path == "/api/v1/auth/login" ||
+			r.URL.Path == "/api/v1/auth/logout" ||
+			r.URL.Path == "/api/v1/auth/me" ||
+			r.URL.Path == "/api/v1/auth/change-password" ||
+			r.URL.Path == "/api/v1/auth/forgot-password" ||
+			strings.HasPrefix(r.URL.Path, "/saml/") {
+			next.ServeHTTP(w, r)
+			return
 		}
-		sessionOK := false
-		if !tokenOK && (s.authMode == "session" || s.authMode == "hybrid") {
-			authz := strings.TrimSpace(r.Header.Get("Authorization"))
-			if strings.HasPrefix(strings.ToLower(authz), "bearer ") {
-				bearer := strings.TrimSpace(authz[len("Bearer "):])
-				sessionOK = s.verifySessionToken(bearer, cleanClientIP(r)) == nil
-			}
-		}
-		if !tokenOK && !sessionOK {
+
+		p, ok := s.resolvePrincipal(r)
+		if !ok {
 			writeJSON(w, http.StatusUnauthorized, envelope{Success: false, Error: "unauthorized"})
 			return
 		}
-		next.ServeHTTP(w, r)
+		// Forced password change: a flagged local account may do nothing else
+		// until it sets a new password (the allowlisted endpoints above let it
+		// reach /auth/me, /auth/change-password, and /auth/logout).
+		if p.mustChange {
+			writeJSON(w, http.StatusForbidden, envelope{Success: false, Error: "password change required", ErrorCode: "NCC_API_PASSWORD_CHANGE_REQUIRED"})
+			return
+		}
+		// Role-based access control: the caller's role must meet the route's
+		// minimum (viewer < operator < admin).
+		if need := routeMinRole(r); p.role < need {
+			writeJSON(w, http.StatusForbidden, envelope{Success: false, Error: fmt.Sprintf("forbidden: this action requires the %q role", need.String())})
+			return
+		}
+		// CSRF: browser cookie sessions must echo the double-submit token on
+		// any mutating request. Token/bearer automation is exempt (no cookie).
+		if p.method == authSessionCookie && isMutating(r) && !s.csrfValid(r) {
+			writeJSON(w, http.StatusForbidden, envelope{Success: false, Error: "forbidden: missing or invalid CSRF token"})
+			return
+		}
+		// Carry the resolved identity forward so audit entries are attributed to
+		// the acting user + role (see apiServer.audit).
+		next.ServeHTTP(w, withPrincipal(r, p))
 	})
 }
 
@@ -506,10 +735,27 @@ func (s *apiServer) withCORS(next http.Handler) http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
 		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+		// Content-Security-Policy. API/JSON (and Prometheus text) responses serve
+		// no active content, so they get a maximally strict policy. The two HTML
+		// help pages (landing + Swagger UI) need inline style/script and, for
+		// Swagger, its bundle/styles from unpkg, so they get a scoped policy.
+		switch r.URL.Path {
+		case "/", "/docs", "/docs/ui":
+			w.Header().Set("Content-Security-Policy",
+				"default-src 'none'; base-uri 'none'; frame-ancestors 'none'; "+
+					"img-src 'self' data: https://unpkg.com; "+
+					"style-src 'self' 'unsafe-inline' https://unpkg.com; "+
+					"script-src 'self' 'unsafe-inline' https://unpkg.com; "+
+					"connect-src 'self'; font-src 'self' data: https://unpkg.com")
+		default:
+			w.Header().Set("Content-Security-Policy",
+				"default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
+		}
 		if r.TLS != nil {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-API-Token, Authorization")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-API-Token, Authorization, X-CSRF-Token")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -529,6 +775,11 @@ func (s *apiServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"time":             time.Now().UTC().Format(time.RFC3339),
 		"auth_mode":        s.authMode,
 		"token_source":     tokenSource(s.authToken, os.Getenv("NCC_API_TOKEN")),
+		"rbac_enabled":     s.viewerToken != "" || s.loginEnabled(),
+		"login_enabled":    s.loginEnabled(),
+		"local_login":      s.users != nil && s.users.count() > 0,
+		"saml_enabled":     s.samlEnabled,
+		"ldap_enabled":     s.ldapIsEnabled(),
 		"config_path":      s.absPath(s.configPath),
 		"output_dir":       s.absPath(s.outputDir),
 		"log_dir":          s.absPath(s.logDir),
@@ -739,6 +990,31 @@ func (s *apiServer) handlePrometheusMetrics(w http.ResponseWriter, r *http.Reque
 		fmt.Fprintf(w, "# TYPE ncc_ratelimit_blocked_total counter\n")
 		fmt.Fprintf(w, "ncc_ratelimit_blocked_total %d\n", st.BlockedTotal)
 	}
+
+	// NCC run metrics derived from the latest run-summary.json. Serving these
+	// over /metrics lets Prometheus scrape per-cluster severity/health
+	// directly from the api-server instead of relying on a node_exporter
+	// textfile collector reading <cluster>.prom files. Best-effort: a missing
+	// or unreadable summary simply omits this block.
+	if v, ok := s.latestRunSummaryView(); ok {
+		fmt.Fprint(w, promtext.RenderRunSummaryMetrics(v))
+	}
+}
+
+// latestRunSummaryView loads the most recent run-summary.json into the view
+// used to render Prometheus run metrics. It returns ok=false when no readable
+// summary exists.
+func (s *apiServer) latestRunSummaryView() (promtext.RunSummaryView, bool) {
+	path := filepath.Join(s.absPath(s.outputDir), "run-summary.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return promtext.RunSummaryView{}, false
+	}
+	var v promtext.RunSummaryView
+	if err := json.Unmarshal(data, &v); err != nil {
+		return promtext.RunSummaryView{}, false
+	}
+	return v, true
 }
 
 func (s *apiServer) handleAPIDocsHome(w http.ResponseWriter, r *http.Request) {
@@ -2731,8 +3007,25 @@ func (s *apiServer) handleMetaRoutes(w http.ResponseWriter, r *http.Request) {
 		{Path: "/api/v1/health", Methods: []string{http.MethodGet}, Description: "Backend health, version, and resolved paths"},
 		{Path: "/api/v1/audit", Methods: []string{http.MethodGet}, Description: "Read recent audit log entries (limit, action, failures filters)"},
 		{Path: "/api/v1/metrics/rate-limit", Methods: []string{http.MethodGet}, Description: "Rate limiter configuration and counters"},
+		{Path: "/metrics", Methods: []string{http.MethodGet}, Description: "Prometheus exposition (run/notification counters, build info)"},
 		{Path: "/api/v1/auth/session", Methods: []string{http.MethodPost}, Description: "Issue short-lived session token"},
 		{Path: "/api/v1/auth/rotate", Methods: []string{http.MethodPost}, Description: "Rotate API token"},
+		{Path: "/api/v1/auth/login", Methods: []string{http.MethodPost}, Description: "Local-account login; sets the httpOnly session + CSRF cookies and reports role/must-change", SampleBody: "{\n  \"username\": \"admin\",\n  \"password\": \"\"\n}"},
+		{Path: "/api/v1/auth/logout", Methods: []string{http.MethodPost}, Description: "Clear the session and CSRF cookies"},
+		{Path: "/api/v1/auth/me", Methods: []string{http.MethodGet}, Description: "Caller identity, role, session expiry, and which login methods are enabled (no auth required)"},
+		{Path: "/api/v1/auth/change-password", Methods: []string{http.MethodPost}, Description: "Self-service password change for the logged-in session (requires CSRF on cookie sessions); bumps token generation so other sessions are signed out", SampleBody: "{\n  \"current_password\": \"\",\n  \"new_password\": \"\"\n}"},
+		{Path: "/api/v1/auth/refresh", Methods: []string{http.MethodPost}, Description: "Re-issue the current session cookie with a fresh expiry (used by the UI's inactivity 'stay logged in' prompt); session auth only"},
+		{Path: "/api/v1/auth/forgot-password", Methods: []string{http.MethodPost}, Description: "Public self-service: queue a password-reset request for an admin to action; always returns a generic 200 (no account enumeration)", SampleBody: "{\n  \"username\": \"alice\"\n}"},
+		{Path: "/api/v1/settings/password-resets", Methods: []string{http.MethodGet}, Description: "Admin-only: list pending self-service password-reset requests"},
+		{Path: "/api/v1/settings/password-resets/{name}", Methods: []string{http.MethodDelete}, Description: "Admin-only: dismiss a pending password-reset request without resetting the password (resetting it clears the request automatically)"},
+		{Path: "/api/v1/settings/users", Methods: []string{http.MethodGet, http.MethodPost}, Description: "Admin-only: list local accounts / create one (last-admin + reserved-admin protection)", SampleBody: "{\n  \"username\": \"alice\",\n  \"password\": \"\",\n  \"role\": \"operator\",\n  \"must_change_password\": true\n}"},
+		{Path: "/api/v1/settings/users/{name}", Methods: []string{http.MethodPut, http.MethodDelete}, Description: "Admin-only: update role / reset password / set must-change, or delete an account", SampleBody: "{\n  \"role\": \"viewer\",\n  \"password\": \"\",\n  \"must_change_password\": true\n}"},
+		{Path: "/api/v1/settings/sso", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/update the runtime SAML SSO configuration (read-only when configured via startup flags)", SampleBody: "{\n  \"enabled\": true,\n  \"root_url\": \"https://ncc.example.com\",\n  \"idp_metadata_url\": \"https://idp.example.com/metadata\",\n  \"role_attribute\": \"groups\",\n  \"role_map\": \"ncc-admins=admin,ncc-ops=operator\",\n  \"default_role\": \"viewer\"\n}"},
+		{Path: "/api/v1/settings/ldap", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/update the runtime LDAP/Active Directory configuration (bind password is write-only; read-only when configured via startup flags)", SampleBody: "{\n  \"enabled\": true,\n  \"url\": \"ldaps://dc1.corp.example.com:636\",\n  \"bind_dn\": \"CN=ncc-svc,OU=Service Accounts,DC=corp,DC=example,DC=com\",\n  \"bind_password\": \"service-account-secret\",\n  \"base_dn\": \"DC=corp,DC=example,DC=com\",\n  \"role_map\": \"CN=NCC-Admins,OU=Groups,DC=corp,DC=example,DC=com=admin\",\n  \"default_role\": \"viewer\"\n}"},
+		{Path: "/api/v1/settings/ldap/test", Methods: []string{http.MethodPost}, Description: "Admin-only: validate an LDAP/AD configuration by authenticating sample credentials, without saving it", SampleBody: "{\n  \"url\": \"ldaps://dc1.corp.example.com:636\",\n  \"base_dn\": \"DC=corp,DC=example,DC=com\",\n  \"bind_dn\": \"CN=ncc-svc,DC=corp,DC=example,DC=com\",\n  \"bind_password\": \"service-account-secret\",\n  \"role_map\": \"CN=NCC-Admins,OU=Groups,DC=corp,DC=example,DC=com=admin\",\n  \"test_username\": \"jdoe\",\n  \"test_password\": \"users-password\"\n}"},
+		{Path: "/api/v1/settings/session", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/set the session lifetime (ttl_sec or ttl_min; 0 restores the --session-ttl default)", SampleBody: "{\n  \"ttl_min\": 360\n}"},
+		{Path: "/api/v1/settings/backup", Methods: []string{http.MethodGet}, Description: "Admin-only: download a .tar.gz backup of the install dir (config + referenced files, local user database, API token, scheduler/notifications state)"},
+		{Path: "/api/v1/settings/restore", Methods: []string{http.MethodPost}, Description: "Admin-only: restore a backup archive uploaded as multipart/form-data (field 'archive'); overwrites install-dir files with --force. Restart the stack afterward for it to take effect."},
 		{Path: "/api/v1/settings/config", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write runtime config", SampleBody: "{\n  \"content\": \"clusters: \\\"10.0.0.1\\\"\\nusername: \\\"admin\\\"\\n\"\n}"},
 		{Path: "/api/v1/settings/config-files", Methods: []string{http.MethodGet}, Description: "List config-referenced files (clusters, exclusions, secrets)"},
 		{Path: "/api/v1/settings/config-file", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write one config-referenced file", SampleBody: "{\n  \"path\": \"alerts-exclude.txt\",\n  \"content\": \"AHV_MemoryUsage\\n\"\n}"},
@@ -2799,11 +3092,189 @@ func (s *apiServer) buildOpenAPISpec() map[string]interface{} {
 			"/api/v1/metrics/rate-limit": map[string]interface{}{
 				"get": map[string]interface{}{"summary": "Rate limiter configuration and counters"},
 			},
+			"/metrics": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Prometheus exposition format (run/notification counters, build info)"},
+			},
 			"/api/v1/auth/session": map[string]interface{}{
 				"post": map[string]interface{}{"summary": "Issue short-lived session token"},
 			},
 			"/api/v1/auth/rotate": map[string]interface{}{
 				"post": map[string]interface{}{"summary": "Rotate API token"},
+			},
+			"/api/v1/auth/login": map[string]interface{}{
+				"post": map[string]interface{}{
+					"summary": "Local-account login. On success sets the httpOnly session cookie + CSRF cookie and returns the role, session expiry, and whether a password change is required.",
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"example": map[string]interface{}{
+									"username": "admin",
+									"password": "",
+								},
+							},
+						},
+					},
+				},
+			},
+			"/api/v1/auth/logout": map[string]interface{}{
+				"post": map[string]interface{}{"summary": "Clear the session and CSRF cookies"},
+			},
+			"/api/v1/auth/refresh": map[string]interface{}{
+				"post": map[string]interface{}{"summary": "Re-issue the current session cookie with a fresh expiry (extends the session by the effective TTL). Session auth only (cookie sessions require X-CSRF-Token); used by the UI's inactivity 'stay logged in' prompt."},
+			},
+			"/api/v1/auth/me": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Caller identity, role, session expiry, and enabled login methods (local/SAML). Reachable unauthenticated so the UI can decide whether to show a login screen."},
+			},
+			"/api/v1/auth/change-password": map[string]interface{}{
+				"post": map[string]interface{}{
+					"summary": "Change the logged-in account's password. Requires a session (cookie sessions also require the X-CSRF-Token header). Verifies the current password, enforces a 12-char minimum, and bumps the token generation so all other sessions are signed out.",
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"example": map[string]interface{}{
+									"current_password": "",
+									"new_password":     "",
+								},
+							},
+						},
+					},
+				},
+			},
+			"/api/v1/auth/forgot-password": map[string]interface{}{
+				"post": map[string]interface{}{
+					"summary": "Public self-service password recovery: queue a reset request for an admin to action out-of-band. Always returns a generic 200 regardless of whether the account exists (no enumeration); a request is recorded only for an existing local account. Rate-limited.",
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"example": map[string]interface{}{"username": "alice"},
+							},
+						},
+					},
+				},
+			},
+			"/api/v1/settings/password-resets": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Admin-only: list pending self-service password-reset requests (username, requested_at, client_ip)."},
+			},
+			"/api/v1/settings/password-resets/{name}": map[string]interface{}{
+				"delete": map[string]interface{}{
+					"summary": "Admin-only: dismiss a pending password-reset request without resetting the password (resetting the user's password via the users endpoint clears it automatically).",
+					"parameters": []map[string]interface{}{
+						{"name": "name", "in": "path", "required": true, "schema": map[string]interface{}{"type": "string"}},
+					},
+				},
+			},
+			"/api/v1/settings/users": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Admin-only: list local accounts (username, role, must-change, timestamps; password hashes are never returned)"},
+				"post": map[string]interface{}{
+					"summary": "Admin-only: create a local account. Role is admin|operator|viewer; new accounts default to must-change-password.",
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"example": map[string]interface{}{
+									"username":             "alice",
+									"password":             "",
+									"role":                 "operator",
+									"must_change_password": true,
+								},
+							},
+						},
+					},
+				},
+			},
+			"/api/v1/settings/users/{name}": map[string]interface{}{
+				"put": map[string]interface{}{
+					"summary": "Admin-only: update an account's role and/or reset its password and/or flip the must-change flag. The built-in admin cannot be demoted; the last admin cannot be demoted.",
+					"parameters": []map[string]interface{}{
+						{"name": "name", "in": "path", "required": true, "schema": map[string]interface{}{"type": "string"}},
+					},
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"example": map[string]interface{}{
+									"role":                 "viewer",
+									"password":             "",
+									"must_change_password": true,
+								},
+							},
+						},
+					},
+				},
+				"delete": map[string]interface{}{
+					"summary": "Admin-only: delete an account. The built-in admin and the last remaining admin cannot be deleted.",
+					"parameters": []map[string]interface{}{
+						{"name": "name", "in": "path", "required": true, "schema": map[string]interface{}{"type": "string"}},
+					},
+				},
+			},
+			"/api/v1/settings/sso": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Admin-only: read the runtime SAML SSO config (SP private key is never returned). Reports whether SSO is enabled and whether it is managed via startup flags or runtime."},
+				"put": map[string]interface{}{
+					"summary": "Admin-only: update the runtime SAML SSO config and hot-reload the SP. Returns 409 when SAML is managed via startup flags.",
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"example": map[string]interface{}{
+									"enabled":          true,
+									"root_url":         "https://ncc.example.com",
+									"idp_metadata_url": "https://idp.example.com/metadata",
+									"role_attribute":   "groups",
+									"role_map":         "ncc-admins=admin,ncc-ops=operator",
+									"default_role":     "viewer",
+								},
+							},
+						},
+					},
+				},
+			},
+			"/api/v1/settings/ldap": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Admin-only: read the runtime LDAP/Active Directory config (the bind password is never returned; has_bind_password is reported instead). Reports whether LDAP is enabled and whether it is managed via startup flags or runtime."},
+				"put": map[string]interface{}{
+					"summary": "Admin-only: update the runtime LDAP/AD config and hot-reload the provider. The bind password is write-only (omit to keep the stored secret). Returns 409 when LDAP is managed via startup flags.",
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"example": map[string]interface{}{
+									"enabled":       true,
+									"url":           "ldaps://dc1.corp.example.com:636",
+									"bind_dn":       "CN=ncc-svc,OU=Service Accounts,DC=corp,DC=example,DC=com",
+									"bind_password": "service-account-secret",
+									"base_dn":       "DC=corp,DC=example,DC=com",
+									"role_map":      "CN=NCC-Admins,OU=Groups,DC=corp,DC=example,DC=com=admin",
+									"default_role":  "viewer",
+								},
+							},
+						},
+					},
+				},
+			},
+			"/api/v1/settings/session": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Admin-only: read the effective session lifetime, its source (default|runtime), and the allowed bounds"},
+				"put": map[string]interface{}{
+					"summary": "Admin-only: set the session lifetime. Provide ttl_sec or ttl_min; 0 clears the override and restores the server's --session-ttl default. New value applies to sessions minted afterward.",
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"example": map[string]interface{}{
+									"ttl_min": 360,
+								},
+							},
+						},
+					},
+				},
+			},
+			"/api/v1/settings/backup": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Admin-only: download a .tar.gz backup of the install directory (config + referenced files, local user database, API token, scheduler/notifications state). The archive contains secrets — store it securely."},
+			},
+			"/api/v1/settings/restore": map[string]interface{}{
+				"post": map[string]interface{}{"summary": "Admin-only: restore a backup archive uploaded as multipart/form-data (field 'archive'). Overwrites install-dir files with --force and proceeds even while the stack is live; restart the stack afterward for the restored config/accounts/token to take effect."},
 			},
 			"/api/v1/settings/config": map[string]interface{}{
 				"get": map[string]interface{}{"summary": "Read runtime config"},
@@ -3751,6 +4222,78 @@ func handleSubcommandArgs(args []string) {
 // it to identify which flags the user explicitly set so that an
 // explicit `--config-path /etc/foo.yaml` is never silently overridden
 // by the auto-detect.
+// buildHandler registers every route on a fresh mux and wraps it in the
+// CORS, rate-limit, and auth middleware. It is shared by main() and the
+// end-to-end tests so both exercise identical routing and middleware.
+func (s *apiServer) buildHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/health", s.handleHealth)
+	mux.HandleFunc("/api/v1/audit", s.handleAudit)
+	mux.HandleFunc("/api/v1/metrics/rate-limit", s.handleRateLimitMetrics)
+	mux.HandleFunc("/metrics", s.handlePrometheusMetrics)
+	mux.HandleFunc("/api/v1/auth/session", s.handleAuthSession)
+	mux.HandleFunc("/api/v1/auth/rotate", s.handleAuthRotate)
+	mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
+	mux.HandleFunc("/api/v1/auth/logout", s.handleLogout)
+	mux.HandleFunc("/api/v1/auth/me", s.handleMe)
+	mux.HandleFunc("/api/v1/auth/change-password", s.handleChangePassword)
+	mux.HandleFunc("/api/v1/auth/refresh", s.handleAuthRefresh)
+	mux.HandleFunc("/api/v1/auth/forgot-password", s.handleForgotPassword)
+	// Register SAML endpoints when SAML is active now or could be enabled at
+	// runtime (a writable user db is present). Handlers 503 when no provider.
+	if s.samlEnabled || s.users.writable() {
+		s.registerSAML(mux)
+	}
+	// Admin-only account and SSO management (under /api/v1/settings/*). Only
+	// meaningful when the store can persist changes.
+	if s.users.writable() {
+		mux.HandleFunc("/api/v1/settings/users", s.handleUsers)
+		mux.HandleFunc("/api/v1/settings/users/", s.handleUserByName)
+		mux.HandleFunc("/api/v1/settings/sso", s.handleSSO)
+		mux.HandleFunc("/api/v1/settings/ldap", s.handleLDAP)
+		mux.HandleFunc("/api/v1/settings/ldap/test", s.handleLDAPTest)
+		mux.HandleFunc("/api/v1/settings/session", s.handleSessionPolicy)
+		mux.HandleFunc("/api/v1/settings/password-resets", s.handlePasswordResets)
+		mux.HandleFunc("/api/v1/settings/password-resets/", s.handlePasswordResetByName)
+	}
+	mux.HandleFunc("/api/v1/settings/backup", s.handleBackup)
+	mux.HandleFunc("/api/v1/settings/restore", s.handleRestore)
+	mux.HandleFunc("/api/v1/settings/config", s.handleConfig)
+	mux.HandleFunc("/api/v1/settings/config-files", s.handleConfigFiles)
+	mux.HandleFunc("/api/v1/settings/config-file", s.handleConfigFile)
+	mux.HandleFunc("/api/v1/settings/notifications", s.handleNotifications)
+	mux.HandleFunc("/api/v1/settings/notifications/test", s.handleNotificationsTest)
+	mux.HandleFunc("/api/v1/schedule", s.handleSchedule)
+	mux.HandleFunc("/api/v1/schedule/health", s.handleScheduleHealth)
+	mux.HandleFunc("/api/v1/artifacts", s.handleArtifacts)
+	mux.HandleFunc("/api/v1/artifacts/", s.handleArtifactByName)
+	mux.HandleFunc("/api/v1/runs", s.handleRuns)
+	mux.HandleFunc("/api/v1/runs/", s.handleRunsRouter)
+	mux.HandleFunc("/api/v1/runs/summary", s.handleRunSummary)
+	mux.HandleFunc("/api/v1/runs/active", s.handleRunActive)
+	mux.HandleFunc("/api/v1/runs/preflight", s.handleRunPreflight)
+	mux.HandleFunc("/api/v1/runs/trigger", s.handleRunTrigger)
+	mux.HandleFunc("/api/v1/report/data", s.handleReportData)
+	mux.HandleFunc("/api/v1/report/trends", s.handleReportTrends)
+	mux.HandleFunc("/api/v1/logs/runner", s.handleRunnerLogs)
+	mux.HandleFunc("/api/v1/openapi.json", s.handleOpenAPI)
+	mux.HandleFunc("/api/v1/meta/routes", s.handleMetaRoutes)
+	mux.HandleFunc("/", s.handleAPIDocsHome)
+
+	return s.withCORS(s.withRateLimit(s.withAuth(mux)))
+}
+
+// defaultUsersDBPath returns the writable user-database path used when no
+// backend is configured. It lives alongside the other server state in the
+// repo root so the default-on login flow "just works" for a bare run.
+func defaultUsersDBPath(repoRoot string) string {
+	root := strings.TrimSpace(repoRoot)
+	if root == "" {
+		root = "."
+	}
+	return v2layout.UsersDB(root)
+}
+
 func applyStackAwareDefaults(s *apiServer, argv []string) {
 	root, ok := v2layout.DetectStackRootFromExe()
 	if !ok {
@@ -3800,6 +4343,7 @@ func applyStackAwareDefaults(s *apiServer, argv []string) {
 		{"output-dir", &s.outputDir, "outputfiles", v2layout.ResolveToReal(v2layout.OutputDir(root))},
 		{"log-dir", &s.logDir, "nccfiles", v2layout.ResolveToReal(v2layout.LogDir(root))},
 		{"token-file-path", &s.tokenFilePath, ".ncc-api-token", v2layout.ResolveToReal(v2layout.TokenFile(root))},
+		{"users-db", &s.usersDBPath, "", v2layout.ResolveToReal(v2layout.UsersDB(root))},
 		{"orchestrator-bin", &s.orchestratorBin, "./ncc-orchestrator", orchBin},
 	}
 	rewrote := []string{}

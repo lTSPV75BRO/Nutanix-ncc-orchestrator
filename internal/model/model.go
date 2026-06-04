@@ -29,16 +29,25 @@ type Config struct {
 	Username           string
 	Password           string
 	InsecureSkipVerify bool
-	Timeout            time.Duration // per-cluster overall timeout
-	RequestTimeout     time.Duration // per HTTP request timeout
-	PollInterval       time.Duration
-	PollJitter         time.Duration
-	OutputDirLogs      string
-	OutputDirFiltered  string
-	OutputFormats      []string // html,csv,json
-	MaxParallel        int
-	TLSMinVersion      uint16
-	LogFile            string
+	// CABundle is an optional path to a PEM file of additional trusted CA
+	// certificates (e.g. an internal Prism CA), a safer alternative to
+	// InsecureSkipVerify.
+	CABundle string `mapstructure:"ca-bundle"`
+	// PinSHA256 is an optional set of allowed server leaf-certificate SHA-256
+	// fingerprints (hex, with or without colons). When set, the server cert is
+	// accepted only if its fingerprint matches one of these (certificate
+	// pinning), independent of the system trust store.
+	PinSHA256         []string      `mapstructure:"-"`
+	Timeout           time.Duration // per-cluster overall timeout
+	RequestTimeout    time.Duration // per HTTP request timeout
+	PollInterval      time.Duration
+	PollJitter        time.Duration
+	OutputDirLogs     string
+	OutputDirFiltered string
+	OutputFormats     []string // html,csv,json
+	MaxParallel       int
+	TLSMinVersion     uint16
+	LogFile           string
 
 	// Filtering
 	SeverityFilter         []string // Only include these severities (FAIL, WARN, ERR, INFO)
@@ -97,6 +106,9 @@ type Config struct {
 	EmailFrom       string
 	EmailTo         []string
 	EmailUseTLS     bool
+	// SMTPInsecureSkipVerify skips SMTP STARTTLS certificate verification,
+	// decoupled from the Prism InsecureSkipVerify flag.
+	SMTPInsecureSkipVerify bool `mapstructure:"smtp-insecure-skip-verify"`
 	// Optional Go text/template overrides for the email subject/body. Empty
 	// = built-in default. Rendered against NotificationSummary (.Cluster,
 	// .FailCount, .WarnCount, .ErrCount, .InfoCount, .TotalChecks, .Overview,
@@ -113,6 +125,15 @@ type Config struct {
 	// = default JSON encoding of NotificationSummary. The rendered output is
 	// sent verbatim (the operator is responsible for producing valid JSON).
 	WebhookTemplate string `mapstructure:"webhook-template"`
+	// WebhookSecret, when set, makes the orchestrator sign the webhook body
+	// with HMAC-SHA256 and send it as the X-NCC-Signature header
+	// ("sha256=<hex>") so the receiver can verify provenance.
+	WebhookSecret string `mapstructure:"webhook-secret"`
+
+	// NotificationDeadLetterDir, when set, is a directory where notification
+	// payloads that fail to deliver (after retries) are written so a transient
+	// SMTP/webhook/Slack outage does not silently lose the alert.
+	NotificationDeadLetterDir string `mapstructure:"notification-deadletter-dir"`
 
 	// Slack
 	SlackEnabled    bool
@@ -175,6 +196,17 @@ type FS interface {
 	ReadDir(path string) ([]os.DirEntry, error)
 	Create(path string) (*os.File, error)
 }
+
+// OSFS is the os-backed implementation of FS used in production.
+type OSFS struct{}
+
+func (OSFS) MkdirAll(path string, perm os.FileMode) error { return os.MkdirAll(path, perm) }
+func (OSFS) WriteFile(path string, data []byte, perm os.FileMode) error {
+	return os.WriteFile(path, data, perm)
+}
+func (OSFS) ReadFile(path string) ([]byte, error)       { return os.ReadFile(path) }
+func (OSFS) ReadDir(path string) ([]os.DirEntry, error) { return os.ReadDir(path) }
+func (OSFS) Create(path string) (*os.File, error)       { return os.Create(path) }
 
 // ClusterHealthScore maps a run's severity counts to a 0-100 health score.
 // FAIL is weighted heaviest, then ERR, then WARN; INFO does not penalize.

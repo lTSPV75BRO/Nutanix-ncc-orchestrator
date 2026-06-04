@@ -1,0 +1,50 @@
+# EXAMPLE: etcd encryption-at-rest for Kubernetes Secrets.
+#
+# IMPORTANT: Kubernetes Secrets are only base64-encoded by default — NOT
+# encrypted. Anyone able to read etcd (or an etcd backup/snapshot) can read
+# every Secret in plaintext. To make the api-server's user-database Secret
+# (ncc-v2-users: bcrypt hashes, SAML SP private key, first-run admin password)
+# "well encrypted" at rest, enable an EncryptionConfiguration on the
+# kube-apiserver.
+#
+# This is a CONTROL-PLANE configuration file — it is NOT applied with
+# `kubectl`. You install it on the API server host(s) and reference it from the
+# kube-apiserver flag:
+#     --encryption-provider-config=/etc/kubernetes/enc/encryption-config.yaml
+# (On managed clusters — EKS/GKE/AKS — enable the provider's envelope/KMS
+# encryption for Secrets instead; you usually cannot edit kube-apiserver flags.)
+#
+# Provider preference (most to least secure):
+#   1. kms (v2)  — envelope encryption with an external KMS/HSM. RECOMMENDED.
+#   2. secretbox — XSalsa20-Poly1305 with a local 32-byte key.
+#   3. aescbc    — AES-CBC with a local 32-byte key (shown below as a baseline).
+# Always list the encrypting provider FIRST and keep `identity` LAST so
+# existing plaintext Secrets can still be read until re-encrypted.
+#
+# Generate a key:    head -c 32 /dev/urandom | base64
+# Re-encrypt existing Secrets after enabling:
+#     kubectl get secrets -A -o json | kubectl replace -f -
+apiVersion: apiserver.config.k8s.io/v1
+kind: EncryptionConfiguration
+resources:
+  - resources:
+      - secrets
+    providers:
+      # ---- Option A (recommended): external KMS v2 envelope encryption ----
+      # - kms:
+      #     apiVersion: v2
+      #     name: ncc-kms
+      #     endpoint: unix:///var/run/kmsplugin/socket.sock
+      #     timeout: 3s
+      # ---- Option B: secretbox with a local key ----
+      # - secretbox:
+      #     keys:
+      #       - name: key1
+      #         secret: <BASE64_32_BYTE_KEY>
+      # ---- Option C: aescbc with a local key (baseline) ----
+      - aescbc:
+          keys:
+            - name: key1
+              secret: REPLACE_WITH_BASE64_32_BYTE_KEY
+      # identity MUST be last so pre-existing/plaintext Secrets stay readable.
+      - identity: {}

@@ -9,6 +9,35 @@ import (
 	"goncc/internal/model"
 )
 
+func TestRenderRunSummaryMetrics(t *testing.T) {
+	out := RenderRunSummaryMetrics(RunSummaryView{
+		Timestamp:      "2026-06-04T10:00:00Z",
+		DurationS:      12.5,
+		ClustersOK:     1,
+		ClustersFailed: 1,
+		ExitCode:       2,
+		Clusters: []ClusterMetricRow{
+			{Address: "10.0.0.1", OK: true, FailCount: 0, WarnCount: 1, ChecksTotal: 10, HealthScore: 95},
+			{Address: "10.0.0.2", OK: false, FailCount: 3, ChecksTotal: 8, HealthScore: 40},
+		},
+	})
+	for _, want := range []string{
+		`ncc_cluster_up{cluster="10.0.0.1"} 1`,
+		`ncc_cluster_up{cluster="10.0.0.2"} 0`,
+		`ncc_cluster_checks_total{cluster="10.0.0.2",severity="FAIL"} 3`,
+		`ncc_cluster_health_score{cluster="10.0.0.1"} 95`,
+		"ncc_last_run_clusters_ok 1",
+		"ncc_last_run_clusters_failed 1",
+		"ncc_last_run_exit_code 2",
+		"ncc_last_run_duration_seconds 12.500",
+		"ncc_last_run_timestamp_seconds ",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("run-summary metrics missing %q in:\n%s", want, out)
+		}
+	}
+}
+
 // osFS is a minimal model.FS backed by the real filesystem for tests.
 type osFS struct{}
 

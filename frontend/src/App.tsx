@@ -3,18 +3,25 @@ import {
   BgColorsOutlined,
   BarChartOutlined,
   DashboardOutlined,
+  LockOutlined,
+  LogoutOutlined,
   PlayCircleOutlined,
   SettingOutlined,
   ThunderboltOutlined,
+  UserOutlined,
   WifiOutlined,
 } from "@ant-design/icons";
-import { Button, Dropdown, Layout, Spin, Tooltip } from "antd";
+import { Button, Dropdown, Layout, Spin, Tag, Tooltip } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { THEME_OPTIONS, useAppTheme, type AppThemeSelection } from "./theme";
 import { api, ApiError } from "./api/client";
-import type { RunActiveData, RunConflictData } from "./api/types";
+import type { MeData, RunActiveData, RunConflictData, UserRole } from "./api/types";
 import { notify, notifyError } from "./notify";
+import { AuthContext, useAuth, type AuthValue } from "./auth/AuthContext";
+import { LoginPage } from "./pages/LoginPage";
+import { ChangePasswordPage, ChangePasswordModal } from "./pages/ChangePasswordPage";
+import { SessionIdleGuard } from "./components/SessionIdleGuard";
 
 const { Header, Content } = Layout;
 const DashboardPage = lazy(() => import("./pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
@@ -139,6 +146,7 @@ function formatElapsedShort(ms: number): string {
 
 function HeaderTriggerRunButton() {
   const queryClient = useQueryClient();
+  const { canOperate } = useAuth();
   const active = useQuery({
     queryKey: ["runs-active"],
     queryFn: api.runActive,
@@ -261,6 +269,9 @@ function HeaderTriggerRunButton() {
     }
   };
 
+  // Viewers (read-only role) cannot trigger runs, so hide the button entirely.
+  if (!canOperate) return null;
+
   // While a run is active, show a spinning <PlayCircleOutlined /> + live
   // elapsed time so the header matches the "Running · 5m 23s" pill rendered
   // on Settings → Runs. When idle, show the lightning bolt + "Trigger".
@@ -284,10 +295,108 @@ function HeaderTriggerRunButton() {
   );
 }
 
+/** Header control showing the signed-in user, their role, and a logout action.
+ *  Rendered only when interactive login is enabled. */
+function HeaderUserMenu({
+  username,
+  role,
+  canChangePassword,
+  onChangePassword,
+  onLogout,
+}: {
+  username: string;
+  role: UserRole;
+  canChangePassword: boolean;
+  onChangePassword: () => void;
+  onLogout: () => void;
+}) {
+  const roleColor = role === "admin" ? "gold" : role === "operator" ? "blue" : "default";
+  const items = [
+    {
+      key: "who",
+      label: (
+        <span>
+          Signed in as <strong>{username || "user"}</strong>
+        </span>
+      ),
+      disabled: true,
+    },
+    { type: "divider" as const },
+    ...(canChangePassword
+      ? [{ key: "change-password", icon: <LockOutlined />, label: "Change password" }]
+      : []),
+    { key: "logout", icon: <LogoutOutlined />, label: "Sign out" },
+  ];
+  return (
+    <Dropdown
+      placement="bottomRight"
+      trigger={["click"]}
+      menu={{
+        items,
+        onClick: ({ key }) => {
+          if (key === "logout") onLogout();
+          else if (key === "change-password") onChangePassword();
+        },
+      }}
+    >
+      <Button className="header-user-btn" icon={<UserOutlined />}>
+        <span className="header-user-name">{username || "user"}</span>
+        <Tag color={roleColor} className="header-user-role">
+          {role || "user"}
+        </Tag>
+      </Button>
+    </Dropdown>
+  );
+}
+
 export default function App() {
   const location = useLocation();
+  const queryClient = useQueryClient();
   const { selectedTheme, setTheme } = useAppTheme();
   const themeLabel = THEME_OPTIONS.find((opt) => opt.value === selectedTheme)?.label ?? "Theme";
+
+  const meQuery = useQuery({
+    queryKey: ["me"],
+    queryFn: api.me,
+    staleTime: 30_000,
+    // Keep the session state fresh so the app maintains the logged-in view and
+    // flips to the login screen promptly once the session expires. When a
+    // session expiry is known, re-check shortly after it lapses (clamped so we
+    // never poll faster than every 15s or slower than every 5 min).
+    refetchInterval: (q) => {
+      const data = q.state.data as MeData | undefined;
+      if (!data?.login_enabled) return 5 * 60_000;
+      const left = data.expires_in_sec;
+      if (typeof left === "number") {
+        return Math.min(5 * 60_000, Math.max(15_000, (left + 2) * 1000));
+      }
+      return 60_000;
+    },
+    refetchOnWindowFocus: true,
+  });
+  const me = meQuery.data as MeData | undefined;
+  const loginEnabled = Boolean(me?.login_enabled);
+  const authenticated = Boolean(me?.authenticated);
+  const role: UserRole = (me?.role as UserRole) ?? "";
+  // When login is disabled (single-user/token deployments) every visitor has
+  // full access, matching the pre-RBAC behavior.
+  const isAdmin = loginEnabled ? Boolean(me?.is_admin) : true;
+  const canOperate = loginEnabled ? Boolean(me?.can_operate) : true;
+  const authValue: AuthValue = { me: me ?? null, role, isAdmin, canOperate, loginEnabled, authenticated };
+  const [changePwOpen, setChangePwOpen] = useState(false);
+
+  const handleLogout = async () => {
+    try {
+      await api.logout();
+    } catch {
+      // ignore; we clear client state regardless (cookies may already be gone)
+    }
+    // Drop every cached (authenticated) query so no stale data lingers, then do
+    // a clean re-bootstrap. A hard navigation guarantees the UI returns to the
+    // login screen regardless of any in-flight query or cached auth state.
+    queryClient.clear();
+    window.location.assign("/");
+  };
 
   const healthQuery = useQuery({
     queryKey: ["health"],
@@ -300,9 +409,16 @@ export default function App() {
     healthQuery.data as { status?: string; auth_mode?: string } | undefined,
   );
 
+  // Don't fire authenticated data queries until we know the viewer may access
+  // them: either login is disabled (single-user/token deployments) or the
+  // session is authenticated. Otherwise polling endpoints like /runs/active
+  // 401 on every tick before login and flood the browser console.
+  const appReady = !meQuery.isLoading && (authenticated || !loginEnabled);
+
   const runActiveQuery = useQuery({
     queryKey: ["runs-active"],
     queryFn: api.runActive,
+    enabled: appReady,
     refetchInterval: 5000,
     staleTime: 1500,
   });
@@ -326,7 +442,42 @@ export default function App() {
     return location.pathname.startsWith(to);
   };
 
+  // Login gate: when the backend requires login and this browser has no
+  // authenticated session, show the full-screen login instead of the app.
+  if (loginEnabled && !authenticated && !meQuery.isLoading) {
+    return (
+      <LoginPage
+        localEnabled={Boolean(me?.local_enabled)}
+        samlEnabled={Boolean(me?.saml_enabled)}
+        bootstrapPending={Boolean(me?.bootstrap_pending)}
+        onSuccess={() => {
+          void queryClient.invalidateQueries();
+          void meQuery.refetch();
+        }}
+      />
+    );
+  }
+
+  // Forced password-change gate: the bootstrap admin (and admin-reset accounts)
+  // must set a new password before doing anything else.
+  if (loginEnabled && authenticated && me?.must_change_password) {
+    return (
+      <ChangePasswordPage
+        forced
+        username={me?.username}
+        onSuccess={() => {
+          void queryClient.invalidateQueries();
+          void meQuery.refetch();
+        }}
+      />
+    );
+  }
+
+  // Settings is admin-only; hide its nav pill from non-admins.
+  const navItems = NAV_ITEMS.filter((item) => item.to !== "/settings" || isAdmin);
+
   return (
+    <AuthContext.Provider value={authValue}>
     <Layout className="app-shell">
       <Header className="app-header">
         <div className="app-header-inner">
@@ -351,7 +502,7 @@ export default function App() {
           </Link>
 
           <nav className="header-nav" aria-label="Primary">
-            {NAV_ITEMS.map((item) => (
+            {navItems.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
@@ -383,6 +534,15 @@ export default function App() {
                 className="header-icon-btn"
               />
             </Dropdown>
+            {loginEnabled && authenticated ? (
+              <HeaderUserMenu
+                username={me?.username ?? ""}
+                role={role}
+                canChangePassword={Boolean(me?.is_local)}
+                onChangePassword={() => setChangePwOpen(true)}
+                onLogout={handleLogout}
+              />
+            ) : null}
           </div>
         </div>
       </Header>
@@ -391,13 +551,31 @@ export default function App() {
           <Suspense fallback={<Spin size="large" />}>
             <Routes>
               <Route path="/" element={<DashboardPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
+              <Route
+                path="/settings"
+                element={isAdmin ? <SettingsPage /> : <Navigate to="/" replace />}
+              />
               <Route path="/insights" element={<InsightsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>
         </div>
       </Content>
+      <ChangePasswordModal
+        open={changePwOpen}
+        onClose={() => setChangePwOpen(false)}
+        onSuccess={() => {
+          notify.success("Password changed.");
+          void meQuery.refetch();
+        }}
+      />
+      {loginEnabled && authenticated && !me?.must_change_password ? (
+        <SessionIdleGuard
+          onLogout={handleLogout}
+          onStayLoggedIn={() => void meQuery.refetch()}
+        />
+      ) : null}
     </Layout>
+    </AuthContext.Provider>
   );
 }

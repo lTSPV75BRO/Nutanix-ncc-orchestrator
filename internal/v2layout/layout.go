@@ -48,6 +48,7 @@ const (
 	apiServerBaseName = "ncc-api-server"
 	uiServerBaseName  = "ncc-ui-server"
 	tokenFileName     = ".ncc-api-token"
+	usersDBName       = ".ncc-api-users.json"
 	configFileName    = "config.yaml"
 	exampleConfigName = "example_config.yaml"
 	outputDirName     = "outputfiles"
@@ -126,6 +127,7 @@ func ConfigPath(installDir string) string {
 func OutputDir(installDir string) string   { return filepath.Join(installDir, outputDirName) }
 func LogDir(installDir string) string      { return filepath.Join(installDir, logDirName) }
 func TokenFile(installDir string) string   { return filepath.Join(installDir, tokenFileName) }
+func UsersDB(installDir string) string     { return filepath.Join(installDir, usersDBName) }
 func FrontendDir(installDir string) string { return filepath.Join(installDir, stackFrontendDir) }
 
 // PlatformSuffix returns "<goos>-<goarch>" (used by both stack archive

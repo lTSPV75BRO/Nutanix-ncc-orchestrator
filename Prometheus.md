@@ -15,9 +15,46 @@ For complete repository setup/build instructions before enabling monitoring, see
 | Surface | Produced by | Endpoint / file | Best for |
 | --- | --- | --- | --- |
 | NCC check metrics | `ncc-orchestrator` | `prom-dir/*.prom` (textfile format) | Cluster check health, severity trends, stale run detection |
-| API runtime limiter metrics | `ncc-api-server` | `GET /api/v1/metrics/rate-limit` | Backend traffic tuning (`rate-limit-per-minute`) |
+| NCC run metrics over HTTP | `ncc-api-server` | `GET /metrics` (`ncc_cluster_*`, `ncc_last_run_*`) | Scraping last-run per-cluster severity/health **without** a textfile collector |
+| API runtime + lifecycle metrics | `ncc-api-server` | `GET /metrics` (`ncc_build_info`, `ncc_runs_*`, Go runtime, rate-limiter) | Backend health, run counters |
+| API rate-limiter metrics (JSON) | `ncc-api-server` | `GET /api/v1/metrics/rate-limit` | Backend traffic tuning (`rate-limit-per-minute`) |
 
-Recommended: scrape both where available.
+Recommended: scrape both where available. **New in v2.1.0:** if you run the
+api-server, you can scrape `GET /metrics` directly for the latest run's
+per-cluster metrics and skip the node_exporter textfile collector entirely (the
+`.prom` files still work for CLI-only hosts).
+
+### NCC run metrics on `ncc-api-server` `/metrics` (no textfile collector)
+
+The api-server reads the latest `run-summary.json` and exposes the last run's
+metrics in the `ncc_` namespace alongside its own build/runtime metrics:
+
+| Metric | Type | Description |
+| --- | --- | --- |
+| `ncc_cluster_up{cluster}` | gauge | `1` if the cluster's last NCC run succeeded, else `0` |
+| `ncc_cluster_checks_total{cluster,severity}` | gauge | Last-run checks per severity (`FAIL`/`WARN`/`ERR`/`INFO`) |
+| `ncc_cluster_checks_count{cluster}` | gauge | Total checks for the cluster in the last run |
+| `ncc_cluster_health_score{cluster}` | gauge | Cluster health score (`0..100`) from the last run |
+| `ncc_last_run_clusters_ok` / `ncc_last_run_clusters_failed` | gauge | Cluster pass/fail counts for the last run |
+| `ncc_last_run_exit_code` | gauge | Exit code of the last run |
+| `ncc_last_run_duration_seconds` | gauge | Wall-clock duration of the last run |
+| `ncc_last_run_timestamp_seconds` | gauge | Unix epoch of the last run |
+
+Scrape it like any target (add `--metrics-public` to the api-server for
+token-free scraping on a private network; otherwise send the API token):
+
+```yaml
+scrape_configs:
+  - job_name: ncc-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["ncc-api-server:8081"]
+    # Easiest: run the api-server with --metrics-public on a trusted network so
+    # no credential is needed. Otherwise send the admin token as a header
+    # (Prometheus 2.50+ http_headers):
+    # http_headers:
+    #   X-API-Token: { values: ["<NCC_API_TOKEN>"] }
+```
 
 ## Reference architecture
 

@@ -36,5 +36,11 @@ EXPOSE 8081
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD ["/usr/local/bin/ncc-api-server", "--health-check", "--listen", "127.0.0.1:8081", "--token-file-path", "/app/data/auth/.ncc-api-token"]
 
+# --users-db lives under the persistent /app/data/auth dir so the local
+# account store (and the first-run bootstrap admin) survive container
+# restarts. On first launch the server prints a random admin password to
+# the log (and writes /app/data/auth/.ncc-initial-admin-password) which
+# must be changed on first login. auth-mode auto-upgrades to hybrid so
+# static-token automation keeps working alongside browser logins.
 ENTRYPOINT ["/usr/local/bin/ncc-api-server"]
-CMD ["--listen", ":8081", "--repo-root", "/app", "--config-path", "/app/config/config.yaml", "--output-dir", "/app/outputfiles", "--log-dir", "/app/nccfiles", "--runner-log-path", "/app/logs/ncc-runner.log", "--token-file-path", "/app/data/auth/.ncc-api-token", "--orchestrator-bin", "/usr/local/bin/ncc-orchestrator", "--auth-mode", "token", "--cors-origin", "http://localhost:8080"]
+CMD ["--listen", ":8081", "--repo-root", "/app", "--config-path", "/app/config/config.yaml", "--output-dir", "/app/outputfiles", "--log-dir", "/app/nccfiles", "--runner-log-path", "/app/logs/ncc-runner.log", "--token-file-path", "/app/data/auth/.ncc-api-token", "--users-db", "/app/data/auth/.ncc-api-users.json", "--orchestrator-bin", "/usr/local/bin/ncc-orchestrator", "--auth-mode", "token", "--cors-origin", "http://localhost:8080"]

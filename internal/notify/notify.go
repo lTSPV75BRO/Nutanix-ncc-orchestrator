@@ -11,7 +11,10 @@ package notify
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,6 +33,56 @@ import (
 	"goncc/internal/model"
 	"goncc/internal/retryutil"
 )
+
+// signWebhookBody returns the HMAC-SHA256 signature header value ("sha256=<hex>")
+// for body using secret.
+func signWebhookBody(secret string, body []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}
+
+// deadLetterRecord is the JSON written for a notification that failed to
+// deliver after retries.
+type deadLetterRecord struct {
+	Channel string `json:"channel"`
+	Time    string `json:"time"`
+	Error   string `json:"error"`
+	Cluster string `json:"cluster,omitempty"`
+	Subject string `json:"subject,omitempty"`
+	Payload string `json:"payload"`
+}
+
+// writeDeadLetter persists a failed notification to dir (best-effort; never
+// returns an error to the caller). A nanosecond suffix avoids collisions
+// between clusters running in parallel.
+func writeDeadLetter(dir, channel, cluster, subject string, deliverErr error, payload []byte) {
+	if strings.TrimSpace(dir) == "" {
+		return
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Error().Err(err).Str("dir", dir).Msg("notification dead-letter: mkdir failed")
+		return
+	}
+	rec := deadLetterRecord{
+		Channel: channel,
+		Time:    time.Now().UTC().Format(time.RFC3339Nano),
+		Cluster: cluster,
+		Subject: subject,
+		Payload: string(payload),
+	}
+	if deliverErr != nil {
+		rec.Error = deliverErr.Error()
+	}
+	data, err := json.MarshalIndent(rec, "", "  ")
+	if err != nil {
+		return
+	}
+	name := fmt.Sprintf("%s-%s-%d.json", channel, time.Now().UTC().Format("20060102T150405Z"), time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+		log.Error().Err(err).Str("dir", dir).Msg("notification dead-letter: write failed")
+	}
+}
 
 // RetryAttempts is the number of times each notification is retried by the
 // *WithRetry wrappers before a failure is recorded.
@@ -203,7 +256,7 @@ func SendEmail(cfg model.Config, subj string, body string, attachPath string) er
 		}
 		defer c.Close()
 
-		if err := c.StartTLS(&tls.Config{ServerName: cfg.SMTPServer, InsecureSkipVerify: cfg.InsecureSkipVerify}); err != nil {
+		if err := c.StartTLS(&tls.Config{ServerName: cfg.SMTPServer, InsecureSkipVerify: cfg.SMTPInsecureSkipVerify}); err != nil {
 			return err
 		}
 		if err := c.Auth(auth); err != nil {
@@ -250,6 +303,7 @@ func SendEmailWithRetry(cfg model.Config, subj string, body string, attachPath s
 		}
 	}
 	defaultMetrics.Record("email", lastErr)
+	writeDeadLetter(cfg.NotificationDeadLetterDir, "email", "", subj, lastErr, []byte(body))
 	return lastErr
 }
 
@@ -286,6 +340,9 @@ func SendWebhook(ctx context.Context, client model.HTTPClient, cfg model.Config,
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if s := strings.TrimSpace(cfg.WebhookSecret); s != "" {
+		req.Header.Set("X-NCC-Signature", signWebhookBody(s, payload))
+	}
 	for k, v := range cfg.WebhookHeaders {
 		req.Header.Set(k, v)
 	}
@@ -354,6 +411,9 @@ func SendWebhookWithRetry(ctx context.Context, client model.HTTPClient, cfg mode
 		}
 	}
 	defaultMetrics.Record("webhook", lastErr)
+	if body, mErr := json.Marshal(summary); mErr == nil {
+		writeDeadLetter(cfg.NotificationDeadLetterDir, "webhook", summary.Cluster, "", lastErr, body)
+	}
 	return lastErr
 }
 
@@ -464,5 +524,8 @@ func SendSlackWithRetry(ctx context.Context, client model.HTTPClient, cfg model.
 		}
 	}
 	defaultMetrics.Record("slack", lastErr)
+	if body, mErr := json.Marshal(summary); mErr == nil {
+		writeDeadLetter(cfg.NotificationDeadLetterDir, "slack", summary.Cluster, "", lastErr, body)
+	}
 	return lastErr
 }

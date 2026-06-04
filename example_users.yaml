@@ -1,0 +1,37 @@
+# Example local accounts SEED file for the ncc-api-server.
+#
+# You usually do NOT need this file. When the api-server runs with a writable
+# user database (--users-db, the default inside a v2 stack), it bootstraps an
+# initial `admin` account with a random password on first launch (printed to
+# the log and written to a 0600 .ncc-initial-admin-password file). Log in with
+# it, change the password when prompted, then manage users and SSO from the
+# Settings -> Access tab.
+#
+# This file is only a ONE-TIME seed: when both --users-db and --users-file are
+# set and the database is still empty, these accounts are imported into the
+# database (after which the YAML file is ignored). It bypasses the random-admin
+# bootstrap, so prefer it only for automated/provisioned installs.
+#     ncc-api-server --users-db .ncc-api-users.json --users-file example_users.yaml
+#
+# Generate a bcrypt password_hash for each account with:
+#     ncc-api-server --hash-password         # prompts, or reads $NCC_PASSWORD
+#
+# Roles (least to most privileged): viewer < operator < admin
+#   viewer    - read-only: runs, reports, artifacts, logs, metrics
+#   operator  - viewer + trigger/cancel/preflight runs
+#   admin     - everything, including Settings, user/SSO management, token rotation
+#
+# Treat this file as a secret: it controls who can administer the server.
+users:
+  - username: admin
+    # bcrypt hash of "changeme" - REPLACE before using.
+    password_hash: "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+    role: admin
+
+  - username: operator
+    password_hash: "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+    role: operator
+
+  - username: viewer
+    password_hash: "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+    role: viewer

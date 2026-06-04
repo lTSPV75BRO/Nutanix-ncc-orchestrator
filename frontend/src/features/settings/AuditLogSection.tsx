@@ -148,6 +148,24 @@ export function AuditLogSection({ onError }: Props) {
           ),
       },
       {
+        title: "User",
+        key: "user",
+        width: 150,
+        render: (_, row) => {
+          const user = (row.user ?? row.username) as string | undefined;
+          const role = row.role as string | undefined;
+          if (!user) return <span>—</span>;
+          return (
+            <Space size={4} wrap>
+              <Typography.Text style={{ fontSize: 12 }}>{user}</Typography.Text>
+              {role ? (
+                <Tag color={role === "admin" ? "gold" : role === "operator" ? "blue" : "default"}>{role}</Tag>
+              ) : null}
+            </Space>
+          );
+        },
+      },
+      {
         title: "Client",
         key: "client",
         width: 150,

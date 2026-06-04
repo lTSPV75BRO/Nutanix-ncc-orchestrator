@@ -2,10 +2,15 @@ package notify
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +19,50 @@ import (
 
 	"goncc/internal/model"
 )
+
+// TestSignWebhookBody verifies the HMAC-SHA256 signature header is deterministic
+// and matches an independent computation.
+func TestSignWebhookBody(t *testing.T) {
+	body := []byte(`{"cluster":"c1","fail":2}`)
+	got := signWebhookBody("topsecret", body)
+
+	mac := hmac.New(sha256.New, []byte("topsecret"))
+	mac.Write(body)
+	want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	if got != want {
+		t.Fatalf("signature mismatch: got %q want %q", got, want)
+	}
+	if got != signWebhookBody("topsecret", body) {
+		t.Fatalf("signature not deterministic")
+	}
+}
+
+// TestWriteDeadLetter confirms a failed notification is persisted to disk with
+// the channel and error captured.
+func TestWriteDeadLetter(t *testing.T) {
+	dir := t.TempDir()
+	writeDeadLetter(dir, "webhook", "cluster-x", "", errors.New("boom"), []byte(`{"k":"v"}`))
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 dead-letter file, got %d", len(entries))
+	}
+	data, err := os.ReadFile(filepath.Join(dir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	for _, want := range []string{`"channel": "webhook"`, `"cluster": "cluster-x"`, "boom", `{\"k\":\"v\"}`} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("dead-letter missing %q in:\n%s", want, data)
+		}
+	}
+
+	// Empty dir is a no-op (must not panic or create files).
+	writeDeadLetter("", "email", "", "subj", errors.New("x"), []byte("y"))
+}
 
 // TestMetrics covers the accumulator: attempts always increment, failures only
 // on error, snapshot copies under lock, and reset clears.

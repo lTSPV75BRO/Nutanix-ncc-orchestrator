@@ -10,7 +10,6 @@ import (
 	crand "crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/base64"
 	"encoding/csv"
 	"encoding/hex"
@@ -24,7 +23,6 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/exec"
@@ -52,11 +50,13 @@ import (
 	"github.com/vbauerster/mpb/v7"
 	"github.com/vbauerster/mpb/v7/decor"
 	"golang.org/x/term"
+	"goncc/internal/httpclient"
 	"goncc/internal/model"
 	"goncc/internal/nccparse"
 	"goncc/internal/notify"
 	"goncc/internal/promtext"
 	"goncc/internal/retryutil"
+	"goncc/internal/trace"
 	"goncc/internal/v2layout"
 	lumberjack "gopkg.in/natefinch/lumberjack.v2"
 )
@@ -152,11 +152,8 @@ const (
 	defaultExcludeMatchMode    = "exact"
 	maxSecretsFileBytes        = 1 << 20 // 1 MiB
 
-	// HTTP connection pooling defaults
-	defaultMaxIdleConns        = 100
-	defaultMaxIdleConnsPerHost = 10
-	defaultMaxConnsPerHost     = 0 // 0 = unlimited
-	defaultIdleConnTimeout     = 90 * time.Second
+	// HTTP connection pooling defaults live in goncc/internal/httpclient
+	// (DefaultMaxIdleConns / DefaultMaxIdleConnsPerHost / DefaultIdleConnTimeout).
 
 	// Graceful shutdown
 	shutdownTimeout = 30 * time.Second
@@ -1572,7 +1569,7 @@ func validateConfigFileRawTypes() error {
 		"skip-preflight-check": true,
 		"clusters":             true, "clusters-file": true, "cluster-source-mode": true, "pcs": true, "pcs-file": true, "prism-central-url": true, "discover-api-version": true,
 		"username": true, "password": true, "ncc-api-version": true, "nutanix-v4-api-version": true,
-		"insecure-skip-verify": true, "timeout": true, "request-timeout": true, "poll-interval": true, "poll-jitter": true,
+		"insecure-skip-verify": true, "ca-bundle": true, "pin-sha256": true, "timeout": true, "request-timeout": true, "poll-interval": true, "poll-jitter": true,
 		"max-parallel": true, "outputs": true, "output-dir-logs": true, "output-dir-filtered": true,
 		"single-report": true, "run-history": true, "run-history-dir": true, "retain-last": true, "retain-days": true, "artifact-retain-days": true, "artifact-retain-max-files": true,
 		"notify-on-regression": true, "adaptive-parallelism": true,
@@ -1585,11 +1582,12 @@ func validateConfigFileRawTypes() error {
 		"gen-test-agg":  true,
 		"email-enabled": true, "email-attach-html": true, "notify-digest": true,
 		"smtp-server": true, "smtp-port": true, "smtp-user": true, "smtp-password": true,
-		"email-from": true, "email-to": true, "email-use-tls": true,
+		"email-from": true, "email-to": true, "email-use-tls": true, "smtp-insecure-skip-verify": true,
 		"email-subject-template": true, "email-body-template": true,
-		"webhook-enabled": true, "webhook-include-html": true, "webhook-url": true, "webhook-headers": true, "webhook-template": true,
+		"webhook-enabled": true, "webhook-include-html": true, "webhook-url": true, "webhook-headers": true, "webhook-template": true, "webhook-secret": true,
 		"slack-enabled": true, "slack-webhook-url": true, "slack-channel": true,
-		"secrets-provider": true, "secrets-file": true,
+		"notification-deadletter-dir": true,
+		"secrets-provider":            true, "secrets-file": true,
 	}
 	for key := range viper.AllSettings() {
 		// Only enforce unknown-key checks for keys that actually come from config file.
@@ -1609,9 +1607,10 @@ func validateConfigFileRawTypes() error {
 		"outputs", "output-dir-logs", "output-dir-filtered", "run-history-dir",
 		"log-file", "log-level", "retry-base-delay", "retry-max-delay", "prom-dir",
 		"severity-filter", "exclude-alert-titles", "exclude-alert-titles-file", "exclude-alert-match-mode", "idle-conn-timeout", "policy-gates", "quiet-hours", "maintenance-windows",
+		"ca-bundle", "pin-sha256",
 		"smtp-server", "smtp-user", "smtp-password", "email-from", "email-to",
 		"email-subject-template", "email-body-template",
-		"webhook-url", "webhook-template", "slack-webhook-url", "slack-channel", "secrets-provider", "secrets-file",
+		"webhook-url", "webhook-template", "webhook-secret", "notification-deadletter-dir", "slack-webhook-url", "slack-channel", "secrets-provider", "secrets-file",
 	}
 	for _, key := range stringKeys {
 		if !viper.InConfig(key) {
@@ -1628,7 +1627,7 @@ func validateConfigFileRawTypes() error {
 		"insecure-skip-verify", "dry-run", "replay", "log-http",
 		"prom-enabled",
 		"run-history", "single-report", "notify-on-regression", "adaptive-parallelism",
-		"email-enabled", "email-attach-html", "notify-digest", "email-use-tls",
+		"email-enabled", "email-attach-html", "notify-digest", "email-use-tls", "smtp-insecure-skip-verify",
 		"webhook-enabled", "webhook-include-html", "slack-enabled",
 	}
 	for _, key := range boolKeys {
@@ -1762,80 +1761,85 @@ func bindConfig() (Config, error) {
 		return Config{}, fmt.Errorf("ncc-api-version: %w", err)
 	}
 	cfg := Config{
-		Clusters:               clustersFromFlag,
-		ClustersFile:           clustersFile,
-		ClusterCredentials:     clusterCreds,
-		ClusterSourceMode:      clusterSourceMode,
-		PCs:                    pcsFromFlag,
-		PCsFile:                pcsFile,
-		PrismCentralURL:        strings.TrimSpace(viper.GetString("prism-central-url")),
-		DiscoverAPIVersion:     strings.TrimSpace(viper.GetString("discover-api-version")),
-		Username:               viper.GetString("username"),
-		Password:               viper.GetString("password"),
-		InsecureSkipVerify:     viper.GetBool("insecure-skip-verify"),
-		Timeout:                mustParseDur(viper.GetString("timeout"), defaultTimeout),
-		RequestTimeout:         mustParseDur(viper.GetString("request-timeout"), defaultRequestTimeout),
-		PollInterval:           mustParseDur(viper.GetString("poll-interval"), defaultPollInterval),
-		PollJitter:             mustParseDur(viper.GetString("poll-jitter"), defaultPollJitter),
-		OutputDirLogs:          viper.GetString("output-dir-logs"),
-		OutputDirFiltered:      viper.GetString("output-dir-filtered"),
-		OutputFormats:          splitCSV(viper.GetString("outputs")),
-		MaxParallel:            viper.GetInt("max-parallel"),
-		TLSMinVersion:          tls.VersionTLS12,
-		LogFile:                viper.GetString("log-file"),
-		LogLevel:               viper.GetString("log-level"),
-		LogHTTP:                viper.GetBool("log-http"),
-		RetryMaxAttempts:       viper.GetInt("retry-max-attempts"),
-		RetryBaseDelay:         mustParseDur(viper.GetString("retry-base-delay"), defaultRetryBaseDelay),
-		RetryMaxDelay:          mustParseDur(viper.GetString("retry-max-delay"), defaultRetryMaxDelay),
-		RetryCircuitBreaker:    viper.GetInt("retry-circuit-breaker"),
-		MaxIdleConns:           viper.GetInt("max-idle-conns"),
-		MaxIdleConnsPerHost:    viper.GetInt("max-idle-conns-per-host"),
-		MaxConnsPerHost:        viper.GetInt("max-conns-per-host"),
-		IdleConnTimeout:        mustParseDur(viper.GetString("idle-conn-timeout"), defaultIdleConnTimeout),
-		EmailEnabled:           viper.GetBool("email-enabled"),
-		EmailAttachHTML:        viper.GetBool("email-attach-html"),
-		NotifyDigest:           viper.GetBool("notify-digest"),
-		SMTPServer:             viper.GetString("smtp-server"),
-		SMTPPort:               viper.GetInt("smtp-port"),
-		SMTPUser:               viper.GetString("smtp-user"),
-		SMTPPassword:           viper.GetString("smtp-password"),
-		EmailFrom:              viper.GetString("email-from"),
-		EmailTo:                splitCSV(viper.GetString("email-to")),
-		EmailUseTLS:            viper.GetBool("email-use-tls"),
-		EmailSubjectTemplate:   viper.GetString("email-subject-template"),
-		EmailBodyTemplate:      viper.GetString("email-body-template"),
-		WebhookEnabled:         viper.GetBool("webhook-enabled"),
-		WebhookIncludeHTML:     viper.GetBool("webhook-include-html"),
-		WebhookURL:             viper.GetString("webhook-url"),
-		WebhookHeaders:         viper.GetStringMapString("webhook-headers"),
-		WebhookTemplate:        viper.GetString("webhook-template"),
-		SeverityFilter:         splitCSV(viper.GetString("severity-filter")),
-		ExcludeAlertTitles:     splitCSV(viper.GetString("exclude-alert-titles")),
-		ExcludeAlertTitlesFile: strings.TrimSpace(viper.GetString("exclude-alert-titles-file")),
-		ExcludeAlertMatchMode:  strings.TrimSpace(viper.GetString("exclude-alert-match-mode")),
-		DryRun:                 viper.GetBool("dry-run"),
-		RunHistoryEnabled:      viper.GetBool("run-history"),
-		RunHistoryDir:          strings.TrimSpace(viper.GetString("run-history-dir")),
-		RetainLastRuns:         viper.GetInt("retain-last"),
-		RetainDays:             viper.GetInt("retain-days"),
-		ArtifactRetainDays:     viper.GetInt("artifact-retain-days"),
-		ArtifactRetainMaxFiles: viper.GetInt("artifact-retain-max-files"),
-		SingleReport:           viper.GetBool("single-report"),
-		NotifyOnRegression:     viper.GetBool("notify-on-regression"),
-		AdaptiveParallelism:    viper.GetBool("adaptive-parallelism"),
-		PolicyGates:            splitCSV(viper.GetString("policy-gates")),
-		QuietHours:             strings.TrimSpace(viper.GetString("quiet-hours")),
-		MaintenanceWindows:     splitCSV(viper.GetString("maintenance-windows")),
-		FlakyLookbackRuns:      viper.GetInt("flaky-lookback-runs"),
-		FlakyMinTransitions:    viper.GetInt("flaky-min-transitions"),
-		SlackEnabled:           viper.GetBool("slack-enabled"),
-		SlackWebhookURL:        viper.GetString("slack-webhook-url"),
-		SlackChannel:           viper.GetString("slack-channel"),
-		SecretsProvider:        strings.TrimSpace(viper.GetString("secrets-provider")),
-		SecretsFile:            strings.TrimSpace(viper.GetString("secrets-file")),
-		NCCAPIVersion:          nccAPIVer,
-		NutanixV4APIVersion:    strings.ToLower(strings.TrimSpace(viper.GetString("nutanix-v4-api-version"))),
+		Clusters:                  clustersFromFlag,
+		ClustersFile:              clustersFile,
+		ClusterCredentials:        clusterCreds,
+		ClusterSourceMode:         clusterSourceMode,
+		PCs:                       pcsFromFlag,
+		PCsFile:                   pcsFile,
+		PrismCentralURL:           strings.TrimSpace(viper.GetString("prism-central-url")),
+		DiscoverAPIVersion:        strings.TrimSpace(viper.GetString("discover-api-version")),
+		Username:                  viper.GetString("username"),
+		Password:                  viper.GetString("password"),
+		InsecureSkipVerify:        viper.GetBool("insecure-skip-verify"),
+		CABundle:                  strings.TrimSpace(viper.GetString("ca-bundle")),
+		PinSHA256:                 splitCSV(viper.GetString("pin-sha256")),
+		Timeout:                   mustParseDur(viper.GetString("timeout"), defaultTimeout),
+		RequestTimeout:            mustParseDur(viper.GetString("request-timeout"), defaultRequestTimeout),
+		PollInterval:              mustParseDur(viper.GetString("poll-interval"), defaultPollInterval),
+		PollJitter:                mustParseDur(viper.GetString("poll-jitter"), defaultPollJitter),
+		OutputDirLogs:             viper.GetString("output-dir-logs"),
+		OutputDirFiltered:         viper.GetString("output-dir-filtered"),
+		OutputFormats:             splitCSV(viper.GetString("outputs")),
+		MaxParallel:               viper.GetInt("max-parallel"),
+		TLSMinVersion:             tls.VersionTLS12,
+		LogFile:                   viper.GetString("log-file"),
+		LogLevel:                  viper.GetString("log-level"),
+		LogHTTP:                   viper.GetBool("log-http"),
+		RetryMaxAttempts:          viper.GetInt("retry-max-attempts"),
+		RetryBaseDelay:            mustParseDur(viper.GetString("retry-base-delay"), defaultRetryBaseDelay),
+		RetryMaxDelay:             mustParseDur(viper.GetString("retry-max-delay"), defaultRetryMaxDelay),
+		RetryCircuitBreaker:       viper.GetInt("retry-circuit-breaker"),
+		MaxIdleConns:              viper.GetInt("max-idle-conns"),
+		MaxIdleConnsPerHost:       viper.GetInt("max-idle-conns-per-host"),
+		MaxConnsPerHost:           viper.GetInt("max-conns-per-host"),
+		IdleConnTimeout:           mustParseDur(viper.GetString("idle-conn-timeout"), httpclient.DefaultIdleConnTimeout),
+		EmailEnabled:              viper.GetBool("email-enabled"),
+		EmailAttachHTML:           viper.GetBool("email-attach-html"),
+		NotifyDigest:              viper.GetBool("notify-digest"),
+		SMTPServer:                viper.GetString("smtp-server"),
+		SMTPPort:                  viper.GetInt("smtp-port"),
+		SMTPUser:                  viper.GetString("smtp-user"),
+		SMTPPassword:              viper.GetString("smtp-password"),
+		EmailFrom:                 viper.GetString("email-from"),
+		EmailTo:                   splitCSV(viper.GetString("email-to")),
+		EmailUseTLS:               viper.GetBool("email-use-tls"),
+		SMTPInsecureSkipVerify:    viper.GetBool("smtp-insecure-skip-verify"),
+		EmailSubjectTemplate:      viper.GetString("email-subject-template"),
+		EmailBodyTemplate:         viper.GetString("email-body-template"),
+		WebhookEnabled:            viper.GetBool("webhook-enabled"),
+		WebhookIncludeHTML:        viper.GetBool("webhook-include-html"),
+		WebhookURL:                viper.GetString("webhook-url"),
+		WebhookHeaders:            viper.GetStringMapString("webhook-headers"),
+		WebhookTemplate:           viper.GetString("webhook-template"),
+		WebhookSecret:             viper.GetString("webhook-secret"),
+		NotificationDeadLetterDir: strings.TrimSpace(viper.GetString("notification-deadletter-dir")),
+		SeverityFilter:            splitCSV(viper.GetString("severity-filter")),
+		ExcludeAlertTitles:        splitCSV(viper.GetString("exclude-alert-titles")),
+		ExcludeAlertTitlesFile:    strings.TrimSpace(viper.GetString("exclude-alert-titles-file")),
+		ExcludeAlertMatchMode:     strings.TrimSpace(viper.GetString("exclude-alert-match-mode")),
+		DryRun:                    viper.GetBool("dry-run"),
+		RunHistoryEnabled:         viper.GetBool("run-history"),
+		RunHistoryDir:             strings.TrimSpace(viper.GetString("run-history-dir")),
+		RetainLastRuns:            viper.GetInt("retain-last"),
+		RetainDays:                viper.GetInt("retain-days"),
+		ArtifactRetainDays:        viper.GetInt("artifact-retain-days"),
+		ArtifactRetainMaxFiles:    viper.GetInt("artifact-retain-max-files"),
+		SingleReport:              viper.GetBool("single-report"),
+		NotifyOnRegression:        viper.GetBool("notify-on-regression"),
+		AdaptiveParallelism:       viper.GetBool("adaptive-parallelism"),
+		PolicyGates:               splitCSV(viper.GetString("policy-gates")),
+		QuietHours:                strings.TrimSpace(viper.GetString("quiet-hours")),
+		MaintenanceWindows:        splitCSV(viper.GetString("maintenance-windows")),
+		FlakyLookbackRuns:         viper.GetInt("flaky-lookback-runs"),
+		FlakyMinTransitions:       viper.GetInt("flaky-min-transitions"),
+		SlackEnabled:              viper.GetBool("slack-enabled"),
+		SlackWebhookURL:           viper.GetString("slack-webhook-url"),
+		SlackChannel:              viper.GetString("slack-channel"),
+		SecretsProvider:           strings.TrimSpace(viper.GetString("secrets-provider")),
+		SecretsFile:               strings.TrimSpace(viper.GetString("secrets-file")),
+		NCCAPIVersion:             nccAPIVer,
+		NutanixV4APIVersion:       strings.ToLower(strings.TrimSpace(viper.GetString("nutanix-v4-api-version"))),
 	}
 	// Apply defaults
 	if cfg.NutanixV4APIVersion == "" {
@@ -2157,180 +2161,14 @@ func readBodyWithLimit(body io.ReadCloser, maxBytes int64, context string) ([]by
 }
 
 // ==================== HTTP Client and File System ====================
+// The HTTP client builder (connection pooling, TLS policy, redacted logging
+// transport) was extracted to goncc/internal/httpclient. OSFS (the os-backed
+// FS implementation) now lives in goncc/internal/model next to the FS
+// interface. These aliases keep the existing call sites in this package
+// unchanged.
+var NewHTTPClient = httpclient.New
 
-type LoggingTransport struct {
-	Base    http.RoundTripper
-	MaxBody int // bytes; 0 = unlimited
-}
-
-// redactHTTPDump masks Authorization and other sensitive headers/body in HTTP dumps for logging.
-func redactHTTPDump(dump []byte, maxBody int) []byte {
-	lines := bytes.SplitAfter(dump, []byte("\n"))
-	var out []byte
-	for _, line := range lines {
-		if bytes.HasPrefix(bytes.TrimLeft(line, " \t"), []byte("Authorization:")) ||
-			bytes.HasPrefix(bytes.TrimLeft(line, " \t"), []byte("authorization:")) {
-			out = append(out, []byte("Authorization: [REDACTED]\r\n")...)
-			continue
-		}
-		if bytes.HasPrefix(bytes.TrimLeft(line, " \t"), []byte("Cookie:")) ||
-			bytes.HasPrefix(bytes.TrimLeft(line, " \t"), []byte("cookie:")) {
-			out = append(out, []byte("Cookie: [REDACTED]\r\n")...)
-			continue
-		}
-		out = append(out, line...)
-	}
-	// If body looks like JSON and contains password field, mask the value
-	if bytes.Contains(out, []byte(`"password"`)) || bytes.Contains(out, []byte(`"Password"`)) {
-		out = redactJSONPasswordValue(out)
-	}
-	if maxBody > 0 && len(out) > maxBody {
-		out = append(append([]byte(nil), out[:maxBody]...), []byte("...[truncated]")...)
-	}
-	return out
-}
-
-func redactJSONPasswordValue(b []byte) []byte {
-	// Replace "password":"<anything>" or "password": "<anything>" with "password":"[REDACTED]"
-	i := 0
-	for {
-		idx := bytes.Index(b[i:], []byte(`"password"`))
-		if idx < 0 {
-			idx = bytes.Index(b[i:], []byte(`"Password"`))
-		}
-		if idx < 0 {
-			break
-		}
-		start := i + idx
-		i = start + 10 // past the key
-		// Skip whitespace and colon
-		for i < len(b) && (b[i] == ' ' || b[i] == '\t' || b[i] == ':') {
-			i++
-		}
-		for i < len(b) && (b[i] == ' ' || b[i] == '\t') {
-			i++
-		}
-		if i >= len(b) {
-			break
-		}
-		// Find value end (string or number)
-		valueStart := i
-		if b[i] == '"' {
-			i++
-			for i < len(b) && b[i] != '"' {
-				if b[i] == '\\' {
-					i++
-				}
-				i++
-			}
-			if i < len(b) {
-				i++
-			}
-		} else {
-			for i < len(b) && b[i] != ',' && b[i] != '}' && b[i] != '\n' && b[i] != '\r' {
-				i++
-			}
-		}
-		// Replace value with [REDACTED]
-		replacement := []byte(`"[REDACTED]"`)
-		b = append(append(append([]byte(nil), b[:valueStart]...), replacement...), b[i:]...)
-		i = valueStart + len(replacement)
-	}
-	return b
-}
-
-func (t *LoggingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	base := t.Base
-	if base == nil {
-		base = http.DefaultTransport
-	}
-	if d, err := httputil.DumpRequestOut(req, true); err == nil {
-		dump := redactHTTPDump(d, t.MaxBody)
-		log.Debug().
-			Str("method", req.Method).
-			Str("url", req.URL.String()).
-			RawJSON("request_dump", dump).
-			Msg("http request")
-	}
-	resp, err := base.RoundTrip(req)
-	if err != nil {
-		log.Error().Err(err).Str("url", req.URL.String()).Msg("http roundtrip error")
-		return nil, err
-	}
-	if resp != nil {
-		if d, err := httputil.DumpResponse(resp, true); err == nil {
-			dump := redactHTTPDump(d, t.MaxBody)
-			log.Debug().
-				Int("status", resp.StatusCode).
-				RawJSON("response_dump", dump).
-				Msg("http response")
-		}
-	}
-	return resp, nil
-}
-
-func NewHTTPClient(cfg Config) *http.Client {
-	// Apply defaults for connection pooling
-	maxIdleConns := cfg.MaxIdleConns
-	if maxIdleConns <= 0 {
-		maxIdleConns = defaultMaxIdleConns
-	}
-	maxIdleConnsPerHost := cfg.MaxIdleConnsPerHost
-	if maxIdleConnsPerHost <= 0 {
-		maxIdleConnsPerHost = defaultMaxIdleConnsPerHost
-	}
-	idleConnTimeout := cfg.IdleConnTimeout
-	if idleConnTimeout <= 0 {
-		idleConnTimeout = defaultIdleConnTimeout
-	}
-
-	tlsCfg := &tls.Config{
-		InsecureSkipVerify: cfg.InsecureSkipVerify,
-		MinVersion:         cfg.TLSMinVersion,
-	}
-	// When insecure mode is on, use a custom verifier that accepts any cert so we bypass
-	// strict x509 "not standards compliant" checks that some Prism certs trigger.
-	if cfg.InsecureSkipVerify {
-		tlsCfg.VerifyPeerCertificate = func([][]byte, [][]*x509.Certificate) error { return nil }
-	}
-	tr := &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout:   5 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		TLSHandshakeTimeout:   5 * time.Second,
-		ResponseHeaderTimeout: 10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		TLSClientConfig:       tlsCfg,
-		// Production-ready connection pooling
-		MaxIdleConns:        maxIdleConns,
-		MaxIdleConnsPerHost: maxIdleConnsPerHost,
-		MaxConnsPerHost:     cfg.MaxConnsPerHost, // 0 = unlimited
-		IdleConnTimeout:     idleConnTimeout,
-		DisableKeepAlives:   false,
-		ForceAttemptHTTP2:   true, // Enable HTTP/2 for better performance
-	}
-	rt := http.RoundTripper(tr)
-	if cfg.LogHTTP || os.Getenv("LOG_HTTP") == "1" {
-		rt = &LoggingTransport{Base: tr, MaxBody: 64 * 1024}
-	}
-	return &http.Client{
-		Timeout:   cfg.RequestTimeout, // Use request timeout, not overall timeout
-		Transport: rt,
-	}
-}
-
-// ==================== File System Interface ====================
-
-type OSFS struct{}
-
-func (OSFS) MkdirAll(path string, perm os.FileMode) error { return os.MkdirAll(path, perm) }
-func (OSFS) WriteFile(path string, data []byte, perm os.FileMode) error {
-	return os.WriteFile(path, data, perm)
-}
-func (OSFS) ReadFile(path string) ([]byte, error)       { return os.ReadFile(path) }
-func (OSFS) ReadDir(path string) ([]os.DirEntry, error) { return os.ReadDir(path) }
-func (OSFS) Create(path string) (*os.File, error)       { return os.Create(path) }
+type OSFS = model.OSFS
 
 // ==================== Prometheus Metrics ====================
 // The Prometheus textfile writers were extracted to goncc/internal/promtext.
@@ -7928,6 +7766,7 @@ type v2StartOptions struct {
 	APICORSOrigins              string
 	UIAllowedOrigins            string
 	TokenFile                   string
+	UsersDB                     string
 	APIAuthMode                 string
 	APISessionTTL               time.Duration
 	APISessionSecret            string
@@ -8669,6 +8508,522 @@ func processIsAlive(pid int) bool {
 	return true
 }
 
+// ---- v2 backup / restore --------------------------------------------------
+//
+// backup/restore capture the *stateful* contents of a v2 install dir — the
+// config and its referenced files (clusters / alert-exclusions / secrets), the
+// local user database (accounts, roles, SAML config, session policy), the API
+// token, the first-run admin password (if still present), and the scheduler /
+// notifications state — into a single tar.gz. Regenerable artifacts (binaries,
+// frontend bundle, logs, run/ pid files, output/ncc files) are intentionally
+// excluded. The archive contains secrets, so it is written 0600 and restore is
+// confined strictly to the install dir.
+
+// backupManifest is the JSON index written at the root of a backup archive so
+// restore can validate the archive and report its provenance. Tool/Version
+// (plus Stream/BuildDate/GoVersion) record the exact ncc-orchestrator binary
+// that produced the backup, so restore can report it and warn on a version
+// mismatch.
+type backupManifest struct {
+	Tool       string   `json:"tool"`
+	Version    string   `json:"version"`              // ncc-orchestrator version that created the backup
+	Stream     string   `json:"stream,omitempty"`     // release stream (prod/dev/beta)
+	BuildDate  string   `json:"build_date,omitempty"` // build timestamp of the creating binary
+	GoVersion  string   `json:"go_version,omitempty"` // Go toolchain of the creating binary
+	CreatedAt  string   `json:"created_at"`
+	InstallDir string   `json:"install_dir"`
+	Files      []string `json:"files"`
+}
+
+// backupEntry pairs an on-disk absolute path with the archive-relative path it
+// is stored under (always relative to the install dir).
+type backupEntry struct {
+	Rel string
+	Abs string
+}
+
+type v2BackupOptions struct {
+	InstallDir string
+	OutputFile string
+}
+
+type v2RestoreOptions struct {
+	InstallDir string
+	InputFile  string
+	Force      bool
+	Restart    bool
+}
+
+type v2ResetPasswordOptions struct {
+	InstallDir   string
+	User         string
+	UsersDB      string
+	UsersDBSec   string
+	UsersDBSecNS string
+}
+
+// runV2ResetPassword recovers a lost account password offline by invoking the
+// api-server's --reset-password against the same user store the stack uses. It
+// locates the api binary in the install dir, defaults the user database to
+// <install-dir>/.ncc-api-users.json (unless a Secret or explicit path is
+// given), streams the child's output (which prints the new temporary
+// password), and reminds the operator to restart the stack so it takes effect.
+func runV2ResetPassword(opts v2ResetPasswordOptions) error {
+	installDir := strings.TrimSpace(opts.InstallDir)
+	if installDir == "" {
+		installDir = defaultV2InstallDir()
+	}
+	if abs, err := filepath.Abs(installDir); err == nil {
+		installDir = abs
+	}
+	if st, err := os.Stat(installDir); err != nil || !st.IsDir() {
+		return fmt.Errorf("install dir not found: %s", installDir)
+	}
+	user := strings.TrimSpace(opts.User)
+	if user == "" {
+		user = "admin"
+	}
+	apiBin, _ := resolveV2APIBinary(installDir)
+	if apiBin == "" {
+		return fmt.Errorf("ncc-api-server binary not found near %s; place it in the install dir or on PATH", installDir)
+	}
+
+	args := []string{"--reset-password", user}
+	usingSecret := strings.TrimSpace(opts.UsersDBSec) != ""
+	if usingSecret {
+		args = append(args, "--users-db-secret", strings.TrimSpace(opts.UsersDBSec))
+		if ns := strings.TrimSpace(opts.UsersDBSecNS); ns != "" {
+			args = append(args, "--users-db-secret-namespace", ns)
+		}
+	} else {
+		usersDB := strings.TrimSpace(opts.UsersDB)
+		if usersDB == "" {
+			usersDB = filepath.Join(installDir, ".ncc-api-users.json")
+		}
+		if abs, err := filepath.Abs(usersDB); err == nil {
+			usersDB = abs
+		}
+		if !isRegularFile(usersDB) {
+			return fmt.Errorf("user database not found: %s (start the stack once to bootstrap it, or pass --users-db / --users-db-secret)", usersDB)
+		}
+		args = append(args, "--users-db", usersDB)
+	}
+
+	c := exec.Command(apiBin, args...)
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	if err := c.Run(); err != nil {
+		return fmt.Errorf("reset-password (%s): %w", apiBin, err)
+	}
+	if running, _ := v2StackRunning(installDir); running {
+		fmt.Println("\nNOTE: the stack is currently running and caches accounts in memory.")
+		fmt.Println("      Run 'ncc-orchestrator v2-stop' then 'ncc-orchestrator v2-start' for the new password to take effect.")
+	} else {
+		fmt.Println("\nStart the stack with 'ncc-orchestrator v2-start'; log in with the temporary password and change it at first login.")
+	}
+	return nil
+}
+
+// isRegularFile reports whether path exists and is a regular (non-dir) file.
+func isRegularFile(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && !st.IsDir()
+}
+
+// sensitiveBackupName reports whether a backed-up file holds secrets and must be
+// (re)written with 0600 perms: the auth token, user DB, bootstrap admin
+// password, and any config-referenced secrets file.
+func sensitiveBackupName(rel string) bool {
+	base := strings.ToLower(filepath.Base(rel))
+	switch {
+	case strings.HasPrefix(base, ".ncc-api-"),
+		base == ".ncc-initial-admin-password",
+		strings.Contains(base, "secret"):
+		return true
+	}
+	return false
+}
+
+// extractConfigRefPath pulls a `key: value` file path out of raw config.yaml
+// content for the small set of file-reference keys. Kept local so the
+// orchestrator binary needs no api-server internals. Returns "" when absent or
+// explicitly unset.
+func extractConfigRefPath(content, key string) string {
+	rx := regexp.MustCompile(`(?im)^\s*` + regexp.QuoteMeta(key) + `\s*:\s*(.+?)\s*$`)
+	m := rx.FindStringSubmatch(content)
+	if m == nil {
+		return ""
+	}
+	v := strings.TrimSpace(m[1])
+	// Strip a trailing inline comment (best-effort; paths rarely contain " #").
+	if i := strings.Index(v, " #"); i >= 0 {
+		v = strings.TrimSpace(v[:i])
+	}
+	v = strings.Trim(v, `"'`)
+	if v == "" || v == "~" || strings.EqualFold(v, "null") {
+		return ""
+	}
+	return v
+}
+
+// collectBackupEntries returns the config/auth/state files to capture from an
+// install dir. Files that resolve outside the install dir (e.g. a
+// config-referenced file placed elsewhere) are reported via skipped so the
+// caller can warn; the archive is always confined to the install dir so restore
+// can never write outside it.
+func collectBackupEntries(installDir string) (entries []backupEntry, skipped []string) {
+	seen := map[string]bool{}
+	add := func(abs string) {
+		abs = filepath.Clean(abs)
+		if !isRegularFile(abs) {
+			return
+		}
+		rel, err := filepath.Rel(installDir, abs)
+		if err != nil || rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+			skipped = append(skipped, abs)
+			return
+		}
+		if seen[rel] {
+			return
+		}
+		seen[rel] = true
+		entries = append(entries, backupEntry{Rel: filepath.ToSlash(rel), Abs: abs})
+	}
+
+	// Core auth/state files, by convention at the install-dir root.
+	for _, name := range []string{
+		"config.yaml",
+		".ncc-api-users.json",
+		".ncc-api-token",
+		".ncc-initial-admin-password",
+		".ncc-api-schedule.json",
+		".ncc-api-notifications.json",
+	} {
+		add(filepath.Join(installDir, name))
+	}
+
+	// Sweep any other api-server state the install may hold at its root
+	// (e.g. future ".ncc-api-*" files), so backups stay complete as new
+	// runtime state is added without having to revisit this list. seen[]
+	// dedupes against the explicit names above.
+	if matches, err := filepath.Glob(filepath.Join(installDir, ".ncc-api-*")); err == nil {
+		for _, m := range matches {
+			add(m)
+		}
+	}
+
+	// JSONL audit log (security/action history). In a standard v2 install the
+	// api-server writes it under <install-dir>/logs/ncc-audit.log; add() is a
+	// no-op when it is absent or rolled elsewhere.
+	add(filepath.Join(installDir, "logs", "ncc-audit.log"))
+
+	// Config-referenced files (clusters list / alert-exclusions / secrets).
+	if content, err := os.ReadFile(filepath.Join(installDir, "config.yaml")); err == nil {
+		for _, key := range []string{"clusters-file", "exclude-alert-titles-file", "secrets-file"} {
+			raw := extractConfigRefPath(string(content), key)
+			if raw == "" {
+				continue
+			}
+			p := raw
+			if !filepath.IsAbs(p) {
+				p = filepath.Join(installDir, p)
+			}
+			add(p)
+		}
+	}
+	return entries, skipped
+}
+
+// tarWriteBytes writes one in-memory file into a tar stream.
+func tarWriteBytes(tw *tar.Writer, name string, data []byte, mode int64) error {
+	hdr := &tar.Header{Name: name, Size: int64(len(data)), Mode: mode, ModTime: time.Now()}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return err
+	}
+	_, err := tw.Write(data)
+	return err
+}
+
+// writeBackupArchive serializes the manifest + entries into a tar.gz at out
+// (created 0600 because it contains secrets).
+func writeBackupArchive(out string, manifest backupManifest, entries []backupEntry) error {
+	f, err := os.OpenFile(out, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	mb, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := tarWriteBytes(tw, "manifest.json", mb, 0o600); err != nil {
+		return err
+	}
+	for _, e := range entries {
+		data, err := os.ReadFile(e.Abs)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", e.Abs, err)
+		}
+		mode := int64(0o644)
+		if sensitiveBackupName(e.Rel) {
+			mode = 0o600
+		}
+		if err := tarWriteBytes(tw, "data/"+e.Rel, data, mode); err != nil {
+			return err
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	return gz.Close()
+}
+
+func runV2Backup(opts v2BackupOptions) error {
+	installDir := strings.TrimSpace(opts.InstallDir)
+	if installDir == "" {
+		installDir = defaultV2InstallDir()
+	}
+	if abs, err := filepath.Abs(installDir); err == nil {
+		installDir = abs
+	}
+	if st, err := os.Stat(installDir); err != nil || !st.IsDir() {
+		return fmt.Errorf("install dir not found: %s", installDir)
+	}
+	entries, skipped := collectBackupEntries(installDir)
+	if len(entries) == 0 {
+		return fmt.Errorf("nothing to back up under %s (no config.yaml, user database, or state files found)", installDir)
+	}
+	out := strings.TrimSpace(opts.OutputFile)
+	if out == "" {
+		out = fmt.Sprintf("ncc-backup-%s.tar.gz", time.Now().UTC().Format("20060102T150405Z"))
+	}
+	if abs, err := filepath.Abs(out); err == nil {
+		out = abs
+	}
+	rels := make([]string, 0, len(entries))
+	for _, e := range entries {
+		rels = append(rels, e.Rel)
+	}
+	manifest := backupManifest{
+		Tool:       "ncc-orchestrator",
+		Version:    Version,
+		Stream:     Stream,
+		BuildDate:  BuildDate,
+		GoVersion:  GoVersion,
+		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+		InstallDir: installDir,
+		Files:      rels,
+	}
+	if err := writeBackupArchive(out, manifest, entries); err != nil {
+		return err
+	}
+	fmt.Printf("Backup written: %s\n", out)
+	fmt.Printf("created by:     ncc-orchestrator %s (%s, built %s)\n", Version, Stream, BuildDate)
+	fmt.Printf("install-dir:    %s\n", installDir)
+	fmt.Printf("files (%d):\n", len(entries))
+	for _, e := range entries {
+		fmt.Printf("  - %s\n", e.Rel)
+	}
+	for _, s := range skipped {
+		fmt.Printf("  ! skipped (resolves outside install dir, not archived): %s\n", s)
+	}
+	fmt.Println("\nThis archive contains secrets (API token, password hashes, SAML key). It was created with 0600 permissions; store it securely.")
+	return nil
+}
+
+// v2StackRunning reports whether any of the stack's pid files point at a live
+// process, so restore can refuse to overwrite a running install dir.
+func v2StackRunning(installDir string) (bool, string) {
+	runDir := filepath.Join(installDir, "run")
+	for _, name := range []string{"v2-api.pid", "v2-ui.pid", "v2-api-supervisor.pid", "v2-ui-supervisor.pid"} {
+		if pid, err := readPIDFromFile(filepath.Join(runDir, name)); err == nil && processIsAlive(pid) {
+			return true, name
+		}
+	}
+	return false, ""
+}
+
+func runV2Restore(opts v2RestoreOptions) error {
+	installDir := strings.TrimSpace(opts.InstallDir)
+	if installDir == "" {
+		installDir = defaultV2InstallDir()
+	}
+	if abs, err := filepath.Abs(installDir); err == nil {
+		installDir = abs
+	}
+	in := strings.TrimSpace(opts.InputFile)
+	if in == "" {
+		return fmt.Errorf("--input-file is required (path to a backup archive)")
+	}
+	if abs, err := filepath.Abs(in); err == nil {
+		in = abs
+	}
+	// Refuse to clobber a running stack unless forced.
+	if !opts.Force {
+		if running, which := v2StackRunning(installDir); running {
+			return fmt.Errorf("stack appears to be running (%s alive); stop it with 'v2-stop' first, or pass --force", which)
+		}
+	}
+
+	f, err := os.Open(in)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return fmt.Errorf("open archive %s: %w", in, err)
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+
+	var manifest *backupManifest
+	type pendingFile struct {
+		rel  string
+		mode int64
+		data []byte
+	}
+	var files []pendingFile
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("read archive: %w", err)
+		}
+		if hdr.FileInfo().IsDir() {
+			continue
+		}
+		data, err := io.ReadAll(io.LimitReader(tr, 32<<20)) // 32 MiB/file cap
+		if err != nil {
+			return err
+		}
+		switch {
+		case hdr.Name == "manifest.json":
+			var m backupManifest
+			if err := json.Unmarshal(data, &m); err != nil {
+				return fmt.Errorf("invalid manifest.json in archive: %w", err)
+			}
+			manifest = &m
+		case strings.HasPrefix(hdr.Name, "data/"):
+			rel := strings.TrimPrefix(hdr.Name, "data/")
+			clean := filepath.Clean(filepath.FromSlash(rel))
+			if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || filepath.IsAbs(clean) {
+				return fmt.Errorf("archive contains an unsafe path: %q", hdr.Name)
+			}
+			files = append(files, pendingFile{rel: clean, mode: hdr.Mode, data: data})
+		}
+	}
+	if manifest == nil {
+		return fmt.Errorf("archive is missing manifest.json (not an ncc backup?)")
+	}
+	if len(files) == 0 {
+		return fmt.Errorf("archive contains no files to restore")
+	}
+
+	// Resolve targets, enforce install-dir confinement, and detect overwrites.
+	targets := make([]string, len(files))
+	var existing []string
+	for i, p := range files {
+		dst := filepath.Join(installDir, p.rel)
+		if rel, err := filepath.Rel(installDir, dst); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("refusing to write outside install dir: %s", dst)
+		}
+		targets[i] = dst
+		if isRegularFile(dst) {
+			existing = append(existing, p.rel)
+		}
+	}
+	if len(existing) > 0 && !opts.Force {
+		fmt.Println("The following files already exist in the install dir and would be overwritten:")
+		for _, e := range existing {
+			fmt.Printf("  - %s\n", e)
+		}
+		return fmt.Errorf("refusing to overwrite %d existing file(s); re-run with --force", len(existing))
+	}
+
+	if err := os.MkdirAll(installDir, 0o755); err != nil {
+		return err
+	}
+	for i, p := range files {
+		dst := targets[i]
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		mode := os.FileMode(p.mode).Perm()
+		if mode == 0 {
+			mode = 0o644
+		}
+		if sensitiveBackupName(p.rel) {
+			mode = 0o600
+		}
+		if err := os.WriteFile(dst, p.data, mode); err != nil {
+			return fmt.Errorf("write %s: %w", dst, err)
+		}
+	}
+
+	fmt.Printf("Restored %d file(s) into %s\n", len(files), installDir)
+	for _, p := range files {
+		fmt.Printf("  - %s\n", p.rel)
+	}
+	fmt.Printf("\nSource backup: tool=%s version=%s stream=%s built=%s created_at=%s install_dir=%s\n",
+		manifest.Tool, manifest.Version, defaultStr(manifest.Stream, "?"), defaultStr(manifest.BuildDate, "?"),
+		manifest.CreatedAt, manifest.InstallDir)
+	// Warn when this orchestrator is OLDER than the one that produced the
+	// backup: a newer backup may carry config/state this binary can't read.
+	if v := strings.TrimSpace(manifest.Version); v != "" && versionLess(Version, v) {
+		fmt.Printf("WARNING: this ncc-orchestrator is %s but the backup was created by %s. "+
+			"Restoring a newer backup with an older binary may not fully load; upgrade the orchestrator if you hit issues.\n", Version, v)
+	}
+
+	if opts.Restart {
+		if err := restartV2Stack(installDir); err != nil {
+			fmt.Printf("\nRestore succeeded, but the automatic restart failed: %v\n", err)
+			fmt.Println("Restart the stack manually with 'v2-stop' then 'v2-start'.")
+			return nil
+		}
+		fmt.Println("\nStack restarted; the restored config, accounts, and token are now loaded.")
+		return nil
+	}
+	fmt.Println("Start (or restart) the stack with 'v2-start' to load the restored config and accounts (or re-run with --restart).")
+	return nil
+}
+
+// defaultStr returns v when non-empty (trimmed), else def.
+func defaultStr(v, def string) string {
+	if strings.TrimSpace(v) == "" {
+		return def
+	}
+	return v
+}
+
+// restartV2Stack stops and restarts the v2 stack by re-invoking THIS
+// orchestrator binary (v2-stop then v2-start --detach). The restart is
+// performed entirely by the binary — no external script — so a CLI restore can
+// bring the stack back automatically. v2-start runs detached so the restarted
+// stack outlives this short-lived restore process.
+func restartV2Stack(installDir string) error {
+	self, err := os.Executable()
+	if err != nil || strings.TrimSpace(self) == "" {
+		return fmt.Errorf("locate orchestrator binary: %w", err)
+	}
+	fmt.Println("\nRestarting stack (binary-managed)...")
+	// Stop first; ignore the error since the stack may already be down.
+	stop := exec.Command(self, "v2-stop", "--install-dir", installDir)
+	stop.Stdout, stop.Stderr = os.Stdout, os.Stderr
+	_ = stop.Run()
+	// Start detached so the relaunched API/UI survive this process exiting.
+	start := exec.Command(self, "v2-start", "--install-dir", installDir, "--detach")
+	start.Stdout, start.Stderr = os.Stdout, os.Stderr
+	if err := start.Run(); err != nil {
+		return fmt.Errorf("v2-start: %w", err)
+	}
+	return nil
+}
+
 // v2DoctorOptions wires the `doctor` subcommand's flags.
 type v2DoctorOptions struct {
 	InstallDir string
@@ -9120,6 +9475,10 @@ func startSelfHealSupervisor(serviceName string, bin string, args []string, pidP
 		"PID_FILE=" + shellQuote(pidPath),
 		"LOG_FILE=" + shellQuote(logPath),
 		"CMD=" + shellQuote(cmdLine),
+		// SERVICE_NAME is passed as a shell-quoted variable (not concatenated
+		// into the echo lines) so a name containing quotes or $(...) cannot
+		// break out of the generated script.
+		"SERVICE_NAME=" + shellQuote(serviceName),
 		"restarts=0",
 		"window_start=$(date +%s)",
 		"while true; do",
@@ -9138,13 +9497,13 @@ func startSelfHealSupervisor(serviceName string, bin string, args []string, pidP
 		"  fi",
 		"  restarts=$((restarts+1))",
 		"  if [ $restarts -gt $MAX_RESTARTS ]; then",
-		"    echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) " + serviceName + " self-heal exhausted restarts\" >> \"$LOG_FILE\"",
+		"    echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $SERVICE_NAME self-heal exhausted restarts\" >> \"$LOG_FILE\"",
 		"    exit 1",
 		"  fi",
 		"  sh -c \"$CMD\" >> \"$LOG_FILE\" 2>&1 &",
 		"  newpid=$!",
 		"  echo \"$newpid\" > \"$PID_FILE\"",
-		"  echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) " + serviceName + " self-heal restart #$restarts pid=$newpid\" >> \"$LOG_FILE\"",
+		"  echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $SERVICE_NAME self-heal restart #$restarts pid=$newpid\" >> \"$LOG_FILE\"",
 		"  sleep 2",
 		"done",
 	}, "\n")
@@ -9459,6 +9818,16 @@ func runV2Start(opts v2StartOptions) error {
 	if absTokenPath, err := filepath.Abs(opts.TokenFile); err == nil {
 		opts.TokenFile = absTokenPath
 	}
+	// Pin the writable user database to the install dir so local accounts,
+	// roles, and SSO config survive v2-stop / v2-start regardless of the
+	// process's working directory (without this the api-server falls back to a
+	// CWD-relative default that can differ between launches).
+	if strings.TrimSpace(opts.UsersDB) == "" {
+		opts.UsersDB = filepath.Join(installDir, ".ncc-api-users.json")
+	}
+	if absUsersDB, err := filepath.Abs(opts.UsersDB); err == nil {
+		opts.UsersDB = absUsersDB
+	}
 	// Same example_config.yaml fallback as v2-check: if config.yaml is
 	// missing but the install ships an example, prefer that with a
 	// stderr warning rather than failing on a fresh extraction.
@@ -9585,6 +9954,7 @@ func runV2Start(opts v2StartOptions) error {
 		"--log-dir", opts.LogDir,
 		"--orchestrator-bin", opts.OrchestratorBin,
 		"--token-file-path", opts.TokenFile,
+		"--users-db", opts.UsersDB,
 		"--cors-origin", apiCORSOrigins,
 		"--auth-mode", opts.APIAuthMode,
 		"--session-ttl", opts.APISessionTTL.String(),
@@ -11597,17 +11967,22 @@ func configJSONSchema() map[string]interface{} {
 			"type":                 "object",
 			"additionalProperties": map[string]interface{}{"type": "string"},
 		},
-		"slack-enabled":           map[string]interface{}{"type": "boolean"},
-		"slack-webhook-url":       map[string]interface{}{"type": "string"},
-		"slack-channel":           map[string]interface{}{"type": "string"},
-		"secrets-provider":        map[string]interface{}{"type": "string", "enum": []string{"", "env", "file"}},
-		"secrets-file":            map[string]interface{}{"type": "string"},
-		"prism-central-url":       map[string]interface{}{"type": "string"},
-		"discover-api-version":    map[string]interface{}{"type": "string", "enum": []string{"v3", "v4"}},
-		"max-idle-conns":          map[string]interface{}{"type": "integer"},
-		"max-idle-conns-per-host": map[string]interface{}{"type": "integer"},
-		"max-conns-per-host":      map[string]interface{}{"type": "integer"},
-		"idle-conn-timeout":       map[string]interface{}{"type": "string"},
+		"slack-enabled":               map[string]interface{}{"type": "boolean"},
+		"slack-webhook-url":           map[string]interface{}{"type": "string"},
+		"slack-channel":               map[string]interface{}{"type": "string"},
+		"secrets-provider":            map[string]interface{}{"type": "string", "enum": []string{"", "env", "file"}},
+		"secrets-file":                map[string]interface{}{"type": "string"},
+		"prism-central-url":           map[string]interface{}{"type": "string"},
+		"discover-api-version":        map[string]interface{}{"type": "string", "enum": []string{"v3", "v4"}},
+		"max-idle-conns":              map[string]interface{}{"type": "integer"},
+		"max-idle-conns-per-host":     map[string]interface{}{"type": "integer"},
+		"max-conns-per-host":          map[string]interface{}{"type": "integer"},
+		"idle-conn-timeout":           map[string]interface{}{"type": "string"},
+		"ca-bundle":                   map[string]interface{}{"type": "string"},
+		"pin-sha256":                  map[string]interface{}{"type": "string"},
+		"smtp-insecure-skip-verify":   map[string]interface{}{"type": "boolean"},
+		"webhook-secret":              map[string]interface{}{"type": "string"},
+		"notification-deadletter-dir": map[string]interface{}{"type": "string"},
 	}
 	return map[string]interface{}{
 		"$schema":              "https://json-schema.org/draft/2020-12/schema",
@@ -13620,6 +13995,18 @@ Run 'ncc-orchestrator --help' for a full list of options.
 			runStart := time.Now()
 			notify.ResetMetrics()
 
+			// Opt-in OpenTelemetry tracing (no-op unless an OTLP endpoint is
+			// configured). Spans are emitted per cluster below.
+			otelShutdown, otelErr := trace.Init(ctx, Version)
+			if otelErr != nil {
+				log.Warn().Err(otelErr).Msg("opentelemetry tracing init failed; continuing without tracing")
+			}
+			defer func() {
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = otelShutdown(shutdownCtx)
+			}()
+
 			for _, cluster := range cfg.Clusters {
 				clusterUser, clusterPass := credentialsForCluster(cfg, cluster)
 				wg.Add(1)
@@ -13687,6 +14074,9 @@ Run 'ncc-orchestrator --help' for a full list of options.
 					reqCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 					defer cancel()
 
+					reqCtx, span := trace.StartCluster(reqCtx, cl)
+					defer span.End()
+
 					onPct := func(pct int) { b.SetCurrent(int64(pct)) }
 					setPhase := func(text string) {
 						phase.SetText(text)
@@ -13695,6 +14085,7 @@ Run 'ncc-orchestrator --help' for a full list of options.
 
 					runOut, err := runClusterWithBars(reqCtx, cfg, fs, httpc, cl, user, pass, onPct, setPhase)
 					if err != nil {
+						trace.RecordError(span, err)
 						b.Abort(false)
 						b.SetTotal(b.Current(), true)
 						setPhase("failed")
@@ -14065,6 +14456,10 @@ Run 'ncc-orchestrator --help' for a full list of options.
 	_ = viper.BindPFlag("config", cmd.PersistentFlags().Lookup("config"))
 	cmd.PersistentFlags().Bool("insecure-skip-verify", false, "Skip TLS verify (only for trusted labs)")
 	_ = viper.BindPFlag("insecure-skip-verify", cmd.PersistentFlags().Lookup("insecure-skip-verify"))
+	cmd.PersistentFlags().String("ca-bundle", "", "Path to a PEM file of extra trusted CA certs (safer than --insecure-skip-verify)")
+	_ = viper.BindPFlag("ca-bundle", cmd.PersistentFlags().Lookup("ca-bundle"))
+	cmd.PersistentFlags().String("pin-sha256", "", "Comma-separated allowed server cert SHA-256 fingerprints (cert pinning; overrides system trust)")
+	_ = viper.BindPFlag("pin-sha256", cmd.PersistentFlags().Lookup("pin-sha256"))
 	cmd.PersistentFlags().String("request-timeout", "20s", "Per-request timeout")
 	_ = viper.BindPFlag("request-timeout", cmd.PersistentFlags().Lookup("request-timeout"))
 
@@ -14145,10 +14540,12 @@ Run 'ncc-orchestrator --help' for a full list of options.
 	cmd.Flags().String("email-from", "", "From email address")
 	cmd.Flags().String("email-to", "", "Comma-separated recipient emails")
 	cmd.Flags().Bool("email-use-tls", true, "Use STARTTLS (recommended)")
+	cmd.Flags().Bool("smtp-insecure-skip-verify", false, "Skip SMTP STARTTLS certificate verification (independent of --insecure-skip-verify)")
 	cmd.Flags().Bool("webhook-enabled", false, "Enable webhook notifications")
 	cmd.Flags().Bool("webhook-include-html", false, "Include per-cluster HTML report as base64 in webhook JSON payload")
 	cmd.Flags().String("webhook-url", "", "Webhook endpoint URL")
 	cmd.Flags().StringToString("webhook-headers", map[string]string{}, "Webhook headers (key=value)")
+	cmd.Flags().String("notification-deadletter-dir", "", "Directory to persist notification payloads that fail to deliver after retries")
 	cmd.Flags().Bool("slack-enabled", false, "Enable Slack notifications")
 	cmd.Flags().String("slack-webhook-url", "", "Slack webhook URL")
 	cmd.Flags().String("slack-channel", "", "Slack channel (optional, uses webhook default if empty)")
@@ -14213,10 +14610,12 @@ Run 'ncc-orchestrator --help' for a full list of options.
 	_ = viper.BindPFlag("email-from", cmd.Flags().Lookup("email-from"))
 	_ = viper.BindPFlag("email-to", cmd.Flags().Lookup("email-to"))
 	_ = viper.BindPFlag("email-use-tls", cmd.Flags().Lookup("email-use-tls"))
+	_ = viper.BindPFlag("smtp-insecure-skip-verify", cmd.Flags().Lookup("smtp-insecure-skip-verify"))
 	_ = viper.BindPFlag("webhook-enabled", cmd.Flags().Lookup("webhook-enabled"))
 	_ = viper.BindPFlag("webhook-include-html", cmd.Flags().Lookup("webhook-include-html"))
 	_ = viper.BindPFlag("webhook-url", cmd.Flags().Lookup("webhook-url"))
 	_ = viper.BindPFlag("webhook-headers", cmd.Flags().Lookup("webhook-headers"))
+	_ = viper.BindPFlag("notification-deadletter-dir", cmd.Flags().Lookup("notification-deadletter-dir"))
 	_ = viper.BindPFlag("severity-filter", cmd.Flags().Lookup("severity-filter"))
 	_ = viper.BindPFlag("exclude-alert-titles", cmd.Flags().Lookup("exclude-alert-titles"))
 	_ = viper.BindPFlag("exclude-alert-titles-file", cmd.Flags().Lookup("exclude-alert-titles-file"))
@@ -14370,6 +14769,7 @@ Use --self-heal with --detach to auto-restart services on unexpected exits.`,
 			apiCORSOrigins, _ := cmd.Flags().GetString("api-cors-origins")
 			uiAllowedOrigins, _ := cmd.Flags().GetString("ui-allowed-origins")
 			tokenFile, _ := cmd.Flags().GetString("token-file")
+			usersDB, _ := cmd.Flags().GetString("users-db")
 			apiAuthMode, _ := cmd.Flags().GetString("api-auth-mode")
 			apiSessionTTL, _ := cmd.Flags().GetDuration("api-session-ttl")
 			apiSessionSecret, _ := cmd.Flags().GetString("api-session-secret")
@@ -14413,6 +14813,7 @@ Use --self-heal with --detach to auto-restart services on unexpected exits.`,
 				APICORSOrigins:              apiCORSOrigins,
 				UIAllowedOrigins:            uiAllowedOrigins,
 				TokenFile:                   tokenFile,
+				UsersDB:                     usersDB,
 				APIAuthMode:                 apiAuthMode,
 				APISessionTTL:               apiSessionTTL,
 				APISessionSecret:            apiSessionSecret,
@@ -14458,8 +14859,9 @@ Use --self-heal with --detach to auto-restart services on unexpected exits.`,
 	v2StartCmd.Flags().String("api-cors-origins", "", "Comma-separated API CORS origins (default derived from UI origin + --ui-allowed-origins)")
 	v2StartCmd.Flags().String("ui-allowed-origins", "", "Additional comma-separated UI origins to allow (e.g. http://192.168.1.50:8080); default localhost origin is always included")
 	v2StartCmd.Flags().String("token-file", "", "Token file path used by UI/API servers (default <install-dir>/.ncc-api-token)")
+	v2StartCmd.Flags().String("users-db", "", "Writable user-database path passed to ncc-api-server; persists local accounts, roles, and SSO config across restarts (default <install-dir>/.ncc-api-users.json)")
 	v2StartCmd.Flags().String("api-auth-mode", "token", "API auth mode passed to ncc-api-server: token, session, hybrid")
-	v2StartCmd.Flags().Duration("api-session-ttl", 10*time.Minute, "Session TTL passed to ncc-api-server")
+	v2StartCmd.Flags().Duration("api-session-ttl", 6*time.Hour, "Session TTL passed to ncc-api-server")
 	v2StartCmd.Flags().String("api-session-secret", "", "Session HMAC secret passed to ncc-api-server (use file flag in production)")
 	v2StartCmd.Flags().String("api-session-secret-file", "", "Read API session secret from file and pass to ncc-api-server")
 	v2StartCmd.Flags().Duration("api-run-timeout", 90*time.Minute, "Run timeout passed to ncc-api-server")
@@ -14587,6 +14989,134 @@ liveness checks.`,
 	v2StatusCmd.Flags().String("ui-listen", ":8080", "UI listen address used in the printed status row (host:port)")
 	v2StatusCmd.Flags().Bool("json", false, "Emit JSON object {install_dir, services:[...]} instead of the text table")
 	cmd.AddCommand(v2StatusCmd)
+
+	// backup subcommand: capture the stateful parts of an install dir
+	// (config + referenced files, user database, API token, scheduler /
+	// notifications state) into one secrets-bearing tar.gz.
+	v2BackupCmd := &cobra.Command{
+		Use:   "v2-backup",
+		Short: "Back up v2 config, local users/roles, tokens, and state into a tar.gz",
+		Long: `Captures the stateful contents of a v2 install dir into a single
+tar.gz so an install can be moved or recovered:
+
+  - config.yaml and its referenced files (clusters-file,
+    exclude-alert-titles-file, secrets-file)
+  - the local user database (.ncc-api-users.json): accounts, bcrypt
+    hashes, roles, runtime SAML config, and session policy
+  - the API auth token (.ncc-api-token) and, if still present, the
+    first-run admin password (.ncc-initial-admin-password)
+  - scheduler and notifications state, plus any other .ncc-api-* state
+    files at the install-dir root
+  - the JSONL audit log (logs/ncc-audit.log) when present
+
+The manifest records the exact ncc-orchestrator version (and stream /
+build date) that created the backup, which 'v2-restore' reports and
+checks. Regenerable artifacts (binaries, frontend bundle, run/ pid
+files, output/ncc files) are excluded. The archive contains secrets, so
+it is written with 0600 permissions — store it securely. Restore it with
+'v2-restore'.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			installDir, _ := cmd.Flags().GetString("install-dir")
+			outputFile, _ := cmd.Flags().GetString("output-file")
+			return runV2Backup(v2BackupOptions{
+				InstallDir: installDir,
+				OutputFile: outputFile,
+			})
+		},
+	}
+	v2BackupCmd.Flags().String("install-dir", "", "Installation directory to back up (default: auto-detect, fallback .ncc-v2)")
+	v2BackupCmd.Flags().String("output-file", "", "Output archive path (default ./ncc-backup-<UTC-timestamp>.tar.gz)")
+	cmd.AddCommand(v2BackupCmd)
+
+	// restore subcommand: extract a v2-backup archive back into an install
+	// dir. Confined to the install dir; refuses to overwrite a running
+	// stack or pre-existing files unless --force.
+	v2RestoreCmd := &cobra.Command{
+		Use:   "v2-restore",
+		Short: "Restore a v2 backup archive (config, users/roles, tokens, state) into an install dir",
+		Long: `Restores an archive produced by 'v2-backup' into an install dir,
+recreating config.yaml + referenced files, the local user database,
+the API token, and scheduler/notifications state.
+
+Safety:
+  - refuses to run while the stack appears to be up (live pid files)
+    unless --force; stop it first with 'v2-stop'
+  - refuses to overwrite existing files unless --force
+  - extraction is confined to the install dir (unsafe archive paths
+    are rejected)
+
+The restore reports the ncc-orchestrator version that created the
+backup and warns if this binary is older than that.
+
+After restoring, start the stack with 'v2-start' — or pass --restart to
+have this binary stop and re-start the stack automatically (v2-stop then
+v2-start --detach) so the restored config/accounts/token load with no
+manual step. The input archive may be given with --input-file or as the
+first positional argument.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			installDir, _ := cmd.Flags().GetString("install-dir")
+			inputFile, _ := cmd.Flags().GetString("input-file")
+			force, _ := cmd.Flags().GetBool("force")
+			restart, _ := cmd.Flags().GetBool("restart")
+			if strings.TrimSpace(inputFile) == "" && len(args) > 0 {
+				inputFile = args[0]
+			}
+			return runV2Restore(v2RestoreOptions{
+				InstallDir: installDir,
+				InputFile:  inputFile,
+				Force:      force,
+				Restart:    restart,
+			})
+		},
+	}
+	v2RestoreCmd.Flags().String("install-dir", "", "Installation directory to restore into (default: auto-detect, fallback .ncc-v2)")
+	v2RestoreCmd.Flags().String("input-file", "", "Backup archive to restore (or pass as the first positional argument)")
+	v2RestoreCmd.Flags().Bool("force", false, "Overwrite existing files and proceed even if the stack appears to be running")
+	v2RestoreCmd.Flags().Bool("restart", false, "After a successful restore, automatically stop and re-start the stack (v2-stop then v2-start --detach) using this binary")
+	cmd.AddCommand(v2RestoreCmd)
+
+	// reset-password subcommand: offline recovery for a lost account password
+	// (admin or any local user). Invokes ncc-api-server --reset-password against
+	// the stack's user store, prints a new temporary password, and reminds the
+	// operator to restart so it loads.
+	v2ResetPasswordCmd := &cobra.Command{
+		Use:   "v2-reset-password",
+		Short: "Recover a lost local account password offline (admin or any user)",
+		Long: `Resets a local account to a new random temporary password without
+needing to log in — the recovery path when the admin (or any user)
+password is lost.
+
+It runs 'ncc-api-server --reset-password <user>' against the same user
+store the stack uses (the <install-dir>/.ncc-api-users.json file, or a
+Kubernetes Secret with --users-db-secret), prints a new temporary
+password, and invalidates that account's existing sessions. The user is
+forced to change the password at next login.
+
+Because a running api-server caches accounts in memory, restart the
+stack afterward ('v2-stop' then 'v2-start') for the new password to take
+effect. Defaults to the 'admin' account.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			installDir, _ := cmd.Flags().GetString("install-dir")
+			user, _ := cmd.Flags().GetString("user")
+			usersDB, _ := cmd.Flags().GetString("users-db")
+			usersDBSecret, _ := cmd.Flags().GetString("users-db-secret")
+			usersDBSecretNS, _ := cmd.Flags().GetString("users-db-secret-namespace")
+			return runV2ResetPassword(v2ResetPasswordOptions{
+				InstallDir:   installDir,
+				User:         user,
+				UsersDB:      usersDB,
+				UsersDBSec:   usersDBSecret,
+				UsersDBSecNS: usersDBSecretNS,
+			})
+		},
+	}
+	v2ResetPasswordCmd.Flags().String("install-dir", "", "Installation directory whose user store to reset (default: auto-detect, fallback .ncc-v2)")
+	v2ResetPasswordCmd.Flags().String("user", "admin", "Local account to reset")
+	v2ResetPasswordCmd.Flags().String("users-db", "", "Override the user-database path (default <install-dir>/.ncc-api-users.json)")
+	v2ResetPasswordCmd.Flags().String("users-db-secret", "", "Reset against a Kubernetes Secret store instead of a file (Secret name)")
+	v2ResetPasswordCmd.Flags().String("users-db-secret-namespace", "", "Namespace of the Kubernetes Secret (defaults to the pod's own namespace)")
+	cmd.AddCommand(v2ResetPasswordCmd)
 
 	// doctor subcommand: single-command diagnostic for support
 	// tickets. Runs verify + v2-check + v2-status, prints recent

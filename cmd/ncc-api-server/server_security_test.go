@@ -11,6 +11,46 @@ import (
 	"time"
 )
 
+func TestWithAuthRBACViewer(t *testing.T) {
+	s := &apiServer{authToken: "adminsecret", viewerToken: "viewersecret", authMode: "token"}
+	next := s.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	do := func(method, path, token string) int {
+		req := httptest.NewRequest(method, path, nil)
+		if token != "" {
+			req.Header.Set("X-API-Token", token)
+		}
+		rr := httptest.NewRecorder()
+		next.ServeHTTP(rr, req)
+		return rr.Code
+	}
+
+	// Viewer may read non-settings GET endpoints.
+	if code := do(http.MethodGet, "/api/v1/runs", "viewersecret"); code != http.StatusOK {
+		t.Fatalf("viewer GET /runs: want 200, got %d", code)
+	}
+	// Viewer is forbidden from settings (even GET) and mutating requests.
+	if code := do(http.MethodGet, "/api/v1/settings/config", "viewersecret"); code != http.StatusForbidden {
+		t.Fatalf("viewer GET /settings/config: want 403, got %d", code)
+	}
+	if code := do(http.MethodPost, "/api/v1/runs/trigger", "viewersecret"); code != http.StatusForbidden {
+		t.Fatalf("viewer POST /runs/trigger: want 403, got %d", code)
+	}
+	// Admin can do everything.
+	if code := do(http.MethodGet, "/api/v1/settings/config", "adminsecret"); code != http.StatusOK {
+		t.Fatalf("admin GET /settings/config: want 200, got %d", code)
+	}
+	if code := do(http.MethodPost, "/api/v1/runs/trigger", "adminsecret"); code != http.StatusOK {
+		t.Fatalf("admin POST /runs/trigger: want 200, got %d", code)
+	}
+	// Unknown token is unauthorized.
+	if code := do(http.MethodGet, "/api/v1/runs", "bogus"); code != http.StatusUnauthorized {
+		t.Fatalf("bogus token: want 401, got %d", code)
+	}
+}
+
 func TestWithAuthTokenMode(t *testing.T) {
 	s := &apiServer{authToken: "topsecret", authMode: "token"}
 	next := s.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

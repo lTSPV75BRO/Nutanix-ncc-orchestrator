@@ -28,6 +28,141 @@ export type HealthData = {
   go_version?: string;
   os?: string;
   arch?: string;
+  /** Whether interactive login (local accounts or SAML) is enabled. */
+  login_enabled?: boolean;
+  local_login?: boolean;
+  saml_enabled?: boolean;
+  ldap_enabled?: boolean;
+};
+
+export type UserRole = "admin" | "operator" | "viewer" | "";
+
+export type MeData = {
+  authenticated: boolean;
+  login_enabled: boolean;
+  local_enabled: boolean;
+  saml_enabled: boolean;
+  ldap_enabled?: boolean;
+  auth_mode?: string;
+  /** True while the built-in admin still has its initial bootstrap password (unchanged). */
+  bootstrap_pending?: boolean;
+  username?: string;
+  role?: UserRole;
+  is_admin?: boolean;
+  can_operate?: boolean;
+  must_change_password?: boolean;
+  /** True when the session is backed by a local password account (eligible for self-service password change). */
+  is_local?: boolean;
+  /** Effective session lifetime (seconds) configured for new logins. */
+  session_ttl_sec?: number;
+  /** When the current session expires (RFC3339), if authenticated via session. */
+  expires_at?: string;
+  /** Seconds remaining before the current session expires. */
+  expires_in_sec?: number;
+};
+
+export type SessionPolicy = {
+  ttl_sec: number;
+  ttl_min: number;
+  default_ttl_sec: number;
+  min_sec: number;
+  max_sec: number;
+  source: "runtime" | "default";
+};
+
+export type LoginData = {
+  username: string;
+  role: UserRole;
+  must_change_password?: boolean;
+  expires_at: string;
+  ttl_sec: number;
+};
+
+export type UserAccount = {
+  username: string;
+  role: UserRole;
+  must_change_password?: boolean;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type PasswordResetRequest = {
+  username: string;
+  requested_at: string;
+  client_ip?: string;
+};
+
+export type SSOConfig = {
+  enabled: boolean;
+  managed_by: "flags" | "runtime";
+  sp_metadata_url?: string;
+  root_url?: string;
+  entity_id?: string;
+  idp_metadata_url?: string;
+  has_idp_metadata_xml?: boolean;
+  username_attribute?: string;
+  role_attribute?: string;
+  role_map?: string;
+  default_role?: string;
+  allow_idp_initiated?: boolean;
+  sp_cert_pem?: string;
+};
+
+export type SSOConfigInput = {
+  enabled: boolean;
+  root_url: string;
+  entity_id?: string;
+  idp_metadata_xml?: string;
+  idp_metadata_url?: string;
+  username_attribute?: string;
+  role_attribute?: string;
+  role_map?: string;
+  default_role?: string;
+  allow_idp_initiated?: boolean;
+};
+
+export type LDAPConfig = {
+  enabled: boolean;
+  managed_by: "flags" | "runtime";
+  url?: string;
+  start_tls?: boolean;
+  insecure_skip_verify?: boolean;
+  has_ca_cert?: boolean;
+  bind_dn?: string;
+  has_bind_password?: boolean;
+  base_dn?: string;
+  user_filter?: string;
+  username_attribute?: string;
+  group_attribute?: string;
+  role_map?: string;
+  default_role?: string;
+};
+
+export type LDAPConfigInput = {
+  enabled: boolean;
+  url: string;
+  start_tls?: boolean;
+  insecure_skip_verify?: boolean;
+  ca_cert_pem?: string;
+  bind_dn?: string;
+  /** Write-only. Omit (undefined) to keep the stored secret; empty string clears it. */
+  bind_password?: string;
+  base_dn: string;
+  user_filter?: string;
+  username_attribute?: string;
+  group_attribute?: string;
+  role_map?: string;
+  default_role?: string;
+};
+
+export type LDAPTestInput = LDAPConfigInput & {
+  test_username: string;
+  test_password: string;
+};
+
+export type LDAPTestResult = {
+  username: string;
+  role: UserRole;
 };
 
 export type AuditLogEntry = {
@@ -39,6 +174,11 @@ export type AuditLogEntry = {
   client?: string;
   auth_mode?: string;
   user_agent?: string;
+  /** Acting principal (set by withAuth-attributed entries). */
+  user?: string;
+  role?: string;
+  /** Some auth-flow entries (login/password change) carry an explicit username. */
+  username?: string;
   /** All other audit fields land here. */
   [key: string]: unknown;
 };

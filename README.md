@@ -294,8 +294,13 @@ Major endpoints (full surface at `GET /api/v1/meta/routes`, OpenAPI at `GET /api
 | `/api/v1/logs/runner`               | GET        | Tail of `ncc-runner.log`                                          |
 | `/api/v1/metrics/rate-limit`        | GET        | Per-route rate-limiter counters                                   |
 | `/api/v1/auth/session`, `/rotate`   | POST       | Issue session token / rotate the API token                        |
+| `/api/v1/auth/login`, `/logout`     | POST       | Local password login / clear session (when `--users-file` set)    |
+| `/api/v1/auth/me`                   | GET        | Current caller identity, role, and available login methods        |
+| `/saml/metadata`, `/login`, `/acs`  | GET/POST   | SAML SP endpoints (when SAML is configured)                       |
 
 All write/mutate routes require `X-API-Token: <token>` (or `Authorization: Bearer …` session token). Errors return a structured envelope with `success: false`, `error`, and `error_code` (e.g. `NCC_API_UNAUTHORIZED`, `NCC_API_BAD_REQUEST`, `NCC_API_NOT_FOUND`, `NCC_API_CONFLICT`).
+
+**RBAC, login & SSO:** the server enforces three roles — `viewer` (read-only), `operator` (also trigger/cancel runs), and `admin` (everything incl. `/api/v1/settings/*`). A role can be a static token (`NCC_API_TOKEN` = admin, `NCC_API_VIEWER_TOKEN` = viewer) or an interactive login: local password accounts (`--users-file`, bcrypt; hash with `ncc-api-server --hash-password`) and/or SAML SSO (`--saml-*`). Browser logins use an httpOnly, `SameSite=Strict` session cookie with double-submit CSRF protection; the UI shows a login screen and hides admin-only/operator-only controls per role. See [docs/SECURITY_AND_TRUST.md](docs/SECURITY_AND_TRUST.md). With no login configured, the single-token behavior is unchanged.
 
 Trigger a run from the API:
 
@@ -379,7 +384,7 @@ on stdout.
 The api-server now exposes a Prometheus-compatible `/metrics` endpoint:
 
 ```text
-ncc_build_info{version="2.1.0",stream="Release",go_version="go1.26.3",os="linux",arch="amd64"} 1
+ncc_build_info{version="2.1.0",stream="Release",go_version="go1.26.4",os="linux",arch="amd64"} 1
 ncc_process_uptime_seconds 3601.42
 ncc_run_active 0
 ncc_runs_triggered_total 42
@@ -389,7 +394,19 @@ ncc_go_goroutines 18
 ncc_go_memstats_alloc_bytes 6291456
 ncc_ratelimit_allowed_total 1842
 ncc_ratelimit_blocked_total 0
+# NCC run metrics (v2.1.0) — read from the latest run-summary.json:
+ncc_cluster_up{cluster="10.0.0.1"} 1
+ncc_cluster_checks_total{cluster="10.0.0.1",severity="FAIL"} 0
+ncc_cluster_health_score{cluster="10.0.0.1"} 95
+ncc_last_run_clusters_failed 1
+ncc_last_run_exit_code 2
 ```
+
+**New in v2.1.0:** `/metrics` now also serves the last run's per-cluster
+severity/health and run-level gauges, so Prometheus can scrape the api-server
+directly instead of running a node_exporter textfile collector over the
+`<cluster>.prom` files (those still work for CLI-only hosts). See
+[`Prometheus.md`](Prometheus.md).
 
 Auth-gated by default (same `X-API-Token` as the rest of the API).
 Pass `--metrics-public` on the api-server to allow unauthenticated
@@ -548,15 +565,19 @@ below and the [`helm/`](helm/) chart.
 
 | Area                  | Default                                                                                                                |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Authentication        | Token-based (`X-API-Token`) using constant-time compare (`crypto/subtle`); session tokens HMAC-signed                  |
+| Authentication        | Token-based (`X-API-Token`) constant-time compare (`crypto/subtle`); HMAC-signed sessions; optional local password accounts (bcrypt) and SAML SSO |
+| Authorization (RBAC)  | Three roles `viewer < operator < admin`: viewers read non-settings `GET`s, operators also trigger/cancel runs, settings/rotation are admin-only |
+| Browser sessions      | Role-bearing httpOnly + `SameSite=Strict` session cookie with double-submit CSRF protection on mutations; ui-server forwards user sessions (no admin-token injection) |
 | CORS                  | Strict allowlist (default `http://localhost:8080`); wildcard origins rejected at startup                               |
 | CSP                   | UI: `script-src 'self'`, no `unsafe-eval`; API: `default-src 'none'`                                                   |
-| Transport             | Optional direct HTTPS (`--tls-cert-file`/`--tls-key-file`); optional mTLS (`--tls-client-ca-file`)                     |
+| Prism TLS             | Verified by default; `--ca-bundle` (trust internal CA) or `--pin-sha256` (cert pinning) preferred over `--insecure-skip-verify` |
+| API/UI transport      | Optional direct HTTPS (`--tls-cert-file`/`--tls-key-file`); optional mTLS (`--tls-client-ca-file`)                     |
+| Outbound notifications| Optional webhook HMAC signing (`webhook-secret` → `X-NCC-Signature`); SMTP TLS verify via `smtp-insecure-skip-verify`; dead-letter dir for failed deliveries |
 | Security headers      | `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Permissions-Policy`, HSTS on TLS   |
 | Rate limiting         | Per-client token bucket on sensitive auth/mutation routes (`--rate-limit-per-minute`, default 60)                      |
 | Path confinement      | All file I/O canonicalized under `--repo-root`; `..` and embedded `/` rejected on `/artifacts/{name}` and `/runs/{id}` |
 | Secrets               | `secret://NAME` refs with `env` or `file` provider; plaintext-in-config triggers a startup warning                     |
-| Vulnerability scans   | `govulncheck ./...` and `npm audit --omit=dev` both clean as of v2.0.0 (Go 1.26.3, DOMPurify ≥ 3.4.7 enforced)         |
+| Vulnerability scans   | `govulncheck ./...` and `npm audit --omit=dev` clean (Go 1.26.4, DOMPurify ≥ 3.4.7 enforced); enforced in CI (`.github/workflows/ci.yml`) |
 
 Full release-gate checklist with evidence: [`docs/PRODUCTION_READINESS_v2.0.0.md`](docs/PRODUCTION_READINESS_v2.0.0.md).
 
@@ -619,7 +640,7 @@ Raw NCC summaries land under `nccfiles/`. Runner JSON logs under `logs/ncc-runne
 | [`docs/RELEASE_CHECKSUMS.md`](docs/RELEASE_CHECKSUMS.md)                              | How `--update` verifies downloads                                     |
 | [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md)                            | Verify SHA-256, run unsigned binaries on macOS/Windows/Linux, GPG     |
 | [`k8s/README.md`](k8s/README.md)                                                     | Kubernetes deployment guide                                           |
-| [`Prometheus.md`](Prometheus.md)                                                     | Prometheus textfile-collector setup                                   |
+| [`Prometheus.md`](Prometheus.md)                                                     | Prometheus setup: `.prom` textfile collector + scraping run metrics from the api-server `/metrics` |
 | [`CHANGELOG.md`](CHANGELOG.md)                                                       | Full version history                                                  |
 | [`RELEASE_NOTES_v2.0.0.md`](RELEASE_NOTES_v2.0.0.md)                                  | What changed since v1.1.0                                             |
 

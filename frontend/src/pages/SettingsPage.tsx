@@ -25,6 +25,7 @@ import {
   LinkOutlined,
   ReloadOutlined,
   SettingOutlined,
+  TeamOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
@@ -36,6 +37,7 @@ import { JsonOutputsSection } from "../features/settings/JsonOutputsSection";
 import { RawOutputsSection } from "../features/settings/RawOutputsSection";
 import { ApiExplorerSection } from "../features/settings/ApiExplorerSection";
 import { AuditLogSection } from "../features/settings/AuditLogSection";
+import { AccessSection } from "../features/settings/AccessSection";
 import { api } from "../api/client";
 import { useLocalStorageState } from "../hooks/useLocalStorageState";
 import { notify, notifyError } from "../notify";
@@ -435,6 +437,7 @@ export function SettingsPage() {
   }
 
   const apiOk = (health.data as { status?: string } | undefined)?.status === "ok";
+  const loginEnabled = Boolean((health.data as { login_enabled?: boolean } | undefined)?.login_enabled);
   const tabLabel = (icon: ReactNode, text: string, dotColor?: string) => (
     <span className="settings-tab-label">
       <span className="settings-tab-icon">{icon}</span>
@@ -443,13 +446,7 @@ export function SettingsPage() {
     </span>
   );
 
-  return (
-    <Tabs
-      activeKey={tab}
-      onChange={setTab}
-      size="large"
-      className="settings-tabs"
-      items={[
+  const items = [
         {
           key: "connection",
           label: tabLabel(<ApiOutlined />, "Connection", apiOk ? "#22c55e" : "#ef4444"),
@@ -485,7 +482,14 @@ export function SettingsPage() {
           label: tabLabel(<LinkOutlined />, "Developer"),
           children: <DeveloperTab onError={notifyError} />,
         },
-      ]}
-    />
-  );
+  ];
+  if (loginEnabled) {
+    items.splice(items.length - 1, 0, {
+      key: "access",
+      label: tabLabel(<TeamOutlined />, "Access"),
+      children: <AccessSection />,
+    });
+  }
+
+  return <Tabs activeKey={tab} onChange={setTab} size="large" className="settings-tabs" items={items} />;
 }

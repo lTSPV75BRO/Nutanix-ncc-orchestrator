@@ -4304,3 +4304,111 @@ func TestSha256OfFile_RoundTrip(t *testing.T) {
 		t.Error("expected error for missing file")
 	}
 }
+
+// TestCollectBackupEntriesIncludesAuditLogAndState verifies the expanded
+// backup set: the audit log and any .ncc-api-* state at the install-dir root
+// are captured in addition to the explicitly-listed core files.
+func TestCollectBackupEntriesIncludesAuditLogAndState(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite := func(rel, content string) {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite("config.yaml", "prismCentral: pc.example.com\n")
+	mustWrite(".ncc-api-users.json", `{"users":[]}`)
+	mustWrite(".ncc-api-token", "tok")
+	mustWrite(".ncc-api-notifications.json", "{}")
+	mustWrite(".ncc-api-custom-state.json", "{}") // future state file, caught by glob
+	mustWrite("logs/ncc-audit.log", "{\"action\":\"x\"}\n")
+
+	entries, _ := collectBackupEntries(dir)
+	got := map[string]bool{}
+	for _, e := range entries {
+		got[e.Rel] = true
+	}
+	for _, want := range []string{
+		"config.yaml",
+		".ncc-api-users.json",
+		".ncc-api-token",
+		".ncc-api-notifications.json",
+		".ncc-api-custom-state.json",
+		"logs/ncc-audit.log",
+	} {
+		if !got[want] {
+			t.Errorf("expected %q in backup entries; got %v", want, got)
+		}
+	}
+}
+
+// TestBackupRestoreRoundTripRecordsOrchestratorVersion exercises a full
+// v2-backup -> v2-restore cycle and asserts the archive manifest records the
+// orchestrator version (and stream/build date) that created it.
+func TestBackupRestoreRoundTripRecordsOrchestratorVersion(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "config.yaml"), []byte("prismCentral: pc\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, ".ncc-api-users.json"), []byte(`{"users":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if err := runV2Backup(v2BackupOptions{InstallDir: src, OutputFile: out}); err != nil {
+		t.Fatalf("v2-backup: %v", err)
+	}
+
+	// Read the manifest back out of the archive.
+	f, err := os.Open(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	var manifest *backupManifest
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hdr.Name == "manifest.json" {
+			var m backupManifest
+			if err := json.NewDecoder(tr).Decode(&m); err != nil {
+				t.Fatal(err)
+			}
+			manifest = &m
+		}
+	}
+	if manifest == nil {
+		t.Fatal("archive missing manifest.json")
+	}
+	if manifest.Tool != "ncc-orchestrator" || manifest.Version != Version {
+		t.Fatalf("manifest tool/version = %q/%q, want ncc-orchestrator/%q", manifest.Tool, manifest.Version, Version)
+	}
+	if manifest.Stream == "" || manifest.BuildDate == "" {
+		t.Errorf("manifest should record stream/build_date; got stream=%q build_date=%q", manifest.Stream, manifest.BuildDate)
+	}
+
+	// Restore into a fresh dir (no --restart) and confirm the files land.
+	dst := t.TempDir()
+	if err := runV2Restore(v2RestoreOptions{InstallDir: dst, InputFile: out}); err != nil {
+		t.Fatalf("v2-restore: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "config.yaml")); err != nil {
+		t.Errorf("restored config.yaml missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, ".ncc-api-users.json")); err != nil {
+		t.Errorf("restored user DB missing: %v", err)
+	}
+}

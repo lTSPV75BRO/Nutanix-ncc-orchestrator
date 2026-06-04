@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"goncc/internal/v2layout"
@@ -133,6 +134,35 @@ func fileExists(p string) bool {
 	}
 	st, err := os.Stat(p)
 	return err == nil && !st.IsDir()
+}
+
+// detectBackendLogin asks the backend's health endpoint whether interactive
+// login (local accounts or SAML) is enabled, so the UI proxy can decide
+// whether to forward user session cookies instead of injecting the admin
+// token. On any error it returns false (legacy admin-token injection).
+func detectBackendLogin(backendURL string, transport *http.Transport) bool {
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(backendURL, "/")+"/api/v1/health", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := (&http.Client{Timeout: 10 * time.Second, Transport: transport}).Do(req)
+	if err != nil || resp == nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return false
+	}
+	var payload struct {
+		Data struct {
+			LoginEnabled bool `json:"login_enabled"`
+		} `json:"data"`
+	}
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err := json.Unmarshal(b, &payload); err != nil {
+		return false
+	}
+	return payload.Data.LoginEnabled
 }
 
 // Build-time metadata; injected via -ldflags. Capitalized names
@@ -269,6 +299,8 @@ func main() {
 	flag.StringVar(&tokenFile, "api-token-file", ".ncc-api-token", "File containing backend API token")
 	flag.StringVar(&token, "api-token", "", "Override backend API token (optional)")
 	flag.StringVar(&authMode, "api-auth-mode", "token", "Backend auth mode: token or session")
+	var loginMode string
+	flag.StringVar(&loginMode, "login-mode", "auto", "Browser login handling: auto (detect from backend), on (forward user session cookies, never inject admin token), off (legacy: inject admin token)")
 	flag.StringVar(&allowedOrigins, "allowed-origins", "http://localhost:8080", "Allowed browser origin(s), comma-separated")
 	flag.StringVar(&tlsCertFile, "tls-cert-file", "", "TLS cert for UI server")
 	flag.StringVar(&tlsKeyFile, "tls-key-file", "", "TLS key for UI server")
@@ -303,6 +335,9 @@ func main() {
 	if authMode != "token" && authMode != "session" {
 		log.Fatal("api-auth-mode must be token or session")
 	}
+	if loginMode != "auto" && loginMode != "on" && loginMode != "off" {
+		log.Fatal("login-mode must be one of: auto, on, off")
+	}
 
 	apiToken := strings.TrimSpace(token)
 
@@ -321,6 +356,57 @@ func main() {
 	transport, err := buildBackendTransport(backendCAFile, backendClientCertFile, backendClientKeyFile, backendInsecureSkipVerify)
 	if err != nil {
 		log.Fatal(err)
+	}
+	// forwardSessions: when the backend has interactive login (local accounts
+	// or SAML) enabled, the browser authenticates with its own role-bearing
+	// session cookie. In that mode we must NOT inject the shared admin token,
+	// otherwise every UI visitor would be silently elevated to admin (which
+	// also defeats the forced first-login password change and logout). We
+	// forward the browser's cookies/CSRF header straight through instead.
+	var forwardSessions atomic.Bool
+	switch loginMode {
+	case "on":
+		forwardSessions.Store(true)
+		log.Printf("login-mode=on: forwarding user session cookies; admin token is NOT injected for browser traffic")
+	case "off":
+		forwardSessions.Store(false)
+		log.Printf("login-mode=off: injecting admin token for browser traffic (interactive login bypassed)")
+	default: // "auto"
+		// Detect with a short retry: under `v2-start` the UI and API servers
+		// launch together, so the backend may not have finished bootstrapping
+		// (and enabling login) on our first probe. Without the retry we would
+		// latch into legacy token injection and never honor login.
+		initial := false
+		for attempt := 0; attempt < 10; attempt++ {
+			if detectBackendLogin(backendURL, transport) {
+				initial = true
+				break
+			}
+			time.Sleep(time.Second)
+		}
+		forwardSessions.Store(initial)
+		if initial {
+			log.Printf("login-mode=auto: backend login detected; forwarding user session cookies (admin token NOT injected)")
+		} else {
+			log.Printf("login-mode=auto: backend login not detected yet; injecting admin token for now and re-checking in the background")
+		}
+		// Keep re-checking so the proxy flips correctly if the backend enables
+		// (or disables) login at runtime after we started.
+		go func() {
+			t := time.NewTicker(15 * time.Second)
+			defer t.Stop()
+			for range t.C {
+				on := detectBackendLogin(backendURL, transport)
+				if on != forwardSessions.Load() {
+					forwardSessions.Store(on)
+					if on {
+						log.Printf("login-mode=auto: backend login now enabled; forwarding user session cookies (admin token NOT injected)")
+					} else {
+						log.Printf("login-mode=auto: backend login now disabled; injecting admin token for browser traffic")
+					}
+				}
+			}
+		}()
 	}
 	var sessionMu sync.Mutex
 	var sessionToken string
@@ -423,7 +509,23 @@ func main() {
 		// of a bare "unauthorized" message. This is the single most common
 		// failure mode when the two servers start from different working
 		// directories or one was rotated after the other started.
-		if resp.StatusCode == http.StatusUnauthorized {
+		//
+		// This diagnostic is ONLY meaningful when the UI server itself attached
+		// the credential the backend rejected (token-injection / minted-session
+		// modes). When we forward the browser's own session cookie
+		// (interactive-login mode), or the request targets an auth/SSO endpoint,
+		// a 401 is the user's own credential failure (e.g. a wrong password) and
+		// the backend's clear message ("invalid username or password") must pass
+		// through untouched.
+		isUserAuthPath := func(p string) bool {
+			return strings.HasPrefix(p, "/api/v1/auth/") || strings.HasPrefix(p, "/saml/")
+		}
+		uiSuppliedCredential := !forwardSessions.Load()
+		reqPath := ""
+		if resp.Request != nil && resp.Request.URL != nil {
+			reqPath = resp.Request.URL.Path
+		}
+		if resp.StatusCode == http.StatusUnauthorized && uiSuppliedCredential && !isUserAuthPath(reqPath) {
 			cause := "token mismatch or empty token"
 			if tok := getBackendToken(); tok == "" {
 				cause = "UI server has no API token available (token file is empty or missing)"
@@ -457,6 +559,12 @@ func main() {
 		req.Header.Del("X-API-Token")
 		req.Header.Del("X-Forwarded-Host")
 		req.Header.Set("X-Forwarded-Proto", backend.Scheme)
+		if forwardSessions.Load() {
+			// The browser's session cookie (forwarded automatically) plus its
+			// X-CSRF-Token header authenticate the request at its own role.
+			// We deliberately do not inject the admin token here.
+			return
+		}
 		if authMode == "session" {
 			if tok := mintSession(); tok != "" {
 				req.Header.Set("Authorization", "Bearer "+tok)
@@ -487,16 +595,17 @@ func main() {
 				return
 			}
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Vary", "Origin")
 		}
 		if r.Method == http.MethodOptions {
 			applyAPIHeaders(w, r.TLS != nil)
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-CSRF-Token, X-Requested-With")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		if !(r.Method == http.MethodGet || r.Method == http.MethodPost || r.Method == http.MethodPut) {
+		if !(r.Method == http.MethodGet || r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete) {
 			writeAPIError(w, http.StatusMethodNotAllowed, "method not allowed", r.TLS != nil, apiCSP)
 			return
 		}

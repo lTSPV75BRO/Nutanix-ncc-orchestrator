@@ -7,6 +7,28 @@ import (
 	"goncc/internal/model"
 )
 
+// FuzzParseSummary ensures ParseSummary never panics on arbitrary input and
+// returns blocks whose severities are always from the known set.
+func FuzzParseSummary(f *testing.F) {
+	f.Add("")
+	f.Add("Detailed information for health_checks:\nPASS\n")
+	f.Add("Node check: FAIL\nDetail: something broke\n")
+	f.Add("\x00\x01\xffrandom\nWARN: weird\n")
+	f.Add(strings.Repeat("INFO line\n", 100))
+	f.Fuzz(func(t *testing.T, in string) {
+		blocks, err := ParseSummary(in)
+		if err != nil {
+			return
+		}
+		allowed := map[string]bool{"FAIL": true, "WARN": true, "ERR": true, "INFO": true, "PASS": true, "": true}
+		for _, b := range blocks {
+			if !allowed[b.Severity] {
+				t.Fatalf("unexpected severity %q for check %q", b.Severity, b.CheckName)
+			}
+		}
+	})
+}
+
 func TestDetectSeverity(t *testing.T) {
 	tests := []struct {
 		name     string

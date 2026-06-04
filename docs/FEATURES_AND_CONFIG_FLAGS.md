@@ -139,6 +139,145 @@ Digest mode sends one notification per run:
 ncc-orchestrator --notify-digest
 ```
 
+**Custom templates.** `email-subject-template`, `email-body-template`, and
+`webhook-template` accept Go `text/template` strings rendered against the run
+summary (`.Cluster`, `.FailCount`, `.WarnCount`, `.ErrCount`, `.InfoCount`,
+`.TotalChecks`, `.Overview`, `.StartedAt`, `.FinishedAt`, `.OutputFiles`). Empty
+= built-in defaults; a broken template logs and falls back to the default
+(never drops a notification).
+
+**Webhook HMAC signing.** Set `webhook-secret` (config/env only — never a CLI
+flag) to sign the webhook body with HMAC-SHA256. The signature is sent as
+`X-NCC-Signature: sha256=<hex>` so the receiver can verify it came from this
+orchestrator:
+
+```yaml
+webhook-secret: "secret://WEBHOOK_HMAC"
+```
+
+**Dead-lettering.** When `--notification-deadletter-dir` is set, any
+email/webhook/Slack payload that still fails after all retries is written there
+as a JSON record (channel, cluster, error, payload), so a transient SMTP/webhook
+outage does not silently lose an alert:
+
+```bash
+ncc-orchestrator --webhook-enabled --webhook-url "https://hooks.example.com/ncc" \
+  --notification-deadletter-dir /var/lib/ncc/deadletter
+```
+
+### 2.11a TLS trust: custom CA bundle and certificate pinning
+
+Instead of disabling verification with `--insecure-skip-verify`, trust an
+internal Prism CA or pin the exact server certificate:
+
+```bash
+# Trust an internal CA (verified against system roots + this bundle)
+ncc-orchestrator --ca-bundle /etc/ncc/prism-ca.pem ...
+
+# Pin the server certificate by SHA-256 fingerprint (colons optional)
+ncc-orchestrator --pin-sha256 "AA:BB:CC:...,11:22:33:..." ...
+```
+
+Pinning skips chain validation but accepts **only** the listed leaf
+fingerprint(s), so a man-in-the-middle presenting a different certificate is
+still rejected — unlike `--insecure-skip-verify`, which accepts any cert.
+`--smtp-insecure-skip-verify` separately controls SMTP STARTTLS verification so
+a self-signed mail relay does not force you to disable Prism verification too.
+
+### 2.11b Run metrics over HTTP (api-server `/metrics`)
+
+When the api-server is running, Prometheus can scrape the last run's per-cluster
+and run-level metrics directly from its `/metrics` endpoint (built from the
+latest `run-summary.json`), instead of pointing a node_exporter textfile
+collector at the `<cluster>.prom` files:
+
+```
+ncc_cluster_up{cluster="10.0.0.1"} 1
+ncc_cluster_checks_total{cluster="10.0.0.1",severity="FAIL"} 0
+ncc_cluster_health_score{cluster="10.0.0.1"} 95
+ncc_last_run_clusters_failed 1
+ncc_last_run_exit_code 2
+```
+
+Pass `--metrics-public` to the api-server for token-free scraping on a private
+network. The on-disk `.prom` textfiles (`--prom-enabled`) still work unchanged.
+
+### 2.11c RBAC, login, and SSO (admin / operator / viewer)
+
+The api-server enforces three ordered roles `viewer < operator < admin`:
+
+- **viewer** — read non-settings `GET` endpoints only.
+- **operator** — viewer plus trigger/cancel/preflight runs.
+- **admin** — everything, including `/api/v1/settings/*` and token rotation.
+
+A caller's role can come from a static token or an interactive login:
+
+- `NCC_API_TOKEN` → admin (automation/CI).
+- `NCC_API_VIEWER_TOKEN` → viewer (dashboards/scrapers); must differ from the
+  admin token.
+- **First-run admin (zero-config, on by default)**: with a writable user
+  database an empty store provisions an `admin` account with a random password
+  on first launch (printed to the log; also persisted for retrieval). The admin
+  must change the password on first login (`POST /api/v1/auth/change-password`),
+  then can manage everything else from the UI. **The user database is enabled by
+  default**: when no backend is configured by a flag, env, or stack path, the
+  server falls back to `<repo-root>/.ncc-api-users.json`, so even a bare run
+  bootstraps login. Opt out with `--disable-local-accounts`
+  (`$NCC_DISABLE_LOCAL_ACCOUNTS=1`) for pure token-only automation. Two storage
+  backends:
+  - **File**: `--users-db` (`$NCC_USERS_DB`), a `0600` JSON file (default
+    `<root>/.ncc-api-users.json`; used by a v2 stack, Docker Compose, and the
+    default-on fallback). Password also written to a `0600`
+    `.ncc-initial-admin-password` file.
+  - **Kubernetes Secret**: `--users-db-secret <name>` (`$NCC_USERS_DB_SECRET`),
+    read/created/patched in-cluster via the pod's service-account token
+    (`--users-db-secret-key`, default `users.json`; `--users-db-secret-namespace`
+    defaults to the pod namespace). The first-run password is stored under the
+    Secret's `initial-admin-password` key. **Secrets are only base64-encoded
+    unless you enable etcd encryption-at-rest (KMS/secretbox/aescbc)** — see
+    `k8s/encryption-config.example.yaml` and `k8s/rbac.yaml` (least-privilege).
+    Mutually exclusive with `--users-db`.
+- **Local accounts** (managed at runtime in Settings → Access, or via
+  `/api/v1/settings/users`): create/list/role-assign/reset-password/delete
+  bcrypt accounts; the last admin is protected from removal/demotion. Browsers
+  sign in via `POST /api/v1/auth/login` (role-bearing httpOnly session cookie);
+  `POST /api/v1/auth/logout` clears it; `GET /api/v1/auth/me` reports role and
+  must-change state. `--users-file` (`$NCC_USERS_FILE`) is an optional one-time
+  YAML seed (`{username, password_hash (bcrypt), role}`) imported into the
+  database when empty; generate hashes with `ncc-api-server --hash-password`.
+- **Session lifetime** (managed at runtime in Settings → Access, or via
+  `GET/PUT /api/v1/settings/session`): admins set how long a signed-in session
+  stays active (1 minute–24h), persisted in the user database and applied to
+  sessions minted afterward. Send `{"ttl_min": <n>}` or `{"ttl_sec": <n>}`;
+  `ttl_sec:0` reverts to the `--session-ttl` server default. `GET /api/v1/auth/me`
+  reports `session_ttl_sec`, `expires_at`, and `expires_in_sec` so the UI can
+  keep the session fresh and return to the login screen when it lapses.
+- **SAML SSO** — either startup flags (`--saml-root-url`, `--saml-idp-metadata`,
+  `--saml-cert`, `--saml-key`; read-only at runtime) **or** runtime config in
+  Settings → Access (`/api/v1/settings/sso`), persisted in the user database and
+  hot-reloaded, with the **SP keypair generated server-side** (publish the SP
+  metadata URL `<root>/saml/metadata` to your IdP). Map IdP attribute values to
+  roles with the role attribute + role map (default role). Endpoints:
+  `/saml/metadata`, `/saml/login`, `/saml/acs`.
+
+Mutating cookie-session requests require a double-submit CSRF token
+(`X-CSRF-Token` header echoing the readable `ncc_csrf` cookie); static-token
+automation is exempt. When local accounts or SAML are configured, `auth-mode`
+auto-upgrades to `hybrid`, and the `ncc-ui-server` forwards each user's session
+cookie instead of injecting the shared admin token (`--login-mode auto|on|off`).
+`/api/v1/health` reports `rbac_enabled`, `login_enabled`, `local_login`, and
+`saml_enabled`. See `docs/SECURITY_AND_TRUST.md` for the full reference.
+
+### 2.11d Distributed tracing (opt-in OpenTelemetry)
+
+Set an OTLP endpoint to emit one span per cluster run over OTLP/HTTP; with no
+endpoint configured tracing is a no-op:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT="http://otel-collector:4318"   # or NCC_OTEL_ENABLED=1
+ncc-orchestrator --clusters 10.0.0.1,10.0.0.2 ...
+```
+
 ### 2.12 Secrets manager style references (`secret://`)
 
 Resolve sensitive values from env or a file-backed secret map:
@@ -256,6 +395,8 @@ Highest to lowest precedence:
 | `ncc-api-version` | string | `v4` | `"Legacy"` |
 | `nutanix-v4-api-version` | string | `v4.2` | `"v4.1"` |
 | `insecure-skip-verify` | bool | `false` | `true` |
+| `ca-bundle` | string | — | `"/etc/ncc/prism-ca.pem"` |
+| `pin-sha256` | csv string | — | `"aa:bb:..,cc:dd:.."` |
 | `timeout` | duration | `15m` | `"20m"` |
 | `request-timeout` | duration | `20s` | `"30s"` |
 | `poll-interval` | duration | `15s` | `"10s"` |
@@ -307,13 +448,19 @@ Highest to lowest precedence:
 | `email-from` | string | — | `"ncc@example.com"` |
 | `email-to` | csv string | — | `"ops@example.com,sre@example.com"` |
 | `email-use-tls` | bool | `true` | `false` |
+| `smtp-insecure-skip-verify` | bool | `false` | `true` |
 | `webhook-enabled` | bool | `false` | `true` |
 | `webhook-include-html` | bool | `false` | `true` |
 | `webhook-url` | string | — | `"https://hooks.example.com/ncc"` |
 | `webhook-headers` | map | `{}` | `{"X-Token":"abc"}` |
+| `webhook-template` | string | — | `'{"text":"NCC {{.Cluster}} FAIL={{.FailCount}}"}'` |
+| `webhook-secret` | string | — | `"secret://WEBHOOK_HMAC"` |
+| `notification-deadletter-dir` | string | — | `"/var/lib/ncc/deadletter"` |
 | `slack-enabled` | bool | `false` | `true` |
 | `slack-webhook-url` | string | — | `"https://hooks.slack.com/services/..."` |
 | `slack-channel` | string | — | `"#infra-alerts"` |
+| `email-subject-template` | string | — | `"NCC {{.Cluster}}: {{.FailCount}} FAIL"` |
+| `email-body-template` | string | — | `"{{.Overview}}"` |
 | `secrets-provider` | string | — | `"env"` or `"file"` |
 | `secrets-file` | string | — | `"secrets.yaml"` |
 
@@ -338,9 +485,13 @@ ncc-orchestrator [flags]
 | `--email-from` | string | Valid email address | none | Sender address used in email notifications; should align with SMTP relay policy/domain requirements. |
 | `--email-to` | string | Comma-separated email addresses | none | Recipient list for email notifications. Supports one or more addresses separated by commas. |
 | `--email-use-tls` | bool | `true`, `false` | `true` | Enables STARTTLS for SMTP sessions. Keep enabled for production unless your SMTP endpoint explicitly requires plain mode in trusted networks. |
+| `--smtp-insecure-skip-verify` | bool | `true`, `false` | `false` | Skips SMTP STARTTLS certificate verification, independent of `--insecure-skip-verify` (which only affects Prism). Use only for a trusted self-signed mail relay. |
+| `--notification-deadletter-dir` | string | Writable directory path | none | When set, notification payloads that fail to deliver after retries (email/webhook/Slack) are written here as JSON (channel, cluster, error, payload) so a transient outage does not silently drop the alert. |
 | `--flaky-lookback-runs` | int | Integer `>= 1` | `6` | Number of historical snapshots used for flaky-check detection. Higher values improve long-range sensitivity but may increase noise in unstable labs. |
 | `--flaky-min-transitions` | int | Integer `>= 1` | `2` | Minimum severity transitions required before a check is marked flaky. Raise this to reduce false positives. |
-| `--insecure-skip-verify` | bool | `true`, `false` | `false` | Disables TLS certificate verification. Use only in trusted lab/self-signed environments. Avoid in production. |
+| `--insecure-skip-verify` | bool | `true`, `false` | `false` | Disables TLS certificate verification. Use only in trusted lab/self-signed environments. Avoid in production; prefer `--ca-bundle` or `--pin-sha256`. |
+| `--ca-bundle` | string | Path to PEM file | none | Adds the PEM-encoded CA certificate(s) in the file to the trust store (verified against system roots **plus** this bundle). Safer than `--insecure-skip-verify` for internal Prism CAs. |
+| `--pin-sha256` | string | CSV of SHA-256 fingerprints (hex, colons optional) | none | Certificate pinning: the server cert is accepted only if its SHA-256 fingerprint matches one of these, independent of the system trust store. Rejects a MITM cert that `--insecure-skip-verify` would accept. |
 | `--log-file` | string | Writable file path | `logs/ncc-runner.log` | Rotated JSON log output file. Use a persistent location for post-incident analysis. |
 | `--log-http` | bool | `true`, `false` | `false` | Enables HTTP request/response logging for deep debugging. Can expose operationally sensitive payloads; keep off in normal production usage. |
 | `--log-level` | string | `trace`, `debug`, `info`, `warn`, `error`, or numeric `0..5` | `info` | Controls verbosity. Use `debug`/`trace` for troubleshooting and `info` for steady-state operations. |
@@ -634,7 +785,7 @@ These are runtime flags for v2 services (`cmd/ncc-api-server`, `cmd/ncc-ui-serve
 | Throughput/Stability | `--api-write-timeout` | `60s` | API HTTP server write timeout. |
 | Throughput/Stability | `--api-idle-timeout` | `60s` | API HTTP keep-alive idle timeout. |
 | Auth/Security | `--api-auth-mode` | `token` | API auth mode: `token`, `session`, `hybrid`. |
-| Auth/Security | `--api-session-ttl` | `10m` | Session token TTL for `session`/`hybrid` mode. |
+| Auth/Security | `--api-session-ttl` | `6h` | Session token TTL for `session`/`hybrid` mode (admins can override at runtime in Settings → Access). |
 | Auth/Security | `--api-session-secret` | empty | Inline HMAC session secret (prefer file in production). |
 | Auth/Security | `--api-session-secret-file` | empty | Reads session secret from file and passes to API process. |
 | Auth/Security | `--api-cors-origins` | derived | Explicit API CORS allowlist (comma-separated). |
@@ -756,6 +907,8 @@ password: "secret://NCC_PRISM_PASSWORD"
 ncc-api-version: "v4"
 nutanix-v4-api-version: "v4.2"
 insecure-skip-verify: false
+# ca-bundle: "/etc/ncc/prism-ca.pem"   # trust an internal CA (safer than insecure-skip-verify)
+# pin-sha256: ""                        # CSV of allowed server cert SHA-256 fingerprints (pinning)
 
 timeout: "15m"
 request-timeout: "20s"
@@ -811,10 +964,17 @@ smtp-password: "secret://SMTP_PASSWORD"
 email-from: "ncc@example.com"
 email-to: "ops@example.com,sre@example.com"
 email-use-tls: true
+# smtp-insecure-skip-verify: false      # skip SMTP STARTTLS verify (independent of insecure-skip-verify)
+# email-subject-template: ""            # Go text/template; empty = built-in default
+# email-body-template: ""
+
+# notification-deadletter-dir: "/var/lib/ncc/deadletter"  # persist failed notification payloads
 
 webhook-enabled: false
 webhook-include-html: false
 webhook-url: "https://hooks.example.com/ncc"
+# webhook-template: ""                  # Go text/template for the body; empty = default JSON
+# webhook-secret: "secret://WEBHOOK_HMAC"  # sign body: header X-NCC-Signature: sha256=<hmac>
 webhook-headers:
   X-Auth-Token: "secret://WEBHOOK_TOKEN"
 
@@ -838,12 +998,27 @@ Examples:
 - `clusters-file` -> `NCC_CLUSTERS_FILE`
 - `request-timeout` -> `NCC_REQUEST_TIMEOUT`
 - `webhook-include-html` -> `NCC_WEBHOOK_INCLUDE_HTML`
+- `webhook-secret` -> `NCC_WEBHOOK_SECRET` (config/env only; no CLI flag, to keep the secret out of the process list)
 
 Print current values:
 
 ```bash
 ncc-orchestrator env-info
 ```
+
+**Server-only environment variables** (api-server, not config keys):
+
+| Variable | Purpose |
+|---|---|
+| `NCC_API_TOKEN` | Admin token for the api-server (full access). |
+| `NCC_API_VIEWER_TOKEN` | Optional read-only viewer token (RBAC). Holders may read non-settings `GET` endpoints but get `403` on `/api/v1/settings/*` and any mutating request. Must differ from `NCC_API_TOKEN`. |
+| `NCC_USERS_DB` | Path to the writable JSON user database file (enables login, first-run admin bootstrap, and runtime user/SSO management). Equivalent to `--users-db`. Defaults to `<root>/.ncc-api-users.json` inside a v2 stack. |
+| `NCC_USERS_DB_SECRET` | Kubernetes Secret name to store the user database in (encrypted at rest by etcd). Equivalent to `--users-db-secret`. Mutually exclusive with `NCC_USERS_DB`. Requires in-cluster execution + RBAC (`k8s/rbac.yaml`). |
+| `NCC_USERS_DB_SECRET_NAMESPACE` | Namespace of the Kubernetes Secret store (defaults to the pod's own namespace). Equivalent to `--users-db-secret-namespace`. |
+| `NCC_USERS_FILE` | Path to an optional read-only YAML seed of local accounts, imported once into the database when empty. Equivalent to `--users-file`. |
+| `NCC_PASSWORD` | Read by `ncc-api-server --hash-password` as the password to hash (otherwise prompts on stdin). |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Enables OpenTelemetry tracing (per-cluster spans) over OTLP/HTTP. |
+| `NCC_OTEL_ENABLED` | Set to `1`/`true` to enable OTel tracing using the standard `OTEL_*` exporter env vars. |
 
 ## 9) Execution lifecycle (detailed)
 

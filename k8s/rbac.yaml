@@ -1,0 +1,47 @@
+# RBAC for the api-server's Kubernetes Secret user-database store.
+#
+# The api-server reads/creates/patches a single Secret (ncc-v2-users) that
+# holds local accounts (bcrypt hashes), roles, the must-change flag, the SAML
+# SP private key, and the first-run admin password. This grants the *minimum*
+# permissions needed: create at the namespace scope (Kubernetes cannot scope
+# `create` to a resourceName) and get/update/patch limited to that one Secret.
+#
+# Apply before the api-server Deployment:
+#   kubectl apply -f k8s/rbac.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ncc-v2-api
+  namespace: ncc-orchestrator-v2
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ncc-v2-users-secret
+  namespace: ncc-orchestrator-v2
+rules:
+  # `create` cannot be restricted by resourceName, so it is scoped to the
+  # namespace only. The Deployment fixes the name to `ncc-v2-users`.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  # Read/modify limited to the single Secret backing the user database.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["ncc-v2-users"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ncc-v2-api-users-secret
+  namespace: ncc-orchestrator-v2
+subjects:
+  - kind: ServiceAccount
+    name: ncc-v2-api
+    namespace: ncc-orchestrator-v2
+roleRef:
+  kind: Role
+  name: ncc-v2-users-secret
+  apiGroup: rbac.authorization.k8s.io

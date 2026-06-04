@@ -17,6 +17,18 @@ import type {
   ScheduleState,
   ScheduleHealthData,
   TriggerRunData,
+  MeData,
+  LoginData,
+  UserAccount,
+  UserRole,
+  SSOConfig,
+  SSOConfigInput,
+  LDAPConfig,
+  LDAPConfigInput,
+  LDAPTestInput,
+  LDAPTestResult,
+  SessionPolicy,
+  PasswordResetRequest,
 } from "./types";
 
 // ApiError preserves both the human-readable message and the structured `data`
@@ -34,9 +46,30 @@ export class ApiError extends Error {
   }
 }
 
+// readCookie returns the value of a document cookie by name, or "" if absent.
+function readCookie(name: string): string {
+  const prefix = `${name}=`;
+  for (const part of document.cookie.split(";")) {
+    const c = part.trim();
+    if (c.startsWith(prefix)) return decodeURIComponent(c.slice(prefix.length));
+  }
+  return "";
+}
+
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
 async function callApi<T>(path: string, init?: RequestInit): Promise<T> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 30000);
+  const method = (init?.method ?? "GET").toUpperCase();
+  // Cookie-based sessions require the CSRF double-submit token on mutations.
+  // The token is harmless to send otherwise (static-token automation ignores
+  // it), so attach it whenever it's present and the method is state-changing.
+  const csrfHeader: Record<string, string> = {};
+  if (MUTATING_METHODS.has(method)) {
+    const csrf = readCookie("ncc_csrf");
+    if (csrf) csrfHeader["X-CSRF-Token"] = csrf;
+  }
   const response = await fetch(path, {
     ...init,
     credentials: "same-origin",
@@ -44,6 +77,7 @@ async function callApi<T>(path: string, init?: RequestInit): Promise<T> {
     headers: {
       "Content-Type": "application/json",
       "X-Requested-With": "ncc-ui",
+      ...csrfHeader,
       ...(init?.headers ?? {}),
     },
   }).finally(() => clearTimeout(timer));
@@ -182,4 +216,95 @@ export const api = {
     const path = params.size > 0 ? `/api/v1/audit?${params.toString()}` : "/api/v1/audit";
     return callApi<AuditLogData>(path);
   },
+  me: () => callApi<MeData>("/api/v1/auth/me"),
+  login: (username: string, password: string) =>
+    callApi<LoginData>("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
+  logout: () => callApi<unknown>("/api/v1/auth/logout", { method: "POST" }),
+  forgotPassword: (username: string) =>
+    callApi<unknown>("/api/v1/auth/forgot-password", {
+      method: "POST",
+      body: JSON.stringify({ username }),
+    }),
+  listPasswordResets: () =>
+    callApi<{ requests: PasswordResetRequest[] }>("/api/v1/settings/password-resets"),
+  dismissPasswordReset: (username: string) =>
+    callApi<unknown>(`/api/v1/settings/password-resets/${encodeURIComponent(username)}`, {
+      method: "DELETE",
+    }),
+  refreshSession: () =>
+    callApi<{ expires_at: string; ttl_sec: number }>("/api/v1/auth/refresh", { method: "POST" }),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    callApi<unknown>("/api/v1/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    }),
+  listUsers: () => callApi<{ users: UserAccount[] }>("/api/v1/settings/users"),
+  createUser: (payload: { username: string; password: string; role: UserRole; must_change_password?: boolean }) =>
+    callApi<unknown>("/api/v1/settings/users", { method: "POST", body: JSON.stringify(payload) }),
+  updateUser: (
+    username: string,
+    payload: { role?: UserRole; password?: string; must_change_password?: boolean },
+  ) =>
+    callApi<unknown>(`/api/v1/settings/users/${encodeURIComponent(username)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  deleteUser: (username: string) =>
+    callApi<unknown>(`/api/v1/settings/users/${encodeURIComponent(username)}`, { method: "DELETE" }),
+  getSSO: () => callApi<SSOConfig>("/api/v1/settings/sso"),
+  updateSSO: (payload: SSOConfigInput) =>
+    callApi<unknown>("/api/v1/settings/sso", { method: "PUT", body: JSON.stringify(payload) }),
+  getLDAP: () => callApi<LDAPConfig>("/api/v1/settings/ldap"),
+  updateLDAP: (payload: LDAPConfigInput) =>
+    callApi<unknown>("/api/v1/settings/ldap", { method: "PUT", body: JSON.stringify(payload) }),
+  testLDAP: (payload: LDAPTestInput) =>
+    callApi<LDAPTestResult>("/api/v1/settings/ldap/test", { method: "POST", body: JSON.stringify(payload) }),
+  downloadBackup: async (): Promise<{ blob: Blob; filename: string }> => {
+    const csrf = readCookie("ncc_csrf");
+    const response = await fetch("/api/v1/settings/backup", {
+      method: "GET",
+      credentials: "same-origin",
+      headers: {
+        "X-Requested-With": "ncc-ui",
+        ...(csrf ? { "X-CSRF-Token": csrf } : {}),
+      },
+    });
+    const contentType = (response.headers.get("content-type") || "").toLowerCase();
+    if (!response.ok || contentType.includes("application/json")) {
+      const payload = (await response.json().catch(() => ({}))) as Envelope<unknown>;
+      throw new ApiError(payload.error ?? response.statusText, response.status, payload.data);
+    }
+    const disposition = response.headers.get("content-disposition") || "";
+    const match = /filename="?([^"]+)"?/.exec(disposition);
+    const filename = match?.[1] ?? `ncc-backup-${new Date().toISOString().replace(/[:.]/g, "-")}.tar.gz`;
+    return { blob: await response.blob(), filename };
+  },
+  restoreBackup: async (file: File): Promise<Envelope<unknown>> => {
+    const csrf = readCookie("ncc_csrf");
+    const form = new FormData();
+    form.append("archive", file);
+    const response = await fetch("/api/v1/settings/restore", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "X-Requested-With": "ncc-ui",
+        ...(csrf ? { "X-CSRF-Token": csrf } : {}),
+      },
+      body: form,
+    });
+    const payload = (await response.json().catch(() => ({}))) as Envelope<unknown>;
+    if (!response.ok || !payload.success) {
+      throw new ApiError(payload.error ?? response.statusText, response.status, payload.data);
+    }
+    return payload;
+  },
+  getSessionPolicy: () => callApi<SessionPolicy>("/api/v1/settings/session"),
+  updateSessionPolicy: (payload: { ttl_min?: number; ttl_sec?: number }) =>
+    callApi<{ ttl_sec: number }>("/api/v1/settings/session", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
 };

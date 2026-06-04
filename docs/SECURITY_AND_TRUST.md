@@ -414,6 +414,293 @@ under `--output-dir`, `--log-dir`, and the token file path.
 
 ---
 
+## Runtime security hardening (v2.1.0+)
+
+The trust steps above cover the binary you run. These options cover how it
+talks to Prism, SMTP, and webhook receivers at runtime, and who can change
+state through the api-server.
+
+### Prism TLS: prefer a CA bundle or pinning over `insecure-skip-verify`
+
+`--insecure-skip-verify` accepts **any** certificate (including a
+man-in-the-middle's). For self-signed or internal-CA Prism deployments, prefer:
+
+- `--ca-bundle <file.pem>` — trust the internal CA. The server cert is verified
+  against the system roots **plus** this bundle.
+- `--pin-sha256 <fp[,fp...]>` — certificate pinning. The server cert is accepted
+  only if its SHA-256 fingerprint matches one you supply (colons optional),
+  independent of the system trust store. A MITM presenting a different cert is
+  rejected.
+
+Capture a fingerprint to pin with:
+
+```bash
+echo | openssl s_client -connect <prism>:9440 2>/dev/null \
+  | openssl x509 -noout -fingerprint -sha256
+```
+
+### SMTP TLS verification is decoupled
+
+`--smtp-insecure-skip-verify` controls SMTP STARTTLS verification independently
+of the Prism `--insecure-skip-verify` flag, so a self-signed mail relay no
+longer forces you to disable Prism certificate verification.
+
+### Outbound webhook authenticity (HMAC)
+
+Set `webhook-secret` (config/env only — `NCC_WEBHOOK_SECRET`, never a CLI flag)
+to sign the webhook body with HMAC-SHA256. The orchestrator sends
+`X-NCC-Signature: sha256=<hex>`; the receiver recomputes the HMAC over the raw
+body with the shared secret and rejects mismatches.
+
+### Notification dead-lettering
+
+`--notification-deadletter-dir` persists any email/webhook/Slack payload that
+fails to deliver after retries (channel, cluster, error, payload) as a
+`0600` JSON file, so a transient outage does not silently lose an alert. Treat
+that directory as sensitive — payloads can contain check details.
+
+### api-server access control (RBAC + login)
+
+The api-server supports three authorization levels, ordered
+`viewer < operator < admin`:
+
+| Role | May do | Denied |
+| ---- | ------ | ------ |
+| **viewer** | Read non-settings `GET` endpoints (runs, reports, artifacts, logs, health, metrics) | `/api/v1/settings/*`, run trigger/cancel, any mutation |
+| **operator** | Everything a viewer can, plus trigger/cancel/preflight runs | `/api/v1/settings/*`, token rotation, schedule/config writes |
+| **admin** | Everything | — |
+
+A role can be presented three ways:
+
+1. **Static admin token** (`NCC_API_TOKEN`) — full admin. For automation/CI.
+2. **Static viewer token** (`NCC_API_VIEWER_TOKEN`) — read-only. Hand to
+   dashboards/scrapers. Must differ from the admin token.
+3. **Interactive login** (browser) — a role-bearing, signed **session cookie**
+   minted by either local password accounts or SAML SSO.
+
+`/api/v1/health` reports `rbac_enabled`, `login_enabled`, `local_login`, and
+`saml_enabled`. Routes enforce a minimum role; insufficient roles get `403`.
+
+#### First-run admin bootstrap (zero-config)
+
+When the api-server runs with a **writable user database** — `--users-db`
+(or `$NCC_USERS_DB`), which defaults to `<root>/.ncc-api-users.json`
+automatically when launched from inside a v2 stack — and that store is empty,
+the server **provisions an initial `admin` account with a random password** on
+first launch. The password is printed to the server log and also written to a
+`0600` `.ncc-initial-admin-password` file next to the database:
+
+```
+==================================================================
+ FIRST-RUN ADMIN CREATED
+   username: admin
+   password: 8s2Qd…(random)…Xv
+   You MUST change this password on first login.
+==================================================================
+```
+
+The bootstrap admin is flagged `must_change_password`: on first login the UI
+forces a password change (and the API blocks every other action with
+`403 NCC_API_PASSWORD_CHANGE_REQUIRED`) until `POST /api/v1/auth/change-password`
+succeeds (new password ≥ 8 chars; current password + CSRF verified). Once
+changed, the `.ncc-initial-admin-password` file is deleted. That admin can then
+add more local users, assign roles, and configure SAML from the UI.
+
+The database holds bcrypt password hashes, roles, the must-change flag, and the
+runtime SAML config (including the SP private key). It can be persisted two ways:
+
+- **`--users-db <path>`** — a local `0600` JSON file, written atomically. Used
+  for file/dev/stack and `docker-compose` installs.
+- **`--users-db-secret <name>`** (mutually exclusive with `--users-db`) — a
+  **Kubernetes Secret**, read/created/patched by the api-server over the
+  in-cluster API using its projected service-account token. The user-database
+  JSON lives under the `users.json` key (override with `--users-db-secret-key`);
+  the first-run admin password is written under `initial-admin-password` and
+  removed once changed. The namespace defaults to the pod's own
+  (`--users-db-secret-namespace` to override). This path uses a small built-in
+  REST client — no `client-go`, so the static binary/image stays lean.
+
+> **Encryption at rest — read this.** Kubernetes Secrets are only
+> base64-encoded by default, **not encrypted**. For the Secret store to be
+> "well encrypted," enable **etcd encryption-at-rest** on the cluster: an
+> external **KMS v2** provider (recommended) or `secretbox`/`aescbc` via a
+> kube-apiserver `EncryptionConfiguration`. See
+> [`k8s/encryption-config.example.yaml`](../k8s/encryption-config.example.yaml).
+> On managed clusters (EKS/GKE/AKS), enable the provider's KMS/envelope
+> encryption for Secrets. After enabling, re-encrypt existing Secrets with
+> `kubectl get secrets -A -o json | kubectl replace -f -`.
+
+The api-server is granted **least-privilege RBAC**
+([`k8s/rbac.yaml`](../k8s/rbac.yaml)): `create` at the namespace scope (which
+Kubernetes cannot restrict by name) plus `get`/`update`/`patch` limited to the
+single `ncc-v2-users` Secret via `resourceNames`. It cannot read other Secrets.
+
+The bundled deployments enable this by default. `docker-compose.yml` and
+`Dockerfile.api` use the file store on the persistent auth volume
+(`/app/data/auth/.ncc-api-users.json`); `k8s/api-deployment.yaml` uses the
+Kubernetes Secret store (`--users-db-secret ncc-v2-users`). Retrieve the
+first-run password:
+
+```bash
+# docker compose (file store): from the logs
+docker compose logs ncc-api-server | grep -A4 "FIRST-RUN ADMIN"
+
+# Kubernetes (Secret store): from the Secret (or the pod logs)
+kubectl -n ncc-orchestrator-v2 get secret ncc-v2-users \
+  -o jsonpath='{.data.initial-admin-password}' | base64 -d
+kubectl -n ncc-orchestrator-v2 logs deploy/ncc-v2-api | grep -A4 "FIRST-RUN ADMIN"
+```
+
+#### Local password accounts
+
+Admins manage accounts at runtime from **Settings → Access** (or the API):
+
+- `GET /api/v1/settings/users` — list accounts (no hashes)
+- `POST /api/v1/settings/users` — create `{username,password,role}` (the new
+  account must change its password on first login by default)
+- `PUT /api/v1/settings/users/<name>` — change role and/or reset password
+- `DELETE /api/v1/settings/users/<name>` — remove an account
+
+The last remaining admin cannot be demoted or deleted
+(`409 NCC_API_LAST_ADMIN`). In addition, the built-in `admin` account is
+reserved: its role is hardcoded to `admin` and can never be changed, and the
+account can never be deleted (`409 NCC_API_RESERVED_ADMIN`), regardless of how
+many other admins exist. A hand-edited store/Secret that demotes `admin` is
+coerced back to `admin` on load. `POST /api/v1/auth/login` `{username,password}`
+verifies the bcrypt hash and sets the session cookie; `POST /api/v1/auth/logout`
+clears it; `GET /api/v1/auth/me` reports the caller's role and must-change state.
+
+For automated/provisioned installs you can pre-seed accounts with a read-only
+YAML file (`--users-file` / `$NCC_USERS_FILE`); it is imported **once** into the
+database when the store is empty (and then ignored), bypassing the random-admin
+bootstrap. Generate hashes with `ncc-api-server --hash-password`.
+
+#### Password recovery
+
+There are two recovery paths, depending on who is locked out.
+
+**Lost admin (or any) password — offline CLI reset.** With host/cluster access
+to the user store you can reset any local account without logging in. Use the
+orchestrator wrapper (it locates the api binary and the stack's user store):
+
+```bash
+# Reset the built-in admin (defaults to --user admin)
+ncc-orchestrator v2-reset-password
+
+# Reset a specific user
+ncc-orchestrator v2-reset-password --user alice
+
+# Against a Kubernetes Secret store instead of a file
+ncc-orchestrator v2-reset-password --user admin --users-db-secret ncc-v2-users
+```
+
+or call the api-server directly with the same store flags the server uses:
+
+```bash
+ncc-api-server --reset-admin --users-db /path/to/.ncc-api-users.json
+ncc-api-server --reset-password alice --users-db-secret ncc-v2-users
+```
+
+The reset writes a **new random temporary password** to the store (printed to
+the console), flags the account `must_change_password`, and **bumps the token
+generation so every existing session for that account is invalidated**. If the
+built-in `admin` was wiped from the store it is **recreated**. Because a running
+api-server caches accounts in memory, **restart it** (`v2-stop` then `v2-start`,
+or restart the pod) for the new password to take effect; the user then logs in
+with the temporary password and is forced to change it.
+
+**A user forgot their password — self-service request queue (no email).** The
+login page has a **"Forgot password?"** link. Submitting a username calls the
+public `POST /api/v1/auth/forgot-password`, which **always returns a generic
+200** (it never reveals whether the account exists — no enumeration) and records
+a request **only** for an existing local account. Admins see pending requests in
+**Settings → Access → Password reset requests** (`GET /api/v1/settings/password-resets`),
+verify each one out-of-band, and either **Reset password** (sharing the
+temporary password securely — this clears the request automatically) or
+**Dismiss** it (`DELETE /api/v1/settings/password-resets/<name>`). The queue is
+persisted in the user store and is rate-limited via the global limiter; no admin
+emails are stored, so the queue + the `auth.forgot_password` audit line are the
+notification surface.
+
+#### SAML SSO
+
+SAML can be configured two ways:
+
+1. **Startup flags** (read-only at runtime): `--saml-root-url`,
+   `--saml-idp-metadata` (URL or file), `--saml-cert`, `--saml-key`.
+2. **Runtime, in the UI** (Settings → Access, or `GET/PUT /api/v1/settings/sso`):
+   paste/point at the IdP metadata and role mapping; the config is persisted in
+   the user database and the SP is **hot-reloaded without a restart**. The SP
+   signing keypair is **generated on the server** the first time SAML is enabled
+   — the private key never leaves the server and is never uploaded through the
+   browser. Hand your IdP the SP metadata URL shown in the UI
+   (`<root>/saml/metadata`).
+
+Either way the server exposes `/saml/metadata` and `/saml/acs`; `/saml/login`
+starts the SP-initiated flow. Map IdP group/role attribute values to local roles
+with the role attribute + role map (e.g. `ncc-admins=admin,ncc-ops=operator`);
+unmatched users fall back to the default role (`viewer`). SAML requires the
+api-server to be reachable at the external root URL over TLS.
+
+#### LDAP / Active Directory
+
+Users can sign in on the normal username/password login form with their AD/LDAP
+credentials. Login is **local-first, then AD fallback**: the built-in `admin`
+and any break-glass local accounts always work even if the directory is down or
+misconfigured. AD users get a normal role session but no local password
+(self-service password change is not offered for them).
+
+Authentication uses a **service-account bind + search + rebind**: the server
+binds the read-only service account, searches `base_dn` with the user filter
+(default `(&(objectClass=user)(sAMAccountName=%s))`), then re-binds as the found
+user DN to verify the password. An empty password is rejected up front so an
+LDAP anonymous bind can never be mistaken for a successful login, and the login
+name is escaped into the search filter.
+
+Configure it two ways:
+
+1. **Startup flags** (read-only at runtime): `--ldap-url` (comma-separated for
+   failover), `--ldap-base-dn`, `--ldap-bind-dn`, `--ldap-bind-password`,
+   `--ldap-user-filter`, `--ldap-username-attribute`, `--ldap-group-attribute`,
+   `--ldap-role-map`, `--ldap-default-role`, `--ldap-start-tls`,
+   `--ldap-ca-file`, `--ldap-insecure-skip-verify`.
+2. **Runtime, in the UI** (Settings → Access, or `GET/PUT /api/v1/settings/ldap`):
+   the config is persisted in the user database and hot-reloaded without a
+   restart. A **Test connection** button (`POST /api/v1/settings/ldap/test`)
+   authenticates a sample user to verify connectivity and role mapping before
+   saving.
+
+Map AD groups to local roles by group DN or CN, one per line (or
+semicolon-separated):
+`CN=NCC-Admins,OU=Groups,DC=corp,DC=example,DC=com=admin`. Matching is
+case-insensitive and the highest matching role wins; unmatched users fall back
+to the default role (`viewer`). Prefer `ldaps://` (or StartTLS); the bind
+password is a secret stored only in the `0600` user-store file or the Kubernetes
+Secret (encrypted at rest) and is **never returned** by the API. `InsecureSkipVerify`
+is supported but discouraged.
+
+#### Session cookies and CSRF
+
+Browser sessions use an **httpOnly, Secure, `SameSite=Strict`** cookie
+(`ncc_session`). Mutating requests authenticated by cookie must echo a
+double-submit CSRF token: the readable `ncc_csrf` cookie value in the
+`X-CSRF-Token` header (the UI does this automatically). Static-token automation
+sends no cookie and is exempt. `--cookie-insecure` drops the `Secure` attribute
+for local http development only.
+
+When local accounts, SAML, or LDAP/AD are configured, `auth-mode` is
+auto-upgraded to `hybrid` so static tokens (automation) and cookie sessions
+(browsers) both work.
+The `ncc-ui-server` detects login is enabled (via health) and stops injecting
+the shared admin token for browser traffic, forwarding each user's own session
+cookie instead — preventing privilege escalation. Override with the ui-server's
+`--login-mode {auto|on|off}`.
+
+For unauthenticated Prometheus scraping of `/metrics` on a private network, use
+the api-server's `--metrics-public` flag instead of sharing a token.
+
+---
+
 ## Reporting suspected tampering
 
 If a binary you downloaded does not match `checksums.txt`, or

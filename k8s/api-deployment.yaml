@@ -15,6 +15,11 @@ spec:
         app: ncc-orchestrator-v2
         component: api
     spec:
+      # Dedicated service account whose RBAC (see rbac.yaml) lets the
+      # api-server read/create/patch ONLY the ncc-v2-users Secret that backs
+      # the user database. The Secret is encrypted at rest by etcd when the
+      # cluster has an EncryptionConfiguration (see encryption-config.example.yaml).
+      serviceAccountName: ncc-v2-api
       securityContext:
         fsGroup: 1000
         fsGroupChangePolicy: "OnRootMismatch"
@@ -58,6 +63,17 @@ spec:
             - "/tools/ncc-orchestrator"
             - "--token-file-path"
             - "/data/auth/.ncc-api-token"
+            # User database stored in a Kubernetes Secret (encrypted at rest by
+            # etcd) instead of a file on the PVC. On first launch the api-server
+            # provisions an `admin` account with a random password and writes it
+            # to the same Secret under `initial-admin-password`. Retrieve it via:
+            #   kubectl -n ncc-orchestrator-v2 get secret ncc-v2-users \
+            #     -o jsonpath='{.data.initial-admin-password}' | base64 -d
+            # (also printed to `kubectl logs deploy/ncc-v2-api`). You must change
+            # it on first login; auth-mode auto-upgrades to hybrid so the
+            # NCC_API_TOKEN automation path keeps working.
+            - "--users-db-secret"
+            - "ncc-v2-users"
             - "--auth-mode"
             - "token"
             - "--cors-origin"
