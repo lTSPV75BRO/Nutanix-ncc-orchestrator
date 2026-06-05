@@ -622,6 +622,55 @@ persisted in the user store and is rate-limited via the global limiter; no admin
 emails are stored, so the queue + the `auth.forgot_password` audit line are the
 notification surface.
 
+**The admin is locked out — self-service via the same link.** When the
+forgot-password username is the built-in `admin`, queuing a request is useless
+(there may be no other admin to action it), so the server instead self-resets
+the admin exactly like first-run setup: it generates a **new random password**,
+forces a change at next login, and **invalidates all existing admin sessions**
+(token-generation bump). The new password is surfaced only through the
+**server logs** and the sibling **`.ncc-initial-admin-password`** file — it is
+**never returned over the network** (the HTTP response only confirms a reset was
+generated and tells the operator where to look). Recovery therefore still
+requires host/log access, the same trust boundary as the first-run bootstrap
+password and the offline `v2-reset-password --user admin` command. The trade-off
+is that an unauthenticated caller who can reach the login page can force-rotate
+the admin password (a nuisance/DoS that repeatedly invalidates the real admin's
+sessions) but **cannot learn the new password or take over the account**; every
+attempt is recorded with `admin_self_reset` in the `auth.forgot_password` audit
+line. A dedicated **per-IP cooldown (60s)** rejects rapid repeats with
+`429 NCC_API_RATE_LIMITED` on top of the global rate limiter; front a public
+deployment with network controls to blunt rotation from many source IPs.
+
+An authenticated admin can produce the same outcome from **Settings → Access →
+Reset password** on the `admin` row: the dialog offers **Generate & reset**
+(`PUT /api/v1/settings/users/admin` with `{"generate_password": true}`), which
+generates a random password, forces a change, invalidates admin sessions, and
+writes the bootstrap file — additionally returning the new password **once** in
+the response so the acting admin can share it securely (this path is authorized
+and CSRF-protected, unlike the anonymous login-screen route which never returns
+the password).
+
+#### Brute-force lockout and session revocation
+
+Login attempts are protected at two layers. The global per-IP rate limiter
+throttles bursts, and a **per-account lockout** (`--login-lockout-threshold`,
+default 5 within `--login-lockout-window` 15m) temporarily locks an account for
+`--login-lockout-duration` (15m), returning `429 NCC_API_ACCOUNT_LOCKED` with a
+`Retry-After` header. Because it keys on the username rather than the IP, it
+stops an attacker who rotates source IPs while grinding one account — something
+the IP limiter alone cannot. A successful login or any password reset clears the
+lockout; set the threshold to `0` to disable. The built-in `admin` is not
+exempt (so it is also protected), and remains recoverable via the
+forgot-password self-reset or the offline `v2-reset-password` command if locked.
+
+Every session is an HMAC token stamped with the account's **token generation**;
+bumping that generation invalidates all outstanding sessions for the user at
+once. Users can self-serve this with **Sign out everywhere**
+(`POST /api/v1/auth/logout-all`), and admins can force it for any account from
+Settings → Access (`PUT /api/v1/settings/users/<name>` with
+`{"revoke_sessions": true}`) — useful for incident response without rotating the
+user's password.
+
 #### SAML SSO
 
 SAML can be configured two ways:

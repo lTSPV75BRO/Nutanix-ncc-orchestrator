@@ -651,7 +651,52 @@ func (s *apiServer) appendAuditLine(line []byte) {
 
 // auditEntries reads and parses up to `limit` most recent audit entries,
 // optionally filtered by an action prefix or success flag.
-func (s *apiServer) auditEntries(limit int, actionPrefix string, onlyFailures bool) ([]map[string]interface{}, error) {
+// auditFilter narrows the audit entries returned by auditEntries. Zero-value
+// fields are ignored (no filtering on that dimension).
+type auditFilter struct {
+	actionPrefix string    // match entries whose "action" has this prefix
+	user         string    // case-insensitive exact match on "user"
+	onlyFailures bool      // keep only failed actions
+	since        time.Time // keep entries at or after this time
+	until        time.Time // keep entries at or before this time
+}
+
+// matches reports whether a decoded audit entry passes the filter.
+func (f auditFilter) matches(entry map[string]interface{}) bool {
+	if f.actionPrefix != "" {
+		act, _ := entry["action"].(string)
+		if !strings.HasPrefix(act, f.actionPrefix) {
+			return false
+		}
+	}
+	if f.onlyFailures {
+		if ok, _ := entry["success"].(bool); ok {
+			return false
+		}
+	}
+	if f.user != "" {
+		u, _ := entry["user"].(string)
+		if !strings.EqualFold(strings.TrimSpace(u), f.user) {
+			return false
+		}
+	}
+	if !f.since.IsZero() || !f.until.IsZero() {
+		ts, _ := entry["ts"].(string)
+		t, err := time.Parse(time.RFC3339, ts)
+		if err != nil {
+			return false
+		}
+		if !f.since.IsZero() && t.Before(f.since) {
+			return false
+		}
+		if !f.until.IsZero() && t.After(f.until) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *apiServer) auditEntries(limit int, f auditFilter) ([]map[string]interface{}, error) {
 	if strings.TrimSpace(s.auditLogPath) == "" {
 		return nil, nil
 	}
@@ -660,8 +705,8 @@ func (s *apiServer) auditEntries(limit int, actionPrefix string, onlyFailures bo
 	if limit <= 0 {
 		limit = 100
 	}
-	if limit > 1000 {
-		limit = 1000
+	if limit > 50000 {
+		limit = 50000
 	}
 	// Always return a non-nil slice so JSON encodes [] (not null), keeping the
 	// API shape stable for the UI even when the file doesn't exist yet.
@@ -685,16 +730,8 @@ func (s *apiServer) auditEntries(limit int, actionPrefix string, onlyFailures bo
 		if err := json.Unmarshal(ln, &entry); err != nil {
 			continue
 		}
-		if actionPrefix != "" {
-			act, _ := entry["action"].(string)
-			if !strings.HasPrefix(act, actionPrefix) {
-				continue
-			}
-		}
-		if onlyFailures {
-			if ok, _ := entry["success"].(bool); ok {
-				continue
-			}
+		if !f.matches(entry) {
+			continue
 		}
 		out = append(out, entry)
 	}

@@ -58,6 +58,28 @@ function readCookie(name: string): string {
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
+export type AuditQuery = {
+  limit?: number;
+  action?: string;
+  failures?: boolean;
+  user?: string;
+  since?: string;
+  until?: string;
+  format?: "csv";
+};
+
+function buildAuditPath(opts?: AuditQuery): string {
+  const params = new URLSearchParams();
+  if (typeof opts?.limit === "number" && opts.limit > 0) params.set("limit", String(opts.limit));
+  if (opts?.action) params.set("action", opts.action);
+  if (opts?.failures) params.set("failures", "1");
+  if (opts?.user) params.set("user", opts.user);
+  if (opts?.since) params.set("since", opts.since);
+  if (opts?.until) params.set("until", opts.until);
+  if (opts?.format) params.set("format", opts.format);
+  return params.size > 0 ? `/api/v1/audit?${params.toString()}` : "/api/v1/audit";
+}
+
 async function callApi<T>(path: string, init?: RequestInit): Promise<T> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 30000);
@@ -96,6 +118,45 @@ async function callApi<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(payload.error ?? response.statusText, response.status, payload.data);
   }
   return (payload.data ?? ({} as T)) as T;
+}
+
+// callApiEnvelope is like callApi but returns the full envelope so callers can
+// read the server-provided `message` (e.g. the admin self-reset guidance).
+async function callApiEnvelope<T>(path: string, init?: RequestInit): Promise<Envelope<T>> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 30000);
+  const method = (init?.method ?? "GET").toUpperCase();
+  const csrfHeader: Record<string, string> = {};
+  if (MUTATING_METHODS.has(method)) {
+    const csrf = readCookie("ncc_csrf");
+    if (csrf) csrfHeader["X-CSRF-Token"] = csrf;
+  }
+  const response = await fetch(path, {
+    ...init,
+    credentials: "same-origin",
+    signal: ctl.signal,
+    headers: {
+      "Content-Type": "application/json",
+      "X-Requested-With": "ncc-ui",
+      ...csrfHeader,
+      ...(init?.headers ?? {}),
+    },
+  }).finally(() => clearTimeout(timer));
+  const contentType = (response.headers.get("content-type") || "").toLowerCase();
+  if (!contentType.includes("application/json")) {
+    const textBody = (await response.text().catch(() => "")).trim();
+    const snippet = textBody ? `\n${textBody.slice(0, 600)}` : "";
+    throw new ApiError(
+      `unexpected response content-type: ${contentType || "unknown"}${snippet}`,
+      response.status,
+      undefined,
+    );
+  }
+  const payload = (await response.json().catch(() => ({}))) as Envelope<T>;
+  if (!response.ok || !payload.success) {
+    throw new ApiError(payload.error ?? response.statusText, response.status, payload.data);
+  }
+  return payload;
 }
 
 function tryParseJSON(raw: string, fallback: unknown): unknown {
@@ -208,13 +269,23 @@ export const api = {
   },
   reportTrends: (limit = 30) => callApi<ReportTrendsData>(`/api/v1/report/trends?limit=${encodeURIComponent(String(limit))}`),
   runnerLogs: () => callApi<RunnerLogData>("/api/v1/logs/runner"),
-  audit: (opts?: { limit?: number; action?: string; failures?: boolean }) => {
-    const params = new URLSearchParams();
-    if (typeof opts?.limit === "number" && opts.limit > 0) params.set("limit", String(opts.limit));
-    if (opts?.action) params.set("action", opts.action);
-    if (opts?.failures) params.set("failures", "1");
-    const path = params.size > 0 ? `/api/v1/audit?${params.toString()}` : "/api/v1/audit";
+  audit: (opts?: AuditQuery) => {
+    const path = buildAuditPath(opts);
     return callApi<AuditLogData>(path);
+  },
+  // auditExportCSV fetches the filtered audit log as CSV text (the backend
+  // streams a downloadable file). Returns the raw CSV so the caller can build a
+  // Blob download; uses a raw fetch because the response is not JSON.
+  auditExportCSV: async (opts?: AuditQuery): Promise<string> => {
+    const path = buildAuditPath({ ...opts, format: "csv" });
+    const response = await fetch(path, {
+      credentials: "same-origin",
+      headers: { "X-Requested-With": "ncc-ui" },
+    });
+    if (!response.ok) {
+      throw new ApiError(`audit export failed (${response.status})`, response.status, undefined);
+    }
+    return response.text();
   },
   me: () => callApi<MeData>("/api/v1/auth/me"),
   login: (username: string, password: string) =>
@@ -223,8 +294,9 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
   logout: () => callApi<unknown>("/api/v1/auth/logout", { method: "POST" }),
+  logoutAll: () => callApi<unknown>("/api/v1/auth/logout-all", { method: "POST" }),
   forgotPassword: (username: string) =>
-    callApi<unknown>("/api/v1/auth/forgot-password", {
+    callApiEnvelope<{ admin_reset?: boolean }>("/api/v1/auth/forgot-password", {
       method: "POST",
       body: JSON.stringify({ username }),
     }),
@@ -246,12 +318,21 @@ export const api = {
     callApi<unknown>("/api/v1/settings/users", { method: "POST", body: JSON.stringify(payload) }),
   updateUser: (
     username: string,
-    payload: { role?: UserRole; password?: string; must_change_password?: boolean },
+    payload: {
+      role?: UserRole;
+      password?: string;
+      must_change_password?: boolean;
+      generate_password?: boolean;
+      revoke_sessions?: boolean;
+    },
   ) =>
-    callApi<unknown>(`/api/v1/settings/users/${encodeURIComponent(username)}`, {
-      method: "PUT",
-      body: JSON.stringify(payload),
-    }),
+    callApi<{ temporary_password?: string; bootstrap_file?: string }>(
+      `/api/v1/settings/users/${encodeURIComponent(username)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      },
+    ),
   deleteUser: (username: string) =>
     callApi<unknown>(`/api/v1/settings/users/${encodeURIComponent(username)}`, { method: "DELETE" }),
   getSSO: () => callApi<SSOConfig>("/api/v1/settings/sso"),

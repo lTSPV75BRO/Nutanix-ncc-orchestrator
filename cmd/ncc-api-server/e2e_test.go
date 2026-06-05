@@ -7,6 +7,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -211,5 +212,146 @@ func TestEndToEndFirstRunAdminFlow(t *testing.T) {
 	code, env = do(http.MethodGet, "/api/v1/auth/me", "")
 	if data(env)["authenticated"] != false {
 		t.Fatalf("after logout, expected unauthenticated: %+v", data(env))
+	}
+}
+
+// TestEndToEndAdminForgotPasswordSelfReset exercises the admin lockout recovery
+// path over the real handler stack: an anonymous forgot-password for the
+// built-in admin self-resets it (first-run workflow) — the prior password stops
+// working, the new one lands only in the .ncc-initial-admin-password file,
+// /me re-advertises bootstrap_pending, and a second immediate attempt from the
+// same client is throttled (429).
+func TestEndToEndAdminForgotPasswordSelfReset(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openUserDB(filepath.Join(dir, "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrapPW, created, err := db.bootstrapAdminIfEmpty("admin")
+	if err != nil || !created {
+		t.Fatalf("bootstrap admin: created=%v err=%v", created, err)
+	}
+
+	s := &apiServer{
+		authMode:       "hybrid",
+		authToken:      "admin-static-token",
+		sessionSecret:  "test-session-secret-value",
+		sessionTTL:     10 * time.Minute,
+		sessionIssuer:  "ncc-api-server",
+		users:          db,
+		usersDBPath:    db.path,
+		cookieInsecure: true,
+		corsOrigin:     "http://localhost:8080",
+		startedAt:      time.Now().UTC(),
+	}
+
+	ts := httptest.NewServer(s.buildHandler())
+	defer ts.Close()
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+	baseURL, _ := url.Parse(ts.URL)
+
+	csrfToken := func() string {
+		for _, c := range jar.Cookies(baseURL) {
+			if c.Name == csrfCookieName {
+				return c.Value
+			}
+		}
+		return ""
+	}
+	do := func(method, path, body string) (int, map[string]any) {
+		t.Helper()
+		var rdr io.Reader
+		if body != "" {
+			rdr = strings.NewReader(body)
+		}
+		req, err := http.NewRequest(method, ts.URL+path, rdr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		if method != http.MethodGet && method != http.MethodHead {
+			if tok := csrfToken(); tok != "" {
+				req.Header.Set(csrfHeaderName, tok)
+			}
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, path, err)
+		}
+		defer resp.Body.Close()
+		var env map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&env)
+		return resp.StatusCode, env
+	}
+	data := func(env map[string]any) map[string]any {
+		d, _ := env["data"].(map[string]any)
+		return d
+	}
+
+	// Admin completes the forced change so the account is "settled" (no longer
+	// must-change) before we simulate a lockout.
+	code, _ := do(http.MethodPost, "/api/v1/auth/login", `{"username":"admin","password":"`+bootstrapPW+`"}`)
+	if code != http.StatusOK {
+		t.Fatalf("login: %d", code)
+	}
+	const settledPW = "settled-admin-password"
+	code, _ = do(http.MethodPost, "/api/v1/auth/change-password", `{"current_password":"`+bootstrapPW+`","new_password":"`+settledPW+`"}`)
+	if code != http.StatusOK {
+		t.Fatalf("change-password: %d", code)
+	}
+	do(http.MethodPost, "/api/v1/auth/logout", "")
+	// Drop the initial password file the bootstrap wrote, so we can prove the
+	// self-reset rewrites it.
+	pwFile := filepath.Join(dir, ".ncc-initial-admin-password")
+	_ = os.Remove(pwFile)
+
+	// Anonymous forgot-password for admin self-resets the account.
+	code, env := do(http.MethodPost, "/api/v1/auth/forgot-password", `{"username":"admin"}`)
+	if code != http.StatusOK {
+		t.Fatalf("forgot admin: %d (%+v)", code, env)
+	}
+	if data(env)["admin_reset"] != true {
+		t.Fatalf("forgot admin should self-reset: %+v", env)
+	}
+
+	// The settled password no longer works; bootstrap_pending is re-advertised.
+	code, _ = do(http.MethodPost, "/api/v1/auth/login", `{"username":"admin","password":"`+settledPW+`"}`)
+	if code == http.StatusOK {
+		t.Fatal("old admin password should be invalid after self-reset")
+	}
+	code, env = do(http.MethodGet, "/api/v1/auth/me", "")
+	if data(env)["bootstrap_pending"] != true {
+		t.Fatalf("bootstrap_pending should be re-advertised: %+v", data(env))
+	}
+
+	// The new temporary password is only retrievable from the sibling file.
+	raw, err := os.ReadFile(pwFile)
+	if err != nil {
+		t.Fatalf("initial password file not rewritten: %v", err)
+	}
+	var newPW string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(line, "password:") {
+			newPW = strings.TrimSpace(strings.TrimPrefix(line, "password:"))
+		}
+	}
+	if newPW == "" {
+		t.Fatalf("no password line in file: %s", string(raw))
+	}
+	code, env = do(http.MethodPost, "/api/v1/auth/login", `{"username":"admin","password":"`+newPW+`"}`)
+	if code != http.StatusOK {
+		t.Fatalf("login with regenerated password: %d (%+v)", code, env)
+	}
+	if data(env)["must_change_password"] != true {
+		t.Fatalf("regenerated admin must be forced to change: %+v", data(env))
+	}
+
+	// A second immediate self-reset from the same client is throttled.
+	code, env = do(http.MethodPost, "/api/v1/auth/forgot-password", `{"username":"admin"}`)
+	if code != http.StatusTooManyRequests {
+		t.Fatalf("second admin self-reset should be throttled (429), got %d (%+v)", code, env)
 	}
 }

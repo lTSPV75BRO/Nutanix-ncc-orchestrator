@@ -4412,3 +4412,131 @@ func TestBackupRestoreRoundTripRecordsOrchestratorVersion(t *testing.T) {
 		t.Errorf("restored user DB missing: %v", err)
 	}
 }
+
+// TestHealRestoredConfigPaths verifies a Windows-origin backup's file-reference
+// paths are rebased onto a Unix install dir and separators normalized, so a
+// cross-OS restore "just works".
+func TestHealRestoredConfigPaths(t *testing.T) {
+	dir := t.TempDir()
+	oldInstall := `C:\ncc\.ncc-v2`
+	cfg := "prismCentral: pc\n" +
+		"clusters-file: " + `C:\ncc\.ncc-v2\clusters.txt` + "\n" +
+		"output-dir-filtered: " + `C:\ncc\.ncc-v2\outputfiles` + "\n" +
+		"log-file: " + `logs\ncc-runner.log` + "\n" +
+		"secrets-file: " + `D:\shared\secrets.yaml` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, warnings := healRestoredConfigPaths(dir, oldInstall)
+	if len(changed) == 0 {
+		t.Fatalf("expected some keys healed; got none (warnings=%v)", warnings)
+	}
+	out, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(out)
+
+	// Paths under the old install dir are rebased to relative paths.
+	if v := healTestVal(t, got, "clusters-file"); v != "clusters.txt" {
+		t.Errorf("clusters-file = %q, want clusters.txt", v)
+	}
+	if v := healTestVal(t, got, "output-dir-filtered"); v != "outputfiles" {
+		t.Errorf("output-dir-filtered = %q, want outputfiles", v)
+	}
+	// Backslashes in a relative path are normalized to forward slashes.
+	if v := healTestVal(t, got, "log-file"); v != "logs/ncc-runner.log" {
+		t.Errorf("log-file = %q, want logs/ncc-runner.log", v)
+	}
+	// An absolute path outside the old install dir can't be rebased and is
+	// normalized but reported as a warning.
+	foundWarn := false
+	for _, w := range warnings {
+		if strings.Contains(w, "secrets-file") {
+			foundWarn = true
+		}
+	}
+	if !foundWarn {
+		t.Errorf("expected a warning about secrets-file; warnings=%v", warnings)
+	}
+}
+
+func healTestVal(t *testing.T, content, key string) string {
+	t.Helper()
+	return yamlScalarValue(content, key)
+}
+
+// TestBackupManifestSurfacesSAMLAndLDAP asserts the manifest's auth summary
+// reflects SAML/LDAP coverage (including whether the SP key and LDAP bind
+// password travelled with the archive), since those secrets live inside
+// .ncc-api-users.json rather than in their own files.
+func TestBackupManifestSurfacesSAMLAndLDAP(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "config.yaml"), []byte("prismCentral: pc\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	usersDB := `{
+		"users":[{"username":"admin"},{"username":"alice"}],
+		"saml":{"enabled":true,"sp_key_pem":"-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----"},
+		"ldap":{"enabled":true,"url":"ldaps://dc1","base_dn":"DC=corp","bind_password":"s3cret"}
+	}`
+	if err := os.WriteFile(filepath.Join(src, ".ncc-api-users.json"), []byte(usersDB), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Direct summary check first.
+	s := summarizeAuthProviders(filepath.Join(src, ".ncc-api-users.json"))
+	if s == nil {
+		t.Fatal("summarizeAuthProviders returned nil")
+	}
+	if s.LocalAccounts != 2 {
+		t.Errorf("local accounts = %d, want 2", s.LocalAccounts)
+	}
+	if !s.SAMLPresent || !s.SAMLEnabled || !s.SAMLHasSPKey {
+		t.Errorf("SAML summary = %+v, want present+enabled+has-key", s)
+	}
+	if !s.LDAPPresent || !s.LDAPEnabled || !s.LDAPHasBindPassword {
+		t.Errorf("LDAP summary = %+v, want present+enabled+has-bind-password", s)
+	}
+
+	// And confirm it is persisted into the archive manifest.
+	out := filepath.Join(t.TempDir(), "backup.tar.gz")
+	if err := runV2Backup(v2BackupOptions{InstallDir: src, OutputFile: out}); err != nil {
+		t.Fatalf("v2-backup: %v", err)
+	}
+	f, err := os.Open(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	var manifest *backupManifest
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hdr.Name == "manifest.json" {
+			var m backupManifest
+			if err := json.NewDecoder(tr).Decode(&m); err != nil {
+				t.Fatal(err)
+			}
+			manifest = &m
+		}
+	}
+	if manifest == nil || manifest.Auth == nil {
+		t.Fatal("manifest missing auth summary")
+	}
+	if !manifest.Auth.SAMLHasSPKey || !manifest.Auth.LDAPHasBindPassword {
+		t.Errorf("manifest auth summary = %+v, want SAML SP key + LDAP bind password recorded", manifest.Auth)
+	}
+}

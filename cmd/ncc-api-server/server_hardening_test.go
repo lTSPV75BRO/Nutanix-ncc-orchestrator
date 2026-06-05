@@ -158,15 +158,19 @@ func TestSecurityResponseHeaders(t *testing.T) {
 		t.Errorf("Access-Control-Allow-Headers missing X-CSRF-Token: %q", got)
 	}
 
-	// The Swagger UI page gets a scoped CSP that permits its bundle/styles.
+	// The Swagger UI page gets a scoped CSP that permits its (self-hosted)
+	// bundle/styles and trusts no external CDN origin.
 	resp2, err := http.Get(ts.URL + "/docs/ui")
 	if err != nil {
 		t.Fatal(err)
 	}
 	resp2.Body.Close()
 	csp := resp2.Header.Get("Content-Security-Policy")
-	if !strings.Contains(csp, "script-src") || !strings.Contains(csp, "unpkg.com") {
-		t.Errorf("/docs/ui CSP not scoped for assets: %q", csp)
+	if !strings.Contains(csp, "script-src 'self'") || !strings.Contains(csp, "style-src 'self'") {
+		t.Errorf("/docs/ui CSP not scoped for self-hosted assets: %q", csp)
+	}
+	if strings.Contains(csp, "unpkg.com") {
+		t.Errorf("/docs/ui CSP should no longer trust unpkg.com: %q", csp)
 	}
 	if strings.Contains(csp, "form-action 'none'") {
 		t.Errorf("/docs/ui should not get the strict API CSP: %q", csp)

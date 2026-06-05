@@ -257,6 +257,23 @@ function FieldControl({
         />
       );
     }
+    case "textarea": {
+      const v = readString(doc, field.key);
+      return (
+        <Input.TextArea
+          id={id}
+          name={field.key}
+          value={v}
+          placeholder={field.placeholder}
+          autoSize={{ minRows: 2, maxRows: 6 }}
+          autoComplete={field.autoComplete ?? "off"}
+          onChange={(e) => {
+            writeKey(doc, field.key, e.target.value);
+            onChange();
+          }}
+        />
+      );
+    }
     case "duration":
     case "string":
     case "list-csv":

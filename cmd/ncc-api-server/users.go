@@ -471,6 +471,22 @@ func (db *userDB) setPassword(username, passwordHash string, mustChange bool) er
 	return db.saveLocked()
 }
 
+// revokeSessions bumps the account's token generation, invalidating every
+// previously issued session for the user without touching the password. Used by
+// self-service "sign out everywhere" and admin force-sign-out.
+func (db *userDB) revokeSessions(username string) error {
+	key := strings.ToLower(strings.TrimSpace(username))
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	a, ok := db.accounts[key]
+	if !ok {
+		return errUserNotFound
+	}
+	a.TokenGen++
+	a.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	return db.saveLocked()
+}
+
 // adminResetPassword sets the named account to a new random temporary password,
 // forces a change at next login, and (via setPassword) bumps the token
 // generation so every existing session for that account is invalidated. The

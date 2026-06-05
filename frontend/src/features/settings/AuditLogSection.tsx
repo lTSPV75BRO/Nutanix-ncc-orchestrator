@@ -4,6 +4,7 @@ import {
   Alert,
   Button,
   Card,
+  DatePicker,
   Empty,
   Input,
   Modal,
@@ -20,12 +21,14 @@ import {
   CloseCircleOutlined,
   CopyOutlined,
   DownloadOutlined,
+  FileExcelOutlined,
   FileTextOutlined,
   ReloadOutlined,
   SearchOutlined,
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
-import { api } from "../../api/client";
+import dayjs, { type Dayjs } from "dayjs";
+import { api, type AuditQuery } from "../../api/client";
 import type { AuditLogEntry } from "../../api/types";
 import { notify } from "../../notify";
 
@@ -83,11 +86,26 @@ export function AuditLogSection({ onError }: Props) {
   const [onlyFailures, setOnlyFailures] = useState(false);
   const [limit, setLimit] = useState(200);
   const [search, setSearch] = useState("");
+  const [userFilter, setUserFilter] = useState("");
+  const [range, setRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [selected, setSelected] = useState<AuditLogEntry | null>(null);
 
+  const since = range?.[0] ? range[0].format("YYYY-MM-DD") : undefined;
+  const until = range?.[1] ? range[1].format("YYYY-MM-DD") : undefined;
+
+  const queryParams: AuditQuery = {
+    limit,
+    action: actionFilter || undefined,
+    failures: onlyFailures,
+    user: userFilter.trim() || undefined,
+    since,
+    until,
+  };
+
   const audit = useQuery({
-    queryKey: ["audit", actionFilter, onlyFailures, limit],
-    queryFn: () => api.audit({ limit, action: actionFilter || undefined, failures: onlyFailures }),
+    queryKey: ["audit", actionFilter, onlyFailures, limit, userFilter.trim(), since, until],
+    queryFn: () => api.audit(queryParams),
     staleTime: 5_000,
   });
 
@@ -212,6 +230,27 @@ export function AuditLogSection({ onError }: Props) {
     notify.success("Audit entries exported as JSONL.");
   };
 
+  const exportCsv = async () => {
+    setExporting(true);
+    try {
+      const csv = await api.auditExportCSV({ ...queryParams, limit: Math.max(limit, 1000) });
+      const blob = new Blob([csv], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `audit-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      notify.success("Audit entries exported as CSV (server-side filtered).");
+    } catch (e) {
+      onError(e);
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const copyEntry = (entry: AuditLogEntry) => {
     const { __idx: _omit, ...rest } = entry as AuditRow;
     void navigator.clipboard.writeText(JSON.stringify(rest, null, 2)).then(() => {
@@ -264,15 +303,34 @@ export function AuditLogSection({ onError }: Props) {
           </Typography.Text>
         </Space>
         <Input
+          id="audit-user-filter"
+          name="audit-user-filter"
+          aria-label="Filter by user"
+          allowClear
+          placeholder="User (exact)"
+          value={userFilter}
+          onChange={(e) => setUserFilter(e.target.value)}
+          style={{ width: 160 }}
+          autoComplete="off"
+        />
+        <DatePicker.RangePicker
+          aria-label="Filter by date range"
+          value={range as never}
+          onChange={(v) => setRange(v as [Dayjs | null, Dayjs | null] | null)}
+          allowEmpty={[true, true]}
+          disabledDate={(d) => d && d.isAfter(dayjs().endOf("day"))}
+          style={{ width: 250 }}
+        />
+        <Input
           id="audit-search"
           name="audit-search"
-          aria-label="Search audit entries"
+          aria-label="Search audit entries (client-side)"
           allowClear
           prefix={<SearchOutlined />}
-          placeholder="Search entries…"
+          placeholder="Search shown…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          style={{ width: 240 }}
+          style={{ width: 200 }}
           autoComplete="off"
         />
         <Tooltip title="Refresh">
@@ -280,6 +338,11 @@ export function AuditLogSection({ onError }: Props) {
         </Tooltip>
         <Tooltip title="Download displayed entries as JSONL">
           <Button icon={<DownloadOutlined />} onClick={downloadJsonl} disabled={filtered.length === 0} />
+        </Tooltip>
+        <Tooltip title="Export server-side filtered entries as CSV">
+          <Button icon={<FileExcelOutlined />} onClick={() => void exportCsv()} loading={exporting}>
+            CSV
+          </Button>
         </Tooltip>
       </Space>
 

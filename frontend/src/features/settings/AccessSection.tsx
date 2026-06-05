@@ -23,8 +23,10 @@ import {
   DeleteOutlined,
   DownloadOutlined,
   KeyOutlined,
+  LogoutOutlined,
   PlusOutlined,
   ReloadOutlined,
+  SearchOutlined,
   UploadOutlined,
   WarningOutlined,
 } from "@ant-design/icons";
@@ -63,6 +65,7 @@ function UsersCard() {
   const usersQuery = useQuery({ queryKey: ["settings", "users"], queryFn: api.listUsers });
   const [createOpen, setCreateOpen] = useState(false);
   const [resetUser, setResetUser] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
   const [createForm] = Form.useForm();
   const [resetForm] = Form.useForm();
 
@@ -89,15 +92,55 @@ function UsersCard() {
   });
 
   const resetMut = useMutation({
-    mutationFn: (v: { username: string; password: string }) =>
-      api.updateUser(v.username, { password: v.password, must_change_password: true }),
-    onSuccess: () => {
-      notify.success("Password reset; the user must change it on next login.");
+    mutationFn: (v: { username: string; password?: string; generate?: boolean }) =>
+      api.updateUser(
+        v.username,
+        v.generate
+          ? { generate_password: true }
+          : { password: v.password, must_change_password: true },
+      ),
+    onSuccess: (res, vars) => {
       setResetUser(null);
       resetForm.resetFields();
       void refresh();
+      if (vars.generate) {
+        const pw = res?.temporary_password;
+        if (pw) {
+          Modal.success({
+            title: "Temporary admin password generated",
+            content: (
+              <div>
+                <Typography.Paragraph style={{ marginBottom: 8 }}>
+                  Share this securely. The admin must change it on next login, and
+                  all existing admin sessions have been signed out.
+                </Typography.Paragraph>
+                <Typography.Text code copyable={{ text: pw }} style={{ fontSize: 15 }}>
+                  {pw}
+                </Typography.Text>
+              </div>
+            ),
+          });
+        } else {
+          notify.success(
+            "Admin password reset. Retrieve the new password from the server logs or the .ncc-initial-admin-password file.",
+          );
+        }
+      } else {
+        notify.success("Password reset; the user must change it on next login.");
+      }
     },
     onError: (e) => notifyError(e, "Failed to reset password"),
+  });
+
+  const resetIsAdmin = resetUser !== null && isReservedAdmin(resetUser);
+
+  const revokeMut = useMutation({
+    mutationFn: (username: string) => api.updateUser(username, { revoke_sessions: true }),
+    onSuccess: (_res, username) => {
+      notify.success(`All sessions for ${username} have been signed out.`);
+      void refresh();
+    },
+    onError: (e) => notifyError(e, "Failed to sign out sessions"),
   });
 
   const deleteMut = useMutation({
@@ -110,6 +153,13 @@ function UsersCard() {
   });
 
   const users = (usersQuery.data?.users ?? []) as UserAccount[];
+  const query = search.trim().toLowerCase();
+  const filteredUsers = query
+    ? users.filter(
+        (u) =>
+          u.username.toLowerCase().includes(query) || (u.role ?? "").toLowerCase().includes(query),
+      )
+    : users;
 
   return (
     <Card
@@ -130,11 +180,22 @@ function UsersCard() {
         Manage password accounts and roles. Roles: <Tag color="gold">admin</Tag> full access,{" "}
         <Tag color="blue">operator</Tag> can trigger/cancel runs, <Tag>viewer</Tag> is read-only.
       </Typography.Paragraph>
+      <Input
+        allowClear
+        prefix={<SearchOutlined />}
+        placeholder="Search by username or role"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        style={{ maxWidth: 320, marginBottom: 12 }}
+      />
       <Table
         rowKey="username"
         size="small"
         loading={usersQuery.isLoading}
-        dataSource={users}
+        dataSource={filteredUsers}
+        locale={{
+          emptyText: query && users.length > 0 ? `No accounts match “${search.trim()}”.` : undefined,
+        }}
         pagination={false}
         columns={[
           { title: "Username", dataIndex: "username" },
@@ -176,6 +237,18 @@ function UsersCard() {
                   <Button size="small" icon={<KeyOutlined />} onClick={() => setResetUser(rec.username)}>
                     Reset password
                   </Button>
+                  <Popconfirm
+                    title={`Sign out all sessions for ${rec.username}?`}
+                    description="Existing tokens for this user stop working immediately."
+                    onConfirm={() => revokeMut.mutate(rec.username)}
+                    okButtonProps={{ danger: true }}
+                  >
+                    <Tooltip title="Invalidate all active sessions for this user">
+                      <Button size="small" icon={<LogoutOutlined />} loading={revokeMut.isPending}>
+                        Sign out
+                      </Button>
+                    </Tooltip>
+                  </Popconfirm>
                   {locked ? (
                     <Tooltip title={RESERVED_ADMIN_HINT}>
                       <Button size="small" danger icon={<DeleteOutlined />} disabled>
@@ -232,25 +305,42 @@ function UsersCard() {
       <Modal
         title={`Reset password — ${resetUser ?? ""}`}
         open={resetUser !== null}
-        onCancel={() => setResetUser(null)}
-        onOk={() => resetForm.submit()}
+        onCancel={() => {
+          setResetUser(null);
+          resetForm.resetFields();
+        }}
+        onOk={() =>
+          resetIsAdmin
+            ? resetUser && resetMut.mutate({ username: resetUser, generate: true })
+            : resetForm.submit()
+        }
         confirmLoading={resetMut.isPending}
-        okText="Reset"
+        okText={resetIsAdmin ? "Generate & reset" : "Reset"}
       >
-        <Form
-          form={resetForm}
-          layout="vertical"
-          onFinish={(v) => resetUser && resetMut.mutate({ username: resetUser, password: v.password })}
-        >
-          <Form.Item
-            name="password"
-            label="New temporary password"
-            rules={[{ required: true }, { min: 8, message: "Use at least 8 characters" }]}
-            extra="The user must change it on next login."
+        {resetIsAdmin ? (
+          <Typography.Paragraph type="secondary" style={{ fontSize: 13, marginBottom: 0 }}>
+            The built-in <code>admin</code> password will be reset to a new random value, following
+            the same workflow as first-run setup: the admin must change it on next login, all
+            existing admin sessions are signed out, and the new password is also written to the
+            server logs and the <code>.ncc-initial-admin-password</code> file. It will be shown once
+            here so you can share it securely.
+          </Typography.Paragraph>
+        ) : (
+          <Form
+            form={resetForm}
+            layout="vertical"
+            onFinish={(v) => resetUser && resetMut.mutate({ username: resetUser, password: v.password })}
           >
-            <Input.Password autoComplete="new-password" />
-          </Form.Item>
-        </Form>
+            <Form.Item
+              name="password"
+              label="New temporary password"
+              rules={[{ required: true }, { min: 8, message: "Use at least 8 characters" }]}
+              extra="The user must change it on next login."
+            >
+              <Input.Password autoComplete="new-password" />
+            </Form.Item>
+          </Form>
+        )}
       </Modal>
     </Card>
   );
@@ -385,7 +475,7 @@ function PasswordResetRequestsCard() {
   );
 }
 
-function SSOCard() {
+function SSOCard({ embedded }: { embedded?: boolean }) {
   const qc = useQueryClient();
   const ssoQuery = useQuery({ queryKey: ["settings", "sso"], queryFn: api.getSSO });
   const [form] = Form.useForm();
@@ -414,14 +504,8 @@ function SSOCard() {
     onError: (e) => notifyError(e, "Failed to save SSO config"),
   });
 
-  return (
-    <Card
-      className="page-card"
-      title="Single sign-on (SAML)"
-      extra={
-        <Tag color={cfg?.enabled ? "green" : "default"}>{cfg?.enabled ? "enabled" : "disabled"}</Tag>
-      }
-    >
+  const body = (
+    <>
       {managedByFlags ? (
         <Alert
           type="info"
@@ -505,6 +589,18 @@ function SSOCard() {
           </Form.Item>
         ) : null}
       </Form>
+    </>
+  );
+  if (embedded) return body;
+  return (
+    <Card
+      className="page-card"
+      title="Single sign-on (SAML)"
+      extra={
+        <Tag color={cfg?.enabled ? "green" : "default"}>{cfg?.enabled ? "enabled" : "disabled"}</Tag>
+      }
+    >
+      {body}
     </Card>
   );
 }
@@ -617,16 +713,47 @@ function BackupRestoreCard() {
     }
   };
 
+  // Poll the backend health endpoint until the restarted stack answers, then
+  // reload so the app re-bootstraps against the restored config/session.
+  const waitForRestartAndReload = async () => {
+    const deadline = Date.now() + 120_000;
+    // The old api/ui servers are being torn down; give them a head start.
+    await new Promise((r) => setTimeout(r, 4000));
+    while (Date.now() < deadline) {
+      try {
+        const resp = await fetch("/api/v1/health", { cache: "no-store" });
+        if (resp.ok) break;
+      } catch {
+        // still down — keep waiting
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    window.location.reload();
+  };
+
   const doRestore = async (file: File) => {
     setRestoring(true);
     try {
       const res = await api.restoreBackup(file);
-      Modal.success({
-        title: "Backup restored",
-        content:
-          res.message ??
-          "Restart the stack (v2-stop then v2-start) for the restored data to take effect.",
-      });
+      const data = (res.data ?? {}) as { restarting?: boolean };
+      if (data.restarting) {
+        Modal.success({
+          title: "Backup restored — restarting",
+          content:
+            res.message ??
+            "The stack is restarting to load the restored data. This page will reconnect automatically.",
+          okText: "OK",
+        });
+        // Fire-and-forget: reconnect once the restarted stack is healthy.
+        void waitForRestartAndReload();
+      } else {
+        Modal.success({
+          title: "Backup restored",
+          content:
+            res.message ??
+            "Restart the stack (v2-stop then v2-start) for the restored data to take effect.",
+        });
+      }
     } catch (e) {
       notifyError(e, "Restore failed");
     } finally {
@@ -649,9 +776,9 @@ function BackupRestoreCard() {
             scheduler/notification state.
           </Typography.Paragraph>
           <Typography.Paragraph style={{ marginBottom: 0 }}>
-            <b>You must restart the stack</b> (v2-stop then v2-start, or restart the api-server)
-            afterward for it to take effect — and your current session may end if the API token
-            changes.
+            The stack will <b>restart automatically</b> afterward to load the restored data — this
+            page will reconnect on its own, and you may be asked to sign in again if the API token
+            or your account changed.
           </Typography.Paragraph>
         </div>
       ),
@@ -676,8 +803,8 @@ function BackupRestoreCard() {
         Download a full backup of this install — configuration and referenced files, local accounts
         and roles, the API token, and scheduler/notification state — as a single{" "}
         <Typography.Text code>.tar.gz</Typography.Text>. The archive contains secrets, so store it
-        securely. Restoring overwrites the current install and requires a stack restart to take
-        effect.
+        securely. Restoring overwrites the current install and then restarts the stack automatically
+        — backups are portable across OS and version, so a Windows backup restores onto Linux/macOS.
       </Typography.Paragraph>
       <Space wrap>
         <Button icon={<DownloadOutlined />} onClick={handleDownload} loading={downloading}>
@@ -697,7 +824,7 @@ function BackupRestoreCard() {
   );
 }
 
-function LDAPCard() {
+function LDAPCard({ embedded }: { embedded?: boolean }) {
   const qc = useQueryClient();
   const ldapQuery = useQuery({ queryKey: ["settings", "ldap"], queryFn: api.getLDAP });
   const [form] = Form.useForm();
@@ -766,13 +893,8 @@ function LDAPCard() {
     }
   };
 
-  return (
-    <Card
-      className="page-card"
-      title="LDAP / Active Directory"
-      extra={<Tag color={cfg?.enabled ? "green" : "default"}>{cfg?.enabled ? "enabled" : "disabled"}</Tag>}
-      loading={ldapQuery.isLoading}
-    >
+  const body = (
+    <>
       {managedByFlags ? (
         <Alert
           type="info"
@@ -924,6 +1046,59 @@ function LDAPCard() {
           </Form.Item>
         </Form>
       </Modal>
+    </>
+  );
+  if (embedded) return body;
+  return (
+    <Card
+      className="page-card"
+      title="LDAP / Active Directory"
+      extra={<Tag color={cfg?.enabled ? "green" : "default"}>{cfg?.enabled ? "enabled" : "disabled"}</Tag>}
+      loading={ldapQuery.isLoading}
+    >
+      {body}
+    </Card>
+  );
+}
+
+function ExternalAuthCard() {
+  const ssoQuery = useQuery({ queryKey: ["settings", "sso"], queryFn: api.getSSO });
+  const ldapQuery = useQuery({ queryKey: ["settings", "ldap"], queryFn: api.getLDAP });
+  const samlOn = Boolean((ssoQuery.data as SSOConfig | undefined)?.enabled);
+  const ldapOn = Boolean((ldapQuery.data as LDAPConfig | undefined)?.enabled);
+  const [provider, setProvider] = useState<"saml" | "ldap">("saml");
+
+  return (
+    <Card className="page-card" title="External authentication">
+      <Space direction="vertical" size={16} style={{ width: "100%" }}>
+        <div>
+          <Space align="center" wrap>
+            <Typography.Text strong>Provider</Typography.Text>
+            <Select
+              value={provider}
+              onChange={(v) => setProvider(v as "saml" | "ldap")}
+              style={{ minWidth: 320 }}
+              options={[
+                { value: "saml", label: "SAML single sign-on" },
+                { value: "ldap", label: "LDAP / Active Directory" },
+              ]}
+            />
+            <Tag color={samlOn ? "green" : "default"}>SAML {samlOn ? "on" : "off"}</Tag>
+            <Tag color={ldapOn ? "green" : "default"}>LDAP {ldapOn ? "on" : "off"}</Tag>
+          </Space>
+          <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+            Configure each provider independently — both can be enabled at the same time. The dropdown
+            only changes which one you're editing; saving one does not disable the other. At login, local
+            accounts are checked first, then any enabled directory provider.
+          </Typography.Paragraph>
+        </div>
+        <div style={{ display: provider === "saml" ? "block" : "none" }}>
+          <SSOCard embedded />
+        </div>
+        <div style={{ display: provider === "ldap" ? "block" : "none" }}>
+          <LDAPCard embedded />
+        </div>
+      </Space>
     </Card>
   );
 }
@@ -935,8 +1110,7 @@ export function AccessSection() {
       <PasswordResetRequestsCard />
       <SessionCard />
       <BackupRestoreCard />
-      <SSOCard />
-      <LDAPCard />
+      <ExternalAuthCard />
     </Space>
   );
 }

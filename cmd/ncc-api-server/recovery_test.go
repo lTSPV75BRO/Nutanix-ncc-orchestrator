@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -150,5 +151,98 @@ func TestForgotPasswordQueueAndResolve(t *testing.T) {
 	}
 	if got := s.users.listResetRequests(); len(got) != 0 {
 		t.Fatalf("request should be gone after dismiss, still have %+v", got)
+	}
+}
+
+// TestRevokeSessionsBumpsGeneration covers session revocation: both the
+// self-service path and the admin force-sign-out bump the account token
+// generation so previously issued sessions stop validating.
+func TestRevokeSessionsBumpsGeneration(t *testing.T) {
+	s := newDBServer(t)
+	hash, err := hashPassword("erin-password-1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.users.upsertUser("erin", hash, RoleOperator, false); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := s.users.lookup("erin")
+
+	// Admin force-sign-out via the users API.
+	rr := httptest.NewRecorder()
+	s.handleUserByName(rr, httptest.NewRequest(http.MethodPut, "/api/v1/settings/users/erin", strings.NewReader(`{"revoke_sessions":true}`)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("revoke via admin: %d (%s)", rr.Code, rr.Body.String())
+	}
+	after, _ := s.users.lookup("erin")
+	if after.TokenGen <= before.TokenGen {
+		t.Fatalf("admin revoke did not bump token gen: before=%d after=%d", before.TokenGen, after.TokenGen)
+	}
+
+	// Self-service logout-all (principal injected into context) bumps again.
+	gen2 := after.TokenGen
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout-all", nil)
+	req = withPrincipal(req, principal{subject: "erin", role: RoleOperator, method: authSessionCookie})
+	rr2 := httptest.NewRecorder()
+	s.handleLogoutAll(rr2, req)
+	if rr2.Code != http.StatusOK {
+		t.Fatalf("logout-all: %d (%s)", rr2.Code, rr2.Body.String())
+	}
+	again, _ := s.users.lookup("erin")
+	if again.TokenGen <= gen2 {
+		t.Fatalf("logout-all did not bump token gen: %d -> %d", gen2, again.TokenGen)
+	}
+}
+
+// TestForgotPasswordAdminSelfReset verifies that asking to reset the built-in
+// admin via forgot-password regenerates a random bootstrap-style password
+// (first-run workflow): the old password stops verifying, a change is forced,
+// sessions are invalidated, the .ncc-initial-admin-password file is rewritten,
+// and the response advertises the self-reset rather than queuing a request.
+func TestForgotPasswordAdminSelfReset(t *testing.T) {
+	s := newDBServer(t)
+	oldPW, _, err := s.users.bootstrapAdminIfEmpty("admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Clear the initial bootstrap file so we can prove the self-reset rewrites it.
+	s.users.clearInitialPassword()
+	before, _ := s.users.lookup("admin")
+
+	rr := httptest.NewRecorder()
+	body := strings.NewReader(`{"username":"admin"}`)
+	s.handleForgotPassword(rr, httptest.NewRequest(http.MethodPost, "/api/v1/auth/forgot-password", body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("forgot admin: %d (%s)", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `"admin_reset":true`) {
+		t.Fatalf("response should flag admin_reset: %s", rr.Body.String())
+	}
+
+	// The original bootstrap password must no longer verify.
+	if _, ok, _ := s.users.verify("admin", oldPW); ok {
+		t.Fatal("old admin password should no longer verify after self-reset")
+	}
+	after, _ := s.users.lookup("admin")
+	if after.TokenGen <= before.TokenGen {
+		t.Fatalf("token gen not bumped: before=%d after=%d", before.TokenGen, after.TokenGen)
+	}
+	if !after.MustChange {
+		t.Fatal("admin self-reset must force a password change")
+	}
+
+	// No reset request should be queued for the admin self-service path.
+	if got := s.users.listResetRequests(); len(got) != 0 {
+		t.Fatalf("admin self-reset must not queue a request, got %+v", got)
+	}
+
+	// The new temporary password is surfaced through the sibling password file.
+	pwFile := filepath.Join(filepath.Dir(s.usersDBPath), ".ncc-initial-admin-password")
+	raw, err := os.ReadFile(pwFile)
+	if err != nil {
+		t.Fatalf("initial password file not rewritten: %v", err)
+	}
+	if !strings.Contains(string(raw), "password:") {
+		t.Fatalf("initial password file missing password line: %s", string(raw))
 	}
 }

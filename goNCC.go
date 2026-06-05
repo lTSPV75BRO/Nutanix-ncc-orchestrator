@@ -8525,14 +8525,31 @@ func processIsAlive(pid int) bool {
 // that produced the backup, so restore can report it and warn on a version
 // mismatch.
 type backupManifest struct {
-	Tool       string   `json:"tool"`
-	Version    string   `json:"version"`              // ncc-orchestrator version that created the backup
-	Stream     string   `json:"stream,omitempty"`     // release stream (prod/dev/beta)
-	BuildDate  string   `json:"build_date,omitempty"` // build timestamp of the creating binary
-	GoVersion  string   `json:"go_version,omitempty"` // Go toolchain of the creating binary
-	CreatedAt  string   `json:"created_at"`
-	InstallDir string   `json:"install_dir"`
-	Files      []string `json:"files"`
+	Tool       string       `json:"tool"`
+	Version    string       `json:"version"`              // ncc-orchestrator version that created the backup
+	Stream     string       `json:"stream,omitempty"`     // release stream (prod/dev/beta)
+	BuildDate  string       `json:"build_date,omitempty"` // build timestamp of the creating binary
+	GoVersion  string       `json:"go_version,omitempty"` // Go toolchain of the creating binary
+	CreatedAt  string       `json:"created_at"`
+	InstallDir string       `json:"install_dir"`
+	Files      []string     `json:"files"`
+	Auth       *authSummary `json:"auth,omitempty"` // which auth providers/secrets the archive carries
+}
+
+// authSummary records which authentication providers a backed-up user database
+// holds and whether their server-side secrets came along. SAML and LDAP config
+// (including the SP signing key and the LDAP bind password) live inside
+// .ncc-api-users.json rather than in their own files, so this summary makes that
+// coverage explicit in the manifest and in backup/restore output instead of
+// leaving it implicit.
+type authSummary struct {
+	LocalAccounts       int  `json:"local_accounts"`
+	SAMLPresent         bool `json:"saml_present"`
+	SAMLEnabled         bool `json:"saml_enabled"`
+	SAMLHasSPKey        bool `json:"saml_has_sp_key"`
+	LDAPPresent         bool `json:"ldap_present"`
+	LDAPEnabled         bool `json:"ldap_enabled"`
+	LDAPHasBindPassword bool `json:"ldap_has_bind_password"`
 }
 
 // backupEntry pairs an on-disk absolute path with the archive-relative path it
@@ -8552,6 +8569,7 @@ type v2RestoreOptions struct {
 	InputFile  string
 	Force      bool
 	Restart    bool
+	NoRestart  bool
 }
 
 type v2ResetPasswordOptions struct {
@@ -8734,6 +8752,89 @@ func collectBackupEntries(installDir string) (entries []backupEntry, skipped []s
 	return entries, skipped
 }
 
+// summarizeAuthProviders parses a backed-up .ncc-api-users.json (best-effort,
+// using a local shape so the orchestrator needs no api-server internals) to
+// report which auth providers and secrets it carries. SAML/LDAP config — and
+// their secrets (the SAML SP signing key, the LDAP bind password) — are stored
+// inside this single file, so reading it is how backup/restore verifies that
+// SSO/directory config actually travelled with the archive. Returns nil when
+// the file is absent or unparseable.
+func summarizeAuthProviders(usersDBPath string) *authSummary {
+	data, err := os.ReadFile(usersDBPath)
+	if err != nil {
+		return nil
+	}
+	var db struct {
+		Users []json.RawMessage `json:"users"`
+		SAML  *struct {
+			Enabled  bool   `json:"enabled"`
+			SPKeyPEM string `json:"sp_key_pem"`
+		} `json:"saml"`
+		LDAP *struct {
+			Enabled      bool   `json:"enabled"`
+			BindPassword string `json:"bind_password"`
+		} `json:"ldap"`
+	}
+	if json.Unmarshal(data, &db) != nil {
+		return nil
+	}
+	s := &authSummary{LocalAccounts: len(db.Users)}
+	if db.SAML != nil {
+		s.SAMLPresent = true
+		s.SAMLEnabled = db.SAML.Enabled
+		s.SAMLHasSPKey = strings.TrimSpace(db.SAML.SPKeyPEM) != ""
+	}
+	if db.LDAP != nil {
+		s.LDAPPresent = true
+		s.LDAPEnabled = db.LDAP.Enabled
+		s.LDAPHasBindPassword = strings.TrimSpace(db.LDAP.BindPassword) != ""
+	}
+	return s
+}
+
+func yesNoStr(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
+}
+
+func enabledWord(b bool) string {
+	if b {
+		return "enabled"
+	}
+	return "disabled"
+}
+
+// printAuthSummary writes a human-readable auth-provider summary to w and
+// returns any warnings (a provider is enabled but its server-side secret is
+// missing). A nil summary prints nothing.
+func printAuthSummary(w io.Writer, s *authSummary) []string {
+	if s == nil {
+		return nil
+	}
+	fmt.Fprintf(w, "auth providers:\n")
+	fmt.Fprintf(w, "  - local accounts: %d\n", s.LocalAccounts)
+	if s.SAMLPresent {
+		fmt.Fprintf(w, "  - SAML SSO:       %s (SP signing key: %s)\n", enabledWord(s.SAMLEnabled), yesNoStr(s.SAMLHasSPKey))
+	} else {
+		fmt.Fprintf(w, "  - SAML SSO:       not configured\n")
+	}
+	if s.LDAPPresent {
+		fmt.Fprintf(w, "  - LDAP / AD:      %s (bind password: %s)\n", enabledWord(s.LDAPEnabled), yesNoStr(s.LDAPHasBindPassword))
+	} else {
+		fmt.Fprintf(w, "  - LDAP / AD:      not configured\n")
+	}
+	var warns []string
+	if s.SAMLEnabled && !s.SAMLHasSPKey {
+		warns = append(warns, "SAML is enabled but no SP signing key is stored; the server may regenerate one and you may need to re-publish SP metadata to the IdP.")
+	}
+	if s.LDAPEnabled && !s.LDAPHasBindPassword {
+		warns = append(warns, "LDAP is enabled with no bind password stored (anonymous bind); confirm this is intended for your directory.")
+	}
+	return warns
+}
+
 // tarWriteBytes writes one in-memory file into a tar stream.
 func tarWriteBytes(tw *tar.Writer, name string, data []byte, mode int64) error {
 	hdr := &tar.Header{Name: name, Size: int64(len(data)), Mode: mode, ModTime: time.Now()}
@@ -8806,6 +8907,7 @@ func runV2Backup(opts v2BackupOptions) error {
 	for _, e := range entries {
 		rels = append(rels, e.Rel)
 	}
+	auth := summarizeAuthProviders(filepath.Join(installDir, ".ncc-api-users.json"))
 	manifest := backupManifest{
 		Tool:       "ncc-orchestrator",
 		Version:    Version,
@@ -8815,6 +8917,7 @@ func runV2Backup(opts v2BackupOptions) error {
 		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
 		InstallDir: installDir,
 		Files:      rels,
+		Auth:       auth,
 	}
 	if err := writeBackupArchive(out, manifest, entries); err != nil {
 		return err
@@ -8829,7 +8932,14 @@ func runV2Backup(opts v2BackupOptions) error {
 	for _, s := range skipped {
 		fmt.Printf("  ! skipped (resolves outside install dir, not archived): %s\n", s)
 	}
-	fmt.Println("\nThis archive contains secrets (API token, password hashes, SAML key). It was created with 0600 permissions; store it securely.")
+	if auth != nil {
+		fmt.Println()
+		warns := printAuthSummary(os.Stdout, auth)
+		for _, wmsg := range warns {
+			fmt.Printf("  ! %s\n", wmsg)
+		}
+	}
+	fmt.Println("\nThis archive contains secrets (API token, password hashes, SAML SP key, LDAP bind password). It was created with 0600 permissions; store it securely.")
 	return nil
 }
 
@@ -8979,7 +9089,43 @@ func runV2Restore(opts v2RestoreOptions) error {
 			"Restoring a newer backup with an older binary may not fully load; upgrade the orchestrator if you hit issues.\n", Version, v)
 	}
 
-	if opts.Restart {
+	// Surface auth-provider coverage from the file that actually landed on
+	// disk, so the operator can confirm SAML/LDAP config and their secrets
+	// were restored (they live inside .ncc-api-users.json). Fall back to the
+	// manifest's recorded summary if the restored DB can't be re-read.
+	restoredAuth := summarizeAuthProviders(filepath.Join(installDir, ".ncc-api-users.json"))
+	if restoredAuth == nil {
+		restoredAuth = manifest.Auth
+	}
+	if restoredAuth != nil {
+		fmt.Println()
+		warns := printAuthSummary(os.Stdout, restoredAuth)
+		for _, wmsg := range warns {
+			fmt.Printf("  ! %s\n", wmsg)
+		}
+	}
+
+	// Heal cross-OS paths in the restored config so a backup taken on one OS
+	// (e.g. Windows, with drive letters / backslashes) restores cleanly onto
+	// another (Linux/macOS): rewrite file-reference paths that pointed inside
+	// the backup's install dir to this install dir and normalize separators.
+	// Best-effort — it never fails the restore.
+	if healed, warns := healRestoredConfigPaths(installDir, defaultStr(manifest.InstallDir, "")); len(healed) > 0 || len(warns) > 0 {
+		if len(healed) > 0 {
+			fmt.Printf("\nAdjusted %d config path(s) for this host: %s\n", len(healed), strings.Join(healed, ", "))
+		}
+		for _, wmsg := range warns {
+			fmt.Printf("  ! %s\n", wmsg)
+		}
+	}
+
+	// Decide whether to restart automatically — a restart is what makes the
+	// restored config/accounts/token take effect. Default: restart when the
+	// stack is currently running (the common "restore into a live install"
+	// case). --restart forces a restart/start even if it looks stopped;
+	// --no-restart suppresses it (e.g. staging a box for later).
+	stackRunning, _ := v2StackRunning(installDir)
+	if !opts.NoRestart && (stackRunning || opts.Restart) {
 		if err := restartV2Stack(installDir); err != nil {
 			fmt.Printf("\nRestore succeeded, but the automatic restart failed: %v\n", err)
 			fmt.Println("Restart the stack manually with 'v2-stop' then 'v2-start'.")
@@ -8988,8 +9134,98 @@ func runV2Restore(opts v2RestoreOptions) error {
 		fmt.Println("\nStack restarted; the restored config, accounts, and token are now loaded.")
 		return nil
 	}
-	fmt.Println("Start (or restart) the stack with 'v2-start' to load the restored config and accounts (or re-run with --restart).")
+	if opts.NoRestart {
+		fmt.Println("Restore complete (--no-restart); start or restart the stack to load the restored config and accounts.")
+	} else {
+		fmt.Println("Start the stack with 'v2-start' to load the restored config and accounts.")
+	}
 	return nil
+}
+
+// windowsAbsPath reports whether p looks like a Windows absolute path: a
+// drive-letter root (C:\ or C:/) or a UNC share (\\server\share). Used during
+// restore-path healing so a backup taken on Windows can be re-pathed onto a
+// Unix host.
+func windowsAbsPath(p string) bool {
+	p = strings.TrimSpace(p)
+	if len(p) >= 2 && p[1] == ':' {
+		c := p[0]
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') {
+			return true
+		}
+	}
+	return strings.HasPrefix(p, `\\`)
+}
+
+// healRestoredConfigPaths rewrites file-reference path values in the restored
+// config.yaml so a backup is portable across operating systems. For each known
+// path key it: (1) normalizes backslashes to forward slashes; and (2) if the
+// value was an absolute path under the backup's original install dir
+// (oldInstallDir), rebases it to a path relative to this install dir. Absolute
+// paths outside the old install dir (e.g. C:\secrets\creds.yaml) can't be
+// re-homed automatically and are reported as warnings. Returns the list of
+// keys that were changed plus any warnings. Never errors — healing is
+// best-effort and the file is left untouched on any read/write failure.
+func healRestoredConfigPaths(installDir, oldInstallDir string) (changed []string, warnings []string) {
+	cfgPath := filepath.Join(installDir, "config.yaml")
+	content, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return nil, nil
+	}
+	text := string(content)
+	pathKeys := []string{
+		"clusters-file", "exclude-alert-titles-file", "secrets-file", "pcs-file",
+		"log-file", "output-dir-logs", "output-dir-filtered", "run-history-dir",
+		"prom-dir", "ca-bundle", "notification-deadletter-dir",
+	}
+	// Normalize the old install dir for prefix comparison (slashes, no trailing).
+	oldNorm := strings.TrimRight(strings.ReplaceAll(strings.TrimSpace(oldInstallDir), `\`, "/"), "/")
+	for _, key := range pathKeys {
+		raw := extractConfigRefPath(text, key)
+		if raw == "" {
+			continue
+		}
+		orig := raw
+		slashed := strings.ReplaceAll(raw, `\`, "/")
+		newVal := slashed
+		if windowsAbsPath(slashed) || filepath.IsAbs(slashed) {
+			matched := false
+			if oldNorm != "" {
+				lc := strings.ToLower(slashed)
+				lo := strings.ToLower(oldNorm)
+				if lc == lo {
+					newVal = "."
+					matched = true
+				} else if strings.HasPrefix(lc, lo+"/") {
+					newVal = strings.TrimPrefix(slashed[len(oldNorm):], "/")
+					matched = true
+				}
+			}
+			if !matched {
+				// Can't rebase. Only warn when the path doesn't resolve on
+				// this host (a same-host/same-path restore is still valid).
+				probe := slashed
+				if !filepath.IsAbs(probe) {
+					probe = filepath.Join(installDir, probe)
+				}
+				if _, statErr := os.Stat(probe); statErr != nil {
+					warnings = append(warnings, fmt.Sprintf("config key %q points at an absolute path from another host (%s); review it before starting the stack", key, orig))
+				}
+				// Still normalize separators below even if we can't rebase.
+			}
+		}
+		if newVal != orig {
+			text = upsertYAMLScalar(text, key, newVal)
+			changed = append(changed, key)
+		}
+	}
+	if len(changed) > 0 {
+		if err := os.WriteFile(cfgPath, []byte(text), 0o600); err != nil {
+			// Roll back our reported changes — we couldn't persist them.
+			return nil, append(warnings, fmt.Sprintf("could not write healed config.yaml: %v", err))
+		}
+	}
+	return changed, warnings
 }
 
 // defaultStr returns v when non-empty (trimmed), else def.
@@ -15048,17 +15284,26 @@ Safety:
 The restore reports the ncc-orchestrator version that created the
 backup and warns if this binary is older than that.
 
-After restoring, start the stack with 'v2-start' — or pass --restart to
-have this binary stop and re-start the stack automatically (v2-stop then
-v2-start --detach) so the restored config/accounts/token load with no
-manual step. The input archive may be given with --input-file or as the
-first positional argument.`,
+Portability: the restore is OS- and version-agnostic. Backups taken on
+Windows (drive letters / backslash paths) restore cleanly onto Linux/macOS —
+file-reference paths under the backup's original install dir are rebased to
+this install dir and separators are normalized automatically. Restoring a
+backup from a different ncc-orchestrator version is allowed (a newer-than-this
+binary backup only prints a warning).
+
+Restart is automatic: when the stack is currently running it is stopped and
+re-started for you (v2-stop then v2-start --detach, performed by this binary)
+so the restored config/accounts/token load with no manual step. Pass --restart
+to force a restart/start even if the stack looks stopped, or --no-restart to
+suppress it (e.g. staging a host for later). The input archive may be given
+with --input-file or as the first positional argument.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			installDir, _ := cmd.Flags().GetString("install-dir")
 			inputFile, _ := cmd.Flags().GetString("input-file")
 			force, _ := cmd.Flags().GetBool("force")
 			restart, _ := cmd.Flags().GetBool("restart")
+			noRestart, _ := cmd.Flags().GetBool("no-restart")
 			if strings.TrimSpace(inputFile) == "" && len(args) > 0 {
 				inputFile = args[0]
 			}
@@ -15067,14 +15312,37 @@ first positional argument.`,
 				InputFile:  inputFile,
 				Force:      force,
 				Restart:    restart,
+				NoRestart:  noRestart,
 			})
 		},
 	}
 	v2RestoreCmd.Flags().String("install-dir", "", "Installation directory to restore into (default: auto-detect, fallback .ncc-v2)")
 	v2RestoreCmd.Flags().String("input-file", "", "Backup archive to restore (or pass as the first positional argument)")
 	v2RestoreCmd.Flags().Bool("force", false, "Overwrite existing files and proceed even if the stack appears to be running")
-	v2RestoreCmd.Flags().Bool("restart", false, "After a successful restore, automatically stop and re-start the stack (v2-stop then v2-start --detach) using this binary")
+	v2RestoreCmd.Flags().Bool("restart", false, "Force a stack restart/start after restore even if it appears stopped (default: auto-restart only when running)")
+	v2RestoreCmd.Flags().Bool("no-restart", false, "Do not restart the stack after restore (overrides the default auto-restart when running)")
 	cmd.AddCommand(v2RestoreCmd)
+
+	v2RestartCmd := &cobra.Command{
+		Use:   "v2-restart",
+		Short: "Stop and re-start the v2 stack (v2-stop then v2-start --detach), performed by this binary",
+		Long: `Restarts the v2 stack by stopping it and starting it again detached,
+entirely from this orchestrator binary. Used internally by the UI/api-server to
+apply a restored backup automatically, and available directly for operators.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			installDir, _ := cmd.Flags().GetString("install-dir")
+			if strings.TrimSpace(installDir) == "" {
+				installDir = defaultV2InstallDir()
+			}
+			if abs, err := filepath.Abs(installDir); err == nil {
+				installDir = abs
+			}
+			return restartV2Stack(installDir)
+		},
+	}
+	v2RestartCmd.Flags().String("install-dir", "", "Installation directory of the stack to restart (default: auto-detect, fallback .ncc-v2)")
+	cmd.AddCommand(v2RestartCmd)
 
 	// reset-password subcommand: offline recovery for a lost account password
 	// (admin or any local user). Invokes ncc-api-server --reset-password against

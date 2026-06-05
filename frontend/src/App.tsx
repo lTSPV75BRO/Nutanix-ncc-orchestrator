@@ -303,12 +303,14 @@ function HeaderUserMenu({
   canChangePassword,
   onChangePassword,
   onLogout,
+  onLogoutEverywhere,
 }: {
   username: string;
   role: UserRole;
   canChangePassword: boolean;
   onChangePassword: () => void;
   onLogout: () => void;
+  onLogoutEverywhere: () => void;
 }) {
   const roleColor = role === "admin" ? "gold" : role === "operator" ? "blue" : "default";
   const items = [
@@ -326,6 +328,9 @@ function HeaderUserMenu({
       ? [{ key: "change-password", icon: <LockOutlined />, label: "Change password" }]
       : []),
     { key: "logout", icon: <LogoutOutlined />, label: "Sign out" },
+    ...(canChangePassword
+      ? [{ key: "logout-all", icon: <LogoutOutlined />, label: "Sign out everywhere", danger: true }]
+      : []),
   ];
   return (
     <Dropdown
@@ -335,6 +340,7 @@ function HeaderUserMenu({
         items,
         onClick: ({ key }) => {
           if (key === "logout") onLogout();
+          else if (key === "logout-all") onLogoutEverywhere();
           else if (key === "change-password") onChangePassword();
         },
       }}
@@ -398,6 +404,17 @@ export default function App() {
     window.location.assign("/");
   };
 
+  const handleLogoutEverywhere = async () => {
+    try {
+      await api.logoutAll();
+      notify.success("Signed out of all sessions on every device.");
+    } catch (e) {
+      notifyError(e, "Could not sign out other sessions");
+    }
+    queryClient.clear();
+    window.location.assign("/");
+  };
+
   const healthQuery = useQuery({
     queryKey: ["health"],
     queryFn: api.health,
@@ -454,6 +471,7 @@ export default function App() {
           void queryClient.invalidateQueries();
           void meQuery.refetch();
         }}
+        onBootstrapReset={() => void meQuery.refetch()}
       />
     );
   }
@@ -541,6 +559,7 @@ export default function App() {
                 canChangePassword={Boolean(me?.is_local)}
                 onChangePassword={() => setChangePwOpen(true)}
                 onLogout={handleLogout}
+                onLogoutEverywhere={handleLogoutEverywhere}
               />
             ) : null}
           </div>

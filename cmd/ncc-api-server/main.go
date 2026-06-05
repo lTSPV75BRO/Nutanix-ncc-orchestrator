@@ -75,6 +75,10 @@ type apiServer struct {
 	auditLogPath          string
 	auditLogMaxBytes      int64
 	auditMu               sync.Mutex
+	loginLockThreshold    int           // failed logins before per-account lockout (0 disables)
+	loginLockWindow       time.Duration // window to accumulate failures
+	loginLockDuration     time.Duration // how long a locked account stays locked
+	loginGuard            *loginGuard
 	orchestratorBin       string
 	authToken             string
 	// viewerToken, when set, grants a read-only role: holders can reach
@@ -123,6 +127,8 @@ type apiServer struct {
 	tlsClientCAFile    string
 	rateLimitPerMinute int
 	rateLimiter        *fixedWindowRateLimiter
+	adminResetMu       sync.Mutex              // guards lazy init of adminResetLimiter
+	adminResetLimiter  *fixedWindowRateLimiter // per-IP cooldown for admin self-reset (GC-evicted)
 	readTimeout        time.Duration
 	writeTimeout       time.Duration
 	idleTimeout        time.Duration
@@ -314,6 +320,9 @@ func main() {
 	flag.StringVar(&s.notificationStatePath, "notifications-state-path", ".ncc-api-notifications.json", "Notifications state file path")
 	flag.StringVar(&s.auditLogPath, "audit-log-path", "logs/ncc-audit.log", "JSONL audit log file path")
 	flag.Int64Var(&s.auditLogMaxBytes, "audit-log-max-bytes", 5*1024*1024, "Audit log size before rotation (bytes); 0 disables rotation")
+	flag.IntVar(&s.loginLockThreshold, "login-lockout-threshold", 5, "Failed logins per account before a temporary lockout (0 disables)")
+	flag.DurationVar(&s.loginLockWindow, "login-lockout-window", 15*time.Minute, "Rolling window for accumulating failed logins toward a lockout")
+	flag.DurationVar(&s.loginLockDuration, "login-lockout-duration", 15*time.Minute, "How long an account stays locked after exceeding the failure threshold")
 	flag.StringVar(&s.orchestratorBin, "orchestrator-bin", "./ncc-orchestrator", "Path to ncc-orchestrator binary")
 	flag.StringVar(&s.tokenFilePath, "token-file-path", ".ncc-api-token", "Token file path for UI proxy/frontend use")
 	flag.StringVar(&s.corsOrigin, "cors-origin", "http://localhost:8080", "CORS allowed origin(s), comma-separated")
@@ -609,6 +618,7 @@ func main() {
 	if s.rateLimitPerMinute > 0 {
 		s.rateLimiter = newFixedWindowRateLimiter(s.rateLimitPerMinute, time.Minute)
 	}
+	s.loginGuard = newLoginGuard(s.loginLockThreshold, s.loginLockWindow, s.loginLockDuration)
 	s.startedAt = time.Now().UTC()
 
 	handler := s.buildHandler()
@@ -667,7 +677,8 @@ func (s *apiServer) withAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if r.URL.Path == "/" || r.URL.Path == "/docs" || r.URL.Path == "/docs/ui" {
+		if r.URL.Path == "/" || r.URL.Path == "/docs" || r.URL.Path == "/docs/ui" ||
+			strings.HasPrefix(r.URL.Path, "/docs/assets/") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -738,16 +749,18 @@ func (s *apiServer) withCORS(next http.Handler) http.Handler {
 		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 		// Content-Security-Policy. API/JSON (and Prometheus text) responses serve
 		// no active content, so they get a maximally strict policy. The two HTML
-		// help pages (landing + Swagger UI) need inline style/script and, for
-		// Swagger, its bundle/styles from unpkg, so they get a scoped policy.
-		switch r.URL.Path {
-		case "/", "/docs", "/docs/ui":
+		// help pages (landing + Swagger UI) need inline style/script; Swagger's
+		// bundle/styles are now self-hosted (vendored, served from /docs/assets),
+		// so the policy no longer trusts any external CDN origin.
+		switch {
+		case r.URL.Path == "/" || r.URL.Path == "/docs" || r.URL.Path == "/docs/ui" ||
+			strings.HasPrefix(r.URL.Path, "/docs/assets/"):
 			w.Header().Set("Content-Security-Policy",
 				"default-src 'none'; base-uri 'none'; frame-ancestors 'none'; "+
-					"img-src 'self' data: https://unpkg.com; "+
-					"style-src 'self' 'unsafe-inline' https://unpkg.com; "+
-					"script-src 'self' 'unsafe-inline' https://unpkg.com; "+
-					"connect-src 'self'; font-src 'self' data: https://unpkg.com")
+					"img-src 'self' data:; "+
+					"style-src 'self' 'unsafe-inline'; "+
+					"script-src 'self' 'unsafe-inline'; "+
+					"connect-src 'self'; font-src 'self' data:; worker-src 'self' blob:")
 		default:
 			w.Header().Set("Content-Security-Policy",
 				"default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
@@ -823,12 +836,38 @@ func (s *apiServer) handleAudit(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
-	actionPrefix := strings.TrimSpace(q.Get("action"))
-	onlyFailures := q.Get("failures") == "1" || strings.EqualFold(q.Get("failures"), "true")
+	filter := auditFilter{
+		actionPrefix: strings.TrimSpace(q.Get("action")),
+		user:         strings.TrimSpace(q.Get("user")),
+		onlyFailures: q.Get("failures") == "1" || strings.EqualFold(q.Get("failures"), "true"),
+	}
+	// since/until accept either an RFC3339 timestamp or a YYYY-MM-DD date.
+	if raw := strings.TrimSpace(q.Get("since")); raw != "" {
+		t, err := parseAuditTime(raw, false)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "invalid since: use RFC3339 or YYYY-MM-DD"})
+			return
+		}
+		filter.since = t
+	}
+	if raw := strings.TrimSpace(q.Get("until")); raw != "" {
+		t, err := parseAuditTime(raw, true)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "invalid until: use RFC3339 or YYYY-MM-DD"})
+			return
+		}
+		filter.until = t
+	}
 
-	entries, err := s.auditEntries(limit, actionPrefix, onlyFailures)
+	entries, err := s.auditEntries(limit, filter)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "read audit log: " + err.Error()})
+		return
+	}
+
+	// CSV export streams a downloadable file rather than the JSON envelope.
+	if strings.EqualFold(strings.TrimSpace(q.Get("format")), "csv") {
+		s.writeAuditCSV(w, entries)
 		return
 	}
 
@@ -849,10 +888,80 @@ func (s *apiServer) handleAudit(w http.ResponseWriter, r *http.Request) {
 		"max_bytes": s.auditLogMaxBytes,
 		"entries":   entries,
 		"filters": map[string]interface{}{
-			"action":   actionPrefix,
-			"failures": onlyFailures,
+			"action":   filter.actionPrefix,
+			"user":     filter.user,
+			"failures": filter.onlyFailures,
+			"since":    q.Get("since"),
+			"until":    q.Get("until"),
 		},
 	}})
+}
+
+// parseAuditTime parses an RFC3339 timestamp or a YYYY-MM-DD date (UTC). For a
+// bare date used as an upper bound, endOfDay extends it to the end of that day
+// so "until=2026-06-05" includes the whole day.
+func parseAuditTime(raw string, endOfDay bool) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t, nil
+	}
+	d, err := time.Parse("2006-01-02", raw)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if endOfDay {
+		return d.Add(24*time.Hour - time.Nanosecond), nil
+	}
+	return d, nil
+}
+
+// writeAuditCSV renders audit entries as a downloadable CSV with stable columns;
+// any keys beyond the common ones are folded into a JSON "details" column.
+func (s *apiServer) writeAuditCSV(w http.ResponseWriter, entries []map[string]interface{}) {
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"ncc-audit-%s.csv\"", time.Now().UTC().Format("20060102-150405")))
+	cw := csv.NewWriter(w)
+	cols := []string{"ts", "user", "role", "action", "success", "client", "method", "path", "user_agent"}
+	_ = cw.Write(append(append([]string{}, cols...), "details"))
+	known := map[string]bool{}
+	for _, c := range cols {
+		known[c] = true
+	}
+	for _, e := range entries {
+		row := make([]string, 0, len(cols)+1)
+		for _, c := range cols {
+			row = append(row, auditCSVCell(e[c]))
+		}
+		details := map[string]interface{}{}
+		for k, v := range e {
+			if !known[k] {
+				details[k] = v
+			}
+		}
+		if len(details) > 0 {
+			b, _ := json.Marshal(details)
+			row = append(row, string(b))
+		} else {
+			row = append(row, "")
+		}
+		_ = cw.Write(row)
+	}
+	cw.Flush()
+}
+
+func auditCSVCell(v interface{}) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case bool:
+		if t {
+			return "true"
+		}
+		return "false"
+	default:
+		return fmt.Sprintf("%v", t)
+	}
 }
 
 func (s *apiServer) handleRateLimitMetrics(w http.ResponseWriter, r *http.Request) {
@@ -1174,14 +1283,14 @@ func (s *apiServer) handleSwaggerUIPage(w http.ResponseWriter, r *http.Request) 
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>NCC API Swagger UI</title>
-  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+  <link rel="stylesheet" href="/docs/assets/swagger-ui.css">
 </head>
 <body>
   <div style="margin:10px 16px;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif">
     <a href="/">Back to API docs</a>
   </div>
   <div id="swagger-ui"></div>
-  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script src="/docs/assets/swagger-ui-bundle.js"></script>
   <script>
     window.ui = SwaggerUIBundle({
       url: "/api/v1/openapi.json",
@@ -2163,7 +2272,7 @@ func (s *apiServer) handleRuns(w http.ResponseWriter, r *http.Request) {
 
 	// 3) Audit-log `runs.trigger` events for triggers that may not have
 	//    produced any artifacts (run still in flight, ephemeral storage, etc).
-	if auditEntries, err := s.auditEntries(500, "runs.trigger", false); err == nil {
+	if auditEntries, err := s.auditEntries(500, auditFilter{actionPrefix: "runs.trigger"}); err == nil {
 		for _, e := range auditEntries {
 			act, _ := e["action"].(string)
 			if act != "runs.trigger" {
@@ -2650,6 +2759,19 @@ func (s *apiServer) handleRunTrigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	args := []string{"--config", resolvedCfgPath}
+	// Pin the runner's output directories to the exact absolute paths this
+	// api-server reads artifacts from. Without this, the orchestrator resolves
+	// the config's relative `output-dir-*` against its working directory, which
+	// can diverge from where the dashboard reads run-summary.json/index.html
+	// (e.g. when the stack's repo-root and output-dir resolve to different
+	// bases, or on a partial-success run). The result was a completed run whose
+	// data never populated the UI. Skip when the caller already set them.
+	if !extraArgsHaveFlag(cleanExtraArgs, "output-dir-filtered") {
+		args = append(args, "--output-dir-filtered", s.absPath(s.outputDir))
+	}
+	if !extraArgsHaveFlag(cleanExtraArgs, "output-dir-logs") {
+		args = append(args, "--output-dir-logs", s.absPath(s.logDir))
+	}
 	args = append(args, cleanExtraArgs...)
 	s.mu.Lock()
 	s.lastCfg = resolvedCfgPath
@@ -3527,6 +3649,20 @@ func (s *apiServer) archiveRunArtifacts(startedAt time.Time, runErr error) {
 	}
 }
 
+// extraArgsHaveFlag reports whether the caller-supplied extra args already
+// include the given flag (matching `--flag` or `--flag=value`), so the
+// api-server doesn't double-specify output directories it would otherwise pin.
+func extraArgsHaveFlag(args []string, flag string) bool {
+	want := "--" + flag
+	for _, a := range args {
+		a = strings.TrimSpace(a)
+		if a == want || strings.HasPrefix(a, want+"=") {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *apiServer) setRunDone(err error, output string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -4235,6 +4371,7 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/api/v1/auth/rotate", s.handleAuthRotate)
 	mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
 	mux.HandleFunc("/api/v1/auth/logout", s.handleLogout)
+	mux.HandleFunc("/api/v1/auth/logout-all", s.handleLogoutAll)
 	mux.HandleFunc("/api/v1/auth/me", s.handleMe)
 	mux.HandleFunc("/api/v1/auth/change-password", s.handleChangePassword)
 	mux.HandleFunc("/api/v1/auth/refresh", s.handleAuthRefresh)
@@ -4278,6 +4415,7 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/api/v1/logs/runner", s.handleRunnerLogs)
 	mux.HandleFunc("/api/v1/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("/api/v1/meta/routes", s.handleMetaRoutes)
+	mux.HandleFunc("/docs/assets/", s.handleSwaggerAsset)
 	mux.HandleFunc("/", s.handleAPIDocsHome)
 
 	return s.withCORS(s.withRateLimit(s.withAuth(mux)))

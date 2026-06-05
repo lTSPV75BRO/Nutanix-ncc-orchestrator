@@ -282,7 +282,20 @@ A caller's role can come from a static token or an interactive login:
   next login. End users can request a reset from the login page's **Forgot
   password?** link (public `POST /api/v1/auth/forgot-password`, always a generic
   200, no account enumeration); admins resolve the queue from Settings → Access
-  (`GET`/`DELETE /api/v1/settings/password-resets[/<name>]`).
+  (`GET`/`DELETE /api/v1/settings/password-resets[/<name>]`). **Admin lockout
+  self-recovery:** if the forgot-password username is the built-in `admin`, the
+  server skips the queue and self-resets it exactly like first-run setup — a
+  fresh random password is generated, a change is forced at next login, existing
+  admin sessions are invalidated, and the new password is surfaced only through
+  the server logs and the `.ncc-initial-admin-password` file (never returned over
+  the network), so a locked-out operator can recover even when no other admin
+  exists. This matches the offline `v2-reset-password --user admin` outcome but
+  is reachable from the login screen. A short per-IP cooldown (60s, returning
+  `429 NCC_API_RATE_LIMITED`) blunts repeated force-rotation. The authenticated
+  **Settings → Access → Reset password** dialog mirrors the same behaviour for
+  the `admin` row — it offers **Generate & reset** (random password, shown once
+  and copyable) instead of asking the admin to type one (`PUT
+  /api/v1/settings/users/admin` with `{"generate_password": true}`).
 - **Backup / restore** — `v2-backup` / `v2-restore` (Settings → Access in the UI,
   or the CLI) capture and recover all stateful auth data (accounts, roles,
   SAML/LDAP config, token, session policy) plus config and audit log. See §6.14a.
@@ -798,6 +811,9 @@ These are runtime flags for v2 services (`cmd/ncc-api-server`, `cmd/ncc-ui-serve
 | Service | Flag | Default | Purpose |
 |---|---|---|---|
 | `ncc-api-server` | `--rate-limit-per-minute` | `60` | Per-client rate limit for sensitive mutation/auth routes (`0` disables). |
+| `ncc-api-server` | `--login-lockout-threshold` | `5` | Failed logins per account before a temporary lockout (`0` disables). |
+| `ncc-api-server` | `--login-lockout-window` | `15m` | Rolling window for accumulating failed logins toward a lockout. |
+| `ncc-api-server` | `--login-lockout-duration` | `15m` | How long a locked account stays locked after exceeding the threshold. |
 | `ncc-api-server` | `--auth-mode` | `token` | API auth mode: `token`, `session`, `hybrid`. |
 | `ncc-api-server` | `--token-file-path` | `.ncc-api-token` | Token file used by UI proxy and local tooling. |
 | `ncc-ui-server` | `--allowed-origins` | `http://localhost:8080` | Browser origin allowlist for proxied API calls. |
@@ -865,8 +881,17 @@ install dir:
 - the JSONL audit log (`logs/ncc-audit.log`) when present
 
 The archive's `manifest.json` records the **ncc-orchestrator version** (plus
-stream, build date, Go toolchain) that created it. Regenerable artifacts
-(binaries, frontend bundle, run/ pid files, output/ncc files) are excluded.
+stream, build date, Go toolchain) that created it, and an **auth-provider
+summary** (`auth`): the local-account count and whether **SAML** (with its SP
+signing key) and **LDAP/AD** (with its bind password) are present/enabled.
+Because SAML and LDAP config — including those secrets — live *inside*
+`.ncc-api-users.json` rather than in their own files, `v2-backup` and
+`v2-restore` print this summary so you can confirm SSO/directory config and its
+secrets travelled with the archive; restore re-reads the restored database and
+**warns when a provider is enabled but its secret is missing** (e.g. SAML
+enabled without an SP key, or LDAP enabled with an anonymous bind). Regenerable
+artifacts (binaries, frontend bundle, run/ pid files, output/ncc files) are
+excluded.
 
 | Command | Flag | Default | Purpose |
 |---|---|---|---|
@@ -875,14 +900,33 @@ stream, build date, Go toolchain) that created it. Regenerable artifacts
 | `v2-restore` | `--install-dir` | auto-detect (`.ncc-v2`) | Install dir to restore into. |
 | `v2-restore` | `--input-file` | — | Archive to restore (or first positional arg). |
 | `v2-restore` | `--force` | `false` | Overwrite existing files / proceed even if the stack is running. |
-| `v2-restore` | `--restart` | `false` | After restore, stop and re-start the stack (`v2-stop` then `v2-start --detach`), performed by the binary itself. |
+| `v2-restore` | `--restart` | `false` | Force a stack restart/start after restore even if it looks stopped (restart is automatic when the stack is running). |
+| `v2-restore` | `--no-restart` | `false` | Suppress the automatic post-restore restart (e.g. staging a host for later). |
+| `v2-restart` | `--install-dir` | auto-detect (`.ncc-v2`) | Stop and re-start the stack (`v2-stop` then `v2-start --detach`), performed by the binary. |
 | `v2-reset-password` | `--user` | `admin` | Local account to reset. |
 | `v2-reset-password` | `--users-db` / `--users-db-secret[-namespace]` | `<install-dir>/.ncc-api-users.json` | User store to reset against (file or Kubernetes Secret). |
 
 `v2-restore` is confined to the install dir (unsafe archive paths rejected),
 reports the orchestrator version that produced the backup, and **warns when the
-restoring binary is older** than the backup's creator. Without `--restart`,
-restart the stack manually for the restored config/accounts/token to load.
+restoring binary is older** than the backup's creator (it never refuses on a
+version difference).
+
+**Cross-OS portable:** a backup taken on Windows restores cleanly onto
+Linux/macOS. During restore, file-reference paths (`clusters-file`,
+`output-dir-logs`, `output-dir-filtered`, `log-file`, `run-history-dir`,
+`prom-dir`, `secrets-file`, `ca-bundle`, …) that pointed inside the backup's
+original install dir are rebased to the target install dir and backslashes are
+normalized to forward slashes; absolute paths outside that dir are normalized
+and flagged with a warning to review.
+
+**Automatic restart:** when the stack is running, `v2-restore` stops and
+re-starts it for you so the restored data loads with no manual step. Use
+`--restart` to force a restart/start even when it looks stopped, or
+`--no-restart` to suppress it. The standalone `v2-restart` command performs the
+same binary-driven stop + `v2-start --detach`. The **UI restore** (Settings →
+Access → Backup & restore) applies the archive and then restarts the stack
+automatically via a detached orchestrator process; the page reconnects on its
+own once the new stack is healthy.
 
 ### 6.14b `v2-check`
 

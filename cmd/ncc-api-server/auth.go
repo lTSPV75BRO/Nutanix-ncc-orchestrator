@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -377,6 +378,20 @@ func (s *apiServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	username := strings.TrimSpace(body.Username)
 
+	// Per-account brute-force lockout: reject early (before touching the user
+	// store / directory) when an account has too many recent failures.
+	if locked, retryAfter := s.loginGuard.locked(username, time.Now()); locked {
+		secs := int(retryAfter.Seconds()) + 1
+		w.Header().Set("Retry-After", strconv.Itoa(secs))
+		s.audit(r, "auth.login", false, map[string]interface{}{"username": username, "error": "account_locked"})
+		writeJSON(w, http.StatusTooManyRequests, envelope{
+			Success:   false,
+			Error:     fmt.Sprintf("too many failed attempts; this account is temporarily locked. Try again in about %ds.", secs),
+			ErrorCode: "NCC_API_ACCOUNT_LOCKED",
+		})
+		return
+	}
+
 	// Local-first: the built-in admin and break-glass local accounts always
 	// work even when AD is down or misconfigured.
 	var (
@@ -409,10 +424,13 @@ func (s *apiServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !ok {
-		s.audit(r, "auth.login", false, map[string]interface{}{"username": username})
+		locked := s.loginGuard.recordFailure(username, time.Now())
+		s.audit(r, "auth.login", false, map[string]interface{}{"username": username, "locked": locked})
 		writeJSON(w, http.StatusUnauthorized, envelope{Success: false, Error: "invalid username or password"})
 		return
 	}
+	// Successful auth clears any accumulated failure/lock state for the account.
+	s.loginGuard.reset(username)
 	token, exp, err := s.issueRoleSessionToken(cleanClientIP(r), username, role)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: err.Error()})
@@ -509,6 +527,40 @@ func (s *apiServer) handleLogout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, envelope{Success: true, Message: "logged out"})
 }
 
+// handleLogoutAll signs the caller out of every device by bumping their account
+// token generation (invalidating all previously issued sessions) and clearing
+// the local cookies. Only local password accounts have a revocable generation;
+// SSO/static-token sessions report a clear error.
+func (s *apiServer) handleLogoutAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	p, ok := principalFromContext(r.Context())
+	if !ok {
+		p, ok = s.resolvePrincipal(r)
+	}
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, envelope{Success: false, Error: "unauthorized"})
+		return
+	}
+	if s.users == nil {
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "local accounts are not configured"})
+		return
+	}
+	if _, found := s.users.lookup(p.subject); !found {
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "only local password accounts can revoke all sessions"})
+		return
+	}
+	if err := s.users.revokeSessions(p.subject); err != nil {
+		writeUserStoreError(w, err)
+		return
+	}
+	s.clearSessionCookies(w)
+	s.audit(r, "auth.logout_all", true, map[string]interface{}{"username": p.subject})
+	writeJSON(w, http.StatusOK, envelope{Success: true, Message: "signed out of all sessions"})
+}
+
 // handleAuthRefresh re-issues the current session cookie with a fresh expiry
 // (the effective session TTL) for the already-authenticated principal. The UI's
 // inactivity "stay logged in" prompt calls it. withAuth has already validated
@@ -566,14 +618,90 @@ func (s *apiServer) handleForgotPassword(w http.ResponseWriter, r *http.Request)
 	}
 	username := strings.TrimSpace(body.Username)
 	recorded := false
+	adminReset := false
 	if username != "" && s.users != nil {
-		if _, ok := s.users.lookup(username); ok {
-			s.users.addResetRequest(username, cleanClientIP(r))
-			recorded = true
+		switch {
+		case isReservedAdmin(username) && s.users.writable():
+			// Admin lockout recovery: a queued reset request is useless when the
+			// only admin is locked out, so self-service the built-in admin the
+			// same way first-run setup does — regenerate a random password,
+			// force a change at next login, invalidate existing admin sessions,
+			// and surface the new password through the server logs and the
+			// .ncc-initial-admin-password file (never over the network).
+			//
+			// A short per-IP cooldown blunts the force-rotation nuisance: an
+			// anonymous caller cannot learn the new password, but without a
+			// throttle they could repeatedly invalidate the real admin's
+			// sessions. When throttled we respond 429 and skip the reset.
+			if !s.allowAdminSelfReset(cleanClientIP(r), time.Now()) {
+				s.audit(r, "auth.forgot_password", true, map[string]interface{}{"username": username, "admin_self_reset": false, "throttled": true})
+				writeJSON(w, http.StatusTooManyRequests, envelope{
+					Success:   false,
+					Error:     "an admin password reset was requested very recently; wait a minute before trying again",
+					ErrorCode: "NCC_API_RATE_LIMITED",
+				})
+				return
+			}
+			if pw, err := s.users.adminResetPassword(reservedAdminUsername); err == nil {
+				hint := s.users.setInitialPassword(reservedAdminUsername, pw)
+				s.loginGuard.reset(reservedAdminUsername) // recovery also clears any lockout
+				logAdminPasswordReset("self-service via forgot-password", pw, hint)
+				adminReset = true
+			} else {
+				log.Printf("forgot-password: admin self-reset failed: %v", err)
+			}
+		default:
+			if _, ok := s.users.lookup(username); ok {
+				s.users.addResetRequest(username, cleanClientIP(r))
+				recorded = true
+			}
 		}
 	}
-	s.audit(r, "auth.forgot_password", true, map[string]interface{}{"username": username, "recorded": recorded})
+	s.audit(r, "auth.forgot_password", true, map[string]interface{}{"username": username, "recorded": recorded, "admin_self_reset": adminReset})
+	if adminReset {
+		writeJSON(w, http.StatusOK, envelope{
+			Success: true,
+			Message: "A new temporary password for the admin account has been generated. Retrieve it from the ncc-api-server logs or the .ncc-initial-admin-password file on the server, then sign in and change it.",
+			Data:    map[string]interface{}{"admin_reset": true},
+		})
+		return
+	}
 	writeJSON(w, http.StatusOK, envelope{Success: true, Message: generic})
+}
+
+// adminSelfResetCooldown bounds how often a single client may trigger the
+// built-in admin's self-service password reset via forgot-password.
+const adminSelfResetCooldown = 60 * time.Second
+
+// allowAdminSelfReset returns true if the client IP has not triggered an admin
+// self-reset within the cooldown window, recording the attempt when allowed. It
+// reuses the fixed-window limiter (limit 1 per cooldown) so expired entries are
+// garbage-collected and the per-IP map cannot grow without bound.
+func (s *apiServer) allowAdminSelfReset(ip string, now time.Time) bool {
+	s.adminResetMu.Lock()
+	if s.adminResetLimiter == nil {
+		s.adminResetLimiter = newFixedWindowRateLimiter(1, adminSelfResetCooldown)
+	}
+	lim := s.adminResetLimiter
+	s.adminResetMu.Unlock()
+	ok, _ := lim.allow("admin-self-reset:"+ip, now)
+	return ok
+}
+
+// logAdminPasswordReset prints the first-run-style banner announcing a freshly
+// generated admin password and where to retrieve it. The plaintext is only ever
+// written to the server logs and the sibling .ncc-initial-admin-password file —
+// it is never returned over the network for the anonymous recovery path.
+func logAdminPasswordReset(reason, password, hint string) {
+	log.Printf("==================================================================")
+	log.Printf(" ADMIN PASSWORD RESET (%s)", reason)
+	log.Printf("   username: %s", reservedAdminUsername)
+	log.Printf("   password: %s", password)
+	log.Printf("   You MUST change this password on next login.")
+	if hint != "" {
+		log.Printf("   retrieve it later from: %s", hint)
+	}
+	log.Printf("==================================================================")
 }
 
 // handleMe reports the current caller's identity, role, and which login

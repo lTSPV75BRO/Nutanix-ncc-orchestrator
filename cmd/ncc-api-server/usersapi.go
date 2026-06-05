@@ -89,9 +89,11 @@ func (s *apiServer) handleUserByName(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPut:
 		var body struct {
-			Role       *string `json:"role"`
-			Password   *string `json:"password"`
-			MustChange *bool   `json:"must_change_password"`
+			Role             *string `json:"role"`
+			Password         *string `json:"password"`
+			MustChange       *bool   `json:"must_change_password"`
+			GeneratePassword *bool   `json:"generate_password"`
+			RevokeSessions   *bool   `json:"revoke_sessions"`
 		}
 		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024))
 		if err := dec.Decode(&body); err != nil {
@@ -113,6 +115,41 @@ func (s *apiServer) handleUserByName(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if body.RevokeSessions != nil && *body.RevokeSessions {
+			// Force-sign-out: invalidate all of the target user's sessions
+			// without changing their password or role.
+			if err := s.users.revokeSessions(username); err != nil {
+				writeUserStoreError(w, err)
+				return
+			}
+			s.audit(r, "settings.users.update", true, map[string]interface{}{"username": username, "sessions_revoked": true})
+			writeJSON(w, http.StatusOK, envelope{Success: true, Message: "all sessions for " + username + " have been signed out"})
+			return
+		}
+		if body.GeneratePassword != nil && *body.GeneratePassword {
+			// Auto-generate a random temporary password instead of accepting a
+			// typed one. The built-in admin additionally follows the first-run
+			// workflow (logs + .ncc-initial-admin-password file) so every admin
+			// reset entry point behaves identically.
+			pw, err := s.users.adminResetPassword(username)
+			if err != nil {
+				writeUserStoreError(w, err)
+				return
+			}
+			s.users.clearResetRequest(username)
+			s.loginGuard.reset(username) // a reset account should not stay locked
+			respData := map[string]interface{}{"temporary_password": pw, "must_change_password": true}
+			if isReservedAdmin(username) {
+				hint := s.users.setInitialPassword(username, pw)
+				logAdminPasswordReset("admin reset via Settings → Access", pw, hint)
+				if hint != "" {
+					respData["bootstrap_file"] = hint
+				}
+			}
+			s.audit(r, "settings.users.update", true, map[string]interface{}{"username": username, "password_generated": true})
+			writeJSON(w, http.StatusOK, envelope{Success: true, Message: "Temporary password generated; the user must change it on next login.", Data: respData})
+			return
+		}
 		if body.Password != nil {
 			if len(*body.Password) < minPasswordLen {
 				writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: fmt.Sprintf("password must be at least %d characters", minPasswordLen)})
@@ -132,8 +169,10 @@ func (s *apiServer) handleUserByName(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			// An admin resetting the password resolves any pending
-			// self-service "forgot password" request for this user.
+			// self-service "forgot password" request for this user and clears
+			// any brute-force lockout so the user can sign in immediately.
 			s.users.clearResetRequest(username)
+			s.loginGuard.reset(username)
 		} else if body.MustChange != nil {
 			// Flip the flag without changing the password.
 			if acct, ok := s.users.lookup(username); ok {

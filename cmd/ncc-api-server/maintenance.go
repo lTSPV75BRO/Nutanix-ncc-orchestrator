@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -123,20 +124,73 @@ func (s *apiServer) handleRestore(w http.ResponseWriter, r *http.Request) {
 	}
 
 	installDir := s.maintenanceInstallDir()
-	out, err := s.runOrchestrator([]string{"v2-restore", "--install-dir", installDir, "--input-file", archivePath, "--force"}, 3*time.Minute)
+	// Restore the files but do NOT let v2-restore restart the stack inline:
+	// this api-server is part of that stack, so an inline restart would kill us
+	// mid-request. We apply the (OS/version-agnostic) restore here, then kick
+	// off the restart as a detached process that survives our own shutdown.
+	out, err := s.runOrchestrator([]string{"v2-restore", "--install-dir", installDir, "--input-file", archivePath, "--force", "--no-restart"}, 3*time.Minute)
 	if err != nil {
 		s.audit(r, "settings.restore", false, map[string]interface{}{"install_dir": installDir, "filename": header.Filename})
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "restore failed: " + strings.TrimSpace(out)})
 		return
 	}
 	s.audit(r, "settings.restore", true, map[string]interface{}{"install_dir": installDir, "filename": header.Filename})
+
+	// Launch the restart detached and slightly delayed so this HTTP response
+	// reaches the browser before v2-stop terminates us. The orchestrator binary
+	// performs the actual stop + start --detach, so the stack comes back with
+	// the restored config/accounts/token loaded — no manual step.
+	restarting := s.spawnDetachedRestart(installDir)
+	msg := "Backup restored. The stack is restarting now to load the restored config, accounts, and token — this page will reconnect in a few seconds."
+	if !restarting {
+		msg = "Backup restored. Restart the stack (v2-stop then v2-start) for the restored config, accounts, and token to take effect."
+	}
 	writeJSON(w, http.StatusOK, envelope{
 		Success: true,
-		Message: "Backup restored. Restart the stack (v2-stop then v2-start, or restart the api-server) for the restored config, accounts, and token to take effect.",
+		Message: msg,
 		Data: map[string]interface{}{
 			"install_dir":      installDir,
-			"restart_required": true,
+			"restarting":       restarting,
+			"restart_required": !restarting,
 			"output":           strings.TrimSpace(out),
 		},
 	})
+}
+
+// spawnDetachedRestart launches `ncc-orchestrator v2-restart` as a detached,
+// orphan-surviving process that stops and re-starts the stack (including this
+// api-server). It returns false when the orchestrator binary isn't available,
+// in which case the caller tells the operator to restart manually. A short
+// delay lets the HTTP response flush before the stop signal lands.
+func (s *apiServer) spawnDetachedRestart(installDir string) bool {
+	base := s.orchestratorBaseCommand()
+	if len(base) == 0 {
+		return false
+	}
+	// Require a real built binary; the `go run` dev fallback is too slow/fragile
+	// to hand a self-restart to.
+	if base[0] == "go" {
+		return false
+	}
+	go func() {
+		// Give the response time to reach the client before we tear down.
+		time.Sleep(2 * time.Second)
+		args := append(append([]string{}, base[1:]...), "v2-restart", "--install-dir", installDir)
+		cmd := exec.Command(base[0], args...)
+		cmd.Dir = s.absPath(s.repoRoot)
+		// Detach from this process group so a group-directed stop signal can't
+		// take the restarter down with us, and so it outlives our shutdown.
+		detachProcess(cmd)
+		logf := filepath.Join(installDir, "logs", "v2-restart.log")
+		if f, err := os.OpenFile(logf, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+			cmd.Stdout, cmd.Stderr = f, f
+			defer f.Close()
+		}
+		if err := cmd.Start(); err != nil {
+			return
+		}
+		// Release so we don't wait on it; it continues after we exit.
+		_ = cmd.Process.Release()
+	}()
+	return true
 }
