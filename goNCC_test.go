@@ -4319,12 +4319,18 @@ func TestCollectBackupEntriesIncludesAuditLogAndState(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	mustWrite("config.yaml", "prismCentral: pc.example.com\n")
+	mustWrite("config.yaml", "prismCentral: pc.example.com\noutput-dir-filtered: outputfiles\n")
 	mustWrite(".ncc-api-users.json", `{"users":[]}`)
 	mustWrite(".ncc-api-token", "tok")
 	mustWrite(".ncc-api-notifications.json", "{}")
 	mustWrite(".ncc-api-custom-state.json", "{}") // future state file, caught by glob
 	mustWrite("logs/ncc-audit.log", "{\"action\":\"x\"}\n")
+	// Latest run report artifacts (top level of output-dir-filtered) are
+	// captured; the run-history under runs/ is not.
+	mustWrite("outputfiles/run-summary.json", `{"clusters":1}`)
+	mustWrite("outputfiles/index.html", "<html></html>")
+	mustWrite("outputfiles/slo-dashboard.json", "{}")
+	mustWrite("outputfiles/runs/2026-06-05/run-summary.json", `{"old":true}`)
 
 	entries, _ := collectBackupEntries(dir)
 	got := map[string]bool{}
@@ -4338,10 +4344,95 @@ func TestCollectBackupEntriesIncludesAuditLogAndState(t *testing.T) {
 		".ncc-api-notifications.json",
 		".ncc-api-custom-state.json",
 		"logs/ncc-audit.log",
+		"outputfiles/run-summary.json",
+		"outputfiles/index.html",
+		"outputfiles/slo-dashboard.json",
 	} {
 		if !got[want] {
 			t.Errorf("expected %q in backup entries; got %v", want, got)
 		}
+	}
+	// The potentially large run-history snapshots must NOT be swept in.
+	if got["outputfiles/runs/2026-06-05/run-summary.json"] {
+		t.Error("run-history snapshots should be excluded from the backup")
+	}
+}
+
+// TestV2StartStateRoundTrip verifies that the portable v2-start settings
+// (CORS, listen addresses, session TTL, …) are persisted, are picked up by the
+// backup collector, and are faithfully reconstructed into restart args so a
+// restore/v2-restart does not silently drop the operator's flags.
+func TestV2StartStateRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	opts := v2StartOptions{
+		InstallDir:            dir,
+		APIListen:             ":9091",
+		UIListen:              ":9090",
+		APICORSOrigins:        "https://ncc.corp.example.com",
+		UIAllowedOrigins:      "https://ncc.corp.example.com,http://10.0.0.5:8080",
+		APIAuthMode:           "hybrid",
+		APISessionTTL:         3 * time.Hour,
+		APIRateLimitPerMinute: 0, // disabled — must survive (no omitempty)
+		SelfHeal:              true,
+		SelfHealMaxRestarts:   5,
+		SelfHealWindow:        15 * time.Minute,
+		// Path/ephemeral fields below must NOT leak into the persisted state.
+		ConfigPath: filepath.Join(dir, "config.yaml"),
+		Detach:     true,
+	}
+	if err := writeV2StartState(dir, opts); err != nil {
+		t.Fatalf("writeV2StartState: %v", err)
+	}
+
+	// Captured by the backup collector.
+	if _, err := os.Stat(filepath.Join(dir, v2StartStateFile)); err != nil {
+		t.Fatalf("state file not written: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("prismCentral: pc\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := collectBackupEntries(dir)
+	foundState := false
+	for _, e := range entries {
+		if e.Rel == v2StartStateFile {
+			foundState = true
+		}
+	}
+	if !foundState {
+		t.Errorf("%s should be included in backup entries", v2StartStateFile)
+	}
+
+	// Reconstructed into restart args.
+	args, ok := v2StartArgsFromState(dir)
+	if !ok {
+		t.Fatal("v2StartArgsFromState returned ok=false")
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		"--detach",
+		"--api-listen :9091",
+		"--ui-listen :9090",
+		"--api-cors-origins https://ncc.corp.example.com",
+		"--ui-allowed-origins https://ncc.corp.example.com,http://10.0.0.5:8080",
+		"--api-auth-mode hybrid",
+		"--api-session-ttl 3h0m0s",
+		"--api-rate-limit-per-minute 0",
+		"--self-heal",
+		"--self-heal-max-restarts 5",
+		"--self-heal-window 15m0s",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("restart args missing %q; got: %s", want, joined)
+		}
+	}
+	// Path/ephemeral flags must not be reconstructed.
+	if strings.Contains(joined, "--config-path") {
+		t.Errorf("path flags must not be persisted/reconstructed; got: %s", joined)
+	}
+
+	// Absent state → no args (caller falls back to a bare default start).
+	if _, ok := v2StartArgsFromState(t.TempDir()); ok {
+		t.Error("expected ok=false when no state file is present")
 	}
 }
 

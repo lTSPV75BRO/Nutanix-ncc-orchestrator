@@ -27,6 +27,7 @@ const { Header, Content } = Layout;
 const DashboardPage = lazy(() => import("./pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 const InsightsPage = lazy(() => import("./pages/InsightsPage").then((m) => ({ default: m.InsightsPage })));
+const NotFoundPage = lazy(() => import("./pages/NotFoundPage").then((m) => ({ default: m.NotFoundPage })));
 
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard", icon: <DashboardOutlined /> },
@@ -575,7 +576,7 @@ export default function App() {
                 element={isAdmin ? <SettingsPage /> : <Navigate to="/" replace />}
               />
               <Route path="/insights" element={<InsightsPage />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
+              <Route path="*" element={<NotFoundPage />} />
             </Routes>
           </Suspense>
         </div>

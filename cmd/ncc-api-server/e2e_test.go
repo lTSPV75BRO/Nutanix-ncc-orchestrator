@@ -355,3 +355,81 @@ func TestEndToEndAdminForgotPasswordSelfReset(t *testing.T) {
 		t.Fatalf("second admin self-reset should be throttled (429), got %d (%+v)", code, env)
 	}
 }
+
+// TestRestoreReachableDuringForcedPasswordChange verifies the first-login
+// escape hatch: a bootstrap admin still owing a forced password change can
+// reach the restore endpoint (so they can recover an existing deployment
+// instead of setting a new password), while every other endpoint stays blocked
+// by the password-change gate.
+func TestRestoreReachableDuringForcedPasswordChange(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openUserDB(filepath.Join(dir, "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminPW, created, err := db.bootstrapAdminIfEmpty("admin")
+	if err != nil || !created {
+		t.Fatalf("bootstrap admin: created=%v err=%v", created, err)
+	}
+
+	s := &apiServer{
+		authMode:       "hybrid",
+		authToken:      "admin-static-token",
+		sessionSecret:  "test-session-secret-value",
+		sessionTTL:     10 * time.Minute,
+		sessionIssuer:  "ncc-api-server",
+		users:          db,
+		usersDBPath:    db.path,
+		cookieInsecure: true,
+		corsOrigin:     "http://localhost:8080",
+		startedAt:      time.Now().UTC(),
+	}
+
+	ts := httptest.NewServer(s.buildHandler())
+	defer ts.Close()
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+
+	do := func(method, path, body string) (int, map[string]any) {
+		t.Helper()
+		var rdr io.Reader
+		if body != "" {
+			rdr = strings.NewReader(body)
+		}
+		req, _ := http.NewRequest(method, ts.URL+path, rdr)
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, path, err)
+		}
+		defer resp.Body.Close()
+		var env map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&env)
+		return resp.StatusCode, env
+	}
+
+	// Login as the bootstrap admin: forced change is now owed.
+	code, env := do(http.MethodPost, "/api/v1/auth/login", `{"username":"admin","password":"`+adminPW+`"}`)
+	if code != http.StatusOK || env["data"].(map[string]any)["must_change_password"] != true {
+		t.Fatalf("login: %d (%+v)", code, env)
+	}
+
+	// A normal endpoint stays blocked by the forced-change gate.
+	code, env = do(http.MethodGet, "/api/v1/runs", "")
+	if code != http.StatusForbidden || env["error_code"] != "NCC_API_PASSWORD_CHANGE_REQUIRED" {
+		t.Fatalf("runs should be blocked during forced change, got %d (%+v)", code, env)
+	}
+
+	// The restore endpoint is reachable: it passes the password-change gate and
+	// RBAC (admin), landing on the handler — a GET there is method-not-allowed,
+	// which proves the request was NOT short-circuited by the gate.
+	code, env = do(http.MethodGet, "/api/v1/settings/restore", "")
+	if code == http.StatusForbidden && env["error_code"] == "NCC_API_PASSWORD_CHANGE_REQUIRED" {
+		t.Fatalf("restore must be reachable during forced change, but was gated: %d (%+v)", code, env)
+	}
+	if code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected restore handler to reject GET with 405, got %d (%+v)", code, env)
+	}
+}

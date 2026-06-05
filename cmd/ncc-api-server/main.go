@@ -707,7 +707,15 @@ func (s *apiServer) withAuth(next http.Handler) http.Handler {
 		// Forced password change: a flagged local account may do nothing else
 		// until it sets a new password (the allowlisted endpoints above let it
 		// reach /auth/me, /auth/change-password, and /auth/logout).
-		if p.mustChange {
+		//
+		// Exception: a backup restore is allowed during forced change so the
+		// first-login admin can recover an existing deployment instead of
+		// setting a new password — the restore replaces the user database with
+		// the backed-up one (old admin hash, must_change=false), making a
+		// password change pointless. The RBAC check below still confines this to
+		// the admin role, and CSRF still applies, so a non-admin flagged account
+		// cannot use it.
+		if p.mustChange && r.URL.Path != "/api/v1/settings/restore" {
 			writeJSON(w, http.StatusForbidden, envelope{Success: false, Error: "password change required", ErrorCode: "NCC_API_PASSWORD_CHANGE_REQUIRED"})
 			return
 		}

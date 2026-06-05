@@ -801,7 +801,8 @@ function BackupRestoreCard() {
     >
       <Typography.Paragraph type="secondary">
         Download a full backup of this install — configuration and referenced files, local accounts
-        and roles, the API token, and scheduler/notification state — as a single{" "}
+        and roles, the API token, scheduler/notification state, the start settings (CORS, listen
+        addresses, session TTL), the audit log, and the latest run's report — as a single{" "}
         <Typography.Text code>.tar.gz</Typography.Text>. The archive contains secrets, so store it
         securely. Restoring overwrites the current install and then restarts the stack automatically
         — backups are portable across OS and version, so a Windows backup restores onto Linux/macOS.

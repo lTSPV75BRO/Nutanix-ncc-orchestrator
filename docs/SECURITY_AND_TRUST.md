@@ -506,6 +506,14 @@ succeeds (new password ≥ 8 chars; current password + CSRF verified). Once
 changed, the `.ncc-initial-admin-password` file is deleted. That admin can then
 add more local users, assign roles, and configure SAML from the UI.
 
+The **only** endpoint allowed through this forced-change block is a backup
+restore (`POST /api/v1/settings/restore`): the first-login screen offers a
+"Restore from backup…" button so a fresh deployment can recover an existing one
+instead of setting a new password (the restored user database replaces the
+bootstrap admin with the original account, `must_change_password=false`). The
+exception is still gated by the admin role and CSRF, so a non-admin flagged
+account cannot use it.
+
 The database holds bcrypt password hashes, roles, the must-change flag, and the
 runtime SAML config (including the SP private key). It can be persisted two ways:
 

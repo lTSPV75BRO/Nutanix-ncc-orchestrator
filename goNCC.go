@@ -8716,6 +8716,7 @@ func collectBackupEntries(installDir string) (entries []backupEntry, skipped []s
 		".ncc-initial-admin-password",
 		".ncc-api-schedule.json",
 		".ncc-api-notifications.json",
+		v2StartStateFile, // persisted v2-start flags (CORS, listen, session TTL, …)
 	} {
 		add(filepath.Join(installDir, name))
 	}
@@ -8735,10 +8736,12 @@ func collectBackupEntries(installDir string) (entries []backupEntry, skipped []s
 	// no-op when it is absent or rolled elsewhere.
 	add(filepath.Join(installDir, "logs", "ncc-audit.log"))
 
-	// Config-referenced files (clusters list / alert-exclusions / secrets).
+	// Config-referenced files (clusters list / alert-exclusions / secrets) plus
+	// the latest run's report artifacts.
 	if content, err := os.ReadFile(filepath.Join(installDir, "config.yaml")); err == nil {
+		cfg := string(content)
 		for _, key := range []string{"clusters-file", "exclude-alert-titles-file", "secrets-file"} {
-			raw := extractConfigRefPath(string(content), key)
+			raw := extractConfigRefPath(cfg, key)
 			if raw == "" {
 				continue
 			}
@@ -8747,6 +8750,26 @@ func collectBackupEntries(installDir string) (entries []backupEntry, skipped []s
 				p = filepath.Join(installDir, p)
 			}
 			add(p)
+		}
+
+		// Latest run data: the dashboard reads run-summary.json plus the HTML /
+		// CSV / JSON report artifacts that live at the top level of
+		// output-dir-filtered. Capture those regular files (non-recursive) so a
+		// restored stack shows the most recent run immediately. The potentially
+		// large run-history under <output-dir-filtered>/runs/ is intentionally
+		// left out — add() skips directories — keeping the archive to a single
+		// run's worth of artifacts rather than the full history.
+		outDir := strings.TrimSpace(extractConfigRefPath(cfg, "output-dir-filtered"))
+		if outDir == "" {
+			outDir = defaultOutputDirFiltered
+		}
+		if !filepath.IsAbs(outDir) {
+			outDir = filepath.Join(installDir, outDir)
+		}
+		if matches, err := filepath.Glob(filepath.Join(outDir, "*")); err == nil {
+			for _, m := range matches {
+				add(m) // add() ignores directories (e.g. the runs/ history) and non-regular files
+			}
 		}
 	}
 	return entries, skipped
@@ -9241,6 +9264,137 @@ func defaultStr(v, def string) string {
 // performed entirely by the binary — no external script — so a CLI restore can
 // bring the stack back automatically. v2-start runs detached so the restarted
 // stack outlives this short-lived restore process.
+// v2StartStateFile records the portable v2-start settings of the most recent
+// start at the install-dir root, so a backup can carry them and an
+// orchestrator-managed restart (after a restore, or via v2-restart) relaunches
+// with the same CORS/listen/session/etc. configuration instead of falling back
+// to defaults.
+const v2StartStateFile = ".ncc-v2-start.json"
+
+// v2StartState is the curated, portable subset of v2StartOptions persisted to
+// v2StartStateFile. Path-type flags (config-path, output/log dirs, token/users
+// DB, TLS material, pid/log files) are intentionally omitted: they default
+// under the install dir and an absolute path captured on one host/OS is
+// meaningless after a cross-OS restore, so a restart re-derives them.
+type v2StartState struct {
+	APIListen                   string        `json:"api_listen,omitempty"`
+	UIListen                    string        `json:"ui_listen,omitempty"`
+	APIAdvertiseURL             string        `json:"api_advertise_url,omitempty"`
+	UIAdvertiseURL              string        `json:"ui_advertise_url,omitempty"`
+	UIBackendURL                string        `json:"ui_backend_url,omitempty"`
+	APICORSOrigins              string        `json:"api_cors_origins,omitempty"`
+	UIAllowedOrigins            string        `json:"ui_allowed_origins,omitempty"`
+	APIAuthMode                 string        `json:"api_auth_mode,omitempty"`
+	APISessionTTL               time.Duration `json:"api_session_ttl,omitempty"`
+	APISessionSecret            string        `json:"api_session_secret,omitempty"`
+	APIRunTimeout               time.Duration `json:"api_run_timeout,omitempty"`
+	APIRateLimitPerMinute       int           `json:"api_rate_limit_per_minute"` // 0 = disabled is meaningful, so no omitempty
+	APIReadTimeout              time.Duration `json:"api_read_timeout,omitempty"`
+	APIWriteTimeout             time.Duration `json:"api_write_timeout,omitempty"`
+	APIIdleTimeout              time.Duration `json:"api_idle_timeout,omitempty"`
+	UIBackendInsecureSkipVerify bool          `json:"ui_backend_insecure_skip_verify,omitempty"`
+	APIOnly                     bool          `json:"api_only,omitempty"`
+	SelfHeal                    bool          `json:"self_heal,omitempty"`
+	SelfHealMaxRestarts         int           `json:"self_heal_max_restarts,omitempty"`
+	SelfHealWindow              time.Duration `json:"self_heal_window,omitempty"`
+}
+
+// writeV2StartState records the portable start settings of opts under
+// installDir. Best-effort: a write failure must not abort the start.
+func writeV2StartState(installDir string, opts v2StartOptions) error {
+	st := v2StartState{
+		APIListen:                   opts.APIListen,
+		UIListen:                    opts.UIListen,
+		APIAdvertiseURL:             opts.APIAdvertiseURL,
+		UIAdvertiseURL:              opts.UIAdvertiseURL,
+		UIBackendURL:                opts.UIBackendURL,
+		APICORSOrigins:              opts.APICORSOrigins,
+		UIAllowedOrigins:            opts.UIAllowedOrigins,
+		APIAuthMode:                 opts.APIAuthMode,
+		APISessionTTL:               opts.APISessionTTL,
+		APISessionSecret:            opts.APISessionSecret,
+		APIRunTimeout:               opts.APIRunTimeout,
+		APIRateLimitPerMinute:       opts.APIRateLimitPerMinute,
+		APIReadTimeout:              opts.APIReadTimeout,
+		APIWriteTimeout:             opts.APIWriteTimeout,
+		APIIdleTimeout:              opts.APIIdleTimeout,
+		UIBackendInsecureSkipVerify: opts.UIBackendInsecureSkipVerify,
+		APIOnly:                     opts.APIOnly,
+		SelfHeal:                    opts.SelfHeal,
+		SelfHealMaxRestarts:         opts.SelfHealMaxRestarts,
+		SelfHealWindow:              opts.SelfHealWindow,
+	}
+	data, err := json.MarshalIndent(st, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(installDir, v2StartStateFile), append(data, '\n'), 0o600)
+}
+
+// loadV2StartState reads the persisted start settings; ok is false when the
+// file is absent or unparseable (a fresh install, or a pre-feature backup).
+func loadV2StartState(installDir string) (v2StartState, bool) {
+	data, err := os.ReadFile(filepath.Join(installDir, v2StartStateFile))
+	if err != nil {
+		return v2StartState{}, false
+	}
+	var st v2StartState
+	if json.Unmarshal(data, &st) != nil {
+		return v2StartState{}, false
+	}
+	return st, true
+}
+
+// v2StartArgsFromState builds the `v2-start` argument list (always detached)
+// from the persisted settings. Returns ok=false when no state is available so
+// the caller can fall back to a bare default start.
+func v2StartArgsFromState(installDir string) (args []string, ok bool) {
+	st, found := loadV2StartState(installDir)
+	if !found {
+		return nil, false
+	}
+	args = []string{"v2-start", "--install-dir", installDir, "--detach"}
+	addStr := func(flag, v string) {
+		if strings.TrimSpace(v) != "" {
+			args = append(args, flag, v)
+		}
+	}
+	addDur := func(flag string, d time.Duration) {
+		if d > 0 {
+			args = append(args, flag, d.String())
+		}
+	}
+	addStr("--api-listen", st.APIListen)
+	addStr("--ui-listen", st.UIListen)
+	addStr("--api-advertise-url", st.APIAdvertiseURL)
+	addStr("--ui-advertise-url", st.UIAdvertiseURL)
+	addStr("--ui-backend-url", st.UIBackendURL)
+	addStr("--api-cors-origins", st.APICORSOrigins)
+	addStr("--ui-allowed-origins", st.UIAllowedOrigins)
+	addStr("--api-auth-mode", st.APIAuthMode)
+	addStr("--api-session-secret", st.APISessionSecret)
+	addDur("--api-session-ttl", st.APISessionTTL)
+	addDur("--api-run-timeout", st.APIRunTimeout)
+	addDur("--api-read-timeout", st.APIReadTimeout)
+	addDur("--api-write-timeout", st.APIWriteTimeout)
+	addDur("--api-idle-timeout", st.APIIdleTimeout)
+	args = append(args, "--api-rate-limit-per-minute", strconv.Itoa(st.APIRateLimitPerMinute))
+	if st.UIBackendInsecureSkipVerify {
+		args = append(args, "--ui-backend-insecure-skip-verify")
+	}
+	if st.APIOnly {
+		args = append(args, "--api-only")
+	}
+	if st.SelfHeal {
+		args = append(args, "--self-heal")
+		if st.SelfHealMaxRestarts > 0 {
+			args = append(args, "--self-heal-max-restarts", strconv.Itoa(st.SelfHealMaxRestarts))
+		}
+		addDur("--self-heal-window", st.SelfHealWindow)
+	}
+	return args, true
+}
+
 func restartV2Stack(installDir string) error {
 	self, err := os.Executable()
 	if err != nil || strings.TrimSpace(self) == "" {
@@ -9251,8 +9405,14 @@ func restartV2Stack(installDir string) error {
 	stop := exec.Command(self, "v2-stop", "--install-dir", installDir)
 	stop.Stdout, stop.Stderr = os.Stdout, os.Stderr
 	_ = stop.Run()
-	// Start detached so the relaunched API/UI survive this process exiting.
-	start := exec.Command(self, "v2-start", "--install-dir", installDir, "--detach")
+	// Start detached so the relaunched API/UI survive this process exiting,
+	// reusing the persisted start settings (CORS, listen, session TTL, …) so a
+	// restore or v2-restart does not silently drop the operator's flags.
+	startArgs, ok := v2StartArgsFromState(installDir)
+	if !ok {
+		startArgs = []string{"v2-start", "--install-dir", installDir, "--detach"}
+	}
+	start := exec.Command(self, startArgs...)
 	start.Stdout, start.Stderr = os.Stdout, os.Stderr
 	if err := start.Run(); err != nil {
 		return fmt.Errorf("v2-start: %w", err)
@@ -9990,6 +10150,13 @@ func runV2Start(opts v2StartOptions) error {
 	}
 	if absInstallDir, err := filepath.Abs(installDir); err == nil {
 		installDir = absInstallDir
+	}
+	// Record the portable start settings so backups carry them and an
+	// orchestrator-managed restart (after a restore, or via v2-restart) reuses
+	// the same CORS/listen/session configuration. Best-effort; never block the
+	// start on a state-write failure.
+	if err := writeV2StartState(installDir, opts); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not persist v2-start settings: %v\n", err)
 	}
 	apiOnly := opts.APIOnly
 	var (

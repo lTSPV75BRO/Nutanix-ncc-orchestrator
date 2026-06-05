@@ -878,7 +878,15 @@ install dir:
   runtime **SAML and LDAP** config, session policy)
 - the API token (`.ncc-api-token`) and first-run admin password if still present
 - scheduler/notifications state and any other `.ncc-api-*` state at the root
+- the **portable `v2-start` settings** (`.ncc-v2-start.json`: CORS origins,
+  listen addresses, advertise/backend URLs, auth mode, session TTL, rate limit,
+  HTTP timeouts, self-heal) so a restore reuses them on restart (path-type flags
+  such as `--config-path`/dirs are re-derived under the new install dir)
 - the JSONL audit log (`logs/ncc-audit.log`) when present
+- the **latest run's report artifacts** — the top-level files of
+  `output-dir-filtered` (`run-summary.json`, `index.html`, and the
+  SLO/drilldown/flaky/checks JSON) — so a restored stack shows the most recent
+  run on the dashboard immediately
 
 The archive's `manifest.json` records the **ncc-orchestrator version** (plus
 stream, build date, Go toolchain) that created it, and an **auth-provider
@@ -890,8 +898,10 @@ Because SAML and LDAP config — including those secrets — live *inside*
 secrets travelled with the archive; restore re-reads the restored database and
 **warns when a provider is enabled but its secret is missing** (e.g. SAML
 enabled without an SP key, or LDAP enabled with an anonymous bind). Regenerable
-artifacts (binaries, frontend bundle, run/ pid files, output/ncc files) are
-excluded.
+artifacts (binaries, frontend bundle, run/ pid files, raw NCC summaries under
+`output-dir-logs`, Prometheus textfiles, and the full run-history snapshots
+under `<output-dir-filtered>/runs/`) are excluded, keeping the archive to a
+single run's worth of report data.
 
 | Command | Flag | Default | Purpose |
 |---|---|---|---|
@@ -910,6 +920,16 @@ excluded.
 reports the orchestrator version that produced the backup, and **warns when the
 restoring binary is older** than the backup's creator (it never refuses on a
 version difference).
+
+**First-login restore:** on a fresh deployment the bootstrap admin is normally
+forced to set a new password before doing anything. The forced-change screen now
+also offers a **"Restore from backup…"** button: uploading an existing
+deployment's archive recovers everything and the admin keeps their **original**
+password (the restored user database carries the old admin account with
+`must_change_password=false`), so no password reset is required. The restore
+endpoint is the single exception allowed through the forced-change gate, and it
+is still confined to the admin role with CSRF enforced; the stack restarts
+automatically and the UI reconnects on its own.
 
 **Cross-OS portable:** a backup taken on Windows restores cleanly onto
 Linux/macOS. During restore, file-reference paths (`clusters-file`,

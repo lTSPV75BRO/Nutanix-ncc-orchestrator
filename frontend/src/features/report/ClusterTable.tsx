@@ -293,7 +293,13 @@ export function ClusterTable({
         return (
           <Space direction="vertical" size={0}>
             {url ? (
-              <a href={url} target="_blank" rel="noreferrer" className="cluster-link kb-like-link">
+              <a
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                className="cluster-link kb-like-link"
+                onClick={(e) => e.stopPropagation()}
+              >
                 {row.clusterName}
               </a>
             ) : (
