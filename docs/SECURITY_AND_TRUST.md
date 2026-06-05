@@ -466,9 +466,11 @@ The api-server supports three authorization levels, ordered
 
 | Role | May do | Denied |
 | ---- | ------ | ------ |
-| **viewer** | Read non-settings `GET` endpoints (runs, reports, artifacts, logs, health, metrics) | `/api/v1/settings/*`, run trigger/cancel, any mutation |
-| **operator** | Everything a viewer can, plus trigger/cancel/preflight runs | `/api/v1/settings/*`, token rotation, schedule/config writes |
+| **viewer** | Read non-settings `GET` endpoints (runs, reports, artifacts, logs, health, metrics) and read the run schedule | `/api/v1/settings/*`, run trigger/cancel, any mutation |
+| **operator** | Everything a viewer can, plus: trigger/cancel/preflight runs; **create/update/apply the run schedule** (`PUT /api/v1/schedule`); **send test notifications** (`POST /api/v1/settings/notifications/test`); **read cluster topology** (`GET /api/v1/settings/clusters` and `GET /api/v1/settings/cluster-groups`) | Secret-bearing settings (config, users, SSO/LDAP, sessions, notifications config, backups, cluster-group **writes**), token rotation |
 | **admin** | Everything | — |
+
+The operator scope is deliberately limited to **operating** NCC (running it, scheduling it, verifying alerting, and seeing which clusters/groups exist to scope runs) without exposing or changing any secret. The carved-out operator endpoints either return no secrets (cluster topology is just names/membership) or are run-adjacent actions; the test-notification path **redacts URLs** from delivery errors so a Slack/webhook secret can't leak to a non-admin (the full error is still logged server-side). In the UI, operators reach a reduced **Settings** view (Connection, Schedule, Runs, Logs, Audit); the secret-bearing tabs (Config, Access, Developer) stay admin-only.
 
 A role can be presented three ways:
 
@@ -480,6 +482,73 @@ A role can be presented three ways:
 
 `/api/v1/health` reports `rbac_enabled`, `login_enabled`, `local_login`, and
 `saml_enabled`. Routes enforce a minimum role; insufficient roles get `403`.
+
+#### Cluster groups (membership-based access control)
+
+On top of the role hierarchy, admins can segregate clusters into **cluster
+groups** (Settings → Access → *Cluster groups*, or
+`GET/PUT /api/v1/settings/cluster-groups`). Each group lists clusters plus
+members, where membership is the union of:
+
+- **local accounts** (by username),
+- **Active Directory groups** (by CN or full DN; matched case-insensitively
+  against the `memberOf` values captured in the user's session at login), and
+- **individual Active Directory users** (matched against the caller's canonical
+  subject, i.e. their `sAMAccountName`; a UPN's local part is accepted too).
+
+A group may also list **Prism Centrals** (URLs/addresses). Every cluster
+registered under a listed PC is folded into the group automatically: the
+api-server discovers the PC's clusters via the orchestrator's `discover-clusters`
+(reusing the active run config's credentials — no extra secrets are stored), and
+both the cluster **name and address** are granted so filtering matches whichever
+identity the reports/runs use. Discovery results are cached and refreshed in the
+background (≈10 min TTL), so newly-registered clusters become accessible without
+an admin edit; admins can preview/refresh a PC's clusters via
+`GET /api/v1/settings/pc-clusters?pc=<url>` (admin-only).
+
+When assigning AD principals, the UI offers **live directory type-ahead**: as the
+admin types, it queries `GET /api/v1/settings/ldap/search?q=<term>&type=group|user`
+(admin-only; binds the configured service account) and returns matching groups
+(stored by full DN) and users (stored by `sAMAccountName`). The field still
+accepts manual entry, so it works even when the directory is unreachable.
+
+A cluster may belong to multiple groups. The model is:
+
+- **Admins and static-token callers are unrestricted** — they see, trigger, and
+  act on every cluster, exactly as before.
+- **Non-admins are confined to the union of clusters in the groups they belong
+  to.** Run triggers are pinned to that set via `--clusters` (a member may
+  further narrow to a subset; requesting a cluster outside their groups is
+  dropped, and a member in no group gets `403`). Report/dashboard data
+  (`/api/v1/report/data`, the runs feed) is **filtered server-side** down to the
+  allowed clusters, and members cannot supply their own `--clusters` /
+  `--cluster-file` to escape the scope.
+- **Ungrouped clusters are admin-only** — a cluster that is in no group is never
+  granted to a non-admin.
+- **Raw multi-cluster artifacts are admin-only.** The pre-rendered
+  `index.html`, CSV/JSON exports, and NCC logs (`GET /api/v1/artifacts*`) embed
+  every cluster and cannot be filtered after the fact, so they are restricted to
+  unrestricted callers; members use the filtered dashboard instead.
+
+`GET /api/v1/auth/me` returns `cluster_access_unrestricted` and (when
+restricted) `allowed_clusters`, so the UI can label the visible scope and hide
+admin-only download buttons. Cluster groups live inside the user database
+(`.ncc-api-users.json`), so they persist across `v2-stop`/`v2-start` and are
+captured by backup/restore automatically.
+
+**Concurrent runs across groups.** Different groups can run at the same time:
+the run engine allows up to `--max-concurrent-runs` (default 4) orchestrator
+processes at once and queues the rest. Because each group's run is pinned to its
+own `--clusters` set, a run by group A and a run by group B proceed in parallel.
+When their cluster sets **overlap**, the later run skips the clusters the earlier
+run already claimed (tracked by a per-cluster in-flight owner map) and executes
+only the remainder — a shared cluster is scanned **once**, never twice
+simultaneously. Each run writes to an isolated per-run output directory and its
+per-cluster results are merged latest-wins back into the canonical report on
+completion, so each group continues to see only its own clusters' data through
+the same server-side cluster-group filtering. This does not widen any
+principal's visibility: skipped/shared clusters are still subject to each
+caller's `allowed_clusters` when reading reports.
 
 #### First-run admin bootstrap (zero-config)
 
@@ -709,7 +778,8 @@ misconfigured. AD users get a normal role session but no local password
 
 Authentication uses a **service-account bind + search + rebind**: the server
 binds the read-only service account, searches `base_dn` with the user filter
-(default `(&(objectClass=user)(sAMAccountName=%s))`), then re-binds as the found
+(default `(&(objectClass=user)(|(sAMAccountName=%s)(userPrincipalName=%s)))`, so
+users can sign in with either `jdoe` or `jdoe@corp.example.com`), then re-binds as the found
 user DN to verify the password. An empty password is rejected up front so an
 LDAP anonymous bind can never be mistaken for a successful login, and the login
 name is escaped into the search filter.

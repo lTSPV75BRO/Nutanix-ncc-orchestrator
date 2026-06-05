@@ -59,6 +59,10 @@ export type MeData = {
   expires_at?: string;
   /** Seconds remaining before the current session expires. */
   expires_in_sec?: number;
+  /** False when the caller is confined to cluster groups (non-admin); true for admins/static tokens. */
+  cluster_access_unrestricted?: boolean;
+  /** When restricted, the clusters the caller may see/act on. */
+  allowed_clusters?: string[];
 };
 
 export type SessionPolicy = {
@@ -163,6 +167,40 @@ export type LDAPTestInput = LDAPConfigInput & {
 export type LDAPTestResult = {
   username: string;
   role: UserRole;
+  groups?: string[];
+};
+
+export type ClusterGroup = {
+  name: string;
+  clusters?: string[];
+  prism_centrals?: string[];
+  local_users?: string[];
+  ad_groups?: string[];
+  ad_users?: string[];
+};
+
+export type PCCluster = {
+  name: string;
+  address: string;
+};
+
+export type PCDiscoverResult = {
+  prism_central: string;
+  count: number;
+  clusters: PCCluster[];
+};
+
+export type DirectoryEntry = {
+  type: "group" | "user";
+  value: string;
+  name: string;
+  dn: string;
+  upn?: string;
+};
+
+export type DirectorySearchResult = {
+  ldap_enabled: boolean;
+  results: DirectoryEntry[];
 };
 
 export type AuditLogEntry = {
@@ -288,6 +326,22 @@ export type RunInfo = {
   auth_mode?: string;
 };
 
+// ActiveRunEntry is one queued or running entry in the concurrent run engine.
+export type ActiveRunEntry = {
+  id: string;
+  status: "queued" | "running" | "done";
+  group?: string;
+  started_at: string;
+  queued_at?: string;
+  elapsed_sec?: number;
+  pid?: number;
+  clusters?: string[];
+  skipped?: string[];
+  skipped_owner?: Record<string, string>;
+  all_clusters?: boolean;
+  live_output?: string;
+};
+
 export type RunActiveData = {
   active: boolean;
   started_at: string;
@@ -305,6 +359,11 @@ export type RunActiveData = {
   command?: string[];
   work_dir?: string;
   env?: Record<string, string>;
+  // Concurrent run engine.
+  runs?: ActiveRunEntry[];
+  running_count?: number;
+  queued_count?: number;
+  max_concurrent?: number;
 };
 
 export type RunConflictData = {
@@ -323,10 +382,12 @@ export type RunConflictData = {
 };
 
 export type RunCancelData = {
-  pid: number;
-  started_at: string;
-  elapsed_seconds: number;
-  elapsed_human: string;
+  run_id?: string;
+  pid?: number;
+  cancelled?: number;
+  started_at?: string;
+  elapsed_seconds?: number;
+  elapsed_human?: string;
   poll_endpoint: string;
 };
 
@@ -336,11 +397,20 @@ export type RunByIdData = {
 };
 
 export type TriggerRunData = {
-  pid: number;
-  command: string[];
-  started_at: string;
+  run_id?: string;
+  started?: boolean;
+  queued?: boolean;
+  queue_position?: number;
+  started_at?: string;
   config_path?: string;
   used_password?: boolean;
+  clusters?: string[];
+  skipped_clusters?: string[];
+  skipped_owner?: Record<string, string>;
+  running_count?: number;
+  // Legacy field (no longer populated; kept for backward compatibility).
+  pid?: number;
+  command?: string[];
 };
 
 export type PreflightCheck = {

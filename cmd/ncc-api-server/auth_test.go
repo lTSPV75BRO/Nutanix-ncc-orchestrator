@@ -26,7 +26,16 @@ func TestRouteMinRole(t *testing.T) {
 		{http.MethodPost, "/api/v1/runs/preflight", RoleOperator},
 		{http.MethodDelete, "/api/v1/runs/active", RoleOperator},
 		{http.MethodDelete, "/api/v1/runs/abc123", RoleOperator},
-		{http.MethodPut, "/api/v1/schedule", RoleAdmin},
+		// Operator-accessible operational endpoints (expanded scope).
+		{http.MethodGet, "/api/v1/schedule", RoleViewer},
+		{http.MethodPut, "/api/v1/schedule", RoleOperator},
+		{http.MethodGet, "/api/v1/settings/clusters", RoleOperator},
+		{http.MethodGet, "/api/v1/settings/cluster-groups", RoleOperator},
+		{http.MethodPut, "/api/v1/settings/cluster-groups", RoleAdmin},
+		{http.MethodPost, "/api/v1/settings/notifications/test", RoleOperator},
+		// Secret-bearing settings reads stay admin-only.
+		{http.MethodGet, "/api/v1/settings/notifications", RoleAdmin},
+		{http.MethodGet, "/api/v1/settings/users", RoleAdmin},
 	}
 	for _, c := range cases {
 		r := httptest.NewRequest(c.method, c.path, nil)

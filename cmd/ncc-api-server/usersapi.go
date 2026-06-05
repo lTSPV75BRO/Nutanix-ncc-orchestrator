@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -388,6 +389,20 @@ func (s *apiServer) handleLDAP(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 			return
 		}
+		// When enabling LDAP, verify connectivity (dial + service-account bind +
+		// base-DN search) before persisting so the admin gets a clear, actionable
+		// error instead of a config that only fails later at login time.
+		if cfg.configured() {
+			prov, _, err := buildLDAPProvider(cfg)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
+				return
+			}
+			if err := prov.validate(); err != nil {
+				writeJSON(w, http.StatusBadGateway, envelope{Success: false, Error: "LDAP connection failed: " + err.Error()})
+				return
+			}
+		}
 		if err := s.users.setLDAP(cfg); err != nil {
 			writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: err.Error()})
 			return
@@ -446,7 +461,7 @@ func (s *apiServer) handleLDAPTest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "test_username and test_password are required"})
 		return
 	}
-	role, canonical, ok, err := prov.authenticate(body.TestUsername, body.TestPassword)
+	role, canonical, groups, ok, err := prov.authenticate(body.TestUsername, body.TestPassword)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, envelope{Success: false, Error: "LDAP error: " + err.Error()})
 		return
@@ -459,7 +474,48 @@ func (s *apiServer) handleLDAPTest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, envelope{Success: true, Message: "LDAP authentication succeeded", Data: map[string]interface{}{
 		"username": canonical,
 		"role":     role.String(),
+		"groups":   groups,
 	}})
+}
+
+// handleLDAPSearch powers real-time AD/LDAP type-ahead when admins assign
+// principals to cluster groups. GET ?q=<term>&type=group|user|all&limit=<n>.
+// Returns an empty result set (not an error) when LDAP is not enabled so the UI
+// can fall back to manual entry.
+func (s *apiServer) handleLDAPSearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	kind := strings.TrimSpace(r.URL.Query().Get("type"))
+	if kind == "" {
+		kind = "all"
+	}
+	limit := 25
+	if v := strings.TrimSpace(r.URL.Query().Get("limit")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	prov := s.currentLDAP()
+	if prov == nil {
+		writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{"ldap_enabled": false, "results": []directoryEntry{}}})
+		return
+	}
+	if len([]rune(q)) < 2 {
+		writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{"ldap_enabled": true, "results": []directoryEntry{}}})
+		return
+	}
+	results, err := prov.searchDirectory(q, kind, limit)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, envelope{Success: false, Error: "LDAP search failed: " + err.Error()})
+		return
+	}
+	if results == nil {
+		results = []directoryEntry{}
+	}
+	writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{"ldap_enabled": true, "results": results}})
 }
 
 // handleSessionPolicy manages the runtime session lifetime (admin-only). GET

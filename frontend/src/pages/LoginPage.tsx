@@ -1,16 +1,35 @@
 import { useState } from "react";
-import { Alert, Button, Card, Divider, Form, Input, Modal, Tooltip, Typography, message } from "antd";
+import { Alert, Button, Card, Divider, Form, Input, Modal, Tooltip, Typography, Upload, message } from "antd";
 import {
+  CloudUploadOutlined,
   InfoCircleOutlined,
   LockOutlined,
   LoginOutlined,
   PauseCircleOutlined,
   PlayCircleOutlined,
   SafetyOutlined,
+  UploadOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import { api, ApiError } from "../api/client";
 import { useLocalStorageState } from "../hooks/useLocalStorageState";
+
+// Poll the backend health endpoint until the restarted stack answers, then
+// reload so the SPA re-bootstraps against the restored deployment.
+async function waitForRestartAndReload() {
+  const deadline = Date.now() + 120_000;
+  await new Promise((r) => setTimeout(r, 4000));
+  while (Date.now() < deadline) {
+    try {
+      const resp = await fetch("/api/v1/health", { cache: "no-store" });
+      if (resp.ok) break;
+    } catch {
+      // still down — keep waiting
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  window.location.reload();
+}
 
 const { Title, Text } = Typography;
 
@@ -96,6 +115,61 @@ export function LoginPage({ localEnabled, samlEnabled, bootstrapPending, onSucce
   const [forgotOpen, setForgotOpen] = useState(false);
   const [forgotSubmitting, setForgotSubmitting] = useState(false);
   const [forgotForm] = Form.useForm<{ username: string }>();
+  const [restoreOpen, setRestoreOpen] = useState(false);
+  const [restoreSubmitting, setRestoreSubmitting] = useState(false);
+  const [restoreFile, setRestoreFile] = useState<File | null>(null);
+  const [restoreForm] = Form.useForm<{ username: string; password: string }>();
+
+  // First-login restore: authenticate with the bootstrap admin credentials (the
+  // restore endpoint is the one action allowed through the forced-change gate),
+  // upload the archive, then let the orchestrator restart the stack. After the
+  // reload the restored deployment governs: the old admin's stored state decides
+  // whether a password change is still owed, so it behaves exactly as the
+  // original deployment did (a still-pending admin is prompted to reset).
+  const handleRestore = async (values: { username: string; password: string }) => {
+    if (!restoreFile) {
+      message.error("Choose a backup archive (.tar.gz) to restore.");
+      return;
+    }
+    setRestoreSubmitting(true);
+    try {
+      await api.login(values.username.trim(), values.password);
+    } catch (e) {
+      setRestoreSubmitting(false);
+      message.error(
+        e instanceof ApiError
+          ? `Sign-in failed: ${e.message}. Enter the current bootstrap admin password to restore.`
+          : "Sign-in failed. Enter the current bootstrap admin password to restore.",
+      );
+      return;
+    }
+    try {
+      const res = await api.restoreBackup(restoreFile);
+      const data = (res.data ?? {}) as { restarting?: boolean };
+      setRestoreOpen(false);
+      if (data.restarting) {
+        Modal.success({
+          title: "Backup restored — restarting",
+          content:
+            res.message ??
+            "The stack is restarting to load the restored deployment. This page will reconnect automatically — then sign in with the credentials from the restored deployment (you may be prompted to set a password if that deployment still required it).",
+          okText: "OK",
+        });
+        void waitForRestartAndReload();
+      } else {
+        Modal.success({
+          title: "Backup restored",
+          content:
+            res.message ??
+            "Restart the stack (v2-stop then v2-start) for the restored deployment to take effect, then sign in with its credentials.",
+        });
+      }
+    } catch (e) {
+      message.error(e instanceof ApiError ? `Restore failed: ${e.message}` : "Restore failed");
+    } finally {
+      setRestoreSubmitting(false);
+    }
+  };
 
   const handleForgot = async (values: { username: string }) => {
     setForgotSubmitting(true);
@@ -241,27 +315,28 @@ export function LoginPage({ localEnabled, samlEnabled, bootstrapPending, onSucce
           <>
             <Divider plain style={{ marginTop: 24 }}>
               <Text type="secondary" style={{ fontSize: 12 }}>
-                First time signing in?
+                First-time sign-in
               </Text>
             </Divider>
             <Alert
               type="info"
               showIcon
               icon={<InfoCircleOutlined />}
-              message="Where's the admin password?"
+              message="Initial administrator password"
               description={
                 <Typography.Paragraph style={{ marginBottom: 0, fontSize: 12 }}>
-                  On first launch the server creates an <Text code>admin</Text> account with a
-                  random password and requires you to change it. Retrieve it from:
+                  On first launch, the server creates an <Text code>admin</Text> account with a
+                  randomly generated password that must be changed at first sign-in. You can
+                  retrieve it from:
                   <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
                     <li>
-                      the <Text strong>api-server console / logs</Text> (the{" "}
-                      <Text code>FIRST-RUN ADMIN CREATED</Text> banner), or the{" "}
-                      <Text code>.ncc-initial-admin-password</Text> file beside the user database;
+                      the api-server console output (the{" "}
+                      <Text code>FIRST-RUN ADMIN CREATED</Text> banner) or the{" "}
+                      <Text code>.ncc-initial-admin-password</Text> file beside the user database; or
                     </li>
                     <li>
-                      on <Text strong>Kubernetes</Text>, the{" "}
-                      <Text code>initial-admin-password</Text> key of the user-database Secret, e.g.{" "}
+                      on Kubernetes, the <Text code>initial-admin-password</Text> key of the
+                      user-database Secret:{" "}
                       <Text code copyable={{ text: "kubectl get secret ncc-v2-users -o jsonpath='{.data.initial-admin-password}' | base64 -d" }}>
                         kubectl get secret …
                       </Text>
@@ -270,6 +345,18 @@ export function LoginPage({ localEnabled, samlEnabled, bootstrapPending, onSucce
                 </Typography.Paragraph>
               }
             />
+            <Button
+              block
+              icon={<CloudUploadOutlined />}
+              onClick={() => setRestoreOpen(true)}
+              style={{ marginTop: 12 }}
+            >
+              Restore from a backup
+            </Button>
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
+              Migrating an existing deployment? Upload its backup to restore all accounts, roles,
+              configuration, and the most recent run, then continue without further setup.
+            </Typography.Paragraph>
           </>
         ) : null}
       </Card>
@@ -300,6 +387,72 @@ export function LoginPage({ localEnabled, samlEnabled, bootstrapPending, onSucce
             rules={[{ required: true, message: "Enter your username" }]}
           >
             <Input prefix={<UserOutlined />} autoComplete="username" autoFocus />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="Restore from backup"
+        open={restoreOpen}
+        onCancel={() => {
+          setRestoreOpen(false);
+          setRestoreFile(null);
+          restoreForm.resetFields();
+        }}
+        okText="Restore and restart"
+        okButtonProps={{ danger: true, icon: <CloudUploadOutlined /> }}
+        confirmLoading={restoreSubmitting}
+        onOk={() => restoreForm.submit()}
+        destroyOnClose
+      >
+        <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
+          Recover an existing deployment onto this fresh install. Sign in with the current{" "}
+          <code>admin</code> bootstrap password, choose its backup archive, and the stack will be
+          restored and <b>restarted automatically</b>. Afterwards you&apos;ll sign in with the{" "}
+          <b>restored</b> deployment&apos;s credentials — if that admin still owed a password change,
+          you&apos;ll be prompted to set one, exactly as on the original deployment.
+        </Typography.Paragraph>
+        <Form
+          form={restoreForm}
+          layout="vertical"
+          requiredMark={false}
+          onFinish={handleRestore}
+          disabled={restoreSubmitting}
+        >
+          <Form.Item
+            name="username"
+            label="Admin username"
+            initialValue="admin"
+            rules={[{ required: true, message: "Enter the admin username" }]}
+          >
+            <Input prefix={<UserOutlined />} autoComplete="username" />
+          </Form.Item>
+          <Form.Item
+            name="password"
+            label="Bootstrap admin password"
+            rules={[{ required: true, message: "Enter the bootstrap admin password" }]}
+          >
+            <Input.Password prefix={<LockOutlined />} autoComplete="current-password" />
+          </Form.Item>
+          <Form.Item label="Backup archive" style={{ marginBottom: 0 }}>
+            <Upload
+              accept=".gz,.tgz,.tar.gz,application/gzip"
+              maxCount={1}
+              showUploadList={false}
+              beforeUpload={(file) => {
+                setRestoreFile(file as unknown as File);
+                return false;
+              }}
+            >
+              <Button icon={<UploadOutlined />}>Choose backup (.tar.gz)</Button>
+            </Upload>
+            {restoreFile ? (
+              <Typography.Text style={{ marginLeft: 8 }}>{restoreFile.name}</Typography.Text>
+            ) : (
+              <Typography.Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
+                No file selected
+              </Typography.Text>
+            )}
           </Form.Item>
         </Form>
       </Modal>

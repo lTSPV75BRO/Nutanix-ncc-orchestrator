@@ -13,9 +13,11 @@ import (
 	"github.com/go-ldap/ldap/v3"
 )
 
-// defaultLDAPUserFilter matches an Active Directory user by sAMAccountName. The
-// "%s" placeholder is replaced with the (filter-escaped) login name.
-const defaultLDAPUserFilter = "(&(objectClass=user)(sAMAccountName=%s))"
+// defaultLDAPUserFilter matches an Active Directory user by either the plain
+// sAMAccountName ("jdoe") or the full userPrincipalName ("jdoe@corp.example.com"),
+// so users can sign in with whichever form they know. Every "%s" placeholder is
+// replaced with the (filter-escaped) login name.
+const defaultLDAPUserFilter = "(&(objectClass=user)(|(sAMAccountName=%s)(userPrincipalName=%s)))"
 
 const (
 	defaultLDAPUsernameAttr = "sAMAccountName"
@@ -54,10 +56,28 @@ func (c *ldapPersisted) configured() bool {
 // resolves the caller's role. It is an interface so login dispatch can be
 // unit-tested with a fake (no live server needed).
 type ldapAuthenticator interface {
-	// authenticate returns (role, canonicalUsername, ok, err). ok is false for a
-	// bad password or unknown user (err stays nil for those expected cases); err
-	// is non-nil only for operational failures (dial/bind/search errors).
-	authenticate(username, password string) (Role, string, bool, error)
+	// authenticate returns (role, canonicalUsername, groups, ok, err). groups is
+	// the user's directory group values (memberOf) so the caller can persist
+	// them for cluster-group membership. ok is false for a bad password or
+	// unknown user (err stays nil for those expected cases); err is non-nil only
+	// for operational failures (dial/bind/search errors).
+	authenticate(username, password string) (Role, string, []string, bool, error)
+	// searchDirectory finds groups and/or users matching query (substring match
+	// on common name attributes) so admins can pick AD principals for cluster
+	// groups via type-ahead. kind is "group", "user", or "all"; limit caps the
+	// result count. Requires the configured service-account bind.
+	searchDirectory(query, kind string, limit int) ([]directoryEntry, error)
+}
+
+// directoryEntry is a single AD/LDAP match returned by searchDirectory. Value is
+// the identifier an admin should store for a cluster group (the full DN for a
+// group; the sAMAccountName for a user), while Name/DN are for display.
+type directoryEntry struct {
+	Type  string `json:"type"`  // "group" | "user"
+	Value string `json:"value"` // what to store (group DN; user sAMAccountName)
+	Name  string `json:"name"`  // display name (displayName/cn)
+	DN    string `json:"dn"`    // full distinguished name
+	UPN   string `json:"upn,omitempty"`
 }
 
 // ldapProvider is the live, resolved LDAP/AD client built from ldapPersisted.
@@ -278,25 +298,147 @@ func (s *apiServer) reloadLDAPFromStore(ctx context.Context) error {
 	return nil
 }
 
+// validate performs a live connectivity check without any end-user credentials:
+// it dials the directory, binds the service account (when configured), and runs
+// a base-scoped search of the configured base DN. It surfaces the underlying
+// directory error verbatim so the admin gets an actionable message on save
+// (wrong scheme/port, bad bind credentials, invalid base DN, TLS trust, etc.).
+func (p *ldapProvider) validate() error {
+	conn, err := p.dial()
+	if err != nil {
+		return fmt.Errorf("connect to %s: %w", strings.Join(p.urls, ", "), err)
+	}
+	defer conn.Close()
+
+	if p.bindDN != "" {
+		if err := conn.Bind(p.bindDN, p.bindPassword); err != nil {
+			return fmt.Errorf("service-account bind as %q failed: %w", p.bindDN, err)
+		}
+	}
+
+	// A base-scoped read of the search base proves the base DN is valid and
+	// reachable for the (service) account. Reuse the configured timeout.
+	req := ldap.NewSearchRequest(
+		p.baseDN,
+		ldap.ScopeBaseObject, ldap.NeverDerefAliases, 1, int(p.timeout.Seconds()), false,
+		"(objectClass=*)",
+		[]string{"dn"},
+		nil,
+	)
+	if _, err := conn.Search(req); err != nil {
+		return fmt.Errorf("search base %q is not reachable: %w", p.baseDN, err)
+	}
+	return nil
+}
+
+// searchDirectory binds the service account and substring-searches the base DN
+// for groups and/or users matching query, for admin type-ahead when assigning
+// AD principals to cluster groups.
+func (p *ldapProvider) searchDirectory(query, kind string, limit int) ([]directoryEntry, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, nil
+	}
+	if limit <= 0 || limit > 50 {
+		limit = 25
+	}
+	conn, err := p.dial()
+	if err != nil {
+		return nil, fmt.Errorf("connect to %s: %w", strings.Join(p.urls, ", "), err)
+	}
+	defer conn.Close()
+	if p.bindDN != "" {
+		if err := conn.Bind(p.bindDN, p.bindPassword); err != nil {
+			return nil, fmt.Errorf("service-account bind as %q failed: %w", p.bindDN, err)
+		}
+	}
+
+	esc := ldap.EscapeFilter(query)
+	groupFilter := fmt.Sprintf("(&(objectClass=group)(|(cn=*%[1]s*)(sAMAccountName=*%[1]s*)))", esc)
+	// objectCategory=person keeps computer accounts (also objectClass=user) out.
+	userFilter := fmt.Sprintf("(&(objectCategory=person)(objectClass=user)(|(cn=*%[1]s*)(sAMAccountName=*%[1]s*)(displayName=*%[1]s*)(userPrincipalName=*%[1]s*)))", esc)
+	var filter string
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "group":
+		filter = groupFilter
+	case "user":
+		filter = userFilter
+	default:
+		filter = "(|" + groupFilter + userFilter + ")"
+	}
+
+	req := ldap.NewSearchRequest(
+		p.baseDN,
+		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, limit, int(p.timeout.Seconds()), false,
+		filter,
+		[]string{"dn", "cn", "sAMAccountName", "displayName", "userPrincipalName", "objectClass"},
+		nil,
+	)
+	res, err := conn.Search(req)
+	if err != nil {
+		// AD returns "size limit exceeded" (code 4) when more matches exist than
+		// the cap; the partial results are still usable for type-ahead.
+		if ldap.IsErrorWithCode(err, ldap.LDAPResultSizeLimitExceeded) && res != nil {
+			// fall through with the partial result set
+		} else {
+			return nil, fmt.Errorf("ldap search: %w", err)
+		}
+	}
+	out := make([]directoryEntry, 0, len(res.Entries))
+	for _, e := range res.Entries {
+		isGroup := false
+		for _, oc := range e.GetAttributeValues("objectClass") {
+			if strings.EqualFold(oc, "group") {
+				isGroup = true
+				break
+			}
+		}
+		cn := strings.TrimSpace(e.GetAttributeValue("cn"))
+		display := strings.TrimSpace(e.GetAttributeValue("displayName"))
+		sam := strings.TrimSpace(e.GetAttributeValue("sAMAccountName"))
+		upn := strings.TrimSpace(e.GetAttributeValue("userPrincipalName"))
+		name := display
+		if name == "" {
+			name = cn
+		}
+		if name == "" {
+			name = sam
+		}
+		if isGroup {
+			out = append(out, directoryEntry{Type: "group", Value: e.DN, Name: name, DN: e.DN})
+		} else {
+			value := sam
+			if value == "" {
+				value = upn
+			}
+			if value == "" {
+				value = e.DN
+			}
+			out = append(out, directoryEntry{Type: "user", Value: value, Name: name, DN: e.DN, UPN: upn})
+		}
+	}
+	return out, nil
+}
+
 // authenticate binds the service account, finds the user, then re-binds as that
 // user to verify the password, finally mapping group membership to a role.
-func (p *ldapProvider) authenticate(username, password string) (Role, string, bool, error) {
+func (p *ldapProvider) authenticate(username, password string) (Role, string, []string, bool, error) {
 	username = strings.TrimSpace(username)
 	// Reject empty credentials before binding: an empty password is an
 	// anonymous bind in LDAP and would otherwise look like a successful auth.
 	if username == "" || password == "" {
-		return RoleNone, "", false, nil
+		return RoleNone, "", nil, false, nil
 	}
 	conn, err := p.dial()
 	if err != nil {
-		return RoleNone, "", false, err
+		return RoleNone, "", nil, false, err
 	}
 	defer conn.Close()
 
 	// Bind the read-only service account (or anonymously when no bind DN set).
 	if p.bindDN != "" {
 		if err := conn.Bind(p.bindDN, p.bindPassword); err != nil {
-			return RoleNone, "", false, fmt.Errorf("ldap bind (service account): %w", err)
+			return RoleNone, "", nil, false, fmt.Errorf("ldap bind (service account): %w", err)
 		}
 	}
 
@@ -310,25 +452,26 @@ func (p *ldapProvider) authenticate(username, password string) (Role, string, bo
 	)
 	res, err := conn.Search(req)
 	if err != nil {
-		return RoleNone, "", false, fmt.Errorf("ldap search: %w", err)
+		return RoleNone, "", nil, false, fmt.Errorf("ldap search: %w", err)
 	}
 	if len(res.Entries) == 0 {
-		return RoleNone, "", false, nil // unknown user
+		return RoleNone, "", nil, false, nil // unknown user
 	}
 	if len(res.Entries) > 1 {
-		return RoleNone, "", false, fmt.Errorf("ldap search for %q matched %d entries (tighten user_filter)", username, len(res.Entries))
+		return RoleNone, "", nil, false, fmt.Errorf("ldap search for %q matched %d entries (tighten user_filter)", username, len(res.Entries))
 	}
 	entry := res.Entries[0]
 
 	// Verify the password by re-binding as the located user DN.
 	if err := conn.Bind(entry.DN, password); err != nil {
-		return RoleNone, "", false, nil // wrong password
+		return RoleNone, "", nil, false, nil // wrong password
 	}
 
 	canonical := strings.TrimSpace(entry.GetAttributeValue(p.usernameAttr))
 	if canonical == "" {
 		canonical = username
 	}
-	role := p.roleFromGroups(entry.GetAttributeValues(p.groupAttr))
-	return role, canonical, true, nil
+	groups := entry.GetAttributeValues(p.groupAttr)
+	role := p.roleFromGroups(groups)
+	return role, canonical, groups, true, nil
 }

@@ -11,9 +11,20 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
+
+// urlRedactPattern matches http(s) URLs so they can be stripped from
+// client-facing error strings (a Slack/webhook URL is a bearer secret).
+var urlRedactPattern = regexp.MustCompile(`https?://[^\s"']+`)
+
+// redactURLs replaces any embedded http(s) URL with a placeholder so a
+// transport error surfaced to a non-admin caller cannot leak a secret endpoint.
+func redactURLs(s string) string {
+	return urlRedactPattern.ReplaceAllString(s, "[redacted-url]")
+}
 
 type notificationEvents struct {
 	RunSuccess       bool `json:"run_success"`
@@ -160,7 +171,11 @@ func (s *apiServer) handleNotificationsTest(w http.ResponseWriter, r *http.Reque
 		"channel":     defaultIfEmpty(channel, "all"),
 	}
 	if err := s.dispatchNotifications(&st, "manual_test", "NCC notifications test", details, target); err != nil {
-		writeJSON(w, http.StatusBadGateway, envelope{Success: false, Error: err.Error(), Data: map[string]interface{}{
+		// Operators (not just admins) may send a test notification, but the
+		// underlying transport error can embed the configured webhook/SMTP URL
+		// (a bearer secret for Slack/webhook). Redact URLs from the response;
+		// the full error is already logged server-side in dispatchNotifications.
+		writeJSON(w, http.StatusBadGateway, envelope{Success: false, Error: redactURLs(err.Error()), Data: map[string]interface{}{
 			"last_delivery": st.LastDelivery,
 		}})
 		return

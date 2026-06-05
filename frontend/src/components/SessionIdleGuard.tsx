@@ -82,9 +82,9 @@ export function SessionIdleGuard({ onLogout, onStayLoggedIn }: SessionIdleGuardP
   return (
     <Modal
       open={warning}
-      title="Still there?"
-      okText="Stay logged in"
-      cancelText="Log out"
+      title="Session about to expire"
+      okText="Stay signed in"
+      cancelText="Sign out"
       onOk={handleStay}
       onCancel={onLogout}
       confirmLoading={staying}
@@ -92,7 +92,7 @@ export function SessionIdleGuard({ onLogout, onStayLoggedIn }: SessionIdleGuardP
       maskClosable={false}
       keyboard={false}
     >
-      You&apos;ve been inactive for a while. For your security you&apos;ll be signed out in{" "}
+      Your session has been inactive. For your security, you will be signed out in{" "}
       <strong>{secondsLeft}</strong> second{secondsLeft === 1 ? "" : "s"}.
     </Modal>
   );

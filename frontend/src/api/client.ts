@@ -23,6 +23,9 @@ import type {
   UserRole,
   SSOConfig,
   SSOConfigInput,
+  ClusterGroup,
+  DirectorySearchResult,
+  PCDiscoverResult,
   LDAPConfig,
   LDAPConfigInput,
   LDAPTestInput,
@@ -233,8 +236,8 @@ export const api = {
   runById: (id: string) => callApi<RunByIdData>(`/api/v1/runs/${encodeURIComponent(id)}`),
   runSummary: () => callApi<unknown>("/api/v1/runs/summary"),
   runActive: () => callApi<RunActiveData>("/api/v1/runs/active"),
-  runCancel: () =>
-    callApi<RunCancelData>("/api/v1/runs/active", {
+  runCancel: (id?: string) =>
+    callApi<RunCancelData>(id ? `/api/v1/runs/active?id=${encodeURIComponent(id)}` : "/api/v1/runs/active", {
       method: "DELETE",
     }),
   runPreflight: (payload: { config_path?: string }) =>
@@ -242,7 +245,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  runTrigger: (payload: { config_path?: string; password?: string; extra_args: string[] }) =>
+  runTrigger: (payload: {
+    config_path?: string;
+    password?: string;
+    extra_args: string[];
+    group?: string;
+    clusters?: string[];
+  }) =>
     callApi<TriggerRunData>("/api/v1/runs/trigger", {
       method: "POST",
       body: JSON.stringify(payload),
@@ -343,6 +352,16 @@ export const api = {
     callApi<unknown>("/api/v1/settings/ldap", { method: "PUT", body: JSON.stringify(payload) }),
   testLDAP: (payload: LDAPTestInput) =>
     callApi<LDAPTestResult>("/api/v1/settings/ldap/test", { method: "POST", body: JSON.stringify(payload) }),
+  getClusterGroups: () => callApi<{ groups: ClusterGroup[] }>("/api/v1/settings/cluster-groups"),
+  updateClusterGroups: (groups: ClusterGroup[]) =>
+    callApi<unknown>("/api/v1/settings/cluster-groups", { method: "PUT", body: JSON.stringify({ groups }) }),
+  getClusterInventory: () => callApi<{ clusters: string[] }>("/api/v1/settings/clusters"),
+  discoverPCClusters: (pc: string) =>
+    callApi<PCDiscoverResult>(`/api/v1/settings/pc-clusters?pc=${encodeURIComponent(pc)}`),
+  searchDirectory: (q: string, type: "group" | "user" | "all" = "all", limit = 25) =>
+    callApi<DirectorySearchResult>(
+      `/api/v1/settings/ldap/search?q=${encodeURIComponent(q)}&type=${type}&limit=${limit}`,
+    ),
   downloadBackup: async (): Promise<{ blob: Blob; filename: string }> => {
     const csrf = readCookie("ncc_csrf");
     const response = await fetch("/api/v1/settings/backup", {

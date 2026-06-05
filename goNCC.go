@@ -40,6 +40,15 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"goncc/internal/httpclient"
+	"goncc/internal/model"
+	"goncc/internal/nccparse"
+	"goncc/internal/notify"
+	"goncc/internal/promtext"
+	"goncc/internal/retryutil"
+	"goncc/internal/trace"
+	"goncc/internal/v2layout"
+
 	"github.com/Masterminds/semver/v3"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -50,14 +59,6 @@ import (
 	"github.com/vbauerster/mpb/v7"
 	"github.com/vbauerster/mpb/v7/decor"
 	"golang.org/x/term"
-	"goncc/internal/httpclient"
-	"goncc/internal/model"
-	"goncc/internal/nccparse"
-	"goncc/internal/notify"
-	"goncc/internal/promtext"
-	"goncc/internal/retryutil"
-	"goncc/internal/trace"
-	"goncc/internal/v2layout"
 	lumberjack "gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -5273,7 +5274,7 @@ function filterData() {
 	  const k = state.sortKey, dir = state.sortDir;
 	  const mul = dir === "asc" ? 1 : -1;
 	  rows.sort((a,b) => {
-    let av = a[k], bv = b[k];
+		let av = a[k], bv = b[k];
     if (k === "clusterName") {
       av = displayClusterName(a);
       bv = displayClusterName(b);
@@ -5734,7 +5735,7 @@ function initTooltips() {
 		    <option value="changed">Changed only</option>
 		    <option value="flaky">Flaky only</option>
 		  </select>
-		</div>
+</div>
 		<div class="control">
 		  <button type="button" onclick="downloadCSV()" aria-label="Export filtered rows as CSV">Export CSV</button>
 		  <button type="button" onclick="downloadJSON()" aria-label="Export filtered rows as JSON">Export JSON</button>
@@ -5744,7 +5745,7 @@ function initTooltips() {
 		  <div class="per-cluster-links" id="artifactLinks" aria-label="Artifact quick links"></div>
 		</div>
 	  </div>
-
+	
 	  <div class="summary">
 		<div class="sum-item clickable" id="sumTotal" role="button" tabindex="0" onclick="filterBySev(null)" onkeydown="if(event.key==='Enter'||event.key===' ') { event.preventDefault(); filterBySev(null); }" aria-label="Show all severities">
 		  <div class="label">Total</div>
@@ -5771,7 +5772,7 @@ function initTooltips() {
 		  <div class="progress info"><span id="barInfo" style="width:0%"></span></div>
 		</div>
 	  </div>
-
+	
 	  <div class="insights">
 		<div class="sum-item">
 		  <div class="label">Policy Gates</div>

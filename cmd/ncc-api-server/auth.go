@@ -78,6 +78,7 @@ type principal struct {
 	method     authMethod
 	mustChange bool      // local account flagged for forced password change
 	expiresAt  time.Time // session expiry (zero for static-token auth)
+	groups     []string  // directory (AD/SAML) groups from the session, for cluster-group membership
 }
 
 // principalCtxKey scopes the resolved principal stored on a request's context
@@ -239,7 +240,7 @@ func (s *apiServer) resolvePrincipal(r *http.Request) (principal, bool) {
 				if claims.Exp > 0 {
 					exp = time.Unix(claims.Exp, 0).UTC()
 				}
-				return principal{role: role, subject: subject, method: method, mustChange: mustChange, expiresAt: exp}, true
+				return principal{role: role, subject: subject, method: method, mustChange: mustChange, expiresAt: exp, groups: claims.Grps}, true
 			}
 		}
 	}
@@ -252,19 +253,47 @@ func (s *apiServer) resolvePrincipal(r *http.Request) (principal, bool) {
 	return principal{}, false
 }
 
-// routeMinRole reports the minimum role required to access a request. Settings
-// endpoints and token rotation are admin-only (they can expose or change
-// secrets) even for GET; run trigger/cancel/preflight require operator; other
-// reads require viewer; any other mutation requires admin.
+// routeMinRole reports the minimum role required to access a request.
+//
+// The model is "viewer < operator < admin": viewers read non-secret data,
+// operators additionally run and operate NCC day to day, and admins own
+// secret-bearing configuration and identity/security management.
+//
+// Settings endpoints and token rotation are admin-only even for GET because
+// they can expose or change secrets — with a small allowlist of operational
+// endpoints carved out for operators (read-only cluster topology, the run
+// schedule, and sending a test notification). These are evaluated first so the
+// blanket /settings/ admin rule below does not shadow them.
 func routeMinRole(r *http.Request) Role {
 	p := r.URL.Path
+	isRead := r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions
+
+	// Operator-accessible operational endpoints. These either expose no secrets
+	// (cluster topology is just names) or are operating actions adjacent to
+	// running NCC (managing the run schedule, sending a test notification).
+	switch {
+	case isRead && p == "/api/v1/settings/clusters":
+		return RoleOperator
+	case isRead && p == "/api/v1/settings/cluster-groups":
+		return RoleOperator
+	case p == "/api/v1/settings/notifications/test":
+		return RoleOperator
+	case p == "/api/v1/schedule":
+		// Reading the schedule is a plain viewer read; creating/updating or
+		// applying a recurring run is an operator action (it automates the same
+		// runs an operator may already trigger by hand).
+		if isRead {
+			return RoleViewer
+		}
+		return RoleOperator
+	}
+
 	if strings.HasPrefix(p, "/api/v1/settings/") ||
 		p == "/api/v1/auth/rotate" ||
 		strings.HasPrefix(p, "/api/v1/auth/users") {
 		return RoleAdmin
 	}
-	switch r.Method {
-	case http.MethodGet, http.MethodHead, http.MethodOptions:
+	if isRead {
 		return RoleViewer
 	}
 	// Mutating methods below.
@@ -399,6 +428,7 @@ func (s *apiServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		ok         bool
 		mustChange bool
 		method     = "local"
+		ldapGroups []string
 	)
 	if hasLocal {
 		role, ok, mustChange = s.users.verify(username, body.Password)
@@ -406,7 +436,7 @@ func (s *apiServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	// AD fallback: only when the local store didn't authenticate the user.
 	if !ok && ldapProv != nil {
-		ldapRole, canonical, authed, err := ldapProv.authenticate(username, body.Password)
+		ldapRole, canonical, groups, authed, err := ldapProv.authenticate(username, body.Password)
 		if err != nil {
 			// Operational failure (dial/bind/search): log it but keep the
 			// response generic so we don't leak directory topology.
@@ -419,7 +449,7 @@ func (s *apiServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 			if strings.TrimSpace(canonical) != "" {
 				username = strings.TrimSpace(canonical)
 			}
-			role, ok, mustChange, method = ldapRole, true, false, "ldap"
+			role, ok, mustChange, method, ldapGroups = ldapRole, true, false, "ldap", groups
 		}
 	}
 
@@ -431,7 +461,9 @@ func (s *apiServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	// Successful auth clears any accumulated failure/lock state for the account.
 	s.loginGuard.reset(username)
-	token, exp, err := s.issueRoleSessionToken(cleanClientIP(r), username, role)
+	// AD/SAML group values are embedded in the session so cluster-group
+	// membership is evaluated without re-querying the directory each request.
+	token, exp, err := s.issueRoleSessionTokenWithGroups(cleanClientIP(r), username, role, ldapGroups)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: err.Error()})
 		return
@@ -749,6 +781,14 @@ func (s *apiServer) handleMe(w http.ResponseWriter, r *http.Request) {
 			} else {
 				data["expires_in_sec"] = 0
 			}
+		}
+		// Cluster-group scope: tell the UI whether the caller sees all clusters
+		// (admin/static token) or only a subset, and which ones, so it can hide
+		// admin-only artifact downloads and label the visible scope.
+		access := s.allowedClusters(p)
+		data["cluster_access_unrestricted"] = access.unrestricted
+		if !access.unrestricted {
+			data["allowed_clusters"] = access.displayList()
 		}
 	}
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: data})

@@ -43,6 +43,24 @@ type sessionPolicy struct {
 	TTLSeconds int `json:"ttl_seconds,omitempty"`
 }
 
+// clusterGroup segregates clusters for membership-based access control. A
+// cluster may belong to multiple groups (many-to-many). Membership is the union
+// of local accounts (matched by username) and AD groups (matched by CN or full
+// DN). Members may see and act on only the clusters in groups they belong to;
+// admins and static-token callers are unrestricted (see allowedClusters).
+type clusterGroup struct {
+	Name string `json:"name"`
+	// Clusters are explicit cluster names/addresses in the group.
+	Clusters []string `json:"clusters,omitempty"`
+	// PrismCentrals lists Prism Central URLs/addresses whose registered clusters
+	// are dynamically folded into this group: every cluster managed by the PC is
+	// granted to the group's members (discovered via the orchestrator and cached).
+	PrismCentrals []string `json:"prism_centrals,omitempty"`
+	LocalUsers    []string `json:"local_users,omitempty"` // local account usernames
+	ADGroups      []string `json:"ad_groups,omitempty"`   // AD group CN or full DN
+	ADUsers       []string `json:"ad_users,omitempty"`    // individual AD users (sAMAccountName/UPN)
+}
+
 // reservedAdminUsername is the built-in administrator account. Its role is
 // hardcoded to admin: it can never be demoted, deleted, or loaded as anything
 // other than admin (a tampered store is coerced back on load).
@@ -58,11 +76,12 @@ func isReservedAdmin(username string) bool {
 // also carries the persisted SAML configuration and session policy so a single
 // 0600 file holds all auth state the admin can manage at runtime.
 type usersDBFile struct {
-	Users   []account              `json:"users"`
-	SAML    *samlPersisted         `json:"saml,omitempty"`
-	LDAP    *ldapPersisted         `json:"ldap,omitempty"`
-	Session *sessionPolicy         `json:"session,omitempty"`
-	Resets  []passwordResetRequest `json:"password_resets,omitempty"`
+	Users         []account              `json:"users"`
+	SAML          *samlPersisted         `json:"saml,omitempty"`
+	LDAP          *ldapPersisted         `json:"ldap,omitempty"`
+	Session       *sessionPolicy         `json:"session,omitempty"`
+	Resets        []passwordResetRequest `json:"password_resets,omitempty"`
+	ClusterGroups []clusterGroup         `json:"cluster_groups,omitempty"`
 }
 
 // passwordResetRequest is a queued self-service "forgot password" request that
@@ -94,14 +113,15 @@ type userStoreBackend interface {
 
 // userDB is the runtime, writable store of local accounts (and SAML config).
 type userDB struct {
-	mu       sync.RWMutex
-	path     string // file path when file-backed (messages/tests); "" otherwise
-	backend  userStoreBackend
-	accounts map[string]*account
-	saml     *samlPersisted
-	ldapCfg  *ldapPersisted
-	session  *sessionPolicy
-	resets   []passwordResetRequest
+	mu            sync.RWMutex
+	path          string // file path when file-backed (messages/tests); "" otherwise
+	backend       userStoreBackend
+	accounts      map[string]*account
+	saml          *samlPersisted
+	ldapCfg       *ldapPersisted
+	session       *sessionPolicy
+	resets        []passwordResetRequest
+	clusterGroups []clusterGroup
 }
 
 func newUserDB(path string) *userDB {
@@ -144,6 +164,7 @@ func openUserDBFromBackend(be userStoreBackend) (*userDB, error) {
 	db.ldapCfg = f.LDAP
 	db.session = f.Session
 	db.resets = f.Resets
+	db.clusterGroups = f.ClusterGroups
 	return db, nil
 }
 
@@ -244,7 +265,7 @@ func (db *userDB) saveLocked() error {
 	if db.backend == nil {
 		return nil // in-memory store
 	}
-	out := usersDBFile{SAML: db.saml, LDAP: db.ldapCfg, Session: db.session, Resets: db.resets}
+	out := usersDBFile{SAML: db.saml, LDAP: db.ldapCfg, Session: db.session, Resets: db.resets, ClusterGroups: db.clusterGroups}
 	keys := make([]string, 0, len(db.accounts))
 	for k := range db.accounts {
 		keys = append(keys, k)
@@ -672,6 +693,44 @@ func (db *userDB) setLDAP(cfg *ldapPersisted) error {
 	defer db.mu.Unlock()
 	db.ldapCfg = cfg
 	return db.saveLocked()
+}
+
+// getClusterGroups returns a deep copy of the persisted cluster groups.
+func (db *userDB) getClusterGroups() []clusterGroup {
+	if db == nil {
+		return nil
+	}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	return cloneClusterGroups(db.clusterGroups)
+}
+
+// setClusterGroups persists the cluster groups (replacing the full set).
+func (db *userDB) setClusterGroups(groups []clusterGroup) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.clusterGroups = cloneClusterGroups(groups)
+	return db.saveLocked()
+}
+
+// cloneClusterGroups returns an independent copy so callers cannot mutate the
+// store's slices in place.
+func cloneClusterGroups(in []clusterGroup) []clusterGroup {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]clusterGroup, len(in))
+	for i, g := range in {
+		out[i] = clusterGroup{
+			Name:          g.Name,
+			Clusters:      append([]string(nil), g.Clusters...),
+			PrismCentrals: append([]string(nil), g.PrismCentrals...),
+			LocalUsers:    append([]string(nil), g.LocalUsers...),
+			ADGroups:      append([]string(nil), g.ADGroups...),
+			ADUsers:       append([]string(nil), g.ADUsers...),
+		}
+	}
+	return out
 }
 
 // getSessionPolicy returns a copy of the persisted session policy (or nil when

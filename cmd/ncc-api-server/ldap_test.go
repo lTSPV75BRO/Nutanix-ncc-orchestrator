@@ -94,11 +94,11 @@ func TestLDAPEmptyPasswordRejected(t *testing.T) {
 	}
 	// An empty password must be rejected before any network bind (no dial),
 	// otherwise LDAP would treat it as an anonymous bind and falsely succeed.
-	role, _, ok, err := p.authenticate("jdoe", "")
+	role, _, _, ok, err := p.authenticate("jdoe", "")
 	if ok || err != nil || role != RoleNone {
 		t.Fatalf("empty password should be rejected without error: role=%v ok=%v err=%v", role, ok, err)
 	}
-	role, _, ok, err = p.authenticate("", "secret")
+	role, _, _, ok, err = p.authenticate("", "secret")
 	if ok || err != nil || role != RoleNone {
 		t.Fatalf("empty username should be rejected: role=%v ok=%v err=%v", role, ok, err)
 	}
@@ -108,6 +108,7 @@ func TestLDAPEmptyPasswordRejected(t *testing.T) {
 type fakeLDAP struct {
 	role      Role
 	canonical string
+	groups    []string
 	ok        bool
 	err       error
 	called    bool
@@ -115,11 +116,15 @@ type fakeLDAP struct {
 	lastPass  string
 }
 
-func (f *fakeLDAP) authenticate(user, pass string) (Role, string, bool, error) {
+func (f *fakeLDAP) authenticate(user, pass string) (Role, string, []string, bool, error) {
 	f.called = true
 	f.lastUser = user
 	f.lastPass = pass
-	return f.role, f.canonical, f.ok, f.err
+	return f.role, f.canonical, f.groups, f.ok, f.err
+}
+
+func (f *fakeLDAP) searchDirectory(_, _ string, _ int) ([]directoryEntry, error) {
+	return nil, nil
 }
 
 func newLDAPLoginTestServer(t *testing.T, fake *fakeLDAP) (*apiServer, string) {

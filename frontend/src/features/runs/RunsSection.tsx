@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Badge, Button, Card, Col, Descriptions, Empty, Input, List, Row, Space, Switch, Table, Tag, Tooltip, Typography } from "antd";
+import { Alert, Badge, Button, Card, Col, Collapse, Empty, Input, List, Row, Select, Space, Switch, Table, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
   ReloadOutlined,
@@ -11,12 +11,14 @@ import {
   CloseCircleOutlined,
   PlayCircleOutlined,
   StopOutlined,
+  ClockCircleOutlined,
 } from "@ant-design/icons";
-import { api, ApiError } from "../../api/client";
-import type { ArtifactInfo, RunActiveData, RunConflictData, RunInfo, RunPreflightData } from "../../api/types";
+import { api } from "../../api/client";
+import type { ActiveRunEntry, ArtifactInfo, RunActiveData, RunInfo, RunPreflightData } from "../../api/types";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { CodeEditor } from "../../components/CodeEditor";
 import { notify } from "../../notify";
+import { useAuth } from "../../auth/AuthContext";
 
 const RUN_TOAST_KEY = "ncc-run-active";
 
@@ -43,43 +45,43 @@ function formatTime(value: string): string {
   return Number.isNaN(d.getTime()) ? value : d.toLocaleString();
 }
 
-function formatElapsed(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) return "0s";
-  const totalSec = Math.floor(ms / 1000);
+function formatElapsedSeconds(sec?: number): string {
+  if (!Number.isFinite(sec) || (sec ?? 0) < 0) return "0s";
+  const totalSec = Math.floor(sec ?? 0);
   const s = totalSec % 60;
-  const totalMin = Math.floor(totalSec / 60);
-  const m = totalMin % 60;
-  const h = Math.floor(totalMin / 60);
+  const m = Math.floor(totalSec / 60) % 60;
+  const h = Math.floor(totalSec / 3600);
   if (h > 0) return `${h}h ${m}m ${s}s`;
-  if (totalMin > 0) return `${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
   return `${s}s`;
 }
 
-function summariseError(raw: string | undefined, fallback = "Run terminated unexpectedly."): string {
-  const trimmed = (raw || "").trim();
-  if (!trimmed) return fallback;
-  const firstLine = trimmed.split(/\r?\n/).find((l) => l.trim().length > 0) || trimmed;
-  return firstLine.length > 220 ? `${firstLine.slice(0, 220)}…` : firstLine;
-}
-
 export function RunsSection({ backendConfigPath, onError }: Props) {
+  const { me } = useAuth();
+  // When the caller is confined to cluster groups, expose only their clusters
+  // and let them optionally narrow the run to a subset of that allowed set.
+  const clusterRestricted = me?.cluster_access_unrestricted === false;
+  const allowedClusters = useMemo(() => me?.allowed_clusters ?? [], [me?.allowed_clusters]);
+  const [selectedClusters, setSelectedClusters] = useState<string[]>([]);
   const [runConfigPath, setRunConfigPath] = useState("");
   const [runPassword, setRunPassword] = useState("");
   const [extraArgs, setExtraArgs] = useLocalStorageState("runs.extraArgs", "");
-  const [liveLogs, setLiveLogs] = useState("");
   const [runs, setRuns] = useState<RunInfo[]>([]);
   const [artifacts, setArtifacts] = useState<ArtifactInfo[]>([]);
   const [active, setActive] = useState<RunActiveData | null>(null);
   const [preflight, setPreflight] = useState<RunPreflightData | null>(null);
   const [followTail, setFollowTail] = useLocalStorageState("runs.logs.followTail", true);
   const [jumpToLastSignal, setJumpToLastSignal] = useState(0);
-  const [elapsedTick, setElapsedTick] = useState(0);
+  const [, setElapsedTick] = useState(0);
 
-  // Lifecycle tracking refs so we don't depend on stale closures.
-  const prevActiveRef = useRef<boolean | null>(null);
-  const runStartMsRef = useRef<number | null>(null);
   const initialLoadCompletedRef = useRef(false);
-  const justTriggeredRef = useRef(false);
+  const prevRunningCountRef = useRef<number>(0);
+
+  const activeRuns: ActiveRunEntry[] = useMemo(() => active?.runs ?? [], [active?.runs]);
+  const runningRuns = useMemo(() => activeRuns.filter((r) => r.status === "running"), [activeRuns]);
+  const queuedRuns = useMemo(() => activeRuns.filter((r) => r.status === "queued"), [activeRuns]);
+  const runningCount = runningRuns.length;
+  const maxConcurrent = active?.max_concurrent ?? 0;
 
   useEffect(() => {
     if (backendConfigPath) setRunConfigPath(backendConfigPath);
@@ -90,20 +92,16 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
       config_path: runConfigPath || undefined,
       password: runPassword || undefined,
       extra_args: parseExtraArgs(extraArgs),
+      // Only send an explicit cluster subset; an empty list lets the server run
+      // the caller's full allowed set (members) or every cluster (admins).
+      clusters: clusterRestricted && selectedClusters.length > 0 ? selectedClusters : undefined,
     }),
-    [runConfigPath, runPassword, extraArgs],
+    [runConfigPath, runPassword, extraArgs, clusterRestricted, selectedClusters],
   );
 
   const loadRunActive = async () => {
     try {
-      const out = await api.runActive();
-      setActive(out);
-      try {
-        const log = await api.runnerLogs();
-        setLiveLogs(log.content || out.live_output || out.last_output || "");
-      } catch {
-        setLiveLogs(out.live_output || out.last_output || "");
-      }
+      setActive(await api.runActive());
     } catch (e) {
       onError(e);
     }
@@ -111,6 +109,13 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
 
   const refreshRuns = async () => {
     try {
+      // Raw multi-cluster artifacts are admin-only; group-restricted members use
+      // the filtered dashboard instead, so skip the (forbidden) artifacts call.
+      if (clusterRestricted) {
+        setRuns(await api.runs());
+        setArtifacts([]);
+        return;
+      }
       const [r, a] = await Promise.all([api.runs(), api.artifacts()]);
       setRuns(r);
       setArtifacts(a);
@@ -130,185 +135,112 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
       void loadRunActive();
     }, 3000);
     return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Run lifecycle: emit toasts on transitions between active/idle.
+  // Refresh the runs/artifacts history whenever the number of running runs
+  // drops (a run finished) so completed results populate without manual reload.
   useEffect(() => {
-    if (!initialLoadCompletedRef.current && !justTriggeredRef.current) {
-      // Skip on initial mount to avoid spurious toasts on page navigation.
-      prevActiveRef.current = Boolean(active?.active);
+    if (!initialLoadCompletedRef.current) {
+      prevRunningCountRef.current = runningCount;
       return;
     }
-    const wasActive = prevActiveRef.current;
-    const isActive = Boolean(active?.active);
-
-    if (isActive && !wasActive) {
-      const startedMs = active?.started_at ? new Date(active.started_at).getTime() : Date.now();
-      runStartMsRef.current = Number.isFinite(startedMs) ? startedMs : Date.now();
-      notify.loading({
-        key: RUN_TOAST_KEY,
-        message: "Run in progress",
-        description: (
-          <Space direction="vertical" size={2}>
-            <span>Started {active?.started_at ? new Date(active.started_at).toLocaleTimeString() : "just now"}</span>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              Live logs are visible in the Active Run card below.
-            </Typography.Text>
-          </Space>
-        ),
-      });
-      justTriggeredRef.current = false;
-    }
-
-    if (!isActive && wasActive) {
-      const elapsedMs = runStartMsRef.current ? Date.now() - runStartMsRef.current : 0;
-      runStartMsRef.current = null;
-      notify.close(RUN_TOAST_KEY);
-      const errorText = (active?.last_error || "").trim();
-      if (errorText) {
-        notify.error({
-          message: "Run failed",
-          description: (
-            <Space direction="vertical" size={2}>
-              <Typography.Text>{summariseError(errorText)}</Typography.Text>
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                Elapsed {formatElapsed(elapsedMs)} · See Active Run output for details.
-              </Typography.Text>
-            </Space>
-          ),
-          duration: 10,
-        });
-      } else {
-        notify.success({
-          message: "Run completed",
-          description: `Finished in ${formatElapsed(elapsedMs)}. Refreshing artifacts…`,
-          duration: 6,
-        });
-      }
+    if (runningCount < prevRunningCountRef.current) {
       void refreshRuns();
     }
+    prevRunningCountRef.current = runningCount;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runningCount]);
 
-    prevActiveRef.current = isActive;
-  }, [active?.active, active?.last_error, active?.started_at]);
-
-  // Tick a state value every second while a run is active so the elapsed
-  // counter rendered in the UI updates without needing to refetch.
+  // Tick once a second so running-run elapsed counters advance smoothly.
   useEffect(() => {
-    if (!active?.active) return;
+    if (runningCount === 0) return;
     const id = window.setInterval(() => setElapsedTick((n) => n + 1), 1000);
     return () => window.clearInterval(id);
-  }, [active?.active]);
+  }, [runningCount]);
 
   const triggerRun = async () => {
-    if (active?.active) {
-      notify.warning({
-        message: "A run is already in progress",
-        description: "Wait for the current run to finish before triggering another.",
-      });
-      return;
-    }
     notify.loading({
       key: RUN_TOAST_KEY,
       message: "Starting run…",
       description: "Submitting trigger request to the API server.",
     });
-    justTriggeredRef.current = true;
     try {
       const out = await api.runTrigger(triggerPayload);
-      notify.loading({
-        key: RUN_TOAST_KEY,
-        message: "Run accepted",
-        description: (
-          <Space direction="vertical" size={2}>
-            <span>
-              PID <Typography.Text code>{out.pid}</Typography.Text> · Started{" "}
-              {out.started_at ? new Date(out.started_at).toLocaleTimeString() : "just now"}
-            </span>
-            {out.config_path ? (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                Config: {out.config_path}
-              </Typography.Text>
-            ) : null}
-          </Space>
-        ),
-      });
-      runStartMsRef.current = out.started_at ? new Date(out.started_at).getTime() : Date.now();
-      await loadRunActive();
-    } catch (e) {
       notify.close(RUN_TOAST_KEY);
-      justTriggeredRef.current = false;
-      // Backend rejected because another run is in flight — surface the
-      // running run's metadata so the user can decide whether to wait or
-      // investigate a stuck run.
-      if (e instanceof ApiError && e.status === 409 && e.data && typeof e.data === "object") {
-        const d = e.data as Partial<RunConflictData>;
-        const startedAt = d.started_at ? new Date(d.started_at).toLocaleString() : "—";
-        const elapsed = d.elapsed_human || (d.elapsed_seconds != null ? `${d.elapsed_seconds}s` : "—");
-        notify.warning({
-          message: "Cannot start another run — one is already in progress",
+      const skipped = out.skipped_clusters ?? [];
+      const skippedNote =
+        skipped.length > 0 ? (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {skipped.length} cluster(s) already running in another run were skipped: {skipped.join(", ")}.
+          </Typography.Text>
+        ) : null;
+
+      if (out.queued) {
+        notify.info({
+          message: `Run queued (position ${out.queue_position ?? "?"})`,
+          description: (
+            <Space direction="vertical" size={2}>
+              <span>All concurrency slots are busy — this run will start automatically when one frees.</span>
+              {skippedNote}
+            </Space>
+          ),
+          duration: 8,
+        });
+      } else if (out.started === false) {
+        // Nothing to run: every requested cluster is already being refreshed.
+        notify.info({
+          message: "Already running",
+          description: (
+            <Space direction="vertical" size={2}>
+              <span>All requested clusters are already being refreshed by an in-progress run. Their results will update when it finishes.</span>
+              {skippedNote}
+            </Space>
+          ),
+          duration: 8,
+        });
+      } else {
+        const ran = out.clusters ?? [];
+        notify.success({
+          message: "Run triggered",
           description: (
             <Space direction="vertical" size={2}>
               <span>
-                Started <Typography.Text>{startedAt}</Typography.Text> · Elapsed{" "}
-                <Typography.Text code>{elapsed}</Typography.Text>
-                {d.pid && d.pid > 0 ? (
-                  <>
-                    {" "}
-                    · PID <Typography.Text code>{d.pid}</Typography.Text>
-                  </>
-                ) : null}
+                {ran.length > 0 ? `Running ${ran.length} cluster(s).` : "Running all clusters."}
+                {typeof out.running_count === "number" ? ` ${out.running_count} run(s) now active.` : ""}
               </span>
-              {d.overdue ? (
-                <Typography.Text type="warning">
-                  Active run has exceeded its expected duration — check the runner log.
-                </Typography.Text>
-              ) : null}
-              {d.runner_log ? (
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  Runner log: {d.runner_log}
-                </Typography.Text>
-              ) : null}
-              {d.hint ? (
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  {d.hint}
-                </Typography.Text>
-              ) : null}
+              {skippedNote}
             </Space>
           ),
-          duration: 10,
+          duration: 6,
         });
-        await loadRunActive();
-        return;
       }
+      await loadRunActive();
+    } catch (e) {
+      notify.close(RUN_TOAST_KEY);
       onError(e);
     }
   };
 
-  const cancelRun = async () => {
+  const cancelRun = async (id?: string) => {
     notify.loading({
       key: RUN_TOAST_KEY,
       message: "Cancelling run…",
-      description: "Signalling the orchestrator process to exit.",
+      description: id ? `Signalling run ${id} to exit.` : "Signalling all active runs to exit.",
     });
     try {
-      const out = await api.runCancel();
+      const out = await api.runCancel(id);
+      notify.close(RUN_TOAST_KEY);
       notify.success({
         message: "Cancellation requested",
-        description: `PID ${out.pid} signalled after ${out.elapsed_human}. The run will exit shortly.`,
-        duration: 6,
+        description: id
+          ? `Run ${out.run_id ?? id} will exit shortly.`
+          : `${out.cancelled ?? 0} run(s) signalled to exit.`,
+        duration: 5,
       });
       await loadRunActive();
     } catch (e) {
       notify.close(RUN_TOAST_KEY);
-      // 409 means no run is active anymore — surface a softer info toast.
-      if (e instanceof ApiError && e.status === 409) {
-        notify.info({
-          message: "No run to cancel",
-          description: "The run already finished before the cancel request arrived.",
-        });
-        await loadRunActive();
-        return;
-      }
       onError(e);
     }
   };
@@ -341,10 +273,6 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
     }
   };
 
-  const elapsedDisplayMs = active?.active && runStartMsRef.current ? Date.now() - runStartMsRef.current : 0;
-  // Reference elapsedTick so React picks up the second-by-second update.
-  void elapsedTick;
-
   // Format a duration in seconds as "5m 51s" / "1h 12m" / "42s".
   const formatDurationS = (s?: number): string => {
     if (typeof s !== "number" || !Number.isFinite(s) || s <= 0) return "—";
@@ -357,9 +285,6 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
     return `${sec}s`;
   };
 
-  // Compact issue summary for runs that have summary data, e.g. "1F · 17W · 6E".
-  // Empty string for trigger entries (which don't carry any counts) so the cell
-  // gracefully renders as "—".
   const renderIssueCounts = (row: RunInfo) => {
     const f = row.fail_total ?? 0;
     const w = row.warn_total ?? 0;
@@ -379,8 +304,6 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
     );
   };
 
-  // Source tag — communicates whether the row is an archived run, the latest
-  // in-place summary, or just a trigger event from the audit log.
   const renderSource = (src?: RunInfo["source"]) => {
     if (src === "history") return <Tag color="blue" style={{ marginInlineEnd: 0 }}>Run</Tag>;
     if (src === "summary") return <Tag color="cyan" style={{ marginInlineEnd: 0 }}>Latest</Tag>;
@@ -388,9 +311,6 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
     return <Tag style={{ marginInlineEnd: 0 }}>—</Tag>;
   };
 
-  // Status tag — for runs with a known success outcome, show pass/fail with
-  // exit code; for triggers, indicate "Triggered" (with a soft warning tone if
-  // the trigger itself failed at the API layer).
   const renderStatus = (row: RunInfo) => {
     if (row.source === "trigger") {
       return row.success === false
@@ -415,19 +335,8 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
       render: (v: string) => <Typography.Text code>{v}</Typography.Text>,
     },
     { title: "Started", dataIndex: "mod_time", key: "mod_time", width: 200, render: formatTime },
-    {
-      title: "Type",
-      dataIndex: "source",
-      key: "source",
-      width: 100,
-      render: (_v, row) => renderSource(row.source),
-    },
-    {
-      title: "Status",
-      key: "status",
-      width: 150,
-      render: (_v, row) => renderStatus(row),
-    },
+    { title: "Type", dataIndex: "source", key: "source", width: 100, render: (_v, row) => renderSource(row.source) },
+    { title: "Status", key: "status", width: 150, render: (_v, row) => renderStatus(row) },
     {
       title: "Duration",
       dataIndex: "duration_s",
@@ -458,11 +367,7 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
         );
       },
     },
-    {
-      title: "Issues",
-      key: "issues",
-      render: (_v, row) => renderIssueCounts(row),
-    },
+    { title: "Issues", key: "issues", render: (_v, row) => renderIssueCounts(row) },
   ];
 
   const artifactColumns: ColumnsType<ArtifactInfo> = [
@@ -484,16 +389,90 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
       key: "actions",
       width: 130,
       render: (_, row) => (
-        <Button
-          size="small"
-          icon={<DownloadOutlined />}
-          href={`/api/v1/artifacts/${encodeURIComponent(row.name)}?download=1`}
-        >
+        <Button size="small" icon={<DownloadOutlined />} href={`/api/v1/artifacts/${encodeURIComponent(row.name)}?download=1`}>
           Download
         </Button>
       ),
     },
   ];
+
+  const renderRunEntry = (run: ActiveRunEntry) => {
+    const clusters = run.clusters ?? [];
+    const skipped = run.skipped ?? [];
+    const header = (
+      <Space size={8} wrap>
+        <Badge status={run.status === "running" ? "processing" : "default"} />
+        <Typography.Text code>{run.id}</Typography.Text>
+        {run.group ? <Tag color="purple">{run.group}</Tag> : null}
+        {run.all_clusters ? <Tag color="geekblue">all clusters</Tag> : null}
+        <Tag color={run.status === "running" ? "processing" : "default"}>
+          {run.status === "running" ? `Running · ${formatElapsedSeconds(run.elapsed_sec)}` : "Queued"}
+        </Tag>
+      </Space>
+    );
+    return {
+      key: run.id,
+      label: header,
+      extra: (
+        <Button
+          danger
+          size="small"
+          icon={<StopOutlined />}
+          onClick={(e) => {
+            e.stopPropagation();
+            void cancelRun(run.id);
+          }}
+        >
+          Cancel
+        </Button>
+      ),
+      children: (
+        <Space direction="vertical" size={10} style={{ width: "100%" }}>
+          <div>
+            <Typography.Text type="secondary" style={{ marginRight: 8 }}>Clusters:</Typography.Text>
+            {clusters.length > 0 ? (
+              clusters.map((c) => <Tag key={c}>{c}</Tag>)
+            ) : run.all_clusters ? (
+              <Tag color="geekblue">all configured clusters</Tag>
+            ) : (
+              <Typography.Text type="secondary">—</Typography.Text>
+            )}
+          </div>
+          {skipped.length > 0 ? (
+            <Alert
+              type="info"
+              showIcon
+              message="Some clusters were skipped (already running in another run)"
+              description={
+                <Space direction="vertical" size={2}>
+                  {skipped.map((c) => (
+                    <Typography.Text key={c}>
+                      {c}
+                      {run.skipped_owner?.[c] ? (
+                        <Typography.Text type="secondary"> · owned by run {run.skipped_owner[c]}</Typography.Text>
+                      ) : null}
+                    </Typography.Text>
+                  ))}
+                </Space>
+              }
+            />
+          ) : null}
+          {run.status === "running" ? (
+            <CodeEditor
+              value={run.live_output || "Waiting for runner output…"}
+              language="plaintext"
+              readOnly
+              height={260}
+              autoRevealLastLine={followTail}
+              jumpToLastSignal={jumpToLastSignal}
+            />
+          ) : (
+            <Typography.Text type="secondary">Waiting for a free slot to start…</Typography.Text>
+          )}
+        </Space>
+      ),
+    };
+  };
 
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
@@ -502,23 +481,26 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
           Trigger Run
         </Typography.Title>
         <Typography.Text type="secondary" className="section-subtitle">
-          Run NCC against the configured clusters. Use Preflight to validate before triggering.
+          Run NCC against the configured clusters. Multiple runs can execute at once — clusters already being refreshed by
+          another active run are reused, so only the remaining clusters run. Use Preflight to validate before triggering.
         </Typography.Text>
-        {/*
-          Wrap the trigger inputs in a real <form> so:
-            1) Chrome stops emitting "Password field is not contained in a form"
-               (it heuristically downgrades autofill/security if it's loose).
-            2) Pressing Enter in any field triggers the run, matching user
-               expectation for a one-action form.
-          autoComplete="off" because these are session-scoped lab credentials,
-          not user account credentials we want browsers to remember.
-        */}
+        {clusterRestricted ? (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginTop: 12 }}
+            message="Your access is limited to your cluster groups"
+            description={
+              allowedClusters.length > 0
+                ? `You can run and view ${allowedClusters.length} cluster(s): ${allowedClusters.join(", ")}.`
+                : "You are not a member of any cluster group. Ask an administrator to add you to a group before triggering a run."
+            }
+          />
+        ) : null}
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            if (!active?.active) {
-              void triggerRun();
-            }
+            void triggerRun();
           }}
           autoComplete="off"
         >
@@ -549,6 +531,23 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
                 autoComplete="new-password"
               />
             </Col>
+            {clusterRestricted ? (
+              <Col xs={24}>
+                <label htmlFor="run-clusters" style={{ display: "block", marginBottom: 4 }}>
+                  <Typography.Text type="secondary">Clusters (optional — defaults to all your clusters)</Typography.Text>
+                </label>
+                <Select
+                  id="run-clusters"
+                  mode="multiple"
+                  allowClear
+                  style={{ width: "100%" }}
+                  placeholder="Leave empty to run all clusters in your groups"
+                  value={selectedClusters}
+                  onChange={setSelectedClusters}
+                  options={allowedClusters.map((c) => ({ value: c, label: c }))}
+                />
+              </Col>
+            ) : null}
             <Col xs={24}>
               <label htmlFor="run-extra-args" style={{ display: "block", marginBottom: 4 }}>
                 <Typography.Text type="secondary">Additional flags (optional)</Typography.Text>
@@ -563,27 +562,26 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
               />
             </Col>
           </Row>
-          {/* Hidden submit button so Enter-key submission works on every browser. */}
           <button type="submit" style={{ display: "none" }} aria-hidden="true" tabIndex={-1} />
         </form>
         <Space size={8} wrap style={{ marginTop: 12 }}>
-          <Button type="primary" icon={<ThunderboltOutlined />} onClick={triggerRun} disabled={Boolean(active?.active)}>
-            {active?.active ? "Run in progress" : "Trigger Run"}
+          <Button type="primary" icon={<ThunderboltOutlined />} onClick={triggerRun}>
+            Trigger Run
           </Button>
-          {active?.active ? (
-            <Button danger icon={<StopOutlined />} onClick={cancelRun}>
-              Cancel Run
-            </Button>
-          ) : null}
           <Button icon={<FileSearchOutlined />} onClick={runPreflight}>
             Run Preflight
           </Button>
           <Button icon={<ReloadOutlined />} onClick={() => { void loadRunActive(); void refreshRuns(); }}>
             Refresh
           </Button>
-          {active?.active ? (
+          {runningCount > 0 ? (
             <Tag icon={<PlayCircleOutlined spin />} color="processing" style={{ fontSize: 13, padding: "4px 10px" }}>
-              Running · {formatElapsed(elapsedDisplayMs)}
+              {runningCount} running{maxConcurrent ? ` / ${maxConcurrent}` : ""}
+            </Tag>
+          ) : null}
+          {queuedRuns.length > 0 ? (
+            <Tag icon={<ClockCircleOutlined />} color="warning" style={{ fontSize: 13, padding: "4px 10px" }}>
+              {queuedRuns.length} queued
             </Tag>
           ) : null}
         </Space>
@@ -629,38 +627,35 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
         title={
           <Space size={8}>
             <Typography.Title level={4} className="section-title" style={{ margin: 0 }}>
-              Active Run
+              Active &amp; Queued Runs
             </Typography.Title>
-            {active?.active ? (
-              <Badge status="processing" text={<Typography.Text strong>Running</Typography.Text>} />
+            {runningCount > 0 ? (
+              <Badge status="processing" text={<Typography.Text strong>{runningCount} running</Typography.Text>} />
             ) : active?.last_error ? (
-              <Tag icon={<CloseCircleOutlined />} color="error">
-                Last run failed
-              </Tag>
+              <Tag icon={<CloseCircleOutlined />} color="error">Last run failed</Tag>
             ) : (
-              <Tag icon={<CheckCircleOutlined />} color="default">
-                Idle
-              </Tag>
+              <Tag icon={<CheckCircleOutlined />} color="default">Idle</Tag>
             )}
           </Space>
         }
+        extra={
+          activeRuns.length > 0 ? (
+            <Space size={8}>
+              <Switch id="runs-follow-tail" aria-label="Follow tail" checked={followTail} onChange={setFollowTail} size="small" />
+              <Typography.Text type="secondary">
+                <label htmlFor="runs-follow-tail">Follow tail</label>
+              </Typography.Text>
+              <Button size="small" onClick={() => setJumpToLastSignal((n) => n + 1)}>Jump to latest</Button>
+              <Button size="small" danger icon={<StopOutlined />} onClick={() => cancelRun()}>Cancel all</Button>
+            </Space>
+          ) : null
+        }
       >
-        {active?.active ? (
-          <Descriptions size="small" column={1} bordered>
-            <Descriptions.Item label="Started">
-              <Space size={6}>
-                {formatTime(active.started_at)}
-                <Typography.Text type="secondary">· elapsed {formatElapsed(elapsedDisplayMs)}</Typography.Text>
-              </Space>
-            </Descriptions.Item>
-            <Descriptions.Item label="Config">{active.config_path || "-"}</Descriptions.Item>
-            <Descriptions.Item label="Output dir">{active.output_dir || "-"}</Descriptions.Item>
-            {active.last_error ? (
-              <Descriptions.Item label="Last error">
-                <Typography.Text type="danger">{active.last_error}</Typography.Text>
-              </Descriptions.Item>
-            ) : null}
-          </Descriptions>
+        {activeRuns.length > 0 ? (
+          <Collapse
+            defaultActiveKey={runningRuns.map((r) => r.id)}
+            items={activeRuns.map(renderRunEntry)}
+          />
         ) : active?.last_error ? (
           <Alert
             type="error"
@@ -670,28 +665,8 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
             description={<Typography.Text>{active.last_error}</Typography.Text>}
           />
         ) : (
-          <Typography.Text type="secondary">No run currently in progress.</Typography.Text>
+          <Typography.Text type="secondary">No runs currently in progress.</Typography.Text>
         )}
-        <div style={{ marginTop: 16 }}>
-          <Space size={8} style={{ marginBottom: 8 }}>
-            <Typography.Text strong>Live Output</Typography.Text>
-            <Switch id="runs-follow-tail" aria-label="Follow tail" checked={followTail} onChange={setFollowTail} size="small" />
-            <Typography.Text type="secondary">
-              <label htmlFor="runs-follow-tail">Follow tail</label>
-            </Typography.Text>
-            <Button size="small" onClick={() => setJumpToLastSignal((n) => n + 1)}>
-              Jump to latest
-            </Button>
-          </Space>
-          <CodeEditor
-            value={liveLogs || "Waiting for runner output…"}
-            language="plaintext"
-            readOnly
-            height={360}
-            autoRevealLastLine={followTail}
-            jumpToLastSignal={jumpToLastSignal}
-          />
-        </div>
       </Card>
 
       <Card className="page-card">
@@ -701,13 +676,7 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
         {runs.length === 0 ? (
           <Empty description="No runs recorded yet" />
         ) : (
-          <Table
-            size="small"
-            rowKey="id"
-            columns={runColumns}
-            dataSource={runs}
-            pagination={{ pageSize: 10, showSizeChanger: false }}
-          />
+          <Table size="small" rowKey="id" columns={runColumns} dataSource={runs} pagination={{ pageSize: 10, showSizeChanger: false }} />
         )}
       </Card>
 
@@ -718,13 +687,7 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
         {artifacts.length === 0 ? (
           <Empty description="No artifacts available" />
         ) : (
-          <Table
-            size="small"
-            rowKey="name"
-            columns={artifactColumns}
-            dataSource={artifacts}
-            pagination={{ pageSize: 10, showSizeChanger: false }}
-          />
+          <Table size="small" rowKey="name" columns={artifactColumns} dataSource={artifacts} pagination={{ pageSize: 10, showSizeChanger: false }} />
         )}
       </Card>
     </Space>

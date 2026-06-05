@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	crand "crypto/rand"
 	"crypto/tls"
@@ -114,6 +113,11 @@ type apiServer struct {
 	ldapFromFlags        bool // LDAP came from startup flags (not runtime-editable)
 	ldapMu               sync.RWMutex
 	ldap                 ldapAuthenticator
+	// pcCacheMu guards the Prism Central -> managed-clusters discovery cache used
+	// to expand cluster-group PC entries into their registered clusters.
+	pcCacheMu  sync.Mutex
+	pcCache    map[string]*pcCacheEntry
+	pcInflight map[string]bool
 	// cookieInsecure drops the Secure attribute on session cookies so the
 	// login flow works over plain http for local development. Off by default.
 	cookieInsecure     bool
@@ -156,6 +160,27 @@ type apiServer struct {
 	cancelRun context.CancelFunc
 	cancelled bool
 	liveOut   *tailBuffer
+
+	// Concurrent run engine. Multiple cluster-group runs can execute at once,
+	// each scoped to a disjoint cluster subset (overlapping clusters are run
+	// only once and shared). All fields below are guarded by s.mu.
+	//
+	//   runs          - every run that is queued or running, keyed by run id.
+	//   runOrder      - run ids in submission order (stable listing).
+	//   clusterOwners - normalized cluster name -> id of the run that owns it
+	//                   (queued or running). Used to de-duplicate overlapping
+	//                   clusters across concurrent triggers.
+	//   runQueue      - ids of runs waiting for a concurrency slot (FIFO).
+	//   wildcardRunID - id of an in-flight "run everything" (admin, no subset)
+	//                   run; while set, it owns every cluster implicitly.
+	maxConcurrentRuns int
+	runs              map[string]*runRecord
+	runOrder          []string
+	clusterOwners     map[string]string
+	runQueue          []string
+	wildcardRunID     string
+	runSeq            int64
+	mergeMu           sync.Mutex // serializes merge-into-canonical of per-run artifacts
 }
 
 type envelope struct {
@@ -220,6 +245,11 @@ type runTriggerRequest struct {
 	ConfigPath string   `json:"config_path,omitempty"`
 	Password   string   `json:"password,omitempty"`
 	ExtraArgs  []string `json:"extra_args,omitempty"`
+	// Group optionally scopes the run to a single cluster group (by name).
+	Group string `json:"group,omitempty"`
+	// Clusters optionally scopes the run to an explicit cluster subset. Both are
+	// further intersected with the caller's allowed clusters for non-admins.
+	Clusters []string `json:"clusters,omitempty"`
 }
 
 type runPreflightRequest struct {
@@ -331,6 +361,7 @@ func main() {
 	flag.DurationVar(&s.sessionTTL, "session-ttl", 6*time.Hour, "Session token TTL (default 6h; admins can override at runtime in Settings → Access)")
 	flag.StringVar(&s.sessionIssuer, "session-issuer", "ncc-api-server", "Session token issuer")
 	flag.DurationVar(&s.runTimeout, "run-timeout", 90*time.Minute, "Max runtime for trigger-run command")
+	flag.IntVar(&s.maxConcurrentRuns, "max-concurrent-runs", defaultMaxConcurrentRuns, "Max orchestrator runs executing at once; extra triggers queue and start as slots free")
 	flag.BoolVar(&s.debugExpose, "debug-expose", false, "Expose debug internals in APIs (off by default)")
 	flag.StringVar(&s.tlsCertFile, "tls-cert-file", "", "TLS certificate file for direct HTTPS")
 	flag.StringVar(&s.tlsKeyFile, "tls-key-file", "", "TLS key file for direct HTTPS")
@@ -619,6 +650,7 @@ func main() {
 		s.rateLimiter = newFixedWindowRateLimiter(s.rateLimitPerMinute, time.Minute)
 	}
 	s.loginGuard = newLoginGuard(s.loginLockThreshold, s.loginLockWindow, s.loginLockDuration)
+	s.ensureRunManager()
 	s.startedAt = time.Now().UTC()
 
 	handler := s.buildHandler()
@@ -2082,6 +2114,10 @@ func (s *apiServer) handleArtifacts(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
+	if s.artifactsRestricted(r) {
+		writeJSON(w, http.StatusForbidden, envelope{Success: false, Error: "raw report artifacts include all clusters and are limited to administrators; use the dashboard for your cluster groups"})
+		return
+	}
 	dir := s.absPath(s.outputDir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -2119,6 +2155,10 @@ const artifactInlineMaxBytes = 5 * 1024 * 1024
 func (s *apiServer) handleArtifactByName(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	if s.artifactsRestricted(r) {
+		writeJSON(w, http.StatusForbidden, envelope{Success: false, Error: "raw report artifacts include all clusters and are limited to administrators; use the dashboard for your cluster groups"})
 		return
 	}
 	name := strings.TrimPrefix(r.URL.Path, "/api/v1/artifacts/")
@@ -2362,7 +2402,31 @@ func (s *apiServer) handleRuns(w http.ResponseWriter, r *http.Request) {
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}
+	// Cluster-group scoping: a run row aggregates every cluster in the run, so
+	// for non-admins blank the cluster-level counts/metrics that would leak
+	// global state. The run still appears (id/time/duration/outcome) and the
+	// per-cluster detail comes from the filtered /report/data endpoint.
+	if p, ok := principalFromContext(r.Context()); ok && !s.allowedClusters(p).unrestricted {
+		for i := range out {
+			redactRunInfoCounts(&out[i])
+		}
+	}
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: out})
+}
+
+// redactRunInfoCounts zeroes the aggregate, all-cluster metric fields of a run
+// row so a group-restricted caller cannot infer global cluster state from the
+// runs feed. Identity/outcome fields are preserved for the listing.
+func redactRunInfoCounts(ri *runInfo) {
+	ri.ClustersOK = 0
+	ri.ClustersFailed = 0
+	ri.TotalChecks = 0
+	ri.AvgHealthScore = 0
+	ri.MinHealthScore = 0
+	ri.FailTotal = 0
+	ri.WarnTotal = 0
+	ri.ErrTotal = 0
+	ri.InfoTotal = 0
 }
 
 // handleRunsRouter dispatches /api/v1/runs/<id> requests that are not
@@ -2500,6 +2564,11 @@ func (s *apiServer) handleRunActive(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
+	// Concurrent run engine: report the full set of queued/running runs as well
+	// as the legacy single-run summary (mirroring the most-recent running run)
+	// so older clients keep working.
+	runs := s.activeRunsSnapshot()
+	queued := s.queuedCount()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var elapsedSeconds int
@@ -2513,6 +2582,12 @@ func (s *apiServer) handleRunActive(w http.ResponseWriter, r *http.Request) {
 		if s.runTimeout > 0 {
 			deadlineISO = s.started.Add(s.runTimeout).UTC().Format(time.RFC3339)
 			overdue = time.Now().After(s.started.Add(s.runTimeout))
+		}
+	}
+	runningCount := 0
+	for _, rec := range s.runs {
+		if rec.status == "running" {
+			runningCount++
 		}
 	}
 	data := map[string]interface{}{
@@ -2529,6 +2604,11 @@ func (s *apiServer) handleRunActive(w http.ResponseWriter, r *http.Request) {
 		"runner_log":        s.absPath(s.runnerLogPath),
 		"output_dir":        s.absPath(s.outputDir),
 		"config_path":       defaultIfEmpty(s.lastCfg, s.absPath(s.configPath)),
+		// Concurrent-run fields.
+		"runs":            runs,
+		"running_count":   runningCount,
+		"queued_count":    queued,
+		"max_concurrent":  s.maxConcurrentRuns,
 	}
 	if s.debugExpose {
 		data["command"] = s.lastCmd
@@ -2538,18 +2618,43 @@ func (s *apiServer) handleRunActive(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: data})
 }
 
-// cancelActiveRun cancels the in-flight orchestrator run, if any, by invoking
-// the saved context.CancelFunc. The goroutine running cmd.Wait() observes the
-// context cancellation, reaps the child process, and routes the result through
-// setRunDone()/archiveRunArtifacts() exactly as it would for a normal exit.
+// cancelActiveRun cancels in-flight orchestrator run(s). With ?id=<run-id> it
+// cancels a single run (running: signals the process to exit; queued: removes it
+// from the queue and frees its reserved clusters). Without an id, it cancels
+// every queued and running run. The goroutine running cmd.Wait() observes the
+// context cancellation, reaps the child, and routes the result through
+// finishRun() exactly as it would for a normal exit.
 //
 // This is the user-facing escape hatch for runs that are stuck on a slow
 // cluster, broken DNS, etc., without forcing the operator to restart the API
-// server (which the previous error hint suggested).
+// server.
 func (s *apiServer) cancelActiveRun(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	if !s.active {
-		s.mu.Unlock()
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id != "" {
+		rec, ok := s.cancelRunByID(id)
+		if !ok {
+			writeJSON(w, http.StatusConflict, envelope{
+				Success: false,
+				Error:   fmt.Sprintf("no queued or running run with id %q", id),
+				Data:    map[string]interface{}{"run_id": id},
+			})
+			return
+		}
+		s.audit(r, "runs.cancel", true, map[string]interface{}{"run_id": id, "pid": rec.pid})
+		writeJSON(w, http.StatusAccepted, envelope{
+			Success: true,
+			Message: "cancellation signalled",
+			Data: map[string]interface{}{
+				"run_id":        rec.id,
+				"pid":           rec.pid,
+				"poll_endpoint": "/api/v1/runs/active",
+			},
+		})
+		return
+	}
+
+	n := s.cancelAllRuns()
+	if n == 0 {
 		writeJSON(w, http.StatusConflict, envelope{
 			Success: false,
 			Error:   "no run is currently active",
@@ -2557,29 +2662,13 @@ func (s *apiServer) cancelActiveRun(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	startedAt := s.started
-	pid := s.lastPID
-	cancel := s.cancelRun
-	s.cancelled = true
-	s.mu.Unlock()
-
-	if cancel != nil {
-		cancel()
-	}
-	elapsed := time.Since(startedAt).Round(time.Second)
-	s.audit(r, "runs.cancel", true, map[string]interface{}{
-		"pid":             pid,
-		"elapsed_seconds": int(elapsed.Seconds()),
-	})
+	s.audit(r, "runs.cancel", true, map[string]interface{}{"cancelled": n})
 	writeJSON(w, http.StatusAccepted, envelope{
 		Success: true,
-		Message: "cancellation signalled",
+		Message: fmt.Sprintf("cancellation signalled for %d run(s)", n),
 		Data: map[string]interface{}{
-			"pid":             pid,
-			"started_at":      startedAt.UTC().Format(time.RFC3339),
-			"elapsed_seconds": int(elapsed.Seconds()),
-			"elapsed_human":   elapsed.String(),
-			"poll_endpoint":   "/api/v1/runs/active",
+			"cancelled":     n,
+			"poll_endpoint": "/api/v1/runs/active",
 		},
 	})
 }
@@ -2659,77 +2748,8 @@ func (s *apiServer) handleRunTrigger(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnsupportedMediaType, envelope{Success: false, Error: err.Error()})
 		return
 	}
-	s.mu.Lock()
-	if s.active {
-		// Capture a snapshot of the active run so the caller learns *why* the
-		// trigger was rejected — when it started, how long it's been running,
-		// the PID/log path/config it's running against, and whether it has
-		// already exceeded any expected duration. This turns an opaque 409
-		// into an actionable error.
-		startedAt := s.started
-		pid := s.lastPID
-		cfg := defaultIfEmpty(s.lastCfg, s.absPath(s.configPath))
-		runnerLog := s.absPath(s.runnerLogPath)
-		runTimeout := s.runTimeout
-		s.mu.Unlock()
-
-		elapsed := time.Since(startedAt).Round(time.Second)
-		var deadlineISO string
-		var overdue bool
-		if runTimeout > 0 {
-			deadlineISO = startedAt.Add(runTimeout).UTC().Format(time.RFC3339)
-			overdue = time.Now().After(startedAt.Add(runTimeout))
-		}
-		hint := "Wait for it to finish, or watch live progress on Settings → Runs (runner log: " + runnerLog + ")."
-		if overdue {
-			hint = "The active run has exceeded the configured timeout; check the runner log to confirm it isn't stuck, or restart the API server to clear the lock."
-		}
-		writeJSON(w, http.StatusConflict, envelope{
-			Success: false,
-			Error: fmt.Sprintf(
-				"a run is already active (started %s, running for %s) — cannot start another until it finishes",
-				startedAt.UTC().Format(time.RFC3339), elapsed,
-			),
-			Data: map[string]interface{}{
-				"active":            true,
-				"started_at":        startedAt.UTC().Format(time.RFC3339),
-				"elapsed_seconds":   int(elapsed.Seconds()),
-				"elapsed_human":     elapsed.String(),
-				"pid":               pid,
-				"config_path":       cfg,
-				"runner_log":        runnerLog,
-				"run_timeout":       runTimeout.String(),
-				"expected_deadline": deadlineISO,
-				"overdue":           overdue,
-				"hint":              hint,
-				"poll_endpoint":     "/api/v1/runs/active",
-			},
-		})
-		s.audit(r, "runs.trigger", false, map[string]interface{}{
-			"reason":          "run_in_progress",
-			"active_started":  startedAt.UTC().Format(time.RFC3339),
-			"elapsed_seconds": int(elapsed.Seconds()),
-			"pid":             pid,
-		})
-		return
-	}
-	s.active = true
-	s.started = time.Now().UTC()
-	s.runsTriggeredTotal.Add(1)
-	s.lastErr = ""
-	s.lastOut = ""
-	s.lastCmd = nil
-	s.lastCwd = ""
-	s.lastEnv = nil
-	s.lastPID = 0
-	s.cancelRun = nil
-	s.cancelled = false
-	s.liveOut = nil
-	s.mu.Unlock()
-
 	var req runTriggerRequest
 	if err := decodeJSON(r.Body, &req); err != nil && !errors.Is(err, io.EOF) {
-		s.setRunDone(err, "")
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 		return
 	}
@@ -2739,23 +2759,28 @@ func (s *apiServer) handleRunTrigger(w http.ResponseWriter, r *http.Request) {
 	}
 	resolvedCfgPath, err := s.validateConfigPath(cfgPath)
 	if err != nil {
-		s.setRunDone(err, "")
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 		return
 	}
 	if len(req.Password) > 256 {
-		s.setRunDone(errors.New("password too long"), "")
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "password too long"})
 		return
 	}
 	cleanExtraArgs, err := sanitizeExtraArgs(req.ExtraArgs)
 	if err != nil {
-		s.setRunDone(err, "")
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 		return
 	}
+	// Cluster-group scoping: confine the run to the caller's allowed clusters
+	// (admins/static tokens are unrestricted) and to any requested group/subset.
+	p, _ := principalFromContext(r.Context())
+	access := s.allowedClusters(p)
+	scopedClusters, scopeErr := s.resolveRunClusterScope(req, access, cleanExtraArgs)
+	if scopeErr != nil {
+		writeJSON(w, http.StatusForbidden, envelope{Success: false, Error: scopeErr.Error()})
+		return
+	}
 	if st, err := os.Stat(resolvedCfgPath); err != nil || st.IsDir() {
-		s.setRunDone(fmt.Errorf("config not found or invalid: %s", cfgPath), "")
 		writeJSON(w, http.StatusBadRequest, envelope{
 			Success: false,
 			Error:   fmt.Sprintf("config file not found: %s", cfgPath),
@@ -2766,84 +2791,87 @@ func (s *apiServer) handleRunTrigger(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	args := []string{"--config", resolvedCfgPath}
-	// Pin the runner's output directories to the exact absolute paths this
-	// api-server reads artifacts from. Without this, the orchestrator resolves
-	// the config's relative `output-dir-*` against its working directory, which
-	// can diverge from where the dashboard reads run-summary.json/index.html
-	// (e.g. when the stack's repo-root and output-dir resolve to different
-	// bases, or on a partial-success run). The result was a completed run whose
-	// data never populated the UI. Skip when the caller already set them.
-	if !extraArgsHaveFlag(cleanExtraArgs, "output-dir-filtered") {
-		args = append(args, "--output-dir-filtered", s.absPath(s.outputDir))
-	}
-	if !extraArgsHaveFlag(cleanExtraArgs, "output-dir-logs") {
-		args = append(args, "--output-dir-logs", s.absPath(s.logDir))
-	}
-	args = append(args, cleanExtraArgs...)
-	s.mu.Lock()
-	s.lastCfg = resolvedCfgPath
-	s.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), s.runTimeout)
-	cmd := s.makeOrchestratorCommand(ctx, args...)
-	cmd.Dir = s.absPath(s.repoRoot)
-	injectedEnv := map[string]string{}
-	if strings.TrimSpace(req.Password) != "" {
-		cmd.Env = append(os.Environ(), "NCC_PASSWORD="+req.Password)
-		injectedEnv["NCC_PASSWORD"] = "***"
+	// Hand off to the concurrent run engine. It de-duplicates clusters that are
+	// already being refreshed by another active run (so two cluster groups can
+	// run at once without re-running shared clusters), and queues the request
+	// when all concurrency slots are busy.
+	res := s.submitRun(runStartParams{
+		cfgPath:      resolvedCfgPath,
+		password:     req.Password,
+		extraArgs:    cleanExtraArgs,
+		group:        strings.TrimSpace(req.Group),
+		requested:    scopedClusters,
+		unrestricted: access.unrestricted,
+		auditSubject: p.subject,
+		auditRole:    p.role.String(),
+	})
+
+	baseFields := map[string]interface{}{"config_path": resolvedCfgPath, "extra_args_count": len(cleanExtraArgs)}
+	if strings.TrimSpace(req.Group) != "" {
+		baseFields["group"] = strings.TrimSpace(req.Group)
 	}
-	fullCmd := append(s.orchestratorBaseCommand(), redactedArgs(args)...)
-	var runOut bytes.Buffer
-	liveBuf := newTailBuffer(64000)
-	mw := io.MultiWriter(&runOut, liveBuf)
-	cmd.Stdout = mw
-	cmd.Stderr = mw
-	s.mu.Lock()
-	s.lastCmd = fullCmd
-	s.lastCwd = cmd.Dir
-	s.lastEnv = injectedEnv
-	s.liveOut = liveBuf
-	s.mu.Unlock()
-	if err := cmd.Start(); err != nil {
-		cancel()
-		s.setRunDone(err, "")
-		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: err.Error()})
+
+	switch {
+	case res.noop:
+		baseFields["reason"] = "already_running"
+		baseFields["skipped"] = len(res.skipped)
+		s.audit(r, "runs.trigger", true, baseFields)
+		writeJSON(w, http.StatusOK, envelope{
+			Success: true,
+			Message: "all requested clusters are already being refreshed by an in-progress run",
+			Data: map[string]interface{}{
+				"started":          false,
+				"queued":           false,
+				"skipped_clusters": res.skipped,
+				"skipped_owner":    res.skippedOwner,
+			},
+		})
+		return
+	case res.queued:
+		baseFields["queued"] = true
+		baseFields["queue_position"] = res.queuePos
+		if len(res.skipped) > 0 {
+			baseFields["skipped"] = len(res.skipped)
+		}
+		s.audit(r, "runs.trigger", true, baseFields)
+		writeJSON(w, http.StatusAccepted, envelope{
+			Success: true,
+			Message: fmt.Sprintf("run queued (position %d) — will start automatically when a slot frees", res.queuePos),
+			Data: map[string]interface{}{
+				"run_id":           res.rec.id,
+				"started":          false,
+				"queued":           true,
+				"queue_position":   res.queuePos,
+				"config_path":      resolvedCfgPath,
+				"skipped_clusters": res.skipped,
+				"skipped_owner":    res.rec.skippedOwner,
+			},
+		})
+		return
+	default: // started immediately
+		if len(res.rec.clusters) > 0 {
+			baseFields["scoped_clusters"] = len(res.rec.clusters)
+		}
+		if len(res.skipped) > 0 {
+			baseFields["skipped"] = len(res.skipped)
+		}
+		baseFields["run_id"] = res.rec.id
+		s.audit(r, "runs.trigger", true, baseFields)
+		writeJSON(w, http.StatusAccepted, envelope{Success: true, Message: "run triggered", Data: map[string]interface{}{
+			"run_id":           res.rec.id,
+			"started":          true,
+			"queued":           false,
+			"started_at":       res.rec.startedAt.Format(time.RFC3339),
+			"config_path":      resolvedCfgPath,
+			"used_password":    strings.TrimSpace(req.Password) != "",
+			"clusters":         res.rec.clusters,
+			"skipped_clusters": res.skipped,
+			"skipped_owner":    res.rec.skippedOwner,
+			"running_count":    res.runningCount,
+		}})
 		return
 	}
-	pid := cmd.Process.Pid
-	s.mu.Lock()
-	s.lastPID = pid
-	s.cancelRun = cancel
-	runStarted := s.started
-	s.mu.Unlock()
-	go func() {
-		defer cancel()
-		err := cmd.Wait()
-		// Distinguish "user pressed cancel" from "timed out" from "exited
-		// non-zero": context.Canceled means somebody called s.cancelRun(),
-		// DeadlineExceeded means the run timeout hit.
-		s.mu.Lock()
-		cancelled := s.cancelled
-		s.mu.Unlock()
-		switch {
-		case cancelled:
-			err = errors.New("run cancelled by user")
-		case ctx.Err() == context.DeadlineExceeded:
-			err = fmt.Errorf("run timed out after %s", s.runTimeout)
-		}
-		s.setRunDone(err, runOut.String())
-		s.archiveRunArtifacts(runStarted, err)
-		go s.notifyRunFinished(err)
-	}()
-	s.audit(r, "runs.trigger", true, map[string]interface{}{"config_path": resolvedCfgPath, "extra_args_count": len(cleanExtraArgs)})
-	writeJSON(w, http.StatusAccepted, envelope{Success: true, Message: "run triggered", Data: map[string]interface{}{
-		"pid":           pid,
-		"command":       append(s.orchestratorBaseCommand(), redactedArgs(args)...),
-		"started_at":    s.started.Format(time.RFC3339),
-		"config_path":   resolvedCfgPath,
-		"used_password": strings.TrimSpace(req.Password) != "",
-	}})
 }
 
 func (s *apiServer) handleRunnerLogs(w http.ResponseWriter, r *http.Request) {
@@ -2882,6 +2910,11 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 		return
 	}
+	// Cluster-group scoping: non-admins only see data for clusters in their
+	// groups. Admins/static tokens are unrestricted. The helper is a no-op when
+	// unrestricted, so the filter calls below are cheap for admins.
+	p, _ := principalFromContext(r.Context())
+	access := s.allowedClusters(p)
 	outDir := s.selectBestReportOutDir()
 	runSummary := readJSONArtifact(filepath.Join(outDir, "run-summary.json"), map[string]interface{}{})
 	// Heal `error_class` / `failure_classes` for runs persisted by older
@@ -2893,11 +2926,12 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 		reclassifyRunSummaryInPlace(m)
 		runSummary = m
 	}
-	checksSnapshot := readJSONArtifact(filepath.Join(outDir, "checks-snapshot.json"), []interface{}{})
-	drilldownDiff := readJSONArtifact(filepath.Join(outDir, "drilldown-diff.json"), map[string]interface{}{})
-	flakyChecks := readJSONArtifact(filepath.Join(outDir, "flaky-checks.json"), map[string]interface{}{})
-	regressionSummary := readJSONArtifact(filepath.Join(outDir, "regression-summary.json"), map[string]interface{}{})
-	sloDashboard := readJSONArtifact(filepath.Join(outDir, "slo-dashboard.json"), map[string]interface{}{})
+	runSummary = deepFilterClusters(runSummary, access)
+	checksSnapshot := deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "checks-snapshot.json"), []interface{}{}), access)
+	drilldownDiff := deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "drilldown-diff.json"), map[string]interface{}{}), access)
+	flakyChecks := deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "flaky-checks.json"), map[string]interface{}{}), access)
+	regressionSummary := deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "regression-summary.json"), map[string]interface{}{}), access)
+	sloDashboard := deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "slo-dashboard.json"), map[string]interface{}{}), access)
 	policyViolations := []string{}
 	if b, err := os.ReadFile(filepath.Join(outDir, "policy-gates.txt")); err == nil {
 		for _, ln := range strings.Split(string(b), "\n") {
@@ -2909,7 +2943,7 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	pagination := map[string]interface{}{}
-	aggRows := readInlineJSONVar(filepath.Join(outDir, "index.html"), "AGG", []interface{}{})
+	aggRows := deepFilterClusters(readInlineJSONVar(filepath.Join(outDir, "index.html"), "AGG", []interface{}{}), access)
 	if rows, ok := checksSnapshot.([]interface{}); ok && pg.enabled() {
 		pageRows, meta := paginateAnySlice(rows, pg)
 		checksSnapshot = pageRows
@@ -2931,12 +2965,12 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 		"agg_rows":            aggRows,
 		"diff_flags":          readInlineJSONVar(filepath.Join(outDir, "index.html"), "DIFF_FLAGS", map[string]interface{}{}),
 		"flaky_keys":          readInlineJSONVar(filepath.Join(outDir, "index.html"), "FLAKY_KEYS", map[string]interface{}{}),
-		"cluster_links":       readInlineJSONVar(filepath.Join(outDir, "index.html"), "CLUSTER_LINKS", []interface{}{}),
+		"cluster_links":       deepFilterClusters(readInlineJSONVar(filepath.Join(outDir, "index.html"), "CLUSTER_LINKS", []interface{}{}), access),
 		"artifact_links":      readInlineJSONVar(filepath.Join(outDir, "index.html"), "ARTIFACT_LINKS", map[string]interface{}{}),
 		"report_meta":         loadReportMeta(outDir),
 		"ncc_logs":            listNCCLogs(s.absPath(s.logDir)),
 		"ncc_summary_counts":  parseNCCSummaryCounts(s.absPath(s.logDir)),
-		"ncc_cluster_summary": parseNCCClusterSummary(s.absPath(s.logDir)),
+		"ncc_cluster_summary": deepFilterClusters(parseNCCClusterSummary(s.absPath(s.logDir)), access),
 		"trends":              collectTrendPoints(outDir, 30),
 		"report_source_dir":   outDir,
 		"pagination":          pagination,
@@ -3153,24 +3187,28 @@ func (s *apiServer) handleMetaRoutes(w http.ResponseWriter, r *http.Request) {
 		{Path: "/api/v1/settings/sso", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/update the runtime SAML SSO configuration (read-only when configured via startup flags)", SampleBody: "{\n  \"enabled\": true,\n  \"root_url\": \"https://ncc.example.com\",\n  \"idp_metadata_url\": \"https://idp.example.com/metadata\",\n  \"role_attribute\": \"groups\",\n  \"role_map\": \"ncc-admins=admin,ncc-ops=operator\",\n  \"default_role\": \"viewer\"\n}"},
 		{Path: "/api/v1/settings/ldap", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/update the runtime LDAP/Active Directory configuration (bind password is write-only; read-only when configured via startup flags)", SampleBody: "{\n  \"enabled\": true,\n  \"url\": \"ldaps://dc1.corp.example.com:636\",\n  \"bind_dn\": \"CN=ncc-svc,OU=Service Accounts,DC=corp,DC=example,DC=com\",\n  \"bind_password\": \"service-account-secret\",\n  \"base_dn\": \"DC=corp,DC=example,DC=com\",\n  \"role_map\": \"CN=NCC-Admins,OU=Groups,DC=corp,DC=example,DC=com=admin\",\n  \"default_role\": \"viewer\"\n}"},
 		{Path: "/api/v1/settings/ldap/test", Methods: []string{http.MethodPost}, Description: "Admin-only: validate an LDAP/AD configuration by authenticating sample credentials, without saving it", SampleBody: "{\n  \"url\": \"ldaps://dc1.corp.example.com:636\",\n  \"base_dn\": \"DC=corp,DC=example,DC=com\",\n  \"bind_dn\": \"CN=ncc-svc,DC=corp,DC=example,DC=com\",\n  \"bind_password\": \"service-account-secret\",\n  \"role_map\": \"CN=NCC-Admins,OU=Groups,DC=corp,DC=example,DC=com=admin\",\n  \"test_username\": \"jdoe\",\n  \"test_password\": \"users-password\"\n}"},
+		{Path: "/api/v1/settings/ldap/search", Methods: []string{http.MethodGet}, Description: "Admin-only: live AD/LDAP type-ahead search for groups and users (?q=<term>&type=group|user|all&limit=<n>) to assign to cluster groups"},
 		{Path: "/api/v1/settings/session", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/set the session lifetime (ttl_sec or ttl_min; 0 restores the --session-ttl default)", SampleBody: "{\n  \"ttl_min\": 360\n}"},
+		{Path: "/api/v1/settings/cluster-groups", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET operator+: read the cluster groups; PUT admin-only: replace the groups that confine non-admins to their clusters (members = local accounts + AD groups/users)", SampleBody: "{\n  \"groups\": [\n    {\n      \"name\": \"Platform\",\n      \"clusters\": [\"10.0.0.1\", \"pc-east\"],\n      \"local_users\": [\"alice\"],\n      \"ad_groups\": [\"CN=NCC-Platform,OU=Groups,DC=corp,DC=example,DC=com\"]\n    }\n  ]\n}"},
+		{Path: "/api/v1/settings/clusters", Methods: []string{http.MethodGet}, Description: "Operator+: list clusters known to the active config (for assigning to groups / scoping runs)"},
+		{Path: "/api/v1/settings/pc-clusters", Methods: []string{http.MethodGet}, Description: "Admin-only: discover the clusters registered under a Prism Central (?pc=<url>) for assigning a PC to a cluster group; uses the active run config's credentials"},
 		{Path: "/api/v1/settings/backup", Methods: []string{http.MethodGet}, Description: "Admin-only: download a .tar.gz backup of the install dir (config + referenced files, local user database, API token, scheduler/notifications state)"},
 		{Path: "/api/v1/settings/restore", Methods: []string{http.MethodPost}, Description: "Admin-only: restore a backup archive uploaded as multipart/form-data (field 'archive'); overwrites install-dir files with --force. Restart the stack afterward for it to take effect."},
 		{Path: "/api/v1/settings/config", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write runtime config", SampleBody: "{\n  \"content\": \"clusters: \\\"10.0.0.1\\\"\\nusername: \\\"admin\\\"\\n\"\n}"},
 		{Path: "/api/v1/settings/config-files", Methods: []string{http.MethodGet}, Description: "List config-referenced files (clusters, exclusions, secrets)"},
 		{Path: "/api/v1/settings/config-file", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write one config-referenced file", SampleBody: "{\n  \"path\": \"alerts-exclude.txt\",\n  \"content\": \"AHV_MemoryUsage\\n\"\n}"},
 		{Path: "/api/v1/settings/notifications", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write notifications state", SampleBody: "{\n  \"enabled\": true,\n  \"channel\": \"webhook\"\n}"},
-		{Path: "/api/v1/settings/notifications/test", Methods: []string{http.MethodPost}, Description: "Send test notification(s)", SampleBody: "{\n  \"channel\": \"all\"\n}"},
-		{Path: "/api/v1/schedule", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write scheduler state", SampleBody: "{\n  \"type\": \"cron\",\n  \"action\": \"create\",\n  \"cron\": \"15 */4 * * *\",\n  \"config\": \"config.yaml\",\n  \"print_only\": true,\n  \"apply\": false\n}"},
+		{Path: "/api/v1/settings/notifications/test", Methods: []string{http.MethodPost}, Description: "Operator+: send test notification(s) (delivery errors are URL-redacted)", SampleBody: "{\n  \"channel\": \"all\"\n}"},
+		{Path: "/api/v1/schedule", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET viewer+: read scheduler state; PUT operator+: create/update/apply a recurring run", SampleBody: "{\n  \"type\": \"cron\",\n  \"action\": \"create\",\n  \"cron\": \"15 */4 * * *\",\n  \"config\": \"config.yaml\",\n  \"print_only\": true,\n  \"apply\": false\n}"},
 		{Path: "/api/v1/schedule/health", Methods: []string{http.MethodGet}, Description: "Scheduler health snapshot (last run/success/error hints)"},
 		{Path: "/api/v1/artifacts", Methods: []string{http.MethodGet}, Description: "List available artifacts"},
 		{Path: "/api/v1/artifacts/{name}", Methods: []string{http.MethodGet}, Description: "Read artifact by name"},
 		{Path: "/api/v1/runs", Methods: []string{http.MethodGet}, Description: "List historical runs with metrics (limit, source, since filters; merges archived runs, latest summary, and audit triggers)"},
 		{Path: "/api/v1/runs/{id}", Methods: []string{http.MethodGet}, Description: "Read one archived run's metadata + embedded artifacts"},
 		{Path: "/api/v1/runs/summary", Methods: []string{http.MethodGet}, Description: "Read latest run summary (with on-read error-class healing)"},
-		{Path: "/api/v1/runs/active", Methods: []string{http.MethodGet, http.MethodDelete}, Description: "GET: read active run state. DELETE: cancel the in-flight run (signals the orchestrator process to exit)."},
+		{Path: "/api/v1/runs/active", Methods: []string{http.MethodGet, http.MethodDelete}, Description: "GET: read all queued/running runs (concurrent engine) plus the legacy single-run summary. DELETE: cancel a run by ?id=<run-id>, or all queued/running runs when no id is given."},
 		{Path: "/api/v1/runs/preflight", Methods: []string{http.MethodPost}, Description: "Run preflight checks (config/secrets/path permissions)", SampleBody: "{\n  \"config_path\": \"config.yaml\"\n}"},
-		{Path: "/api/v1/runs/trigger", Methods: []string{http.MethodPost}, Description: "Trigger orchestrator run (returns 409 with active-run details if one is already in flight)", SampleBody: "{\n  \"config_path\": \"config.yaml\",\n  \"password\": \"\",\n  \"extra_args\": [\"--no-html\"]\n}"},
+		{Path: "/api/v1/runs/trigger", Methods: []string{http.MethodPost}, Description: "Trigger an orchestrator run. Concurrent runs are allowed; clusters already being refreshed by another active run are skipped (reported in skipped_clusters) and the run executes only the remainder. When all concurrency slots are busy the run is queued and starts automatically.", SampleBody: "{\n  \"config_path\": \"config.yaml\",\n  \"password\": \"\",\n  \"group\": \"\",\n  \"clusters\": [],\n  \"extra_args\": [\"--no-html\"]\n}"},
 		{Path: "/api/v1/report/data", Methods: []string{http.MethodGet}, Description: "Aggregated report payload (supports optional limit/offset pagination for large arrays)"},
 		{Path: "/api/v1/report/trends", Methods: []string{http.MethodGet}, Description: "Historical trends from run summaries"},
 		{Path: "/api/v1/logs/runner", Methods: []string{http.MethodGet}, Description: "Read tail of runner log"},
@@ -3384,6 +3422,36 @@ func (s *apiServer) buildOpenAPISpec() map[string]interface{} {
 					},
 				},
 			},
+			"/api/v1/settings/ldap/search": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Admin-only: live AD/LDAP type-ahead search for groups and users (query params q, type=group|user|all, limit) used when assigning AD principals to cluster groups. Returns an empty result set when LDAP is not enabled."},
+			},
+			"/api/v1/settings/pc-clusters": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Admin-only: discover the clusters registered under a Prism Central (query param pc=<url>) so it can be assigned to a cluster group. Uses the active run config's credentials; results are cached and refreshed in the background."},
+			},
+			"/api/v1/settings/cluster-groups": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Admin-only: list the cluster groups. Membership (local accounts + AD groups + individual AD users) confines non-admins to the clusters in their groups (plus any clusters under an assigned Prism Central); ungrouped clusters are admin-only."},
+				"put": map[string]interface{}{
+					"summary": "Admin-only: replace the full set of cluster groups.",
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"example": map[string]interface{}{
+									"groups": []map[string]interface{}{{
+										"name":        "Platform",
+										"clusters":    []string{"10.0.0.1", "pc-east"},
+										"local_users": []string{"alice"},
+										"ad_groups":   []string{"CN=NCC-Platform,OU=Groups,DC=corp,DC=example,DC=com"},
+									}},
+								},
+							},
+						},
+					},
+				},
+			},
+			"/api/v1/settings/clusters": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Admin-only: list the clusters known to the active config (inline clusters + clusters-file) for assigning to groups."},
+			},
 			"/api/v1/settings/session": map[string]interface{}{
 				"get": map[string]interface{}{"summary": "Admin-only: read the effective session lifetime, its source (default|runtime), and the allowed bounds"},
 				"put": map[string]interface{}{
@@ -3526,8 +3594,8 @@ func (s *apiServer) buildOpenAPISpec() map[string]interface{} {
 				"get": map[string]interface{}{"summary": "Read latest run summary (with on-read error_class healing for legacy entries)"},
 			},
 			"/api/v1/runs/active": map[string]interface{}{
-				"get":    map[string]interface{}{"summary": "Read active run state (started_at, elapsed, pid, overdue flag)"},
-				"delete": map[string]interface{}{"summary": "Cancel the in-flight run. Returns 409 if no run is active."},
+				"get":    map[string]interface{}{"summary": "Read all queued/running runs (runs[], running_count, queued_count, max_concurrent) plus the legacy single-run summary"},
+				"delete": map[string]interface{}{"summary": "Cancel a run by ?id=<run-id>, or all queued/running runs when no id is given. Returns 409 if nothing is active."},
 			},
 			"/api/v1/runs/preflight": map[string]interface{}{
 				"post": map[string]interface{}{
@@ -3546,7 +3614,7 @@ func (s *apiServer) buildOpenAPISpec() map[string]interface{} {
 			},
 			"/api/v1/runs/trigger": map[string]interface{}{
 				"post": map[string]interface{}{
-					"summary": "Trigger orchestrator run",
+					"summary": "Trigger an orchestrator run. Concurrent runs are allowed; clusters already in flight elsewhere are skipped and only the remainder runs. Over the concurrency cap the run is queued.",
 					"requestBody": map[string]interface{}{
 						"required": true,
 						"content": map[string]interface{}{
@@ -3586,77 +3654,6 @@ func (s *apiServer) buildOpenAPISpec() map[string]interface{} {
 	}
 }
 
-// archiveRunArtifacts snapshots the orchestrator's most recent run-summary,
-// ncc-run-record, and regression-summary into outputDir/runs/<id>/ so that the
-// /api/v1/runs endpoint can return real historical entries even when the
-// orchestrator writes its artifacts in-place. The ID is derived from the
-// run-summary's `timestamp` field when present, otherwise from startedAt.
-//
-// Failures are non-fatal — archiving is best-effort and must not break the
-// run completion path or trigger error responses (logging only).
-func (s *apiServer) archiveRunArtifacts(startedAt time.Time, runErr error) {
-	outDir := s.absPath(s.outputDir)
-	id := startedAt.UTC().Format("20060102T150405Z")
-	exitCode := 0
-	if runErr != nil {
-		exitCode = -1
-	}
-
-	sumPath := filepath.Join(outDir, "run-summary.json")
-	sumBytes, sumErr := os.ReadFile(sumPath)
-	if sumErr == nil {
-		var probe struct {
-			Timestamp string `json:"timestamp"`
-			ExitCode  *int   `json:"exit_code"`
-		}
-		if json.Unmarshal(sumBytes, &probe) == nil {
-			if strings.TrimSpace(probe.Timestamp) != "" {
-				if t, err := time.Parse(time.RFC3339, probe.Timestamp); err == nil {
-					id = t.UTC().Format("20060102T150405Z")
-				}
-			}
-			if probe.ExitCode != nil {
-				exitCode = *probe.ExitCode
-			}
-		}
-	}
-
-	target := filepath.Join(outDir, "runs", id)
-	if err := os.MkdirAll(target, 0o755); err != nil {
-		log.Printf("archive run: mkdir %s: %v", target, err)
-		return
-	}
-	copyIfExists := func(src, dstName string) {
-		b, err := os.ReadFile(src)
-		if err != nil {
-			return
-		}
-		if err := os.WriteFile(filepath.Join(target, dstName), b, 0o644); err != nil {
-			log.Printf("archive run: write %s: %v", dstName, err)
-		}
-	}
-	if sumErr == nil {
-		_ = os.WriteFile(filepath.Join(target, "run-summary.json"), sumBytes, 0o644)
-	}
-	copyIfExists(filepath.Join(outDir, "ncc-run-record.json"), "ncc-run-record.json")
-	copyIfExists(filepath.Join(outDir, "regression-summary.json"), "regression-summary.json")
-	copyIfExists(filepath.Join(outDir, "checks-snapshot.json"), "checks-snapshot.json")
-
-	meta := map[string]interface{}{
-		"started_at":  startedAt.UTC().Format(time.RFC3339),
-		"finished_at": time.Now().UTC().Format(time.RFC3339),
-		"duration_s":  time.Since(startedAt).Seconds(),
-		"success":     runErr == nil,
-		"exit_code":   exitCode,
-	}
-	if runErr != nil {
-		meta["error"] = runErr.Error()
-	}
-	if b, err := json.MarshalIndent(meta, "", "  "); err == nil {
-		_ = os.WriteFile(filepath.Join(target, "run-meta.json"), b, 0o644)
-	}
-}
-
 // extraArgsHaveFlag reports whether the caller-supplied extra args already
 // include the given flag (matching `--flag` or `--flag=value`), so the
 // api-server doesn't double-specify output directories it would otherwise pin.
@@ -3669,27 +3666,6 @@ func extraArgsHaveFlag(args []string, flag string) bool {
 		}
 	}
 	return false
-}
-
-func (s *apiServer) setRunDone(err error, output string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.active = false
-	s.runsCompletedTotal.Add(1)
-	if err != nil {
-		s.runsFailedTotal.Add(1)
-	}
-	s.lastOut = tailString(strings.TrimSpace(output), 4000)
-	s.liveOut = nil
-	if err != nil {
-		if s.lastOut != "" {
-			s.lastErr = fmt.Sprintf("%s\n%s", err.Error(), s.lastOut)
-			return
-		}
-		s.lastErr = err.Error()
-		return
-	}
-	s.lastErr = ""
 }
 
 func (s *apiServer) runOrchestrator(args []string, timeout time.Duration) (string, error) {
@@ -4397,10 +4373,14 @@ func (s *apiServer) buildHandler() http.Handler {
 		mux.HandleFunc("/api/v1/settings/sso", s.handleSSO)
 		mux.HandleFunc("/api/v1/settings/ldap", s.handleLDAP)
 		mux.HandleFunc("/api/v1/settings/ldap/test", s.handleLDAPTest)
+		mux.HandleFunc("/api/v1/settings/ldap/search", s.handleLDAPSearch)
 		mux.HandleFunc("/api/v1/settings/session", s.handleSessionPolicy)
 		mux.HandleFunc("/api/v1/settings/password-resets", s.handlePasswordResets)
 		mux.HandleFunc("/api/v1/settings/password-resets/", s.handlePasswordResetByName)
+		mux.HandleFunc("/api/v1/settings/cluster-groups", s.handleClusterGroups)
 	}
+	mux.HandleFunc("/api/v1/settings/clusters", s.handleClusterInventory)
+	mux.HandleFunc("/api/v1/settings/pc-clusters", s.handlePCDiscover)
 	mux.HandleFunc("/api/v1/settings/backup", s.handleBackup)
 	mux.HandleFunc("/api/v1/settings/restore", s.handleRestore)
 	mux.HandleFunc("/api/v1/settings/config", s.handleConfig)

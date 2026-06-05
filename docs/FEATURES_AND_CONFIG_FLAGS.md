@@ -206,9 +206,16 @@ network. The on-disk `.prom` textfiles (`--prom-enabled`) still work unchanged.
 
 The api-server enforces three ordered roles `viewer < operator < admin`:
 
-- **viewer** — read non-settings `GET` endpoints only.
-- **operator** — viewer plus trigger/cancel/preflight runs.
-- **admin** — everything, including `/api/v1/settings/*` and token rotation.
+- **viewer** — read non-settings `GET` endpoints only (plus reading the run schedule).
+- **operator** — viewer plus the day-to-day *operation* of NCC: trigger/cancel/preflight
+  runs, create/update/apply the run **schedule** (`PUT /api/v1/schedule`), send
+  **test notifications** (`POST /api/v1/settings/notifications/test`; delivery
+  errors are URL-redacted so secrets can't leak), and read **cluster topology**
+  (`GET /api/v1/settings/clusters`, `GET /api/v1/settings/cluster-groups`).
+  Operators reach a reduced Settings view in the UI (Connection, Schedule, Runs,
+  Logs, Audit).
+- **admin** — everything, including secret-bearing `/api/v1/settings/*` (config,
+  users, SSO/LDAP, backups, cluster-group writes) and token rotation.
 
 A caller's role can come from a static token or an interactive login:
 
@@ -296,9 +303,33 @@ A caller's role can come from a static token or an interactive login:
   the `admin` row — it offers **Generate & reset** (random password, shown once
   and copyable) instead of asking the admin to type one (`PUT
   /api/v1/settings/users/admin` with `{"generate_password": true}`).
+- **Cluster groups (membership-based access control)** — on top of the role
+  hierarchy, admins can segregate clusters into named groups (Settings → Access →
+  *Cluster groups*, or `GET/PUT /api/v1/settings/cluster-groups`; a cluster may be
+  in several groups). Membership is the union of **local accounts** (by username),
+  **AD groups** (by CN or full DN, matched against the `memberOf` values
+  captured in the session at login), and **individual AD users** (matched on the
+  caller's `sAMAccountName`/UPN local part). The UI assigns AD principals with
+  **live directory type-ahead** (admin-only `GET /api/v1/settings/ldap/search?q=<term>&type=group|user`,
+  a service-account substring search; manual entry still works offline). A group
+  may also list **Prism Centrals** — every cluster registered under a listed PC is
+  folded into the group automatically (discovered via the orchestrator's
+  `discover-clusters` using the active run config's credentials, cached with a
+  ~10 min background refresh; preview/refresh via admin-only
+  `GET /api/v1/settings/pc-clusters?pc=<url>`). Non-admins are confined to the union of
+  clusters in their groups — run triggers are pinned via `--clusters` (members may
+  narrow to a subset; foreign requests are dropped; a member in no group gets
+  `403`), and `/api/v1/report/data` and the runs feed are filtered server-side to
+  allowed clusters. **Ungrouped clusters and raw multi-cluster artifacts
+  (`/api/v1/artifacts*`) are admin-only.** Admins and static tokens are
+  unrestricted. `GET /api/v1/auth/me` reports `cluster_access_unrestricted` and
+  `allowed_clusters`; `GET /api/v1/settings/clusters` enumerates clusters from the
+  active config for assignment. Groups live in `.ncc-api-users.json`, so they
+  persist across restarts and are covered by backup/restore.
 - **Backup / restore** — `v2-backup` / `v2-restore` (Settings → Access in the UI,
   or the CLI) capture and recover all stateful auth data (accounts, roles,
-  SAML/LDAP config, token, session policy) plus config and audit log. See §6.14a.
+  SAML/LDAP config, cluster groups, token, session policy) plus config and audit
+  log. See §6.14a.
 
 Mutating cookie-session requests require a double-submit CSRF token
 (`X-CSRF-Token` header echoing the readable `ncc_csrf` cookie); static-token
@@ -811,6 +842,7 @@ These are runtime flags for v2 services (`cmd/ncc-api-server`, `cmd/ncc-ui-serve
 | Service | Flag | Default | Purpose |
 |---|---|---|---|
 | `ncc-api-server` | `--rate-limit-per-minute` | `60` | Per-client rate limit for sensitive mutation/auth routes (`0` disables). |
+| `ncc-api-server` | `--max-concurrent-runs` | `4` | Maximum orchestrator runs executing at once. Triggers beyond this queue and start automatically as slots free; clusters already being refreshed by another active run are skipped so a shared cluster runs only once. |
 | `ncc-api-server` | `--login-lockout-threshold` | `5` | Failed logins per account before a temporary lockout (`0` disables). |
 | `ncc-api-server` | `--login-lockout-window` | `15m` | Rolling window for accumulating failed logins toward a lockout. |
 | `ncc-api-server` | `--login-lockout-duration` | `15m` | How long a locked account stays locked after exceeding the threshold. |

@@ -492,8 +492,11 @@ export default function App() {
     );
   }
 
-  // Settings is admin-only; hide its nav pill from non-admins.
-  const navItems = NAV_ITEMS.filter((item) => item.to !== "/settings" || isAdmin);
+  // Settings is reachable by operators and admins (viewers have no settings
+  // actions). Operators see a reduced set of tabs (see SettingsPage); the
+  // secret-bearing tabs stay admin-only. Hide the nav pill from viewers.
+  const canSeeSettings = isAdmin || canOperate;
+  const navItems = NAV_ITEMS.filter((item) => item.to !== "/settings" || canSeeSettings);
 
   return (
     <AuthContext.Provider value={authValue}>
@@ -573,7 +576,7 @@ export default function App() {
               <Route path="/" element={<DashboardPage />} />
               <Route
                 path="/settings"
-                element={isAdmin ? <SettingsPage /> : <Navigate to="/" replace />}
+                element={canSeeSettings ? <SettingsPage isAdmin={isAdmin} /> : <Navigate to="/" replace />}
               />
               <Route path="/insights" element={<InsightsPage />} />
               <Route path="*" element={<NotFoundPage />} />

@@ -47,6 +47,11 @@ type sessionClaims struct {
 	Sub  string `json:"sub,omitempty"`  // subject (username / identity)
 	Role string `json:"role,omitempty"` // viewer|operator|admin
 	Gen  int    `json:"gen,omitempty"`  // token generation (bumped on password change/reset)
+	// Grps carries the directory (AD/SAML) group values resolved at login so
+	// cluster-group membership can be evaluated without a live directory lookup
+	// on every request. Empty for local accounts (membership is resolved live
+	// by username) and static-token callers.
+	Grps []string `json:"grps,omitempty"`
 }
 
 type fixedWindowRateLimiter struct {
@@ -415,6 +420,13 @@ func (s *apiServer) issueSessionToken(clientIP string) (string, time.Time, error
 // role. Used by password login and SAML SSO so the session itself encodes the
 // caller's authorization level.
 func (s *apiServer) issueRoleSessionToken(clientIP, subject string, role Role) (string, time.Time, error) {
+	return s.issueRoleSessionTokenWithGroups(clientIP, subject, role, nil)
+}
+
+// issueRoleSessionTokenWithGroups is issueRoleSessionToken plus the directory
+// group values resolved at login, embedded in the token so cluster-group
+// membership can be evaluated per request without re-querying the directory.
+func (s *apiServer) issueRoleSessionTokenWithGroups(clientIP, subject string, role Role, groups []string) (string, time.Time, error) {
 	jb := make([]byte, 16)
 	if _, err := rand.Read(jb); err != nil {
 		return "", time.Time{}, fmt.Errorf("generate session id: %w", err)
@@ -438,6 +450,7 @@ func (s *apiServer) issueRoleSessionToken(clientIP, subject string, role Role) (
 		Sub:  strings.TrimSpace(subject),
 		Role: role.String(),
 		Gen:  gen,
+		Grps: groups,
 	}
 	raw, err := json.Marshal(claims)
 	if err != nil {

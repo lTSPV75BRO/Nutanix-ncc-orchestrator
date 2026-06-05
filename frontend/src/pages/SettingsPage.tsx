@@ -409,7 +409,7 @@ function DeveloperTab({ onError }: { onError: (e: unknown) => void }) {
   );
 }
 
-export function SettingsPage() {
+export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
   const [tab, setTab] = useLocalStorageState("settings.activeTab", "connection");
   const health = useQuery({ queryKey: ["health"], queryFn: api.health });
   const report = useQuery({ queryKey: ["report-data"], queryFn: api.reportData });
@@ -491,5 +491,14 @@ export function SettingsPage() {
     });
   }
 
-  return <Tabs activeKey={tab} onChange={setTab} size="large" className="settings-tabs" items={items} />;
+  // Operators (non-admins who can run NCC) get a reduced set of tabs: the
+  // operational ones (Connection, Schedule, Runs, Logs, Audit) that only read
+  // non-secret data or perform run/schedule actions they are allowed. The
+  // secret-bearing tabs (Config, Access, Developer) remain admin-only, matching
+  // the server-side RBAC on those endpoints.
+  const operatorTabs = new Set(["connection", "schedule", "runs", "logs", "audit"]);
+  const visibleItems = isAdmin ? items : items.filter((it) => operatorTabs.has(it.key));
+  const activeTab = visibleItems.some((it) => it.key === tab) ? tab : (visibleItems[0]?.key ?? "connection");
+
+  return <Tabs activeKey={activeTab} onChange={setTab} size="large" className="settings-tabs" items={visibleItems} />;
 }
