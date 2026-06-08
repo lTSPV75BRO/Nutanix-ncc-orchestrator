@@ -3180,6 +3180,8 @@ func (s *apiServer) handleMetaRoutes(w http.ResponseWriter, r *http.Request) {
 		{Path: "/api/v1/auth/change-password", Methods: []string{http.MethodPost}, Description: "Self-service password change for the logged-in session (requires CSRF on cookie sessions); bumps token generation so other sessions are signed out", SampleBody: "{\n  \"current_password\": \"\",\n  \"new_password\": \"\"\n}"},
 		{Path: "/api/v1/auth/refresh", Methods: []string{http.MethodPost}, Description: "Re-issue the current session cookie with a fresh expiry (used by the UI's inactivity 'stay logged in' prompt); session auth only"},
 		{Path: "/api/v1/auth/forgot-password", Methods: []string{http.MethodPost}, Description: "Public self-service: queue a password-reset request for an admin to action; always returns a generic 200 (no account enumeration)", SampleBody: "{\n  \"username\": \"alice\"\n}"},
+		{Path: "/api/v1/auth/tokens", Methods: []string{http.MethodGet, http.MethodPost}, Description: "Self-service personal access tokens (any signed-in user): GET lists your tokens (metadata only); POST mints a bearer token inheriting your role, returned once. Use it as 'X-API-Token: <token>' or 'Authorization: Bearer <token>'.", SampleBody: "{\n  \"name\": \"laptop-cli\",\n  \"expires_in_days\": 90\n}"},
+		{Path: "/api/v1/auth/tokens/{id}", Methods: []string{http.MethodDelete}, Description: "Self-service: revoke one of your own personal access tokens by id"},
 		{Path: "/api/v1/settings/password-resets", Methods: []string{http.MethodGet}, Description: "Admin-only: list pending self-service password-reset requests"},
 		{Path: "/api/v1/settings/password-resets/{name}", Methods: []string{http.MethodDelete}, Description: "Admin-only: dismiss a pending password-reset request without resetting the password (resetting it clears the request automatically)"},
 		{Path: "/api/v1/settings/users", Methods: []string{http.MethodGet, http.MethodPost}, Description: "Admin-only: list local accounts / create one (last-admin + reserved-admin protection)", SampleBody: "{\n  \"username\": \"alice\",\n  \"password\": \"\",\n  \"role\": \"operator\",\n  \"must_change_password\": true\n}"},
@@ -3190,6 +3192,8 @@ func (s *apiServer) handleMetaRoutes(w http.ResponseWriter, r *http.Request) {
 		{Path: "/api/v1/settings/ldap/search", Methods: []string{http.MethodGet}, Description: "Admin-only: live AD/LDAP type-ahead search for groups and users (?q=<term>&type=group|user|all&limit=<n>) to assign to cluster groups"},
 		{Path: "/api/v1/settings/session", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/set the session lifetime (ttl_sec or ttl_min; 0 restores the --session-ttl default)", SampleBody: "{\n  \"ttl_min\": 360\n}"},
 		{Path: "/api/v1/settings/cluster-groups", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET operator+: read the cluster groups; PUT admin-only: replace the groups that confine non-admins to their clusters (members = local accounts + AD groups/users)", SampleBody: "{\n  \"groups\": [\n    {\n      \"name\": \"Platform\",\n      \"clusters\": [\"10.0.0.1\", \"pc-east\"],\n      \"local_users\": [\"alice\"],\n      \"ad_groups\": [\"CN=NCC-Platform,OU=Groups,DC=corp,DC=example,DC=com\"]\n    }\n  ]\n}"},
+		{Path: "/api/v1/settings/tokens", Methods: []string{http.MethodGet}, Description: "Admin-only: inventory every user's personal access tokens (metadata only)"},
+		{Path: "/api/v1/settings/tokens/{id}", Methods: []string{http.MethodDelete}, Description: "Admin-only: revoke any user's personal access token by id"},
 		{Path: "/api/v1/settings/clusters", Methods: []string{http.MethodGet}, Description: "Operator+: list clusters known to the active config (for assigning to groups / scoping runs)"},
 		{Path: "/api/v1/settings/pc-clusters", Methods: []string{http.MethodGet}, Description: "Admin-only: discover the clusters registered under a Prism Central (?pc=<url>) for assigning a PC to a cluster group; uses the active run config's credentials"},
 		{Path: "/api/v1/settings/backup", Methods: []string{http.MethodGet}, Description: "Admin-only: download a .tar.gz backup of the install dir (config + referenced files, local user database, API token, scheduler/notifications state)"},
@@ -4360,6 +4364,10 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/api/v1/auth/change-password", s.handleChangePassword)
 	mux.HandleFunc("/api/v1/auth/refresh", s.handleAuthRefresh)
 	mux.HandleFunc("/api/v1/auth/forgot-password", s.handleForgotPassword)
+	// Self-service personal access tokens: any authenticated user manages their
+	// own (handlers 501 when the store is not writable).
+	mux.HandleFunc("/api/v1/auth/tokens", s.handleAuthTokens)
+	mux.HandleFunc("/api/v1/auth/tokens/", s.handleAuthTokenByID)
 	// Register SAML endpoints when SAML is active now or could be enabled at
 	// runtime (a writable user db is present). Handlers 503 when no provider.
 	if s.samlEnabled || s.users.writable() {
@@ -4378,6 +4386,8 @@ func (s *apiServer) buildHandler() http.Handler {
 		mux.HandleFunc("/api/v1/settings/password-resets", s.handlePasswordResets)
 		mux.HandleFunc("/api/v1/settings/password-resets/", s.handlePasswordResetByName)
 		mux.HandleFunc("/api/v1/settings/cluster-groups", s.handleClusterGroups)
+		mux.HandleFunc("/api/v1/settings/tokens", s.handleAdminTokens)
+		mux.HandleFunc("/api/v1/settings/tokens/", s.handleAdminTokenByID)
 	}
 	mux.HandleFunc("/api/v1/settings/clusters", s.handleClusterInventory)
 	mux.HandleFunc("/api/v1/settings/pc-clusters", s.handlePCDiscover)

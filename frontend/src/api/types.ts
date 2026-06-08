@@ -96,6 +96,29 @@ export type PasswordResetRequest = {
   client_ip?: string;
 };
 
+/** A personal access token's metadata (the secret is never returned after creation). */
+export type PersonalToken = {
+  id: string;
+  name: string;
+  owner: string;
+  owner_local?: boolean;
+  role: string;
+  created_at?: string;
+  expires_at?: string;
+  last_used_at?: string;
+  created_ip?: string;
+};
+
+/** Response from creating a personal access token; `token` is shown only once. */
+export type CreatedToken = {
+  id: string;
+  name: string;
+  role: string;
+  token: string;
+  created_at?: string;
+  expires_at?: string;
+};
+
 export type SSOConfig = {
   enabled: boolean;
   managed_by: "flags" | "runtime";

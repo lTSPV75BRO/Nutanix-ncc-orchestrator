@@ -69,6 +69,7 @@ const (
 	authStaticViewerToken
 	authSessionCookie
 	authSessionBearer
+	authPAT // user-minted personal access token (bearer credential)
 )
 
 // principal is the resolved identity + role for a request.
@@ -203,6 +204,13 @@ func (s *apiServer) resolvePrincipal(r *http.Request) (principal, bool) {
 			return principal{role: RoleAdmin, subject: "static-admin-token", method: authStaticAdminToken}, true
 		}
 	}
+	// Personal access tokens: user-minted bearer credentials carried in
+	// X-API-Token or Authorization: Bearer. Honored in any auth mode (they are
+	// explicit, revocable, owner-scoped credentials), but only when a writable
+	// user store exists to verify and re-resolve them.
+	if p, ok := s.principalFromPAT(r); ok {
+		return p, true
+	}
 	if s.sessionsHonored() {
 		if claims, method, err := s.sessionFromRequest(r); err == nil {
 			role, ok := parseRole(claims.Role)
@@ -272,6 +280,13 @@ func routeMinRole(r *http.Request) Role {
 	// (cluster topology is just names) or are operating actions adjacent to
 	// running NCC (managing the run schedule, sending a test notification).
 	switch {
+	// Personal access tokens are self-service: any authenticated user (viewer
+	// included) may list, create, and revoke their OWN tokens. The handlers
+	// scope every operation to the caller's subject, and a created token can
+	// never exceed the caller's own role. Admin-wide token management lives
+	// under /settings/tokens (covered by the admin rule below).
+	case p == "/api/v1/auth/tokens" || strings.HasPrefix(p, "/api/v1/auth/tokens/"):
+		return RoleViewer
 	case isRead && p == "/api/v1/settings/clusters":
 		return RoleOperator
 	case isRead && p == "/api/v1/settings/cluster-groups":

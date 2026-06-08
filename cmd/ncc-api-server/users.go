@@ -72,6 +72,29 @@ func isReservedAdmin(username string) bool {
 	return strings.EqualFold(strings.TrimSpace(username), reservedAdminUsername)
 }
 
+// personalToken is a user-minted personal access token (PAT): a long-lived
+// bearer credential a logged-in user generates so they can call the API from
+// curl/Postman/CI without a browser session. Only a SHA-256 hash of the secret
+// is stored (the plaintext is shown once at creation); the token carries the
+// owner's role so it cannot exceed the privileges the owner had when minting it.
+type personalToken struct {
+	ID    string `json:"id"`    // short opaque id used for listing/revocation
+	Name  string `json:"name"`  // user-supplied label
+	Owner string `json:"owner"` // subject (local username or AD/SAML subject)
+	// OwnerLocal records whether the owner was a local account at creation. When
+	// true the live role is re-resolved from the account on each request (and the
+	// token dies if the account is deleted or flagged must-change); when false
+	// (AD/SAML) the snapshot Role/Groups below are used.
+	OwnerLocal bool     `json:"owner_local,omitempty"`
+	Role       string   `json:"role"`             // role snapshot (authoritative for non-local owners)
+	Groups     []string `json:"groups,omitempty"` // AD group snapshot (non-local owners, for cluster-group eval)
+	Hash       string   `json:"hash"`             // SHA-256 hex of the secret (never the secret itself)
+	CreatedAt  string   `json:"created_at,omitempty"`
+	ExpiresAt  string   `json:"expires_at,omitempty"` // RFC3339; empty means no expiry
+	LastUsedAt string   `json:"last_used_at,omitempty"`
+	CreatedIP  string   `json:"created_ip,omitempty"`
+}
+
 // usersDBFile is the on-disk JSON schema for the writable user database. It
 // also carries the persisted SAML configuration and session policy so a single
 // 0600 file holds all auth state the admin can manage at runtime.
@@ -82,6 +105,7 @@ type usersDBFile struct {
 	Session       *sessionPolicy         `json:"session,omitempty"`
 	Resets        []passwordResetRequest `json:"password_resets,omitempty"`
 	ClusterGroups []clusterGroup         `json:"cluster_groups,omitempty"`
+	Tokens        []personalToken        `json:"personal_tokens,omitempty"`
 }
 
 // passwordResetRequest is a queued self-service "forgot password" request that
@@ -122,6 +146,7 @@ type userDB struct {
 	session       *sessionPolicy
 	resets        []passwordResetRequest
 	clusterGroups []clusterGroup
+	tokens        []personalToken
 }
 
 func newUserDB(path string) *userDB {
@@ -165,6 +190,7 @@ func openUserDBFromBackend(be userStoreBackend) (*userDB, error) {
 	db.session = f.Session
 	db.resets = f.Resets
 	db.clusterGroups = f.ClusterGroups
+	db.tokens = f.Tokens
 	return db, nil
 }
 
@@ -265,7 +291,7 @@ func (db *userDB) saveLocked() error {
 	if db.backend == nil {
 		return nil // in-memory store
 	}
-	out := usersDBFile{SAML: db.saml, LDAP: db.ldapCfg, Session: db.session, Resets: db.resets, ClusterGroups: db.clusterGroups}
+	out := usersDBFile{SAML: db.saml, LDAP: db.ldapCfg, Session: db.session, Resets: db.resets, ClusterGroups: db.clusterGroups, Tokens: db.tokens}
 	keys := make([]string, 0, len(db.accounts))
 	for k := range db.accounts {
 		keys = append(keys, k)
@@ -731,6 +757,141 @@ func cloneClusterGroups(in []clusterGroup) []clusterGroup {
 		}
 	}
 	return out
+}
+
+// maxTokensPerOwner caps how many personal access tokens a single user may hold
+// so the store cannot grow unbounded from token churn.
+const maxTokensPerOwner = 25
+
+// errTokenForbidden is returned when a caller tries to revoke a token they do
+// not own (and is not an admin).
+var errTokenForbidden = errors.New("token belongs to another user")
+
+// addToken stores a new personal access token, enforcing the per-owner cap.
+func (db *userDB) addToken(pt personalToken) error {
+	if db == nil {
+		return errors.New("user database not available")
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	n := 0
+	for _, t := range db.tokens {
+		if strings.EqualFold(t.Owner, pt.Owner) {
+			n++
+		}
+	}
+	if n >= maxTokensPerOwner {
+		return fmt.Errorf("token limit reached (%d per user); revoke an existing token first", maxTokensPerOwner)
+	}
+	db.tokens = append(db.tokens, pt)
+	return db.saveLocked()
+}
+
+// findTokenByHash returns the token whose stored hash matches (constant-time),
+// or false when none does.
+func (db *userDB) findTokenByHash(hash string) (personalToken, bool) {
+	if db == nil || strings.TrimSpace(hash) == "" {
+		return personalToken{}, false
+	}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	for _, t := range db.tokens {
+		if secureCompare(t.Hash, hash) {
+			return t, true
+		}
+	}
+	return personalToken{}, false
+}
+
+// tokenView is a metadata copy with the secret hash blanked, safe to return
+// over the API.
+func tokenView(t personalToken) personalToken {
+	c := t
+	c.Hash = ""
+	return c
+}
+
+// listTokensForOwner returns the caller's own tokens (hash blanked), newest first.
+func (db *userDB) listTokensForOwner(owner string) []personalToken {
+	out := []personalToken{}
+	if db == nil {
+		return out
+	}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	for _, t := range db.tokens {
+		if strings.EqualFold(t.Owner, owner) {
+			out = append(out, tokenView(t))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt > out[j].CreatedAt })
+	return out
+}
+
+// listAllTokens returns every token (hash blanked), for admin management.
+func (db *userDB) listAllTokens() []personalToken {
+	out := []personalToken{}
+	if db == nil {
+		return out
+	}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	for _, t := range db.tokens {
+		out = append(out, tokenView(t))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Owner != out[j].Owner {
+			return out[i].Owner < out[j].Owner
+		}
+		return out[i].CreatedAt > out[j].CreatedAt
+	})
+	return out
+}
+
+// deleteToken revokes the token with the given id. Non-admin callers may only
+// revoke tokens they own. Returns the removed token and whether it existed.
+func (db *userDB) deleteToken(id, requester string, isAdmin bool) (personalToken, bool, error) {
+	if db == nil {
+		return personalToken{}, false, errors.New("user database not available")
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	for i, t := range db.tokens {
+		if t.ID != id {
+			continue
+		}
+		if !isAdmin && !strings.EqualFold(t.Owner, requester) {
+			return personalToken{}, false, errTokenForbidden
+		}
+		removed := t
+		db.tokens = append(db.tokens[:i], db.tokens[i+1:]...)
+		return tokenView(removed), true, db.saveLocked()
+	}
+	return personalToken{}, false, nil
+}
+
+// touchTokenLastUsed records when a token was last used, throttled to at most
+// once a minute per token to avoid a store write on every authenticated request.
+func (db *userDB) touchTokenLastUsed(id, clientIP string) {
+	if db == nil || strings.TrimSpace(id) == "" {
+		return
+	}
+	now := time.Now().UTC()
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	for i := range db.tokens {
+		if db.tokens[i].ID != id {
+			continue
+		}
+		if db.tokens[i].LastUsedAt != "" {
+			if last, err := time.Parse(time.RFC3339, db.tokens[i].LastUsedAt); err == nil && now.Sub(last) < time.Minute {
+				return
+			}
+		}
+		db.tokens[i].LastUsedAt = now.Format(time.RFC3339)
+		_ = db.saveLocked()
+		return
+	}
 }
 
 // getSessionPolicy returns a copy of the persisted session policy (or nil when

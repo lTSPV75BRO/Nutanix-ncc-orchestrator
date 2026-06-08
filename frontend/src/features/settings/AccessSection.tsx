@@ -38,6 +38,7 @@ import type {
   DirectoryEntry,
   LDAPConfig,
   PasswordResetRequest,
+  PersonalToken,
   SessionPolicy,
   SSOConfig,
   UserAccount,
@@ -1575,11 +1576,95 @@ function ClusterGroupsCard() {
   );
 }
 
+// TokensCard is the admin-wide personal-access-token inventory: every user's
+// tokens with metadata, and a revoke action for any of them. Users mint and
+// manage their own tokens from the header user menu; this card lets an admin
+// audit and revoke org-wide.
+function TokensCard() {
+  const qc = useQueryClient();
+  const tokensQuery = useQuery({
+    queryKey: ["settings", "tokens"],
+    queryFn: api.listAllTokens,
+  });
+  const refresh = () => qc.invalidateQueries({ queryKey: ["settings", "tokens"] });
+
+  const revokeMut = useMutation({
+    mutationFn: (id: string) => api.adminRevokeToken(id),
+    onSuccess: () => {
+      notify.success("Token revoked.");
+      void refresh();
+    },
+    onError: (e) => notifyError(e, "Failed to revoke token"),
+  });
+
+  const tokens = (tokensQuery.data?.tokens ?? []) as PersonalToken[];
+  const fmt = (v?: string) => (v ? new Date(v).toLocaleString() : "—");
+
+  return (
+    <Card
+      className="page-card"
+      title={
+        <Space>
+          <KeyOutlined />
+          Personal access tokens
+        </Space>
+      }
+      extra={
+        <Space>
+          <Tag color={tokens.length > 0 ? "blue" : "default"}>{tokens.length} active</Tag>
+          <Button icon={<ReloadOutlined />} onClick={() => refresh()} loading={tokensQuery.isFetching}>
+            Refresh
+          </Button>
+        </Space>
+      }
+    >
+      <Typography.Paragraph type="secondary">
+        Bearer tokens users created to call the API outside the browser. Each token carries its
+        owner&apos;s role. Revoke any that are unused or compromised — the client stops working
+        immediately.
+      </Typography.Paragraph>
+      <Table
+        rowKey="id"
+        size="small"
+        loading={tokensQuery.isLoading}
+        dataSource={tokens}
+        pagination={false}
+        locale={{ emptyText: "No personal access tokens." }}
+        columns={[
+          { title: "Owner", dataIndex: "owner", render: (v: string) => <Typography.Text strong>{v}</Typography.Text> },
+          { title: "Name", dataIndex: "name" },
+          { title: "Role", dataIndex: "role", render: (v: string) => <Tag color={roleColor(v)}>{v || "—"}</Tag> },
+          { title: "Created", dataIndex: "created_at", render: fmt },
+          { title: "Expires", dataIndex: "expires_at", render: fmt },
+          { title: "Last used", dataIndex: "last_used_at", render: fmt },
+          {
+            title: "Actions",
+            key: "actions",
+            render: (_: unknown, rec: PersonalToken) => (
+              <Popconfirm
+                title={`Revoke ${rec.owner}'s token "${rec.name}"?`}
+                okText="Revoke"
+                okButtonProps={{ danger: true }}
+                onConfirm={() => revokeMut.mutate(rec.id)}
+              >
+                <Button size="small" danger icon={<DeleteOutlined />}>
+                  Revoke
+                </Button>
+              </Popconfirm>
+            ),
+          },
+        ]}
+      />
+    </Card>
+  );
+}
+
 export function AccessSection() {
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
       <UsersCard />
       <PasswordResetRequestsCard />
+      <TokensCard />
       <ClusterGroupsCard />
       <SessionCard />
       <BackupRestoreCard />

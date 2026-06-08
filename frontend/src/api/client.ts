@@ -32,6 +32,8 @@ import type {
   LDAPTestResult,
   SessionPolicy,
   PasswordResetRequest,
+  PersonalToken,
+  CreatedToken,
 } from "./types";
 
 // ApiError preserves both the human-readable message and the structured `data`
@@ -407,4 +409,12 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
+  listTokens: () => callApi<{ tokens: PersonalToken[] }>("/api/v1/auth/tokens"),
+  createToken: (payload: { name: string; expires_in_days?: number }) =>
+    callApi<CreatedToken>("/api/v1/auth/tokens", { method: "POST", body: JSON.stringify(payload) }),
+  revokeToken: (id: string) =>
+    callApi<unknown>(`/api/v1/auth/tokens/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  listAllTokens: () => callApi<{ tokens: PersonalToken[] }>("/api/v1/settings/tokens"),
+  adminRevokeToken: (id: string) =>
+    callApi<unknown>(`/api/v1/settings/tokens/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };

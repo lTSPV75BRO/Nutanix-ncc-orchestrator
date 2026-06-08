@@ -472,16 +472,53 @@ The api-server supports three authorization levels, ordered
 
 The operator scope is deliberately limited to **operating** NCC (running it, scheduling it, verifying alerting, and seeing which clusters/groups exist to scope runs) without exposing or changing any secret. The carved-out operator endpoints either return no secrets (cluster topology is just names/membership) or are run-adjacent actions; the test-notification path **redacts URLs** from delivery errors so a Slack/webhook secret can't leak to a non-admin (the full error is still logged server-side). In the UI, operators reach a reduced **Settings** view (Connection, Schedule, Runs, Logs, Audit); the secret-bearing tabs (Config, Access, Developer) stay admin-only.
 
-A role can be presented three ways:
+A role can be presented four ways:
 
 1. **Static admin token** (`NCC_API_TOKEN`) — full admin. For automation/CI.
 2. **Static viewer token** (`NCC_API_VIEWER_TOKEN`) — read-only. Hand to
    dashboards/scrapers. Must differ from the admin token.
 3. **Interactive login** (browser) — a role-bearing, signed **session cookie**
-   minted by either local password accounts or SAML SSO.
+   minted by either local password accounts, SAML SSO, or LDAP/AD.
+4. **Personal access token (PAT)** — a user-minted bearer credential that
+   inherits the owner's role (see below).
 
 `/api/v1/health` reports `rbac_enabled`, `login_enabled`, `local_login`, and
 `saml_enabled`. Routes enforce a minimum role; insufficient roles get `403`.
+
+#### Personal access tokens (PATs)
+
+Interactive sessions live in an **httpOnly** cookie that a script can't read, so
+to call the API from `curl`/Postman/CI a user previously needed the shared static
+admin token. Instead, any signed-in user can mint their **own** personal access
+tokens from the header user menu → **Personal access tokens**:
+
+- A PAT is a bearer credential (prefixed `ncc_pat_`) presented as either
+  `X-API-Token: <token>` or `Authorization: Bearer <token>`.
+- It **inherits the creator's role** and can never exceed the privileges the
+  owner held when minting it. For **local accounts the live role is re-resolved
+  on every request**, so promoting/demoting the account, deleting it, or flagging
+  it for a forced password change takes effect immediately (and a deleted or
+  must-change account's PATs stop working). For directory (AD/SAML) owners the
+  role and group snapshot captured at creation are used.
+- Only a **SHA-256 hash** of the secret is stored — the plaintext is shown
+  exactly **once**, at creation. Tokens carry a bounded expiry (7 days–1 year,
+  default 90), a 25-per-user cap, and record their last-used time.
+- PAT auth is **exempt from CSRF** (it is a header credential, not a cookie),
+  but the endpoints that *create/list/revoke* tokens from the browser are normal
+  cookie-session mutations and so still require CSRF.
+- Self-service: `GET/POST /api/v1/auth/tokens` and
+  `DELETE /api/v1/auth/tokens/{id}` are reachable by **any** authenticated role
+  (viewer included) and are scoped to the caller's **own** tokens. Admin-wide
+  audit/revocation lives at `GET /api/v1/settings/tokens` and
+  `DELETE /api/v1/settings/tokens/{id}` (Settings → Access → *Personal access
+  tokens*), letting an admin list and revoke **any** user's token.
+- Tokens persist inside `.ncc-api-users.json`, so they survive
+  `v2-stop`/`v2-start` and are covered by backup/restore automatically.
+
+Note that PATs are **independent of session revocation**: "sign out everywhere"
+and admin force-sign-out invalidate *sessions* (via the token-generation bump)
+but not PATs, which are explicit, individually revocable credentials. Revoke a
+PAT directly (or delete the owning account) to kill it.
 
 #### Cluster groups (membership-based access control)
 

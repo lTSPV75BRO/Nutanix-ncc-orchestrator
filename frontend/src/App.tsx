@@ -3,6 +3,7 @@ import {
   BgColorsOutlined,
   BarChartOutlined,
   DashboardOutlined,
+  KeyOutlined,
   LockOutlined,
   LogoutOutlined,
   PlayCircleOutlined,
@@ -21,6 +22,7 @@ import { notify, notifyError } from "./notify";
 import { AuthContext, useAuth, type AuthValue } from "./auth/AuthContext";
 import { LoginPage } from "./pages/LoginPage";
 import { ChangePasswordPage, ChangePasswordModal } from "./pages/ChangePasswordPage";
+import { PersonalTokensModal } from "./features/tokens/PersonalTokensModal";
 import { SessionIdleGuard } from "./components/SessionIdleGuard";
 
 const { Header, Content } = Layout;
@@ -303,6 +305,7 @@ function HeaderUserMenu({
   role,
   canChangePassword,
   onChangePassword,
+  onManageTokens,
   onLogout,
   onLogoutEverywhere,
 }: {
@@ -310,6 +313,7 @@ function HeaderUserMenu({
   role: UserRole;
   canChangePassword: boolean;
   onChangePassword: () => void;
+  onManageTokens: () => void;
   onLogout: () => void;
   onLogoutEverywhere: () => void;
 }) {
@@ -325,6 +329,7 @@ function HeaderUserMenu({
       disabled: true,
     },
     { type: "divider" as const },
+    { key: "tokens", icon: <KeyOutlined />, label: "Personal access tokens" },
     ...(canChangePassword
       ? [{ key: "change-password", icon: <LockOutlined />, label: "Change password" }]
       : []),
@@ -343,6 +348,7 @@ function HeaderUserMenu({
           if (key === "logout") onLogout();
           else if (key === "logout-all") onLogoutEverywhere();
           else if (key === "change-password") onChangePassword();
+          else if (key === "tokens") onManageTokens();
         },
       }}
     >
@@ -391,6 +397,7 @@ export default function App() {
   const canOperate = loginEnabled ? Boolean(me?.can_operate) : true;
   const authValue: AuthValue = { me: me ?? null, role, isAdmin, canOperate, loginEnabled, authenticated };
   const [changePwOpen, setChangePwOpen] = useState(false);
+  const [tokensOpen, setTokensOpen] = useState(false);
 
   const handleLogout = async () => {
     try {
@@ -562,6 +569,7 @@ export default function App() {
                 role={role}
                 canChangePassword={Boolean(me?.is_local)}
                 onChangePassword={() => setChangePwOpen(true)}
+                onManageTokens={() => setTokensOpen(true)}
                 onLogout={handleLogout}
                 onLogoutEverywhere={handleLogoutEverywhere}
               />
@@ -592,6 +600,7 @@ export default function App() {
           void meQuery.refetch();
         }}
       />
+      <PersonalTokensModal open={tokensOpen} onClose={() => setTokensOpen(false)} role={role} />
       {loginEnabled && authenticated && !me?.must_change_password ? (
         <SessionIdleGuard
           onLogout={handleLogout}

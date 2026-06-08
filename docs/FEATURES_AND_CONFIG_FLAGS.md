@@ -252,6 +252,19 @@ A caller's role can come from a static token or an interactive login:
   must-change state. `--users-file` (`$NCC_USERS_FILE`) is an optional one-time
   YAML seed (`{username, password_hash (bcrypt), role}`) imported into the
   database when empty; generate hashes with `ncc-api-server --hash-password`.
+- **Personal access tokens** (self-service, any role) — a signed-in user mints
+  their own bearer token from the header user menu → *Personal access tokens* to
+  call the API outside the browser. `GET/POST /api/v1/auth/tokens` and
+  `DELETE /api/v1/auth/tokens/{id}` list/create/revoke the caller's **own**
+  tokens; the token inherits the owner's role, is shown **once** at creation, and
+  is sent as `X-API-Token: <token>` or `Authorization: Bearer <token>` (prefixed
+  `ncc_pat_`). Tokens carry a bounded expiry (7 days–1 year, default 90) and a
+  per-user cap; only a SHA-256 hash is stored. For local owners the role is
+  re-resolved live each request (deleting the account or flagging a forced
+  password change disables its tokens). Admins audit/revoke any user's token via
+  `GET /api/v1/settings/tokens` and `DELETE /api/v1/settings/tokens/{id}`
+  (Settings → Access → *Personal access tokens*). Tokens live in
+  `.ncc-api-users.json`, so they persist across restarts and are backed up.
 - **Session lifetime** (managed at runtime in Settings → Access, or via
   `GET/PUT /api/v1/settings/session`): admins set how long a signed-in session
   stays active (1 minute–24h), persisted in the user database and applied to
