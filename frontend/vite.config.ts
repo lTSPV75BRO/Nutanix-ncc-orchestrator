@@ -43,10 +43,32 @@ export default defineConfig({
       },
     },
   },
-  // Bumped because the Ant Design + react-query bundle naturally lands ~660 kB
-  // (gzip ~215 kB). Heavy editor (Monaco) is already split into its own chunk
-  // via React.lazy, so this threshold silences a cosmetic warning only.
+  // Heavy editor (Monaco) is already split into its own chunk via React.lazy.
+  // We additionally split the large framework vendors into their own
+  // long-cached chunks so the browser can download them in parallel (the
+  // ui-server is HTTP/1.1, ~6 connections) instead of fetching one ~370 kB
+  // gzip blob serially — this is the dominant cost of first paint under
+  // Lighthouse's throttled mobile profile. Splitting also means a UI-only
+  // deploy doesn't bust the (rarely-changing) vendor caches.
   build: {
-    chunkSizeWarningLimit: 800,
+    chunkSizeWarningLimit: 900,
+    rolldownOptions: {
+      output: {
+        advancedChunks: {
+          groups: [
+            // Only extract the framework runtime that every route needs anyway
+            // (so it never adds unused bytes to a route) into a stable,
+            // long-cached chunk. We deliberately do NOT group all of antd here:
+            // that would force route-only antd components (e.g. Settings-only
+            // widgets) to load eagerly on the dashboard. Letting Rolldown
+            // auto-split antd keeps each route's antd surface with its chunk.
+            {
+              name: "react-vendor",
+              test: /[\\/]node_modules[\\/](react|react-dom|scheduler|react-router|react-router-dom)[\\/]/,
+            },
+          ],
+        },
+      },
+    },
   },
 });

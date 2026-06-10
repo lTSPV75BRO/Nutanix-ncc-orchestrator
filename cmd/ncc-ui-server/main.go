@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -615,6 +616,16 @@ func main() {
 		}
 		proxy.ServeHTTP(w, r)
 	}))
+	// SAML SP endpoints (/saml/metadata, /saml/login, /saml/acs, /saml/complete)
+	// live on the backend but are browser-mediated, so they must be reachable on
+	// the UI origin — the post-login session cookie has to land on the same host
+	// the SPA runs on. We pass these straight through to the backend (the proxy
+	// Director already forwards the browser's cookies and never injects the admin
+	// token in login mode); unlike /api/ we apply no CORS/method gating because
+	// the IdP POSTs the assertion to /saml/acs cross-site as a top-level form.
+	mux.Handle("/saml/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxy.ServeHTTP(w, r)
+	}))
 	staticFS := http.Dir(dir)
 	fileServer := http.FileServer(staticFS)
 	// serveStatic adds Cache-Control and transparent gzip compression for
@@ -654,7 +665,7 @@ func main() {
 		serveStatic(w, clone)
 	}))
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") {
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/saml/") {
 			mux.ServeHTTP(w, r)
 			return
 		}
@@ -674,7 +685,8 @@ func main() {
 		if strings.TrimSpace(tlsCertFile) == "" || strings.TrimSpace(tlsKeyFile) == "" {
 			log.Fatal("both tls-cert-file and tls-key-file are required together")
 		}
-		if err := srv.ListenAndServeTLS(tlsCertFile, tlsKeyFile); err != nil {
+		log.Printf("TLS enabled: serving HTTPS and 308-redirecting plain HTTP to HTTPS on %s", listen)
+		if err := serveTLSWithRedirect(srv, listen, tlsCertFile, tlsKeyFile); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -682,6 +694,125 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// --- HTTP→HTTPS redirect on the TLS port -----------------------------------
+//
+// The UI runs on a single port. To honor "no plain-HTTP support" while still
+// being friendly to users who type http://, we serve HTTPS and transparently
+// redirect any plain-HTTP client that lands on the same port to https://. We do
+// this by peeking the first byte of every accepted connection: a TLS
+// ClientHello always begins with 0x16 (handshake record); anything else is
+// treated as plain HTTP and handed to a tiny 308-redirect server. Both logical
+// servers are fed from one real listener via connChanListener.
+
+type connChanListener struct {
+	addr   net.Addr
+	ch     chan net.Conn
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (l *connChanListener) Accept() (net.Conn, error) {
+	select {
+	case c := <-l.ch:
+		return c, nil
+	case <-l.closed:
+		return nil, net.ErrClosed
+	}
+}
+
+func (l *connChanListener) Close() error {
+	l.once.Do(func() { close(l.closed) })
+	return nil
+}
+
+func (l *connChanListener) Addr() net.Addr { return l.addr }
+
+// prefixConn re-emits bytes already peeked off the wire before reading more, so
+// the downstream server sees the complete stream (handshake or request line).
+type prefixConn struct {
+	net.Conn
+	prefix []byte
+}
+
+func (c *prefixConn) Read(b []byte) (int, error) {
+	if len(c.prefix) > 0 {
+		n := copy(b, c.prefix)
+		c.prefix = c.prefix[n:]
+		return n, nil
+	}
+	return c.Conn.Read(b)
+}
+
+func redirectToHTTPSHandler(w http.ResponseWriter, r *http.Request) {
+	host := strings.TrimSpace(r.Host)
+	if host == "" {
+		http.Error(w, "missing host", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Connection", "close")
+	http.Redirect(w, r, "https://"+host+r.URL.RequestURI(), http.StatusPermanentRedirect)
+}
+
+// serveTLSWithRedirect serves HTTPS on addr using cert/key and 308-redirects any
+// plain-HTTP connection on the same port to https://.
+func serveTLSWithRedirect(srv *http.Server, addr, certFile, keyFile string) error {
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return err
+	}
+	base, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	tlsLn := &connChanListener{addr: base.Addr(), ch: make(chan net.Conn), closed: make(chan struct{})}
+	redirLn := &connChanListener{addr: base.Addr(), ch: make(chan net.Conn), closed: make(chan struct{})}
+
+	go func() {
+		for {
+			c, aerr := base.Accept()
+			if aerr != nil {
+				tlsLn.Close()
+				redirLn.Close()
+				return
+			}
+			go func(c net.Conn) {
+				_ = c.SetReadDeadline(time.Now().Add(15 * time.Second))
+				b := make([]byte, 1)
+				n, rerr := c.Read(b)
+				_ = c.SetReadDeadline(time.Time{})
+				if rerr != nil || n == 0 {
+					_ = c.Close()
+					return
+				}
+				pc := &prefixConn{Conn: c, prefix: b[:n]}
+				dst := redirLn
+				if b[0] == 0x16 { // TLS handshake record byte
+					dst = tlsLn
+				}
+				select {
+				case dst.ch <- pc:
+				case <-dst.closed:
+					_ = c.Close()
+				}
+			}(c)
+		}
+	}()
+
+	redirectSrv := &http.Server{
+		Handler:      http.HandlerFunc(redirectToHTTPSHandler),
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  10 * time.Second,
+	}
+	go func() { _ = redirectSrv.Serve(redirLn) }()
+
+	srv.TLSConfig = &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{cert},
+	}
+	return srv.ServeTLS(tlsLn, "", "")
 }
 
 func buildBackendTransport(caFile, certFile, keyFile string, skipVerify bool) (*http.Transport, error) {

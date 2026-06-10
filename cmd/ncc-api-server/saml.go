@@ -202,6 +202,13 @@ func buildSAMLProvider(ctx context.Context, b samlBuild) (*samlProvider, error) 
 		Certificate:       keyPair.Leaf,
 		IDPMetadata:       idpMeta,
 		AllowIDPInitiated: b.AllowIDPInit,
+		// The IdP returns its assertion as a top-level cross-site form POST to
+		// our ACS (idp-host → ui-host), so the request-tracking cookie minted
+		// during the AuthnRequest must survive that navigation. A default/Lax
+		// cookie is dropped on cross-site POST, which would make every login
+		// fail with "request not found". SameSite=None requires Secure, which
+		// crewjam already sets because the ACS URL is https (UI is HTTPS).
+		CookieSameSite: http.SameSiteNoneMode,
 	}
 	if eid := strings.TrimSpace(b.EntityID); eid != "" {
 		opts.EntityID = eid

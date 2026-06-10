@@ -59,18 +59,23 @@ func (a clusterAccess) displayList() []string {
 }
 
 // allowedClusters resolves which clusters a principal may see/act on. Admins and
-// static-token callers (infra credentials) are unrestricted. Every other caller
-// gets the union of clusters from each group they belong to, where membership is
-// a local-account username match OR an AD group match (by CN or full DN). Because
-// only grouped clusters are ever granted, ungrouped clusters are admin-only.
+// static-token callers (infra credentials) are unrestricted. Cluster groups are
+// opt-in isolation: a non-admin who belongs to NO group is unrestricted — it sees
+// every cluster (and, subject to role, may act on every cluster) — while
+// membership in one or more groups confines the caller to the union of those
+// groups' clusters. Membership is a local-account username match OR an AD group
+// match (by CN or full DN). Assigning a user to a group therefore restricts them;
+// leaving them ungrouped grants full visibility.
 func (s *apiServer) allowedClusters(p principal) clusterAccess {
 	if p.role == RoleAdmin || p.method == authStaticAdminToken || p.method == authStaticViewerToken {
 		return clusterAccess{unrestricted: true}
 	}
-	allowed := map[string]string{}
 	if s.users == nil {
-		return clusterAccess{allowed: allowed}
+		// No user database means no cluster groups can exist, so no non-admin is
+		// a member of any group: ungrouped ⇒ unrestricted.
+		return clusterAccess{unrestricted: true}
 	}
+	allowed := map[string]string{}
 	// Lower-case the principal's AD group values and their extracted CNs once so
 	// matching is case-insensitive and works whether a group is stored as a CN or
 	// a full DN.
@@ -93,10 +98,12 @@ func (s *apiServer) allowedClusters(p principal) clusterAccess {
 			}
 		}
 	}
+	memberOfAnyGroup := false
 	for _, grp := range s.users.getClusterGroups() {
 		if !principalInClusterGroup(subj, adVals, grp) {
 			continue
 		}
+		memberOfAnyGroup = true
 		for _, c := range grp.Clusters {
 			add(c)
 		}
@@ -112,6 +119,14 @@ func (s *apiServer) allowedClusters(p principal) clusterAccess {
 				add(c.Address)
 			}
 		}
+	}
+	if !memberOfAnyGroup {
+		// Ungrouped non-admin: cluster groups are opt-in isolation, so a caller
+		// not named in any group sees every cluster. This keys off membership,
+		// not the resolved cluster count — a member of a group that currently
+		// expands to zero clusters stays restricted (to nothing) rather than
+		// silently becoming unrestricted, preserving intended isolation.
+		return clusterAccess{unrestricted: true}
 	}
 	return clusterAccess{allowed: allowed}
 }

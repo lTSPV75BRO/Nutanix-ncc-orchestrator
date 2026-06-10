@@ -46,6 +46,7 @@ import (
 	"goncc/internal/notify"
 	"goncc/internal/promtext"
 	"goncc/internal/retryutil"
+	"goncc/internal/selfsigned"
 	"goncc/internal/trace"
 	"goncc/internal/v2layout"
 
@@ -7780,8 +7781,10 @@ type v2StartOptions struct {
 	APITLSCertFile              string
 	APITLSKeyFile               string
 	APITLSClientCAFile          string
+	APICookieInsecure           bool
 	UITLSCertFile               string
 	UITLSKeyFile                string
+	UIInsecureHTTP              bool
 	UIBackendCAFile             string
 	UIBackendClientCertFile     string
 	UIBackendClientKeyFile      string
@@ -8188,6 +8191,64 @@ func localHTTPURLFromListen(listenAddr, defaultPort string) string {
 		return "http://[" + host + "]:" + port
 	}
 	return "http://" + host + ":" + port
+}
+
+// listenHostForCert extracts a concrete host from a listen address for use as a
+// certificate SAN. A wildcard bind (":8080", "0.0.0.0:8080", "[::]:8080")
+// returns "" since there is no specific host to certify.
+func listenHostForCert(listenAddr string) string {
+	addr := strings.TrimSpace(listenAddr)
+	if addr == "" || strings.HasPrefix(addr, ":") {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
+		return ""
+	}
+	return host
+}
+
+// ensureDefaultUISelfSignedCert returns the path to a self-signed UI cert/key,
+// generating it under <installDir>/tls on first use. An existing pair is reused
+// across restarts so the browser's trust decision sticks. The certificate
+// covers localhost/loopback plus the UI advertise host and any concrete listen
+// host, so https://<that-host> validates the name (self-signed trust aside).
+func ensureDefaultUISelfSignedCert(installDir string, opts v2StartOptions) (certPath, keyPath string, err error) {
+	dir := filepath.Join(installDir, "tls")
+	certPath = filepath.Join(dir, "ui-selfsigned.crt")
+	keyPath = filepath.Join(dir, "ui-selfsigned.key")
+	if st, e := os.Stat(certPath); e == nil && !st.IsDir() {
+		if st2, e2 := os.Stat(keyPath); e2 == nil && !st2.IsDir() {
+			return certPath, keyPath, nil
+		}
+	}
+	if mkErr := os.MkdirAll(dir, 0o700); mkErr != nil {
+		return "", "", mkErr
+	}
+	var hosts []string
+	if u := strings.TrimSpace(opts.UIAdvertiseURL); u != "" {
+		if parsed, perr := url.Parse(u); perr == nil && parsed.Hostname() != "" {
+			hosts = append(hosts, parsed.Hostname())
+		}
+	}
+	if h := listenHostForCert(opts.UIListen); h != "" {
+		hosts = append(hosts, h)
+	}
+	certPEM, keyPEM, gerr := selfsigned.Generate(hosts, 0)
+	if gerr != nil {
+		return "", "", gerr
+	}
+	if wErr := os.WriteFile(certPath, certPEM, 0o600); wErr != nil {
+		return "", "", wErr
+	}
+	if wErr := os.WriteFile(keyPath, keyPEM, 0o600); wErr != nil {
+		return "", "", wErr
+	}
+	return certPath, keyPath, nil
 }
 
 func mergeAllowedOriginsCSV(baseOrigin string, extraCSV string) string {
@@ -8994,6 +9055,12 @@ func runV2Restore(opts v2RestoreOptions) error {
 	if abs, err := filepath.Abs(in); err == nil {
 		in = abs
 	}
+	// Capture this host's environment-specific start settings BEFORE the archive
+	// overwrites the start-state file. A backup is portable across hosts, so its
+	// origins/advertise URLs/listen addresses belong to the source host;
+	// adopting them here would make the UI reject this host's browser origin
+	// ("origin not allowed"). We re-apply the captured values after extraction.
+	preStartState, hadPreStartState := loadV2StartState(installDir)
 	// Refuse to clobber a running stack unless forced.
 	if !opts.Force {
 		if running, which := v2StackRunning(installDir); running {
@@ -9141,6 +9208,14 @@ func runV2Restore(opts v2RestoreOptions) error {
 		for _, wmsg := range warns {
 			fmt.Printf("  ! %s\n", wmsg)
 		}
+	}
+
+	// Re-apply this host's networking settings on top of the start-state the
+	// archive just wrote, so a backup taken on another host (or with different
+	// listen/origin flags) does not lock this host's browser out with
+	// "origin not allowed" after the restart replays the restored state.
+	if preserved := preserveHostStartStateNetworking(installDir, preStartState, hadPreStartState); len(preserved) > 0 {
+		fmt.Printf("\nKept this host's start settings (overriding the backup's): %s\n", strings.Join(preserved, ", "))
 	}
 
 	// Decide whether to restart automatically — a restart is what makes the
@@ -9294,7 +9369,17 @@ type v2StartState struct {
 	APIWriteTimeout             time.Duration `json:"api_write_timeout,omitempty"`
 	APIIdleTimeout              time.Duration `json:"api_idle_timeout,omitempty"`
 	UIBackendInsecureSkipVerify bool          `json:"ui_backend_insecure_skip_verify,omitempty"`
-	APIOnly                     bool          `json:"api_only,omitempty"`
+	APICookieInsecure           bool          `json:"api_cookie_insecure,omitempty"`
+	// UI TLS material is persisted (unlike the api-server's, which is treated
+	// as environment-specific) because it is managed at runtime from
+	// Settings → Access (TLS): enabling HTTPS writes the cert/key here so the
+	// next start/restart binds the browser-facing UI server to TLS.
+	UITLSCertFile string `json:"ui_tls_cert_file,omitempty"`
+	UITLSKeyFile  string `json:"ui_tls_key_file,omitempty"`
+	// UIInsecureHTTP opts out of the default self-signed HTTPS and serves the
+	// UI over plain HTTP. Persisted so a restart keeps the operator's choice.
+	UIInsecureHTTP bool `json:"ui_insecure_http,omitempty"`
+	APIOnly        bool `json:"api_only,omitempty"`
 	SelfHeal                    bool          `json:"self_heal,omitempty"`
 	SelfHealMaxRestarts         int           `json:"self_heal_max_restarts,omitempty"`
 	SelfHealWindow              time.Duration `json:"self_heal_window,omitempty"`
@@ -9320,6 +9405,10 @@ func writeV2StartState(installDir string, opts v2StartOptions) error {
 		APIWriteTimeout:             opts.APIWriteTimeout,
 		APIIdleTimeout:              opts.APIIdleTimeout,
 		UIBackendInsecureSkipVerify: opts.UIBackendInsecureSkipVerify,
+		APICookieInsecure:           opts.APICookieInsecure,
+		UITLSCertFile:               opts.UITLSCertFile,
+		UITLSKeyFile:                opts.UITLSKeyFile,
+		UIInsecureHTTP:              opts.UIInsecureHTTP,
 		APIOnly:                     opts.APIOnly,
 		SelfHeal:                    opts.SelfHeal,
 		SelfHealMaxRestarts:         opts.SelfHealMaxRestarts,
@@ -9330,6 +9419,53 @@ func writeV2StartState(installDir string, opts v2StartOptions) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(installDir, v2StartStateFile), append(data, '\n'), 0o600)
+}
+
+// preserveHostStartStateNetworking re-applies the current host's
+// environment-specific v2-start networking settings (listen addresses,
+// advertise URLs, backend URL, CORS/allowed origins, and UI TLS material) on
+// top of a start-state that a restore just overwrote. Backups are portable
+// across hosts/OSes, so those fields describe the *source* host; keeping them
+// would point the restored stack at the wrong addresses and make the UI reject
+// this host's browser origin. Non-network settings (auth mode, session TTL,
+// timeouts, rate limit, self-heal, …) are intentionally taken from the backup.
+// Returns the names of the fields it kept (for logging). Best-effort: it never
+// fails the restore.
+func preserveHostStartStateNetworking(installDir string, pre v2StartState, hadPre bool) []string {
+	if !hadPre {
+		return nil
+	}
+	cur, ok := loadV2StartState(installDir)
+	if !ok {
+		return nil
+	}
+	var kept []string
+	keep := func(name string, dst *string, src string) {
+		if strings.TrimSpace(src) != "" && *dst != src {
+			*dst = src
+			kept = append(kept, name)
+		}
+	}
+	keep("api-listen", &cur.APIListen, pre.APIListen)
+	keep("ui-listen", &cur.UIListen, pre.UIListen)
+	keep("api-advertise-url", &cur.APIAdvertiseURL, pre.APIAdvertiseURL)
+	keep("ui-advertise-url", &cur.UIAdvertiseURL, pre.UIAdvertiseURL)
+	keep("ui-backend-url", &cur.UIBackendURL, pre.UIBackendURL)
+	keep("api-cors-origins", &cur.APICORSOrigins, pre.APICORSOrigins)
+	keep("ui-allowed-origins", &cur.UIAllowedOrigins, pre.UIAllowedOrigins)
+	keep("ui-tls-cert-file", &cur.UITLSCertFile, pre.UITLSCertFile)
+	keep("ui-tls-key-file", &cur.UITLSKeyFile, pre.UITLSKeyFile)
+	if len(kept) == 0 {
+		return nil
+	}
+	data, err := json.MarshalIndent(cur, "", "  ")
+	if err != nil {
+		return nil
+	}
+	if err := os.WriteFile(filepath.Join(installDir, v2StartStateFile), append(data, '\n'), 0o600); err != nil {
+		return nil
+	}
+	return kept
 }
 
 // loadV2StartState reads the persisted start settings; ok is false when the
@@ -9382,6 +9518,14 @@ func v2StartArgsFromState(installDir string) (args []string, ok bool) {
 	args = append(args, "--api-rate-limit-per-minute", strconv.Itoa(st.APIRateLimitPerMinute))
 	if st.UIBackendInsecureSkipVerify {
 		args = append(args, "--ui-backend-insecure-skip-verify")
+	}
+	if st.APICookieInsecure {
+		args = append(args, "--api-cookie-insecure")
+	}
+	addStr("--ui-tls-cert-file", st.UITLSCertFile)
+	addStr("--ui-tls-key-file", st.UITLSKeyFile)
+	if st.UIInsecureHTTP {
+		args = append(args, "--ui-insecure-http")
 	}
 	if st.APIOnly {
 		args = append(args, "--api-only")
@@ -10320,6 +10464,30 @@ func runV2Start(opts v2StartOptions) error {
 	if real := resolveV2PathToReal(installDir); real != "" {
 		installDir = real
 	}
+
+	// Secure-by-default: when serving the UI and the operator did not bring
+	// their own certificate (or explicitly opt into plain HTTP with
+	// --ui-insecure-http), mint/reuse a self-signed certificate and bind the
+	// UI server to TLS. The ui-server additionally 308-redirects any plain-HTTP
+	// client on the same port, so "http://…" still lands the user on HTTPS.
+	// Browsers show a one-time self-signed warning, which is expected for an
+	// internal IP-addressed tool. Operators can install a real cert any time
+	// from Settings → Access (or with --ui-tls-cert-file/--ui-tls-key-file).
+	if !opts.APIOnly &&
+		strings.TrimSpace(opts.UITLSCertFile) == "" &&
+		strings.TrimSpace(opts.UITLSKeyFile) == "" &&
+		!opts.UIInsecureHTTP {
+		certPath, keyPath, gerr := ensureDefaultUISelfSignedCert(installDir, opts)
+		if gerr != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not generate the default self-signed UI certificate (%v); falling back to plain HTTP. Pass --ui-tls-cert-file/--ui-tls-key-file to provide your own, or --ui-insecure-http to silence this.\n", gerr)
+		} else {
+			opts.UITLSCertFile = certPath
+			opts.UITLSKeyFile = keyPath
+			fmt.Fprintf(os.Stderr, "[tls] no UI certificate provided; serving self-signed HTTPS by default (cert: %s). Use --ui-insecure-http for plain HTTP.\n", certPath)
+		}
+	}
+	uiTLSActive := strings.TrimSpace(opts.UITLSCertFile) != "" && strings.TrimSpace(opts.UITLSKeyFile) != ""
+
 	backendURL := strings.TrimSpace(opts.UIBackendURL)
 	if backendURL == "" {
 		if strings.TrimSpace(opts.APITLSCertFile) != "" && strings.TrimSpace(opts.APITLSKeyFile) != "" {
@@ -10335,6 +10503,13 @@ func runV2Start(opts v2StartOptions) error {
 	corsBase := uiOrigin
 	if alt := loopbackAltOriginFromListen(opts.UIListen, "8080"); alt != "" && alt != uiOrigin {
 		corsBase = uiOrigin + "," + alt
+	}
+	// When the UI serves TLS, the browser's origin is https://; reflect that in
+	// the derived origins so CORS matches. (Same-origin requests are accepted
+	// regardless, but keep the advertised/printed URL on the right scheme.)
+	if uiTLSActive {
+		uiOrigin = strings.Replace(uiOrigin, "http://", "https://", 1)
+		corsBase = strings.ReplaceAll(corsBase, "http://", "https://")
 	}
 	allowedOrigins := mergeAllowedOriginsCSV(corsBase, opts.UIAllowedOrigins)
 	apiCORSOrigins := strings.TrimSpace(opts.APICORSOrigins)
@@ -10376,6 +10551,18 @@ func runV2Start(opts v2StartOptions) error {
 	}
 	if strings.TrimSpace(opts.APITLSClientCAFile) != "" {
 		apiArgs = append(apiArgs, "--tls-client-ca-file", opts.APITLSClientCAFile)
+	}
+	// Drop the Secure attribute on session cookies when serving the stack over
+	// plain HTTP from a non-localhost address; otherwise browsers silently
+	// refuse to store the session cookie and every login bounces back to the
+	// login screen. TLS is still the right answer for anything exposed.
+	if opts.APICookieInsecure {
+		apiArgs = append(apiArgs, "--cookie-insecure")
+	} else if uiTLSActive {
+		// The browser reaches the stack over HTTPS, so session cookies can (and
+		// should) carry the Secure attribute. The api-server sits on loopback
+		// behind the UI server and cannot infer this itself, so tell it here.
+		apiArgs = append(apiArgs, "--cookie-secure")
 	}
 
 	apiCmd := exec.Command(apiBin, apiArgs...)
@@ -15186,8 +15373,10 @@ Use --self-heal with --detach to auto-restart services on unexpected exits.`,
 			apiTLSCertFile, _ := cmd.Flags().GetString("api-tls-cert-file")
 			apiTLSKeyFile, _ := cmd.Flags().GetString("api-tls-key-file")
 			apiTLSClientCAFile, _ := cmd.Flags().GetString("api-tls-client-ca-file")
+			apiCookieInsecure, _ := cmd.Flags().GetBool("api-cookie-insecure")
 			uiTLSCertFile, _ := cmd.Flags().GetString("ui-tls-cert-file")
 			uiTLSKeyFile, _ := cmd.Flags().GetString("ui-tls-key-file")
+			uiInsecureHTTP, _ := cmd.Flags().GetBool("ui-insecure-http")
 			uiBackendCAFile, _ := cmd.Flags().GetString("ui-backend-ca-file")
 			uiBackendClientCertFile, _ := cmd.Flags().GetString("ui-backend-client-cert-file")
 			uiBackendClientKeyFile, _ := cmd.Flags().GetString("ui-backend-client-key-file")
@@ -15230,8 +15419,10 @@ Use --self-heal with --detach to auto-restart services on unexpected exits.`,
 				APITLSCertFile:              apiTLSCertFile,
 				APITLSKeyFile:               apiTLSKeyFile,
 				APITLSClientCAFile:          apiTLSClientCAFile,
+				APICookieInsecure:           apiCookieInsecure,
 				UITLSCertFile:               uiTLSCertFile,
 				UITLSKeyFile:                uiTLSKeyFile,
+				UIInsecureHTTP:              uiInsecureHTTP,
 				UIBackendCAFile:             uiBackendCAFile,
 				UIBackendClientCertFile:     uiBackendClientCertFile,
 				UIBackendClientKeyFile:      uiBackendClientKeyFile,
@@ -15276,8 +15467,10 @@ Use --self-heal with --detach to auto-restart services on unexpected exits.`,
 	v2StartCmd.Flags().String("api-tls-cert-file", "", "TLS cert file for ncc-api-server")
 	v2StartCmd.Flags().String("api-tls-key-file", "", "TLS key file for ncc-api-server")
 	v2StartCmd.Flags().String("api-tls-client-ca-file", "", "mTLS client CA bundle for ncc-api-server")
-	v2StartCmd.Flags().String("ui-tls-cert-file", "", "TLS cert file for ncc-ui-server")
-	v2StartCmd.Flags().String("ui-tls-key-file", "", "TLS key file for ncc-ui-server")
+	v2StartCmd.Flags().Bool("api-cookie-insecure", false, "Drop the Secure attribute on session cookies so logins work when serving over plain HTTP from a non-localhost address (use TLS instead for anything exposed)")
+	v2StartCmd.Flags().String("ui-tls-cert-file", "", "TLS cert file for ncc-ui-server (overrides the default self-signed certificate)")
+	v2StartCmd.Flags().String("ui-tls-key-file", "", "TLS key file for ncc-ui-server (overrides the default self-signed certificate)")
+	v2StartCmd.Flags().Bool("ui-insecure-http", false, "Serve the UI over plain HTTP instead of the default self-signed HTTPS (not recommended; only for trusted-loopback or TLS-terminating-proxy deployments)")
 	v2StartCmd.Flags().String("ui-backend-ca-file", "", "Custom CA bundle for ncc-ui-server backend TLS")
 	v2StartCmd.Flags().String("ui-backend-client-cert-file", "", "Client cert for ncc-ui-server backend mTLS")
 	v2StartCmd.Flags().String("ui-backend-client-key-file", "", "Client key for ncc-ui-server backend mTLS")

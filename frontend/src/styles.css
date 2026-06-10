@@ -1501,6 +1501,28 @@ html[data-theme="light"] .alerts-toolbar {
   color: #cbd5e1 !important;
 }
 
+/* WCAG AA: antd's filled "error" tag in the dark themes renders bright-red
+   text (#f43f5e/#ef4444) on a dark translucent red fill, which lands just
+   under the 4.5:1 ratio. Brighten the text to rose-300 and firm up the border
+   so FAIL / Stale pills stay legible without changing the brand error color
+   used elsewhere (buttons, alerts). */
+html[data-theme="dark"] .ant-tag-error,
+html[data-theme="it-pro"] .ant-tag-error {
+  color: #fda4af !important;
+  border-color: rgba(244, 99, 122, 0.6) !important;
+}
+
+/* WCAG AA: a checked CheckableTag (the severity "ALL"/FAIL/WARN… filter pills)
+   fills with colorPrimary and white text. The dark theme's violet (#8b5cf6)
+   and IT-Pro teal (#14b8a6) are too light for white text (≈3.4:1). Use a
+   darker shade for the checked fill only so the label clears 4.5:1. */
+html[data-theme="dark"] .ant-tag-checkable-checked {
+  background: #7c3aed !important;
+}
+html[data-theme="it-pro"] .ant-tag-checkable-checked {
+  background: #0f766e !important;
+}
+
 pre {
   border: 1px solid var(--pre-border);
   background: var(--pre-bg);

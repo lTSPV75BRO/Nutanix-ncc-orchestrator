@@ -124,15 +124,22 @@ func (s *apiServer) handleAuthTokens(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "name must be 80 characters or fewer"})
 			return
 		}
+		// Expiry policy: default to patDefaultExpiryDays. A caller may pin any
+		// value in [1, patMaxExpiryDays], or pass <= 0 to mint a token that
+		// never expires (long-lived automation credentials). Never-expiring
+		// tokens are stored with an empty ExpiresAt and rely on explicit
+		// revocation, so they are an admin/owner-managed risk by design.
 		days := patDefaultExpiryDays
+		neverExpires := false
 		if body.ExpiresInDays != nil {
-			days = *body.ExpiresInDays
-		}
-		if days < 1 {
-			days = 1
-		}
-		if days > patMaxExpiryDays {
-			days = patMaxExpiryDays
+			if *body.ExpiresInDays <= 0 {
+				neverExpires = true
+			} else {
+				days = *body.ExpiresInDays
+				if days > patMaxExpiryDays {
+					days = patMaxExpiryDays
+				}
+			}
 		}
 		secret, err := randToken(32)
 		if err != nil {
@@ -146,6 +153,10 @@ func (s *apiServer) handleAuthTokens(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		now := time.Now().UTC()
+		expiresAt := ""
+		if !neverExpires {
+			expiresAt = now.Add(time.Duration(days) * 24 * time.Hour).Format(time.RFC3339)
+		}
 		_, ownerLocal := s.users.lookup(p.subject)
 		pt := personalToken{
 			ID:         id,
@@ -156,7 +167,7 @@ func (s *apiServer) handleAuthTokens(w http.ResponseWriter, r *http.Request) {
 			Groups:     append([]string(nil), p.groups...),
 			Hash:       patHash(secret),
 			CreatedAt:  now.Format(time.RFC3339),
-			ExpiresAt:  now.Add(time.Duration(days) * 24 * time.Hour).Format(time.RFC3339),
+			ExpiresAt:  expiresAt,
 			CreatedIP:  cleanClientIP(r),
 		}
 		if err := s.users.addToken(pt); err != nil {

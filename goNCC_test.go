@@ -4631,3 +4631,58 @@ func TestBackupManifestSurfacesSAMLAndLDAP(t *testing.T) {
 		t.Errorf("manifest auth summary = %+v, want SAML SP key + LDAP bind password recorded", manifest.Auth)
 	}
 }
+
+func TestPreserveHostStartStateNetworking(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, v2StartStateFile)
+
+	// pre = this host's good settings (captured before restore).
+	pre := v2StartState{
+		APIListen:        ":8081",
+		UIListen:         ":8080",
+		APIAdvertiseURL:  "http://10.21.88.27:8081",
+		UIAdvertiseURL:   "http://10.21.88.27:8080",
+		UIAllowedOrigins: "http://10.21.88.27:8080",
+		UITLSCertFile:    "/root/ncc-orchestrator/tls/ui.crt",
+		APIAuthMode:      "token",
+	}
+
+	// The restore just wrote the backup's (foreign) start-state: different
+	// origins, no TLS, plus a non-network setting we must keep from the backup.
+	restored := v2StartState{
+		APIListen:             ":9091",
+		UIListen:              ":9090",
+		APIAdvertiseURL:       "http://192.168.1.5:9091",
+		UIAllowedOrigins:      "http://192.168.1.5:9090",
+		APIAuthMode:           "session",
+		APIRateLimitPerMinute: 120,
+	}
+	data, _ := json.MarshalIndent(restored, "", "  ")
+	if err := os.WriteFile(statePath, append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	kept := preserveHostStartStateNetworking(dir, pre, true)
+	if len(kept) == 0 {
+		t.Fatal("expected some host networking fields to be preserved")
+	}
+
+	got, ok := loadV2StartState(dir)
+	if !ok {
+		t.Fatal("could not reload merged start-state")
+	}
+	// Networking fields must be this host's (pre) values.
+	if got.UIAllowedOrigins != pre.UIAllowedOrigins || got.APIAdvertiseURL != pre.APIAdvertiseURL ||
+		got.APIListen != pre.APIListen || got.UIListen != pre.UIListen || got.UITLSCertFile != pre.UITLSCertFile {
+		t.Fatalf("networking fields not preserved: %+v", got)
+	}
+	// Non-network settings must come from the backup.
+	if got.APIAuthMode != "session" || got.APIRateLimitPerMinute != 120 {
+		t.Fatalf("non-network settings should come from the backup, got auth=%q rate=%d", got.APIAuthMode, got.APIRateLimitPerMinute)
+	}
+
+	// No pre-state (fresh install) must be a no-op.
+	if kept := preserveHostStartStateNetworking(dir, v2StartState{}, false); kept != nil {
+		t.Fatalf("expected no-op without pre-state, got %v", kept)
+	}
+}

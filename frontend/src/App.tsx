@@ -579,7 +579,20 @@ export default function App() {
       </Header>
       <Content className="app-content">
         <div className="app-content-inner">
-          <Suspense fallback={<Spin size="large" />}>
+          <Suspense
+            fallback={
+              <div
+                style={{
+                  minHeight: "70vh",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Spin size="large" />
+              </div>
+            }
+          >
             <Routes>
               <Route path="/" element={<DashboardPage />} />
               <Route

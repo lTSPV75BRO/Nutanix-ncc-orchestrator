@@ -131,9 +131,25 @@ func (s *apiServer) sessionsHonored() bool {
 }
 
 // cookieSecure reports whether session cookies should carry the Secure
-// attribute. On by default; --cookie-insecure disables it for local http dev.
+// attribute. Insecure by default so the stack works over plain HTTP out of the
+// box (browsers refuse to store a Secure cookie on a non-localhost http origin,
+// which otherwise bounces every login back to the login screen). The Secure
+// attribute is turned on automatically once an admin enables HTTPS from
+// Settings → Access (TLS), and --cookie-secure forces it on for deployments
+// that terminate TLS in front of the stack (reverse proxy / load balancer).
 func (s *apiServer) cookieSecure() bool {
-	return !s.cookieInsecure
+	if s.cookieInsecure {
+		return false
+	}
+	if s.cookieSecureForce {
+		return true
+	}
+	if s.users != nil {
+		if p := s.users.getTLSPolicy(); p != nil && p.HTTPSEnabled {
+			return true
+		}
+	}
+	return false
 }
 
 // Session-lifetime bounds for the runtime-tunable session TTL. The admin can

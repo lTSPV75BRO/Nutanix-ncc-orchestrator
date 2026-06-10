@@ -118,9 +118,14 @@ type apiServer struct {
 	pcCacheMu  sync.Mutex
 	pcCache    map[string]*pcCacheEntry
 	pcInflight map[string]bool
-	// cookieInsecure drops the Secure attribute on session cookies so the
-	// login flow works over plain http for local development. Off by default.
-	cookieInsecure     bool
+	// cookieInsecure forces the Secure attribute OFF on session cookies even
+	// when HTTPS is enabled (useful only behind a TLS-terminating proxy that
+	// re-presents plain http to the stack). Insecure is already the default.
+	cookieInsecure bool
+	// cookieSecureForce forces the Secure attribute ON regardless of the
+	// runtime HTTPS policy, for deployments that terminate TLS in front of the
+	// stack (reverse proxy / load balancer) yet still want Secure cookies.
+	cookieSecureForce  bool
 	sessionSecret      string
 	sessionTTL         time.Duration
 	sessionIssuer      string
@@ -377,7 +382,8 @@ func main() {
 	flag.StringVar(&s.usersDBSecretKey, "users-db-secret-key", "users.json", "Data key inside the Kubernetes Secret that holds the user-database JSON")
 	flag.StringVar(&s.usersDBSecretNS, "users-db-secret-namespace", "", "Namespace of the Kubernetes Secret (defaults to the pod's own namespace)")
 	flag.BoolVar(&s.disableLocalAccounts, "disable-local-accounts", false, "Opt out of the default-on user database (no first-run admin bootstrap, login disabled). Use for pure token-only automation")
-	flag.BoolVar(&s.cookieInsecure, "cookie-insecure", false, "Drop the Secure attribute on session cookies (local http dev only)")
+	flag.BoolVar(&s.cookieInsecure, "cookie-insecure", false, "Force the Secure attribute OFF on session cookies even when HTTPS is enabled (only behind a TLS-terminating proxy that talks plain http to the stack). Insecure is already the default.")
+	flag.BoolVar(&s.cookieSecureForce, "cookie-secure", false, "Force the Secure attribute ON on session cookies regardless of the runtime HTTPS policy (for deployments terminating TLS in front of the stack)")
 	var samlCfg samlConfig
 	flag.StringVar(&samlCfg.RootURL, "saml-root-url", "", "External base URL of this server for SAML (e.g. https://ncc.example.com); enables SAML when set together with cert/key/idp-metadata")
 	flag.StringVar(&samlCfg.IDPMetadata, "saml-idp-metadata", "", "SAML IdP metadata URL or local file path")
@@ -773,7 +779,14 @@ func (s *apiServer) withCORS(next http.Handler) http.Handler {
 	allowedOrigins := parseAllowedOrigins(s.corsOrigin)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := strings.TrimSpace(r.Header.Get("Origin"))
-		if origin != "" {
+		// SAML SP endpoints are browser-mediated and IdP-originated: the IdP
+		// returns its assertion as a top-level cross-site POST to /saml/acs, so
+		// the browser sends Origin: <idp-host>, which can never be in the UI
+		// origin allowlist. The CORS allowlist guards the SPA's XHR calls to
+		// /api/; the SAML flow's security boundary is the signed assertion plus
+		// the relay-state cookie, so exempt /saml/ from origin enforcement.
+		isSAML := strings.HasPrefix(r.URL.Path, "/saml/")
+		if origin != "" && !isSAML {
 			if _, ok := allowedOrigins[origin]; !ok {
 				writeJSON(w, http.StatusForbidden, envelope{Success: false, Error: "origin not allowed"})
 				return
@@ -2910,9 +2923,10 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 		return
 	}
-	// Cluster-group scoping: non-admins only see data for clusters in their
-	// groups. Admins/static tokens are unrestricted. The helper is a no-op when
-	// unrestricted, so the filter calls below are cheap for admins.
+	// Cluster-group scoping: non-admins who belong to one or more cluster groups
+	// only see data for clusters in those groups; ungrouped non-admins (and
+	// admins/static tokens) are unrestricted. The helper is a no-op when
+	// unrestricted, so the filter calls below are cheap for those callers.
 	p, _ := principalFromContext(r.Context())
 	access := s.allowedClusters(p)
 	outDir := s.selectBestReportOutDir()
@@ -3191,6 +3205,8 @@ func (s *apiServer) handleMetaRoutes(w http.ResponseWriter, r *http.Request) {
 		{Path: "/api/v1/settings/ldap/test", Methods: []string{http.MethodPost}, Description: "Admin-only: validate an LDAP/AD configuration by authenticating sample credentials, without saving it", SampleBody: "{\n  \"url\": \"ldaps://dc1.corp.example.com:636\",\n  \"base_dn\": \"DC=corp,DC=example,DC=com\",\n  \"bind_dn\": \"CN=ncc-svc,DC=corp,DC=example,DC=com\",\n  \"bind_password\": \"service-account-secret\",\n  \"role_map\": \"CN=NCC-Admins,OU=Groups,DC=corp,DC=example,DC=com=admin\",\n  \"test_username\": \"jdoe\",\n  \"test_password\": \"users-password\"\n}"},
 		{Path: "/api/v1/settings/ldap/search", Methods: []string{http.MethodGet}, Description: "Admin-only: live AD/LDAP type-ahead search for groups and users (?q=<term>&type=group|user|all&limit=<n>) to assign to cluster groups"},
 		{Path: "/api/v1/settings/session", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/set the session lifetime (ttl_sec or ttl_min; 0 restores the --session-ttl default)", SampleBody: "{\n  \"ttl_min\": 360\n}"},
+		{Path: "/api/v1/settings/tls", Methods: []string{http.MethodGet, http.MethodPut, http.MethodDelete}, Description: "Admin-only: manage HTTPS for the UI server. GET returns the installed certificate metadata; PUT installs a PEM cert+key, enables HTTPS, and restarts the stack (session cookies become Secure); DELETE removes the cert, disables HTTPS, and restarts back to HTTP", SampleBody: "{\n  \"cert\": \"-----BEGIN CERTIFICATE-----\\n...\\n-----END CERTIFICATE-----\\n\",\n  \"key\": \"-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n\"\n}"},
+		{Path: "/api/v1/settings/tls/generate", Methods: []string{http.MethodPost}, Description: "Admin-only: generate (or renew) a self-signed certificate for the UI server, enable HTTPS, and restart the stack. Body is optional: {hosts:[...], valid_days:N}; hosts default to the request host and always include localhost/loopback", SampleBody: "{\n  \"hosts\": [\"10.21.88.27\"],\n  \"valid_days\": 825\n}"},
 		{Path: "/api/v1/settings/cluster-groups", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET operator+: read the cluster groups; PUT admin-only: replace the groups that confine non-admins to their clusters (members = local accounts + AD groups/users)", SampleBody: "{\n  \"groups\": [\n    {\n      \"name\": \"Platform\",\n      \"clusters\": [\"10.0.0.1\", \"pc-east\"],\n      \"local_users\": [\"alice\"],\n      \"ad_groups\": [\"CN=NCC-Platform,OU=Groups,DC=corp,DC=example,DC=com\"]\n    }\n  ]\n}"},
 		{Path: "/api/v1/settings/tokens", Methods: []string{http.MethodGet}, Description: "Admin-only: inventory every user's personal access tokens (metadata only)"},
 		{Path: "/api/v1/settings/tokens/{id}", Methods: []string{http.MethodDelete}, Description: "Admin-only: revoke any user's personal access token by id"},
@@ -4383,6 +4399,8 @@ func (s *apiServer) buildHandler() http.Handler {
 		mux.HandleFunc("/api/v1/settings/ldap/test", s.handleLDAPTest)
 		mux.HandleFunc("/api/v1/settings/ldap/search", s.handleLDAPSearch)
 		mux.HandleFunc("/api/v1/settings/session", s.handleSessionPolicy)
+		mux.HandleFunc("/api/v1/settings/tls", s.handleTLSSettings)
+		mux.HandleFunc("/api/v1/settings/tls/generate", s.handleTLSGenerate)
 		mux.HandleFunc("/api/v1/settings/password-resets", s.handlePasswordResets)
 		mux.HandleFunc("/api/v1/settings/password-resets/", s.handlePasswordResetByName)
 		mux.HandleFunc("/api/v1/settings/cluster-groups", s.handleClusterGroups)

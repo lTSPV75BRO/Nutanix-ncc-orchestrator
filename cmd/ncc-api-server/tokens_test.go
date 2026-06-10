@@ -1,8 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -155,6 +159,112 @@ func TestPATPerOwnerCap(t *testing.T) {
 	if err := s.users.addToken(over); err == nil {
 		t.Fatal("expected per-owner cap to reject the extra token")
 	}
+}
+
+func TestPATResolvesNeverExpiringToken(t *testing.T) {
+	s := newTokenTestServer(t)
+	addLocalAccount(t, s.users, "heidi", RoleOperator)
+	// Empty ExpiresAt means the token never expires; it must still resolve far
+	// into the future.
+	secret, _ := mintToken(t, s, "heidi", true, RoleOperator, "")
+	if _, ok := s.principalFromPAT(reqWithToken(secret)); !ok {
+		t.Fatal("a never-expiring token must always resolve")
+	}
+}
+
+func TestCreateTokenNeverExpiryViaHandler(t *testing.T) {
+	s := newTokenTestServer(t)
+	addLocalAccount(t, s.users, "ivan", RoleViewer)
+
+	body := strings.NewReader(`{"name":"forever","expires_in_days":0}`)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/auth/tokens", body)
+	r.Header.Set("Content-Type", "application/json")
+	r = withPrincipal(r, principal{subject: "ivan", role: RoleViewer, method: authSessionCookie})
+	rr := httptest.NewRecorder()
+	s.handleAuthTokens(rr, r)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Token     string `json:"token"`
+			ExpiresAt string `json:"expires_at"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Data.ExpiresAt != "" {
+		t.Fatalf("expires_at should be empty for a never-expiring token, got %q", resp.Data.ExpiresAt)
+	}
+	if _, ok := s.principalFromPAT(reqWithToken(resp.Data.Token)); !ok {
+		t.Fatal("minted never-expiring token should authenticate")
+	}
+}
+
+func TestCookieSecureDefaultsInsecure(t *testing.T) {
+	s := newTokenTestServer(t)
+	if s.cookieSecure() {
+		t.Fatal("session cookies must be insecure by default (plain HTTP works out of the box)")
+	}
+	// Enabling HTTPS flips cookies to Secure.
+	if err := s.users.setTLSPolicy(&tlsPolicy{HTTPSEnabled: true}); err != nil {
+		t.Fatalf("setTLSPolicy: %v", err)
+	}
+	if !s.cookieSecure() {
+		t.Fatal("session cookies must be Secure once HTTPS is enabled")
+	}
+	// --cookie-insecure forces them off even with HTTPS on (TLS-terminating proxy).
+	s.cookieInsecure = true
+	if s.cookieSecure() {
+		t.Fatal("--cookie-insecure must force Secure off")
+	}
+}
+
+func TestPatchV2StartStateUITLS(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, v2StartStateFileName)
+	// Pre-existing state with unrelated keys that must be preserved.
+	if err := os.WriteFile(statePath, []byte(`{"api_listen":"127.0.0.1:8081","ui_listen":"0.0.0.0:8080"}`), 0o600); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+	ok, err := patchV2StartStateUITLS(dir, "/x/ui.crt", "/x/ui.key")
+	if err != nil || !ok {
+		t.Fatalf("patch set: ok=%v err=%v", ok, err)
+	}
+	got := readState(t, statePath)
+	if got["ui_tls_cert_file"] != "/x/ui.crt" || got["ui_tls_key_file"] != "/x/ui.key" {
+		t.Fatalf("expected TLS files set, got %#v", got)
+	}
+	if got["api_listen"] != "127.0.0.1:8081" {
+		t.Fatalf("unrelated keys must be preserved, got %#v", got)
+	}
+	// Clearing removes the keys.
+	if ok, err := patchV2StartStateUITLS(dir, "", ""); err != nil || !ok {
+		t.Fatalf("patch clear: ok=%v err=%v", ok, err)
+	}
+	got = readState(t, statePath)
+	if _, present := got["ui_tls_cert_file"]; present {
+		t.Fatalf("ui_tls_cert_file should be removed, got %#v", got)
+	}
+	// Missing file => ok=false, no error (caller declines auto-restart).
+	if ok, err := patchV2StartStateUITLS(t.TempDir(), "/x/ui.crt", "/x/ui.key"); err != nil || ok {
+		t.Fatalf("missing state should yield ok=false,nil; got ok=%v err=%v", ok, err)
+	}
+}
+
+func readState(t *testing.T, path string) map[string]string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	m := map[string]string{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("unmarshal state: %v", err)
+	}
+	return m
 }
 
 func randID(t *testing.T, i int) string {

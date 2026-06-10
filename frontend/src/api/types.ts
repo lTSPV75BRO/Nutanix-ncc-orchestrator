@@ -119,6 +119,24 @@ export type CreatedToken = {
   expires_at?: string;
 };
 
+/** The admin-managed HTTPS/TLS policy for the UI server (no private key is ever returned). */
+export type TLSPolicy = {
+  https_enabled: boolean;
+  subject?: string;
+  issuer?: string;
+  not_before?: string;
+  not_after?: string;
+  dns_names?: string[];
+  updated_at?: string;
+};
+
+/** Response from enabling/disabling HTTPS — the stack restarts to apply it. */
+export type TLSApplyResult = {
+  tls: TLSPolicy;
+  restarting: boolean;
+  restart_required: boolean;
+};
+
 export type SSOConfig = {
   enabled: boolean;
   managed_by: "flags" | "runtime";

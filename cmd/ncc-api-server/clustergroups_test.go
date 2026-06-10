@@ -57,11 +57,6 @@ func TestAllowedClustersMembership(t *testing.T) {
 			want: []string{"10.0.0.1", "pc-east"},
 		},
 		{
-			name: "local user no match",
-			p:    principal{role: RoleViewer, subject: "carol", method: authSessionCookie},
-			want: []string{},
-		},
-		{
 			name: "AD full DN match",
 			p:    principal{role: RoleViewer, subject: "bob", method: authSessionCookie, groups: []string{"CN=NCC-Platform,OU=Groups,DC=corp,DC=example,DC=com"}},
 			want: []string{"10.0.0.1", "pc-east"},
@@ -99,6 +94,15 @@ func TestAllowedClustersMembership(t *testing.T) {
 			}
 		})
 	}
+
+	// A non-admin who matches no group is unrestricted: cluster groups are
+	// opt-in isolation, so an ungrouped caller sees every cluster.
+	t.Run("non-member (ungrouped) is unrestricted", func(t *testing.T) {
+		access := s.allowedClusters(principal{role: RoleViewer, subject: "carol", method: authSessionCookie})
+		if !access.unrestricted {
+			t.Fatalf("ungrouped non-admin should be unrestricted; got allowed=%v", access.displayList())
+		}
+	})
 }
 
 func TestAllowedClustersPrismCentralExpansion(t *testing.T) {
@@ -128,9 +132,10 @@ func TestAllowedClustersPrismCentralExpansion(t *testing.T) {
 			t.Fatalf("expected PC-expanded cluster %q to be permitted; allowed=%v", want, access.displayList())
 		}
 	}
-	// A non-member of the group still sees nothing.
-	if !s.allowedClusters(principal{role: RoleViewer, subject: "bob", method: authSessionCookie}).empty() {
-		t.Fatal("non-member should have no clusters")
+	// A non-member of any group is unrestricted (cluster groups are opt-in
+	// isolation), so it is not pinned to this group's PC-expanded clusters.
+	if !s.allowedClusters(principal{role: RoleViewer, subject: "bob", method: authSessionCookie}).unrestricted {
+		t.Fatal("ungrouped non-admin should be unrestricted")
 	}
 }
 
@@ -200,9 +205,17 @@ func TestResolveRunClusterScope(t *testing.T) {
 			t.Fatal("expected error when member overrides cluster selection")
 		}
 	})
-	t.Run("non-member with empty allowed set is rejected", func(t *testing.T) {
-		if _, err := s.resolveRunClusterScope(runTriggerRequest{}, s.allowedClusters(stranger), nil); err == nil {
-			t.Fatal("expected 403-style error for a user in no group")
+	t.Run("non-member (ungrouped) is unrestricted and runs everything", func(t *testing.T) {
+		access := s.allowedClusters(stranger)
+		if !access.unrestricted {
+			t.Fatalf("ungrouped operator should be unrestricted; got allowed=%v", access.displayList())
+		}
+		got, err := s.resolveRunClusterScope(runTriggerRequest{}, access, nil)
+		if err != nil {
+			t.Fatalf("ungrouped operator run should not error: %v", err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("ungrouped operator should not be pinned to a subset, got %v", got)
 		}
 	})
 	t.Run("admin unrestricted runs everything", func(t *testing.T) {

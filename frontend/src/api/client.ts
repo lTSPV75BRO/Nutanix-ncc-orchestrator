@@ -34,6 +34,8 @@ import type {
   PasswordResetRequest,
   PersonalToken,
   CreatedToken,
+  TLSPolicy,
+  TLSApplyResult,
 } from "./types";
 
 // ApiError preserves both the human-readable message and the structured `data`
@@ -417,4 +419,13 @@ export const api = {
   listAllTokens: () => callApi<{ tokens: PersonalToken[] }>("/api/v1/settings/tokens"),
   adminRevokeToken: (id: string) =>
     callApi<unknown>(`/api/v1/settings/tokens/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  getTLS: () => callApi<TLSPolicy>("/api/v1/settings/tls"),
+  installTLS: (payload: { cert: string; key: string }) =>
+    callApi<TLSApplyResult>("/api/v1/settings/tls", { method: "PUT", body: JSON.stringify(payload) }),
+  generateTLS: (payload?: { hosts?: string[]; valid_days?: number }) =>
+    callApi<TLSApplyResult>("/api/v1/settings/tls/generate", {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    }),
+  disableTLS: () => callApi<TLSApplyResult>("/api/v1/settings/tls", { method: "DELETE" }),
 };

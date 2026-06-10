@@ -41,6 +41,11 @@ function toAntThemeConfig(theme: AppThemeKey): ThemeConfig {
         colorBgLayout: "#f4f4f5",
         colorText: "#18181b",
         colorTextSecondary: "#52525b",
+        // Statistic titles use colorTextDescription and inputs use
+        // colorTextPlaceholder; antd's defaults are too light to clear WCAG AA
+        // (4.5:1) on white, so we pin darker greys that still read as muted.
+        colorTextDescription: "#52525b",
+        colorTextPlaceholder: "#6b7280",
         colorBorder: "#e4e4e7",
         colorBorderSecondary: "#f4f4f5",
         borderRadius: 10,
@@ -64,6 +69,9 @@ function toAntThemeConfig(theme: AppThemeKey): ThemeConfig {
         colorBgBase: "#0b1220",
         colorBgContainer: "#152238",
         colorText: "#dbeafe",
+        colorTextSecondary: "#b6c9e6",
+        colorTextDescription: "#a8bcd9",
+        colorTextPlaceholder: "#90a6c6",
         colorBorder: "#334155",
         borderRadius: 6,
       },
@@ -90,6 +98,11 @@ function toAntThemeConfig(theme: AppThemeKey): ThemeConfig {
       colorBgLayout: "#0a0a0a",
       colorText: "#ededed",
       colorTextSecondary: "#a1a1aa",
+      // Brighten the derived "description"/"placeholder" greys so statistic
+      // titles and input placeholders clear WCAG AA (4.5:1) on the #141414
+      // container; antd's dark defaults (~rgba .45/.25) fall well short.
+      colorTextDescription: "#a1a1aa",
+      colorTextPlaceholder: "#8a8a93",
       colorBorder: "#262626",
       colorBorderSecondary: "#1f1f1f",
       borderRadius: 10,

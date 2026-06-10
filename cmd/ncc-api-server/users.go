@@ -43,6 +43,25 @@ type sessionPolicy struct {
 	TTLSeconds int `json:"ttl_seconds,omitempty"`
 }
 
+// tlsPolicy records the admin-managed HTTPS/TLS configuration applied from
+// Settings → Access. The certificate and private key live on disk (referenced
+// by CertPath/KeyPath, 0600) — never in this JSON — so the document stays safe
+// to back up and the key is not duplicated. The remaining fields are decoded
+// certificate metadata kept only so the UI can show what is installed without
+// re-parsing the PEM. When HTTPSEnabled is true the api-server marks session
+// cookies Secure and the stack (re)starts with the UI server bound to TLS.
+type tlsPolicy struct {
+	HTTPSEnabled bool     `json:"https_enabled,omitempty"`
+	CertPath     string   `json:"cert_path,omitempty"`
+	KeyPath      string   `json:"key_path,omitempty"`
+	Subject      string   `json:"subject,omitempty"`
+	Issuer       string   `json:"issuer,omitempty"`
+	NotBefore    string   `json:"not_before,omitempty"`
+	NotAfter     string   `json:"not_after,omitempty"`
+	DNSNames     []string `json:"dns_names,omitempty"`
+	UpdatedAt    string   `json:"updated_at,omitempty"`
+}
+
 // clusterGroup segregates clusters for membership-based access control. A
 // cluster may belong to multiple groups (many-to-many). Membership is the union
 // of local accounts (matched by username) and AD groups (matched by CN or full
@@ -103,6 +122,7 @@ type usersDBFile struct {
 	SAML          *samlPersisted         `json:"saml,omitempty"`
 	LDAP          *ldapPersisted         `json:"ldap,omitempty"`
 	Session       *sessionPolicy         `json:"session,omitempty"`
+	TLS           *tlsPolicy             `json:"tls,omitempty"`
 	Resets        []passwordResetRequest `json:"password_resets,omitempty"`
 	ClusterGroups []clusterGroup         `json:"cluster_groups,omitempty"`
 	Tokens        []personalToken        `json:"personal_tokens,omitempty"`
@@ -144,6 +164,7 @@ type userDB struct {
 	saml          *samlPersisted
 	ldapCfg       *ldapPersisted
 	session       *sessionPolicy
+	tls           *tlsPolicy
 	resets        []passwordResetRequest
 	clusterGroups []clusterGroup
 	tokens        []personalToken
@@ -188,6 +209,7 @@ func openUserDBFromBackend(be userStoreBackend) (*userDB, error) {
 	db.saml = f.SAML
 	db.ldapCfg = f.LDAP
 	db.session = f.Session
+	db.tls = f.TLS
 	db.resets = f.Resets
 	db.clusterGroups = f.ClusterGroups
 	db.tokens = f.Tokens
@@ -291,7 +313,7 @@ func (db *userDB) saveLocked() error {
 	if db.backend == nil {
 		return nil // in-memory store
 	}
-	out := usersDBFile{SAML: db.saml, LDAP: db.ldapCfg, Session: db.session, Resets: db.resets, ClusterGroups: db.clusterGroups, Tokens: db.tokens}
+	out := usersDBFile{SAML: db.saml, LDAP: db.ldapCfg, Session: db.session, TLS: db.tls, Resets: db.resets, ClusterGroups: db.clusterGroups, Tokens: db.tokens}
 	keys := make([]string, 0, len(db.accounts))
 	for k := range db.accounts {
 		keys = append(keys, k)
@@ -907,6 +929,37 @@ func (db *userDB) getSessionPolicy() *sessionPolicy {
 	}
 	c := *db.session
 	return &c
+}
+
+// getTLSPolicy returns a copy of the persisted HTTPS/TLS policy, or nil when
+// none is configured (HTTP-only, the default).
+func (db *userDB) getTLSPolicy() *tlsPolicy {
+	if db == nil {
+		return nil
+	}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	if db.tls == nil {
+		return nil
+	}
+	c := *db.tls
+	c.DNSNames = append([]string(nil), db.tls.DNSNames...)
+	return &c
+}
+
+// setTLSPolicy persists the HTTPS/TLS policy (cert metadata + on-disk cert/key
+// paths). A nil policy disables HTTPS and clears any stored metadata.
+func (db *userDB) setTLSPolicy(p *tlsPolicy) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if p == nil {
+		db.tls = nil
+	} else {
+		c := *p
+		c.DNSNames = append([]string(nil), p.DNSNames...)
+		db.tls = &c
+	}
+	return db.saveLocked()
 }
 
 // setSessionTTLSeconds persists the session TTL (in seconds). A value of 0

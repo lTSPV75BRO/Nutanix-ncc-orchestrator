@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Card,
+  Divider,
   Form,
   Input,
   InputNumber,
@@ -25,8 +26,10 @@ import {
   DownloadOutlined,
   KeyOutlined,
   LogoutOutlined,
+  LockOutlined,
   PlusOutlined,
   ReloadOutlined,
+  SafetyCertificateOutlined,
   SearchOutlined,
   UploadOutlined,
   WarningOutlined,
@@ -41,6 +44,8 @@ import type {
   PersonalToken,
   SessionPolicy,
   SSOConfig,
+  TLSApplyResult,
+  TLSPolicy,
   UserAccount,
   UserRole,
 } from "../../api/types";
@@ -1635,7 +1640,11 @@ function TokensCard() {
           { title: "Name", dataIndex: "name" },
           { title: "Role", dataIndex: "role", render: (v: string) => <Tag color={roleColor(v)}>{v || "—"}</Tag> },
           { title: "Created", dataIndex: "created_at", render: fmt },
-          { title: "Expires", dataIndex: "expires_at", render: fmt },
+          {
+            title: "Expires",
+            dataIndex: "expires_at",
+            render: (v?: string) => (v ? new Date(v).toLocaleString() : <Tag color="orange">Never</Tag>),
+          },
           { title: "Last used", dataIndex: "last_used_at", render: fmt },
           {
             title: "Actions",
@@ -1659,6 +1668,235 @@ function TokensCard() {
   );
 }
 
+// TLSCard manages HTTPS for the browser-facing UI server: upload a PEM
+// certificate + key to enable HTTPS (the stack restarts to bind TLS and session
+// cookies become Secure), or remove it to fall back to plain HTTP. The private
+// key is write-only — it is stored 0600 on the server and never returned.
+function TLSCard() {
+  const qc = useQueryClient();
+  const tlsQuery = useQuery({ queryKey: ["settings", "tls"], queryFn: api.getTLS });
+  const [form] = Form.useForm();
+  const [submitting, setSubmitting] = useState(false);
+  const cfg = tlsQuery.data as TLSPolicy | undefined;
+  const enabled = Boolean(cfg?.https_enabled);
+  // The stack may serve HTTPS-by-default (orchestrator self-signed) before any
+  // certificate has been registered through this card, so trust the live scheme
+  // too when labeling the current state.
+  const servingHTTPS = enabled || (typeof window !== "undefined" && window.location.protocol === "https:");
+
+  const fmt = (v?: string) => (v ? new Date(v).toLocaleString() : "—");
+
+  // After enabling/disabling HTTPS the stack restarts and the scheme changes,
+  // so the current origin stops answering. Guide the user to the new-scheme URL
+  // (same host/port) and offer to navigate there once the restart settles.
+  const announceSchemeSwitch = (result: TLSApplyResult, nextScheme: "https" | "http") => {
+    const port = window.location.port ? `:${window.location.port}` : "";
+    const target = `${nextScheme}://${window.location.hostname}${port}${window.location.pathname}`;
+    if (result.restarting) {
+      Modal.success({
+        title: nextScheme === "https" ? "HTTPS enabled — restarting" : "HTTPS disabled — restarting",
+        width: 540,
+        content: (
+          <div>
+            <Typography.Paragraph>
+              {result.tls.https_enabled
+                ? "The stack is restarting to serve over TLS. Session cookies will be marked Secure."
+                : "The stack is restarting to serve over plain HTTP."}{" "}
+              Reconnect at:
+            </Typography.Paragraph>
+            <Typography.Text code copyable={{ text: target }}>
+              {target}
+            </Typography.Text>
+            {nextScheme === "https" ? (
+              <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+                If you uploaded a self-signed certificate, your browser will warn about it — that is
+                expected; accept it to proceed.
+              </Typography.Paragraph>
+            ) : null}
+          </div>
+        ),
+        okText: "Reconnect now",
+        onOk: () => {
+          window.location.href = target;
+        },
+      });
+      // Auto-navigate after the restart has had time to come back up.
+      window.setTimeout(() => {
+        window.location.href = target;
+      }, 8000);
+    } else {
+      Modal.warning({
+        title: result.tls.https_enabled ? "Certificate installed" : "HTTPS disabled",
+        content:
+          "An automatic restart was unavailable. Restart the stack (v2-restart) for the change to take effect.",
+      });
+    }
+  };
+
+  const installMut = useMutation({
+    mutationFn: (v: { cert: string; key: string }) => api.installTLS(v),
+    onSuccess: (res) => {
+      form.resetFields();
+      void qc.invalidateQueries({ queryKey: ["settings", "tls"] });
+      announceSchemeSwitch(res, "https");
+    },
+    onError: (e) => notifyError(e, "Failed to enable HTTPS"),
+  });
+
+  // Generate (or renew) a self-signed certificate. We pass the hostname the
+  // admin is currently using so the certificate's SANs cover it; the backend
+  // always adds localhost/loopback too.
+  const generateMut = useMutation({
+    mutationFn: () => api.generateTLS({ hosts: [window.location.hostname].filter(Boolean) }),
+    onSuccess: (res) => {
+      void qc.invalidateQueries({ queryKey: ["settings", "tls"] });
+      announceSchemeSwitch(res, "https");
+    },
+    onError: (e) => notifyError(e, "Failed to generate self-signed certificate"),
+  });
+
+  const disableMut = useMutation({
+    mutationFn: () => api.disableTLS(),
+    onSuccess: (res) => {
+      void qc.invalidateQueries({ queryKey: ["settings", "tls"] });
+      announceSchemeSwitch(res, "http");
+    },
+    onError: (e) => notifyError(e, "Failed to disable HTTPS"),
+  });
+
+  const onFinish = async (v: { cert: string; key: string }) => {
+    setSubmitting(true);
+    try {
+      await installMut.mutateAsync({ cert: v.cert, key: v.key });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Card
+      className="page-card"
+      title={
+        <Space>
+          <SafetyCertificateOutlined /> HTTPS / TLS
+        </Space>
+      }
+      extra={
+        <Tag color={servingHTTPS ? "green" : "default"}>{servingHTTPS ? "HTTPS enabled" : "HTTP only"}</Tag>
+      }
+      loading={tlsQuery.isLoading}
+    >
+      <Typography.Paragraph type="secondary">
+        The UI is served over HTTPS by default with a self-signed certificate, and any plain-HTTP
+        request is redirected to HTTPS. Generate or renew a self-signed certificate with one click,
+        or upload your own PEM certificate and private key below. Applying a certificate restarts the
+        stack to bind the browser-facing server to TLS and marks session cookies as <code>Secure</code>.
+        The private key is stored with <code>0600</code> permissions on the server and is never shown
+        again.
+      </Typography.Paragraph>
+
+      <div style={{ marginBottom: 16 }}>
+        <Space wrap>
+          <Popconfirm
+            title={enabled ? "Renew the self-signed certificate?" : "Generate a self-signed certificate?"
+            }
+            description="The stack restarts to apply the new certificate. Browsers will show a one-time self-signed warning — accept it to continue."
+            okText={enabled ? "Renew & restart" : "Generate & restart"}
+            onConfirm={() => generateMut.mutate()}
+          >
+            <Button type="primary" icon={<SafetyCertificateOutlined />} loading={generateMut.isPending}>
+              {enabled ? "Renew self-signed certificate" : "Generate self-signed certificate"}
+            </Button>
+          </Popconfirm>
+          {enabled ? (
+            <Popconfirm
+              title="Disable HTTPS?"
+              description="The stack restarts and falls back to plain HTTP. The stored certificate and key are removed. Note: if the stack is configured for HTTPS-by-default it will regenerate a self-signed certificate on the next start."
+              okText="Disable HTTPS"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => disableMut.mutate()}
+            >
+              <Button danger icon={<DeleteOutlined />} loading={disableMut.isPending}>
+                Disable HTTPS
+              </Button>
+            </Popconfirm>
+          ) : null}
+        </Space>
+      </div>
+
+      {enabled ? (
+        <Alert
+          type="success"
+          showIcon
+          icon={<LockOutlined />}
+          style={{ marginBottom: 16 }}
+          message="HTTPS is enabled"
+          description={
+            <Space direction="vertical" size={2} style={{ width: "100%" }}>
+              <span>
+                <Typography.Text type="secondary">Subject: </Typography.Text>
+                <Typography.Text code>{cfg?.subject || "—"}</Typography.Text>
+              </span>
+              <span>
+                <Typography.Text type="secondary">Issuer: </Typography.Text>
+                {cfg?.issuer || "—"}
+              </span>
+              <span>
+                <Typography.Text type="secondary">Valid: </Typography.Text>
+                {fmt(cfg?.not_before)} → {fmt(cfg?.not_after)}
+              </span>
+              {cfg?.dns_names && cfg.dns_names.length > 0 ? (
+                <span>
+                  <Typography.Text type="secondary">SANs: </Typography.Text>
+                  {cfg.dns_names.map((d) => (
+                    <Tag key={d}>{d}</Tag>
+                  ))}
+                </span>
+              ) : null}
+            </Space>
+          }
+        />
+      ) : null}
+
+      <Divider titlePlacement="start" plain>
+        Advanced — bring your own certificate
+      </Divider>
+      <Typography.Paragraph type="secondary" style={{ marginTop: -8 }}>
+        Replace the self-signed certificate with one issued by your own CA (e.g. an internal PKI or a
+        publicly-trusted cert for a DNS name). Paste the full chain and the matching private key.
+      </Typography.Paragraph>
+      <Form form={form} layout="vertical" onFinish={onFinish}>
+        <Form.Item
+          name="cert"
+          label="Certificate (PEM)"
+          rules={[{ required: true, message: "Paste the PEM certificate (include any intermediates)" }]}
+          extra="Paste the full certificate chain: leaf certificate first, then any intermediates."
+        >
+          <Input.TextArea rows={5} placeholder={"-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"} />
+        </Form.Item>
+        <Form.Item
+          name="key"
+          label="Private key (PEM)"
+          rules={[{ required: true, message: "Paste the matching PEM private key" }]}
+          extra="The matching unencrypted private key. Stored 0600 on the server; never returned."
+        >
+          <Input.TextArea rows={4} placeholder={"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"} />
+        </Form.Item>
+        <Form.Item>
+          <Button
+            type="primary"
+            htmlType="submit"
+            icon={<LockOutlined />}
+            loading={submitting || installMut.isPending}
+          >
+            {enabled ? "Replace certificate & restart" : "Enable HTTPS & restart"}
+          </Button>
+        </Form.Item>
+      </Form>
+    </Card>
+  );
+}
+
 export function AccessSection() {
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
@@ -1667,6 +1905,7 @@ export function AccessSection() {
       <TokensCard />
       <ClusterGroupsCard />
       <SessionCard />
+      <TLSCard />
       <BackupRestoreCard />
       <ExternalAuthCard />
     </Space>

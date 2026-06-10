@@ -273,20 +273,90 @@ export function DashboardPage() {
   const initialLoading = previewReport.isLoading && !previewReport.data && !fullReport.data;
 
   if (initialLoading) {
+    // The loading state mirrors the *exact* structure of the loaded dashboard
+    // (hero card with the four stats + severity strip, then the filter-toolbar
+    // card, then the table) rather than a generic stack of skeletons. This
+    // keeps the LCP element (the "Operations Dashboard" <h4>) painting on first
+    // render and — critically — holds the above-the-fold layout at a stable
+    // height so the loading→loaded transition causes almost no layout shift
+    // (lower CLS). Numbers render as "—" placeholders that swap to real values
+    // in place without resizing their rows.
     return (
       <Space direction="vertical" size={16} style={{ width: "100%" }}>
+        {/* HERO STRIP */}
         <Card className="page-card dashboard-hero">
-          <Skeleton active paragraph={{ rows: 2 }} />
-        </Card>
-        <Row gutter={[16, 16]}>
-          {[0, 1, 2, 3].map((i) => (
-            <Col xs={12} md={6} key={i}>
-              <Card className="page-card">
-                <Skeleton active title={false} paragraph={{ rows: 2 }} />
-              </Card>
+          <Row gutter={[12, 12]} align="middle">
+            <Col xs={24} md={6}>
+              <Space size={12} align="center">
+                <div
+                  className="health-pill"
+                  style={{ background: "linear-gradient(135deg, #3f3f46, #27272ab0)" }}
+                >
+                  <div style={{ fontSize: 10, opacity: 0.9, letterSpacing: 1 }}>HEALTH</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, lineHeight: 1 }}>—</div>
+                </div>
+                <div>
+                  <Typography.Title level={4} style={{ margin: 0 }}>
+                    Operations Dashboard
+                  </Typography.Title>
+                  <Tag icon={<ClockCircleOutlined />} style={{ marginTop: 6 }}>
+                    Loading…
+                  </Tag>
+                </div>
+              </Space>
             </Col>
-          ))}
-        </Row>
+            <Col xs={24} md={12}>
+              <Row gutter={[8, 8]}>
+                {["Clusters OK", "Failed", "Total Plugins", "Pass"].map((t) => (
+                  <Col xs={12} md={6} key={t}>
+                    <Statistic title={t} value="—" />
+                  </Col>
+                ))}
+              </Row>
+            </Col>
+            <Col xs={24} md={6}>
+              <Space size={8} style={{ display: "flex", justifyContent: "flex-end" }} wrap>
+                <Button icon={<ReloadOutlined />} disabled>
+                  Refresh
+                </Button>
+                <Button type="primary" icon={<ArrowRightOutlined />} iconPosition="end" disabled>
+                  Insights
+                </Button>
+              </Space>
+            </Col>
+          </Row>
+          <div className="severity-totals-row">
+            {SEVERITY_META.map((sm) => (
+              <div key={sm.key} className="severity-total-pill" style={{ borderColor: sm.color }}>
+                <Badge color={sm.color} />
+                <Typography.Text strong style={{ color: sm.color }}>
+                  {sm.label}
+                </Typography.Text>
+                <Typography.Text strong>—</Typography.Text>
+              </div>
+            ))}
+            <div className="severity-total-pill subtle">
+              <Typography.Text type="secondary">UNKNOWN</Typography.Text>
+              <Typography.Text strong>—</Typography.Text>
+            </div>
+          </div>
+        </Card>
+
+        {/* FILTER TOOLBAR */}
+        <Card className="page-card filter-toolbar-card">
+          <Typography.Title level={5} className="section-title" style={{ marginBottom: 8 }}>
+            Alert Filters
+          </Typography.Title>
+          <Skeleton.Input active block style={{ height: 32 }} />
+          <Space size={[6, 6]} wrap style={{ marginTop: 12 }}>
+            <Skeleton.Button active size="small" />
+            <Skeleton.Button active size="small" />
+            <Skeleton.Button active size="small" />
+            <Skeleton.Button active size="small" />
+          </Space>
+        </Card>
+
+        {/* MAIN TABLE */}
         <Card className="page-card">
           <Skeleton active paragraph={{ rows: 8 }} />
         </Card>
