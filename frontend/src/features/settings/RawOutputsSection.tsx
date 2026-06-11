@@ -14,6 +14,7 @@ import type { ArtifactInfo } from "../../api/types";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { CodeEditor, inferEditorLanguage } from "../../components/CodeEditor";
 import { notify } from "../../notify";
+import { formatDateTime, relativeTime } from "../../utils/datetime";
 
 type Props = {
   onError: (e: unknown) => void;
@@ -25,20 +26,6 @@ function formatBytes(bytes: number): string {
   const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
   const v = bytes / Math.pow(1024, i);
   return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
-}
-
-function relativeTime(iso: string): string {
-  if (!iso) return "—";
-  const t = new Date(iso).getTime();
-  if (!Number.isFinite(t)) return "—";
-  const diff = Date.now() - t;
-  if (diff < 0) return "in the future";
-  if (diff < 60_000) return "just now";
-  const m = Math.floor(diff / 60_000);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
 }
 
 function iconForName(name: string) {
@@ -171,9 +158,11 @@ export function RawOutputsSection({ onError }: Props) {
                           {a.name}
                         </Typography.Text>
                       </Space>
-                      <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                        {formatBytes(a.size)} · modified {relativeTime(a.mod_time)}
-                      </Typography.Text>
+                      <Tooltip title={formatDateTime(a.mod_time)}>
+                        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                          {formatBytes(a.size)} · modified {relativeTime(a.mod_time)}
+                        </Typography.Text>
+                      </Tooltip>
                     </Space>
                   </List.Item>
                 );

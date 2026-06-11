@@ -54,6 +54,7 @@ import type {
   UserRole,
 } from "../../api/types";
 import { notify, notifyError } from "../../notify";
+import { formatDateTime } from "../../utils/datetime";
 
 const ROLE_OPTIONS = [
   { value: "admin", label: "admin — full access" },
@@ -428,7 +429,7 @@ function PasswordResetRequestsCard() {
             {
               title: "Requested",
               dataIndex: "requested_at",
-              render: (v: string) => (v ? new Date(v).toLocaleString() : "—"),
+              render: (v: string) => formatDateTime(v),
             },
             {
               title: "From IP",
@@ -940,7 +941,7 @@ function BackupRestoreCard() {
     {
       title: "Created",
       dataIndex: "mod_time",
-      render: (v: string) => (v ? new Date(v).toLocaleString() : "—"),
+      render: (v: string) => formatDateTime(v),
     },
     {
       title: "Actions",
@@ -1816,7 +1817,7 @@ function TokensCard() {
   });
 
   const tokens = (tokensQuery.data?.tokens ?? []) as PersonalToken[];
-  const fmt = (v?: string) => (v ? new Date(v).toLocaleString() : "—");
+  const fmt = (v?: string) => formatDateTime(v);
 
   return (
     <Card
@@ -1856,7 +1857,7 @@ function TokensCard() {
           {
             title: "Expires",
             dataIndex: "expires_at",
-            render: (v?: string) => (v ? new Date(v).toLocaleString() : <Tag color="orange">Never</Tag>),
+            render: (v?: string) => (v ? formatDateTime(v) : <Tag color="orange">Never</Tag>),
           },
           { title: "Last used", dataIndex: "last_used_at", render: fmt },
           {
@@ -1897,7 +1898,7 @@ function TLSCard() {
   // too when labeling the current state.
   const servingHTTPS = enabled || (typeof window !== "undefined" && window.location.protocol === "https:");
 
-  const fmt = (v?: string) => (v ? new Date(v).toLocaleString() : "—");
+  const fmt = (v?: string) => formatDateTime(v);
 
   // After enabling/disabling HTTPS the stack restarts and the scheme changes,
   // so the current origin stops answering. Guide the user to the new-scheme URL

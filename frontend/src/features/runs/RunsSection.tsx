@@ -19,6 +19,7 @@ import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { CodeEditor } from "../../components/CodeEditor";
 import { notify } from "../../notify";
 import { useAuth } from "../../auth/AuthContext";
+import { formatDateTime } from "../../utils/datetime";
 
 const RUN_TOAST_KEY = "ncc-run-active";
 
@@ -39,11 +40,7 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(value >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
-function formatTime(value: string): string {
-  if (!value) return "-";
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleString();
-}
+const formatTime = (value: string): string => formatDateTime(value);
 
 function formatElapsedSeconds(sec?: number): string {
   if (!Number.isFinite(sec) || (sec ?? 0) < 0) return "0s";

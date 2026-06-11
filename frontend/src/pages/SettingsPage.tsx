@@ -44,22 +44,7 @@ import { SystemHealthSection } from "../features/settings/SystemHealthSection";
 import { api } from "../api/client";
 import { useLocalStorageState } from "../hooks/useLocalStorageState";
 import { notify, notifyError } from "../notify";
-
-function relativeTime(iso: string): string {
-  if (!iso) return "—";
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return iso;
-  const diff = Date.now() - t;
-  const abs = Math.abs(diff);
-  const s = Math.floor(abs / 1000);
-  if (s < 60) return diff >= 0 ? `${s}s ago` : `in ${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return diff >= 0 ? `${m}m ago` : `in ${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return diff >= 0 ? `${h}h ago` : `in ${h}h`;
-  const d = Math.floor(h / 24);
-  return diff >= 0 ? `${d}d ago` : `in ${d}d`;
-}
+import { localDateKey as localDayKey, relativeTime } from "../utils/datetime";
 
 /**
  * Compact bar-sparkline of *completed* runs per day for the trailing N days.
@@ -253,9 +238,7 @@ function ConnectionTab({
 
   const buildLabel = (() => {
     if (!buildDate || buildDate === "unknown") return "";
-    const d = new Date(buildDate);
-    if (Number.isNaN(d.getTime())) return buildDate;
-    return d.toISOString().slice(0, 10);
+    return localDayKey(buildDate) || buildDate;
   })();
 
   return (

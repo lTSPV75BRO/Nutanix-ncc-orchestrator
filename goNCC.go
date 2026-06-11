@@ -2440,7 +2440,7 @@ func generateHTML(fs FS, rows []Row, filename string, meta HTMLMeta) error {
 	}
 	data := HTMLData{
 		Rows:    rows,
-		Now:     htmlNowForReport().Format(time.RFC3339),
+		Now:     htmlNowForReport().UTC().Format(time.RFC3339),
 		Meta:    meta,
 		Summary: sum,
 	}
@@ -3577,7 +3577,7 @@ func generateJSON(fs FS, blocks []ParsedBlock, filename string, meta HTMLMeta) e
 	}
 
 	output := JSONOutput{
-		GeneratedAt: time.Now().Format(time.RFC3339),
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 		Checks:      checks,
 		Summary: JSONSummary{
 			Total: len(blocks),
@@ -4115,7 +4115,7 @@ func writeAllClustersFailedHTML(fs FS, outDir string, failedClusters []string) e
 		Failed      []string
 		GeneratedAt string
 	}
-	d := data{Failed: failedClusters, GeneratedAt: time.Now().Format(time.RFC3339)}
+	d := data{Failed: failedClusters, GeneratedAt: time.Now().UTC().Format(time.RFC3339)}
 	f, err := fs.Create(path)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", path, err)
@@ -6117,7 +6117,7 @@ function initTooltips() {
 		ArtifactLinksJSON:    template.JS(artifactLinksJSON),
 		ReportMetaJSON:       template.JS(reportMetaJSON),
 		Clusters:             perCluster,
-		GeneratedAt:          time.Now().Format(time.RFC3339),
+		GeneratedAt:          time.Now().UTC().Format(time.RFC3339),
 	}
 
 	f, err := fs.Create(path)

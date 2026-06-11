@@ -24,6 +24,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { ChangePasswordPage, ChangePasswordModal } from "./pages/ChangePasswordPage";
 import { PersonalTokensModal } from "./features/tokens/PersonalTokensModal";
 import { SessionIdleGuard } from "./components/SessionIdleGuard";
+import { formatDateTime, formatTime, localDateKey, parseInstant } from "./utils/datetime";
 
 const { Header, Content } = Layout;
 const DashboardPage = lazy(() => import("./pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
@@ -112,9 +113,7 @@ function BrandVersionTag({
   const shortVersion = version.split("-")[0];
   const built = (() => {
     if (!buildDate || buildDate === "unknown") return "";
-    const d = new Date(buildDate);
-    if (Number.isNaN(d.getTime())) return buildDate;
-    return d.toISOString().slice(0, 10);
+    return localDateKey(buildDate) || buildDate;
   })();
   const tooltip = (
     <div style={{ fontSize: 12, lineHeight: 1.5 }}>
@@ -183,7 +182,7 @@ function HeaderTriggerRunButton() {
       // header pill can display elapsed time without waiting for the next
       // transition.
       if (isActive && active.data?.started_at) {
-        startMsRef.current = new Date(active.data.started_at).getTime();
+        startMsRef.current = parseInstant(active.data.started_at)?.getTime() ?? null;
       }
       wasActiveRef.current = isActive;
       return;
@@ -191,7 +190,7 @@ function HeaderTriggerRunButton() {
     const wasActive = wasActiveRef.current;
     if (isActive && !wasActive) {
       const startedAt = active.data?.started_at;
-      startMsRef.current = startedAt ? new Date(startedAt).getTime() : Date.now();
+      startMsRef.current = startedAt ? (parseInstant(startedAt)?.getTime() ?? Date.now()) : Date.now();
     }
     if (!isActive && wasActive) {
       const elapsedMs = startMsRef.current ? Date.now() - startMsRef.current : 0;
@@ -239,10 +238,10 @@ function HeaderTriggerRunButton() {
         key: RUN_TOAST_KEY,
         message: "Run accepted",
         description: `PID ${out.pid} · Started ${
-          out.started_at ? new Date(out.started_at).toLocaleTimeString() : "just now"
+          out.started_at ? formatTime(out.started_at) : "just now"
         }. Live logs are visible on Settings → Runs.`,
       });
-      startMsRef.current = out.started_at ? new Date(out.started_at).getTime() : Date.now();
+      startMsRef.current = out.started_at ? (parseInstant(out.started_at)?.getTime() ?? Date.now()) : Date.now();
       void active.refetch();
     } catch (e) {
       notify.close(RUN_TOAST_KEY);
@@ -251,7 +250,7 @@ function HeaderTriggerRunButton() {
       // duration, PID and runner log path instead of a generic error.
       if (e instanceof ApiError && e.status === 409 && e.data && typeof e.data === "object") {
         const d = e.data as Partial<RunConflictData>;
-        const startedAt = d.started_at ? new Date(d.started_at).toLocaleString() : "—";
+        const startedAt = d.started_at ? formatDateTime(d.started_at) : "—";
         const elapsed = d.elapsed_human || (d.elapsed_seconds != null ? `${d.elapsed_seconds}s` : "—");
         const lines: string[] = [
           `Started: ${startedAt}`,

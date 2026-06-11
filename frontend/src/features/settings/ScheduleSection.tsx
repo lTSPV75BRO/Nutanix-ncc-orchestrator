@@ -4,6 +4,7 @@ import { ReloadOutlined, SaveOutlined, HeartOutlined, InfoCircleOutlined } from 
 import { api } from "../../api/client";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { notify } from "../../notify";
+import { formatDateTime as formatTime, formatDateTime, relativeTime } from "../../utils/datetime";
 
 type Props = {
   backendConfigPath: string;
@@ -33,28 +34,6 @@ type ScheduleHealth = {
   detector?: string;
   install_check_error?: string;
 };
-
-function formatTime(value?: string): string {
-  if (!value) return "—";
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleString();
-}
-
-function relativeTime(iso?: string): string {
-  if (!iso) return "—";
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return iso;
-  const diff = Date.now() - t;
-  const abs = Math.abs(diff);
-  const s = Math.floor(abs / 1000);
-  if (s < 60) return diff >= 0 ? `${s}s ago` : `in ${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return diff >= 0 ? `${m}m ago` : `in ${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return diff >= 0 ? `${h}h ago` : `in ${h}h`;
-  const d = Math.floor(h / 24);
-  return diff >= 0 ? `${d}d ago` : `in ${d}d`;
-}
 
 function formatBytes(bytes?: number): string {
   if (!bytes || bytes <= 0) return "0 B";
@@ -410,10 +389,10 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
                 <Typography.Text>{health.detector || "—"}</Typography.Text>
               </Descriptions.Item>
               <Descriptions.Item label="Last run">
-                {health.last_run ? <Tooltip title={health.last_run}>{relativeTime(health.last_run)}</Tooltip> : "—"}
+                {health.last_run ? <Tooltip title={formatDateTime(health.last_run)}>{relativeTime(health.last_run)}</Tooltip> : "—"}
               </Descriptions.Item>
               <Descriptions.Item label="Last success">
-                {health.last_success ? <Tooltip title={health.last_success}>{relativeTime(health.last_success)}</Tooltip> : "—"}
+                {health.last_success ? <Tooltip title={formatDateTime(health.last_success)}>{relativeTime(health.last_success)}</Tooltip> : "—"}
               </Descriptions.Item>
               <Descriptions.Item label="State updated">{formatTime(health.last_updated_at)}</Descriptions.Item>
               <Descriptions.Item label="Log file">

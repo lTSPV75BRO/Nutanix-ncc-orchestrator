@@ -22,6 +22,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import type { DiagnosticCheck, DiagnosticsData } from "../../api/types";
 import { notify, notifyError } from "../../notify";
+import { formatTime } from "../../utils/datetime";
 
 const STATUS_META: Record<
   DiagnosticCheck["status"],
@@ -151,7 +152,7 @@ export function SystemHealthSection() {
                     </Tooltip>
                   ) : null}
                   {data?.generated_at ? (
-                    <Tag>checked {new Date(data.generated_at).toLocaleTimeString()}</Tag>
+                    <Tag>checked {formatTime(data.generated_at)}</Tag>
                   ) : null}
                 </Space>
               </div>

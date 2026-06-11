@@ -19,6 +19,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import type { CreatedToken, PersonalToken } from "../../api/types";
 import { notify, notifyError } from "../../notify";
+import { formatDateTime } from "../../utils/datetime";
 
 const { Text, Paragraph } = Typography;
 
@@ -31,11 +32,7 @@ const EXPIRY_OPTIONS = [
   { value: 0, label: "Never" },
 ];
 
-function fmtDate(s?: string): string {
-  if (!s) return "—";
-  const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? s : d.toLocaleString();
-}
+const fmtDate = (s?: string): string => formatDateTime(s);
 
 // An empty expiry means the token never expires (long-lived automation
 // credential), so render it explicitly rather than as a missing value.

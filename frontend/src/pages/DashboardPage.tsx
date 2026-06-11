@@ -45,6 +45,7 @@ import {
   toNumber,
 } from "../utils/report";
 import { useLocalStorageState } from "../hooks/useLocalStorageState";
+import { ageMs, formatDateTime, formatTime, relativeTime } from "../utils/datetime";
 
 type Severity = "FAIL" | "WARN" | "ERR" | "INFO";
 type CompareMode = "all" | "changed" | "flaky";
@@ -56,29 +57,13 @@ const SEVERITY_META: Array<{ key: Severity; color: string; label: string; icon: 
   { key: "INFO", color: "#38bdf8", label: "INFO", icon: <InfoCircleOutlined /> },
 ];
 
-function relativeTime(iso: string): string {
-  if (!iso) return "—";
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return iso;
-  const diff = Date.now() - t;
-  const abs = Math.abs(diff);
-  const s = Math.floor(abs / 1000);
-  if (s < 60) return diff >= 0 ? `${s}s ago` : `in ${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return diff >= 0 ? `${m}m ago` : `in ${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return diff >= 0 ? `${h}h ago` : `in ${h}h`;
-  const d = Math.floor(h / 24);
-  return diff >= 0 ? `${d}d ago` : `in ${d}d`;
-}
-
 function freshnessTag(iso: string): { color: string; label: string } {
   if (!iso) return { color: "default", label: "Unknown" };
-  const ageMs = Date.now() - new Date(iso).getTime();
-  if (Number.isNaN(ageMs)) return { color: "default", label: "Unknown" };
-  if (ageMs <= 6 * 3600_000) return { color: "success", label: "Fresh" };
-  if (ageMs <= 24 * 3600_000) return { color: "processing", label: "Recent" };
-  if (ageMs <= 72 * 3600_000) return { color: "warning", label: "Aging" };
+  const age = ageMs(iso);
+  if (!Number.isFinite(age)) return { color: "default", label: "Unknown" };
+  if (age <= 6 * 3600_000) return { color: "success", label: "Fresh" };
+  if (age <= 24 * 3600_000) return { color: "processing", label: "Recent" };
+  if (age <= 72 * 3600_000) return { color: "warning", label: "Aging" };
   return { color: "error", label: "Stale" };
 }
 
@@ -600,7 +585,7 @@ export function DashboardPage() {
 
             if (runActive) {
               const startedAt = runActiveQuery.data?.started_at
-                ? new Date(runActiveQuery.data.started_at).toLocaleTimeString()
+                ? formatTime(runActiveQuery.data.started_at)
                 : "moments ago";
               return (
                 <Empty
@@ -633,7 +618,7 @@ export function DashboardPage() {
                       <Typography.Text strong>All clusters clean — no alerts in the latest run</Typography.Text>
                       <Typography.Text type="secondary">
                         {hasPriorRun
-                          ? `Last run finished ${new Date(runTimestamp).toLocaleString()} with no findings.`
+                          ? `Last run finished ${formatDateTime(runTimestamp)} with no findings.`
                           : "The most recent run found no failures, errors, or warnings."}
                       </Typography.Text>
                     </Space>

@@ -36,6 +36,7 @@ import { DrilldownDiffPanel } from "../features/report/DrilldownDiffPanel";
 import { FlakyChecksPanel } from "../features/report/FlakyChecksPanel";
 import { SloPanel } from "../features/report/SloPanel";
 import { notifyError } from "../notify";
+import { ageMs, relativeTime } from "../utils/datetime";
 
 // ---------- helpers ----------
 
@@ -82,29 +83,13 @@ function kbUrl(row: Record<string, unknown>): string {
   return id ? `http://portal.nutanix.com/kb/${id}` : "";
 }
 
-function relativeTime(iso: string): string {
-  if (!iso) return "—";
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return iso;
-  const diff = Date.now() - t;
-  const abs = Math.abs(diff);
-  const s = Math.floor(abs / 1000);
-  if (s < 60) return diff >= 0 ? `${s}s ago` : `in ${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return diff >= 0 ? `${m}m ago` : `in ${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return diff >= 0 ? `${h}h ago` : `in ${h}h`;
-  const d = Math.floor(h / 24);
-  return diff >= 0 ? `${d}d ago` : `in ${d}d`;
-}
-
 function freshnessTag(iso: string): { color: string; label: string } {
   if (!iso) return { color: "default", label: "Unknown" };
-  const ageMs = Date.now() - new Date(iso).getTime();
-  if (Number.isNaN(ageMs)) return { color: "default", label: "Unknown" };
-  if (ageMs <= 6 * 3600_000) return { color: "success", label: "Fresh" };
-  if (ageMs <= 24 * 3600_000) return { color: "processing", label: "Recent" };
-  if (ageMs <= 72 * 3600_000) return { color: "warning", label: "Aging" };
+  const age = ageMs(iso);
+  if (!Number.isFinite(age)) return { color: "default", label: "Unknown" };
+  if (age <= 6 * 3600_000) return { color: "success", label: "Fresh" };
+  if (age <= 24 * 3600_000) return { color: "processing", label: "Recent" };
+  if (age <= 72 * 3600_000) return { color: "warning", label: "Aging" };
   return { color: "error", label: "Stale" };
 }
 

@@ -31,6 +31,7 @@ import dayjs, { type Dayjs } from "dayjs";
 import { api, type AuditQuery } from "../../api/client";
 import type { AuditLogEntry } from "../../api/types";
 import { notify } from "../../notify";
+import { formatDateTime, relativeTime } from "../../utils/datetime";
 
 type Props = {
   onError: (e: unknown) => void;
@@ -48,21 +49,6 @@ function formatBytes(n: number): string {
   return `${value.toFixed(value >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
-function relativeTime(iso: string): string {
-  if (!iso) return "—";
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return iso;
-  const diff = Date.now() - t;
-  const abs = Math.abs(diff);
-  const s = Math.floor(abs / 1000);
-  if (s < 60) return diff >= 0 ? `${s}s ago` : `in ${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return diff >= 0 ? `${m}m ago` : `in ${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return diff >= 0 ? `${h}h ago` : `in ${h}h`;
-  const d = Math.floor(h / 24);
-  return diff >= 0 ? `${d}d ago` : `in ${d}d`;
-}
 
 const ACTION_PRESETS: { label: string; value: string }[] = [
   { label: "All actions", value: "" },
@@ -139,7 +125,7 @@ export function AuditLogSection({ onError }: Props) {
         key: "ts",
         width: 150,
         render: (_, row) => (
-          <Tooltip title={row.ts}>
+          <Tooltip title={formatDateTime(row.ts)}>
             <Typography.Text style={{ fontSize: 12 }}>{relativeTime(row.ts)}</Typography.Text>
           </Tooltip>
         ),
@@ -359,7 +345,7 @@ export function AuditLogSection({ onError }: Props) {
         ) : null}
         {data ? <Tag>Size: {formatBytes(data.size || 0)}</Tag> : null}
         {data?.mod_time ? (
-          <Tooltip title={data.mod_time}>
+          <Tooltip title={formatDateTime(data.mod_time)}>
             <Tag>Last entry: {relativeTime(data.mod_time)}</Tag>
           </Tooltip>
         ) : null}
