@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -1457,6 +1458,73 @@ func TestBindConfigDefaults(t *testing.T) {
 	}
 	if cfg.RetryMaxAttempts != 6 {
 		t.Errorf("Expected default RetryMaxAttempts 6, got %d", cfg.RetryMaxAttempts)
+	}
+}
+
+func TestResolveUnderBase(t *testing.T) {
+	base := filepath.Join(string(filepath.Separator), "opt", "ncc")
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"relative is anchored", "outputfiles", filepath.Join(base, "outputfiles")},
+		{"nested relative is anchored", filepath.Join("data", "runs"), filepath.Join(base, "data", "runs")},
+		{"absolute is untouched", filepath.Join(string(filepath.Separator), "var", "lib", "x"), filepath.Join(string(filepath.Separator), "var", "lib", "x")},
+		{"empty stays empty", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveUnderBase(tc.in, base); got != tc.want {
+				t.Errorf("resolveUnderBase(%q, %q) = %q, want %q", tc.in, base, got, tc.want)
+			}
+		})
+	}
+	if got := resolveUnderBase("outputfiles", ""); got != "outputfiles" {
+		t.Errorf("empty base must leave path unchanged, got %q", got)
+	}
+}
+
+// TestBindConfigAnchorsRelativeOutputDirsToConfigDir is the regression guard for
+// the scheduled-run bug: a cron job runs the orchestrator with an arbitrary
+// working directory, so relative output dirs in config.yaml must resolve against
+// the config file's directory (not the cwd) so results land where the API/UI
+// reads them.
+func TestBindConfigAnchorsRelativeOutputDirsToConfigDir(t *testing.T) {
+	viper.Reset()
+	defer viper.Reset()
+	viper.SetEnvPrefix("ncc")
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+	viper.AutomaticEnv()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cfgBody := "clusters: \"10.0.0.1\"\n" +
+		"username: \"admin\"\n" +
+		"output-dir-logs: \"nccfiles\"\n" +
+		"output-dir-filtered: \"outputfiles\"\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgBody), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	viper.Set("config", cfgPath)
+
+	cfg, err := bindConfig()
+	if err != nil {
+		t.Fatalf("bindConfig() failed: %v", err)
+	}
+
+	wantLogs := filepath.Join(dir, "nccfiles")
+	wantFiltered := filepath.Join(dir, "outputfiles")
+	if cfg.OutputDirLogs != wantLogs {
+		t.Errorf("OutputDirLogs = %q, want %q (anchored to config dir)", cfg.OutputDirLogs, wantLogs)
+	}
+	if cfg.OutputDirFiltered != wantFiltered {
+		t.Errorf("OutputDirFiltered = %q, want %q (anchored to config dir)", cfg.OutputDirFiltered, wantFiltered)
+	}
+	// RunHistoryDir is derived from OutputDirFiltered and must inherit the base.
+	wantHistory := filepath.Join(wantFiltered, "runs")
+	if cfg.RunHistoryDir != wantHistory {
+		t.Errorf("RunHistoryDir = %q, want %q", cfg.RunHistoryDir, wantHistory)
 	}
 }
 
@@ -4365,17 +4433,19 @@ func TestCollectBackupEntriesIncludesAuditLogAndState(t *testing.T) {
 func TestV2StartStateRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	opts := v2StartOptions{
-		InstallDir:            dir,
-		APIListen:             ":9091",
-		UIListen:              ":9090",
-		APICORSOrigins:        "https://ncc.corp.example.com",
-		UIAllowedOrigins:      "https://ncc.corp.example.com,http://10.0.0.5:8080",
-		APIAuthMode:           "hybrid",
-		APISessionTTL:         3 * time.Hour,
-		APIRateLimitPerMinute: 0, // disabled — must survive (no omitempty)
-		SelfHeal:              true,
-		SelfHealMaxRestarts:   5,
-		SelfHealWindow:        15 * time.Minute,
+		InstallDir:                 dir,
+		APIListen:                  ":9091",
+		UIListen:                   ":9090",
+		APICORSOrigins:             "https://ncc.corp.example.com",
+		UIAllowedOrigins:           "https://ncc.corp.example.com,http://10.0.0.5:8080",
+		APIAuthMode:                "hybrid",
+		APISessionTTL:              3 * time.Hour,
+		APIRateLimitPerMinute:      0, // disabled — must survive (no omitempty)
+		SelfHeal:                   true,
+		SelfHealMaxRestarts:        5,
+		SelfHealWindow:             15 * time.Minute,
+		SelfHealProbeInterval:      20 * time.Second,
+		SelfHealUnhealthyThreshold: 4,
 		// Path/ephemeral fields below must NOT leak into the persisted state.
 		ConfigPath: filepath.Join(dir, "config.yaml"),
 		Detach:     true,
@@ -4420,6 +4490,8 @@ func TestV2StartStateRoundTrip(t *testing.T) {
 		"--self-heal",
 		"--self-heal-max-restarts 5",
 		"--self-heal-window 15m0s",
+		"--self-heal-probe-interval 20s",
+		"--self-heal-unhealthy-threshold 4",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("restart args missing %q; got: %s", want, joined)
@@ -4433,6 +4505,88 @@ func TestV2StartStateRoundTrip(t *testing.T) {
 	// Absent state → no args (caller falls back to a bare default start).
 	if _, ok := v2StartArgsFromState(t.TempDir()); ok {
 		t.Error("expected ok=false when no state file is present")
+	}
+}
+
+// TestBuildAPIHealthProbeCmd checks the api-server self-probe command is
+// assembled with the built-in --health-check mode and the addressing flags it
+// needs, and that an empty binary yields no command.
+func TestBuildAPIHealthProbeCmd(t *testing.T) {
+	got := buildAPIHealthProbeCmd("/opt/ncc/bin/ncc-api-server", ":8081", "/opt/ncc/.ncc-api-token", "/opt/ncc")
+	for _, want := range []string{
+		"ncc-api-server",
+		"--health-check",
+		"--listen",
+		":8081",
+		"--token-file-path",
+		"/opt/ncc/.ncc-api-token",
+		"--repo-root",
+		"/opt/ncc",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("probe cmd missing %q; got: %s", want, got)
+		}
+	}
+	if buildAPIHealthProbeCmd("", ":8081", "/t", "/r") != "" {
+		t.Error("empty binary must yield an empty probe command")
+	}
+}
+
+// TestSelfHealSupervisorScript asserts the generated supervisor loop is valid
+// POSIX sh and encodes the enhanced behavior: health-probe-driven restarts of a
+// hung-but-alive process, exponential backoff, and cooldown-and-resume (no
+// permanent give-up) once the restart budget is exhausted.
+func TestSelfHealSupervisorScript(t *testing.T) {
+	healthCmd := "'/opt/ncc/bin/ncc-api-server' --health-check --listen ':8081'"
+	script := selfHealSupervisorScript("api", "'/opt/ncc/bin/ncc-api-server' --listen ':8081'", "/run/api.pid", "/logs/api.log", healthCmd, 5, 600, 10, 3)
+
+	for _, want := range []string{
+		"MAX_RESTARTS=5",
+		"WINDOW_SECONDS=600",
+		"PROBE_INTERVAL=10",
+		"UNHEALTHY_MAX=3",
+		"COOLDOWN_SECONDS=$WINDOW_SECONDS",
+		"HEALTH_CMD=",
+		"unhealthy threshold reached; restarting",
+		"cooling down", // cooldown-and-resume, not exit
+		"backoff=$((backoff*2))",
+		"BACKOFF_CAP",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("supervisor script missing %q", want)
+		}
+	}
+	// The enhanced supervisor must never permanently exit on exhaustion.
+	if strings.Contains(script, "exit 1") {
+		t.Error("supervisor must cool down and resume, not exit on exhausted restarts")
+	}
+
+	// Syntax-check the generated script with `sh -n` so a quoting/`set -e`
+	// regression is caught at build time rather than on a production host.
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available; skipping syntax check")
+	}
+	f := filepath.Join(t.TempDir(), "supervisor.sh")
+	if err := os.WriteFile(f, []byte(script), 0o600); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	if out, err := exec.Command("sh", "-n", f).CombinedOutput(); err != nil {
+		t.Fatalf("generated supervisor script is not valid POSIX sh: %v\n%s", err, out)
+	}
+
+	// The probe branch is gated at runtime by a non-empty HEALTH_CMD, so the
+	// health command must be embedded for the API supervisor...
+	if !strings.Contains(script, "--health-check") {
+		t.Error("API supervisor script should embed the health-check probe command")
+	}
+	// ...and the liveness-only (UI) variant must set an empty HEALTH_CMD so the
+	// probe branch never fires.
+	noProbe := selfHealSupervisorScript("ui", "'/bin/ui'", "/run/ui.pid", "/logs/ui.log", "", 3, 300, 10, 3)
+	if !strings.Contains(noProbe, "HEALTH_CMD=''") {
+		t.Error("liveness-only supervisor should set an empty HEALTH_CMD")
+	}
+	if strings.Contains(noProbe, "--health-check") {
+		t.Error("liveness-only supervisor should not embed a health-check command")
 	}
 }
 

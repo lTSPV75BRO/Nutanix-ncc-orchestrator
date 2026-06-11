@@ -21,12 +21,14 @@ import {
   CloseCircleOutlined,
   CodeOutlined,
   FileTextOutlined,
+  HeartOutlined,
   KeyOutlined,
   LinkOutlined,
   ReloadOutlined,
   SettingOutlined,
   TeamOutlined,
   ThunderboltOutlined,
+  ToolOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { ConfigSection } from "../features/settings/ConfigSection";
@@ -37,7 +39,8 @@ import { JsonOutputsSection } from "../features/settings/JsonOutputsSection";
 import { RawOutputsSection } from "../features/settings/RawOutputsSection";
 import { ApiExplorerSection } from "../features/settings/ApiExplorerSection";
 import { AuditLogSection } from "../features/settings/AuditLogSection";
-import { AccessSection } from "../features/settings/AccessSection";
+import { AccessSection, MaintenanceSection } from "../features/settings/AccessSection";
+import { SystemHealthSection } from "../features/settings/SystemHealthSection";
 import { api } from "../api/client";
 import { useLocalStorageState } from "../hooks/useLocalStorageState";
 import { notify, notifyError } from "../notify";
@@ -478,13 +481,27 @@ export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
           children: <AuditLogSection onError={notifyError} />,
         },
         {
+          key: "health",
+          label: tabLabel(<HeartOutlined />, "System Health"),
+          children: <SystemHealthSection />,
+        },
+        {
+          key: "maintenance",
+          label: tabLabel(<ToolOutlined />, "Maintenance"),
+          children: <MaintenanceSection />,
+        },
+        {
           key: "developer",
           label: tabLabel(<LinkOutlined />, "Developer"),
           children: <DeveloperTab onError={notifyError} />,
         },
   ];
   if (loginEnabled) {
-    items.splice(items.length - 1, 0, {
+    // Insert Access just before Maintenance so the trailing admin tabs read
+    // Access → Maintenance → Developer.
+    const maintenanceIdx = items.findIndex((it) => it.key === "maintenance");
+    const insertAt = maintenanceIdx >= 0 ? maintenanceIdx : items.length - 1;
+    items.splice(insertAt, 0, {
       key: "access",
       label: tabLabel(<TeamOutlined />, "Access"),
       children: <AccessSection />,

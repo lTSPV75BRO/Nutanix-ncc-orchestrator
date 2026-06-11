@@ -1044,6 +1044,36 @@ func runHashPassword() {
 // --users-db is set, otherwise nil. Shared by startup and the offline
 // --reset-password recovery path so both operate on the same store.
 func (s *apiServer) resolveUserStoreBackend() (userStoreBackend, error) {
+	be, err := s.resolveBaseUserStoreBackend()
+	if err != nil || be == nil {
+		return be, err
+	}
+	// Optional envelope encryption at rest: when a master key is configured the
+	// document is transparently AES-256-GCM encrypted on save and decrypted on
+	// load (legacy plaintext stores are migrated on the next write). No key →
+	// unchanged plaintext behavior.
+	key, err := loadMasterKey(s.usersDBKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("user store encryption: %w", err)
+	}
+	if key != nil {
+		s.userStoreEncrypted = true
+		return &encryptingBackend{inner: be, key: key}, nil
+	}
+	// Fail-fast self-heal guard: if the on-disk store is already encrypted but
+	// no master key is configured, loading it as plaintext would fail to parse
+	// and the server would bootstrap a *fresh* admin — silently orphaning every
+	// real account and locking operators out. Refuse to start with an
+	// actionable message instead.
+	if data, lerr := be.load(); lerr == nil && documentIsEncrypted(data) {
+		return nil, fmt.Errorf("user store at %s is encrypted but no master key is configured: set %s (or --users-db-key-file / %s) to the 32-byte key it was encrypted with; refusing to start so a fresh admin is not bootstrapped over your existing accounts", be.location(), masterKeyEnv, masterKeyFileEnv)
+	}
+	return be, nil
+}
+
+// resolveBaseUserStoreBackend picks the unencrypted persistence backend
+// (Kubernetes Secret in-cluster, else a local 0600 JSON file).
+func (s *apiServer) resolveBaseUserStoreBackend() (userStoreBackend, error) {
 	if strings.TrimSpace(s.usersDBSecret) != "" {
 		cli, err := newInClusterSecretClient(s.usersDBSecretNS)
 		if err != nil {

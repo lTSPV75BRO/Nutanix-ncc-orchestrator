@@ -40,6 +40,31 @@ metrics in the `ncc_` namespace alongside its own build/runtime metrics:
 | `ncc_last_run_duration_seconds` | gauge | Wall-clock duration of the last run |
 | `ncc_last_run_timestamp_seconds` | gauge | Unix epoch of the last run |
 
+#### Operational metrics (concurrent runs, auth, updates)
+
+In addition to the per-cluster series above, the api-server exposes live
+operational counters/gauges (process-lifetime; reset on restart, matching
+Prometheus's counter semantics):
+
+| Metric | Type | Description |
+| --- | --- | --- |
+| `ncc_runs_running` | gauge | NCC runs currently executing (concurrent engine) |
+| `ncc_runs_queued` | gauge | Runs waiting for a free concurrency slot |
+| `ncc_runs_max_concurrent` | gauge | Configured `--max-concurrent-runs` |
+| `ncc_runs_triggered_total` / `ncc_runs_completed_total` / `ncc_runs_failed_total` | counter | Run lifecycle counts |
+| `ncc_run_duration_seconds_sum` / `ncc_run_duration_seconds_count` | summary | Run durations; `avg = rate(sum)/rate(count)` |
+| `ncc_run_last_duration_seconds` | gauge | Duration of the most recently completed run |
+| `ncc_auth_logins_total` | counter | Successful interactive logins (local + LDAP) |
+| `ncc_auth_login_failures_total` | counter | Failed login attempts (bad creds, locked, directory down) |
+| `ncc_auth_lockouts_total` | counter | Accounts newly locked by the brute-force guard |
+| `ncc_update_applied_total` / `ncc_update_failed_total` | counter | In-app software-update outcomes |
+| `ncc_ratelimit_allowed_total` / `ncc_ratelimit_blocked_total` | counter | Rate-limiter decisions (when enabled) |
+
+A starter Grafana dashboard wiring these up (run throughput, run duration,
+login success/failure/lockouts, rate-limiter, update outcomes, process health)
+ships at [`deploy/grafana/ncc-orchestrator-dashboard.json`](deploy/grafana/ncc-orchestrator-dashboard.json) —
+import it and pick your Prometheus data source.
+
 Scrape it like any target (add `--metrics-public` to the api-server for
 token-free scraping on a private network; otherwise send the API token):
 
@@ -216,6 +241,13 @@ groups:
 - `nutanix_ncc_run_health_score`
 - `nutanix_ncc_check_problem_ratio`
 - `time() - nutanix_ncc_last_run_timestamp_seconds`
+
+Operational (api-server `/metrics`):
+
+- Avg run duration: `rate(ncc_run_duration_seconds_sum[15m]) / rate(ncc_run_duration_seconds_count[15m])`
+- Login failure rate: `rate(ncc_auth_login_failures_total[5m])`
+- Lockouts in the last hour: `increase(ncc_auth_lockouts_total[1h])`
+- Queue backlog: `ncc_runs_queued`
 
 ## Troubleshooting
 

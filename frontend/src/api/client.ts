@@ -16,6 +16,7 @@ import type {
   RunInfo,
   ScheduleState,
   ScheduleHealthData,
+  DiagnosticsData,
   TriggerRunData,
   MeData,
   LoginData,
@@ -36,6 +37,9 @@ import type {
   CreatedToken,
   TLSPolicy,
   TLSApplyResult,
+  UpdateStatus,
+  UpdateJob,
+  BackupEntry,
 } from "./types";
 
 // ApiError preserves both the human-readable message and the structured `data`
@@ -229,6 +233,8 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   scheduleHealth: () => callApi<ScheduleHealthData>("/api/v1/schedule/health"),
+  diagnostics: () => callApi<DiagnosticsData>("/api/v1/health/diagnostics"),
+  healDiagnostics: () => callApi<DiagnosticsData>("/api/v1/health/diagnostics", { method: "POST" }),
   runs: (opts?: { limit?: number; source?: "history" | "summary" | "trigger"; since?: string }) => {
     const params = new URLSearchParams();
     if (typeof opts?.limit === "number" && opts.limit > 0) params.set("limit", String(opts.limit));
@@ -428,4 +434,44 @@ export const api = {
       body: JSON.stringify(payload ?? {}),
     }),
   disableTLS: () => callApi<TLSApplyResult>("/api/v1/settings/tls", { method: "DELETE" }),
+  updateStatus: () => callApi<UpdateStatus>("/api/v1/settings/update"),
+  checkUpdate: () => callApi<UpdateStatus>("/api/v1/settings/update?check=1"),
+  applyUpdate: (payload?: { target_version?: string }) =>
+    callApiEnvelope<UpdateJob>("/api/v1/settings/update/apply", {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    }),
+  listBackups: () => callApi<{ backups: BackupEntry[] }>("/api/v1/settings/backups"),
+  createBackup: () =>
+    callApiEnvelope<{ backup: BackupEntry }>("/api/v1/settings/backups", { method: "POST" }),
+  restoreNamedBackup: (name: string) =>
+    callApiEnvelope<{ restarting?: boolean }>("/api/v1/settings/backups/restore", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+  deleteBackup: (name: string) =>
+    callApi<unknown>("/api/v1/settings/backups/delete", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+  downloadNamedBackup: async (name: string): Promise<{ blob: Blob; filename: string }> => {
+    const csrf = readCookie("ncc_csrf");
+    const response = await fetch(
+      `/api/v1/settings/backups/download?name=${encodeURIComponent(name)}`,
+      {
+        method: "GET",
+        credentials: "same-origin",
+        headers: {
+          "X-Requested-With": "ncc-ui",
+          ...(csrf ? { "X-CSRF-Token": csrf } : {}),
+        },
+      },
+    );
+    const contentType = (response.headers.get("content-type") || "").toLowerCase();
+    if (!response.ok || contentType.includes("application/json")) {
+      const payload = (await response.json().catch(() => ({}))) as Envelope<unknown>;
+      throw new ApiError(payload.error ?? response.statusText, response.status, payload.data);
+    }
+    return { blob: await response.blob(), filename: name };
+  },
 };

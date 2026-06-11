@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -18,25 +19,65 @@ import (
 	"goncc/internal/kblinks"
 )
 
-const (
-	serverName    = "ncc-orchestrator"
-	serverVersion = "2.0.1"
-)
+const serverName = "ncc-orchestrator"
+
+// serverVersion is the advertised MCP server version. It is overridable at build
+// time via -ldflags "-X main.serverVersion=<v>" (the release build stamps the
+// orchestrator version here) and otherwise defaults to the current release.
+var serverVersion = "2.1.0"
+
+// orchestratorBinaryName is the platform-specific orchestrator executable name.
+func orchestratorBinaryName() string {
+	if runtime.GOOS == "windows" {
+		return "ncc-orchestrator.exe"
+	}
+	return "ncc-orchestrator"
+}
 
 // orchestratorBin returns the path to the ncc-orchestrator binary (env, same-dir, or PATH).
 func orchestratorBin() string {
 	if b := os.Getenv("NCC_ORCHESTRATOR_BIN"); b != "" {
 		return b
 	}
+	name := orchestratorBinaryName()
 	// When MCP server and orchestrator live in the same directory (e.g. project root), use that.
 	if exe, err := os.Executable(); err == nil {
-		dir := filepath.Dir(exe)
-		candidate := filepath.Join(dir, "ncc-orchestrator")
+		candidate := filepath.Join(filepath.Dir(exe), name)
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
 	}
-	return "ncc-orchestrator"
+	return name
+}
+
+// boolPtr returns a pointer to b, for the optional *bool hint fields in
+// mcp.ToolAnnotations.
+func boolPtr(b bool) *bool { return &b }
+
+// runOrchestrator invokes the ncc-orchestrator binary with args and returns its
+// combined stdout/stderr plus any execution error.
+func runOrchestrator(ctx context.Context, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, orchestratorBin(), args...)
+	cmd.Stdin = nil
+	cmd.Env = os.Environ()
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// safeJoin joins a caller-supplied relative file name onto dir, guaranteeing the
+// result stays inside dir. It rejects absolute paths and "../" traversal so a
+// report-reading tool cannot be used to read arbitrary files on the host.
+func safeJoin(dir, file string) (string, error) {
+	base, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	joined := filepath.Join(base, file)
+	rel, err := filepath.Rel(base, joined)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %q escapes output directory %q", file, dir)
+	}
+	return joined, nil
 }
 
 func main() {
@@ -48,53 +89,136 @@ func main() {
 	// Tool: run_ncc — run NCC checks on clusters and generate reports
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "run_ncc",
+		Title:       "Run NCC checks",
 		Description: "Run Nutanix NCC (Cluster Check) across one or more clusters. Uses config file and/or cluster list and credentials. Returns run summary (duration, clusters ok/failed, index path).",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Run NCC checks",
+			ReadOnlyHint:    false,
+			DestructiveHint: boolPtr(false),
+			OpenWorldHint:   boolPtr(true), // contacts Prism / clusters
+		},
 	}, runNCC)
 
 	// Tool: discover_clusters — list clusters from Prism Central
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "discover_clusters",
+		Title:       "Discover clusters from Prism Central",
 		Description: "List cluster IPs/hostnames from Prism Central (default v4 API, optional v3). Requires prism_central_url and credentials.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:         "Discover clusters from Prism Central",
+			ReadOnlyHint:  true,
+			OpenWorldHint: boolPtr(true),
+		},
 	}, discoverClusters)
+
+	// Tool: validate_config — validate a config file without contacting clusters
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "validate_config",
+		Title:       "Validate config file",
+		Description: "Validate an ncc-orchestrator configuration file (and its secret:// references) without contacting any cluster. Returns validation errors/warnings. Use this before run_ncc to catch misconfiguration early.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:          "Validate config file",
+			ReadOnlyHint:   true,
+			IdempotentHint: true,
+			OpenWorldHint:  boolPtr(false),
+		},
+	}, validateConfig)
+
+	// Tool: preflight_check — combined config/secrets/path preflight (JSON)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "preflight_check",
+		Title:       "Preflight check",
+		Description: "Run the combined config/secrets/path preflight checks and return the structured JSON report (per-check id/status/title/message with remediation guidance). Broader than validate_config; run it before scheduling production runs.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:          "Preflight check",
+			ReadOnlyHint:   true,
+			IdempotentHint: true,
+		},
+	}, preflightCheck)
 
 	// Tool: get_run_summary — read last run summary from output directory
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_run_summary",
+		Title:       "Read run summary",
 		Description: "Read run-summary.json from a previous NCC run (output directory). Includes timestamp, duration, clusters_ok/failed, per-cluster clusters[] (severity counts, errors), exit_code (0/1/3), index_html path.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:          "Read run summary",
+			ReadOnlyHint:   true,
+			IdempotentHint: true,
+		},
 	}, getRunSummary)
 
 	// Tool: replay_reports — regenerate reports from existing logs without calling NCC API
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "replay_reports",
+		Title:       "Replay reports from logs",
 		Description: "Replay from existing NCC log files: regenerate HTML/CSV reports and optional notifications without calling the NCC API. Uses config for output paths and options.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Replay reports from logs",
+			ReadOnlyHint:    false,
+			DestructiveHint: boolPtr(false),
+			OpenWorldHint:   boolPtr(true), // may send notifications
+		},
 	}, replayReports)
 
 	// Tool: list_run_artifacts — list files in an NCC run output directory
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_run_artifacts",
+		Title:       "List run artifacts",
 		Description: "List files in an NCC run output directory (run-summary.json, ncc-run-record.json, regression-summary.json, index.html, per-cluster .log/.html/.csv/.sarif). Use to discover what reports exist from a previous run.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:          "List run artifacts",
+			ReadOnlyHint:   true,
+			IdempotentHint: true,
+		},
 	}, listRunArtifacts)
 
 	// Tool: get_report — read aggregated or per-cluster report content (HTML/text)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_report",
+		Title:       "Read report file",
 		Description: "Read the aggregated index.html or a specific cluster report file from an output directory. For *.log files, KB references (e.g. KB 5582) are expanded to markdown links to portal.nutanix.com. Returns report content for the AI to summarize or analyze.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:          "Read report file",
+			ReadOnlyHint:   true,
+			IdempotentHint: true,
+		},
 	}, getReport)
 
 	// Tool: create_schedule — create/update scheduler entry
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "create_schedule",
+		Title:       "Create/update schedule",
 		Description: "Create or update a periodic schedule for ncc-orchestrator. Supports cron (Linux/macOS) and Windows Scheduled Task.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Create/update schedule",
+			ReadOnlyHint:    false,
+			DestructiveHint: boolPtr(false),
+			IdempotentHint:  true, // create/update keyed by task name
+		},
 	}, createSchedule)
 	// Tool: list_schedules — list scheduler entries for task marker/name
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_schedules",
+		Title:       "List schedules",
 		Description: "List existing schedule entries for ncc-orchestrator task marker/name.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:          "List schedules",
+			ReadOnlyHint:   true,
+			IdempotentHint: true,
+		},
 	}, listSchedules)
 	// Tool: delete_schedule — remove scheduler entry/task
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "delete_schedule",
+		Title:       "Delete schedule",
 		Description: "Remove existing ncc-orchestrator schedule entry/task by task name.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Delete schedule",
+			ReadOnlyHint:    false,
+			DestructiveHint: boolPtr(true),
+			IdempotentHint:  true, // deleting an absent task is a no-op
+		},
 	}, deleteSchedule)
 
 	// Resources: latest run-summary and report (from default output dir relative to cwd)
@@ -241,6 +365,70 @@ func discoverClusters(ctx context.Context, req *mcp.CallToolRequest, input Disco
 	}, nil, nil
 }
 
+// --- validate_config ---
+
+type ValidateConfigInput struct {
+	ConfigPath     string `json:"config_path" jsonschema:"Path to the YAML/JSON config file to validate."`
+	IncludeSecrets bool   `json:"include_secrets,omitempty" jsonschema:"Also validate secret:// references and secret-source accessibility (validate-secrets)."`
+}
+
+func validateConfig(ctx context.Context, req *mcp.CallToolRequest, input ValidateConfigInput) (*mcp.CallToolResult, any, error) {
+	if strings.TrimSpace(input.ConfigPath) == "" {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "config_path is required"}},
+			IsError: true,
+		}, nil, nil
+	}
+	sub := "validate-config"
+	if input.IncludeSecrets {
+		sub = "validate-secrets"
+	}
+	out, err := runOrchestrator(ctx, "--config", strings.TrimSpace(input.ConfigPath), sub)
+	if err != nil {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "Validation failed:\n" + out}},
+			IsError: true,
+		}, nil, nil
+	}
+	if strings.TrimSpace(out) == "" {
+		out = "Configuration is valid."
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: out}},
+	}, nil, nil
+}
+
+// --- preflight_check ---
+
+type PreflightCheckInput struct {
+	ConfigPath string `json:"config_path" jsonschema:"Path to the config file to preflight."`
+}
+
+func preflightCheck(ctx context.Context, req *mcp.CallToolRequest, input PreflightCheckInput) (*mcp.CallToolResult, any, error) {
+	if strings.TrimSpace(input.ConfigPath) == "" {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "config_path is required"}},
+			IsError: true,
+		}, nil, nil
+	}
+	out, err := runOrchestrator(ctx, "--config", strings.TrimSpace(input.ConfigPath), "preflight-check", "--format", "json")
+	// preflight-check returns a non-zero exit when checks fail, but still emits a
+	// useful JSON report; surface the report either way and only flag IsError when
+	// there was no parseable output.
+	text := out
+	if strings.TrimSpace(text) == "" && err != nil {
+		text = "Error: " + err.Error()
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: text}},
+			IsError: true,
+		}, nil, nil
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: text}},
+		IsError: err != nil,
+	}, nil, nil
+}
+
 // --- get_run_summary ---
 
 type GetRunSummaryInput struct {
@@ -358,7 +546,13 @@ func getReport(ctx context.Context, req *mcp.CallToolRequest, input GetReportInp
 	if file == "" || strings.ToLower(file) == "index" {
 		file = "index.html"
 	}
-	path := filepath.Join(dir, file)
+	path, err := safeJoin(dir, file)
+	if err != nil {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+			IsError: true,
+		}, nil, nil
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {

@@ -137,6 +137,49 @@ export type TLSApplyResult = {
   restart_required: boolean;
 };
 
+export type UpdatePhase =
+  | "idle"
+  | "backing_up"
+  | "updating"
+  | "restarting"
+  | "done"
+  | "error";
+
+/** Live status of an in-app software update job. */
+export type UpdateJob = {
+  in_progress: boolean;
+  phase: UpdatePhase;
+  message?: string;
+  error?: string;
+  target_version?: string;
+  backup_path?: string;
+  started_at?: string;
+  finished_at?: string;
+};
+
+/** Result of GET /api/v1/settings/update (version check + current job). */
+export type UpdateStatus = {
+  current_version: string;
+  latest_version?: string;
+  latest_overall?: string;
+  has_package?: boolean;
+  update_available?: boolean;
+  supported?: boolean;
+  check_error?: string;
+  check_skipped?: string;
+  raw?: string;
+  job: UpdateJob;
+};
+
+/** One archive in the server-side backups directory. */
+export type BackupEntry = {
+  name: string;
+  kind: "pre-update" | "manual" | "other";
+  size: number;
+  mod_time: string;
+  rollback_candidate?: boolean;
+};
+
 export type SSOConfig = {
   enabled: boolean;
   managed_by: "flags" | "runtime";
@@ -314,6 +357,28 @@ export type ScheduleState = {
   updated_at: string;
 };
 
+export type DiagnosticCheck = {
+  id: string;
+  title: string;
+  category: string;
+  status: "ok" | "warn" | "fail";
+  message: string;
+  hint?: string;
+  fixed?: boolean;
+  fix_message?: string;
+  source: "orchestrator" | "api";
+};
+
+export type DiagnosticsData = {
+  generated_at: string;
+  fix_applied: boolean;
+  overall: "ok" | "warn" | "fail";
+  summary: { ok: number; warn: number; fail: number };
+  checks: DiagnosticCheck[];
+  auto_fix_loop?: boolean;
+  orchestrator_error?: string;
+};
+
 export type ScheduleHealthData = {
   configured: boolean;
   saved?: boolean;
@@ -381,6 +446,8 @@ export type ActiveRunEntry = {
   skipped_owner?: Record<string, string>;
   all_clusters?: boolean;
   live_output?: string;
+  /** 1-based position in the FIFO queue (queued runs only). */
+  queue_position?: number;
 };
 
 export type RunActiveData = {
@@ -405,6 +472,8 @@ export type RunActiveData = {
   running_count?: number;
   queued_count?: number;
   max_concurrent?: number;
+  /** Mean wall-clock duration of completed runs this process has seen (queue ETA basis). */
+  avg_run_duration_sec?: number;
 };
 
 export type RunConflictData = {

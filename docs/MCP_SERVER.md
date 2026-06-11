@@ -1,8 +1,10 @@
 # NCC Orchestrator MCP Server
 
-The **NCC MCP server** exposes the Nutanix NCC Orchestrator to AI assistants (Cursor, Claude Desktop, etc.) via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). The AI can run NCC checks, discover clusters from Prism Central, read run summaries, and replay reports.
+The **NCC MCP server** exposes the Nutanix NCC Orchestrator to AI assistants (Cursor, Claude Desktop, etc.) via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). The AI can validate configs, run preflight checks, run NCC checks, discover clusters from Prism Central, read run summaries, and replay reports.
 
-Current server implementation version: **`2.0.0`**.
+Current server implementation version: **`2.1.0`** (overridable at build time via `-ldflags "-X main.serverVersion=<v>"`).
+
+Every tool advertises MCP **annotations** (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) and a human-readable title, so MCP hosts can present read-only tools differently from mutating/destructive ones (e.g. ask for confirmation before `delete_schedule`).
 
 ## Prerequisites
 
@@ -25,17 +27,21 @@ go install ./cmd/ncc-mcp-server/
 
 ## Tools Exposed to the AI
 
-| Tool | Description |
-| --- | --- |
-| **run_ncc** | Run NCC across clusters. Options: `config_path`, `clusters`, `username`, `password`, `insecure_skip_verify` (skip TLS verify for lab/self-signed certs), `dry_run`. Returns CLI output and run summary when available. |
-| **discover_clusters** | List cluster IPs from Prism Central (default v4 `clustermgmt` API; optional `discover_api_version`: `v4` or `v3`; optional `nutanix_v4_api_version` such as `v4.2`, `v4.0.a1`). Requires `prism_central_url`; optional `config_path`, `username`, `password`, `insecure_skip_verify`, `output_path`. |
-| **get_run_summary** | Read `run-summary.json` from a previous run (per-cluster `clusters[]`, `exit_code`, `health_score` rollups). Optional `output_dir` (default `outputfiles`). |
-| **replay_reports** | Regenerate HTML/CSV from existing logs (no NCC API). Requires `config_path`. |
-| **list_run_artifacts** | List files in an NCC run output directory (run-summary.json, ncc-run-record.json, regression-summary.json, checks-snapshot.json, drilldown-diff.json, flaky-checks.json, slo-dashboard.json, index.html, per-cluster .log/.html/.csv/.sarif). Optional `output_dir` (default `outputfiles`). |
-| **get_report** | Read the aggregated index.html or a specific cluster report file. Optional `output_dir` (default `outputfiles`), `file` (`index` or a filename like `10.0.0.1.html`). For `*.log` files, `KB NNNN` references are turned into markdown links to `portal.nutanix.com/kb/NNNN` for Cursor/IDE. Large reports are truncated for context. |
-| **create_schedule** | Create/update scheduler entries via `create-schedule` (`type`, `task_name`, `config`, `command`, `cron`, `every`, `log_path`, `print_only`). |
-| **list_schedules** | List scheduler entries for a task name (`type`, `task_name`). |
-| **delete_schedule** | Remove scheduler entries for a task name (`type`, `task_name`, `print_only`). |
+Hints below: **RO** = read-only, **OW** = open-world (contacts clusters/external services), **D** = destructive.
+
+| Tool | Hints | Description |
+| --- | --- | --- |
+| **run_ncc** | OW | Run NCC across clusters. Options: `config_path`, `clusters`, `username`, `password`, `insecure_skip_verify` (skip TLS verify for lab/self-signed certs), `dry_run`. Returns CLI output and run summary when available. |
+| **discover_clusters** | RO, OW | List cluster IPs from Prism Central (default v4 `clustermgmt` API; optional `discover_api_version`: `v4` or `v3`; optional `nutanix_v4_api_version` such as `v4.2`, `v4.0.a1`). Requires `prism_central_url`; optional `config_path`, `username`, `password`, `insecure_skip_verify`, `output_path`. |
+| **validate_config** | RO | Validate a config file without contacting clusters. Requires `config_path`; set `include_secrets: true` to also validate `secret://` references and secret-source accessibility. Run before `run_ncc` to catch misconfiguration early. |
+| **preflight_check** | RO | Run the combined config/secrets/path preflight checks and return the structured JSON report (per-check `id`/`status`/`title`/`message` with remediation). Requires `config_path`. Broader than `validate_config`. |
+| **get_run_summary** | RO | Read `run-summary.json` from a previous run (per-cluster `clusters[]`, `exit_code`, `health_score` rollups). Optional `output_dir` (default `outputfiles`). |
+| **replay_reports** | OW | Regenerate HTML/CSV from existing logs (no NCC API; may send notifications). Requires `config_path`. |
+| **list_run_artifacts** | RO | List files in an NCC run output directory (run-summary.json, ncc-run-record.json, regression-summary.json, checks-snapshot.json, drilldown-diff.json, flaky-checks.json, slo-dashboard.json, index.html, per-cluster .log/.html/.csv/.sarif). Optional `output_dir` (default `outputfiles`). |
+| **get_report** | RO | Read the aggregated index.html or a specific cluster report file. Optional `output_dir` (default `outputfiles`), `file` (`index` or a filename like `10.0.0.1.html`). The `file` is confined to `output_dir` (no `../` traversal). For `*.log` files, `KB NNNN` references are turned into markdown links to `portal.nutanix.com/kb/NNNN` for Cursor/IDE. Large reports are truncated for context. |
+| **create_schedule** | — | Create/update scheduler entries via `create-schedule` (`type`, `task_name`, `config`, `command`, `cron`, `every`, `log_path`, `print_only`). |
+| **list_schedules** | RO | List scheduler entries for a task name (`type`, `task_name`). |
+| **delete_schedule** | D | Remove scheduler entries for a task name (`type`, `task_name`, `print_only`). |
 
 ## Resources (read-only)
 

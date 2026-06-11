@@ -98,6 +98,14 @@ type apiServer struct {
 	usersDBSecret    string // Kubernetes Secret name backing the store (--users-db-secret)
 	usersDBSecretKey string // data key inside that Secret (--users-db-secret-key)
 	usersDBSecretNS  string // namespace override (--users-db-secret-namespace)
+	// usersDBKeyFile points at a file holding a 32-byte master key (base64/hex)
+	// used to envelope-encrypt the user store at rest. The NCC_MASTER_KEY env
+	// takes precedence. Empty (and env unset) => plaintext store (default).
+	usersDBKeyFile string
+	// userStoreEncrypted records whether the file-backed user store is wrapped
+	// with envelope encryption (a master key was configured). Surfaced on
+	// /api/v1/health so operators can confirm secrets-at-rest is active.
+	userStoreEncrypted bool
 	// disableLocalAccounts opts out of the default-on user database. By
 	// default (no flag, env, secret, or stack path) the server falls back to a
 	// writable JSON file in the repo root so a bare run still bootstraps a
@@ -151,6 +159,37 @@ type apiServer struct {
 	runsTriggeredTotal atomic.Int64
 	runsCompletedTotal atomic.Int64
 	runsFailedTotal    atomic.Int64
+	// runAutoRetriesTotal counts self-heal auto-retries triggered after a run
+	// failed with a recoverable class (rate-limit, timeout, network).
+	runAutoRetriesTotal atomic.Int64
+	// runAutoRetryDisabled turns off the single bounded auto-retry (--disable-run-auto-retry).
+	runAutoRetryDisabled bool
+
+	// Periodic self-heal: when selfHealInterval > 0 a background loop runs the
+	// orchestrator's `doctor` checks on a timer, caching the report for the
+	// diagnostics endpoint and metrics. When selfHealAutoFix is set the loop
+	// passes --fix so safe remediations (path anchoring, missing dirs, secret
+	// perms, config repair) are applied unattended.
+	selfHealInterval   time.Duration
+	selfHealAutoFix    bool
+	selfHealMu         sync.RWMutex
+	lastSelfHeal       *selfHealReport
+	selfHealRunsTotal  atomic.Int64
+	selfHealFixesTotal atomic.Int64
+	// Authentication counters (interactive login: local + LDAP). SAML ACS has
+	// its own path and is not counted here.
+	loginSuccessTotal atomic.Int64
+	loginFailureTotal atomic.Int64
+	lockoutTotal      atomic.Int64 // accounts newly locked by the brute-force guard
+	// In-app software-update outcomes.
+	updateAppliedTotal atomic.Int64
+	updateFailedTotal  atomic.Int64
+	// Run-duration accumulator (sum is milliseconds to stay integer-atomic;
+	// exposed as ncc_run_duration_seconds_{sum,count} so Prometheus can derive
+	// rate()/avg over time, and the avg backs the UI queue-ETA estimate).
+	runDurationMillisSum atomic.Int64
+	runDurationCount     atomic.Int64
+	lastRunDurationMs    atomic.Int64
 
 	mu        sync.Mutex
 	active    bool
@@ -367,6 +406,9 @@ func main() {
 	flag.StringVar(&s.sessionIssuer, "session-issuer", "ncc-api-server", "Session token issuer")
 	flag.DurationVar(&s.runTimeout, "run-timeout", 90*time.Minute, "Max runtime for trigger-run command")
 	flag.IntVar(&s.maxConcurrentRuns, "max-concurrent-runs", defaultMaxConcurrentRuns, "Max orchestrator runs executing at once; extra triggers queue and start as slots free")
+	flag.BoolVar(&s.runAutoRetryDisabled, "disable-run-auto-retry", false, "Disable the single self-heal auto-retry of a failed run (with a safe mitigation) for recoverable failures (rate-limit/timeout/network)")
+	flag.DurationVar(&s.selfHealInterval, "self-heal-interval", 0, "Periodically run the orchestrator doctor self-heal checks on this interval (e.g. 1h; 0 = disabled). Results feed /metrics and the System Health view")
+	flag.BoolVar(&s.selfHealAutoFix, "self-heal-auto-fix", false, "When --self-heal-interval is set, apply safe remediations each cycle (anchor relative output paths, create missing dirs, tighten secret perms, repair config)")
 	flag.BoolVar(&s.debugExpose, "debug-expose", false, "Expose debug internals in APIs (off by default)")
 	flag.StringVar(&s.tlsCertFile, "tls-cert-file", "", "TLS certificate file for direct HTTPS")
 	flag.StringVar(&s.tlsKeyFile, "tls-key-file", "", "TLS key file for direct HTTPS")
@@ -381,6 +423,7 @@ func main() {
 	flag.StringVar(&s.usersDBSecret, "users-db-secret", "", "Kubernetes Secret name to store the user database in (encrypted at rest by etcd); mutually exclusive with --users-db. Requires in-cluster execution + RBAC to get/create/patch the Secret")
 	flag.StringVar(&s.usersDBSecretKey, "users-db-secret-key", "users.json", "Data key inside the Kubernetes Secret that holds the user-database JSON")
 	flag.StringVar(&s.usersDBSecretNS, "users-db-secret-namespace", "", "Namespace of the Kubernetes Secret (defaults to the pod's own namespace)")
+	flag.StringVar(&s.usersDBKeyFile, "users-db-key-file", "", "Path to a file holding a 32-byte master key (base64 or hex) to envelope-encrypt the user store at rest with AES-256-GCM. NCC_MASTER_KEY env takes precedence. Unset => plaintext (default). Keep this key off the protected disk/backup.")
 	flag.BoolVar(&s.disableLocalAccounts, "disable-local-accounts", false, "Opt out of the default-on user database (no first-run admin bootstrap, login disabled). Use for pure token-only automation")
 	flag.BoolVar(&s.cookieInsecure, "cookie-insecure", false, "Force the Secure attribute OFF on session cookies even when HTTPS is enabled (only behind a TLS-terminating proxy that talks plain http to the stack). Insecure is already the default.")
 	flag.BoolVar(&s.cookieSecureForce, "cookie-secure", false, "Force the Secure attribute ON on session cookies regardless of the runtime HTTPS policy (for deployments terminating TLS in front of the stack)")
@@ -658,6 +701,7 @@ func main() {
 	s.loginGuard = newLoginGuard(s.loginLockThreshold, s.loginLockWindow, s.loginLockDuration)
 	s.ensureRunManager()
 	s.startedAt = time.Now().UTC()
+	s.startSelfHealLoop(context.Background())
 
 	handler := s.buildHandler()
 	srv := &http.Server{
@@ -837,26 +881,27 @@ func (s *apiServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := map[string]interface{}{
-		"status":           "ok",
-		"time":             time.Now().UTC().Format(time.RFC3339),
-		"auth_mode":        s.authMode,
-		"token_source":     tokenSource(s.authToken, os.Getenv("NCC_API_TOKEN")),
-		"rbac_enabled":     s.viewerToken != "" || s.loginEnabled(),
-		"login_enabled":    s.loginEnabled(),
-		"local_login":      s.users != nil && s.users.count() > 0,
-		"saml_enabled":     s.samlEnabled,
-		"ldap_enabled":     s.ldapIsEnabled(),
-		"config_path":      s.absPath(s.configPath),
-		"output_dir":       s.absPath(s.outputDir),
-		"log_dir":          s.absPath(s.logDir),
-		"token_file":       s.absPath(s.tokenFilePath),
-		"orchestrator_bin": s.absPath(s.orchestratorBin),
-		"version":          Version,
-		"build_date":       BuildDate,
-		"stream":           Stream,
-		"go_version":       GoVersion,
-		"os":               runtime.GOOS,
-		"arch":             runtime.GOARCH,
+		"status":                "ok",
+		"time":                  time.Now().UTC().Format(time.RFC3339),
+		"auth_mode":             s.authMode,
+		"token_source":          tokenSource(s.authToken, os.Getenv("NCC_API_TOKEN")),
+		"rbac_enabled":          s.viewerToken != "" || s.loginEnabled(),
+		"login_enabled":         s.loginEnabled(),
+		"local_login":           s.users != nil && s.users.count() > 0,
+		"saml_enabled":          s.samlEnabled,
+		"ldap_enabled":          s.ldapIsEnabled(),
+		"users_store_encrypted": s.userStoreEncrypted,
+		"config_path":           s.absPath(s.configPath),
+		"output_dir":            s.absPath(s.outputDir),
+		"log_dir":               s.absPath(s.logDir),
+		"token_file":            s.absPath(s.tokenFilePath),
+		"orchestrator_bin":      s.absPath(s.orchestratorBin),
+		"version":               Version,
+		"build_date":            BuildDate,
+		"stream":                Stream,
+		"go_version":            GoVersion,
+		"os":                    runtime.GOOS,
+		"arch":                  runtime.GOARCH,
 	}
 	if s.debugExpose {
 		data["repo_root"] = s.absPath(s.repoRoot)
@@ -1082,6 +1127,9 @@ func (s *apiServer) handlePrometheusMetrics(w http.ResponseWriter, r *http.Reque
 	if !s.started.IsZero() {
 		startedTS = float64(s.started.Unix())
 	}
+	runningNow := s.runningCountLocked()
+	queuedNow := len(s.runQueue)
+	maxConc := s.maxConcurrentRuns
 	s.mu.Unlock()
 
 	fmt.Fprintf(w, "# HELP ncc_build_info Build metadata for this api-server (always 1).\n")
@@ -1116,6 +1164,70 @@ func (s *apiServer) handlePrometheusMetrics(w http.ResponseWriter, r *http.Reque
 	fmt.Fprintf(w, "# HELP ncc_runs_failed_total Cumulative count of NCC runs that exited with a non-zero status since process start.\n")
 	fmt.Fprintf(w, "# TYPE ncc_runs_failed_total counter\n")
 	fmt.Fprintf(w, "ncc_runs_failed_total %d\n", s.runsFailedTotal.Load())
+
+	fmt.Fprintf(w, "# HELP ncc_run_auto_retries_total Cumulative count of self-heal auto-retries triggered after a recoverable run failure (rate-limit/timeout/network).\n")
+	fmt.Fprintf(w, "# TYPE ncc_run_auto_retries_total counter\n")
+	fmt.Fprintf(w, "ncc_run_auto_retries_total %d\n", s.runAutoRetriesTotal.Load())
+
+	fmt.Fprintf(w, "# HELP ncc_selfheal_runs_total Cumulative count of periodic self-heal (doctor) cycles executed.\n")
+	fmt.Fprintf(w, "# TYPE ncc_selfheal_runs_total counter\n")
+	fmt.Fprintf(w, "ncc_selfheal_runs_total %d\n", s.selfHealRunsTotal.Load())
+	fmt.Fprintf(w, "# HELP ncc_selfheal_fixes_total Cumulative count of remediations applied by periodic self-heal cycles.\n")
+	fmt.Fprintf(w, "# TYPE ncc_selfheal_fixes_total counter\n")
+	fmt.Fprintf(w, "ncc_selfheal_fixes_total %d\n", s.selfHealFixesTotal.Load())
+	if rep := s.cachedSelfHeal(); rep != nil {
+		fmt.Fprintf(w, "# HELP ncc_selfheal_checks Most recent self-heal check counts by status (ok/warn/fail).\n")
+		fmt.Fprintf(w, "# TYPE ncc_selfheal_checks gauge\n")
+		for _, status := range []string{"ok", "warn", "fail"} {
+			fmt.Fprintf(w, "ncc_selfheal_checks{status=%q} %d\n", status, rep.Summary[status])
+		}
+	}
+
+	fmt.Fprintf(w, "# HELP ncc_runs_running Number of NCC runs currently executing (concurrent engine).\n")
+	fmt.Fprintf(w, "# TYPE ncc_runs_running gauge\n")
+	fmt.Fprintf(w, "ncc_runs_running %d\n", runningNow)
+
+	fmt.Fprintf(w, "# HELP ncc_runs_queued Number of NCC runs waiting for a free concurrency slot.\n")
+	fmt.Fprintf(w, "# TYPE ncc_runs_queued gauge\n")
+	fmt.Fprintf(w, "ncc_runs_queued %d\n", queuedNow)
+
+	fmt.Fprintf(w, "# HELP ncc_runs_max_concurrent Configured maximum number of concurrent NCC runs.\n")
+	fmt.Fprintf(w, "# TYPE ncc_runs_max_concurrent gauge\n")
+	fmt.Fprintf(w, "ncc_runs_max_concurrent %d\n", maxConc)
+
+	// Run-duration summary. Emitting _sum and _count (no buckets) keeps the
+	// hand-rolled exposition simple while still letting Prometheus compute the
+	// average run time as rate(_sum)/rate(_count).
+	durCount := s.runDurationCount.Load()
+	durSumSeconds := float64(s.runDurationMillisSum.Load()) / 1000.0
+	fmt.Fprintf(w, "# HELP ncc_run_duration_seconds Wall-clock duration of completed NCC runs (summary; sum+count only).\n")
+	fmt.Fprintf(w, "# TYPE ncc_run_duration_seconds summary\n")
+	fmt.Fprintf(w, "ncc_run_duration_seconds_sum %.3f\n", durSumSeconds)
+	fmt.Fprintf(w, "ncc_run_duration_seconds_count %d\n", durCount)
+
+	fmt.Fprintf(w, "# HELP ncc_run_last_duration_seconds Wall-clock duration of the most recently completed NCC run.\n")
+	fmt.Fprintf(w, "# TYPE ncc_run_last_duration_seconds gauge\n")
+	fmt.Fprintf(w, "ncc_run_last_duration_seconds %.3f\n", float64(s.lastRunDurationMs.Load())/1000.0)
+
+	fmt.Fprintf(w, "# HELP ncc_auth_logins_total Cumulative successful interactive logins (local + LDAP) since process start.\n")
+	fmt.Fprintf(w, "# TYPE ncc_auth_logins_total counter\n")
+	fmt.Fprintf(w, "ncc_auth_logins_total %d\n", s.loginSuccessTotal.Load())
+
+	fmt.Fprintf(w, "# HELP ncc_auth_login_failures_total Cumulative failed interactive login attempts (bad credentials, locked, or directory unavailable).\n")
+	fmt.Fprintf(w, "# TYPE ncc_auth_login_failures_total counter\n")
+	fmt.Fprintf(w, "ncc_auth_login_failures_total %d\n", s.loginFailureTotal.Load())
+
+	fmt.Fprintf(w, "# HELP ncc_auth_lockouts_total Cumulative account lockouts triggered by the brute-force guard.\n")
+	fmt.Fprintf(w, "# TYPE ncc_auth_lockouts_total counter\n")
+	fmt.Fprintf(w, "ncc_auth_lockouts_total %d\n", s.lockoutTotal.Load())
+
+	fmt.Fprintf(w, "# HELP ncc_update_applied_total Cumulative in-app software updates successfully installed.\n")
+	fmt.Fprintf(w, "# TYPE ncc_update_applied_total counter\n")
+	fmt.Fprintf(w, "ncc_update_applied_total %d\n", s.updateAppliedTotal.Load())
+
+	fmt.Fprintf(w, "# HELP ncc_update_failed_total Cumulative in-app software updates that failed (backup or install error).\n")
+	fmt.Fprintf(w, "# TYPE ncc_update_failed_total counter\n")
+	fmt.Fprintf(w, "ncc_update_failed_total %d\n", s.updateFailedTotal.Load())
 
 	fmt.Fprintf(w, "# HELP ncc_go_goroutines Number of goroutines in the running api-server process.\n")
 	fmt.Fprintf(w, "# TYPE ncc_go_goroutines gauge\n")
@@ -2618,10 +2730,11 @@ func (s *apiServer) handleRunActive(w http.ResponseWriter, r *http.Request) {
 		"output_dir":        s.absPath(s.outputDir),
 		"config_path":       defaultIfEmpty(s.lastCfg, s.absPath(s.configPath)),
 		// Concurrent-run fields.
-		"runs":            runs,
-		"running_count":   runningCount,
-		"queued_count":    queued,
-		"max_concurrent":  s.maxConcurrentRuns,
+		"runs":                 runs,
+		"running_count":        runningCount,
+		"queued_count":         queued,
+		"max_concurrent":       s.maxConcurrentRuns,
+		"avg_run_duration_sec": s.avgRunDurationSeconds(),
 	}
 	if s.debugExpose {
 		data["command"] = s.lastCmd
@@ -3214,6 +3327,12 @@ func (s *apiServer) handleMetaRoutes(w http.ResponseWriter, r *http.Request) {
 		{Path: "/api/v1/settings/pc-clusters", Methods: []string{http.MethodGet}, Description: "Admin-only: discover the clusters registered under a Prism Central (?pc=<url>) for assigning a PC to a cluster group; uses the active run config's credentials"},
 		{Path: "/api/v1/settings/backup", Methods: []string{http.MethodGet}, Description: "Admin-only: download a .tar.gz backup of the install dir (config + referenced files, local user database, API token, scheduler/notifications state)"},
 		{Path: "/api/v1/settings/restore", Methods: []string{http.MethodPost}, Description: "Admin-only: restore a backup archive uploaded as multipart/form-data (field 'archive'); overwrites install-dir files with --force. Restart the stack afterward for it to take effect."},
+		{Path: "/api/v1/settings/backups", Methods: []string{http.MethodGet, http.MethodPost}, Description: "Admin-only: GET lists server-side backups under <install>/backups (manual snapshots + pre-update rollback points); POST creates a new persistent snapshot"},
+		{Path: "/api/v1/settings/backups/restore", Methods: []string{http.MethodPost}, Description: "Admin-only: restore a server-side backup by name (no re-upload), then restart the stack. Also powers post-update rollback.", SampleBody: "{\n  \"name\": \"pre-update-20260610T120000Z.tar.gz\"\n}"},
+		{Path: "/api/v1/settings/backups/delete", Methods: []string{http.MethodPost}, Description: "Admin-only: delete a server-side backup by name", SampleBody: "{\n  \"name\": \"manual-20260610T120000Z.tar.gz\"\n}"},
+		{Path: "/api/v1/settings/backups/download", Methods: []string{http.MethodGet}, Description: "Admin-only: download a server-side backup by name (?name=...)"},
+		{Path: "/api/v1/settings/update", Methods: []string{http.MethodGet}, Description: "Admin-only: check for a newer release (current/latest version, update_available) and report any in-progress in-app update job/phase"},
+		{Path: "/api/v1/settings/update/apply", Methods: []string{http.MethodPost}, Description: "Admin-only: apply an in-app update — takes a pre-update backup, installs the latest stack (orchestrator+api+ui+frontend, always checksum-verified against the release checksums.txt), then restarts the stack. Runs in the background; poll GET /api/v1/settings/update for progress.", SampleBody: "{\n  \"target_version\": \"\"\n}"},
 		{Path: "/api/v1/settings/config", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write runtime config", SampleBody: "{\n  \"content\": \"clusters: \\\"10.0.0.1\\\"\\nusername: \\\"admin\\\"\\n\"\n}"},
 		{Path: "/api/v1/settings/config-files", Methods: []string{http.MethodGet}, Description: "List config-referenced files (clusters, exclusions, secrets)"},
 		{Path: "/api/v1/settings/config-file", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write one config-referenced file", SampleBody: "{\n  \"path\": \"alerts-exclude.txt\",\n  \"content\": \"AHV_MemoryUsage\\n\"\n}"},
@@ -4411,6 +4530,12 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/api/v1/settings/pc-clusters", s.handlePCDiscover)
 	mux.HandleFunc("/api/v1/settings/backup", s.handleBackup)
 	mux.HandleFunc("/api/v1/settings/restore", s.handleRestore)
+	mux.HandleFunc("/api/v1/settings/backups", s.handleBackups)
+	mux.HandleFunc("/api/v1/settings/backups/restore", s.handleBackupRestoreNamed)
+	mux.HandleFunc("/api/v1/settings/backups/delete", s.handleBackupDelete)
+	mux.HandleFunc("/api/v1/settings/backups/download", s.handleBackupDownloadNamed)
+	mux.HandleFunc("/api/v1/settings/update", s.handleUpdateCheck)
+	mux.HandleFunc("/api/v1/settings/update/apply", s.handleUpdateApply)
 	mux.HandleFunc("/api/v1/settings/config", s.handleConfig)
 	mux.HandleFunc("/api/v1/settings/config-files", s.handleConfigFiles)
 	mux.HandleFunc("/api/v1/settings/config-file", s.handleConfigFile)
@@ -4418,6 +4543,7 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/api/v1/settings/notifications/test", s.handleNotificationsTest)
 	mux.HandleFunc("/api/v1/schedule", s.handleSchedule)
 	mux.HandleFunc("/api/v1/schedule/health", s.handleScheduleHealth)
+	mux.HandleFunc("/api/v1/health/diagnostics", s.handleHealthDiagnostics)
 	mux.HandleFunc("/api/v1/artifacts", s.handleArtifacts)
 	mux.HandleFunc("/api/v1/artifacts/", s.handleArtifactByName)
 	mux.HandleFunc("/api/v1/runs", s.handleRuns)

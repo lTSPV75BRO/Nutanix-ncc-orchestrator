@@ -296,6 +296,10 @@ func routeMinRole(r *http.Request) Role {
 	// (cluster topology is just names) or are operating actions adjacent to
 	// running NCC (managing the run schedule, sending a test notification).
 	switch {
+	// System Health diagnostics + on-demand heal are admin-only: probes touch
+	// directory/SSO connectivity and POST applies remediations.
+	case strings.HasPrefix(p, "/api/v1/health/diagnostics"):
+		return RoleAdmin
 	// Personal access tokens are self-service: any authenticated user (viewer
 	// included) may list, create, and revoke their OWN tokens. The handlers
 	// scope every operation to the caller's subject, and a created token can
@@ -442,6 +446,7 @@ func (s *apiServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// store / directory) when an account has too many recent failures.
 	if locked, retryAfter := s.loginGuard.locked(username, time.Now()); locked {
 		secs := int(retryAfter.Seconds()) + 1
+		s.loginFailureTotal.Add(1)
 		w.Header().Set("Retry-After", strconv.Itoa(secs))
 		s.audit(r, "auth.login", false, map[string]interface{}{"username": username, "error": "account_locked"})
 		writeJSON(w, http.StatusTooManyRequests, envelope{
@@ -472,6 +477,7 @@ func (s *apiServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 			// Operational failure (dial/bind/search): log it but keep the
 			// response generic so we don't leak directory topology.
 			log.Printf("LDAP authentication error for %q: %v", username, err)
+			s.loginFailureTotal.Add(1)
 			s.audit(r, "auth.login", false, map[string]interface{}{"username": username, "method": "ldap", "error": "ldap_unavailable"})
 			writeJSON(w, http.StatusUnauthorized, envelope{Success: false, Error: "invalid username or password"})
 			return
@@ -486,11 +492,16 @@ func (s *apiServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	if !ok {
 		locked := s.loginGuard.recordFailure(username, time.Now())
+		s.loginFailureTotal.Add(1)
+		if locked {
+			s.lockoutTotal.Add(1)
+		}
 		s.audit(r, "auth.login", false, map[string]interface{}{"username": username, "locked": locked})
 		writeJSON(w, http.StatusUnauthorized, envelope{Success: false, Error: "invalid username or password"})
 		return
 	}
 	// Successful auth clears any accumulated failure/lock state for the account.
+	s.loginSuccessTotal.Add(1)
 	s.loginGuard.reset(username)
 	// AD/SAML group values are embedded in the session so cluster-group
 	// membership is evaluated without re-querying the directory each request.

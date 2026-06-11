@@ -5,7 +5,7 @@
 
 > **Affiliation:** This is an independent open-source project. It is **not** affiliated with or endorsed by Nutanix, Inc. NCC and Nutanix are trademarks of their respective owners. The project is MIT licensed; see [`LICENSE`](LICENSE).
 
-v2.1.0 brings real **multi-user authentication and RBAC** to the api-server — local password accounts and SAML SSO, a first-run admin bootstrap with a forced password change, runtime user & SSO management in the UI, and a Kubernetes Secret-backed user store that is encrypted at rest. On top of that it closes a download-integrity gap in `v2-bootstrap`, adds notification observability and templating, hardens TLS / notifications / process supervision, serves NCC run metrics over the api-server `/metrics` endpoint, adds OpenTelemetry tracing, improves the Windows self-update flow, refreshes dependencies, and begins splitting the monolithic `goNCC.go` into focused packages. There are no breaking changes — every v2.0.x invocation keeps working, and static-token automation is unaffected.
+v2.1.0 brings real **multi-user authentication and RBAC** to the api-server — local password accounts, **SAML SSO**, and **LDAP / Active Directory** login, a first-run admin bootstrap with a forced password change, runtime user/SSO/LDAP management in the UI, self-service **personal access tokens**, **cluster groups** for membership-based access control, and a Kubernetes Secret-backed user store that is encrypted at rest. The browser-facing UI now serves **HTTPS by default** (auto-generated self-signed cert, HTTP→HTTPS redirect, in-app certificate management). On top of that it closes a download-integrity gap in `v2-bootstrap`, adds notification observability and templating, hardens TLS / notifications / process supervision, serves NCC run metrics over the api-server `/metrics` endpoint, adds OpenTelemetry tracing, adds `v2-backup`/`v2-restore`, improves the Windows self-update flow, refreshes dependencies, and begins splitting the monolithic `goNCC.go` into focused packages. There are no breaking changes — every v2.0.x invocation keeps working, and static-token automation is unaffected.
 
 ---
 
@@ -17,9 +17,29 @@ The api-server now supports real interactive login with three ordered roles — 
 
 - **viewer** reads non-settings `GET` endpoints; **operator** can also trigger/cancel/preflight runs; **admin** can do everything, including `/api/v1/settings/*`, user management, and token rotation.
 - **First-run admin bootstrap (zero-config).** With a writable user database, an empty store provisions an `admin` account with a random password on first launch (printed to the log and stored for retrieval). The admin is forced to change it on first login, then can add users, assign roles, and configure SSO from the UI.
-- **Local accounts + SAML SSO.** Password accounts (bcrypt) are managed at runtime in **Settings → Access** (or `/api/v1/settings/users`). SAML can be set via startup flags or configured at runtime in the UI — the SP signing key is generated server-side and never uploaded through the browser; publish `<root>/saml/metadata` to your IdP.
-- **Secure sessions.** Browser sessions use an httpOnly, Secure, `SameSite=Strict` `ncc_session` cookie with double-submit CSRF protection. Static-token automation (`NCC_API_TOKEN` / `NCC_API_VIEWER_TOKEN`) keeps working unchanged — `auth-mode` auto-upgrades to `hybrid`.
-- **`ncc-ui-server`** auto-detects when login is enabled and forwards each browser's session/CSRF instead of injecting the shared admin token.
+- **Local accounts, SAML SSO, and LDAP/AD.** Password accounts (bcrypt) are managed at runtime in **Settings → Access** (or `/api/v1/settings/users`). SAML can be set via startup flags or configured at runtime in the UI — the SP signing key is generated server-side and never uploaded through the browser; publish `<root>/saml/metadata` to your IdP. LDAP / Active Directory login is **local-first with AD fallback** (service-account bind + search + rebind, AD group→role mapping), configurable by flags or at runtime with a **Test connection** check. SAML and LDAP can be enabled together.
+- **Secure sessions.** Browser sessions use an httpOnly, `SameSite=Strict` `ncc_session` cookie with double-submit CSRF protection; the cookie is marked `Secure` automatically when the UI is on HTTPS (the default) and non-`Secure` under `--ui-insecure-http` so plain-HTTP hosts can still log in. Static-token automation (`NCC_API_TOKEN` / `NCC_API_VIEWER_TOKEN`) keeps working unchanged — `auth-mode` auto-upgrades to `hybrid`.
+- **`ncc-ui-server`** auto-detects when login is enabled and forwards each browser's session/CSRF instead of injecting the shared admin token, and proxies `/saml/*` to the api-server so the SP flow completes on the UI origin.
+
+### HTTPS by default + in-app certificate management
+
+The browser-facing `ncc-ui-server` now serves **HTTPS out of the box**. With no certificate supplied, `v2-start` generates a **self-signed** certificate (ECDSA P-256, SANs for the listen host plus `localhost`/loopback, stored under `<install-dir>/tls/`) and binds TLS automatically, and plain-HTTP requests on the same port are **308-redirected to HTTPS** (a first-byte peek demultiplexes TLS from HTTP — no separate HTTP listener). Admins manage the certificate from **Settings → Access → HTTPS / TLS**: generate/renew a self-signed cert for the current host (`POST /api/v1/settings/tls/generate`), install your own PEM cert + key from an internal PKI or public CA (`PUT /api/v1/settings/tls`), or revert (`DELETE`). Enabling HTTPS marks session cookies `Secure` and validates the SAML `SameSite=None` SP cookie, so **SSO works out of the box** on the default self-signed HTTPS. Opt out with `--ui-insecure-http` for a trusted loopback or a TLS-terminating proxy.
+
+### Cluster groups (opt-in isolation)
+
+Admins can segregate clusters into named **cluster groups** (Settings → Access) for membership-based access control. Membership is the union of local accounts, AD groups (by CN/DN, matched against `memberOf`), and individual AD users, and a group may also list **Prism Centrals** (every registered cluster is folded in automatically). The model is **opt-in isolation**: a non-admin in **no** group is **unrestricted** (a plain viewer sees every cluster's alerts with zero setup), while membership in **one or more** groups confines the caller to the union of those groups' clusters — run triggers are pinned to that set and report/dashboard data is filtered server-side. Assigning AD principals uses **live directory type-ahead**, and admins/static-token callers are always unrestricted.
+
+### Concurrent cluster-group runs with overlap de-duplication
+
+The run engine no longer serializes to a single in-flight run: up to `--max-concurrent-runs` (default 4) runs execute at once (extras queue), so one group can run while another's run is in progress. When two runs request **overlapping clusters**, the later run skips the clusters the first is already refreshing (surfaced as `skipped_clusters`) and runs only the remainder — a shared cluster is scanned once, and each group still sees that cluster's freshest result via cluster-group filtering. `GET /api/v1/runs/active` returns a `runs[]` list with per-run status/clusters/output, and Settings → Runs gains an **Active & Queued Runs** panel.
+
+### Personal access tokens (self-service API credentials)
+
+Any signed-in user can mint their own **bearer token** (`ncc_pat_…`) from the header user menu to call the API outside the browser. A PAT **inherits the owner's role** (re-resolved live for local accounts), is shown once, is SHA-256-hashed at rest, can **expire (7 days–1 year, default 90) or never expire**, is revocable, and is capped at 25 per user. Admins audit/revoke any user's token in Settings → Access.
+
+### Backup / restore
+
+New `v2-backup` / `v2-restore` (CLI or Settings → Access) capture and recover an install dir's stateful parts — config, the user database (accounts, roles, SAML/LDAP config, cluster groups, PATs, session policy), API token, audit log, portable `v2-start` settings, and the latest run's report — as a single `0600` tar.gz. Restore is OS- and version-agnostic, restarts the stack automatically, and **preserves host-specific networking/TLS** (CORS origins, advertise/backend URLs, listen addresses, `--ui-insecure-http`, UI TLS paths) so importing a backup from another host doesn't cause an `origin not allowed` lockout.
 
 ### User database: file or Kubernetes Secret (encrypted at rest)
 
@@ -137,6 +157,8 @@ From any v2.0.x install:
 ```bash
 ./ncc-orchestrator update
 ```
+
+Or, on a running v2 stack, update **from the UI**: **Settings → Access → Software updates → Check for updates**, then **Back up & update** — the server takes a pre-update backup, installs the checksum-verified package (orchestrator + api + ui + frontend), and restarts the stack automatically; the page reconnects on its own.
 
 On Windows, after the download completes, exit the program and run the generated `apply-ncc-update.cmd`. On macOS/Linux the running binary is replaced atomically in place.
 

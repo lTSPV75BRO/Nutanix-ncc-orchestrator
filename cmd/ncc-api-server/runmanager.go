@@ -69,6 +69,10 @@ type runRecord struct {
 	password  string
 	extraArgs []string
 
+	// retryCount is the self-heal auto-retry depth (0 = original submission).
+	// Bounded to a single retry so a persistently-failing run cannot loop.
+	retryCount int
+
 	// audit provenance captured at submission time.
 	auditSubject string
 	auditRole    string
@@ -90,6 +94,9 @@ type runStartParams struct {
 	auditSubject string
 	auditRole    string
 	auditClient  string
+
+	// retryCount carries the self-heal auto-retry depth into a resubmission.
+	retryCount int
 }
 
 // runSubmitResult describes the outcome of submitRun so the handler can shape
@@ -171,6 +178,7 @@ func (s *apiServer) submitRun(p runStartParams) runSubmitResult {
 		auditSubject: p.auditSubject,
 		auditRole:    p.auditRole,
 		auditClient:  p.auditClient,
+		retryCount:   p.retryCount,
 	}
 
 	skipped := []string{}
@@ -365,6 +373,17 @@ func (s *apiServer) finishRun(rec *runRecord, runErr error, output string) {
 	if runErr != nil {
 		s.runsFailedTotal.Add(1)
 	}
+	// Accumulate run duration for /metrics (ncc_run_duration_seconds_{sum,count})
+	// and the UI queue-ETA estimate. Only count runs that actually started.
+	if !rec.startedAt.IsZero() {
+		ms := time.Since(rec.startedAt).Milliseconds()
+		if ms < 0 {
+			ms = 0
+		}
+		s.runDurationMillisSum.Add(ms)
+		s.runDurationCount.Add(1)
+		s.lastRunDurationMs.Store(ms)
+	}
 
 	var toStart []*runRecord
 	s.mu.Lock()
@@ -394,6 +413,24 @@ func (s *apiServer) finishRun(rec *runRecord, runErr error, output string) {
 	s.lastOut = rec.outTail
 	s.lastPID = rec.pid
 
+	// Capture what a possible self-heal auto-retry needs while we hold the lock.
+	healDecision := decideRunHeal(runErr != nil, rec.cancelled, s.runAutoRetryDisabled, rec.retryCount, output, rec.extraArgs)
+	var retryParams runStartParams
+	if healDecision.Retry {
+		retryParams = runStartParams{
+			cfgPath:      rec.cfgPath,
+			password:     rec.password,
+			extraArgs:    append(append([]string{}, rec.extraArgs...), healDecision.Mitigation...),
+			group:        rec.group,
+			requested:    append([]string{}, rec.clusters...),
+			unrestricted: rec.wildcard,
+			auditSubject: rec.auditSubject,
+			auditRole:    rec.auditRole,
+			auditClient:  rec.auditClient,
+			retryCount:   rec.retryCount + 1,
+		}
+	}
+
 	// Promote queued runs into freed slots (respecting the wildcard barrier).
 	toStart = s.dequeueRunnableLocked()
 	s.refreshLegacyRunStateLocked()
@@ -401,6 +438,19 @@ func (s *apiServer) finishRun(rec *runRecord, runErr error, output string) {
 
 	for _, q := range toStart {
 		go s.launchRun(q)
+	}
+
+	if healDecision.Retry {
+		s.runAutoRetriesTotal.Add(1)
+		log.Printf("run %s failed (%s); self-heal auto-retrying once with mitigation %v",
+			rec.id, healDecision.Class, healDecision.Mitigation)
+		s.auditEvent("run.auto_retry", true, map[string]interface{}{
+			"failed_run":  rec.id,
+			"class":       string(healDecision.Class),
+			"mitigation":  strings.Join(healDecision.Mitigation, " "),
+			"retry_count": retryParams.retryCount,
+		})
+		go s.submitRun(retryParams)
 	}
 
 	go s.notifyRunFinished(runErr)
@@ -504,6 +554,12 @@ func (s *apiServer) activeRunsSnapshot() []map[string]interface{} {
 	s.ensureRunManager()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Map each queued run id to its 1-based position in the FIFO queue so the UI
+	// can show "position N in line".
+	queuePos := make(map[string]int, len(s.runQueue))
+	for i, id := range s.runQueue {
+		queuePos[id] = i + 1
+	}
 	out := make([]map[string]interface{}, 0, len(s.runOrder))
 	for _, id := range s.runOrder {
 		rec := s.runs[id]
@@ -526,6 +582,9 @@ func (s *apiServer) activeRunsSnapshot() []map[string]interface{} {
 			"skipped":     rec.skipped,
 			"live_output": strings.TrimSpace(rec.liveOut.String()),
 		}
+		if pos, ok := queuePos[id]; ok {
+			entry["queue_position"] = pos
+		}
 		if len(rec.skippedOwner) > 0 {
 			entry["skipped_owner"] = rec.skippedOwner
 		}
@@ -546,6 +605,17 @@ func (s *apiServer) queuedCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.runQueue)
+}
+
+// avgRunDurationSeconds returns the mean wall-clock duration of completed runs
+// this process has observed, or 0 when none have finished yet. Used as a rough
+// queue-ETA basis in the UI.
+func (s *apiServer) avgRunDurationSeconds() float64 {
+	count := s.runDurationCount.Load()
+	if count <= 0 {
+		return 0
+	}
+	return (float64(s.runDurationMillisSum.Load()) / 1000.0) / float64(count)
 }
 
 // computeRunRemainder splits desired clusters into the subset this run should

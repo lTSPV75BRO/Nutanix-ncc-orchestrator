@@ -244,6 +244,13 @@ A caller's role can come from a static token or an interactive login:
     unless you enable etcd encryption-at-rest (KMS/secretbox/aescbc)** — see
     `k8s/encryption-config.example.yaml` and `k8s/rbac.yaml` (least-privilege).
     Mutually exclusive with `--users-db`.
+  - **Encryption at rest (file store, optional)**: supply a 32-byte master key
+    via `NCC_MASTER_KEY` (base64/hex) or `--users-db-key-file` /
+    `NCC_MASTER_KEY_FILE` to envelope-encrypt the file store with AES-256-GCM
+    (protects the SAML SP key and LDAP bind password on disk and in backups).
+    Unset → plaintext (default, backward compatible); enabling it migrates a
+    plaintext store on the next write. Keep the key off the protected
+    disk/backup. See `docs/SECURITY_AND_TRUST.md`.
 - **Local accounts** (managed at runtime in Settings → Access, or via
   `/api/v1/settings/users`): create/list/role-assign/reset-password/delete
   bcrypt accounts; the last admin is protected from removal/demotion. Browsers
@@ -258,8 +265,8 @@ A caller's role can come from a static token or an interactive login:
   `DELETE /api/v1/auth/tokens/{id}` list/create/revoke the caller's **own**
   tokens; the token inherits the owner's role, is shown **once** at creation, and
   is sent as `X-API-Token: <token>` or `Authorization: Bearer <token>` (prefixed
-  `ncc_pat_`). Tokens carry a bounded expiry (7 days–1 year, default 90) and a
-  per-user cap; only a SHA-256 hash is stored. For local owners the role is
+  `ncc_pat_`). Tokens carry an expiry (7 days–1 year, default 90, or **Never**
+  for long-lived automation) and a 25-per-user cap; only a SHA-256 hash is stored. For local owners the role is
   re-resolved live each request (deleting the account or flagging a forced
   password change disables its tokens). Admins audit/revoke any user's token via
   `GET /api/v1/settings/tokens` and `DELETE /api/v1/settings/tokens/{id}`
@@ -278,7 +285,12 @@ A caller's role can come from a static token or an interactive login:
   hot-reloaded, with the **SP keypair generated server-side** (publish the SP
   metadata URL `<root>/saml/metadata` to your IdP). Map IdP attribute values to
   roles with the role attribute + role map (default role). Endpoints:
-  `/saml/metadata`, `/saml/login`, `/saml/acs`.
+  `/saml/metadata`, `/saml/login`, `/saml/acs`. Set the **root URL to the
+  browser-facing UI origin** — `ncc-ui-server` proxies `/saml/*` to the api-server
+  so the post-login cookie lands on the right host; the SP request-tracking cookie
+  is `SameSite=None` (it survives the IdP's cross-site POST to `/saml/acs`, which
+  requires HTTPS — the default), and `/saml/*` is exempt from the CORS origin
+  allowlist.
 - **LDAP / Active Directory** — users sign in on the normal username/password
   form with their AD credentials. Login is **local-first, then AD fallback** (so
   the built-in `admin` and break-glass local accounts work even if AD is down),
@@ -329,20 +341,50 @@ A caller's role can come from a static token or an interactive login:
   folded into the group automatically (discovered via the orchestrator's
   `discover-clusters` using the active run config's credentials, cached with a
   ~10 min background refresh; preview/refresh via admin-only
-  `GET /api/v1/settings/pc-clusters?pc=<url>`). Non-admins are confined to the union of
-  clusters in their groups — run triggers are pinned via `--clusters` (members may
-  narrow to a subset; foreign requests are dropped; a member in no group gets
-  `403`), and `/api/v1/report/data` and the runs feed are filtered server-side to
-  allowed clusters. **Ungrouped clusters and raw multi-cluster artifacts
-  (`/api/v1/artifacts*`) are admin-only.** Admins and static tokens are
-  unrestricted. `GET /api/v1/auth/me` reports `cluster_access_unrestricted` and
+  `GET /api/v1/settings/pc-clusters?pc=<url>`). Cluster groups are **opt-in
+  isolation**: a non-admin in **no** group is **unrestricted** (a plain viewer
+  sees every cluster's alerts out of the box), while membership in **one or more**
+  groups confines the caller to the union of those groups' clusters. For scoped
+  members, run triggers are pinned via `--clusters` (members may narrow to a
+  subset; foreign requests are dropped), and `/api/v1/report/data` and the runs
+  feed are filtered server-side to allowed clusters; scoping keys off **group
+  membership**, not the resolved cluster count. **Raw multi-cluster artifacts
+  (`/api/v1/artifacts*`) are restricted to unrestricted callers** (they embed
+  every cluster); scoped members use the filtered dashboard. Admins and static
+  tokens are unrestricted. `GET /api/v1/auth/me` reports `cluster_access_unrestricted` and
   `allowed_clusters`; `GET /api/v1/settings/clusters` enumerates clusters from the
   active config for assignment. Groups live in `.ncc-api-users.json`, so they
   persist across restarts and are covered by backup/restore.
+- **UI HTTPS / TLS** — `ncc-ui-server` serves **HTTPS by default**. With no cert
+  supplied, `v2-start` generates a **self-signed** cert (ECDSA P-256; SANs for the
+  listen host + `localhost`/loopback; stored under `<install-dir>/tls/`) and
+  308-redirects plain HTTP to HTTPS on the **same port** (a first-byte peek
+  demultiplexes TLS from HTTP). `--ui-insecure-http` opts out (persisted in
+  `.ncc-v2-start.json`). Admins manage the cert from Settings → Access → *HTTPS /
+  TLS*: `POST /api/v1/settings/tls/generate` mints/renews a self-signed cert for
+  the request host and restarts the stack; `PUT /api/v1/settings/tls` installs a
+  PEM **cert + private key** (internal PKI or public CA), restarts, and marks
+  session cookies `Secure`; `DELETE /api/v1/settings/tls` reverts. The private key
+  is stored `0600` and never returned; cert metadata (subject/issuer/validity/SANs)
+  is recorded for display. HTTPS is what makes the SAML `SameSite=None` cookie
+  valid, so SSO works out of the box on the default self-signed HTTPS.
 - **Backup / restore** — `v2-backup` / `v2-restore` (Settings → Access in the UI,
   or the CLI) capture and recover all stateful auth data (accounts, roles,
   SAML/LDAP config, cluster groups, token, session policy) plus config and audit
-  log. See §6.14a.
+  log. Restore **preserves host-specific networking/TLS** (CORS origins,
+  advertise/backend URLs, listen addresses, `--ui-insecure-http`, UI TLS paths) so
+  importing a backup from another host doesn't trigger an `origin not allowed`
+  lockout or a stale cert path. See §6.14a.
+- **In-app software updates** — admins can check for and apply a new release from
+  **Settings → Access → Software updates**. `GET /api/v1/settings/update` reports
+  the current/latest version and `update_available` (networked check only with
+  `?check=1`; plain GET is a cheap status poll). `POST /api/v1/settings/update/apply`
+  runs a background job that takes a **pre-update backup** (to
+  `<install-dir>/backups/`, aborting if it fails), applies the checksum-verified
+  package update (orchestrator + api + ui + frontend), then **restarts the stack
+  automatically** (`v2-restart`); the UI polls the phase and reconnects when the
+  new version is live. Optional `target_version` / `skip_checksum_verify`. Requires
+  a built orchestrator binary (not the dev `go run` fallback).
 
 Mutating cookie-session requests require a double-submit CSRF token
 (`X-CSRF-Token` header echoing the readable `ncc_csrf` cookie); static-token
@@ -861,8 +903,10 @@ These are runtime flags for v2 services (`cmd/ncc-api-server`, `cmd/ncc-ui-serve
 | `ncc-api-server` | `--login-lockout-duration` | `15m` | How long a locked account stays locked after exceeding the threshold. |
 | `ncc-api-server` | `--auth-mode` | `token` | API auth mode: `token`, `session`, `hybrid`. |
 | `ncc-api-server` | `--token-file-path` | `.ncc-api-token` | Token file used by UI proxy and local tooling. |
+| `ncc-api-server` | `--cookie-secure` / `--cookie-insecure` | auto | Force the session cookie `Secure` attribute on/off. Auto-set by `v2-start` to track whether the UI is on HTTPS (the default); set `--cookie-insecure` only when serving plain HTTP. |
 | `ncc-ui-server` | `--allowed-origins` | `http://localhost:8080` | Browser origin allowlist for proxied API calls. |
 | `ncc-ui-server` | `--api-auth-mode` | `token` | Backend auth forwarding mode (`token` or `session`). |
+| `ncc-ui-server` | `--ui-insecure-http` | `false` | Serve plain HTTP instead of the default self-signed HTTPS (use only behind a trusted proxy/loopback). |
 
 `v2-start` convenience mode flags (must-have operator controls):
 
@@ -883,7 +927,8 @@ These are runtime flags for v2 services (`cmd/ncc-api-server`, `cmd/ncc-ui-serve
 | Network/Topology | `--ui-advertise-url` | empty | External UI URL to print at startup for operators/users. |
 | TLS/mTLS | `--api-tls-cert-file`, `--api-tls-key-file` | empty | Enable HTTPS for API listener. |
 | TLS/mTLS | `--api-tls-client-ca-file` | empty | Enable API mTLS client verification. |
-| TLS/mTLS | `--ui-tls-cert-file`, `--ui-tls-key-file` | empty | Enable HTTPS for UI listener. |
+| TLS/mTLS | `--ui-tls-cert-file`, `--ui-tls-key-file` | auto (self-signed) | UI HTTPS cert/key. **The UI serves HTTPS by default**: when empty, `v2-start` generates a self-signed cert under `<install-dir>/tls/` and redirects HTTP→HTTPS on the same port. Supply your own to use a CA/PKI cert, or pass `--ui-insecure-http` to serve plain HTTP. |
+| TLS/mTLS | `--ui-insecure-http` | `false` | Serve the UI over plain HTTP instead of the default self-signed HTTPS (trusted loopback / TLS-terminating proxy only). Persisted in `.ncc-v2-start.json`. |
 | TLS/mTLS | `--ui-backend-ca-file` | empty | Custom CA trust for UI->API TLS connection. |
 | TLS/mTLS | `--ui-backend-client-cert-file`, `--ui-backend-client-key-file` | empty | UI client certificate pair for API mTLS. |
 | TLS/mTLS | `--ui-backend-insecure-skip-verify` | `false` | Skip UI->API certificate verification (dev/troubleshooting only). |
@@ -892,9 +937,11 @@ These are runtime flags for v2 services (`cmd/ncc-api-server`, `cmd/ncc-ui-serve
 | Operability | `--detach` | `false` | Run services in background with PID/log files. |
 | Operability | `--api-log-file`, `--ui-log-file` | under `<install-dir>/logs/` | Custom detached log paths. |
 | Operability | `--api-pid-file`, `--ui-pid-file` | under `<install-dir>/run/` | Custom detached PID file paths. |
-| Operability | `--self-heal` | `false` | Detached mode only: monitor API/UI and auto-restart on unexpected process exits. |
-| Operability | `--self-heal-max-restarts` | `3` | Maximum restart attempts within self-heal window before monitor stops. |
-| Operability | `--self-heal-window` | `10m` | Rolling restart budget window for detached self-heal monitor. |
+| Operability | `--self-heal` | `false` | Detached mode only: monitor API/UI and auto-restart on unexpected process exits. Also restarts a hung-but-alive API server via health probes, applies exponential backoff between restarts, and cools down then resumes (instead of giving up) once the restart budget is exhausted. |
+| Operability | `--self-heal-max-restarts` | `3` | Maximum restart attempts within the self-heal window before a cooldown. |
+| Operability | `--self-heal-window` | `10m` | Rolling restart-budget window for the detached self-heal monitor (also the cooldown duration after the budget is exhausted, after which the monitor resumes). |
+| Operability | `--self-heal-probe-interval` | `10s` | How often the self-heal monitor health-probes a still-alive API server (via the api-server's built-in `--health-check`) to detect hangs/deadlocks. API server only. |
+| Operability | `--self-heal-unhealthy-threshold` | `3` | Consecutive failed health probes before the monitor restarts a hung-but-alive API server. |
 | Mode | `--api-only` | `false` | Start only API (no UI server/frontend). |
 | Existing | `--ui-allowed-origins` | empty | Additional browser origins for UI CORS checks (localhost always included). |
 
@@ -1191,6 +1238,8 @@ ncc-orchestrator env-info
 | `NCC_USERS_DB` | Path to the writable JSON user database file (enables login, first-run admin bootstrap, and runtime user/SSO management). Equivalent to `--users-db`. Defaults to `<root>/.ncc-api-users.json` inside a v2 stack. |
 | `NCC_USERS_DB_SECRET` | Kubernetes Secret name to store the user database in (encrypted at rest by etcd). Equivalent to `--users-db-secret`. Mutually exclusive with `NCC_USERS_DB`. Requires in-cluster execution + RBAC (`k8s/rbac.yaml`). |
 | `NCC_USERS_DB_SECRET_NAMESPACE` | Namespace of the Kubernetes Secret store (defaults to the pod's own namespace). Equivalent to `--users-db-secret-namespace`. |
+| `NCC_MASTER_KEY` | 32-byte master key (base64 std/raw/url or hex) to envelope-encrypt the file-backed user store at rest with AES-256-GCM. Takes precedence over `--users-db-key-file`/`NCC_MASTER_KEY_FILE`. Unset → plaintext (default). |
+| `NCC_MASTER_KEY_FILE` | Path to a file holding the 32-byte master key (base64/hex, or 32 raw bytes). Equivalent to `--users-db-key-file`. Keep it off the protected disk/backup. |
 | `NCC_USERS_FILE` | Path to an optional read-only YAML seed of local accounts, imported once into the database when empty. Equivalent to `--users-file`. |
 | `NCC_PASSWORD` | Read by `ncc-api-server --hash-password` as the password to hash (otherwise prompts on stdin). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Enables OpenTelemetry tracing (per-cluster spans) over OTLP/HTTP. |

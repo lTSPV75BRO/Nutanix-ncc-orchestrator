@@ -21,6 +21,7 @@ import {
 import {
   ApartmentOutlined,
   ClockCircleOutlined,
+  CloudDownloadOutlined,
   DatabaseOutlined,
   DeleteOutlined,
   DownloadOutlined,
@@ -29,6 +30,7 @@ import {
   LockOutlined,
   PlusOutlined,
   ReloadOutlined,
+  RollbackOutlined,
   SafetyCertificateOutlined,
   SearchOutlined,
   UploadOutlined,
@@ -37,6 +39,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import type {
+  BackupEntry,
   ClusterGroup,
   DirectoryEntry,
   LDAPConfig,
@@ -46,6 +49,7 @@ import type {
   SSOConfig,
   TLSApplyResult,
   TLSPolicy,
+  UpdateStatus,
   UserAccount,
   UserRole,
 } from "../../api/types";
@@ -716,22 +720,53 @@ function SessionCard() {
   );
 }
 
+// triggerBlobDownload saves a fetched Blob to disk via a transient anchor.
+function triggerBlobDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// Human-readable byte size for the backups table.
+function humanSize(bytes?: number): string {
+  if (!bytes || bytes <= 0) return "—";
+  const units = ["B", "KB", "MB", "GB"];
+  let v = bytes;
+  let u = 0;
+  while (v >= 1024 && u < units.length - 1) {
+    v /= 1024;
+    u += 1;
+  }
+  return `${v.toFixed(v < 10 && u > 0 ? 1 : 0)} ${units[u]}`;
+}
+
+const BACKUP_KIND_META: Record<string, { color: string; label: string }> = {
+  "pre-update": { color: "gold", label: "pre-update" },
+  manual: { color: "blue", label: "manual" },
+  other: { color: "default", label: "other" },
+};
+
 function BackupRestoreCard() {
+  const qc = useQueryClient();
+  const backupsQuery = useQuery({ queryKey: ["settings", "backups"], queryFn: api.listBackups });
   const [downloading, setDownloading] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const [busyName, setBusyName] = useState<string | null>(null);
+
+  const backups = (backupsQuery.data?.backups ?? []) as BackupEntry[];
+  const rollback = backups.find((b) => b.rollback_candidate);
+  const refresh = () => qc.invalidateQueries({ queryKey: ["settings", "backups"] });
 
   const handleDownload = async () => {
     setDownloading(true);
     try {
       const { blob, filename } = await api.downloadBackup();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      triggerBlobDownload(blob, filename);
       notify.success("Backup downloaded.");
     } catch (e) {
       notifyError(e, "Failed to create backup");
@@ -739,6 +774,24 @@ function BackupRestoreCard() {
       setDownloading(false);
     }
   };
+
+  const createMut = useMutation({
+    mutationFn: () => api.createBackup(),
+    onSuccess: (res) => {
+      notify.success(res.message ?? "Snapshot created.");
+      void refresh();
+    },
+    onError: (e) => notifyError(e, "Failed to create snapshot"),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (name: string) => api.deleteBackup(name),
+    onSuccess: () => {
+      notify.success("Backup deleted.");
+      void refresh();
+    },
+    onError: (e) => notifyError(e, "Failed to delete backup"),
+  });
 
   // Poll the backend health endpoint until the restarted stack answers, then
   // reload so the app re-bootstraps against the restored config/session.
@@ -758,29 +811,32 @@ function BackupRestoreCard() {
     window.location.reload();
   };
 
-  const doRestore = async (file: File) => {
+  const announceRestore = (restarting: boolean, message?: string) => {
+    if (restarting) {
+      Modal.success({
+        title: "Backup restored — restarting",
+        content:
+          message ??
+          "The stack is restarting to load the restored data. This page will reconnect automatically.",
+        okText: "OK",
+      });
+      void waitForRestartAndReload();
+    } else {
+      Modal.success({
+        title: "Backup restored",
+        content:
+          message ??
+          "Restart the stack (v2-stop then v2-start) for the restored data to take effect.",
+      });
+    }
+  };
+
+  const doRestoreUpload = async (file: File) => {
     setRestoring(true);
     try {
       const res = await api.restoreBackup(file);
       const data = (res.data ?? {}) as { restarting?: boolean };
-      if (data.restarting) {
-        Modal.success({
-          title: "Backup restored — restarting",
-          content:
-            res.message ??
-            "The stack is restarting to load the restored data. This page will reconnect automatically.",
-          okText: "OK",
-        });
-        // Fire-and-forget: reconnect once the restarted stack is healthy.
-        void waitForRestartAndReload();
-      } else {
-        Modal.success({
-          title: "Backup restored",
-          content:
-            res.message ??
-            "Restart the stack (v2-stop then v2-start) for the restored data to take effect.",
-        });
-      }
+      announceRestore(Boolean(data.restarting), res.message);
     } catch (e) {
       notifyError(e, "Restore failed");
     } finally {
@@ -788,34 +844,140 @@ function BackupRestoreCard() {
     }
   };
 
+  const doRestoreNamed = async (name: string) => {
+    setBusyName(name);
+    try {
+      const res = await api.restoreNamedBackup(name);
+      const data = (res.data ?? {}) as { restarting?: boolean };
+      announceRestore(Boolean(data.restarting), res.message);
+    } catch (e) {
+      notifyError(e, "Restore failed");
+    } finally {
+      setBusyName(null);
+    }
+  };
+
+  const downloadNamed = async (name: string) => {
+    setBusyName(name);
+    try {
+      const { blob, filename } = await api.downloadNamedBackup(name);
+      triggerBlobDownload(blob, filename);
+    } catch (e) {
+      notifyError(e, "Failed to download backup");
+    } finally {
+      setBusyName(null);
+    }
+  };
+
+  const restoreBody = (name: string, isRollback: boolean) => (
+    <div>
+      <Typography.Paragraph>
+        This overwrites the install directory with the contents of <b>{name}</b> — configuration and
+        referenced files, local accounts and roles, the API token, and scheduler/notification state.
+      </Typography.Paragraph>
+      <Typography.Paragraph style={{ marginBottom: 0 }}>
+        {isRollback ? "The stack rolls back and " : "The stack "}
+        <b>restarts automatically</b> afterward to load the restored data — this page reconnects on
+        its own, and you may be asked to sign in again if the API token or your account changed.
+      </Typography.Paragraph>
+    </div>
+  );
+
+  const confirmRestoreNamed = (entry: BackupEntry) => {
+    const isRollback = Boolean(entry.rollback_candidate);
+    Modal.confirm({
+      title: isRollback ? "Roll back to pre-update backup?" : "Restore this backup?",
+      icon: <WarningOutlined style={{ color: "#faad14" }} />,
+      width: 540,
+      content: restoreBody(entry.name, isRollback),
+      okText: isRollback ? "Roll back and restart" : "Restore and restart",
+      okButtonProps: { danger: true },
+      cancelText: "Cancel",
+      onOk: () => doRestoreNamed(entry.name),
+    });
+  };
+
   // beforeUpload intercepts the selected file, shows a destructive-action
   // confirmation, and returns false so antd never auto-uploads it.
-  const confirmRestore = (file: File): boolean => {
+  const confirmRestoreUpload = (file: File): boolean => {
     Modal.confirm({
-      title: "Restore from backup?",
+      title: "Restore from uploaded backup?",
       icon: <WarningOutlined style={{ color: "#faad14" }} />,
-      width: 520,
-      content: (
-        <div>
-          <Typography.Paragraph>
-            This overwrites the install directory with the contents of <b>{file.name}</b> —
-            configuration and referenced files, local accounts and roles, the API token, and
-            scheduler/notification state.
-          </Typography.Paragraph>
-          <Typography.Paragraph style={{ marginBottom: 0 }}>
-            The stack will <b>restart automatically</b> afterward to load the restored data — this
-            page will reconnect on its own, and you may be asked to sign in again if the API token
-            or your account changed.
-          </Typography.Paragraph>
-        </div>
-      ),
+      width: 540,
+      content: restoreBody(file.name, false),
       okText: "Restore and overwrite",
       okButtonProps: { danger: true },
       cancelText: "Cancel",
-      onOk: () => doRestore(file),
+      onOk: () => doRestoreUpload(file),
     });
     return false;
   };
+
+  const columns = [
+    {
+      title: "Name",
+      dataIndex: "name",
+      render: (n: string) => (
+        <Typography.Text className="mono" style={{ fontSize: 12 }}>
+          {n}
+        </Typography.Text>
+      ),
+    },
+    {
+      title: "Type",
+      dataIndex: "kind",
+      render: (k: string, rec: BackupEntry) => {
+        const meta = BACKUP_KIND_META[k] ?? BACKUP_KIND_META.other;
+        return (
+          <Space size={4}>
+            <Tag color={meta.color}>{meta.label}</Tag>
+            {rec.rollback_candidate ? <Tag color="volcano">latest rollback</Tag> : null}
+          </Space>
+        );
+      },
+    },
+    { title: "Size", dataIndex: "size", render: (v: number) => humanSize(v) },
+    {
+      title: "Created",
+      dataIndex: "mod_time",
+      render: (v: string) => (v ? new Date(v).toLocaleString() : "—"),
+    },
+    {
+      title: "Actions",
+      key: "actions",
+      render: (_: unknown, rec: BackupEntry) => (
+        <Space wrap>
+          <Button
+            size="small"
+            danger
+            icon={rec.rollback_candidate ? <RollbackOutlined /> : <UploadOutlined />}
+            loading={busyName === rec.name}
+            onClick={() => confirmRestoreNamed(rec)}
+          >
+            {rec.rollback_candidate ? "Roll back" : "Restore"}
+          </Button>
+          <Button
+            size="small"
+            icon={<DownloadOutlined />}
+            loading={busyName === rec.name}
+            onClick={() => downloadNamed(rec.name)}
+          >
+            Download
+          </Button>
+          <Popconfirm
+            title={`Delete ${rec.name}?`}
+            okText="Delete"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => deleteMut.mutate(rec.name)}
+          >
+            <Button size="small" danger icon={<DeleteOutlined />}>
+              Delete
+            </Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ];
 
   return (
     <Card
@@ -825,29 +987,80 @@ function BackupRestoreCard() {
           <DatabaseOutlined /> Backup &amp; restore
         </Space>
       }
+      extra={
+        <Space>
+          {rollback ? (
+            <Tooltip title={`Roll back to the most recent pre-update snapshot (${rollback.name})`}>
+              <Button
+                icon={<RollbackOutlined />}
+                danger
+                loading={busyName === rollback.name}
+                onClick={() => confirmRestoreNamed(rollback)}
+              >
+                Roll back last update
+              </Button>
+            </Tooltip>
+          ) : null}
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={() => refresh()}
+            loading={backupsQuery.isFetching}
+          >
+            Refresh
+          </Button>
+        </Space>
+      }
     >
       <Typography.Paragraph type="secondary">
-        Download a full backup of this install — configuration and referenced files, local accounts
-        and roles, the API token, scheduler/notification state, the start settings (CORS, listen
-        addresses, session TTL), the audit log, and the latest run's report — as a single{" "}
-        <Typography.Text code>.tar.gz</Typography.Text>. The archive contains secrets, so store it
-        securely. Restoring overwrites the current install and then restarts the stack automatically
-        — backups are portable across OS and version, so a Windows backup restores onto Linux/macOS.
+        A backup is a single <Typography.Text code>.tar.gz</Typography.Text> of this installation —
+        configuration and referenced files, local accounts and roles, the API token,
+        scheduler/notification state, the start settings (CORS, listen addresses, session TTL), the
+        audit log, and the latest run&apos;s report. Backups are portable across operating systems
+        and versions, so a Windows backup restores onto Linux or macOS. Restoring overwrites the
+        current installation and then restarts the stack automatically. Archives contain secrets —
+        store them securely.
       </Typography.Paragraph>
-      <Space wrap>
+
+      <Space wrap style={{ marginBottom: 16 }}>
+        <Button
+          type="primary"
+          icon={<PlusOutlined />}
+          onClick={() => createMut.mutate()}
+          loading={createMut.isPending}
+        >
+          Create snapshot
+        </Button>
         <Button icon={<DownloadOutlined />} onClick={handleDownload} loading={downloading}>
           Download backup
         </Button>
         <Upload
           accept=".gz,.tgz,.tar.gz,application/gzip"
           showUploadList={false}
-          beforeUpload={(file) => confirmRestore(file as unknown as File)}
+          beforeUpload={(file) => confirmRestoreUpload(file as unknown as File)}
         >
           <Button icon={<UploadOutlined />} danger loading={restoring}>
-            Restore from backup…
+            Restore from file…
           </Button>
         </Upload>
       </Space>
+
+      <Typography.Title level={5} style={{ marginTop: 0 }}>
+        Server-side backups
+      </Typography.Title>
+      <Typography.Paragraph type="secondary" style={{ marginTop: -4 }}>
+        Snapshots saved on the server, including automatic <b>pre-update</b> backups taken before
+        each in-app update. Restore any of them without re-uploading, or roll back the most recent
+        update with one click.
+      </Typography.Paragraph>
+      <Table
+        rowKey="name"
+        size="small"
+        loading={backupsQuery.isLoading}
+        dataSource={backups}
+        columns={columns}
+        pagination={false}
+        locale={{ emptyText: "No server-side backups yet. Create a snapshot or run an update." }}
+      />
     </Card>
   );
 }
@@ -1897,6 +2110,260 @@ function TLSCard() {
   );
 }
 
+const UPDATE_PHASE_LABEL: Record<string, string> = {
+  idle: "Idle",
+  backing_up: "Backing up",
+  updating: "Downloading & installing",
+  restarting: "Restarting",
+  done: "Done",
+  error: "Failed",
+};
+
+// UpdatesCard lets an admin check for a newer release and apply it in place. The
+// backend takes a pre-update backup, installs the new stack (orchestrator + api
+// + ui + frontend, checksum-verified), then restarts the stack; this card polls
+// the job phase and reconnects the page once the restarted stack is healthy.
+function UpdatesCard() {
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const job = status?.job;
+  const phase = job?.phase ?? "idle";
+  const inProgress = job?.in_progress ?? false;
+  const busy = checking || applying || inProgress || restarting;
+
+  const stopPolling = () => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
+
+  // Poll the backend health endpoint until the restarted stack answers, then
+  // reload so the app re-bootstraps on the freshly-installed version.
+  const waitForRestartAndReload = async () => {
+    setRestarting(true);
+    const deadline = Date.now() + 180_000;
+    await new Promise((r) => setTimeout(r, 4000));
+    while (Date.now() < deadline) {
+      try {
+        const resp = await fetch("/api/v1/health", { cache: "no-store" });
+        if (resp.ok) break;
+      } catch {
+        // still down — keep waiting
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    window.location.reload();
+  };
+
+  const startPolling = () => {
+    stopPolling();
+    pollRef.current = setInterval(async () => {
+      try {
+        const s = await api.updateStatus();
+        setStatus((prev) => ({ ...(prev ?? {}), ...s }) as UpdateStatus);
+        const p = s.job?.phase;
+        if (p === "restarting") {
+          stopPolling();
+          void waitForRestartAndReload();
+        } else if (p === "done") {
+          stopPolling();
+          setApplying(false);
+          notify.success(s.job?.message ?? "Update complete.");
+        } else if (p === "error") {
+          stopPolling();
+          setApplying(false);
+          notify.error(s.job?.error ?? "Update failed.");
+        }
+      } catch {
+        // A failed status poll while applying almost certainly means the
+        // restart has begun and the api-server is going down — switch to
+        // reconnect mode.
+        stopPolling();
+        void waitForRestartAndReload();
+      }
+    }, 3000);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .updateStatus()
+      .then((s) => {
+        if (cancelled) return;
+        setStatus(s);
+        if (s.job?.in_progress) {
+          setApplying(true);
+          startPolling();
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      stopPolling();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleCheck = async () => {
+    setChecking(true);
+    try {
+      const s = await api.checkUpdate();
+      setStatus(s);
+    } catch (e) {
+      notifyError(e, "Could not check for updates");
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const doApply = async () => {
+    setApplying(true);
+    try {
+      const res = await api.applyUpdate();
+      const jobData = (res.data ?? {}) as UpdateStatus["job"];
+      setStatus((prev) => ({ ...(prev ?? {}), job: jobData }) as UpdateStatus);
+      notify.info(res.message ?? "Update started.");
+      startPolling();
+    } catch (e) {
+      setApplying(false);
+      notifyError(e, "Could not start the update");
+    }
+  };
+
+  const confirmApply = () => {
+    Modal.confirm({
+      title: "Confirm software update",
+      icon: <CloudDownloadOutlined style={{ color: "#1677ff" }} />,
+      width: 540,
+      content: (
+        <div>
+          <Typography.Paragraph>
+            This installation will be updated to{" "}
+            <b>{status?.latest_version ? `v${status.latest_version}` : "the latest release"}</b>. The
+            server will perform the following steps:
+          </Typography.Paragraph>
+          <ol style={{ marginTop: 0, paddingLeft: 20 }}>
+            <li>
+              create a <b>pre-update backup</b> (saved under{" "}
+              <Typography.Text code>backups/</Typography.Text> in the installation directory),
+            </li>
+            <li>
+              install the new orchestrator, API, UI, and frontend components (checksum-verified),
+              then
+            </li>
+            <li>
+              <b>restart the stack automatically</b> to activate the new version.
+            </li>
+          </ol>
+          <Typography.Paragraph style={{ marginBottom: 0 }}>
+            This page will reconnect automatically once the restarted stack is healthy. You may be
+            prompted to sign in again.
+          </Typography.Paragraph>
+        </div>
+      ),
+      okText: "Back up and update",
+      cancelText: "Cancel",
+      onOk: doApply,
+    });
+  };
+
+  const supported = status?.supported !== false;
+  const updateAvailable = status?.update_available === true;
+
+  return (
+    <Card
+      className="page-card"
+      title={
+        <Space>
+          <CloudDownloadOutlined /> Software updates
+        </Space>
+      }
+      extra={
+        <Button
+          icon={<ReloadOutlined />}
+          onClick={handleCheck}
+          loading={checking}
+          disabled={busy && !checking}
+        >
+          Check for updates
+        </Button>
+      }
+    >
+      <Typography.Paragraph type="secondary">
+        Check for a newer release and apply it in place. The update creates a backup first, installs
+        the latest orchestrator, API, UI, and frontend components (verified against the published
+        release checksums), then restarts the stack automatically to activate the new version.
+      </Typography.Paragraph>
+
+      <Space direction="vertical" size={12} style={{ width: "100%" }}>
+        <Space wrap>
+          <Typography.Text type="secondary">Current version:</Typography.Text>
+          <Tag>{status?.current_version ? `v${status.current_version}` : "unknown"}</Tag>
+          {status?.latest_version ? (
+            <>
+              <Typography.Text type="secondary">Latest:</Typography.Text>
+              <Tag color={updateAvailable ? "gold" : "green"}>v{status.latest_version}</Tag>
+            </>
+          ) : null}
+        </Space>
+
+        {!supported ? (
+          <Alert
+            type="info"
+            showIcon
+            message="In-app updates are not available"
+            description="Updating from the UI requires a compiled ncc-orchestrator binary, which is not present in this development environment."
+          />
+        ) : null}
+
+        {supported && !inProgress && !restarting && status?.check_error ? (
+          <Alert type="warning" showIcon message="Unable to check for updates" description={status.check_error} />
+        ) : null}
+
+        {supported && !inProgress && !restarting && status?.update_available === false ? (
+          <Alert type="success" showIcon message="This installation is running the latest available release." />
+        ) : null}
+
+        {supported && !inProgress && !restarting && updateAvailable ? (
+          <Alert
+            type="warning"
+            showIcon
+            message={`Update available: v${status?.latest_version}`}
+            description="Select “Back up and update” to create a backup, install the update, and restart the stack."
+            action={
+              <Button type="primary" icon={<CloudDownloadOutlined />} onClick={confirmApply}>
+                Back up and update
+              </Button>
+            }
+          />
+        ) : null}
+
+        {(inProgress || restarting) ? (
+          <Alert
+            type="info"
+            showIcon
+            message={`Update in progress — ${UPDATE_PHASE_LABEL[restarting ? "restarting" : phase] ?? phase}`}
+            description={
+              restarting
+                ? "The stack is restarting to load the new version. This page will reconnect automatically."
+                : (job?.message ?? "Processing…")
+            }
+          />
+        ) : null}
+
+        {!inProgress && !restarting && phase === "error" && job?.error ? (
+          <Alert type="error" showIcon message="Last update failed" description={job.error} />
+        ) : null}
+      </Space>
+    </Card>
+  );
+}
+
 export function AccessSection() {
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
@@ -1906,8 +2373,19 @@ export function AccessSection() {
       <ClusterGroupsCard />
       <SessionCard />
       <TLSCard />
-      <BackupRestoreCard />
       <ExternalAuthCard />
+    </Space>
+  );
+}
+
+// MaintenanceSection groups the lifecycle/operations tooling — in-place software
+// updates and full backup/restore of the installation — into a dedicated tab,
+// separate from access control.
+export function MaintenanceSection() {
+  return (
+    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+      <UpdatesCard />
+      <BackupRestoreCard />
     </Space>
   );
 }

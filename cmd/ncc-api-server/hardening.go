@@ -592,6 +592,26 @@ func (s *apiServer) withRateLimit(next http.Handler) http.Handler {
 	})
 }
 
+// auditEvent records a server-originated (non-HTTP) audit entry — e.g. a
+// background self-heal action that has no request context. It mirrors audit()
+// but tags the actor as the system rather than a principal/IP.
+func (s *apiServer) auditEvent(action string, success bool, fields map[string]interface{}) {
+	payload := map[string]interface{}{
+		"ts":        time.Now().UTC().Format(time.RFC3339),
+		"action":    action,
+		"success":   success,
+		"client":    "system",
+		"user":      "system",
+		"auth_mode": s.authMode,
+	}
+	for k, v := range fields {
+		payload[k] = v
+	}
+	b, _ := json.Marshal(payload)
+	fmt.Printf("AUDIT %s\n", string(b))
+	s.appendAuditLine(b)
+}
+
 func (s *apiServer) audit(r *http.Request, action string, success bool, fields map[string]interface{}) {
 	payload := map[string]interface{}{
 		"ts":        time.Now().UTC().Format(time.RFC3339),

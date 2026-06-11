@@ -502,7 +502,10 @@ tokens from the header user menu → **Personal access tokens**:
   role and group snapshot captured at creation are used.
 - Only a **SHA-256 hash** of the secret is stored — the plaintext is shown
   exactly **once**, at creation. Tokens carry a bounded expiry (7 days–1 year,
-  default 90), a 25-per-user cap, and record their last-used time.
+  default 90) or, by choosing **Never**, no expiry at all for long-lived
+  automation credentials (a never-expiring token relies on explicit revocation —
+  treat it as an admin/owner-managed risk). Each user is capped at 25 tokens, and
+  every token records its last-used time.
 - PAT auth is **exempt from CSRF** (it is a header credential, not a cookie),
   but the endpoints that *create/list/revoke* tokens from the browser are normal
   cookie-session mutations and so still require CSRF.
@@ -552,20 +555,25 @@ accepts manual entry, so it works even when the directory is unreachable.
 A cluster may belong to multiple groups. The model is:
 
 - **Admins and static-token callers are unrestricted** — they see, trigger, and
-  act on every cluster, exactly as before.
-- **Non-admins are confined to the union of clusters in the groups they belong
-  to.** Run triggers are pinned to that set via `--clusters` (a member may
-  further narrow to a subset; requesting a cluster outside their groups is
-  dropped, and a member in no group gets `403`). Report/dashboard data
-  (`/api/v1/report/data`, the runs feed) is **filtered server-side** down to the
-  allowed clusters, and members cannot supply their own `--clusters` /
-  `--cluster-file` to escape the scope.
-- **Ungrouped clusters are admin-only** — a cluster that is in no group is never
-  granted to a non-admin.
-- **Raw multi-cluster artifacts are admin-only.** The pre-rendered
-  `index.html`, CSV/JSON exports, and NCC logs (`GET /api/v1/artifacts*`) embed
-  every cluster and cannot be filtered after the fact, so they are restricted to
-  unrestricted callers; members use the filtered dashboard instead.
+  act on every cluster.
+- **Cluster groups are opt-in isolation.** A non-admin (viewer or operator) who
+  is **not a member of any group** is **unrestricted**: it sees, and — subject to
+  its role — acts on, every cluster. A plain viewer therefore gets read-only
+  visibility into all clusters' alerts out of the box, with no group setup.
+- **Membership scopes a caller down.** A non-admin who belongs to one or more
+  groups is **confined to the union of those groups' clusters**. Run triggers are
+  pinned to that set via `--clusters` (a member may narrow to a subset; a cluster
+  outside their groups is dropped), report/dashboard data (`/api/v1/report/data`,
+  the runs feed) is **filtered server-side** to the allowed clusters, and members
+  cannot supply their own `--clusters` / `--cluster-file` to escape the scope.
+  Scoping keys off **group membership**, not the resolved cluster count, so a
+  member of a group that currently expands to zero clusters stays restricted (it
+  does not silently become unrestricted). Assigning a user to a group therefore
+  *restricts* them; leaving them ungrouped grants full visibility.
+- **Raw multi-cluster artifacts are restricted to unrestricted callers.** The
+  pre-rendered `index.html`, CSV/JSON exports, and NCC logs
+  (`GET /api/v1/artifacts*`) embed every cluster and cannot be filtered after the
+  fact, so a group-scoped member uses the filtered dashboard instead.
 
 `GET /api/v1/auth/me` returns `cluster_access_unrestricted` and (when
 restricted) `allowed_clusters`, so the UI can label the visible scope and hide
@@ -643,6 +651,31 @@ runtime SAML config (including the SP private key). It can be persisted two ways
 > On managed clusters (EKS/GKE/AKS), enable the provider's KMS/envelope
 > encryption for Secrets. After enabling, re-encrypt existing Secrets with
 > `kubectl get secrets -A -o json | kubectl replace -f -`.
+
+#### File-store envelope encryption (non-Kubernetes installs)
+
+For **file-backed** installs (`--users-db`, the default outside Kubernetes) the
+`0600` document is plaintext to anyone who can read the disk or a backup
+archive — and it carries the most sensitive secrets the orchestrator holds: the
+**SAML SP private key** and the **LDAP service-account bind password** (the
+password hashes and PAT hashes are one-way, but the SP key and bind password are
+not). To protect these at rest you can supply a **32-byte master key**; the
+api-server then transparently wraps the whole document with **AES-256-GCM** on
+save and unwraps it on load (a fresh random nonce per write, with the envelope
+magic bound as additional-authenticated data):
+
+- `NCC_MASTER_KEY` — the key as base64 (std/raw/url) or hex (takes precedence), or
+- `--users-db-key-file <path>` / `NCC_MASTER_KEY_FILE` — a file holding the key.
+
+Generate one with `openssl rand -base64 32`. **Keep the key off the protected
+disk and out of the backup** (a tmpfs, a secret mount, or a value fetched from a
+KMS/Vault at boot) so the key and the ciphertext are not co-located — otherwise
+the encryption adds little over the existing `0600` permissions. With no key
+configured the store stays plaintext (unchanged, fully backward compatible), and
+enabling a key **cannot lock you out**: a legacy plaintext store is read as-is
+and upgraded to ciphertext on the next write. The wrapper is transparent to
+backup/restore — the archive simply carries the encrypted document, and a
+restored stack needs the same key to read it.
 
 The api-server is granted **least-privilege RBAC**
 ([`k8s/rbac.yaml`](../k8s/rbac.yaml)): `create` at the namespace scope (which
@@ -802,8 +835,19 @@ SAML can be configured two ways:
 Either way the server exposes `/saml/metadata` and `/saml/acs`; `/saml/login`
 starts the SP-initiated flow. Map IdP group/role attribute values to local roles
 with the role attribute + role map (e.g. `ncc-admins=admin,ncc-ops=operator`);
-unmatched users fall back to the default role (`viewer`). SAML requires the
-api-server to be reachable at the external root URL over TLS.
+unmatched users fall back to the default role (`viewer`).
+
+**Same-origin SP endpoints.** The SP endpoints must live on the same origin the
+SPA runs on so the post-login session cookie lands on the right host, so
+`ncc-ui-server` proxies `/saml/*` straight through to the api-server. Set the
+SAML **root URL to the browser-facing UI origin** (e.g. `https://ncc.example.com`
+or `https://<host>:8080`). Because the IdP returns its assertion as a top-level
+**cross-site POST** to `/saml/acs`, the SP's request-tracking cookie is issued
+`SameSite=None; Secure` (which requires HTTPS — see *UI TLS / HTTPS* below) and
+`/saml/*` is exempt from the api-server's CORS origin allowlist (the signed
+assertion plus the relay-state cookie are the security boundary there). SAML
+therefore requires the UI to be served over TLS at the external root URL — which
+is the default (self-signed HTTPS).
 
 #### LDAP / Active Directory
 
@@ -845,12 +889,18 @@ is supported but discouraged.
 
 #### Session cookies and CSRF
 
-Browser sessions use an **httpOnly, Secure, `SameSite=Strict`** cookie
-(`ncc_session`). Mutating requests authenticated by cookie must echo a
-double-submit CSRF token: the readable `ncc_csrf` cookie value in the
-`X-CSRF-Token` header (the UI does this automatically). Static-token automation
-sends no cookie and is exempt. `--cookie-insecure` drops the `Secure` attribute
-for local http development only.
+Browser sessions use an **httpOnly, `SameSite=Strict`** cookie (`ncc_session`).
+Mutating requests authenticated by cookie must echo a double-submit CSRF token:
+the readable `ncc_csrf` cookie value in the `X-CSRF-Token` header (the UI does
+this automatically). Static-token automation sends no cookie and is exempt.
+
+The `Secure` attribute is set **automatically when the UI is served over HTTPS**
+(the default — see *UI TLS / HTTPS* below) so the cookie is only sent over TLS.
+When the UI is run over plain HTTP (`--ui-insecure-http`), the cookie is issued
+without `Secure` so browsers will still store it on a non-localhost host. Two
+flags let you force the behaviour on the api-server: `--cookie-secure` always
+marks cookies `Secure`, and `--cookie-insecure` never does (`v2-start` wires the
+right one based on whether UI TLS is active).
 
 When local accounts, SAML, or LDAP/AD are configured, `auth-mode` is
 auto-upgraded to `hybrid` so static tokens (automation) and cookie sessions
@@ -862,6 +912,37 @@ cookie instead — preventing privilege escalation. Override with the ui-server'
 
 For unauthenticated Prometheus scraping of `/metrics` on a private network, use
 the api-server's `--metrics-public` flag instead of sharing a token.
+
+#### UI TLS / HTTPS
+
+The browser-facing `ncc-ui-server` serves **HTTPS by default**. When no
+certificate is supplied, `v2-start` generates a **self-signed** certificate
+(ECDSA P-256, SANs for the listen host plus `localhost`/loopback; stored under
+`<install-dir>/tls/`) and binds TLS automatically. Plain-HTTP requests to the
+same port are **308-redirected to HTTPS** (a first-byte peek demultiplexes TLS
+from HTTP on one port), so there is no separate HTTP listener to leak cookies.
+
+- **Opt out:** `--ui-insecure-http` serves plain HTTP instead (only for a
+  trusted loopback or a TLS-terminating proxy in front). The choice is persisted
+  in `.ncc-v2-start.json` so restarts keep it.
+- **Bring your own certificate / generate one from the UI:** Settings → Access →
+  *HTTPS / TLS* (admin-only) manages the browser-facing certificate via
+  `/api/v1/settings/tls`:
+  - `POST /api/v1/settings/tls/generate` mints (or renews) a self-signed cert for
+    the request host and restarts the stack — one click for an internal,
+    IP-addressed host with no CA.
+  - `PUT /api/v1/settings/tls` installs your own PEM **certificate + private
+    key** (e.g. from an internal PKI or a publicly-trusted CA), restarts the
+    stack to bind TLS, and marks session cookies `Secure`. The private key is
+    stored `0600` on the server and never returned.
+  - `DELETE /api/v1/settings/tls` removes the certificate and reverts to the
+    default behaviour.
+- Enabling HTTPS marks session cookies `Secure` and is what makes the
+  `SameSite=None` SAML SP cookie valid, so **SSO works out of the box** on the
+  default self-signed HTTPS. The installed certificate's metadata (subject,
+  issuer, validity, SANs) is recorded in the user database so the UI can show
+  what is installed without re-parsing the PEM; restore preserves host-specific
+  TLS paths (see backup/restore).
 
 ---
 

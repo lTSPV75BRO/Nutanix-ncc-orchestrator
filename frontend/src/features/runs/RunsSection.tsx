@@ -396,9 +396,21 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
     },
   ];
 
+  // Rough queue ETA: a run at position p waits for ~ceil(p / slots) batches of
+  // the average run duration before a slot frees. Only shown once at least one
+  // run has completed (so we have an average to project from).
+  const avgRunDurationSec = active?.avg_run_duration_sec ?? 0;
+  const estimateWaitSec = (position?: number): number | undefined => {
+    if (!position || position < 1 || avgRunDurationSec <= 0) return undefined;
+    const slots = Math.max(1, maxConcurrent || 1);
+    return Math.ceil(position / slots) * avgRunDurationSec;
+  };
+
   const renderRunEntry = (run: ActiveRunEntry) => {
     const clusters = run.clusters ?? [];
     const skipped = run.skipped ?? [];
+    const waitSec = run.status === "queued" ? estimateWaitSec(run.queue_position) : undefined;
+    const queuedLabel = run.queue_position ? `Queued · #${run.queue_position} in line` : "Queued";
     const header = (
       <Space size={8} wrap>
         <Badge status={run.status === "running" ? "processing" : "default"} />
@@ -406,8 +418,13 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
         {run.group ? <Tag color="purple">{run.group}</Tag> : null}
         {run.all_clusters ? <Tag color="geekblue">all clusters</Tag> : null}
         <Tag color={run.status === "running" ? "processing" : "default"}>
-          {run.status === "running" ? `Running · ${formatElapsedSeconds(run.elapsed_sec)}` : "Queued"}
+          {run.status === "running" ? `Running · ${formatElapsedSeconds(run.elapsed_sec)}` : queuedLabel}
         </Tag>
+        {waitSec !== undefined ? (
+          <Tooltip title="Estimated wait based on the average duration of recent runs">
+            <Tag icon={<ClockCircleOutlined />} color="default">{`~${formatElapsedSeconds(waitSec)} ETA`}</Tag>
+          </Tooltip>
+        ) : null}
       </Space>
     );
     return {
@@ -467,7 +484,13 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
               jumpToLastSignal={jumpToLastSignal}
             />
           ) : (
-            <Typography.Text type="secondary">Waiting for a free slot to start…</Typography.Text>
+            <Typography.Text type="secondary">
+              {run.queue_position
+                ? `Waiting for a free slot — #${run.queue_position} in line${
+                    waitSec !== undefined ? ` · ~${formatElapsedSeconds(waitSec)} estimated` : ""
+                  }.`
+                : "Waiting for a free slot to start…"}
+            </Typography.Text>
           )}
         </Space>
       ),

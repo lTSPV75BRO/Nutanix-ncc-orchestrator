@@ -1,7 +1,7 @@
 # Nutanix NCC Orchestrator
 
 [![Version](https://img.shields.io/badge/version-2.1.0-blue)](RELEASE_NOTES_v2.1.0.md)
-[![Go](https://img.shields.io/badge/go-1.26.3-00ADD8)](go.mod)
+[![Go](https://img.shields.io/badge/go-1.26.4-00ADD8)](go.mod)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Status](https://img.shields.io/badge/release-GA-success)](docs/PRODUCTION_READINESS_v2.0.0.md)
 
@@ -112,22 +112,56 @@ Open <http://localhost:8080> — the UI picks up the auto-generated `.ncc-api-to
 
 ### From source
 
-Requires **Go 1.26.3+** and **Node 20+**.
+Requires **Go 1.26.4+** (matching the `go` directive in [`go.mod`](go.mod)) and **Node 20+**.
 
 ```bash
 git clone https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator.git
 cd Nutanix-ncc-orchestrator
+```
 
-# Build all four binaries (orchestrator, api, ui, mcp)
-go build ./...
+**1. Build the four Go binaries.** `go build ./...` only *compile-checks* the
+module — when several `main` packages match, the resulting executables are
+discarded. Use explicit `-o` targets to actually produce the binaries:
 
-# Build the SPA
+```bash
+go build ./...                                      # fast compile check of everything
+
+go build -o ncc-orchestrator .                      # CLI runner + scheduler + v2 stack manager
+go build -o ncc-api-server  ./cmd/ncc-api-server    # REST/JSON API + auth/RBAC backend
+go build -o ncc-ui-server   ./cmd/ncc-ui-server     # SPA host + API reverse proxy
+go build -o ncc-mcp-server  ./cmd/ncc-mcp-server    # Model Context Protocol server (optional)
+```
+
+**2. Build the SPA** (served by `ncc-ui-server`):
+
+```bash
 (cd frontend && npm ci && npm run build)
+```
 
-# Run a scan
+**3. (Optional) verify your tree** before running:
+
+```bash
+go vet ./...
+go test ./...        # add -race for the concurrency-sensitive auth/run suites
+```
+
+**4a. Run a one-shot scan** (CLI only, no UI):
+
+```bash
 export NCC_PASSWORD='your-prism-password'
-./ncc-orchestrator validate-config --config example_config.yaml
+./ncc-orchestrator validate-config --config example_config.yaml   # lint config before running
 ./ncc-orchestrator --config example_config.yaml run
+```
+
+**4b. Or launch the full web stack** (API + UI + first-run admin bootstrap;
+serves **HTTPS by default** with an auto-generated self-signed cert):
+
+```bash
+./ncc-orchestrator v2-start --config-path example_config.yaml \
+  --api-listen :8081 --ui-listen :8080
+# Open https://localhost:8080 — grab the first-run admin password from the API
+# server log (search for "FIRST-RUN ADMIN") and change it on first login.
+# Add --ui-insecure-http to serve plain HTTP for a trusted loopback instead.
 ```
 
 Reproducible release build (cross-compile + archives + checksums): see [`binaryGO.txt`](binaryGO.txt) and [`docs/BUILD_FROM_SCRATCH.md`](docs/BUILD_FROM_SCRATCH.md).
@@ -301,7 +335,9 @@ Major endpoints (full surface at `GET /api/v1/meta/routes`, OpenAPI at `GET /api
 
 All write/mutate routes require `X-API-Token: <token>` (or `Authorization: Bearer …` session token). Errors return a structured envelope with `success: false`, `error`, and `error_code` (e.g. `NCC_API_UNAUTHORIZED`, `NCC_API_BAD_REQUEST`, `NCC_API_NOT_FOUND`, `NCC_API_CONFLICT`).
 
-**RBAC, login & SSO:** the server enforces three roles — `viewer` (read-only), `operator` (also trigger/cancel runs), and `admin` (everything incl. `/api/v1/settings/*`). A role can be a static token (`NCC_API_TOKEN` = admin, `NCC_API_VIEWER_TOKEN` = viewer) or an interactive login. Interactive login is on by default with a first-run **admin bootstrap** (random password + forced change); accounts live in a writable store (a `0600` file or a Kubernetes Secret). Login methods: local password accounts (managed in Settings → Access, bcrypt), **SAML SSO** (`--saml-*` or runtime), and **LDAP / Active Directory** (`--ldap-*` or runtime; local-first with AD fallback, AD group→role mapping) — all configurable together. Browser logins use an httpOnly, `SameSite=Strict` session cookie with double-submit CSRF protection; the UI shows a login screen and hides admin-only/operator-only controls per role. Lost passwords are recoverable offline (`ncc-orchestrator v2-reset-password`) or via a self-service request queue, and all auth state can be captured with `v2-backup` / restored with `v2-restore`. See [docs/SECURITY_AND_TRUST.md](docs/SECURITY_AND_TRUST.md). With no login configured, the single-token behavior is unchanged.
+**RBAC, login & SSO:** the server enforces three roles — `viewer` (read-only), `operator` (also trigger/cancel runs), and `admin` (everything incl. `/api/v1/settings/*`). A role can be a static token (`NCC_API_TOKEN` = admin, `NCC_API_VIEWER_TOKEN` = viewer), an interactive login, or a self-service **personal access token** (`ncc_pat_…` bearer, inherits the owner's role, expiring or **never**-expiring, revocable; user menu → *Personal access tokens*). Interactive login is on by default with a first-run **admin bootstrap** (random password + forced change); accounts live in a writable store (a `0600` file or a Kubernetes Secret). Login methods: local password accounts (managed in Settings → Access, bcrypt), **SAML SSO** (`--saml-*` or runtime), and **LDAP / Active Directory** (`--ldap-*` or runtime; local-first with AD fallback, AD group→role mapping) — all configurable together. Browser logins use an httpOnly, `SameSite=Strict` session cookie (marked `Secure` whenever the UI is on HTTPS — the default) with double-submit CSRF protection; the UI shows a login screen and hides admin-only/operator-only controls per role. Admins can segregate clusters into **cluster groups** for access control: groups are **opt-in isolation** — an ungrouped viewer/operator sees all clusters, while membership confines a caller to that group's clusters. Lost passwords are recoverable offline (`ncc-orchestrator v2-reset-password`) or via a self-service request queue, and all auth state can be captured with `v2-backup` / restored with `v2-restore`. See [docs/SECURITY_AND_TRUST.md](docs/SECURITY_AND_TRUST.md). With no login configured, the single-token behavior is unchanged.
+
+**HTTPS by default:** `ncc-ui-server` serves HTTPS out of the box — `v2-start` auto-generates a self-signed cert (under `<install-dir>/tls/`) and redirects plain HTTP to HTTPS on the same port. Manage the certificate from **Settings → Access → HTTPS / TLS**: generate/renew a self-signed cert, or install your own PEM cert + key. Opt out with `--ui-insecure-http`.
 
 Trigger a run from the API:
 
@@ -568,11 +604,12 @@ below and the [`helm/`](helm/) chart.
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | Authentication        | Token-based (`X-API-Token`) constant-time compare (`crypto/subtle`); HMAC-signed sessions; optional local password accounts (bcrypt), SAML SSO, and LDAP / Active Directory |
 | Authorization (RBAC)  | Three roles `viewer < operator < admin`: viewers read non-settings `GET`s, operators also trigger/cancel runs, settings/rotation are admin-only |
-| Browser sessions      | Role-bearing httpOnly + `SameSite=Strict` session cookie with double-submit CSRF protection on mutations; ui-server forwards user sessions (no admin-token injection) |
-| CORS                  | Strict allowlist (default `http://localhost:8080`); wildcard origins rejected at startup                               |
+| Browser sessions      | Role-bearing httpOnly + `SameSite=Strict` session cookie (auto-`Secure` on HTTPS) with double-submit CSRF protection on mutations; ui-server forwards user sessions (no admin-token injection) |
+| Personal access tokens| Self-service `ncc_pat_…` bearer tokens; SHA-256-hashed at rest, inherit owner's role (live re-resolve for local accounts), bounded or never-expiring, revocable, 25/user cap |
+| CORS                  | Strict allowlist (default `http://localhost:8080`); wildcard origins rejected at startup; `/saml/*` exempt (signed assertion + relay-state cookie) |
 | CSP                   | UI: `script-src 'self'`, no `unsafe-eval`; API: `default-src 'none'`                                                   |
 | Prism TLS             | Verified by default; `--ca-bundle` (trust internal CA) or `--pin-sha256` (cert pinning) preferred over `--insecure-skip-verify` |
-| API/UI transport      | Optional direct HTTPS (`--tls-cert-file`/`--tls-key-file`); optional mTLS (`--tls-client-ca-file`)                     |
+| UI transport          | **HTTPS by default** — self-signed cert auto-generated by `v2-start`, HTTP→HTTPS redirect on the same port; generate/renew or install your own cert in Settings → Access → HTTPS / TLS; `--ui-insecure-http` to opt out. Direct API HTTPS via `--tls-cert-file`/`--tls-key-file`; optional mTLS (`--tls-client-ca-file`) |
 | Outbound notifications| Optional webhook HMAC signing (`webhook-secret` → `X-NCC-Signature`); SMTP TLS verify via `smtp-insecure-skip-verify`; dead-letter dir for failed deliveries |
 | Security headers      | `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Permissions-Policy`, HSTS on TLS   |
 | Rate limiting         | Per-client token bucket on sensitive auth/mutation routes (`--rate-limit-per-minute`, default 60)                      |

@@ -137,6 +137,47 @@ func fileExists(p string) bool {
 	return err == nil && !st.IsDir()
 }
 
+// uiRunHealthCheck probes the running UI server at listen and returns a process
+// exit code: 0 when it answers with any HTTP status (the server is up and
+// serving), 1 when the connection fails or times out (crashed or hung). TLS
+// verification is skipped because the stack default is a self-signed cert.
+func uiRunHealthCheck(listen string, https bool) int {
+	host := strings.TrimSpace(listen)
+	if host == "" {
+		host = ":8080"
+	}
+	if strings.HasPrefix(host, ":") {
+		host = "127.0.0.1" + host
+	} else if h, p, err := net.SplitHostPort(host); err == nil {
+		if h == "" || h == "0.0.0.0" || h == "::" {
+			h = "127.0.0.1"
+		}
+		host = net.JoinHostPort(h, p)
+	}
+	scheme := "http"
+	if https {
+		scheme = "https"
+	}
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+	resp, err := client.Get(fmt.Sprintf("%s://%s/", scheme, host))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ui health-check failed: %v\n", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode >= 500 {
+		fmt.Fprintf(os.Stderr, "ui health-check: server returned %d\n", resp.StatusCode)
+		return 1
+	}
+	return 0
+}
+
 // detectBackendLogin asks the backend's health endpoint whether interactive
 // login (local accounts or SAML) is enabled, so the UI proxy can decide
 // whether to forward user session cookies instead of injecting the admin
@@ -294,6 +335,8 @@ func main() {
 	var backendInsecureSkipVerify bool
 	var backendClientCertFile string
 	var backendClientKeyFile string
+	var healthCheck bool
+	flag.BoolVar(&healthCheck, "health-check", false, "Probe the running UI server's listen address and exit 0 (healthy) / 1 (unhealthy). Used by the self-heal supervisor to detect a hung UI process")
 	flag.StringVar(&listen, "listen", ":8080", "HTTP listen address")
 	flag.StringVar(&dir, "dir", "./frontend/dist", "Frontend static directory")
 	flag.StringVar(&backendURL, "backend-url", "http://localhost:8081", "Backend API base URL")
@@ -316,6 +359,13 @@ func main() {
 	// Without this, Go's flag package silently ignores the args and
 	// the UI server starts up anyway, leaving the user confused.
 	uiHandleSubcommandArgs(flag.Args())
+
+	// --health-check short-circuits: probe the live server and exit. The
+	// self-heal supervisor invokes this to detect a hung (alive-but-unresponsive)
+	// UI process, not just a crashed one.
+	if healthCheck {
+		os.Exit(uiRunHealthCheck(listen, strings.TrimSpace(tlsCertFile) != "" && strings.TrimSpace(tlsKeyFile) != ""))
+	}
 
 	// Stack-aware defaults: when the ui-server is launched from
 	// inside an extracted v2 stack (`<root>/bin/<self>`) and the

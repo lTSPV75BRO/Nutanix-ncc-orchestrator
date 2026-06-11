@@ -1683,6 +1683,41 @@ func validateConfigFileRawTypes() error {
 	return nil
 }
 
+// configBaseDir returns the absolute directory of the loaded config file. It is
+// used to anchor relative output paths so they resolve consistently regardless
+// of the process working directory. Returns "" when no config file is in use
+// (flag-only runs), in which case the legacy cwd-relative behavior is kept.
+func configBaseDir(cfgFile string) string {
+	p := strings.TrimSpace(cfgFile)
+	if p == "" {
+		p = strings.TrimSpace(viper.ConfigFileUsed())
+	}
+	if p == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return ""
+	}
+	return filepath.Dir(abs)
+}
+
+// resolveUnderBase makes a relative path absolute by anchoring it to base. An
+// already-absolute path, an empty path, or an empty base is returned unchanged.
+// This is the core of the "self-healing" output-path resolution: a scheduled
+// (cron) run executes with an arbitrary working directory (often the invoking
+// user's home), so a relative output-dir like "outputfiles" would otherwise be
+// created beside that cwd and silently diverge from where the API/UI reads
+// results. Anchoring to the config file's directory keeps scheduled runs and
+// interactive runs writing to the same place.
+func resolveUnderBase(p, base string) string {
+	p = strings.TrimSpace(p)
+	if p == "" || base == "" || filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(base, p)
+}
+
 func bindConfig() (Config, error) {
 	cfgFile := viper.GetString("config")
 	if cfgFile != "" {
@@ -1853,6 +1888,15 @@ func bindConfig() (Config, error) {
 	if cfg.OutputDirFiltered == "" {
 		cfg.OutputDirFiltered = defaultOutputDirFiltered
 	}
+	// Self-healing path resolution: anchor relative output directories to the
+	// config file's directory so a scheduled run (cron, arbitrary cwd) writes to
+	// the same place an interactive run from the install dir does. Resolved here
+	// (before RunHistoryDir is derived from OutputDirFiltered) so the history dir
+	// inherits the absolute base too. Absolute paths are left untouched.
+	if cfgBase := configBaseDir(cfgFile); cfgBase != "" {
+		cfg.OutputDirLogs = resolveUnderBase(cfg.OutputDirLogs, cfgBase)
+		cfg.OutputDirFiltered = resolveUnderBase(cfg.OutputDirFiltered, cfgBase)
+	}
 	if len(cfg.OutputFormats) == 0 {
 		cfg.OutputFormats = []string{defaultOutputFormat}
 	}
@@ -1905,6 +1949,8 @@ func bindConfig() (Config, error) {
 	cfg.ExcludeAlertMatchMode = excludeMode
 	if cfg.RunHistoryDir == "" {
 		cfg.RunHistoryDir = filepath.Join(cfg.OutputDirFiltered, "runs")
+	} else if cfgBase := configBaseDir(cfgFile); cfgBase != "" {
+		cfg.RunHistoryDir = resolveUnderBase(cfg.RunHistoryDir, cfgBase)
 	}
 	if cfg.FlakyLookbackRuns <= 0 {
 		cfg.FlakyLookbackRuns = defaultFlakyLookbackRuns
@@ -7133,7 +7179,15 @@ type updateOptions struct {
 	BinarySHA256       string
 	TargetVersion      string
 	SkipChecksumVerify bool
+	JSONOut            bool // emit a machine-readable result line for --check (consumed by the api-server)
 }
+
+// updateCheckJSONPrefix is the sentinel that precedes the machine-readable
+// JSON object printed by `update --check --json`. The orchestrator mixes
+// human-readable progress on stderr with this single stdout line, and callers
+// (the api-server) scan combined output for this prefix to parse the result
+// without depending on the wording of the human-readable lines.
+const updateCheckJSONPrefix = "NCC_UPDATE_JSON "
 
 func parseVersionMajor(raw string) (int64, error) {
 	clean := strings.TrimPrefix(stripGoBuildGitSuffix(strings.TrimSpace(raw)), "v")
@@ -7800,6 +7854,12 @@ type v2StartOptions struct {
 	SelfHeal                    bool
 	SelfHealMaxRestarts         int
 	SelfHealWindow              time.Duration
+	// SelfHealProbeInterval is how often the supervisor runs an HTTP health
+	// probe against a still-alive process to catch hangs/deadlocks (not just
+	// crashes). SelfHealUnhealthyThreshold is the number of consecutive failed
+	// probes that triggers a restart. Zero values fall back to defaults.
+	SelfHealProbeInterval      time.Duration
+	SelfHealUnhealthyThreshold int
 }
 
 type v2StopOptions struct {
@@ -8624,6 +8684,9 @@ type backupEntry struct {
 type v2BackupOptions struct {
 	InstallDir string
 	OutputFile string
+	// Retain, when > 0, prunes older ncc-backup-*.tar.gz siblings of the output
+	// file so at most Retain backups are kept (newest wins).
+	Retain int
 }
 
 type v2RestoreOptions struct {
@@ -8632,6 +8695,114 @@ type v2RestoreOptions struct {
 	Force      bool
 	Restart    bool
 	NoRestart  bool
+	// VerifyOnly validates the archive (gzip+tar integrity, manifest present,
+	// confined paths) and reports, without extracting anything.
+	VerifyOnly bool
+}
+
+// backupVerifyResult summarizes a validated backup archive.
+type backupVerifyResult struct {
+	Manifest  backupManifest
+	DataFiles int
+	Bytes     int64
+}
+
+// verifyBackupArchive reads an archive end-to-end and validates it is a
+// restorable ncc backup: it must decompress cleanly (gzip CRC), untar without
+// error, carry a parseable manifest.json, contain at least one data/ file, and
+// hold no path-traversal/absolute entries. It writes nothing. A "backup" that
+// cannot be restored is worse than no backup, so create/restore and the doctor
+// all gate on this.
+func verifyBackupArchive(path string) (backupVerifyResult, error) {
+	var res backupVerifyResult
+	f, err := os.Open(path)
+	if err != nil {
+		return res, err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return res, fmt.Errorf("not a gzip archive: %w", err)
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	sawManifest := false
+	sep := string(filepath.Separator)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return res, fmt.Errorf("corrupt tar stream: %w", err)
+		}
+		if hdr.FileInfo().IsDir() {
+			continue
+		}
+		switch {
+		case hdr.Name == "manifest.json":
+			data, err := io.ReadAll(io.LimitReader(tr, 1<<20))
+			if err != nil {
+				return res, err
+			}
+			if err := json.Unmarshal(data, &res.Manifest); err != nil {
+				return res, fmt.Errorf("invalid manifest.json: %w", err)
+			}
+			sawManifest = true
+		case strings.HasPrefix(hdr.Name, "data/"):
+			rel := strings.TrimPrefix(hdr.Name, "data/")
+			clean := filepath.Clean(filepath.FromSlash(rel))
+			if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+sep) || filepath.IsAbs(clean) {
+				return res, fmt.Errorf("unsafe path in archive: %q", hdr.Name)
+			}
+			n, err := io.Copy(io.Discard, io.LimitReader(tr, 64<<20))
+			if err != nil {
+				return res, fmt.Errorf("read %s: %w", hdr.Name, err)
+			}
+			res.DataFiles++
+			res.Bytes += n
+		}
+	}
+	if !sawManifest {
+		return res, fmt.Errorf("archive missing manifest.json (not an ncc backup?)")
+	}
+	if res.DataFiles == 0 {
+		return res, fmt.Errorf("archive contains no data files to restore")
+	}
+	return res, nil
+}
+
+// pruneOldBackups keeps at most retain newest ncc-backup-*.tar.gz files in dir,
+// deleting the rest. Returns the names pruned.
+func pruneOldBackups(dir string, retain int) ([]string, error) {
+	if retain <= 0 {
+		return nil, nil
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "ncc-backup-*.tar.gz"))
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) <= retain {
+		return nil, nil
+	}
+	type bk struct {
+		path string
+		mod  time.Time
+	}
+	var list []bk
+	for _, m := range matches {
+		if st, err := os.Stat(m); err == nil && !st.IsDir() {
+			list = append(list, bk{m, st.ModTime()})
+		}
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].mod.After(list[j].mod) })
+	var pruned []string
+	for _, b := range list[retain:] {
+		if err := os.Remove(b.path); err == nil {
+			pruned = append(pruned, filepath.Base(b.path))
+		}
+	}
+	return pruned, nil
 }
 
 type v2ResetPasswordOptions struct {
@@ -8988,6 +9159,21 @@ func runV2Backup(opts v2BackupOptions) error {
 	if abs, err := filepath.Abs(out); err == nil {
 		out = abs
 	}
+	// Disk guard: refuse to write a backup we don't have room for (a truncated
+	// archive is an unrestorable backup). Estimate from the uncompressed source
+	// size plus headroom; gzip only makes the real archive smaller.
+	var estBytes uint64
+	for _, e := range entries {
+		if st, err := os.Stat(e.Abs); err == nil {
+			estBytes += uint64(st.Size())
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		return fmt.Errorf("create backup output dir: %w", err)
+	}
+	if free, ok := diskFreeBytes(filepath.Dir(out)); ok && free < estBytes+(64<<20) {
+		return fmt.Errorf("insufficient disk space for backup: need ~%s, only %s free on %s; prune old backups or free space", humanBytes(estBytes), humanBytes(free), filepath.Dir(out))
+	}
 	rels := make([]string, 0, len(entries))
 	for _, e := range entries {
 		rels = append(rels, e.Rel)
@@ -9007,7 +9193,16 @@ func runV2Backup(opts v2BackupOptions) error {
 	if err := writeBackupArchive(out, manifest, entries); err != nil {
 		return err
 	}
+	// Verify-after-create: immediately read the archive back and validate it is
+	// restorable. If it isn't, delete the bad file so it can't be mistaken for a
+	// usable backup, and fail loudly.
+	vr, verr := verifyBackupArchive(out)
+	if verr != nil {
+		_ = os.Remove(out)
+		return fmt.Errorf("backup verification failed (removed %s): %w", out, verr)
+	}
 	fmt.Printf("Backup written: %s\n", out)
+	fmt.Printf("verified:       %d file(s) readable from archive (%s uncompressed)\n", vr.DataFiles, humanBytes(uint64(vr.Bytes)))
 	fmt.Printf("created by:     ncc-orchestrator %s (%s, built %s)\n", Version, Stream, BuildDate)
 	fmt.Printf("install-dir:    %s\n", installDir)
 	fmt.Printf("files (%d):\n", len(entries))
@@ -9022,6 +9217,11 @@ func runV2Backup(opts v2BackupOptions) error {
 		warns := printAuthSummary(os.Stdout, auth)
 		for _, wmsg := range warns {
 			fmt.Printf("  ! %s\n", wmsg)
+		}
+	}
+	if opts.Retain > 0 {
+		if pruned, perr := pruneOldBackups(filepath.Dir(out), opts.Retain); perr == nil && len(pruned) > 0 {
+			fmt.Printf("retention:      kept newest %d, pruned %d older backup(s): %s\n", opts.Retain, len(pruned), strings.Join(pruned, ", "))
 		}
 	}
 	fmt.Println("\nThis archive contains secrets (API token, password hashes, SAML SP key, LDAP bind password). It was created with 0600 permissions; store it securely.")
@@ -9054,6 +9254,19 @@ func runV2Restore(opts v2RestoreOptions) error {
 	}
 	if abs, err := filepath.Abs(in); err == nil {
 		in = abs
+	}
+	// Restore preflight: validate the archive before touching the install dir.
+	// --verify-only stops here and just reports.
+	vr, verr := verifyBackupArchive(in)
+	if verr != nil {
+		return fmt.Errorf("backup archive failed verification: %w", verr)
+	}
+	if opts.VerifyOnly {
+		fmt.Printf("Archive OK: %s\n", in)
+		fmt.Printf("  created by:  ncc-orchestrator %s (%s, built %s)\n", vr.Manifest.Version, vr.Manifest.Stream, vr.Manifest.BuildDate)
+		fmt.Printf("  created at:  %s\n", vr.Manifest.CreatedAt)
+		fmt.Printf("  data files:  %d (%s uncompressed)\n", vr.DataFiles, humanBytes(uint64(vr.Bytes)))
+		return nil
 	}
 	// Capture this host's environment-specific start settings BEFORE the archive
 	// overwrites the start-state file. A backup is portable across hosts, so its
@@ -9378,11 +9591,13 @@ type v2StartState struct {
 	UITLSKeyFile  string `json:"ui_tls_key_file,omitempty"`
 	// UIInsecureHTTP opts out of the default self-signed HTTPS and serves the
 	// UI over plain HTTP. Persisted so a restart keeps the operator's choice.
-	UIInsecureHTTP bool `json:"ui_insecure_http,omitempty"`
-	APIOnly        bool `json:"api_only,omitempty"`
-	SelfHeal                    bool          `json:"self_heal,omitempty"`
-	SelfHealMaxRestarts         int           `json:"self_heal_max_restarts,omitempty"`
-	SelfHealWindow              time.Duration `json:"self_heal_window,omitempty"`
+	UIInsecureHTTP             bool          `json:"ui_insecure_http,omitempty"`
+	APIOnly                    bool          `json:"api_only,omitempty"`
+	SelfHeal                   bool          `json:"self_heal,omitempty"`
+	SelfHealMaxRestarts        int           `json:"self_heal_max_restarts,omitempty"`
+	SelfHealWindow             time.Duration `json:"self_heal_window,omitempty"`
+	SelfHealProbeInterval      time.Duration `json:"self_heal_probe_interval,omitempty"`
+	SelfHealUnhealthyThreshold int           `json:"self_heal_unhealthy_threshold,omitempty"`
 }
 
 // writeV2StartState records the portable start settings of opts under
@@ -9413,6 +9628,8 @@ func writeV2StartState(installDir string, opts v2StartOptions) error {
 		SelfHeal:                    opts.SelfHeal,
 		SelfHealMaxRestarts:         opts.SelfHealMaxRestarts,
 		SelfHealWindow:              opts.SelfHealWindow,
+		SelfHealProbeInterval:       opts.SelfHealProbeInterval,
+		SelfHealUnhealthyThreshold:  opts.SelfHealUnhealthyThreshold,
 	}
 	data, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
@@ -9536,6 +9753,10 @@ func v2StartArgsFromState(installDir string) (args []string, ok bool) {
 			args = append(args, "--self-heal-max-restarts", strconv.Itoa(st.SelfHealMaxRestarts))
 		}
 		addDur("--self-heal-window", st.SelfHealWindow)
+		addDur("--self-heal-probe-interval", st.SelfHealProbeInterval)
+		if st.SelfHealUnhealthyThreshold > 0 {
+			args = append(args, "--self-heal-unhealthy-threshold", strconv.Itoa(st.SelfHealUnhealthyThreshold))
+		}
 	}
 	return args, true
 }
@@ -9572,6 +9793,9 @@ type v2DoctorOptions struct {
 	UIListen   string
 	OutputFile string // when set, writes a redacted support tarball
 	NoBundle   bool
+	ConfigPath string // override for the self-heal config checks
+	Fix        bool   // apply safe self-heal remediations
+	JSON       bool   // emit the self-heal report as JSON (skips the human report + bundle)
 }
 
 // runV2Doctor is the "something's broken, give me everything"
@@ -9604,6 +9828,21 @@ func runV2Doctor(opts v2DoctorOptions) error {
 	uiListen := strings.TrimSpace(opts.UIListen)
 	if uiListen == "" {
 		uiListen = ":8080"
+	}
+
+	// JSON mode is the machine-readable self-heal report only: no human report,
+	// no support bundle. Used by automation and the api-server diagnostics view.
+	if opts.JSON {
+		hr := runSelfHeal(installDir, opts.ConfigPath, opts.Fix)
+		out, err := json.MarshalIndent(hr, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(out))
+		if hr.Worst() == healFail {
+			return fmt.Errorf("self-heal found %d failing check(s)", hr.Summary["fail"])
+		}
+		return nil
 	}
 
 	var report bytes.Buffer
@@ -9660,6 +9899,15 @@ func runV2Doctor(opts v2DoctorOptions) error {
 	}
 	fmt.Fprintln(w)
 
+	heading := "-- 6. self-heal checks --"
+	if opts.Fix {
+		heading = "-- 6. self-heal checks (--fix: applying safe remediations) --"
+	}
+	fmt.Fprintln(w, heading)
+	hr := runSelfHeal(installDir, opts.ConfigPath, opts.Fix)
+	doctorPrintSelfHeal(w, hr)
+	fmt.Fprintln(w)
+
 	fmt.Fprintln(w, "========================================")
 	fmt.Fprintln(w, "doctor: report complete")
 	fmt.Fprintln(w, "========================================")
@@ -9680,6 +9928,35 @@ func runV2Doctor(opts v2DoctorOptions) error {
 	fmt.Fprintf(os.Stdout, "\nsupport bundle: %s\n", bundlePath)
 	fmt.Fprintln(os.Stdout, "  attach this file to your support ticket; secrets and tokens have been redacted.")
 	return nil
+}
+
+// doctorPrintSelfHeal renders a self-heal report as aligned, human-readable
+// lines: a status glyph, the check title, its message, and any remediation
+// applied or hint to follow up.
+func doctorPrintSelfHeal(w io.Writer, hr healReport) {
+	glyph := func(s healStatus) string {
+		switch s {
+		case healOK:
+			return "[ ok ]"
+		case healWarn:
+			return "[warn]"
+		case healFail:
+			return "[FAIL]"
+		default:
+			return "[ ?? ]"
+		}
+	}
+	fmt.Fprintf(w, "config: %s\n", hr.ConfigPath)
+	for _, res := range hr.Results {
+		fmt.Fprintf(w, "  %s %-28s %s\n", glyph(res.Status), res.Title, res.Message)
+		if res.Fixed && strings.TrimSpace(res.FixMsg) != "" {
+			fmt.Fprintf(w, "         fixed: %s\n", res.FixMsg)
+		}
+		if !res.Fixed && strings.TrimSpace(res.Hint) != "" {
+			fmt.Fprintf(w, "         hint:  %s\n", res.Hint)
+		}
+	}
+	fmt.Fprintf(w, "summary: %d ok, %d warn, %d fail\n", hr.Summary["ok"], hr.Summary["warn"], hr.Summary["fail"])
 }
 
 // doctorPrintRedactedEnv prints NCC_* env var NAMES only — values
@@ -9987,7 +10264,143 @@ func waitForPIDExit(pid int, timeout time.Duration) bool {
 	return false
 }
 
-func startSelfHealSupervisor(serviceName string, bin string, args []string, pidPath string, logPath string, maxRestarts int, window time.Duration) (int, error) {
+// buildAPIHealthProbeCmd returns a shell command that runs the api-server's
+// built-in `--health-check` self-probe (GET /api/v1/health over loopback,
+// exit 0 healthy / 1 unhealthy). The supervisor runs this against a still-alive
+// api-server to detect hangs the liveness check cannot. Returns "" if the
+// binary path is empty.
+func buildAPIHealthProbeCmd(apiBin, listen, tokenFile, repoRoot string) string {
+	if strings.TrimSpace(apiBin) == "" {
+		return ""
+	}
+	parts := []string{shellQuote(apiBin), "--health-check"}
+	if strings.TrimSpace(listen) != "" {
+		parts = append(parts, "--listen", shellQuote(listen))
+	}
+	if strings.TrimSpace(tokenFile) != "" {
+		parts = append(parts, "--token-file-path", shellQuote(tokenFile))
+	}
+	if strings.TrimSpace(repoRoot) != "" {
+		parts = append(parts, "--repo-root", shellQuote(repoRoot))
+	}
+	return strings.Join(parts, " ")
+}
+
+// buildUIHealthProbeCmd returns a shell command that runs the ui-server's
+// built-in `--health-check` self-probe (GET / over loopback, exit 0 healthy / 1
+// unhealthy) so the supervisor can detect a hung UI process, not just a crashed
+// one. tls toggles the https scheme. Returns "" if the binary path is empty.
+func buildUIHealthProbeCmd(uiBin, listen string, tls bool) string {
+	if strings.TrimSpace(uiBin) == "" {
+		return ""
+	}
+	parts := []string{shellQuote(uiBin), "--health-check"}
+	if strings.TrimSpace(listen) != "" {
+		parts = append(parts, "--listen", shellQuote(listen))
+	}
+	if tls {
+		// Presence of the cert/key flags switches the probe to https; pass
+		// placeholder paths so the ui-server picks the https scheme. The probe
+		// skips TLS verification, so the values only need to be non-empty.
+		parts = append(parts, "--tls-cert-file", shellQuote("tls.crt"), "--tls-key-file", shellQuote("tls.key"))
+	}
+	return strings.Join(parts, " ")
+}
+
+// selfHealSupervisorScript builds the POSIX-sh supervisor loop. It is split out
+// from process launch so its behavior can be unit-tested (the generated script
+// is asserted by TestSelfHealSupervisorScript). healthCmd is an optional
+// shell command run against a *still-alive* process to detect hangs/deadlocks
+// (empty = liveness-only). probeIntervalSec/unhealthyThreshold gate that probe.
+func selfHealSupervisorScript(serviceName, cmdLine, pidPath, logPath, healthCmd string, maxRestarts, windowSeconds, probeIntervalSec, unhealthyThreshold int) string {
+	return strings.Join([]string{
+		"set -eu",
+		"MAX_RESTARTS=" + strconv.Itoa(maxRestarts),
+		"WINDOW_SECONDS=" + strconv.Itoa(windowSeconds),
+		"PROBE_INTERVAL=" + strconv.Itoa(probeIntervalSec),
+		"UNHEALTHY_MAX=" + strconv.Itoa(unhealthyThreshold),
+		// Cap exponential restart backoff and cool down (then resume) after the
+		// restart budget is exhausted instead of giving up permanently, so a
+		// prolonged-but-transient fault (disk full, downstream outage) still
+		// self-heals once it clears.
+		"BACKOFF_CAP=30",
+		"COOLDOWN_SECONDS=$WINDOW_SECONDS",
+		"PID_FILE=" + shellQuote(pidPath),
+		"LOG_FILE=" + shellQuote(logPath),
+		"CMD=" + shellQuote(cmdLine),
+		"HEALTH_CMD=" + shellQuote(healthCmd),
+		// SERVICE_NAME is passed as a shell-quoted variable (not concatenated
+		// into the echo lines) so a name containing quotes or $(...) cannot
+		// break out of the generated script.
+		"SERVICE_NAME=" + shellQuote(serviceName),
+		"log() { echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $SERVICE_NAME $1\" >> \"$LOG_FILE\"; }",
+		"restarts=0",
+		"window_start=$(date +%s)",
+		"unhealthy=0",
+		"backoff=1",
+		"last_probe=0",
+		"while true; do",
+		"  pid=\"\"",
+		"  if [ -f \"$PID_FILE\" ]; then",
+		"    pid=$(sed -n '1p' \"$PID_FILE\" | tr -d '\\r\\n ' || true)",
+		"  fi",
+		"  if [ -n \"$pid\" ] && kill -0 \"$pid\" 2>/dev/null; then",
+		// Process is alive. If a health probe is configured, run it on the
+		// configured interval; consecutive failures mean the process is hung
+		// (alive but not serving) so kill it and let the restart path fire.
+		"    if [ -n \"$HEALTH_CMD\" ]; then",
+		"      now=$(date +%s)",
+		"      if [ $((now-last_probe)) -ge $PROBE_INTERVAL ]; then",
+		"        last_probe=$now",
+		"        if sh -c \"$HEALTH_CMD\" >/dev/null 2>&1; then",
+		"          unhealthy=0",
+		"        else",
+		"          unhealthy=$((unhealthy+1))",
+		"          log \"health probe failed ($unhealthy/$UNHEALTHY_MAX) pid=$pid\"",
+		"          if [ $unhealthy -ge $UNHEALTHY_MAX ]; then",
+		"            log \"unhealthy threshold reached; restarting pid=$pid\"",
+		"            kill \"$pid\" 2>/dev/null || true",
+		"            sleep 2",
+		"            kill -0 \"$pid\" 2>/dev/null && kill -9 \"$pid\" 2>/dev/null || true",
+		"            unhealthy=0",
+		"            continue",
+		"          fi",
+		"        fi",
+		"      fi",
+		"    fi",
+		"    sleep 2",
+		"    continue",
+		"  fi",
+		"  now=$(date +%s)",
+		"  if [ $((now-window_start)) -gt $WINDOW_SECONDS ]; then",
+		"    window_start=$now",
+		"    restarts=0",
+		"    backoff=1",
+		"  fi",
+		"  restarts=$((restarts+1))",
+		"  if [ $restarts -gt $MAX_RESTARTS ]; then",
+		"    log \"self-heal exhausted restarts ($MAX_RESTARTS within ${WINDOW_SECONDS}s); cooling down ${COOLDOWN_SECONDS}s before resuming\"",
+		"    sleep \"$COOLDOWN_SECONDS\"",
+		"    window_start=$(date +%s)",
+		"    restarts=0",
+		"    backoff=1",
+		"    unhealthy=0",
+		"    continue",
+		"  fi",
+		"  sh -c \"$CMD\" >> \"$LOG_FILE\" 2>&1 &",
+		"  newpid=$!",
+		"  echo \"$newpid\" > \"$PID_FILE\"",
+		"  log \"self-heal restart #$restarts pid=$newpid (backoff ${backoff}s)\"",
+		"  unhealthy=0",
+		"  last_probe=$(date +%s)",
+		"  sleep \"$backoff\"",
+		"  backoff=$((backoff*2))",
+		"  if [ $backoff -gt $BACKOFF_CAP ]; then backoff=$BACKOFF_CAP; fi",
+		"done",
+	}, "\n")
+}
+
+func startSelfHealSupervisor(serviceName string, bin string, args []string, pidPath string, logPath string, maxRestarts int, window time.Duration, healthCmd string, probeInterval time.Duration, unhealthyThreshold int) (int, error) {
 	if runtime.GOOS == "windows" {
 		return 0, fmt.Errorf("self-heal supervisor is currently unsupported on windows")
 	}
@@ -10001,6 +10414,13 @@ func startSelfHealSupervisor(serviceName string, bin string, args []string, pidP
 	if windowSeconds < 30 {
 		windowSeconds = 30
 	}
+	probeIntervalSec := int(probeInterval.Seconds())
+	if probeIntervalSec < 1 {
+		probeIntervalSec = 10
+	}
+	if unhealthyThreshold < 1 {
+		unhealthyThreshold = 3
+	}
 	quotedArgs := make([]string, 0, len(args))
 	for _, a := range args {
 		quotedArgs = append(quotedArgs, shellQuote(a))
@@ -10009,45 +10429,7 @@ func startSelfHealSupervisor(serviceName string, bin string, args []string, pidP
 	if len(quotedArgs) > 0 {
 		cmdLine += " " + strings.Join(quotedArgs, " ")
 	}
-	script := strings.Join([]string{
-		"set -eu",
-		"MAX_RESTARTS=" + strconv.Itoa(maxRestarts),
-		"WINDOW_SECONDS=" + strconv.Itoa(windowSeconds),
-		"PID_FILE=" + shellQuote(pidPath),
-		"LOG_FILE=" + shellQuote(logPath),
-		"CMD=" + shellQuote(cmdLine),
-		// SERVICE_NAME is passed as a shell-quoted variable (not concatenated
-		// into the echo lines) so a name containing quotes or $(...) cannot
-		// break out of the generated script.
-		"SERVICE_NAME=" + shellQuote(serviceName),
-		"restarts=0",
-		"window_start=$(date +%s)",
-		"while true; do",
-		"  pid=\"\"",
-		"  if [ -f \"$PID_FILE\" ]; then",
-		"    pid=$(sed -n '1p' \"$PID_FILE\" | tr -d '\\r\\n ' || true)",
-		"  fi",
-		"  if [ -n \"$pid\" ] && kill -0 \"$pid\" 2>/dev/null; then",
-		"    sleep 2",
-		"    continue",
-		"  fi",
-		"  now=$(date +%s)",
-		"  if [ $((now-window_start)) -gt $WINDOW_SECONDS ]; then",
-		"    window_start=$now",
-		"    restarts=0",
-		"  fi",
-		"  restarts=$((restarts+1))",
-		"  if [ $restarts -gt $MAX_RESTARTS ]; then",
-		"    echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $SERVICE_NAME self-heal exhausted restarts\" >> \"$LOG_FILE\"",
-		"    exit 1",
-		"  fi",
-		"  sh -c \"$CMD\" >> \"$LOG_FILE\" 2>&1 &",
-		"  newpid=$!",
-		"  echo \"$newpid\" > \"$PID_FILE\"",
-		"  echo \"$(date -u +%Y-%m-%dT%H:%M:%SZ) $SERVICE_NAME self-heal restart #$restarts pid=$newpid\" >> \"$LOG_FILE\"",
-		"  sleep 2",
-		"done",
-	}, "\n")
+	script := selfHealSupervisorScript(serviceName, cmdLine, pidPath, logPath, healthCmd, maxRestarts, windowSeconds, probeIntervalSec, unhealthyThreshold)
 	monitorCmd := exec.Command("sh", "-c", script)
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
@@ -10422,6 +10804,12 @@ func runV2Start(opts v2StartOptions) error {
 	if opts.SelfHealWindow <= 0 {
 		opts.SelfHealWindow = 10 * time.Minute
 	}
+	if opts.SelfHealProbeInterval <= 0 {
+		opts.SelfHealProbeInterval = 10 * time.Second
+	}
+	if opts.SelfHealUnhealthyThreshold <= 0 {
+		opts.SelfHealUnhealthyThreshold = 3
+	}
 	if opts.SelfHeal && !opts.Detach {
 		fmt.Fprintln(os.Stderr, "warning: --self-heal is effective only with --detach; continuing without detached self-heal monitor")
 	}
@@ -10766,7 +11154,16 @@ func runV2Start(opts v2StartOptions) error {
 			if apiLogPath == "" {
 				apiLogPath = filepath.Join(installDir, "logs", "v2-api.log")
 			}
-			pid, err := startSelfHealSupervisor("api", apiBin, apiArgs, apiPIDPath, apiLogPath, opts.SelfHealMaxRestarts, opts.SelfHealWindow)
+			// Health-probe restarts catch a hung-but-alive api-server (deadlock,
+			// stuck handler) that a liveness-only check would miss. The probe
+			// reuses the api-server's built-in `--health-check` mode (no curl
+			// dependency), which hits /api/v1/health over loopback HTTP — so it
+			// only applies when the api-server is not serving its own TLS.
+			apiHealthCmd := ""
+			if strings.TrimSpace(opts.APITLSCertFile) == "" {
+				apiHealthCmd = buildAPIHealthProbeCmd(apiBin, opts.APIListen, opts.TokenFile, repoRoot)
+			}
+			pid, err := startSelfHealSupervisor("api", apiBin, apiArgs, apiPIDPath, apiLogPath, opts.SelfHealMaxRestarts, opts.SelfHealWindow, apiHealthCmd, opts.SelfHealProbeInterval, opts.SelfHealUnhealthyThreshold)
 			if err != nil {
 				return fmt.Errorf("start api self-heal supervisor: %w", err)
 			}
@@ -10778,7 +11175,11 @@ func runV2Start(opts v2StartOptions) error {
 				if uiLogPath == "" {
 					uiLogPath = filepath.Join(installDir, "logs", "v2-ui.log")
 				}
-				pid, err := startSelfHealSupervisor("ui", uiBin, uiArgs, uiPIDPath, uiLogPath, opts.SelfHealMaxRestarts, opts.SelfHealWindow)
+				// The UI server's built-in --health-check probe lets the
+				// supervisor catch a hung (alive-but-unresponsive) UI process,
+				// not just a crashed one.
+				uiHealthCmd := buildUIHealthProbeCmd(uiBin, opts.UIListen, strings.TrimSpace(opts.UITLSCertFile) != "")
+				pid, err := startSelfHealSupervisor("ui", uiBin, uiArgs, uiPIDPath, uiLogPath, opts.SelfHealMaxRestarts, opts.SelfHealWindow, uiHealthCmd, opts.SelfHealProbeInterval, opts.SelfHealUnhealthyThreshold)
 				if err != nil {
 					return fmt.Errorf("start ui self-heal supervisor: %w", err)
 				}
@@ -10809,7 +11210,7 @@ func runV2Start(opts v2StartOptions) error {
 				fmt.Fprintf(os.Stderr, "Kill cmd: kill \"$(cat %s)\" \"$(cat %s)\"\n", shellQuote(apiPIDPath), shellQuote(uiPIDPath))
 			}
 			if opts.SelfHeal {
-				fmt.Fprintf(os.Stderr, "Self-heal: enabled (max_restarts=%d window=%s)\n", opts.SelfHealMaxRestarts, opts.SelfHealWindow)
+				fmt.Fprintf(os.Stderr, "Self-heal: enabled (max_restarts=%d window=%s, health-probe every %s after %d failures, cooldown-and-resume)\n", opts.SelfHealMaxRestarts, opts.SelfHealWindow, opts.SelfHealProbeInterval, opts.SelfHealUnhealthyThreshold)
 				fmt.Fprintf(os.Stderr, "Self-heal supervisor pids: api=%d ui=%d\n", apiSupervisorPID, uiSupervisorPID)
 			}
 		} else {
@@ -10825,7 +11226,7 @@ func runV2Start(opts v2StartOptions) error {
 				fmt.Fprintf(os.Stderr, "Kill cmd: kill \"$(cat %s)\"\n", shellQuote(apiPIDPath))
 			}
 			if opts.SelfHeal {
-				fmt.Fprintf(os.Stderr, "Self-heal: enabled (max_restarts=%d window=%s)\n", opts.SelfHealMaxRestarts, opts.SelfHealWindow)
+				fmt.Fprintf(os.Stderr, "Self-heal: enabled (max_restarts=%d window=%s, health-probe every %s after %d failures, cooldown-and-resume)\n", opts.SelfHealMaxRestarts, opts.SelfHealWindow, opts.SelfHealProbeInterval, opts.SelfHealUnhealthyThreshold)
 				fmt.Fprintf(os.Stderr, "Self-heal supervisor pid: api=%d\n", apiSupervisorPID)
 			}
 		}
@@ -11416,6 +11817,18 @@ func runUpdate(opts updateOptions) error {
 	stackURL, stackName := pickStackAssetForCurrentPlatform(*targetRelease)
 
 	if opts.CheckOnly {
+		if opts.JSONOut {
+			result := map[string]interface{}{
+				"current_version":  currentVer,
+				"latest_version":   targetVer,
+				"latest_overall":   strings.TrimPrefix(strings.TrimSpace(latestOverall.TagName), "v"),
+				"update_available": versionLess(currentVer, targetVer),
+				"has_package":      stackURL != "",
+			}
+			if b, err := json.Marshal(result); err == nil {
+				fmt.Fprintf(os.Stdout, "%s%s\n", updateCheckJSONPrefix, string(b))
+			}
+		}
 		if versionLess(currentVer, targetVer) {
 			fmt.Fprintf(os.Stderr, "Update available in track: %s -> %s\n", currentVer, targetVer)
 		} else if versionLess(targetVer, currentVer) {
@@ -15257,6 +15670,7 @@ When using --binary-url for install, --binary-sha256 is required.`,
 			binarySHA256, _ := cmd.Flags().GetString("binary-sha256")
 			targetVersion, _ := cmd.Flags().GetString("target-version")
 			skipChecksumVerify, _ := cmd.Flags().GetBool("skip-checksum-verify")
+			jsonOut, _ := cmd.Flags().GetBool("json")
 			return runUpdate(updateOptions{
 				CheckOnly:          checkOnly,
 				AllowMajorUpgrade:  allowMajorUpgrade,
@@ -15265,10 +15679,12 @@ When using --binary-url for install, --binary-sha256 is required.`,
 				BinarySHA256:       binarySHA256,
 				TargetVersion:      targetVersion,
 				SkipChecksumVerify: skipChecksumVerify,
+				JSONOut:            jsonOut,
 			})
 		},
 	}
 	updateCmd.Flags().Bool("check", false, "Check update availability without downloading or replacing")
+	updateCmd.Flags().Bool("json", false, "With --check, also emit a machine-readable result line (NCC_UPDATE_JSON {...}) on stdout")
 	updateCmd.Flags().Bool("allow-major-upgrade", false, "Allow major upgrades (for example v1.x to v2.x)")
 	updateCmd.Flags().String("repo", defaultGitHubRepo, "GitHub repo in owner/repo or GitHub URL format")
 	updateCmd.Flags().String("binary-url", "", "Direct binary URL for non-GitHub/custom repositories")
@@ -15392,6 +15808,8 @@ Use --self-heal with --detach to auto-restart services on unexpected exits.`,
 			selfHeal, _ := cmd.Flags().GetBool("self-heal")
 			selfHealMaxRestarts, _ := cmd.Flags().GetInt("self-heal-max-restarts")
 			selfHealWindow, _ := cmd.Flags().GetDuration("self-heal-window")
+			selfHealProbeInterval, _ := cmd.Flags().GetDuration("self-heal-probe-interval")
+			selfHealUnhealthyThreshold, _ := cmd.Flags().GetInt("self-heal-unhealthy-threshold")
 			return runV2Start(v2StartOptions{
 				InstallDir:                  installDir,
 				ConfigPath:                  configPath,
@@ -15438,6 +15856,8 @@ Use --self-heal with --detach to auto-restart services on unexpected exits.`,
 				SelfHeal:                    selfHeal,
 				SelfHealMaxRestarts:         selfHealMaxRestarts,
 				SelfHealWindow:              selfHealWindow,
+				SelfHealProbeInterval:       selfHealProbeInterval,
+				SelfHealUnhealthyThreshold:  selfHealUnhealthyThreshold,
 			})
 		},
 	}
@@ -15483,9 +15903,11 @@ Use --self-heal with --detach to auto-restart services on unexpected exits.`,
 	v2StartCmd.Flags().String("ui-log-file", "", "Detached mode UI log file path (default <install-dir>/logs/v2-ui.log)")
 	v2StartCmd.Flags().String("api-pid-file", "", "Detached mode API PID file path (default <install-dir>/run/v2-api.pid)")
 	v2StartCmd.Flags().String("ui-pid-file", "", "Detached mode UI PID file path (default <install-dir>/run/v2-ui.pid)")
-	v2StartCmd.Flags().Bool("self-heal", false, "Detached mode only: monitor and auto-restart API/UI if they exit unexpectedly")
-	v2StartCmd.Flags().Int("self-heal-max-restarts", 3, "Maximum auto-restarts allowed within self-heal window")
-	v2StartCmd.Flags().Duration("self-heal-window", 10*time.Minute, "Rolling window used for self-heal restart budget")
+	v2StartCmd.Flags().Bool("self-heal", false, "Detached mode only: monitor and auto-restart API/UI if they exit unexpectedly (also restarts a hung-but-alive API via health probes, with exponential backoff and cooldown-and-resume after the restart budget is exhausted)")
+	v2StartCmd.Flags().Int("self-heal-max-restarts", 3, "Maximum auto-restarts allowed within self-heal window before a cooldown")
+	v2StartCmd.Flags().Duration("self-heal-window", 10*time.Minute, "Rolling window used for self-heal restart budget (also the cooldown duration after the budget is exhausted)")
+	v2StartCmd.Flags().Duration("self-heal-probe-interval", 10*time.Second, "How often the self-heal supervisor health-probes a still-alive API server to detect hangs (api-server only; uses its built-in --health-check)")
+	v2StartCmd.Flags().Int("self-heal-unhealthy-threshold", 3, "Consecutive failed health probes before the self-heal supervisor restarts a hung-but-alive API server")
 	cmd.AddCommand(v2StartCmd)
 
 	v2CheckCmd := &cobra.Command{
@@ -15615,14 +16037,17 @@ it is written with 0600 permissions — store it securely. Restore it with
 		RunE: func(cmd *cobra.Command, args []string) error {
 			installDir, _ := cmd.Flags().GetString("install-dir")
 			outputFile, _ := cmd.Flags().GetString("output-file")
+			retain, _ := cmd.Flags().GetInt("retain")
 			return runV2Backup(v2BackupOptions{
 				InstallDir: installDir,
 				OutputFile: outputFile,
+				Retain:     retain,
 			})
 		},
 	}
 	v2BackupCmd.Flags().String("install-dir", "", "Installation directory to back up (default: auto-detect, fallback .ncc-v2)")
 	v2BackupCmd.Flags().String("output-file", "", "Output archive path (default ./ncc-backup-<UTC-timestamp>.tar.gz)")
+	v2BackupCmd.Flags().Int("retain", 0, "Keep at most N newest ncc-backup-*.tar.gz files in the output directory, pruning older ones (0 = keep all)")
 	cmd.AddCommand(v2BackupCmd)
 
 	// restore subcommand: extract a v2-backup archive back into an install
@@ -15665,6 +16090,7 @@ with --input-file or as the first positional argument.`,
 			force, _ := cmd.Flags().GetBool("force")
 			restart, _ := cmd.Flags().GetBool("restart")
 			noRestart, _ := cmd.Flags().GetBool("no-restart")
+			verifyOnly, _ := cmd.Flags().GetBool("verify-only")
 			if strings.TrimSpace(inputFile) == "" && len(args) > 0 {
 				inputFile = args[0]
 			}
@@ -15674,11 +16100,13 @@ with --input-file or as the first positional argument.`,
 				Force:      force,
 				Restart:    restart,
 				NoRestart:  noRestart,
+				VerifyOnly: verifyOnly,
 			})
 		},
 	}
 	v2RestoreCmd.Flags().String("install-dir", "", "Installation directory to restore into (default: auto-detect, fallback .ncc-v2)")
 	v2RestoreCmd.Flags().String("input-file", "", "Backup archive to restore (or pass as the first positional argument)")
+	v2RestoreCmd.Flags().Bool("verify-only", false, "Validate the archive (gzip+tar integrity, manifest, confined paths) and report, without restoring")
 	v2RestoreCmd.Flags().Bool("force", false, "Overwrite existing files and proceed even if the stack appears to be running")
 	v2RestoreCmd.Flags().Bool("restart", false, "Force a stack restart/start after restore even if it appears stopped (default: auto-restart only when running)")
 	v2RestoreCmd.Flags().Bool("no-restart", false, "Do not restart the stack after restore (overrides the default auto-restart when running)")
@@ -15778,12 +16206,18 @@ replaced by ***REDACTED***.`,
 			uiListen, _ := cmd.Flags().GetString("ui-listen")
 			outputFile, _ := cmd.Flags().GetString("output-file")
 			noBundle, _ := cmd.Flags().GetBool("no-bundle")
+			configPath, _ := cmd.Flags().GetString("config")
+			fix, _ := cmd.Flags().GetBool("fix")
+			jsonOut, _ := cmd.Flags().GetBool("json")
 			return runV2Doctor(v2DoctorOptions{
 				InstallDir: installDir,
 				APIListen:  apiListen,
 				UIListen:   uiListen,
 				OutputFile: outputFile,
 				NoBundle:   noBundle,
+				ConfigPath: configPath,
+				Fix:        fix,
+				JSON:       jsonOut,
 			})
 		},
 	}
@@ -15792,6 +16226,9 @@ replaced by ***REDACTED***.`,
 	v2DoctorCmd.Flags().String("ui-listen", ":8080", "UI listen address used in the printed status row")
 	v2DoctorCmd.Flags().String("output-file", "", "Bundle path (default ./ncc-support-<UTC-timestamp>.tar.gz)")
 	v2DoctorCmd.Flags().Bool("no-bundle", false, "Print the report only; do not write a tarball")
+	v2DoctorCmd.Flags().String("config", "", "Config file for self-heal checks (default <install-dir>/config.yaml)")
+	v2DoctorCmd.Flags().Bool("fix", false, "Apply safe self-heal remediations (create missing output dirs, anchor relative paths, tighten secret-file perms, repair config)")
+	v2DoctorCmd.Flags().Bool("json", false, "Emit the self-heal report as JSON (skips the human report and support bundle)")
 	cmd.AddCommand(v2DoctorCmd)
 
 	genTestAggCmd := &cobra.Command{

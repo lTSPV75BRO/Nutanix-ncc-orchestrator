@@ -1,0 +1,186 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "Prometheus data source scraping the NCC Orchestrator /metrics endpoint",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__requires": [
+    { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "9.0.0" },
+    { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" },
+    { "type": "panel", "id": "timeseries", "name": "Time series", "version": "" },
+    { "type": "panel", "id": "stat", "name": "Stat", "version": "" }
+  ],
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "tags": ["ncc", "nutanix", "orchestrator"],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Data source",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0
+      },
+      {
+        "name": "instance",
+        "label": "Instance",
+        "type": "query",
+        "datasource": "${datasource}",
+        "query": "label_values(ncc_build_info, instance)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "timezone": "",
+  "title": "NCC Orchestrator",
+  "uid": "ncc-orchestrator",
+  "version": 1,
+  "panels": [
+    {
+      "type": "row",
+      "title": "Overview",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Version",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^version$/" }, "colorMode": "none", "textMode": "name" },
+      "targets": [
+        { "expr": "ncc_build_info{instance=~\"$instance\"}", "instant": true, "legendFormat": "{{version}}", "refId": "A", "datasource": "${datasource}" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Runs running",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "blue", "value": 1 } ] } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
+      "targets": [ { "expr": "sum(ncc_runs_running{instance=~\"$instance\"})", "refId": "A", "datasource": "${datasource}" } ]
+    },
+    {
+      "type": "stat",
+      "title": "Runs queued",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 1 } ] } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
+      "targets": [ { "expr": "sum(ncc_runs_queued{instance=~\"$instance\"})", "refId": "A", "datasource": "${datasource}" } ]
+    },
+    {
+      "type": "stat",
+      "title": "Account lockouts (last 1h)",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
+      "targets": [ { "expr": "sum(increase(ncc_auth_lockouts_total{instance=~\"$instance\"}[1h]))", "refId": "A", "datasource": "${datasource}" } ]
+    },
+    {
+      "type": "row",
+      "title": "Runs",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Run throughput (per 5m)",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } } },
+      "targets": [
+        { "expr": "sum(rate(ncc_runs_triggered_total{instance=~\"$instance\"}[5m]))", "legendFormat": "triggered", "refId": "A", "datasource": "${datasource}" },
+        { "expr": "sum(rate(ncc_runs_completed_total{instance=~\"$instance\"}[5m]))", "legendFormat": "completed", "refId": "B", "datasource": "${datasource}" },
+        { "expr": "sum(rate(ncc_runs_failed_total{instance=~\"$instance\"}[5m]))", "legendFormat": "failed", "refId": "C", "datasource": "${datasource}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Run duration",
+      "datasource": "${datasource}",
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 10 } } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "targets": [
+        { "expr": "sum(rate(ncc_run_duration_seconds_sum{instance=~\"$instance\"}[15m])) / clamp_min(sum(rate(ncc_run_duration_seconds_count{instance=~\"$instance\"}[15m])), 0.0001)", "legendFormat": "avg (15m)", "refId": "A", "datasource": "${datasource}" },
+        { "expr": "max(ncc_run_last_duration_seconds{instance=~\"$instance\"})", "legendFormat": "last", "refId": "B", "datasource": "${datasource}" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Authentication",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Logins (per 5m)",
+      "datasource": "${datasource}",
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "targets": [
+        { "expr": "sum(rate(ncc_auth_logins_total{instance=~\"$instance\"}[5m]))", "legendFormat": "success", "refId": "A", "datasource": "${datasource}" },
+        { "expr": "sum(rate(ncc_auth_login_failures_total{instance=~\"$instance\"}[5m]))", "legendFormat": "failure", "refId": "B", "datasource": "${datasource}" },
+        { "expr": "sum(rate(ncc_auth_lockouts_total{instance=~\"$instance\"}[5m]))", "legendFormat": "lockouts", "refId": "C", "datasource": "${datasource}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Rate limiter (per 5m)",
+      "datasource": "${datasource}",
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "targets": [
+        { "expr": "sum(rate(ncc_ratelimit_allowed_total{instance=~\"$instance\"}[5m]))", "legendFormat": "allowed", "refId": "A", "datasource": "${datasource}" },
+        { "expr": "sum(rate(ncc_ratelimit_blocked_total{instance=~\"$instance\"}[5m]))", "legendFormat": "blocked", "refId": "B", "datasource": "${datasource}" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Updates & process",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "In-app updates (per 1h)",
+      "datasource": "${datasource}",
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 60 } } },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "targets": [
+        { "expr": "sum(increase(ncc_update_applied_total{instance=~\"$instance\"}[1h]))", "legendFormat": "applied", "refId": "A", "datasource": "${datasource}" },
+        { "expr": "sum(increase(ncc_update_failed_total{instance=~\"$instance\"}[1h]))", "legendFormat": "failed", "refId": "B", "datasource": "${datasource}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Process memory & goroutines",
+      "datasource": "${datasource}",
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } } },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "targets": [
+        { "expr": "max(ncc_go_memstats_heap_inuse_bytes{instance=~\"$instance\"})", "legendFormat": "heap in-use (bytes)", "refId": "A", "datasource": "${datasource}" },
+        { "expr": "max(ncc_go_goroutines{instance=~\"$instance\"})", "legendFormat": "goroutines", "refId": "B", "datasource": "${datasource}" }
+      ]
+    }
+  ]
+}
