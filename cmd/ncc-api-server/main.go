@@ -2231,7 +2231,7 @@ func (s *apiServer) scheduleDetectorName() string {
 	if runtime.GOOS == "windows" {
 		return "schtasks (via orchestrator)"
 	}
-	return "crontab (via orchestrator)"
+	return "crontab / systemd timer (via orchestrator)"
 }
 
 func (s *apiServer) handleArtifacts(w http.ResponseWriter, r *http.Request) {

@@ -7860,6 +7860,12 @@ type v2StartOptions struct {
 	// probes that triggers a restart. Zero values fall back to defaults.
 	SelfHealProbeInterval      time.Duration
 	SelfHealUnhealthyThreshold int
+	// Supervise runs the stack under the native foreground supervisor instead
+	// of detaching: a single long-lived process launches and keeps API/UI
+	// alive (liveness + health-probe restarts, backoff, cooldown-and-resume).
+	// Intended to be run as a Type=simple systemd service for reboot
+	// persistence. Mutually preferred over Detach when both are set.
+	Supervise bool
 }
 
 type v2StopOptions struct {
@@ -8506,6 +8512,9 @@ func runV2Status(opts v2StatusOptions) error {
 		probe   bool
 	}
 	services := []svc{
+		// Native foreground supervisor (v2-supervise); owns both children.
+		{"supervisor", filepath.Join(runDir, "v2-supervisor.pid"), "", filepath.Join(logDir, "v2-supervisor.log"), false},
+		// Legacy per-service sh supervisors (v2-start --detach --self-heal).
 		{"api-supervisor", filepath.Join(runDir, "v2-api-supervisor.pid"), "", filepath.Join(logDir, "v2-api-supervisor.log"), false},
 		{"ncc-api-server", filepath.Join(runDir, "v2-api.pid"), apiListen, filepath.Join(logDir, "v2-api.log"), true},
 		{"ui-supervisor", filepath.Join(runDir, "v2-ui-supervisor.pid"), "", filepath.Join(logDir, "v2-ui-supervisor.log"), false},
@@ -9232,7 +9241,7 @@ func runV2Backup(opts v2BackupOptions) error {
 // process, so restore can refuse to overwrite a running install dir.
 func v2StackRunning(installDir string) (bool, string) {
 	runDir := filepath.Join(installDir, "run")
-	for _, name := range []string{"v2-api.pid", "v2-ui.pid", "v2-api-supervisor.pid", "v2-ui-supervisor.pid"} {
+	for _, name := range []string{"v2-supervisor.pid", "v2-api.pid", "v2-ui.pid", "v2-api-supervisor.pid", "v2-ui-supervisor.pid"} {
 		if pid, err := readPIDFromFile(filepath.Join(runDir, name)); err == nil && processIsAlive(pid) {
 			return true, name
 		}
@@ -9892,7 +9901,7 @@ func runV2Doctor(opts v2DoctorOptions) error {
 
 	fmt.Fprintln(w, "-- 5. recent log tails (last 200 lines each) --")
 	logDir := filepath.Join(installDir, "logs")
-	for _, name := range []string{"v2-api.log", "v2-ui.log", "v2-api-supervisor.log", "v2-ui-supervisor.log"} {
+	for _, name := range []string{"v2-supervisor.log", "v2-api.log", "v2-ui.log", "v2-api-supervisor.log", "v2-ui-supervisor.log"} {
 		p := filepath.Join(logDir, name)
 		fmt.Fprintf(w, "\n--- %s ---\n", p)
 		doctorTailFile(w, p, 200)
@@ -10065,7 +10074,7 @@ func writeDoctorBundle(path, report, installDir string) error {
 	}
 
 	logDir := filepath.Join(installDir, "logs")
-	for _, name := range []string{"v2-api.log", "v2-ui.log", "v2-api-supervisor.log", "v2-ui-supervisor.log"} {
+	for _, name := range []string{"v2-supervisor.log", "v2-api.log", "v2-ui.log", "v2-api-supervisor.log", "v2-ui-supervisor.log"} {
 		p := filepath.Join(logDir, name)
 		var buf bytes.Buffer
 		doctorTailFile(&buf, p, 1000)
@@ -10469,6 +10478,10 @@ func runV2Stop(opts v2StopOptions) error {
 		name    string
 		pidPath string
 	}{
+		// Stop the native foreground supervisor first: on SIGTERM it gracefully
+		// stops its own children and clears their pid files, so the api/ui
+		// targets below become no-ops (or clean up anything it missed).
+		{name: "supervisor", pidPath: filepath.Join(runDir, "v2-supervisor.pid")},
 		{name: "api-supervisor", pidPath: filepath.Join(runDir, "v2-api-supervisor.pid")},
 		{name: "ui-supervisor", pidPath: filepath.Join(runDir, "v2-ui-supervisor.pid")},
 		{name: "api", pidPath: apiPIDPath},
@@ -10985,6 +10998,86 @@ func runV2Start(opts v2StartOptions) error {
 			uiArgs = append(uiArgs, "--backend-insecure-skip-verify")
 		}
 		uiCmd = exec.Command(uiBin, uiArgs...)
+	}
+	if opts.Supervise {
+		// Native foreground supervisor: this process owns the children and
+		// keeps them alive (crash + hang recovery) for as long as it runs.
+		// Run it as a Type=simple systemd service so the OS keeps the
+		// supervisor alive across reboots. apiCmd/uiCmd built above are not
+		// used here; the supervisor builds its own commands on every restart.
+		runDir := filepath.Join(installDir, "run")
+		logDir := filepath.Join(installDir, "logs")
+		apiLogPath := strings.TrimSpace(opts.APILogFile)
+		if apiLogPath == "" {
+			apiLogPath = filepath.Join(logDir, "v2-api.log")
+		}
+		apiPIDPath := strings.TrimSpace(opts.APIPIDFile)
+		if apiPIDPath == "" {
+			apiPIDPath = filepath.Join(runDir, "v2-api.pid")
+		}
+		// Health-probe restarts catch a hung-but-alive api-server. The probe
+		// reuses the api-server's built-in --health-check (loopback HTTP), so
+		// it only applies when the api-server is not serving its own TLS.
+		var apiHealthArgs []string
+		if strings.TrimSpace(opts.APITLSCertFile) == "" {
+			apiHealthArgs = buildAPIHealthProbeArgs(apiBin, opts.APIListen, opts.TokenFile, repoRoot)
+		}
+		children := []*superviseChild{{
+			name:       "api",
+			bin:        apiBin,
+			args:       apiArgs,
+			pidPath:    apiPIDPath,
+			logPath:    apiLogPath,
+			healthArgs: apiHealthArgs,
+		}}
+		if uiCmd != nil {
+			uiLogPath := strings.TrimSpace(opts.UILogFile)
+			if uiLogPath == "" {
+				uiLogPath = filepath.Join(logDir, "v2-ui.log")
+			}
+			uiPIDPath := strings.TrimSpace(opts.UIPIDFile)
+			if uiPIDPath == "" {
+				uiPIDPath = filepath.Join(runDir, "v2-ui.pid")
+			}
+			children = append(children, &superviseChild{
+				name:       "ui",
+				bin:        uiBin,
+				args:       uiArgs,
+				pidPath:    uiPIDPath,
+				logPath:    uiLogPath,
+				healthArgs: buildUIHealthProbeArgs(uiBin, opts.UIListen, uiTLSActive),
+				// Gate the UI's first launch on the API having written the
+				// shared token file (same ordering as the detached path).
+				waitToken: opts.TokenFile,
+			})
+		}
+		fmt.Fprintf(os.Stderr, "v2 stack supervisor starting (foreground)\n")
+		if strings.TrimSpace(layout) != "" {
+			fmt.Fprintf(os.Stderr, "Asset layout: %s\n", layout)
+		}
+		fmt.Fprintf(os.Stderr, "API binary: %s\n", apiBin)
+		if uiCmd != nil {
+			fmt.Fprintf(os.Stderr, "UI binary : %s\n", uiBin)
+			fmt.Fprintf(os.Stderr, "Frontend  : %s\n", frontendDir)
+		}
+		fmt.Fprintf(os.Stderr, "Config path: %s\n", opts.ConfigPath)
+		fmt.Fprintf(os.Stderr, "Token file: %s\n", opts.TokenFile)
+		fmt.Fprintf(os.Stderr, "API: %s\n", displayAPIURL)
+		if uiCmd != nil {
+			fmt.Fprintf(os.Stderr, "UI : %s\n", displayUIURL)
+			fmt.Fprintf(os.Stderr, "UI allowed origins: %s\n", allowedOrigins)
+		}
+		fmt.Fprintf(os.Stderr, "Supervisor: max_restarts=%d window=%s, health-probe every %s after %d failures, cooldown-and-resume\n",
+			opts.SelfHealMaxRestarts, opts.SelfHealWindow, opts.SelfHealProbeInterval, opts.SelfHealUnhealthyThreshold)
+		fmt.Fprintf(os.Stderr, "Stop with SIGTERM/SIGINT (or `systemctl stop ncc-orchestrator`).\n")
+		return runV2Supervise(superviseConfig{
+			installDir:         installDir,
+			children:           children,
+			maxRestarts:        opts.SelfHealMaxRestarts,
+			window:             opts.SelfHealWindow,
+			probeInterval:      opts.SelfHealProbeInterval,
+			unhealthyThreshold: opts.SelfHealUnhealthyThreshold,
+		})
 	}
 	if opts.Detach {
 		runDir := filepath.Join(installDir, "run")
@@ -12450,10 +12543,12 @@ func normalizeScheduleType(s string) (string, error) {
 		return "cron", nil
 	case "cron":
 		return "cron", nil
+	case "systemd", "systemd-timer", "timer":
+		return "systemd", nil
 	case "windows", "windows-task":
 		return "windows", nil
 	default:
-		return "", fmt.Errorf("type must be auto, cron, or windows (got %q)", s)
+		return "", fmt.Errorf("type must be auto, cron, systemd, or windows (got %q)", s)
 	}
 }
 
@@ -12794,6 +12889,8 @@ func runCreateSchedule(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return exitConfig(err)
 	}
+	rawLower := strings.ToLower(strings.TrimSpace(scheduleTypeRaw))
+	isAuto := rawLower == "" || rawLower == "auto"
 
 	taskName, _ := cmd.Flags().GetString("task-name")
 	if err := validateScheduleTaskName(taskName); err != nil {
@@ -12810,19 +12907,26 @@ func runCreateSchedule(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	configPath, _ := cmd.Flags().GetString("config")
+	configPath = strings.TrimSpace(configPath)
+	if configPath != "" && !filepath.IsAbs(configPath) {
+		if absConfigPath, absErr := filepath.Abs(configPath); absErr == nil {
+			configPath = absConfigPath
+		}
+	}
 	runCmd, _ := cmd.Flags().GetString("command")
 	if strings.TrimSpace(runCmd) == "" {
-		configPath, _ := cmd.Flags().GetString("config")
-		configPath = strings.TrimSpace(configPath)
-		if configPath != "" && !filepath.IsAbs(configPath) {
-			if absConfigPath, absErr := filepath.Abs(configPath); absErr == nil {
-				configPath = absConfigPath
-			}
-		}
 		runCmd, err = defaultScheduleCommand(configPath)
 		if err != nil {
 			return fmt.Errorf("build schedule command: %w", err)
 		}
+	}
+	// systemd timers run with an explicit WorkingDirectory; anchor it to the
+	// config file's directory so a relative output-dir resolves the same way an
+	// interactive run from there would (the cron cwd footgun).
+	systemdWorkDir := ""
+	if configPath != "" {
+		systemdWorkDir = filepath.Dir(configPath)
 	}
 	runCmd, err = sanitizeScheduleCommand(runCmd)
 	if err != nil {
@@ -12842,13 +12946,30 @@ func runCreateSchedule(cmd *cobra.Command, args []string) error {
 	case "cron":
 		switch action {
 		case "list":
-			return listCronSchedules(taskName)
+			if err := listCronSchedules(taskName); err != nil {
+				return err
+			}
+			// With --type auto on a systemd host, also surface (and below,
+			// also remove) a systemd timer so detection/cleanup is uniform
+			// regardless of which backend installed the schedule.
+			if isAuto && systemctlAvailable() {
+				_ = listSystemdSchedules(taskName)
+			}
+			return nil
 		case "remove":
 			if printOnly {
 				fmt.Printf("Cron remove preview: marker=%q\n", scheduleMarker(taskName))
 				return nil
 			}
-			return removeCronSchedule(taskName)
+			if err := removeCronSchedule(taskName); err != nil {
+				return err
+			}
+			if isAuto && systemctlAvailable() {
+				if _, rmErr := removeSystemdSchedule(taskName, logPath); rmErr != nil {
+					fmt.Fprintf(os.Stderr, "warning: remove systemd timer: %v\n", rmErr)
+				}
+			}
+			return nil
 		case "run-now":
 			fmt.Printf("Running now: %s\n", runCmd)
 			return runScheduleCommandNow(runCmd)
@@ -12870,7 +12991,66 @@ func runCreateSchedule(cmd *cobra.Command, args []string) error {
 			fmt.Printf("Cron entry preview:\n%s\n", line)
 			return nil
 		}
+		// Coexistence guard: a systemd timer for the same task would double-run
+		// the scan. Remove it when switching to cron.
+		if schedulerHasSystemdTimer(taskName) {
+			fmt.Fprintf(os.Stderr, "note: removing existing systemd timer for %q to avoid duplicate runs\n", scheduleMarker(taskName))
+			if _, rmErr := removeSystemdSchedule(taskName, logPath); rmErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not remove conflicting systemd timer: %v\n", rmErr)
+			}
+		}
 		return installCronSchedule(taskName, cronSpec, runCmd, logPath, withLock)
+	case "systemd":
+		switch action {
+		case "list":
+			return listSystemdSchedules(taskName)
+		case "remove":
+			if printOnly {
+				fmt.Printf("systemd remove preview: timer=%s.timer marker=%q\n", systemdUnitBase(taskName), scheduleMarker(taskName))
+				return nil
+			}
+			removed, rmErr := removeSystemdSchedule(taskName, logPath)
+			if rmErr != nil {
+				return rmErr
+			}
+			if !removed {
+				fmt.Printf("No systemd timer found for marker %q\n", scheduleMarker(taskName))
+			}
+			return nil
+		case "run-now":
+			fmt.Printf("Running now: %s\n", runCmd)
+			return runScheduleCommandNow(runCmd)
+		case "create":
+		default:
+			return exitConfig(fmt.Errorf("action must be create, list, remove, or run-now (got %q)", action))
+		}
+
+		cronSpec, _ := cmd.Flags().GetString("cron")
+		cronSpec = strings.TrimSpace(cronSpec)
+		onCalendar, ocErr := onCalendarFromSchedule(cronSpec, every)
+		if ocErr != nil {
+			return exitConfig(fmt.Errorf("derive OnCalendar: %w", ocErr))
+		}
+		if printOnly {
+			marker := scheduleMarker(taskName)
+			workDir := systemdWorkDir
+			if workDir == "" {
+				workDir = filepath.Dir(logPath)
+			}
+			svc, tmr := buildSystemdScheduleUnits(taskName, onCalendar, scheduleRunnerScriptPath(taskName, logPath), workDir, marker)
+			fmt.Printf("systemd unit preview (%s.service):\n%s\nsystemd unit preview (%s.timer):\n%s\n",
+				systemdUnitBase(taskName), svc, systemdUnitBase(taskName), tmr)
+			return nil
+		}
+		// Coexistence guard: drop any cron entry for the same task so the scan
+		// is not scheduled twice.
+		if schedulerHasCronEntry(taskName) {
+			fmt.Fprintf(os.Stderr, "note: removing existing cron entry for %q to avoid duplicate runs\n", scheduleMarker(taskName))
+			if rmErr := removeCronSchedule(taskName); rmErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not remove conflicting cron entry: %v\n", rmErr)
+			}
+		}
+		return installSystemdSchedule(taskName, cronSpec, every, runCmd, logPath, systemdWorkDir)
 	case "windows":
 		switch action {
 		case "list":
@@ -15751,8 +15931,9 @@ Then it writes startup scripts under --install-dir.`,
 	cmd.AddCommand(v2BootstrapCmd)
 
 	v2StartCmd := &cobra.Command{
-		Use:   "v2-start",
-		Short: "Start v2 services (API + optional UI)",
+		Use:     "v2-start",
+		Aliases: []string{"v2-supervise"},
+		Short:   "Start v2 services (API + optional UI)",
 		Long: `Starts ncc-api-server and, by default, ncc-ui-server from bootstrapped binaries.
 
 Run "ncc-orchestrator v2-bootstrap" once before using this command.
@@ -15761,7 +15942,13 @@ Use --api-only to start only the backend API service (for custom UI integrations
 
 Use --detach to run services in the background.
 
-Use --self-heal with --detach to auto-restart services on unexpected exits.`,
+Use --self-heal with --detach to auto-restart services on unexpected exits.
+
+Use --supervise (or the "v2-supervise" alias) to run a single long-lived
+foreground supervisor that owns and keeps the API/UI children alive (liveness +
+health-probe restarts, exponential backoff, and cooldown-and-resume). Run it as
+a Type=simple systemd service (Restart=always) so the OS keeps the supervisor
+alive across reboots and the supervisor keeps the stack alive across crashes.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			installDir, _ := cmd.Flags().GetString("install-dir")
 			configPath, _ := cmd.Flags().GetString("config-path")
@@ -15810,6 +15997,75 @@ Use --self-heal with --detach to auto-restart services on unexpected exits.`,
 			selfHealWindow, _ := cmd.Flags().GetDuration("self-heal-window")
 			selfHealProbeInterval, _ := cmd.Flags().GetDuration("self-heal-probe-interval")
 			selfHealUnhealthyThreshold, _ := cmd.Flags().GetInt("self-heal-unhealthy-threshold")
+			supervise, _ := cmd.Flags().GetBool("supervise")
+			// Invoking the command via its "v2-supervise" alias implies the
+			// foreground supervisor without needing the flag.
+			if cmd.CalledAs() == "v2-supervise" {
+				supervise = true
+			}
+			if supervise && detach {
+				fmt.Fprintln(os.Stderr, "note: --supervise runs in the foreground; ignoring --detach")
+				detach = false
+			}
+			// Boot persistence: when run as the (systemd-managed) supervisor,
+			// replay the persisted start settings for any flag the operator did
+			// not explicitly pass. This keeps a reboot honoring settings that
+			// were changed at runtime (e.g. TLS enabled from Settings → Access
+			// rewrites .ncc-v2-start.json) without baking them into the unit.
+			if supervise {
+				effInstall := strings.TrimSpace(installDir)
+				if effInstall == "" {
+					effInstall = defaultV2InstallDir()
+				}
+				if st, ok := loadV2StartState(effInstall); ok {
+					ovStr := func(name string, dst *string, src string) {
+						if !cmd.Flags().Changed(name) && strings.TrimSpace(src) != "" {
+							*dst = src
+						}
+					}
+					ovDur := func(name string, dst *time.Duration, src time.Duration) {
+						if !cmd.Flags().Changed(name) && src > 0 {
+							*dst = src
+						}
+					}
+					ovBool := func(name string, dst *bool, src bool) {
+						if !cmd.Flags().Changed(name) {
+							*dst = src
+						}
+					}
+					ovStr("api-listen", &apiListen, st.APIListen)
+					ovStr("ui-listen", &uiListen, st.UIListen)
+					ovStr("api-advertise-url", &apiAdvertiseURL, st.APIAdvertiseURL)
+					ovStr("ui-advertise-url", &uiAdvertiseURL, st.UIAdvertiseURL)
+					ovStr("ui-backend-url", &uiBackendURL, st.UIBackendURL)
+					ovStr("api-cors-origins", &apiCORSOrigins, st.APICORSOrigins)
+					ovStr("ui-allowed-origins", &uiAllowedOrigins, st.UIAllowedOrigins)
+					ovStr("api-auth-mode", &apiAuthMode, st.APIAuthMode)
+					ovStr("api-session-secret", &apiSessionSecret, st.APISessionSecret)
+					ovDur("api-session-ttl", &apiSessionTTL, st.APISessionTTL)
+					ovDur("api-run-timeout", &apiRunTimeout, st.APIRunTimeout)
+					ovDur("api-read-timeout", &apiReadTimeout, st.APIReadTimeout)
+					ovDur("api-write-timeout", &apiWriteTimeout, st.APIWriteTimeout)
+					ovDur("api-idle-timeout", &apiIdleTimeout, st.APIIdleTimeout)
+					if !cmd.Flags().Changed("api-rate-limit-per-minute") {
+						apiRateLimitPerMinute = st.APIRateLimitPerMinute
+					}
+					ovBool("ui-backend-insecure-skip-verify", &uiBackendInsecureSkipVerify, st.UIBackendInsecureSkipVerify)
+					ovBool("api-cookie-insecure", &apiCookieInsecure, st.APICookieInsecure)
+					ovStr("ui-tls-cert-file", &uiTLSCertFile, st.UITLSCertFile)
+					ovStr("ui-tls-key-file", &uiTLSKeyFile, st.UITLSKeyFile)
+					ovBool("ui-insecure-http", &uiInsecureHTTP, st.UIInsecureHTTP)
+					ovBool("api-only", &apiOnly, st.APIOnly)
+					if st.SelfHealMaxRestarts > 0 && !cmd.Flags().Changed("self-heal-max-restarts") {
+						selfHealMaxRestarts = st.SelfHealMaxRestarts
+					}
+					ovDur("self-heal-window", &selfHealWindow, st.SelfHealWindow)
+					ovDur("self-heal-probe-interval", &selfHealProbeInterval, st.SelfHealProbeInterval)
+					if st.SelfHealUnhealthyThreshold > 0 && !cmd.Flags().Changed("self-heal-unhealthy-threshold") {
+						selfHealUnhealthyThreshold = st.SelfHealUnhealthyThreshold
+					}
+				}
+			}
 			return runV2Start(v2StartOptions{
 				InstallDir:                  installDir,
 				ConfigPath:                  configPath,
@@ -15858,6 +16114,7 @@ Use --self-heal with --detach to auto-restart services on unexpected exits.`,
 				SelfHealWindow:              selfHealWindow,
 				SelfHealProbeInterval:       selfHealProbeInterval,
 				SelfHealUnhealthyThreshold:  selfHealUnhealthyThreshold,
+				Supervise:                   supervise,
 			})
 		},
 	}
@@ -15908,7 +16165,62 @@ Use --self-heal with --detach to auto-restart services on unexpected exits.`,
 	v2StartCmd.Flags().Duration("self-heal-window", 10*time.Minute, "Rolling window used for self-heal restart budget (also the cooldown duration after the budget is exhausted)")
 	v2StartCmd.Flags().Duration("self-heal-probe-interval", 10*time.Second, "How often the self-heal supervisor health-probes a still-alive API server to detect hangs (api-server only; uses its built-in --health-check)")
 	v2StartCmd.Flags().Int("self-heal-unhealthy-threshold", 3, "Consecutive failed health probes before the self-heal supervisor restarts a hung-but-alive API server")
+	v2StartCmd.Flags().Bool("supervise", false, "Run a single long-lived foreground supervisor that owns and keeps the API/UI children alive (liveness + health-probe restarts, backoff, cooldown-and-resume). Run as a Type=simple systemd service for reboot persistence. Implied by the v2-supervise alias; reuses --self-heal-* tuning")
 	cmd.AddCommand(v2StartCmd)
+
+	v2InstallServiceCmd := &cobra.Command{
+		Use:   "v2-install-service",
+		Short: "Install the stack supervisor as a boot-persistent OS service",
+		Long: `Registers "ncc-orchestrator v2-supervise" with the platform service manager so
+the v2 stack starts automatically after an OS reboot and is kept alive by the
+native supervisor:
+
+  Linux   -> a Type=simple systemd service (Restart=always) under /etc/systemd/system
+  Windows -> a Task Scheduler task triggered at system startup (run as SYSTEM)
+  macOS   -> a launchd LaunchDaemon (RunAtLoad + KeepAlive) under /Library/LaunchDaemons
+
+Run with --print-only to preview the unit/task without applying it. Typically
+requires root/Administrator.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			installDir, _ := cmd.Flags().GetString("install-dir")
+			serviceName, _ := cmd.Flags().GetString("service-name")
+			orchestratorBin, _ := cmd.Flags().GetString("orchestrator-bin")
+			now, _ := cmd.Flags().GetBool("now")
+			printOnly, _ := cmd.Flags().GetBool("print-only")
+			return runV2InstallService(installServiceOptions{
+				InstallDir:      installDir,
+				ServiceName:     serviceName,
+				OrchestratorBin: orchestratorBin,
+				Now:             now,
+				PrintOnly:       printOnly,
+			})
+		},
+	}
+	v2InstallServiceCmd.Flags().String("install-dir", "", "Installation directory the supervisor manages (default: auto-detect, fallback .ncc-v2)")
+	v2InstallServiceCmd.Flags().String("service-name", "ncc-orchestrator", "Service/task name to create")
+	v2InstallServiceCmd.Flags().String("orchestrator-bin", "", "Path to the ncc-orchestrator binary the service runs (default: this executable)")
+	v2InstallServiceCmd.Flags().Bool("now", true, "Also enable+start the service immediately (Linux: enable --now; Windows: schtasks /Run; macOS: launchctl load -w)")
+	v2InstallServiceCmd.Flags().Bool("print-only", false, "Preview the unit/task and the commands without applying them")
+	cmd.AddCommand(v2InstallServiceCmd)
+
+	v2UninstallServiceCmd := &cobra.Command{
+		Use:   "v2-uninstall-service",
+		Short: "Remove the boot-persistent supervisor service installed by v2-install-service",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			serviceName, _ := cmd.Flags().GetString("service-name")
+			installDir, _ := cmd.Flags().GetString("install-dir")
+			printOnly, _ := cmd.Flags().GetBool("print-only")
+			return runV2UninstallService(installServiceOptions{
+				InstallDir:  installDir,
+				ServiceName: serviceName,
+				PrintOnly:   printOnly,
+			})
+		},
+	}
+	v2UninstallServiceCmd.Flags().String("service-name", "ncc-orchestrator", "Service/task name to remove")
+	v2UninstallServiceCmd.Flags().String("install-dir", "", "Installation directory (used to locate runner artifacts; default: auto-detect)")
+	v2UninstallServiceCmd.Flags().Bool("print-only", false, "Preview the removal commands without applying them")
+	cmd.AddCommand(v2UninstallServiceCmd)
 
 	v2CheckCmd := &cobra.Command{
 		Use:   "v2-check",
@@ -16383,18 +16695,22 @@ Use --output to write to a file (e.g. for --clusters-file).`,
 		Short: "Create periodic scheduler for ncc-orchestrator",
 		Long: `Creates a periodic schedule to run ncc-orchestrator.
 
-On Linux/macOS, it installs (or replaces) a crontab entry.
+On Linux/macOS, it installs (or replaces) a crontab entry by default, or a
+systemd timer with --type systemd (better on systemd hosts: explicit working
+directory/env, per-run logging, free overlap protection, and Persistent=true to
+replay a run missed while the box was off).
 On Windows, it creates or updates a Scheduled Task.
 
 Examples:
   ncc-orchestrator create-schedule --type cron --cron "15 */4 * * *" --config config.yaml --print-only
   ncc-orchestrator create-schedule --type cron --every 4h --config config.yaml
+  ncc-orchestrator create-schedule --type systemd --every 4h --config /root/ncc-orchestrator/config.yaml --print-only=false
   ncc-orchestrator create-schedule --type windows --every 4h --config C:\ncc\config.yaml
   ncc-orchestrator create-schedule --type auto --action list
   ncc-orchestrator create-schedule --type auto --action remove --print-only=false`,
 		RunE: runCreateSchedule,
 	}
-	createScheduleCmd.Flags().String("type", "auto", "Scheduler type: auto, cron, or windows")
+	createScheduleCmd.Flags().String("type", "auto", "Scheduler type: auto, cron, systemd, or windows")
 	createScheduleCmd.Flags().String("action", "create", "Action: create, list, remove, or run-now")
 	createScheduleCmd.Flags().String("task-name", "ncc-orchestrator", "Schedule/task name marker")
 	createScheduleCmd.Flags().String("command", "", "Override full command used by scheduler (advanced)")

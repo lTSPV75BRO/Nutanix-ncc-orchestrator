@@ -330,7 +330,7 @@ func (s *apiServer) validateConfigPath(p string) (string, error) {
 
 func validateScheduleInput(st scheduleState) error {
 	switch st.Type {
-	case "auto", "cron", "windows":
+	case "auto", "cron", "systemd", "windows":
 	default:
 		return fmt.Errorf("invalid schedule type: %s", st.Type)
 	}

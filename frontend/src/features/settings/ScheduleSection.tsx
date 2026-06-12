@@ -228,6 +228,7 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
                       options={[
                         { value: "auto", label: "Auto-detect" },
                         { value: "cron", label: "Cron (Linux/macOS)" },
+                        { value: "systemd", label: "systemd timer (Linux)" },
                         { value: "windows", label: "Scheduled Task (Windows)" },
                       ]}
                       style={{ width: "100%" }}
@@ -251,11 +252,20 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={8}>
-                  <Form.Item label="Custom cron expression" tooltip="5-field cron, leave empty to derive from interval" htmlFor="sched-cron">
+                  <Form.Item label="Custom cron expression" tooltip="5-field cron, leave empty to derive from interval. Day-of-week is not supported for systemd timers." htmlFor="sched-cron">
                     <Input id="sched-cron" name="cron" value={cron} onChange={(e) => setCron(e.target.value)} placeholder="e.g. 15 */4 * * *" autoComplete="off" />
                   </Form.Item>
                 </Col>
               </Row>
+              {type === "systemd" ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                  message="systemd timer backend"
+                  description="Installs a systemd .timer + oneshot .service under /etc/systemd/system (requires root). Overlapping runs are prevented automatically (the file lock is not needed), missed runs replay on boot (Persistent=true), and the run uses the config file's directory as its working directory. Day-of-week cron fields are not supported — use an interval or a cron without a DOW field."
+                />
+              ) : null}
               <Row gutter={16}>
                 <Col xs={24} md={12}>
                   <Form.Item label="Task name" htmlFor="sched-task-name">
