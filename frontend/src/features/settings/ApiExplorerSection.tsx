@@ -66,6 +66,14 @@ const PRESETS: EndpointPreset[] = [
   { label: "Runs Summary", method: "GET", path: "/api/v1/runs/summary" },
   { label: "Artifacts", method: "GET", path: "/api/v1/artifacts" },
   { label: "Schedule Health", method: "GET", path: "/api/v1/schedule/health" },
+  { label: "Diagnostics (System Health)", method: "GET", path: "/api/v1/health/diagnostics" },
+  { label: "List Backups", method: "GET", path: "/api/v1/settings/backups" },
+  {
+    label: "Create Snapshot (optionally encrypted)",
+    method: "POST",
+    path: "/api/v1/settings/backups",
+    body: JSON.stringify({ passphrase: "" }, null, 2),
+  },
   {
     label: "Trigger Run (sample)",
     method: "POST",
@@ -231,39 +239,72 @@ export function ApiExplorerSection({ onError }: Props) {
     setRoutesOpen(false);
   };
 
+  // Merge both route sources by path so the explorer is never missing an
+  // endpoint: the OpenAPI spec carries richer per-path detail (query params,
+  // request examples) for some routes, while /api/v1/meta/routes is the
+  // comprehensive catalog of every registered route. We union them — preferring
+  // the OpenAPI entry where present and filling any gaps (and empty
+  // descriptions / sample bodies) from the catalog.
   const loadRoutes = async () => {
+    const headers = { "X-Requested-With": "ncc-ui" };
+    const byPath = new Map<string, RouteMeta>();
+    let loadedAny = false;
+    let lastError = "";
+
     try {
-      setRoutesError("");
       const openAPIRes = await fetch("/api/v1/openapi.json", {
         method: "GET",
         credentials: "same-origin",
-        headers: { "X-Requested-With": "ncc-ui" },
+        headers,
       });
       const openAPI = (await openAPIRes.json().catch(() => ({}))) as OpenAPISpec;
       if (openAPIRes.ok) {
-        const parsed = parseRoutesFromOpenAPI(openAPI);
-        if (parsed.length > 0) {
-          setRoutes(parsed);
-          return;
-        }
+        for (const r of parseRoutesFromOpenAPI(openAPI)) byPath.set(r.path, r);
+        loadedAny = true;
       }
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+
+    try {
       const res = await fetch("/api/v1/meta/routes", {
         method: "GET",
         credentials: "same-origin",
-        headers: { "X-Requested-With": "ncc-ui" },
+        headers,
       });
       const payload = (await res.json().catch(() => ({}))) as {
         success?: boolean;
         error?: string;
         data?: { routes?: RouteMeta[] };
       };
-      if (!res.ok || !payload.success) {
-        throw new Error(payload.error || res.statusText || "failed to load routes");
+      if (res.ok && payload.success) {
+        for (const r of payload.data?.routes ?? []) {
+          const existing = byPath.get(r.path);
+          if (!existing) {
+            byPath.set(r.path, r);
+          } else {
+            byPath.set(r.path, {
+              path: r.path,
+              methods: existing.methods.length ? existing.methods : r.methods,
+              description: existing.description || r.description,
+              sample_body: existing.sample_body || r.sample_body,
+            });
+          }
+        }
+        loadedAny = true;
+      } else if (!loadedAny) {
+        lastError = payload.error || res.statusText || "failed to load routes";
       }
-      setRoutes(Array.isArray(payload.data?.routes) ? payload.data?.routes : []);
     } catch (error) {
-      setRoutesError(error instanceof Error ? error.message : String(error));
+      if (!loadedAny) lastError = error instanceof Error ? error.message : String(error);
     }
+
+    if (!loadedAny) {
+      setRoutesError(lastError || "failed to load routes");
+      return;
+    }
+    setRoutesError("");
+    setRoutes(Array.from(byPath.values()).sort((a, b) => a.path.localeCompare(b.path)));
   };
 
   useEffect(() => {

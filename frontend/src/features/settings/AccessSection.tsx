@@ -34,7 +34,6 @@ import {
   SafetyCertificateOutlined,
   SearchOutlined,
   UploadOutlined,
-  WarningOutlined,
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../api/client";
@@ -762,6 +761,10 @@ function BackupRestoreCard() {
   const [downloadPass, setDownloadPass] = useState("");
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
   const [restorePass, setRestorePass] = useState("");
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [createPass, setCreatePass] = useState("");
+  const [restoreNamedEntry, setRestoreNamedEntry] = useState<BackupEntry | null>(null);
+  const [restoreNamedPass, setRestoreNamedPass] = useState("");
 
   const backups = (backupsQuery.data?.backups ?? []) as BackupEntry[];
   const rollback = backups.find((b) => b.rollback_candidate);
@@ -784,9 +787,11 @@ function BackupRestoreCard() {
   };
 
   const createMut = useMutation({
-    mutationFn: () => api.createBackup(),
+    mutationFn: (passphrase?: string) => api.createBackup(passphrase),
     onSuccess: (res) => {
       notify.success(res.message ?? "Snapshot created.");
+      setCreateModalOpen(false);
+      setCreatePass("");
       void refresh();
     },
     onError: (e) => notifyError(e, "Failed to create snapshot"),
@@ -854,11 +859,13 @@ function BackupRestoreCard() {
     }
   };
 
-  const doRestoreNamed = async (name: string) => {
+  const doRestoreNamed = async (name: string, passphrase?: string) => {
     setBusyName(name);
     try {
-      const res = await api.restoreNamedBackup(name);
+      const res = await api.restoreNamedBackup(name, passphrase);
       const data = (res.data ?? {}) as { restarting?: boolean };
+      setRestoreNamedEntry(null);
+      setRestoreNamedPass("");
       announceRestore(Boolean(data.restarting), res.message);
     } catch (e) {
       notifyError(e, "Restore failed");
@@ -893,18 +900,11 @@ function BackupRestoreCard() {
     </div>
   );
 
+  // Opens the restore confirmation. Encrypted snapshots need a passphrase, so we
+  // use a stateful modal (rendered below) rather than the static Modal.confirm.
   const confirmRestoreNamed = (entry: BackupEntry) => {
-    const isRollback = Boolean(entry.rollback_candidate);
-    Modal.confirm({
-      title: isRollback ? "Roll back to pre-update backup?" : "Restore this backup?",
-      icon: <WarningOutlined style={{ color: "#faad14" }} />,
-      width: 540,
-      content: restoreBody(entry.name, isRollback),
-      okText: isRollback ? "Roll back and restart" : "Restore and restart",
-      okButtonProps: { danger: true },
-      cancelText: "Cancel",
-      onOk: () => doRestoreNamed(entry.name),
-    });
+    setRestoreNamedPass("");
+    setRestoreNamedEntry(entry);
   };
 
   // beforeUpload intercepts the selected file and opens a destructive-action
@@ -935,6 +935,13 @@ function BackupRestoreCard() {
           <Space size={4}>
             <Tag color={meta.color}>{meta.label}</Tag>
             {rec.rollback_candidate ? <Tag color="volcano">latest rollback</Tag> : null}
+            {rec.encrypted ? (
+              <Tooltip title="Encrypted at rest (AES-256-GCM) — restore needs the passphrase">
+                <Tag color="geekblue" icon={<LockOutlined />}>
+                  encrypted
+                </Tag>
+              </Tooltip>
+            ) : null}
           </Space>
         );
       },
@@ -1028,7 +1035,10 @@ function BackupRestoreCard() {
         <Button
           type="primary"
           icon={<PlusOutlined />}
-          onClick={() => createMut.mutate()}
+          onClick={() => {
+            setCreatePass("");
+            setCreateModalOpen(true);
+          }}
           loading={createMut.isPending}
         >
           Create snapshot
@@ -1129,6 +1139,78 @@ function BackupRestoreCard() {
           onChange={(e) => setRestorePass(e.target.value)}
           allowClear
         />
+      </Modal>
+
+      <Modal
+        title="Create snapshot"
+        open={createModalOpen}
+        onCancel={() => {
+          setCreateModalOpen(false);
+          setCreatePass("");
+        }}
+        onOk={() => createMut.mutate(createPass.trim() || undefined)}
+        okText={createPass.trim() ? "Create encrypted snapshot" : "Create snapshot"}
+        okButtonProps={{ loading: createMut.isPending, icon: <PlusOutlined /> }}
+        cancelText="Cancel"
+        destroyOnClose
+      >
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
+          Saves a snapshot on the server under <Typography.Text code>backups/</Typography.Text>. It
+          contains secrets — optionally seal it at rest with <b>AES-256-GCM</b> by setting a
+          passphrase (stored as <Typography.Text code>.tar.gz.enc</Typography.Text>; restoring it
+          later needs the same passphrase). Leave blank for a plain snapshot.
+        </Typography.Paragraph>
+        <Input.Password
+          autoFocus
+          placeholder="Encryption passphrase (optional)"
+          value={createPass}
+          onChange={(e) => setCreatePass(e.target.value)}
+          onPressEnter={() => createMut.mutate(createPass.trim() || undefined)}
+          allowClear
+        />
+      </Modal>
+
+      <Modal
+        title={
+          restoreNamedEntry?.rollback_candidate
+            ? "Roll back to pre-update backup?"
+            : "Restore this backup?"
+        }
+        open={restoreNamedEntry !== null}
+        onCancel={() => {
+          setRestoreNamedEntry(null);
+          setRestoreNamedPass("");
+        }}
+        onOk={() => {
+          if (restoreNamedEntry) {
+            void doRestoreNamed(restoreNamedEntry.name, restoreNamedPass.trim() || undefined);
+          }
+        }}
+        okText={
+          restoreNamedEntry?.rollback_candidate ? "Roll back and restart" : "Restore and restart"
+        }
+        okButtonProps={{ danger: true, loading: busyName === restoreNamedEntry?.name }}
+        cancelText="Cancel"
+        width={540}
+        destroyOnClose
+      >
+        {restoreNamedEntry
+          ? restoreBody(restoreNamedEntry.name, Boolean(restoreNamedEntry.rollback_candidate))
+          : null}
+        {restoreNamedEntry?.encrypted ? (
+          <>
+            <Typography.Paragraph type="secondary" style={{ marginTop: 4, marginBottom: 6 }}>
+              This snapshot is <b>encrypted</b>. Enter the passphrase used when it was created.
+            </Typography.Paragraph>
+            <Input.Password
+              autoFocus
+              placeholder="Decryption passphrase"
+              value={restoreNamedPass}
+              onChange={(e) => setRestoreNamedPass(e.target.value)}
+              allowClear
+            />
+          </>
+        ) : null}
       </Modal>
     </Card>
   );

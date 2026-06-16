@@ -21,6 +21,11 @@ import (
 
 const backupFileSuffix = ".tar.gz"
 
+// backupEncSuffix marks a server-side snapshot that was sealed at rest with
+// AES-256-GCM (v2-backup --encrypt). Downloads stream it as an opaque blob and
+// restores require the original passphrase.
+const backupEncSuffix = ".tar.gz.enc"
+
 func (s *apiServer) backupsDir() string {
 	return filepath.Join(s.maintenanceInstallDir(), "backups")
 }
@@ -32,6 +37,13 @@ type backupEntry struct {
 	Size              int64  `json:"size"`
 	ModTime           string `json:"mod_time"`
 	RollbackCandidate bool   `json:"rollback_candidate,omitempty"`
+	Encrypted         bool   `json:"encrypted,omitempty"`
+}
+
+// isBackupArchiveName reports whether name is a backup archive we manage
+// (plaintext .tar.gz or encrypted .tar.gz.enc).
+func isBackupArchiveName(name string) bool {
+	return strings.HasSuffix(name, backupFileSuffix) || strings.HasSuffix(name, backupEncSuffix)
 }
 
 func backupKind(name string) string {
@@ -53,7 +65,7 @@ func (s *apiServer) safeBackupPath(name string) (string, bool) {
 	if name == "" || name != filepath.Base(name) || strings.ContainsAny(name, `/\`) {
 		return "", false
 	}
-	if !strings.HasSuffix(name, backupFileSuffix) {
+	if !isBackupArchiveName(name) {
 		return "", false
 	}
 	dir := s.backupsDir()
@@ -76,7 +88,7 @@ func (s *apiServer) listBackupEntries() ([]backupEntry, error) {
 	}
 	out := make([]backupEntry, 0, len(ents))
 	for _, e := range ents {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), backupFileSuffix) {
+		if e.IsDir() || !isBackupArchiveName(e.Name()) {
 			continue
 		}
 		info, err := e.Info()
@@ -84,10 +96,11 @@ func (s *apiServer) listBackupEntries() ([]backupEntry, error) {
 			continue
 		}
 		out = append(out, backupEntry{
-			Name:    e.Name(),
-			Kind:    backupKind(e.Name()),
-			Size:    info.Size(),
-			ModTime: info.ModTime().UTC().Format(time.RFC3339),
+			Name:      e.Name(),
+			Kind:      backupKind(e.Name()),
+			Size:      info.Size(),
+			ModTime:   info.ModTime().UTC().Format(time.RFC3339),
+			Encrypted: strings.HasSuffix(e.Name(), backupEncSuffix),
 		})
 	}
 	// Newest first.
@@ -125,8 +138,26 @@ func (s *apiServer) handleBackupsList(w http.ResponseWriter, _ *http.Request) {
 }
 
 // handleBackupCreate writes a persistent snapshot into <install>/backups so it
-// shows up in the list (and can later be restored or downloaded).
+// shows up in the list (and can later be restored or downloaded). An optional
+// JSON body {"passphrase":"..."} seals the snapshot at rest with AES-256-GCM
+// (stored as manual-<stamp>.tar.gz.enc); restoring/downloading then needs the
+// same passphrase. The passphrase is handed to v2-backup via the environment
+// (NCC_BACKUP_PASSPHRASE), never argv, so it stays out of the process list and
+// audit log.
 func (s *apiServer) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Passphrase string `json:"passphrase"`
+	}
+	// Body is optional (the UI's plain "Create snapshot" sends none); ignore a
+	// decode error on an empty/absent body.
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body)
+	passphrase := strings.TrimSpace(body.Passphrase)
+	if len(passphrase) > 1024 {
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "passphrase too long"})
+		return
+	}
+	encrypt := passphrase != ""
+
 	installDir := s.maintenanceInstallDir()
 	dir := s.backupsDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -135,20 +166,32 @@ func (s *apiServer) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	stamp := time.Now().UTC().Format("20060102T150405Z")
 	name := "manual-" + stamp + backupFileSuffix
+	if encrypt {
+		name = "manual-" + stamp + backupEncSuffix
+	}
 	outPath := filepath.Join(dir, name)
-	if out, err := s.runOrchestrator([]string{"v2-backup", "--install-dir", installDir, "--output-file", outPath}, 2*time.Minute); err != nil {
-		s.audit(r, "settings.backup.create", false, map[string]interface{}{"install_dir": installDir})
+	args := []string{"v2-backup", "--install-dir", installDir, "--output-file", outPath}
+	var extraEnv []string
+	if encrypt {
+		args = append(args, "--encrypt")
+		extraEnv = []string{"NCC_BACKUP_PASSPHRASE=" + passphrase}
+	}
+	if out, err := s.runOrchestratorEnv(args, 2*time.Minute, extraEnv); err != nil {
+		s.audit(r, "settings.backup.create", false, map[string]interface{}{"install_dir": installDir, "encrypted": encrypt})
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "snapshot failed: " + strings.TrimSpace(out)})
 		return
 	}
-	var entry backupEntry
+	entry := backupEntry{Name: name, Kind: "manual", Encrypted: encrypt}
 	if info, err := os.Stat(outPath); err == nil {
-		entry = backupEntry{Name: name, Kind: "manual", Size: info.Size(), ModTime: info.ModTime().UTC().Format(time.RFC3339)}
-	} else {
-		entry = backupEntry{Name: name, Kind: "manual"}
+		entry.Size = info.Size()
+		entry.ModTime = info.ModTime().UTC().Format(time.RFC3339)
 	}
-	s.audit(r, "settings.backup.create", true, map[string]interface{}{"install_dir": installDir, "name": name, "bytes": entry.Size})
-	writeJSON(w, http.StatusOK, envelope{Success: true, Message: "Snapshot created.", Data: map[string]interface{}{"backup": entry}})
+	s.audit(r, "settings.backup.create", true, map[string]interface{}{"install_dir": installDir, "name": name, "bytes": entry.Size, "encrypted": encrypt})
+	msg := "Snapshot created."
+	if encrypt {
+		msg = "Encrypted snapshot created."
+	}
+	writeJSON(w, http.StatusOK, envelope{Success: true, Message: msg, Data: map[string]interface{}{"backup": entry}})
 }
 
 // handleBackupRestoreNamed restores a server-side backup selected by name (so
@@ -160,7 +203,8 @@ func (s *apiServer) handleBackupRestoreNamed(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var body struct {
-		Name string `json:"name"`
+		Name       string `json:"name"`
+		Passphrase string `json:"passphrase"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "invalid JSON body"})
@@ -175,9 +219,20 @@ func (s *apiServer) handleBackupRestoreNamed(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusNotFound, envelope{Success: false, Error: "backup not found"})
 		return
 	}
+	passphrase := strings.TrimSpace(body.Passphrase)
+	if len(passphrase) > 1024 {
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "passphrase too long"})
+		return
+	}
 
 	installDir := s.maintenanceInstallDir()
-	out, err := s.runOrchestrator([]string{"v2-restore", "--install-dir", installDir, "--input-file", archivePath, "--force", "--no-restart"}, 3*time.Minute)
+	// v2-restore auto-detects encryption by magic header; we only supply the key
+	// (via env, not argv). An unencrypted archive ignores it.
+	var extraEnv []string
+	if passphrase != "" {
+		extraEnv = []string{"NCC_BACKUP_PASSPHRASE=" + passphrase}
+	}
+	out, err := s.runOrchestratorEnv([]string{"v2-restore", "--install-dir", installDir, "--input-file", archivePath, "--force", "--no-restart"}, 3*time.Minute, extraEnv)
 	if err != nil {
 		s.audit(r, "settings.backup.restore", false, map[string]interface{}{"install_dir": installDir, "name": body.Name})
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "restore failed: " + strings.TrimSpace(out)})
@@ -254,7 +309,12 @@ func (s *apiServer) handleBackupDownloadNamed(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "stat backup: " + err.Error()})
 		return
 	}
-	w.Header().Set("Content-Type", "application/gzip")
+	contentType := "application/gzip"
+	if strings.HasSuffix(path, backupEncSuffix) {
+		// Encrypted snapshots are opaque AES-256-GCM envelopes, not gzip.
+		contentType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(path)))
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", fi.Size()))
 	w.Header().Set("X-Content-Type-Options", "nosniff")

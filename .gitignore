@@ -54,3 +54,7 @@ ncc-v2-stack-*.zip
 # tools/winversioninfo as part of binaryGO.txt; arch-specific so
 # they need to be regenerated each release)
 *.syso
+
+# Local cross-compile / deploy staging output (cross-compiled binaries,
+# frontend dist copy, and the deploy tarball produced when shipping to a host)
+/build/

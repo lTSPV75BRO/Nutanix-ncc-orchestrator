@@ -178,6 +178,7 @@ export type BackupEntry = {
   size: number;
   mod_time: string;
   rollback_candidate?: boolean;
+  encrypted?: boolean;
 };
 
 export type SSOConfig = {

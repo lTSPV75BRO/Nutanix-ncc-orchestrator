@@ -3322,6 +3322,7 @@ func (s *apiServer) handleMetaRoutes(w http.ResponseWriter, r *http.Request) {
 		{Path: "/api/v1/audit", Methods: []string{http.MethodGet}, Description: "Read recent audit log entries (limit, action, failures filters)"},
 		{Path: "/api/v1/metrics/rate-limit", Methods: []string{http.MethodGet}, Description: "Rate limiter configuration and counters"},
 		{Path: "/metrics", Methods: []string{http.MethodGet}, Description: "Prometheus exposition (run/notification counters, build info)"},
+		{Path: "/api/v1/health/diagnostics", Methods: []string{http.MethodGet, http.MethodPost}, Description: "Admin-only: GET runs a read-only self-heal scan (doctor checks + live LDAP/SAML/clock probes) returning a ranked diagnostics list with an overall status; POST re-runs the doctor checks with --fix to apply safe remediations, then re-probes and returns the post-fix state."},
 		{Path: "/api/v1/auth/session", Methods: []string{http.MethodPost}, Description: "Issue short-lived session token"},
 		{Path: "/api/v1/auth/rotate", Methods: []string{http.MethodPost}, Description: "Rotate API token"},
 		{Path: "/api/v1/auth/login", Methods: []string{http.MethodPost}, Description: "Local-account login; sets the httpOnly session + CSRF cookies and reports role/must-change", SampleBody: "{\n  \"username\": \"admin\",\n  \"password\": \"\"\n}"},
@@ -3348,12 +3349,12 @@ func (s *apiServer) handleMetaRoutes(w http.ResponseWriter, r *http.Request) {
 		{Path: "/api/v1/settings/tokens/{id}", Methods: []string{http.MethodDelete}, Description: "Admin-only: revoke any user's personal access token by id"},
 		{Path: "/api/v1/settings/clusters", Methods: []string{http.MethodGet}, Description: "Operator+: list clusters known to the active config (for assigning to groups / scoping runs)"},
 		{Path: "/api/v1/settings/pc-clusters", Methods: []string{http.MethodGet}, Description: "Admin-only: discover the clusters registered under a Prism Central (?pc=<url>) for assigning a PC to a cluster group; uses the active run config's credentials"},
-		{Path: "/api/v1/settings/backup", Methods: []string{http.MethodGet}, Description: "Admin-only: download a .tar.gz backup of the install dir (config + referenced files, local user database, API token, scheduler/notifications state)"},
-		{Path: "/api/v1/settings/restore", Methods: []string{http.MethodPost}, Description: "Admin-only: restore a backup archive uploaded as multipart/form-data (field 'archive'); overwrites install-dir files with --force. Restart the stack afterward for it to take effect."},
-		{Path: "/api/v1/settings/backups", Methods: []string{http.MethodGet, http.MethodPost}, Description: "Admin-only: GET lists server-side backups under <install>/backups (manual snapshots + pre-update rollback points); POST creates a new persistent snapshot"},
-		{Path: "/api/v1/settings/backups/restore", Methods: []string{http.MethodPost}, Description: "Admin-only: restore a server-side backup by name (no re-upload), then restart the stack. Also powers post-update rollback.", SampleBody: "{\n  \"name\": \"pre-update-20260610T120000Z.tar.gz\"\n}"},
+		{Path: "/api/v1/settings/backup", Methods: []string{http.MethodGet}, Description: "Admin-only: download a .tar.gz backup of the install dir (config + referenced files, local user database, API token, scheduler/notifications state). Send an optional 'X-NCC-Backup-Passphrase' header to seal the download at rest with AES-256-GCM (served as .tar.gz.enc)."},
+		{Path: "/api/v1/settings/restore", Methods: []string{http.MethodPost}, Description: "Admin-only: restore a backup archive uploaded as multipart/form-data (field 'archive'; optional 'passphrase' field decrypts an encrypted archive); overwrites install-dir files with --force. Restart the stack afterward for it to take effect."},
+		{Path: "/api/v1/settings/backups", Methods: []string{http.MethodGet, http.MethodPost}, Description: "Admin-only: GET lists server-side backups under <install>/backups (manual snapshots + pre-update rollback points; each entry reports whether it is encrypted); POST creates a new persistent snapshot. Pass an optional {\"passphrase\":\"...\"} to encrypt the snapshot at rest with AES-256-GCM (stored as .tar.gz.enc).", SampleBody: "{\n  \"passphrase\": \"\"\n}"},
+		{Path: "/api/v1/settings/backups/restore", Methods: []string{http.MethodPost}, Description: "Admin-only: restore a server-side backup by name (no re-upload), then restart the stack. Also powers post-update rollback. Supply 'passphrase' to restore an encrypted (.tar.gz.enc) snapshot.", SampleBody: "{\n  \"name\": \"pre-update-20260610T120000Z.tar.gz\",\n  \"passphrase\": \"\"\n}"},
 		{Path: "/api/v1/settings/backups/delete", Methods: []string{http.MethodPost}, Description: "Admin-only: delete a server-side backup by name", SampleBody: "{\n  \"name\": \"manual-20260610T120000Z.tar.gz\"\n}"},
-		{Path: "/api/v1/settings/backups/download", Methods: []string{http.MethodGet}, Description: "Admin-only: download a server-side backup by name (?name=...)"},
+		{Path: "/api/v1/settings/backups/download", Methods: []string{http.MethodGet}, Description: "Admin-only: download a server-side backup by name (?name=...). Encrypted snapshots stream as the opaque .tar.gz.enc envelope (decrypt with v2-restore + the passphrase)."},
 		{Path: "/api/v1/settings/update", Methods: []string{http.MethodGet}, Description: "Admin-only: check for a newer release (current/latest version, update_available) and report any in-progress in-app update job/phase"},
 		{Path: "/api/v1/settings/update/apply", Methods: []string{http.MethodPost}, Description: "Admin-only: apply an in-app update — takes a pre-update backup, installs the latest stack (orchestrator+api+ui+frontend, always checksum-verified against the release checksums.txt), then restarts the stack. Runs in the background; poll GET /api/v1/settings/update for progress.", SampleBody: "{\n  \"target_version\": \"\"\n}"},
 		{Path: "/api/v1/settings/config", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write runtime config", SampleBody: "{\n  \"content\": \"clusters: \\\"10.0.0.1\\\"\\nusername: \\\"admin\\\"\\n\"\n}"},
@@ -3631,10 +3632,61 @@ func (s *apiServer) buildOpenAPISpec() map[string]interface{} {
 				},
 			},
 			"/api/v1/settings/backup": map[string]interface{}{
-				"get": map[string]interface{}{"summary": "Admin-only: download a .tar.gz backup of the install directory (config + referenced files, local user database, API token, scheduler/notifications state). The archive contains secrets — store it securely."},
+				"get": map[string]interface{}{
+					"summary": "Admin-only: download a .tar.gz backup of the install directory (config + referenced files, local user database, API token, scheduler/notifications state). The archive contains secrets — store it securely. Send an optional 'X-NCC-Backup-Passphrase' header to encrypt the download at rest with AES-256-GCM (served as .tar.gz.enc).",
+					"parameters": []map[string]interface{}{
+						{"name": "X-NCC-Backup-Passphrase", "in": "header", "required": false, "schema": map[string]interface{}{"type": "string"}, "description": "When set, the archive is sealed with AES-256-GCM and downloaded as .tar.gz.enc; restore needs the same passphrase."},
+					},
+				},
 			},
 			"/api/v1/settings/restore": map[string]interface{}{
-				"post": map[string]interface{}{"summary": "Admin-only: restore a backup archive uploaded as multipart/form-data (field 'archive'). Overwrites install-dir files with --force and proceeds even while the stack is live; restart the stack afterward for the restored config/accounts/token to take effect."},
+				"post": map[string]interface{}{"summary": "Admin-only: restore a backup archive uploaded as multipart/form-data (field 'archive'; optional 'passphrase' field decrypts an encrypted archive). Overwrites install-dir files with --force and proceeds even while the stack is live; restart the stack afterward for the restored config/accounts/token to take effect."},
+			},
+			"/api/v1/settings/backups": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Admin-only: list server-side backups under <install>/backups (manual snapshots + pre-update rollback points). Each entry reports name, kind, size, mod_time, and whether it is encrypted."},
+				"post": map[string]interface{}{
+					"summary": "Admin-only: create a persistent server-side snapshot. An optional passphrase seals it at rest with AES-256-GCM (stored as .tar.gz.enc).",
+					"requestBody": map[string]interface{}{
+						"required": false,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{"example": map[string]interface{}{"passphrase": ""}},
+						},
+					},
+				},
+			},
+			"/api/v1/settings/backups/restore": map[string]interface{}{
+				"post": map[string]interface{}{
+					"summary": "Admin-only: restore a server-side backup by name, then restart the stack. Supply 'passphrase' to restore an encrypted (.tar.gz.enc) snapshot.",
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{"example": map[string]interface{}{"name": "pre-update-20260610T120000Z.tar.gz", "passphrase": ""}},
+						},
+					},
+				},
+			},
+			"/api/v1/settings/backups/delete": map[string]interface{}{
+				"post": map[string]interface{}{
+					"summary": "Admin-only: delete a server-side backup by name.",
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{"example": map[string]interface{}{"name": "manual-20260610T120000Z.tar.gz"}},
+						},
+					},
+				},
+			},
+			"/api/v1/settings/backups/download": map[string]interface{}{
+				"get": map[string]interface{}{
+					"summary": "Admin-only: download a server-side backup by name. Encrypted snapshots stream as the opaque .tar.gz.enc envelope.",
+					"parameters": []map[string]interface{}{
+						{"name": "name", "in": "query", "required": true, "schema": map[string]interface{}{"type": "string"}, "description": "Backup filename (…tar.gz or …tar.gz.enc)"},
+					},
+				},
+			},
+			"/api/v1/health/diagnostics": map[string]interface{}{
+				"get":  map[string]interface{}{"summary": "Admin-only: read-only self-heal scan (doctor checks + live LDAP/SAML/clock probes) with a ranked diagnostics list and overall status."},
+				"post": map[string]interface{}{"summary": "Admin-only: re-run the doctor checks with --fix to apply safe remediations, re-probe auth, and return the post-fix state."},
 			},
 			"/api/v1/settings/config": map[string]interface{}{
 				"get": map[string]interface{}{"summary": "Read runtime config"},

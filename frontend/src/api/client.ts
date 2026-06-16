@@ -448,13 +448,20 @@ export const api = {
       body: JSON.stringify(payload ?? {}),
     }),
   listBackups: () => callApi<{ backups: BackupEntry[] }>("/api/v1/settings/backups"),
-  createBackup: () =>
-    callApiEnvelope<{ backup: BackupEntry }>("/api/v1/settings/backups", { method: "POST" }),
-  restoreNamedBackup: (name: string) =>
-    callApiEnvelope<{ restarting?: boolean }>("/api/v1/settings/backups/restore", {
+  createBackup: (passphrase?: string) => {
+    const pass = (passphrase ?? "").trim();
+    return callApiEnvelope<{ backup: BackupEntry }>("/api/v1/settings/backups", {
       method: "POST",
-      body: JSON.stringify({ name }),
-    }),
+      ...(pass ? { body: JSON.stringify({ passphrase: pass }) } : {}),
+    });
+  },
+  restoreNamedBackup: (name: string, passphrase?: string) => {
+    const pass = (passphrase ?? "").trim();
+    return callApiEnvelope<{ restarting?: boolean }>("/api/v1/settings/backups/restore", {
+      method: "POST",
+      body: JSON.stringify(pass ? { name, passphrase: pass } : { name }),
+    });
+  },
   deleteBackup: (name: string) =>
     callApi<unknown>("/api/v1/settings/backups/delete", {
       method: "POST",
