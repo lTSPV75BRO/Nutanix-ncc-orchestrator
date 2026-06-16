@@ -2026,9 +2026,21 @@ func (s *apiServer) handleSchedule(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 			return
 		}
-		if _, err := s.validateConfigPath(st.Config); err != nil {
-			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
+		// Anchor config + log paths to absolute, install-root paths before we
+		// persist or apply them. Otherwise the orchestrator's create-schedule
+		// resolves a relative path against ITS OWN working directory (e.g.
+		// <install>/bin), producing a cron line / systemd unit whose runner
+		// can't find config.yaml — the "at least one cluster must be provided"
+		// failure that silently breaks scheduled runs. Resolving here makes the
+		// generated schedule deterministic regardless of the api-server's cwd.
+		resolvedCfg, cfgErr := s.validateConfigPath(st.Config)
+		if cfgErr != nil {
+			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: cfgErr.Error()})
 			return
+		}
+		st.Config = resolvedCfg
+		if st.LogPath != "" {
+			st.LogPath = s.absPath(st.LogPath)
 		}
 		if err := s.saveSchedule(st); err != nil {
 			writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: err.Error()})
@@ -2155,6 +2167,14 @@ func (s *apiServer) handleScheduleHealth(w http.ResponseWriter, r *http.Request)
 	logInfo, statErr := os.Stat(logAbs)
 	lockPath := filepath.Join(filepath.Dir(logAbs), ".ncc-scheduler.lock")
 	parsed := parseScheduleHealthFromLog(logAbs)
+	// Surface the exact config the schedule runs with (absolute) so the UI can
+	// show — and operators can verify — which config.yaml the timer uses. A
+	// relative/missing config here is precisely what silently breaks scheduled
+	// runs ("at least one cluster must be provided").
+	configDisp := strings.TrimSpace(st.Config)
+	if configDisp != "" {
+		configDisp = s.absPath(configDisp)
+	}
 	data := map[string]interface{}{
 		"configured":        installed, // authoritative: schedule is actually installed in OS
 		"saved":             saved,
@@ -2164,6 +2184,9 @@ func (s *apiServer) handleScheduleHealth(w http.ResponseWriter, r *http.Request)
 		"type":              st.Type,
 		"action":            st.Action,
 		"with_lock":         st.WithLock,
+		"config":            configDisp,
+		"every":             st.Every,
+		"cron":              st.Cron,
 		"log_path":          logAbs,
 		"lock_path":         lockPath,
 		"last_updated_at":   st.UpdatedAt,

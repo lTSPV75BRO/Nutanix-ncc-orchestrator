@@ -13025,6 +13025,16 @@ func runCreateSchedule(cmd *cobra.Command, args []string) error {
 			return exitConfig(fmt.Errorf("action must be create, list, remove, or run-now (got %q)", action))
 		}
 
+		// Defense-in-depth: a systemd timer runs the scan from an explicit
+		// WorkingDirectory that is NOT the operator's interactive cwd, so a
+		// config-less run cannot reliably locate config.yaml and fails with
+		// "at least one cluster must be provided". Require an explicit --config
+		// (anchored absolute above) rather than installing a timer that is
+		// guaranteed to fail on its first activation.
+		if strings.TrimSpace(configPath) == "" {
+			return exitConfig(errors.New("systemd timers require an explicit --config (preferably an absolute path): without it the timer runs from systemd's working directory and cannot locate config.yaml"))
+		}
+
 		cronSpec, _ := cmd.Flags().GetString("cron")
 		cronSpec = strings.TrimSpace(cronSpec)
 		onCalendar, ocErr := onCalendarFromSchedule(cronSpec, every)

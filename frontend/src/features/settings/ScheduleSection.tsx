@@ -22,6 +22,9 @@ type ScheduleHealth = {
   type?: string;
   action?: string;
   with_lock?: boolean;
+  config?: string;
+  every?: string;
+  cron?: string;
   log_path?: string;
   lock_path?: string;
   last_updated_at?: string;
@@ -43,6 +46,55 @@ function formatBytes(bytes?: number): string {
   return `${value.toFixed(value >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
+/** Human-readable summary of the effective schedule (cron takes precedence). */
+function describeSchedule(every?: string, cron?: string): string {
+  const c = (cron || "").trim();
+  if (c) return `Cron: ${c}`;
+  const m = (every || "").trim().match(/^(\d+)([mhd])$/);
+  if (m) {
+    const n = Number(m[1]);
+    const unit = m[2] === "m" ? "minute" : m[2] === "h" ? "hour" : "day";
+    return `Every ${n} ${unit}${n === 1 ? "" : "s"}`;
+  }
+  return "—";
+}
+
+/** Friendly backend label for a saved scheduler type. */
+function friendlyBackend(type?: string): string {
+  switch ((type || "").toLowerCase()) {
+    case "systemd":
+      return "systemd timer";
+    case "cron":
+      return "cron";
+    case "windows":
+      return "Windows Scheduled Task";
+    case "auto":
+      return "auto-detect";
+    default:
+      return type || "—";
+  }
+}
+
+/**
+ * Approximate the next run for an interval schedule, anchored on the last time
+ * the scheduler log was written (a good proxy for the last run). Returns null
+ * for cron expressions (where slot math is non-trivial) — the UI labels the
+ * result "approx" since systemd/cron wall-clock alignment may differ slightly.
+ */
+function approxNextRun(every?: string, cron?: string, lastModIso?: string): Date | null {
+  if ((cron || "").trim()) return null;
+  const m = (every || "").trim().match(/^(\d+)([mhd])$/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  const ms = n * (m[2] === "m" ? 60_000 : m[2] === "h" ? 3_600_000 : 86_400_000);
+  if (ms <= 0) return null;
+  const base = lastModIso ? new Date(lastModIso).getTime() : Date.now();
+  if (Number.isNaN(base)) return null;
+  const now = Date.now();
+  const k = Math.max(1, Math.ceil((now - base) / ms));
+  return new Date(base + k * ms);
+}
+
 export function ScheduleSection({ backendConfigPath, onError }: Props) {
   const [mode, setMode] = useLocalStorageState<Mode>("settings.schedule.mode", "simple");
   const [type, setType] = useLocalStorageState("settings.schedule.type", "auto");
@@ -57,6 +109,15 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
   const [printOnly, setPrintOnly] = useLocalStorageState("settings.schedule.printOnly", true);
   const [apply, setApply] = useLocalStorageState("settings.schedule.apply", false);
   const [health, setHealth] = useState<ScheduleHealth | null>(null);
+
+  // systemd timers gate overlapping activations themselves, so the file lock is
+  // redundant (and the toggle is shown disabled/forced-on for that backend).
+  const lockManagedBySystemd = mode === "advanced" && type === "systemd";
+
+  const nextRun = useMemo(
+    () => (health ? approxNextRun(health.every, health.cron, health.log_mod_time) : null),
+    [health],
+  );
 
   const payload = useMemo(() => {
     const every = everyValue > 0 ? `${everyValue}${everyUnit}` : "";
@@ -216,6 +277,13 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
             <Button size="small" onClick={() => { setEveryValue(24); setEveryUnit("h"); }}>Daily</Button>
           </Space>
 
+          <div style={{ marginBottom: 12 }}>
+            <Typography.Text type="secondary">
+              Effective schedule:{" "}
+              <Typography.Text strong>{describeSchedule(payload.every, payload.cron)}</Typography.Text>
+            </Typography.Text>
+          </div>
+
           {mode === "advanced" ? (
             <>
               <Row gutter={16}>
@@ -295,9 +363,19 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
               </Typography.Text>
             </Space>
             <Space size={8}>
-              <Switch id="sched-with-lock" aria-label="Prevent overlapping runs" checked={withLock} onChange={setWithLock} />
+              <Tooltip title={lockManagedBySystemd ? "systemd prevents overlapping runs natively — a second activation won't start while one is still running, so the file lock is not needed." : undefined}>
+                <Switch
+                  id="sched-with-lock"
+                  aria-label="Prevent overlapping runs"
+                  checked={lockManagedBySystemd ? true : withLock}
+                  disabled={lockManagedBySystemd}
+                  onChange={setWithLock}
+                />
+              </Tooltip>
               <Typography.Text>
-                <label htmlFor="sched-with-lock">Prevent overlapping runs (file lock)</label>
+                <label htmlFor="sched-with-lock">
+                  Prevent overlapping runs {lockManagedBySystemd ? "(native via systemd)" : "(file lock)"}
+                </label>
               </Typography.Text>
             </Space>
           </Space>
@@ -395,14 +473,40 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
               <Descriptions.Item label="Task name">
                 <Typography.Text code>{health.task_name || "—"}</Typography.Text>
               </Descriptions.Item>
-              <Descriptions.Item label="Detected via">
-                <Typography.Text>{health.detector || "—"}</Typography.Text>
+              <Descriptions.Item label="Schedule">
+                <Typography.Text strong>{describeSchedule(health.every, health.cron)}</Typography.Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="Backend">
+                <Space size={6}>
+                  <Tag color={(health.type || "").toLowerCase() === "systemd" ? "geekblue" : "default"}>
+                    {friendlyBackend(health.type)}
+                  </Tag>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    via {health.detector || "—"}
+                  </Typography.Text>
+                </Space>
+              </Descriptions.Item>
+              <Descriptions.Item label="Config file">
+                <Typography.Text className="mono" copyable={health.config ? { text: health.config } : false}>
+                  {health.config || "—"}
+                </Typography.Text>
               </Descriptions.Item>
               <Descriptions.Item label="Last run">
                 {health.last_run ? <Tooltip title={formatDateTime(health.last_run)}>{relativeTime(health.last_run)}</Tooltip> : "—"}
               </Descriptions.Item>
               <Descriptions.Item label="Last success">
                 {health.last_success ? <Tooltip title={formatDateTime(health.last_success)}>{relativeTime(health.last_success)}</Tooltip> : "—"}
+              </Descriptions.Item>
+              <Descriptions.Item label="Next run (approx)">
+                {nextRun ? (
+                  <Tooltip title={formatDateTime(nextRun.toISOString())}>
+                    {relativeTime(nextRun.toISOString())}
+                  </Tooltip>
+                ) : (
+                  <Typography.Text type="secondary">
+                    {health.installed ? "—" : "not scheduled"}
+                  </Typography.Text>
+                )}
               </Descriptions.Item>
               <Descriptions.Item label="State updated">{formatTime(health.last_updated_at)}</Descriptions.Item>
               <Descriptions.Item label="Log file">

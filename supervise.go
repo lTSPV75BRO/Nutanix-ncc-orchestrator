@@ -116,6 +116,15 @@ func runV2Supervise(cfg superviseConfig) error {
 	}
 
 	supPIDPath := filepath.Join(runDir, "v2-supervisor.pid")
+	// Single-instance guard: refuse to start if another supervisor is already
+	// live. A second supervisor can never bind the shared ports anyway (its
+	// children crash-loop on "address already in use"), and on exit it would
+	// delete the shared run/v2-*.pid files out from under the running stack,
+	// blinding v2-status/v2-stop. Aborting early keeps the live stack's state
+	// intact. A stale pid file (process gone) is ignored and overwritten.
+	if existing, perr := readPIDFromFile(supPIDPath); perr == nil && existing != os.Getpid() && processIsAlive(existing) {
+		return fmt.Errorf("supervisor: another ncc-orchestrator supervisor is already running (pid %d); stop it first (`systemctl stop ncc-orchestrator` or `ncc-orchestrator v2-stop`) before starting another", existing)
+	}
 	if err := os.WriteFile(supPIDPath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644); err != nil {
 		return fmt.Errorf("supervisor: write pid file: %w", err)
 	}
