@@ -7,6 +7,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
@@ -4839,4 +4840,170 @@ func TestPreserveHostStartStateNetworking(t *testing.T) {
 	if kept := preserveHostStartStateNetworking(dir, v2StartState{}, false); kept != nil {
 		t.Fatalf("expected no-op without pre-state, got %v", kept)
 	}
+}
+
+// TestVerifyBackupArchiveEnforcesCaps pins the restore-hardening caps shared by
+// verifyBackupArchive and runV2Restore: a single file over the per-file limit
+// and an archive with too many entries are both rejected (so a decompression
+// bomb or a corrupt/oversize file can't exhaust memory or disk, and can't be
+// silently truncated on restore), while a normal small archive still verifies.
+func TestVerifyBackupArchiveEnforcesCaps(t *testing.T) {
+	buildArchive := func(t *testing.T, entries func(tw *tar.Writer)) string {
+		t.Helper()
+		var buf bytes.Buffer
+		gzw := gzip.NewWriter(&buf)
+		tw := tar.NewWriter(gzw)
+		mani := []byte(`{"tool":"ncc-orchestrator","version":"2.1.0"}`)
+		if err := tw.WriteHeader(&tar.Header{Name: "manifest.json", Mode: 0o600, Size: int64(len(mani)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatalf("manifest hdr: %v", err)
+		}
+		if _, err := tw.Write(mani); err != nil {
+			t.Fatalf("manifest body: %v", err)
+		}
+		entries(tw)
+		if err := tw.Close(); err != nil {
+			t.Fatalf("tar close: %v", err)
+		}
+		if err := gzw.Close(); err != nil {
+			t.Fatalf("gz close: %v", err)
+		}
+		p := filepath.Join(t.TempDir(), "b.tar.gz")
+		if err := os.WriteFile(p, buf.Bytes(), 0o600); err != nil {
+			t.Fatalf("write archive: %v", err)
+		}
+		return p
+	}
+
+	t.Run("oversize file rejected", func(t *testing.T) {
+		size := int64(maxBackupFileBytes) + 1
+		path := buildArchive(t, func(tw *tar.Writer) {
+			if err := tw.WriteHeader(&tar.Header{Name: "data/big.bin", Mode: 0o600, Size: size, Typeflag: tar.TypeReg}); err != nil {
+				t.Fatalf("hdr: %v", err)
+			}
+			chunk := make([]byte, 1<<20) // zeros: tiny once gzipped
+			for written := int64(0); written < size; {
+				n := int64(len(chunk))
+				if size-written < n {
+					n = size - written
+				}
+				if _, err := tw.Write(chunk[:n]); err != nil {
+					t.Fatalf("body: %v", err)
+				}
+				written += n
+			}
+		})
+		if _, err := verifyBackupArchive(path); err == nil {
+			t.Fatal("expected oversize file to fail verification")
+		}
+	})
+
+	t.Run("too many files rejected", func(t *testing.T) {
+		body := []byte("x")
+		path := buildArchive(t, func(tw *tar.Writer) {
+			for i := 0; i <= maxBackupFileCount; i++ {
+				name := fmt.Sprintf("data/f%d.txt", i)
+				if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
+					t.Fatalf("hdr: %v", err)
+				}
+				if _, err := tw.Write(body); err != nil {
+					t.Fatalf("body: %v", err)
+				}
+			}
+		})
+		if _, err := verifyBackupArchive(path); err == nil {
+			t.Fatal("expected too-many-files to fail verification")
+		}
+	})
+
+	t.Run("normal archive passes", func(t *testing.T) {
+		body := []byte("clusters:\n  - addr: 10.0.0.1\n")
+		path := buildArchive(t, func(tw *tar.Writer) {
+			if err := tw.WriteHeader(&tar.Header{Name: "data/config.yaml", Mode: 0o600, Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
+				t.Fatalf("hdr: %v", err)
+			}
+			if _, err := tw.Write(body); err != nil {
+				t.Fatalf("body: %v", err)
+			}
+		})
+		res, err := verifyBackupArchive(path)
+		if err != nil {
+			t.Fatalf("normal archive should verify: %v", err)
+		}
+		if res.DataFiles != 1 {
+			t.Fatalf("expected 1 data file, got %d", res.DataFiles)
+		}
+	})
+}
+
+// TestEncryptedBackupRoundTrip pins `v2-backup --encrypt` + `v2-restore`
+// auto-detect: a passphrase- and a key-file-encrypted archive each round-trip,
+// the on-disk archive is unreadable as a plain tar.gz, and the wrong
+// passphrase/key fails to decrypt (GCM auth) rather than restoring garbage.
+func TestEncryptedBackupRoundTrip(t *testing.T) {
+	newSrc := func(t *testing.T) string {
+		t.Helper()
+		src := t.TempDir()
+		if err := os.WriteFile(filepath.Join(src, "config.yaml"), []byte("prismCentral: pc\npassword: s3cret\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(src, ".ncc-api-users.json"), []byte(`{"users":[]}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return src
+	}
+
+	t.Run("passphrase round trip", func(t *testing.T) {
+		src := newSrc(t)
+		out := filepath.Join(t.TempDir(), "enc.tar.gz")
+		if err := runV2Backup(v2BackupOptions{InstallDir: src, OutputFile: out, Encrypt: true, Passphrase: "correct horse battery staple"}); err != nil {
+			t.Fatalf("encrypted backup: %v", err)
+		}
+		// The file must be detected as encrypted and must NOT verify as a plain archive.
+		if enc, err := backupArchiveIsEncrypted(out); err != nil || !enc {
+			t.Fatalf("expected encrypted archive (enc=%v err=%v)", enc, err)
+		}
+		if _, err := verifyBackupArchive(out); err == nil {
+			t.Fatal("encrypted archive must not verify as a plain tar.gz")
+		}
+		// Wrong passphrase fails.
+		if err := runV2Restore(v2RestoreOptions{InstallDir: t.TempDir(), InputFile: out, Passphrase: "wrong"}); err == nil {
+			t.Fatal("restore with wrong passphrase should fail")
+		}
+		// Correct passphrase restores the files.
+		dst := t.TempDir()
+		if err := runV2Restore(v2RestoreOptions{InstallDir: dst, InputFile: out, Passphrase: "correct horse battery staple"}); err != nil {
+			t.Fatalf("restore with correct passphrase: %v", err)
+		}
+		if b, err := os.ReadFile(filepath.Join(dst, "config.yaml")); err != nil || !strings.Contains(string(b), "s3cret") {
+			t.Fatalf("restored config.yaml missing/incorrect: %v", err)
+		}
+	})
+
+	t.Run("key-file round trip", func(t *testing.T) {
+		src := newSrc(t)
+		keyFile := filepath.Join(t.TempDir(), "key.b64")
+		// 32 zero bytes, base64-encoded.
+		if err := os.WriteFile(keyFile, []byte(base64StdKey32()), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out := filepath.Join(t.TempDir(), "enck.tar.gz")
+		if err := runV2Backup(v2BackupOptions{InstallDir: src, OutputFile: out, Encrypt: true, KeyFile: keyFile}); err != nil {
+			t.Fatalf("key-encrypted backup: %v", err)
+		}
+		if enc, err := backupArchiveIsEncrypted(out); err != nil || !enc {
+			t.Fatalf("expected encrypted archive (enc=%v err=%v)", enc, err)
+		}
+		dst := t.TempDir()
+		if err := runV2Restore(v2RestoreOptions{InstallDir: dst, InputFile: out, KeyFile: keyFile}); err != nil {
+			t.Fatalf("restore with key file: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(dst, ".ncc-api-users.json")); err != nil {
+			t.Errorf("restored user DB missing: %v", err)
+		}
+	})
+}
+
+// base64StdKey32 returns a base64-encoded 32-byte key for tests.
+func base64StdKey32() string {
+	return base64.StdEncoding.EncodeToString(make([]byte, 32))
 }

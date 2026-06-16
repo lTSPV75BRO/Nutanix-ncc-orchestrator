@@ -59,3 +59,17 @@ See **`outputfiles/run-summary.json`** for `exit_code` and per-cluster `clusters
 
 - **Cause (older builds):** Restore overwrote the host's `.ncc-v2-start.json` networking with the backup's values, dropping the local `ui-allowed-origins`.
 - **Fix:** The current `v2-restore` **preserves host-specific networking/TLS** (CORS origins, advertise/backend URLs, listen addresses, `--ui-insecure-http`, UI TLS paths). Upgrade and re-restore, or add the current origin under Settings/`--cors-origin` and restart.
+
+## Scheduled runs (cron / systemd timer)
+
+### A scheduled run produces no output / the dashboard data goes stale
+
+- **Symptom:** The schedule is installed and the timer fires on time, but no new reports appear and `doctor` warns the latest run is hours old. The scheduler log (`logs/ncc-scheduler.log`, or `journalctl -u ncc-sched-<task>.service`) shows `configuration validation failed: at least one cluster must be provided` (exit 2).
+- **Cause (older builds):** The generated runner executed the orchestrator without an **absolute** `--config` (and, for systemd, from a `WorkingDirectory` that is not the install dir), so `config.yaml` was never found and the run aborted before any output was written.
+- **Fix:** Upgrade to the current build and re-save the schedule from **Settings → Schedule** (or re-run `create-schedule` with an absolute `--config /path/to/config.yaml`). The api-server now anchors the schedule's config/log paths to absolute install-root paths, and the systemd backend refuses to install a config-less timer. Confirm in **Settings → Schedule** that **Config file** shows the expected absolute path (or inspect the generated runner under `logs/`).
+
+### A systemd timer run is marked `failed` but reports were still written
+
+- **Symptom:** `systemctl status ncc-sched-<task>.service` shows `failed` / a non-zero `ExecMainStatus`, yet the dashboard shows fresh data.
+- **Cause:** Exit code **3** is *partial success* — some clusters failed (e.g. an unreachable Prism Central) while others succeeded and a report was written. systemd treats any non-zero exit as a unit failure.
+- **Fix:** Expected when some targets are unreachable. Fix routing/credentials for the failing clusters, or remove them from `config.yaml`, so the run exits 0. The failing clusters are listed in `logs/ncc-scheduler.log` and `outputfiles/run-summary.json`.

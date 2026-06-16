@@ -76,6 +76,7 @@ func (s *apiServer) runSelfHealOnce(ctx context.Context, fix bool) (*selfHealRep
 	defer cancel()
 	cmd := exec.CommandContext(cctx, bin, args...)
 	cmd.Dir = s.absPath(s.repoRoot)
+	cmd.Env = childEnv()
 	out, runErr := cmd.Output()
 
 	var rep selfHealReport

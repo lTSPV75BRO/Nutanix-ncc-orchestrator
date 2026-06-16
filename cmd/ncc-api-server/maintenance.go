@@ -38,11 +38,32 @@ func (s *apiServer) handleBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.RemoveAll(tmpDir)
 
+	// Optional client-side encryption. The passphrase arrives in a header (not a
+	// query param) so it never lands in the URL/access log, and we hand it to
+	// v2-backup via the environment (NCC_BACKUP_PASSPHRASE) rather than argv so
+	// it stays out of the process listing and audit log too.
+	passphrase := strings.TrimSpace(r.Header.Get("X-NCC-Backup-Passphrase"))
+	if len(passphrase) > 1024 {
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "passphrase too long"})
+		return
+	}
+	encrypt := passphrase != ""
+
 	stamp := time.Now().UTC().Format("20060102T150405Z")
-	outPath := filepath.Join(tmpDir, "ncc-backup-"+stamp+".tar.gz")
-	out, err := s.runOrchestrator([]string{"v2-backup", "--install-dir", installDir, "--output-file", outPath}, 2*time.Minute)
+	outName := "ncc-backup-" + stamp + ".tar.gz"
+	if encrypt {
+		outName += ".enc"
+	}
+	outPath := filepath.Join(tmpDir, outName)
+	args := []string{"v2-backup", "--install-dir", installDir, "--output-file", outPath}
+	var extraEnv []string
+	if encrypt {
+		args = append(args, "--encrypt")
+		extraEnv = []string{"NCC_BACKUP_PASSPHRASE=" + passphrase}
+	}
+	out, err := s.runOrchestratorEnv(args, 2*time.Minute, extraEnv)
 	if err != nil {
-		s.audit(r, "settings.backup", false, map[string]interface{}{"install_dir": installDir})
+		s.audit(r, "settings.backup", false, map[string]interface{}{"install_dir": installDir, "encrypted": encrypt})
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "backup failed: " + strings.TrimSpace(out)})
 		return
 	}
@@ -57,14 +78,18 @@ func (s *apiServer) handleBackup(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "stat backup archive: " + err.Error()})
 		return
 	}
-	filename := "ncc-backup-" + stamp + ".tar.gz"
-	w.Header().Set("Content-Type", "application/gzip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	contentType := "application/gzip"
+	if encrypt {
+		// Encrypted archives are opaque AES-256-GCM envelopes, not gzip.
+		contentType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", outName))
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", fi.Size()))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, f)
-	s.audit(r, "settings.backup", true, map[string]interface{}{"install_dir": installDir, "bytes": fi.Size()})
+	s.audit(r, "settings.backup", true, map[string]interface{}{"install_dir": installDir, "bytes": fi.Size(), "encrypted": encrypt})
 }
 
 // maxRestoreUploadBytes caps the uploaded archive size. Backups are small
@@ -123,12 +148,26 @@ func (s *apiServer) handleRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Optional decryption passphrase for an encrypted archive (v2-backup
+	// --encrypt). v2-restore auto-detects encryption by magic header; we only
+	// need to supply the key. Passed via the environment, not argv, so it stays
+	// out of the process list and audit log. An unencrypted archive ignores it.
+	passphrase := strings.TrimSpace(r.FormValue("passphrase"))
+	if len(passphrase) > 1024 {
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "passphrase too long"})
+		return
+	}
+
 	installDir := s.maintenanceInstallDir()
 	// Restore the files but do NOT let v2-restore restart the stack inline:
 	// this api-server is part of that stack, so an inline restart would kill us
 	// mid-request. We apply the (OS/version-agnostic) restore here, then kick
 	// off the restart as a detached process that survives our own shutdown.
-	out, err := s.runOrchestrator([]string{"v2-restore", "--install-dir", installDir, "--input-file", archivePath, "--force", "--no-restart"}, 3*time.Minute)
+	var extraEnv []string
+	if passphrase != "" {
+		extraEnv = []string{"NCC_BACKUP_PASSPHRASE=" + passphrase}
+	}
+	out, err := s.runOrchestratorEnv([]string{"v2-restore", "--install-dir", installDir, "--input-file", archivePath, "--force", "--no-restart"}, 3*time.Minute, extraEnv)
 	if err != nil {
 		s.audit(r, "settings.restore", false, map[string]interface{}{"install_dir": installDir, "filename": header.Filename})
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "restore failed: " + strings.TrimSpace(out)})
@@ -178,6 +217,7 @@ func (s *apiServer) spawnDetachedRestart(installDir string) bool {
 		args := append(append([]string{}, base[1:]...), "v2-restart", "--install-dir", installDir)
 		cmd := exec.Command(base[0], args...)
 		cmd.Dir = s.absPath(s.repoRoot)
+		cmd.Env = childEnv()
 		// Detach from this process group so a group-directed stop signal can't
 		// take the restarter down with us, and so it outlives our shutdown.
 		detachProcess(cmd)

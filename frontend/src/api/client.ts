@@ -372,14 +372,18 @@ export const api = {
     callApi<DirectorySearchResult>(
       `/api/v1/settings/ldap/search?q=${encodeURIComponent(q)}&type=${type}&limit=${limit}`,
     ),
-  downloadBackup: async (): Promise<{ blob: Blob; filename: string }> => {
+  downloadBackup: async (
+    passphrase?: string,
+  ): Promise<{ blob: Blob; filename: string }> => {
     const csrf = readCookie("ncc_csrf");
+    const pass = (passphrase ?? "").trim();
     const response = await fetch("/api/v1/settings/backup", {
       method: "GET",
       credentials: "same-origin",
       headers: {
         "X-Requested-With": "ncc-ui",
         ...(csrf ? { "X-CSRF-Token": csrf } : {}),
+        ...(pass ? { "X-NCC-Backup-Passphrase": pass } : {}),
       },
     });
     const contentType = (response.headers.get("content-type") || "").toLowerCase();
@@ -392,10 +396,12 @@ export const api = {
     const filename = match?.[1] ?? `ncc-backup-${new Date().toISOString().replace(/[:.]/g, "-")}.tar.gz`;
     return { blob: await response.blob(), filename };
   },
-  restoreBackup: async (file: File): Promise<Envelope<unknown>> => {
+  restoreBackup: async (file: File, passphrase?: string): Promise<Envelope<unknown>> => {
     const csrf = readCookie("ncc_csrf");
     const form = new FormData();
     form.append("archive", file);
+    const pass = (passphrase ?? "").trim();
+    if (pass) form.append("passphrase", pass);
     const response = await fetch("/api/v1/settings/restore", {
       method: "POST",
       credentials: "same-origin",

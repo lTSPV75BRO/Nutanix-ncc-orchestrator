@@ -758,17 +758,24 @@ function BackupRestoreCard() {
   const [downloading, setDownloading] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [busyName, setBusyName] = useState<string | null>(null);
+  const [downloadModalOpen, setDownloadModalOpen] = useState(false);
+  const [downloadPass, setDownloadPass] = useState("");
+  const [restoreFile, setRestoreFile] = useState<File | null>(null);
+  const [restorePass, setRestorePass] = useState("");
 
   const backups = (backupsQuery.data?.backups ?? []) as BackupEntry[];
   const rollback = backups.find((b) => b.rollback_candidate);
   const refresh = () => qc.invalidateQueries({ queryKey: ["settings", "backups"] });
 
   const handleDownload = async () => {
+    const pass = downloadPass.trim();
     setDownloading(true);
     try {
-      const { blob, filename } = await api.downloadBackup();
+      const { blob, filename } = await api.downloadBackup(pass || undefined);
       triggerBlobDownload(blob, filename);
-      notify.success("Backup downloaded.");
+      notify.success(pass ? "Encrypted backup downloaded." : "Backup downloaded.");
+      setDownloadModalOpen(false);
+      setDownloadPass("");
     } catch (e) {
       notifyError(e, "Failed to create backup");
     } finally {
@@ -832,11 +839,13 @@ function BackupRestoreCard() {
     }
   };
 
-  const doRestoreUpload = async (file: File) => {
+  const doRestoreUpload = async (file: File, passphrase?: string) => {
     setRestoring(true);
     try {
-      const res = await api.restoreBackup(file);
+      const res = await api.restoreBackup(file, passphrase);
       const data = (res.data ?? {}) as { restarting?: boolean };
+      setRestoreFile(null);
+      setRestorePass("");
       announceRestore(Boolean(data.restarting), res.message);
     } catch (e) {
       notifyError(e, "Restore failed");
@@ -898,19 +907,12 @@ function BackupRestoreCard() {
     });
   };
 
-  // beforeUpload intercepts the selected file, shows a destructive-action
-  // confirmation, and returns false so antd never auto-uploads it.
+  // beforeUpload intercepts the selected file and opens a destructive-action
+  // confirmation (with an optional decryption passphrase field), returning false
+  // so antd never auto-uploads it.
   const confirmRestoreUpload = (file: File): boolean => {
-    Modal.confirm({
-      title: "Restore from uploaded backup?",
-      icon: <WarningOutlined style={{ color: "#faad14" }} />,
-      width: 540,
-      content: restoreBody(file.name, false),
-      okText: "Restore and overwrite",
-      okButtonProps: { danger: true },
-      cancelText: "Cancel",
-      onOk: () => doRestoreUpload(file),
-    });
+    setRestorePass("");
+    setRestoreFile(file);
     return false;
   };
 
@@ -1031,11 +1033,18 @@ function BackupRestoreCard() {
         >
           Create snapshot
         </Button>
-        <Button icon={<DownloadOutlined />} onClick={handleDownload} loading={downloading}>
+        <Button
+          icon={<DownloadOutlined />}
+          onClick={() => {
+            setDownloadPass("");
+            setDownloadModalOpen(true);
+          }}
+          loading={downloading}
+        >
           Download backup
         </Button>
         <Upload
-          accept=".gz,.tgz,.tar.gz,application/gzip"
+          accept=".gz,.tgz,.tar.gz,.enc,application/gzip,application/octet-stream"
           showUploadList={false}
           beforeUpload={(file) => confirmRestoreUpload(file as unknown as File)}
         >
@@ -1062,6 +1071,65 @@ function BackupRestoreCard() {
         pagination={false}
         locale={{ emptyText: "No server-side backups yet. Create a snapshot or run an update." }}
       />
+
+      <Modal
+        title="Download backup"
+        open={downloadModalOpen}
+        onCancel={() => {
+          setDownloadModalOpen(false);
+          setDownloadPass("");
+        }}
+        onOk={handleDownload}
+        okText={downloadPass.trim() ? "Encrypt and download" : "Download"}
+        okButtonProps={{ loading: downloading, icon: <DownloadOutlined /> }}
+        cancelText="Cancel"
+        destroyOnClose
+      >
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
+          The archive contains secrets (API token, password hashes, SAML SP key, LDAP bind
+          password). Optionally encrypt it at rest with <b>AES-256-GCM</b> by setting a passphrase —
+          you&apos;ll need the same passphrase to restore. Leave blank to download an unencrypted{" "}
+          <Typography.Text code>.tar.gz</Typography.Text>.
+        </Typography.Paragraph>
+        <Input.Password
+          autoFocus
+          placeholder="Encryption passphrase (optional)"
+          value={downloadPass}
+          onChange={(e) => setDownloadPass(e.target.value)}
+          onPressEnter={() => void handleDownload()}
+          allowClear
+        />
+      </Modal>
+
+      <Modal
+        title="Restore from uploaded backup?"
+        open={restoreFile !== null}
+        onCancel={() => {
+          setRestoreFile(null);
+          setRestorePass("");
+        }}
+        onOk={() => {
+          if (restoreFile) void doRestoreUpload(restoreFile, restorePass.trim() || undefined);
+        }}
+        okText="Restore and overwrite"
+        okButtonProps={{ danger: true, loading: restoring }}
+        cancelText="Cancel"
+        width={540}
+        destroyOnClose
+      >
+        {restoreFile ? restoreBody(restoreFile.name, false) : null}
+        <Typography.Paragraph type="secondary" style={{ marginTop: 4, marginBottom: 6 }}>
+          If this archive was encrypted (<Typography.Text code>v2-backup --encrypt</Typography.Text>{" "}
+          or a passphrase-protected download), enter its passphrase. Leave blank for an unencrypted
+          archive.
+        </Typography.Paragraph>
+        <Input.Password
+          placeholder="Decryption passphrase (only for encrypted archives)"
+          value={restorePass}
+          onChange={(e) => setRestorePass(e.target.value)}
+          allowClear
+        />
+      </Modal>
     </Card>
   );
 }

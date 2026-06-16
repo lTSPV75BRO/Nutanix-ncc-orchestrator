@@ -306,7 +306,7 @@ func (s *apiServer) launchRun(rec *runRecord) {
 	cmd.Dir = s.absPath(s.repoRoot)
 	injectedEnv := map[string]string{}
 	if strings.TrimSpace(rec.password) != "" {
-		cmd.Env = append(os.Environ(), "NCC_PASSWORD="+rec.password)
+		cmd.Env = append(childEnv(), "NCC_PASSWORD="+rec.password)
 		injectedEnv["NCC_PASSWORD"] = "***"
 	}
 	fullCmd := append(s.orchestratorBaseCommand(), redactedArgs(args)...)

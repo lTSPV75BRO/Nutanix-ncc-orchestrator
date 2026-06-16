@@ -3831,10 +3831,22 @@ func extraArgsHaveFlag(args []string, flag string) bool {
 }
 
 func (s *apiServer) runOrchestrator(args []string, timeout time.Duration) (string, error) {
+	return s.runOrchestratorEnv(args, timeout, nil)
+}
+
+// runOrchestratorEnv is runOrchestrator with extra environment variables
+// appended to the (master-key-scrubbed) child environment. Used to pass a
+// backup passphrase (NCC_BACKUP_PASSPHRASE) to v2-backup/v2-restore via the
+// environment rather than argv, so it never lands in a process listing or the
+// audit log.
+func (s *apiServer) runOrchestratorEnv(args []string, timeout time.Duration, extraEnv []string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := s.makeOrchestratorCommand(ctx, args...)
 	cmd.Dir = s.absPath(s.repoRoot)
+	if len(extraEnv) > 0 {
+		cmd.Env = append(cmd.Env, extraEnv...)
+	}
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
 		return string(out), fmt.Errorf("command timed out after %s", timeout)
@@ -3959,10 +3971,16 @@ func (s *apiServer) makeOrchestratorCommand(ctx context.Context, args ...string)
 	}
 	name := full[0]
 	rest := full[1:]
+	var cmd *exec.Cmd
 	if ctx == nil {
-		return exec.Command(name, rest...)
+		cmd = exec.Command(name, rest...)
+	} else {
+		cmd = exec.CommandContext(ctx, name, rest...)
 	}
-	return exec.CommandContext(ctx, name, rest...)
+	// Never hand the user-store master key to an orchestrator child; it copies
+	// the (already-sealed) user DB as opaque bytes and has no need for the key.
+	cmd.Env = childEnv()
+	return cmd
 }
 
 func tailString(s string, max int) string {

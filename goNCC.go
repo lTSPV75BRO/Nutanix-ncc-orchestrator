@@ -8696,6 +8696,12 @@ type v2BackupOptions struct {
 	// Retain, when > 0, prunes older ncc-backup-*.tar.gz siblings of the output
 	// file so at most Retain backups are kept (newest wins).
 	Retain int
+	// Encrypt seals the finished archive with AES-256-GCM. Key material comes
+	// from Passphrase/NCC_BACKUP_PASSPHRASE (scrypt) or KeyFile/NCC_BACKUP_KEY_*
+	// (raw 32-byte key).
+	Encrypt    bool
+	KeyFile    string
+	Passphrase string
 }
 
 type v2RestoreOptions struct {
@@ -8707,7 +8713,22 @@ type v2RestoreOptions struct {
 	// VerifyOnly validates the archive (gzip+tar integrity, manifest present,
 	// confined paths) and reports, without extracting anything.
 	VerifyOnly bool
+	// KeyFile/Passphrase decrypt an encrypted backup; an unencrypted archive
+	// ignores them.
+	KeyFile    string
+	Passphrase string
 }
+
+// Backup archive limits, shared by the verifier and the restorer so the two
+// agree on what is acceptable (a file that verifies must also restore without
+// silent truncation). They also bound the work a malicious or corrupt archive
+// can force: a decompression bomb (a tiny gzip that expands to gigabytes)
+// cannot exhaust memory or disk during restore.
+const (
+	maxBackupFileBytes  = 64 << 20  // per-file uncompressed cap (64 MiB)
+	maxBackupTotalBytes = 512 << 20 // total uncompressed cap across all files (512 MiB)
+	maxBackupFileCount  = 10000     // sanity cap on the number of entries
+)
 
 // backupVerifyResult summarizes a validated backup archive.
 type backupVerifyResult struct {
@@ -8764,12 +8785,24 @@ func verifyBackupArchive(path string) (backupVerifyResult, error) {
 			if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+sep) || filepath.IsAbs(clean) {
 				return res, fmt.Errorf("unsafe path in archive: %q", hdr.Name)
 			}
-			n, err := io.Copy(io.Discard, io.LimitReader(tr, 64<<20))
+			// +1 so we can tell "exactly at the cap" from "over the cap" and
+			// reject an oversize file rather than let it through (the restorer
+			// would otherwise truncate it).
+			n, err := io.Copy(io.Discard, io.LimitReader(tr, maxBackupFileBytes+1))
 			if err != nil {
 				return res, fmt.Errorf("read %s: %w", hdr.Name, err)
 			}
+			if n > maxBackupFileBytes {
+				return res, fmt.Errorf("archive file %q exceeds the per-file limit (%d bytes)", hdr.Name, maxBackupFileBytes)
+			}
 			res.DataFiles++
+			if res.DataFiles > maxBackupFileCount {
+				return res, fmt.Errorf("archive contains too many files (>%d)", maxBackupFileCount)
+			}
 			res.Bytes += n
+			if res.Bytes > maxBackupTotalBytes {
+				return res, fmt.Errorf("archive exceeds the total size limit (%d bytes)", maxBackupTotalBytes)
+			}
 		}
 	}
 	if !sawManifest {
@@ -9210,8 +9243,26 @@ func runV2Backup(opts v2BackupOptions) error {
 		_ = os.Remove(out)
 		return fmt.Errorf("backup verification failed (removed %s): %w", out, verr)
 	}
+	// Encrypt-at-rest: seal the verified archive after verification (the sealed
+	// file is no longer a readable tar.gz, so it must be sealed last).
+	encrypted := false
+	if opts.Encrypt {
+		key, mode, salt, kerr := resolveBackupEncKey(opts.KeyFile, opts.Passphrase)
+		if kerr != nil {
+			_ = os.Remove(out)
+			return fmt.Errorf("encrypt backup: %w", kerr)
+		}
+		if eerr := encryptBackupFile(out, key, mode, salt); eerr != nil {
+			_ = os.Remove(out)
+			return fmt.Errorf("encrypt backup: %w", eerr)
+		}
+		encrypted = true
+	}
 	fmt.Printf("Backup written: %s\n", out)
 	fmt.Printf("verified:       %d file(s) readable from archive (%s uncompressed)\n", vr.DataFiles, humanBytes(uint64(vr.Bytes)))
+	if encrypted {
+		fmt.Printf("encrypted:      yes (AES-256-GCM) — restore needs the same passphrase/key\n")
+	}
 	fmt.Printf("created by:     ncc-orchestrator %s (%s, built %s)\n", Version, Stream, BuildDate)
 	fmt.Printf("install-dir:    %s\n", installDir)
 	fmt.Printf("files (%d):\n", len(entries))
@@ -9233,7 +9284,11 @@ func runV2Backup(opts v2BackupOptions) error {
 			fmt.Printf("retention:      kept newest %d, pruned %d older backup(s): %s\n", opts.Retain, len(pruned), strings.Join(pruned, ", "))
 		}
 	}
-	fmt.Println("\nThis archive contains secrets (API token, password hashes, SAML SP key, LDAP bind password). It was created with 0600 permissions; store it securely.")
+	if encrypted {
+		fmt.Println("\nThis archive contains secrets (API token, password hashes, SAML SP key, LDAP bind password) but is encrypted at rest (AES-256-GCM). Keep the passphrase/key separate from the archive.")
+	} else {
+		fmt.Println("\nThis archive contains secrets (API token, password hashes, SAML SP key, LDAP bind password). It was created with 0600 permissions; store it securely, or use --encrypt to seal it.")
+	}
 	return nil
 }
 
@@ -9264,6 +9319,17 @@ func runV2Restore(opts v2RestoreOptions) error {
 	if abs, err := filepath.Abs(in); err == nil {
 		in = abs
 	}
+	// Transparently decrypt an encrypted backup (v2-backup --encrypt) into a
+	// temp .tar.gz before the rest of the flow runs. An unencrypted archive is
+	// untouched. The decrypted temp file is removed when we return.
+	if enc, derr := backupArchiveIsEncrypted(in); derr == nil && enc {
+		dec, derr := decryptBackupArchive(in, opts.KeyFile, opts.Passphrase)
+		if derr != nil {
+			return fmt.Errorf("decrypt backup archive: %w", derr)
+		}
+		defer os.Remove(dec)
+		in = dec
+	}
 	// Restore preflight: validate the archive before touching the install dir.
 	// --verify-only stops here and just reports.
 	vr, verr := verifyBackupArchive(in)
@@ -9290,55 +9356,73 @@ func runV2Restore(opts v2RestoreOptions) error {
 		}
 	}
 
-	f, err := os.Open(in)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		return fmt.Errorf("open archive %s: %w", in, err)
-	}
-	defer gz.Close()
-	tr := tar.NewReader(gz)
-
-	var manifest *backupManifest
+	// Restore in two passes over the on-disk archive so memory stays bounded no
+	// matter how large it decompresses to: pass 1 reads only headers (and the
+	// small manifest) to validate confinement, enforce caps, and detect
+	// overwrites; pass 2 streams each file body straight to its target on disk.
+	// Neither pass buffers a whole file in RAM, so a decompression bomb cannot
+	// exhaust memory, and the per-file/total caps bound disk use as well.
 	type pendingFile struct {
 		rel  string
 		mode int64
-		data []byte
 	}
+	var manifest *backupManifest
 	var files []pendingFile
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("read archive: %w", err)
-		}
-		if hdr.FileInfo().IsDir() {
-			continue
-		}
-		data, err := io.ReadAll(io.LimitReader(tr, 32<<20)) // 32 MiB/file cap
+
+	// Pass 1: headers + manifest only (no file bodies read into memory).
+	if err := func() error {
+		f, err := os.Open(in)
 		if err != nil {
 			return err
 		}
-		switch {
-		case hdr.Name == "manifest.json":
-			var m backupManifest
-			if err := json.Unmarshal(data, &m); err != nil {
-				return fmt.Errorf("invalid manifest.json in archive: %w", err)
-			}
-			manifest = &m
-		case strings.HasPrefix(hdr.Name, "data/"):
-			rel := strings.TrimPrefix(hdr.Name, "data/")
-			clean := filepath.Clean(filepath.FromSlash(rel))
-			if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || filepath.IsAbs(clean) {
-				return fmt.Errorf("archive contains an unsafe path: %q", hdr.Name)
-			}
-			files = append(files, pendingFile{rel: clean, mode: hdr.Mode, data: data})
+		defer f.Close()
+		gz, err := gzip.NewReader(f)
+		if err != nil {
+			return fmt.Errorf("open archive %s: %w", in, err)
 		}
+		defer gz.Close()
+		tr := tar.NewReader(gz)
+		for {
+			hdr, err := tr.Next()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return fmt.Errorf("read archive: %w", err)
+			}
+			if hdr.FileInfo().IsDir() {
+				continue
+			}
+			switch {
+			case hdr.Name == "manifest.json":
+				data, err := io.ReadAll(io.LimitReader(tr, 1<<20))
+				if err != nil {
+					return err
+				}
+				var m backupManifest
+				if err := json.Unmarshal(data, &m); err != nil {
+					return fmt.Errorf("invalid manifest.json in archive: %w", err)
+				}
+				manifest = &m
+			case strings.HasPrefix(hdr.Name, "data/"):
+				rel := strings.TrimPrefix(hdr.Name, "data/")
+				clean := filepath.Clean(filepath.FromSlash(rel))
+				if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || filepath.IsAbs(clean) {
+					return fmt.Errorf("archive contains an unsafe path: %q", hdr.Name)
+				}
+				dst := filepath.Join(installDir, clean)
+				if rel, err := filepath.Rel(installDir, dst); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					return fmt.Errorf("refusing to write outside install dir: %s", dst)
+				}
+				if len(files) >= maxBackupFileCount {
+					return fmt.Errorf("archive contains too many files (>%d)", maxBackupFileCount)
+				}
+				files = append(files, pendingFile{rel: clean, mode: hdr.Mode})
+			}
+		}
+		return nil
+	}(); err != nil {
+		return err
 	}
 	if manifest == nil {
 		return fmt.Errorf("archive is missing manifest.json (not an ncc backup?)")
@@ -9347,16 +9431,11 @@ func runV2Restore(opts v2RestoreOptions) error {
 		return fmt.Errorf("archive contains no files to restore")
 	}
 
-	// Resolve targets, enforce install-dir confinement, and detect overwrites.
-	targets := make([]string, len(files))
+	// Detect overwrites up front so a non-forced restore fails before writing
+	// anything.
 	var existing []string
-	for i, p := range files {
-		dst := filepath.Join(installDir, p.rel)
-		if rel, err := filepath.Rel(installDir, dst); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("refusing to write outside install dir: %s", dst)
-		}
-		targets[i] = dst
-		if isRegularFile(dst) {
+	for _, p := range files {
+		if isRegularFile(filepath.Join(installDir, p.rel)) {
 			existing = append(existing, p.rel)
 		}
 	}
@@ -9371,21 +9450,83 @@ func runV2Restore(opts v2RestoreOptions) error {
 	if err := os.MkdirAll(installDir, 0o755); err != nil {
 		return err
 	}
-	for i, p := range files {
-		dst := targets[i]
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+
+	// Pass 2: stream each data/ file body straight to disk, enforcing a
+	// per-file and a cumulative size cap.
+	modeByRel := make(map[string]int64, len(files))
+	for _, p := range files {
+		modeByRel[p.rel] = p.mode
+	}
+	if err := func() error {
+		f, err := os.Open(in)
+		if err != nil {
 			return err
 		}
-		mode := os.FileMode(p.mode).Perm()
-		if mode == 0 {
-			mode = 0o644
+		defer f.Close()
+		gz, err := gzip.NewReader(f)
+		if err != nil {
+			return fmt.Errorf("open archive %s: %w", in, err)
 		}
-		if sensitiveBackupName(p.rel) {
-			mode = 0o600
+		defer gz.Close()
+		tr := tar.NewReader(gz)
+		var total int64
+		for {
+			hdr, err := tr.Next()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return fmt.Errorf("read archive: %w", err)
+			}
+			if hdr.FileInfo().IsDir() || !strings.HasPrefix(hdr.Name, "data/") {
+				continue
+			}
+			clean := filepath.Clean(filepath.FromSlash(strings.TrimPrefix(hdr.Name, "data/")))
+			storedMode, ok := modeByRel[clean]
+			if !ok {
+				continue // not validated in pass 1 (only happens if the archive mutated underneath us)
+			}
+			dst := filepath.Join(installDir, clean)
+			if rel, err := filepath.Rel(installDir, dst); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return fmt.Errorf("refusing to write outside install dir: %s", dst)
+			}
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+				return err
+			}
+			mode := os.FileMode(storedMode).Perm()
+			if mode == 0 {
+				mode = 0o644
+			}
+			if sensitiveBackupName(clean) {
+				mode = 0o600
+			}
+			out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+			if err != nil {
+				return fmt.Errorf("write %s: %w", dst, err)
+			}
+			// +1 so an oversize file is detected (n > cap) rather than silently
+			// truncated to the cap.
+			n, err := io.Copy(out, io.LimitReader(tr, maxBackupFileBytes+1))
+			closeErr := out.Close()
+			if err != nil {
+				return fmt.Errorf("write %s: %w", dst, err)
+			}
+			if closeErr != nil {
+				return fmt.Errorf("write %s: %w", dst, closeErr)
+			}
+			if n > maxBackupFileBytes {
+				_ = os.Remove(dst)
+				return fmt.Errorf("archive file %q exceeds the per-file limit (%d bytes)", clean, maxBackupFileBytes)
+			}
+			total += n
+			if total > maxBackupTotalBytes {
+				_ = os.Remove(dst)
+				return fmt.Errorf("archive exceeds the total restore size limit (%d bytes)", maxBackupTotalBytes)
+			}
 		}
-		if err := os.WriteFile(dst, p.data, mode); err != nil {
-			return fmt.Errorf("write %s: %w", dst, err)
-		}
+		return nil
+	}(); err != nil {
+		return err
 	}
 
 	fmt.Printf("Restored %d file(s) into %s\n", len(files), installDir)
@@ -16360,16 +16501,29 @@ it is written with 0600 permissions — store it securely. Restore it with
 			installDir, _ := cmd.Flags().GetString("install-dir")
 			outputFile, _ := cmd.Flags().GetString("output-file")
 			retain, _ := cmd.Flags().GetInt("retain")
+			encrypt, _ := cmd.Flags().GetBool("encrypt")
+			keyFile, _ := cmd.Flags().GetString("key-file")
+			passphrase, _ := cmd.Flags().GetString("passphrase")
+			// A supplied passphrase or key-file implies intent to encrypt.
+			if strings.TrimSpace(keyFile) != "" || strings.TrimSpace(passphrase) != "" {
+				encrypt = true
+			}
 			return runV2Backup(v2BackupOptions{
 				InstallDir: installDir,
 				OutputFile: outputFile,
 				Retain:     retain,
+				Encrypt:    encrypt,
+				KeyFile:    keyFile,
+				Passphrase: passphrase,
 			})
 		},
 	}
 	v2BackupCmd.Flags().String("install-dir", "", "Installation directory to back up (default: auto-detect, fallback .ncc-v2)")
 	v2BackupCmd.Flags().String("output-file", "", "Output archive path (default ./ncc-backup-<UTC-timestamp>.tar.gz)")
 	v2BackupCmd.Flags().Int("retain", 0, "Keep at most N newest ncc-backup-*.tar.gz files in the output directory, pruning older ones (0 = keep all)")
+	v2BackupCmd.Flags().Bool("encrypt", false, "Encrypt the archive at rest with AES-256-GCM (key from --passphrase/NCC_BACKUP_PASSPHRASE or --key-file/NCC_BACKUP_KEY_FILE/NCC_BACKUP_KEY)")
+	v2BackupCmd.Flags().String("passphrase", "", "Passphrase to derive the encryption key (scrypt); prefer NCC_BACKUP_PASSPHRASE to keep it out of the process list")
+	v2BackupCmd.Flags().String("key-file", "", "File holding a 32-byte encryption key (base64/hex); alternative to --passphrase")
 	cmd.AddCommand(v2BackupCmd)
 
 	// restore subcommand: extract a v2-backup archive back into an install
@@ -16413,6 +16567,8 @@ with --input-file or as the first positional argument.`,
 			restart, _ := cmd.Flags().GetBool("restart")
 			noRestart, _ := cmd.Flags().GetBool("no-restart")
 			verifyOnly, _ := cmd.Flags().GetBool("verify-only")
+			keyFile, _ := cmd.Flags().GetString("key-file")
+			passphrase, _ := cmd.Flags().GetString("passphrase")
 			if strings.TrimSpace(inputFile) == "" && len(args) > 0 {
 				inputFile = args[0]
 			}
@@ -16423,12 +16579,16 @@ with --input-file or as the first positional argument.`,
 				Restart:    restart,
 				NoRestart:  noRestart,
 				VerifyOnly: verifyOnly,
+				KeyFile:    keyFile,
+				Passphrase: passphrase,
 			})
 		},
 	}
 	v2RestoreCmd.Flags().String("install-dir", "", "Installation directory to restore into (default: auto-detect, fallback .ncc-v2)")
 	v2RestoreCmd.Flags().String("input-file", "", "Backup archive to restore (or pass as the first positional argument)")
 	v2RestoreCmd.Flags().Bool("verify-only", false, "Validate the archive (gzip+tar integrity, manifest, confined paths) and report, without restoring")
+	v2RestoreCmd.Flags().String("passphrase", "", "Passphrase to decrypt an encrypted backup (or NCC_BACKUP_PASSPHRASE)")
+	v2RestoreCmd.Flags().String("key-file", "", "Key file to decrypt a key-encrypted backup (or NCC_BACKUP_KEY_FILE/NCC_BACKUP_KEY)")
 	v2RestoreCmd.Flags().Bool("force", false, "Overwrite existing files and proceed even if the stack appears to be running")
 	v2RestoreCmd.Flags().Bool("restart", false, "Force a stack restart/start after restore even if it appears stopped (default: auto-restart only when running)")
 	v2RestoreCmd.Flags().Bool("no-restart", false, "Do not restart the stack after restore (overrides the default auto-restart when running)")

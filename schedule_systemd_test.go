@@ -28,8 +28,18 @@ func TestCronToOnCalendar(t *testing.T) {
 		{"0 */4 * * *", "*-*-* 0/4:0:00", false},
 		{"0 0 */2 * *", "*-*-1/2 0:0:00", false},
 		{"15 3 * * *", "*-*-* 3:15:00", false},
-		// day-of-week is intentionally unsupported (cron vs systemd numbering)
-		{"0 0 * * 1", "", true},
+		// day-of-week is enumerated to systemd weekday names (cron Sun=0..Sat=6).
+		{"0 0 * * 1", "Mon *-*-* 0:0:00", false},
+		{"0 0 * * 0", "Sun *-*-* 0:0:00", false},
+		{"0 0 * * 7", "Sun *-*-* 0:0:00", false}, // cron 7 == Sunday
+		{"0 0 * * 1-5", "Mon,Tue,Wed,Thu,Fri *-*-* 0:0:00", false},
+		{"30 2 * * 0,6", "Sat,Sun *-*-* 2:30:00", false},
+		{"0 0 * * mon,wed,fri", "Mon,Wed,Fri *-*-* 0:0:00", false},
+		{"0 0 * * 5-0", "Fri,Sat,Sun *-*-* 0:0:00", false}, // wrap-around range
+		{"0 0 * * 1-7", "*-*-* 0:0:00", false},             // every day -> no weekday prefix
+		// ambiguous: cron ORs day-of-month and day-of-week; systemd ANDs them
+		{"0 0 1 * 1", "", true},
+		{"0 0 * * 9", "", true}, // out-of-range weekday
 		{"bad spec", "", true},
 		{"* * * *", "", true},
 	}

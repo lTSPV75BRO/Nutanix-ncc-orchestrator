@@ -153,6 +153,36 @@ func parseAllowedOrigins(raw string) map[string]struct{} {
 	return out
 }
 
+// scrubEnv returns a copy of env with any variable whose name matches one of
+// drop removed. It never mutates the input slice.
+func scrubEnv(env []string, drop ...string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		keep := true
+		for _, d := range drop {
+			if strings.HasPrefix(kv, d+"=") {
+				keep = false
+				break
+			}
+		}
+		if keep {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
+// childEnv is the environment handed to any orchestrator child process. It
+// strips the user-store master key (NCC_MASTER_KEY): only this api-server uses
+// it to (un)seal the user database, while the orchestrator copies that DB as
+// opaque bytes for backup/restore and never needs the key — so it must not
+// leak into a child's environment (visible via /proc/<pid>/environ and
+// inherited by anything the child itself spawns). Operators who want the key
+// available to children should use the key-file source instead.
+func childEnv() []string {
+	return scrubEnv(os.Environ(), "NCC_MASTER_KEY")
+}
+
 func secureCompare(a, b string) bool {
 	ab := []byte(strings.TrimSpace(a))
 	bb := []byte(strings.TrimSpace(b))

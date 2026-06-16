@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -96,11 +97,118 @@ func cronFieldToCalendar(field string, start int) string {
 	return f
 }
 
+// cronDowNames maps cron's 3-letter day-of-week names to 0..6 (Sun=0..Sat=6).
+var cronDowNames = map[string]int{
+	"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6,
+}
+
+// systemdDowName renders 0..6 (Sun=0..Sat=6) as the systemd weekday name.
+var systemdDowName = [7]string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
+
+// parseCronDowValue maps a single cron day-of-week value (number 0-7 or a
+// 3-letter name like "mon"/"SUN") to 0..6 (Sun=0..Sat=6). cron's 7 and 0 both
+// mean Sunday.
+func parseCronDowValue(s string) (int, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, errors.New("empty day-of-week value")
+	}
+	if n, err := strconv.Atoi(s); err == nil {
+		if n < 0 || n > 7 {
+			return 0, fmt.Errorf("day-of-week number out of range (0-7): %d", n)
+		}
+		return n % 7, nil // 7 -> 0 (Sunday)
+	}
+	key := strings.ToLower(s)
+	if len(key) > 3 {
+		key = key[:3]
+	}
+	if v, ok := cronDowNames[key]; ok {
+		return v, nil
+	}
+	return 0, fmt.Errorf("invalid day-of-week value: %q", s)
+}
+
+// cronDowToSystemd converts a cron day-of-week field to a systemd OnCalendar
+// weekday prefix (e.g. cron "1-5" -> "Mon,Tue,Wed,Thu,Fri"). It returns
+// restricted=false for "*" (every day — no weekday prefix). Numbers, names,
+// comma lists, ranges (including wrap-around like "5-0" = Fri..Sun) and steps
+// are all supported by enumerating the matching weekday set, which sidesteps
+// the cron (Sun=0..Sat=6, 7=Sun) vs systemd (Mon..Sun) ordering mismatch that
+// makes a naive textual translation run on the wrong days.
+func cronDowToSystemd(field string) (spec string, restricted bool, err error) {
+	f := strings.TrimSpace(field)
+	if f == "" || f == "*" {
+		return "", false, nil
+	}
+	var present [7]bool
+	for _, tok := range strings.Split(f, ",") {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			return "", false, fmt.Errorf("empty day-of-week token in %q", field)
+		}
+		step := 1
+		base := tok
+		if slash := strings.IndexByte(tok, '/'); slash >= 0 {
+			base = strings.TrimSpace(tok[:slash])
+			n, serr := strconv.Atoi(strings.TrimSpace(tok[slash+1:]))
+			if serr != nil || n <= 0 {
+				return "", false, fmt.Errorf("invalid day-of-week step in %q", tok)
+			}
+			step = n
+			if base == "" || base == "*" {
+				base = "0-6"
+			}
+		}
+		var start, end int
+		if dash := strings.IndexByte(base, '-'); dash >= 0 {
+			a, aerr := parseCronDowValue(base[:dash])
+			if aerr != nil {
+				return "", false, aerr
+			}
+			b, berr := parseCronDowValue(base[dash+1:])
+			if berr != nil {
+				return "", false, berr
+			}
+			start, end = a, b
+		} else {
+			v, verr := parseCronDowValue(base)
+			if verr != nil {
+				return "", false, verr
+			}
+			start, end = v, v
+		}
+		// Enumerate start..end inclusive, wrapping through Sat->Sun so a range
+		// like 5-0 (Fri..Sun) still resolves, applying the step.
+		span := (end - start + 7) % 7
+		for i := 0; i <= span; i += step {
+			present[(start+i)%7] = true
+		}
+	}
+	allDays := true
+	for _, p := range present {
+		if !p {
+			allDays = false
+			break
+		}
+	}
+	if allDays {
+		return "", false, nil // every day -> no weekday restriction
+	}
+	order := []int{1, 2, 3, 4, 5, 6, 0} // systemd lists weekdays Mon..Sun
+	var names []string
+	for _, idx := range order {
+		if present[idx] {
+			names = append(names, systemdDowName[idx])
+		}
+	}
+	return strings.Join(names, ","), true, nil
+}
+
 // cronToOnCalendar translates a 5-field cron expression to a systemd
-// OnCalendar specification. Day-of-week fields are rejected because cron
-// (0=Sun..6=Sat, 7=Sun) and systemd (Mon..Sun) disagree on numbering and a
-// silent mistranslation would silently run at the wrong time; callers should
-// use --every or a DOW-free cron for systemd timers.
+// OnCalendar specification, including day-of-week fields (mapped by
+// cronDowToSystemd, which enumerates weekdays to avoid the cron/systemd
+// numbering mismatch).
 func cronToOnCalendar(spec string) (string, error) {
 	fields := strings.Fields(strings.TrimSpace(spec))
 	if len(fields) != 5 {
@@ -110,12 +218,23 @@ func cronToOnCalendar(spec string) (string, error) {
 	hour := cronFieldToCalendar(fields[1], 0)
 	dom := cronFieldToCalendar(fields[2], 1)
 	mon := cronFieldToCalendar(fields[3], 1)
-	dow := strings.TrimSpace(fields[4])
-	if dow != "*" {
-		return "", errors.New("day-of-week cron fields are not supported for systemd timers; use --every or a cron expression without a day-of-week field")
+	dowSpec, dowRestricted, err := cronDowToSystemd(fields[4])
+	if err != nil {
+		return "", fmt.Errorf("day-of-week: %w", err)
 	}
-	// OnCalendar normalized form: YYYY-MM-DD HH:MM:SS (no DOW prefix here).
-	return fmt.Sprintf("*-%s-%s %s:%s:00", mon, dom, hour, minute), nil
+	// cron treats a restricted day-of-month AND a restricted day-of-week as an
+	// OR (the run fires if either matches); systemd ANDs the two. Refuse the
+	// ambiguous combination rather than silently change the schedule's meaning.
+	domRestricted := strings.TrimSpace(fields[2]) != "*"
+	if dowRestricted && domRestricted {
+		return "", errors.New("cannot combine a day-of-month and a day-of-week restriction for a systemd timer (cron ORs them, systemd ANDs them); restrict only one")
+	}
+	cal := fmt.Sprintf("*-%s-%s %s:%s:00", mon, dom, hour, minute)
+	if dowRestricted {
+		// OnCalendar form with a weekday prefix: "Mon,Wed,Fri *-*-* HH:MM:SS".
+		cal = dowSpec + " " + cal
+	}
+	return cal, nil
 }
 
 // onCalendarFromSchedule derives the OnCalendar spec from an explicit cron

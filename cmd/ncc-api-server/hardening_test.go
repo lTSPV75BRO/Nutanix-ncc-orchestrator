@@ -16,6 +16,42 @@ func TestSecureCompare(t *testing.T) {
 	}
 }
 
+func TestScrubEnvDropsMasterKey(t *testing.T) {
+	env := []string{
+		"PATH=/usr/bin",
+		"NCC_MASTER_KEY=supersecret",
+		"NCC_MASTER_KEY_FILE=/tmp/k", // a path, not the key itself: must be kept
+		"HOME=/root",
+	}
+	got := scrubEnv(env, "NCC_MASTER_KEY")
+	for _, kv := range got {
+		if kv == "NCC_MASTER_KEY=supersecret" {
+			t.Fatal("scrubEnv must drop NCC_MASTER_KEY")
+		}
+	}
+	// Prefix-only drop: NCC_MASTER_KEY_FILE shares a prefix but is a distinct
+	// var and must survive.
+	var sawFile, sawPath bool
+	for _, kv := range got {
+		if kv == "NCC_MASTER_KEY_FILE=/tmp/k" {
+			sawFile = true
+		}
+		if kv == "PATH=/usr/bin" {
+			sawPath = true
+		}
+	}
+	if !sawFile {
+		t.Fatal("scrubEnv must not drop NCC_MASTER_KEY_FILE (only the exact NCC_MASTER_KEY var)")
+	}
+	if !sawPath {
+		t.Fatal("scrubEnv dropped an unrelated var")
+	}
+	// Input slice must not be mutated.
+	if len(env) != 4 || env[1] != "NCC_MASTER_KEY=supersecret" {
+		t.Fatal("scrubEnv must not mutate its input")
+	}
+}
+
 func TestValidateConfigPath(t *testing.T) {
 	repo := t.TempDir()
 	s := &apiServer{repoRoot: repo}
