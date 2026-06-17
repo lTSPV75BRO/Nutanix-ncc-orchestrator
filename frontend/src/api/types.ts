@@ -199,6 +199,83 @@ export type BackupScheduleResponse = {
   next_run?: string;
 };
 
+export type NotificationEvents = {
+  run_success?: boolean;
+  run_failure?: boolean;
+  policy_violations?: boolean;
+};
+
+export type SlackNotificationConfig = {
+  enabled?: boolean;
+  webhook_url?: string;
+  channel?: string;
+  username?: string;
+};
+
+export type WebhookNotificationConfig = {
+  enabled?: boolean;
+  url?: string;
+};
+
+export type EmailNotificationConfig = {
+  enabled?: boolean;
+  smtp_host?: string;
+  smtp_port?: number;
+  username?: string;
+  password?: string;
+  from?: string;
+  to?: string;
+};
+
+export type QuietHoursConfig = {
+  enabled?: boolean;
+  start?: string;
+  end?: string;
+  timezone?: string;
+  allow_failures?: boolean;
+};
+
+export type MaintenanceWindow = {
+  start: string;
+  end: string;
+  note?: string;
+};
+
+export type NotificationThrottle = {
+  dedup_window_sec?: number;
+  min_interval_sec?: number;
+};
+
+export type DigestConfig = {
+  enabled?: boolean;
+  every?: string;
+  last_sent_at?: string;
+};
+
+export type NotificationDeliveryStatus = {
+  last_attempt_at?: string;
+  last_success_at?: string;
+  last_event?: string;
+  last_error?: string;
+  success?: boolean;
+  total_success?: number;
+  total_failure?: number;
+};
+
+export type NotificationState = {
+  enabled?: boolean;
+  events?: NotificationEvents;
+  slack?: SlackNotificationConfig;
+  webhook?: WebhookNotificationConfig;
+  email?: EmailNotificationConfig;
+  quiet?: QuietHoursConfig;
+  maintenance?: MaintenanceWindow[];
+  throttle?: NotificationThrottle;
+  digest?: DigestConfig;
+  last_delivery?: Record<string, NotificationDeliveryStatus>;
+  updated_at?: string;
+};
+
 export type SSOConfig = {
   enabled: boolean;
   managed_by: "flags" | "runtime";

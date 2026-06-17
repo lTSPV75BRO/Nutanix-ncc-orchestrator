@@ -16,6 +16,7 @@ import {
   ApartmentOutlined,
   ApiOutlined,
   AuditOutlined,
+  BellOutlined,
   CalendarOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -40,6 +41,7 @@ import { RawOutputsSection } from "../features/settings/RawOutputsSection";
 import { ApiExplorerSection } from "../features/settings/ApiExplorerSection";
 import { AuditLogSection } from "../features/settings/AuditLogSection";
 import { AccessSection, MaintenanceSection } from "../features/settings/AccessSection";
+import { NotificationsSection } from "../features/settings/NotificationsSection";
 import { SystemHealthSection } from "../features/settings/SystemHealthSection";
 import { api } from "../api/client";
 import { useLocalStorageState } from "../hooks/useLocalStorageState";
@@ -462,6 +464,11 @@ export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
           key: "audit",
           label: tabLabel(<AuditOutlined />, "Audit"),
           children: <AuditLogSection onError={notifyError} />,
+        },
+        {
+          key: "notifications",
+          label: tabLabel(<BellOutlined />, "Notifications"),
+          children: <NotificationsSection />,
         },
         {
           key: "health",

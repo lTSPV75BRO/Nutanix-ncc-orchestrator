@@ -683,6 +683,9 @@ func (s *apiServer) audit(r *http.Request, action string, success bool, fields m
 // requests don't interleave bytes. It rotates the log when it exceeds
 // auditLogMaxBytes (renaming current file to <path>.1).
 func (s *apiServer) appendAuditLine(line []byte) {
+	// Ship to the external SIEM/syslog sink first (best-effort, non-blocking),
+	// independent of whether local file logging is enabled.
+	s.auditForwarder.forward(line)
 	if strings.TrimSpace(s.auditLogPath) == "" {
 		return
 	}

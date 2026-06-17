@@ -60,8 +60,44 @@ type notificationState struct {
 	Slack        slackNotificationConfig               `json:"slack"`
 	Webhook      webhookNotificationConfig             `json:"webhook"`
 	Email        emailNotificationConfig               `json:"email"`
+	Quiet        quietHoursConfig                      `json:"quiet,omitempty"`
+	Maintenance  []maintenanceWindow                   `json:"maintenance,omitempty"`
+	Throttle     notificationThrottle                  `json:"throttle,omitempty"`
+	Digest       digestConfig                          `json:"digest,omitempty"`
 	LastDelivery map[string]notificationDeliveryStatus `json:"last_delivery,omitempty"`
 	UpdatedAt    string                                `json:"updated_at"`
+}
+
+// quietHoursConfig suppresses non-urgent notifications during a recurring daily
+// window (e.g. overnight). Failures can be exempted so pages still get through.
+type quietHoursConfig struct {
+	Enabled       bool   `json:"enabled"`
+	Start         string `json:"start"`          // "HH:MM" (24h, local to Timezone)
+	End           string `json:"end"`            // "HH:MM"; may wrap past midnight
+	Timezone      string `json:"timezone"`       // IANA name; empty = UTC
+	AllowFailures bool   `json:"allow_failures"` // failures bypass quiet hours when true
+}
+
+// maintenanceWindow suppresses ALL notifications (and in-process scheduled
+// backups) during an explicit absolute time range.
+type maintenanceWindow struct {
+	Start string `json:"start"` // RFC3339
+	End   string `json:"end"`   // RFC3339
+	Note  string `json:"note,omitempty"`
+}
+
+// notificationThrottle prevents alert storms: DedupWindowSec collapses repeats
+// of the same event; MinIntervalSec enforces a global floor between any sends.
+type notificationThrottle struct {
+	DedupWindowSec int `json:"dedup_window_sec"`
+	MinIntervalSec int `json:"min_interval_sec"`
+}
+
+// digestConfig drives the scheduled summary email of the latest run's health.
+type digestConfig struct {
+	Enabled    bool   `json:"enabled"`
+	Every      string `json:"every"` // 6h / 24h / 7d (see parseEveryDuration)
+	LastSentAt string `json:"last_sent_at,omitempty"`
 }
 
 type notificationDeliveryStatus struct {
@@ -120,8 +156,15 @@ func (s *apiServer) handleNotifications(w http.ResponseWriter, r *http.Request) 
 		if len(req.LastDelivery) == 0 {
 			req.LastDelivery = existing.LastDelivery
 		}
+		if len(req.Digest.LastSentAt) == 0 {
+			req.Digest.LastSentAt = existing.Digest.LastSentAt
+		}
 		req.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		if err := validateNotificationState(req); err != nil {
+			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
+			return
+		}
+		if err := validateNotificationControls(req); err != nil {
 			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 			return
 		}
@@ -317,7 +360,7 @@ func (s *apiServer) notifyRunFinished(runErr error) {
 			event = "run_success"
 			title = "NCC run completed"
 			details["last_output"] = lastOut
-			_ = s.dispatchNotifications(&st, event, title, details, nil)
+			s.emit(&st, event, title, details)
 		}
 		if st.Events.PolicyViolations {
 			violations := s.readPolicyViolations()
@@ -325,12 +368,12 @@ func (s *apiServer) notifyRunFinished(runErr error) {
 				event = "policy_violations"
 				title = fmt.Sprintf("NCC policy violations detected (%d)", len(violations))
 				details["violations"] = violations
-				_ = s.dispatchNotifications(&st, event, title, details, nil)
+				s.emit(&st, event, title, details)
 			}
 		}
 		return
 	}
-	_ = s.dispatchNotifications(&st, event, title, details, nil)
+	s.emit(&st, event, title, details)
 }
 
 // notifyOperationalFailure sends an alert for a non-run operational failure
@@ -344,7 +387,7 @@ func (s *apiServer) notifyOperationalFailure(event, title string, details map[st
 	if err != nil || !st.Enabled || !st.Events.RunFailure {
 		return
 	}
-	_ = s.dispatchNotifications(&st, event, title, details, nil)
+	s.emit(&st, event, title, details)
 }
 
 func (s *apiServer) readPolicyViolations() []string {

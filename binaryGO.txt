@@ -7,6 +7,12 @@ if [ -n "${ZSH_VERSION:-}" ]; then setopt nonomatch; fi
 # default), surfaced as `gitRevision` inside the binaries. We only thread the
 # `-dirty` suffix into Version so support tickets can spot uncommitted builds.
 export VERSION=2.1.0 STREAM=Release BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ') GO_VER=$(go version | awk '{print $3}') GIT_DIRTY=$(git diff --quiet 2>/dev/null || echo "-dirty"); export LDFLAGS="-w -s -X main.Version=${VERSION}${GIT_DIRTY} -X main.BuildDate=${BUILD_DATE} -X main.Stream=${STREAM} -X main.GoVersion=${GO_VER}"; mkdir -p dist
+# Signed releases (optional): set NCC_RELEASE_PUBKEY to the base64 Ed25519 public key
+# (from `ncc-orchestrator release-keygen`) to EMBED it in every binary, so `verify
+# --online` and the in-app updater verify the Ed25519 signature over checksums.txt.
+# Step 7b below then signs checksums.txt with NCC_RELEASE_SIGN_KEY (the matching
+# private key, kept offline). Leave both unset for an unsigned build (unchanged).
+if [ -n "${NCC_RELEASE_PUBKEY:-}" ]; then export LDFLAGS="${LDFLAGS} -X main.releaseSigningPublicKeyB64=${NCC_RELEASE_PUBKEY}"; fi
 
 # 1) Preflight: module integrity, vet, unit tests, frontend typecheck. Fails fast.
 go mod download && go mod verify && go vet ./... && go test ./cmd/... ./... -count=1 -short 2>&1 | tail -20 && (cd frontend && npm ci && npx tsc --noEmit -p tsconfig.json) && echo "PREFLIGHT_OK"
@@ -192,6 +198,16 @@ fi
 # binaries continue to ship inside ncc-v2-stack-* archives where the v1.x updater cannot
 # see them (archive assets take the install-by-extraction code path).
 (cd dist && : > checksums.txt && for f in ncc-orchestrator-* ncc-v2-stack-* example_config.yaml RELEASE_NOTES_v${VERSION}.md release-attestation.json bom-*.cdx.json; do [ -e "$f" ] || continue; (shasum -a 256 "$f" 2>/dev/null || sha256sum "$f") >> checksums.txt; done; sort -o checksums.txt checksums.txt)
+
+# 7b) Signed releases (optional): sign dist/checksums.txt with the offline Ed25519
+# private key so consumers can verify provenance (not just integrity). Produces
+# dist/checksums.txt.sig (base64 detached signature) for upload alongside
+# checksums.txt. Verified by `verify --online` / the updater against the public
+# key embedded in step 0 (NCC_RELEASE_PUBKEY). No-op when NCC_RELEASE_SIGN_KEY unset.
+if [ -n "${NCC_RELEASE_SIGN_KEY:-}" ]; then
+  go run . release-sign --key "${NCC_RELEASE_SIGN_KEY}" --in dist/checksums.txt --out dist/checksums.txt.sig || exit 1
+  echo "wrote dist/checksums.txt.sig (Ed25519)"
+fi
 
 # 8) Verification: print the 6 stack archives, list cross-arch binaries, then assert counts.
 ls -1 dist/ncc-v2-stack-* 2>/dev/null; ls -1 dist/ncc-orchestrator-* dist/ncc-api-server-* dist/ncc-ui-server-* 2>/dev/null

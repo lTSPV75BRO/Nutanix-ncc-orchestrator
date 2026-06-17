@@ -7666,12 +7666,24 @@ func verifyAssetAgainstReleaseChecksum(rel *githubRelease, assetName string, bod
 	}
 	for _, a := range rel.Assets {
 		an := strings.ToLower(a.Name)
+		if strings.HasSuffix(an, ".sig") {
+			continue // the detached signature asset, not the checksum list
+		}
 		if !(strings.Contains(an, "checksum") || strings.Contains(an, "sha256") || strings.HasSuffix(an, ".sha256")) {
 			continue
 		}
 		csBody, err := fetchURL(a.BrowserDownloadURL, client)
 		if err != nil {
 			return fmt.Errorf("fetch checksum asset %s: %w", a.Name, err)
+		}
+		// When this build embeds a release public key, the checksums.txt must
+		// carry a valid Ed25519 signature before we trust any hash in it —
+		// otherwise an attacker who can swap the asset could swap its checksum
+		// too. Unsigned/dev builds (no embedded key) keep the prior behavior.
+		if sigStatus, sigErr := verifyChecksumSignature(rel, csBody, client, false); sigErr != nil {
+			return fmt.Errorf("refusing to install %s: checksums.txt signature %s: %w", assetName, sigStatus, sigErr)
+		} else if sigStatus == sigValid {
+			fmt.Fprintln(os.Stderr, "Checksum signature verified (Ed25519).")
 		}
 		expectedHash := parseChecksumFile(csBody, assetName)
 		if expectedHash == "" {
@@ -14680,9 +14692,10 @@ func versionInfoString() string {
 // and reports MATCH / MISMATCH / NOT FOUND, returning a non-zero error on
 // mismatch so it is usable in CI / health checks.
 type verifyOptions struct {
-	Online     bool
-	ReleaseTag string // override the release tag to check against ("" = stamped version)
-	Repo       string // override the GitHub repo ("" = default)
+	Online           bool
+	ReleaseTag       string // override the release tag to check against ("" = stamped version)
+	Repo             string // override the GitHub repo ("" = default)
+	RequireSignature bool   // fail unless the Ed25519 signature over checksums.txt verifies
 }
 
 func runVerifyCommand(out io.Writer, opts verifyOptions) error {
@@ -14733,7 +14746,7 @@ func runVerifyCommand(out io.Writer, opts verifyOptions) error {
 		return nil
 	}
 
-	return runVerifyOnline(out, exeReal, hash, hashErr, gitDirty, releaseTag, opts.Repo)
+	return runVerifyOnline(out, exeReal, hash, hashErr, gitDirty, releaseTag, opts.Repo, opts.RequireSignature)
 }
 
 // runVerifyOnline fetches the matching release's checksums.txt from GitHub and
@@ -14747,7 +14760,7 @@ func runVerifyCommand(out io.Writer, opts verifyOptions) error {
 // MITM'd* download and pins the *version* — it is not proof against a
 // compromised release. Cryptographic provenance (signed checksums / GitHub
 // artifact attestations) is tracked as future work.
-func runVerifyOnline(out io.Writer, exePath, localHash string, hashErr error, gitDirty bool, releaseTag, repoOverride string) error {
+func runVerifyOnline(out io.Writer, exePath, localHash string, hashErr error, gitDirty bool, releaseTag, repoOverride string, requireSignature bool) error {
 	if hashErr != nil {
 		return fmt.Errorf("verify --online: cannot hash executable: %w", hashErr)
 	}
@@ -14785,13 +14798,26 @@ func runVerifyOnline(out io.Writer, exePath, localHash string, hashErr error, gi
 		fmt.Fprintf(out, "verify_result:     NOT FOUND — release v%s has no asset for %s/%s\n", releaseTag, runtime.GOOS, runtime.GOARCH)
 		return fmt.Errorf("no asset for %s/%s in release v%s", runtime.GOOS, runtime.GOARCH, releaseTag)
 	}
-	expected, csAsset, err := fetchReleaseChecksum(rel, assetName, client)
+	csBody, csAsset, err := fetchReleaseChecksumBody(rel, client)
 	if err != nil {
 		return fmt.Errorf("verify --online: %w", err)
+	}
+	expected := parseChecksumFile(csBody, assetName)
+	if expected == "" {
+		return fmt.Errorf("verify --online: checksum entry for %s not found in %s", assetName, csAsset)
 	}
 	fmt.Fprintf(out, "release_asset:     %s\n", assetName)
 	fmt.Fprintf(out, "checksum_source:   %s (%s)\n", csAsset, rel.TagName)
 	fmt.Fprintf(out, "expected_sha256:   %s\n", expected)
+
+	// Verify the Ed25519 signature over checksums.txt before trusting the hash.
+	// INVALID always fails; MISSING/SKIPPED fail only with --require-signature.
+	sigStatus, sigErr := verifyChecksumSignature(rel, csBody, client, requireSignature)
+	fmt.Fprintf(out, "signature_result:  %s\n", sigStatus)
+	if sigErr != nil {
+		fmt.Fprintf(out, "verify_result:     FAILED — checksum signature %s: %v\n", sigStatus, sigErr)
+		return fmt.Errorf("checksum signature %s: %w", sigStatus, sigErr)
+	}
 	if strings.EqualFold(expected, localHash) {
 		fmt.Fprintf(out, "verify_result:     MATCH — executable matches the published checksum for v%s\n", releaseTag)
 		return nil
@@ -14806,25 +14832,41 @@ func runVerifyOnline(out io.Writer, exePath, localHash string, hashErr error, gi
 // verifyAssetAgainstReleaseChecksum but returns the hash for display/comparison
 // rather than verifying a downloaded body.
 func fetchReleaseChecksum(rel *githubRelease, assetName string, client *http.Client) (expected, checksumAsset string, err error) {
+	csBody, csAsset, err := fetchReleaseChecksumBody(rel, client)
+	if err != nil {
+		return "", csAsset, err
+	}
+	h := parseChecksumFile(csBody, assetName)
+	if h == "" {
+		return "", csAsset, fmt.Errorf("checksum entry for %s not found in %s", assetName, csAsset)
+	}
+	return h, csAsset, nil
+}
+
+// fetchReleaseChecksumBody downloads the release's checksums.txt (or
+// sha256/.sha256) asset and returns its raw bytes plus the asset name. The raw
+// body is what release-signature verification authenticates, so callers that
+// verify signatures must use the exact bytes returned here.
+func fetchReleaseChecksumBody(rel *githubRelease, client *http.Client) (csBody []byte, checksumAsset string, err error) {
 	if rel == nil {
-		return "", "", errors.New("nil release passed to checksum fetcher")
+		return nil, "", errors.New("nil release passed to checksum fetcher")
 	}
 	for _, a := range rel.Assets {
 		an := strings.ToLower(a.Name)
+		// The signature asset (checksums.txt.sig) also contains "checksum"; skip it.
+		if strings.HasSuffix(an, ".sig") {
+			continue
+		}
 		if !(strings.Contains(an, "checksum") || strings.Contains(an, "sha256") || strings.HasSuffix(an, ".sha256")) {
 			continue
 		}
-		csBody, ferr := fetchURL(a.BrowserDownloadURL, client)
+		body, ferr := fetchURL(a.BrowserDownloadURL, client)
 		if ferr != nil {
-			return "", a.Name, fmt.Errorf("fetch checksum asset %s: %w", a.Name, ferr)
+			return nil, a.Name, fmt.Errorf("fetch checksum asset %s: %w", a.Name, ferr)
 		}
-		h := parseChecksumFile(csBody, assetName)
-		if h == "" {
-			return "", a.Name, fmt.Errorf("checksum entry for %s not found in %s", assetName, a.Name)
-		}
-		return h, a.Name, nil
+		return body, a.Name, nil
 	}
-	return "", "", fmt.Errorf("no checksum asset found for release %s", rel.TagName)
+	return nil, "", fmt.Errorf("no checksum asset found for release %s", rel.TagName)
 }
 
 // sha256OfFile streams a file through SHA-256. Streamed (rather than
@@ -16905,20 +16947,70 @@ that produced the release.
 With --online, verify fetches the matching release's checksums.txt from
 GitHub and reports MATCH / MISMATCH / NOT FOUND, exiting non-zero on a
 mismatch (usable in CI / health checks). The checksum is fetched from the
-same repo that serves the binary, so it authenticates a corrupted or
-MITM'd download and pins the version — it is not proof against a
-compromised release (signed checksums / attestations are future work).`,
+same repo that serves the binary; on a build that embeds a release public
+key (signed releases), --online also verifies an Ed25519 signature over
+checksums.txt before trusting any hash. Add --require-signature to fail
+when a valid signature is absent (e.g. an unsigned build or release).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			online, _ := cmd.Flags().GetBool("online")
 			releaseTag, _ := cmd.Flags().GetString("release")
 			repo, _ := cmd.Flags().GetString("repo")
-			return runVerifyCommand(os.Stdout, verifyOptions{Online: online, ReleaseTag: releaseTag, Repo: repo})
+			requireSig, _ := cmd.Flags().GetBool("require-signature")
+			return runVerifyCommand(os.Stdout, verifyOptions{Online: online, ReleaseTag: releaseTag, Repo: repo, RequireSignature: requireSig})
 		},
 	}
 	verifyCmd.Flags().Bool("online", false, "Fetch the matching release's checksums.txt from GitHub and compare (exits non-zero on mismatch)")
 	verifyCmd.Flags().String("release", "", "Release tag to verify against (default: this binary's stamped version)")
 	verifyCmd.Flags().String("repo", "", "GitHub owner/repo to fetch the release from (default: the project repo)")
+	verifyCmd.Flags().Bool("require-signature", false, "With --online, fail unless the Ed25519 signature over checksums.txt verifies against the embedded release key")
 	cmd.AddCommand(verifyCmd)
+
+	// release-keygen / release-sign: maintainer-side tooling to produce signed
+	// releases. Hidden from the normal command list (operators never need them).
+	releaseKeygenCmd := &cobra.Command{
+		Use:    "release-keygen",
+		Short:  "Generate an Ed25519 release signing key (maintainers)",
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			out, _ := cmd.Flags().GetString("out")
+			if strings.TrimSpace(out) == "" {
+				out = "ncc-release-signing.key"
+			}
+			pub, err := generateReleaseSigningKey(out)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Wrote private key: %s (keep OFFLINE/secret)\n", out)
+			fmt.Printf("Public key (embed via -ldflags \"-X main.releaseSigningPublicKeyB64=...\"):\n%s\n", pub)
+			return nil
+		},
+	}
+	releaseKeygenCmd.Flags().String("out", "ncc-release-signing.key", "Path to write the base64 Ed25519 private key")
+	cmd.AddCommand(releaseKeygenCmd)
+
+	releaseSignCmd := &cobra.Command{
+		Use:    "release-sign",
+		Short:  "Sign a file (e.g. checksums.txt) with the Ed25519 release key (maintainers)",
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			key, _ := cmd.Flags().GetString("key")
+			in, _ := cmd.Flags().GetString("in")
+			out, _ := cmd.Flags().GetString("out")
+			if strings.TrimSpace(out) == "" {
+				out = in + ".sig"
+			}
+			if err := signReleaseFile(key, in, out); err != nil {
+				return err
+			}
+			fmt.Printf("Wrote signature: %s\n", out)
+			return nil
+		},
+	}
+	releaseSignCmd.Flags().String("key", "", "Path to the base64 Ed25519 private key (from release-keygen)")
+	releaseSignCmd.Flags().String("in", "checksums.txt", "File to sign")
+	releaseSignCmd.Flags().String("out", "", "Signature output path (default <in>.sig)")
+	_ = releaseSignCmd.MarkFlagRequired("key")
+	cmd.AddCommand(releaseSignCmd)
 
 	// completion subcommand: emit shell-completion scripts for bash,
 	// zsh, fish, and powershell. Uses cobra's built-in generators so

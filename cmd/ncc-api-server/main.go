@@ -75,12 +75,19 @@ type apiServer struct {
 	auditLogPath            string
 	auditLogMaxBytes        int64
 	auditMu                 sync.Mutex
-	loginLockThreshold      int           // failed logins before per-account lockout (0 disables)
-	loginLockWindow         time.Duration // window to accumulate failures
-	loginLockDuration       time.Duration // how long a locked account stays locked
-	loginGuard              *loginGuard
-	orchestratorBin         string
-	authToken               string
+	// SIEM/syslog audit forwarding (flag-configured; nil when disabled).
+	auditForwardHTTPURL    string
+	auditForwardHTTPAuth   string
+	auditForwardHTTPSplunk bool
+	auditForwardSyslog     string
+	auditForwardSyslogNet  string
+	auditForwarder         *auditForwarder
+	loginLockThreshold     int           // failed logins before per-account lockout (0 disables)
+	loginLockWindow        time.Duration // window to accumulate failures
+	loginLockDuration      time.Duration // how long a locked account stays locked
+	loginGuard             *loginGuard
+	orchestratorBin        string
+	authToken              string
 	// viewerToken, when set, grants a read-only role: holders can reach
 	// safe GET endpoints but are denied settings/* and all mutating
 	// requests (those require the full authToken / a session). When empty,
@@ -180,6 +187,11 @@ type apiServer struct {
 	// prevSelfHealFail holds the failing-check count from the previous self-heal
 	// cycle so we alert only on a healthy->failing transition (no per-cycle spam).
 	prevSelfHealFail atomic.Int64
+	// Notification throttle state (in-memory): last send time per event and the
+	// last send of any event, used by the dedup / min-interval controls.
+	notifThrottleMu sync.Mutex
+	notifLastSent   map[string]time.Time
+	notifLastAny    time.Time
 	// Authentication counters (interactive login: local + LDAP). SAML ACS has
 	// its own path and is not counted here.
 	loginSuccessTotal atomic.Int64
@@ -424,6 +436,11 @@ func main() {
 	flag.StringVar(&s.notificationStatePath, "notifications-state-path", ".ncc-api-notifications.json", "Notifications state file path")
 	flag.StringVar(&s.auditLogPath, "audit-log-path", "logs/ncc-audit.log", "JSONL audit log file path")
 	flag.Int64Var(&s.auditLogMaxBytes, "audit-log-max-bytes", 5*1024*1024, "Audit log size before rotation (bytes); 0 disables rotation")
+	flag.StringVar(&s.auditForwardHTTPURL, "audit-forward-http-url", "", "Forward each audit event (JSON) to this HTTP collector endpoint (Splunk HEC, Elastic, Loki, generic webhook). Empty disables.")
+	flag.StringVar(&s.auditForwardHTTPAuth, "audit-forward-http-auth", "", "Authorization header value for the audit HTTP collector (e.g. 'Bearer <token>' or 'Splunk <hec-token>')")
+	flag.BoolVar(&s.auditForwardHTTPSplunk, "audit-forward-http-splunk", false, "Wrap each forwarded audit event as a Splunk HEC payload {\"event\": ...}")
+	flag.StringVar(&s.auditForwardSyslog, "audit-forward-syslog", "", "Forward each audit event as an RFC5424 syslog message to host:port (e.g. siem.example.com:514). Empty disables.")
+	flag.StringVar(&s.auditForwardSyslogNet, "audit-forward-syslog-network", "udp", "Transport for --audit-forward-syslog: udp or tcp")
 	flag.IntVar(&s.loginLockThreshold, "login-lockout-threshold", 5, "Failed logins per account before a temporary lockout (0 disables)")
 	flag.DurationVar(&s.loginLockWindow, "login-lockout-window", 15*time.Minute, "Rolling window for accumulating failed logins toward a lockout")
 	flag.DurationVar(&s.loginLockDuration, "login-lockout-duration", 15*time.Minute, "How long an account stays locked after exceeding the failure threshold")
@@ -731,8 +748,10 @@ func main() {
 	s.loginGuard = newLoginGuard(s.loginLockThreshold, s.loginLockWindow, s.loginLockDuration)
 	s.ensureRunManager()
 	s.startedAt = time.Now().UTC()
+	s.auditForwarder = s.startAuditForwarder(context.Background())
 	s.startSelfHealLoop(context.Background())
 	s.startBackupScheduleLoop(context.Background())
+	s.startNotificationDigestLoop(context.Background())
 
 	handler := s.buildHandler()
 	srv := &http.Server{
@@ -1259,6 +1278,12 @@ func (s *apiServer) handlePrometheusMetrics(w http.ResponseWriter, r *http.Reque
 	fmt.Fprintf(w, "# HELP ncc_update_failed_total Cumulative in-app software updates that failed (backup or install error).\n")
 	fmt.Fprintf(w, "# TYPE ncc_update_failed_total counter\n")
 	fmt.Fprintf(w, "ncc_update_failed_total %d\n", s.updateFailedTotal.Load())
+
+	if s.auditForwarder != nil {
+		fmt.Fprintf(w, "# HELP ncc_audit_forward_dropped_total Audit events dropped (buffer full or sink error) instead of forwarded to the SIEM/syslog sink.\n")
+		fmt.Fprintf(w, "# TYPE ncc_audit_forward_dropped_total counter\n")
+		fmt.Fprintf(w, "ncc_audit_forward_dropped_total %d\n", s.auditForwarder.dropped.Load())
+	}
 
 	// Update-availability gauge from the cached `update --check` result (set
 	// when the UI last polled). Omitted entirely until a check has run so a
@@ -3413,7 +3438,7 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/health", Methods: []string{http.MethodGet}, Description: "Backend health, version, and resolved paths"},
 		{Path: "/api/v1/audit", Methods: []string{http.MethodGet}, Description: "Read recent audit log entries (limit, action, failures filters)"},
 		{Path: "/api/v1/metrics/rate-limit", Methods: []string{http.MethodGet}, Description: "Rate limiter configuration and counters"},
-		{Path: "/metrics", Methods: []string{http.MethodGet}, Description: "Prometheus exposition (run/auth/update counters, build info, self-heal, backup inventory gauges, update-availability)"},
+		{Path: "/metrics", Methods: []string{http.MethodGet}, Description: "Prometheus exposition (run/auth/update counters, build info, self-heal, backup inventory gauges, update-availability, audit-forward drops)"},
 		{Path: "/api/v1/health/diagnostics", Methods: []string{http.MethodGet, http.MethodPost}, Description: "Admin-only: GET runs a read-only self-heal scan (doctor checks + live LDAP/SAML/clock probes) returning a ranked diagnostics list with an overall status; POST re-runs the doctor checks with --fix to apply safe remediations, then re-probes and returns the post-fix state."},
 		{Path: "/api/v1/auth/session", Methods: []string{http.MethodPost}, Description: "Issue short-lived session token"},
 		{Path: "/api/v1/auth/rotate", Methods: []string{http.MethodPost}, Description: "Rotate API token"},
@@ -3454,7 +3479,7 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/settings/config", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write runtime config", SampleBody: "{\n  \"content\": \"clusters: \\\"10.0.0.1\\\"\\nusername: \\\"admin\\\"\\n\"\n}"},
 		{Path: "/api/v1/settings/config-files", Methods: []string{http.MethodGet}, Description: "List config-referenced files (clusters, exclusions, secrets)"},
 		{Path: "/api/v1/settings/config-file", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write one config-referenced file", SampleBody: "{\n  \"path\": \"alerts-exclude.txt\",\n  \"content\": \"AHV_MemoryUsage\\n\"\n}"},
-		{Path: "/api/v1/settings/notifications", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write notifications state", SampleBody: "{\n  \"enabled\": true,\n  \"channel\": \"webhook\"\n}"},
+		{Path: "/api/v1/settings/notifications", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/write notification channels (slack/webhook/email), events, and delivery controls — quiet hours, maintenance windows, dedup/rate-limit throttle, and the scheduled health digest. Failures (run/backup/self-heal) reuse the run_failure toggle.", SampleBody: "{\n  \"enabled\": true,\n  \"events\": {\"run_failure\": true, \"run_success\": false, \"policy_violations\": true},\n  \"email\": {\"enabled\": true, \"smtp_host\": \"smtp.example.com\", \"smtp_port\": 587, \"from\": \"ncc@example.com\", \"to\": \"sre@example.com\"},\n  \"quiet\": {\"enabled\": true, \"start\": \"22:00\", \"end\": \"07:00\", \"timezone\": \"UTC\", \"allow_failures\": true},\n  \"maintenance\": [{\"start\": \"2026-07-01T01:00:00Z\", \"end\": \"2026-07-01T03:00:00Z\", \"note\": \"patching\"}],\n  \"throttle\": {\"dedup_window_sec\": 300, \"min_interval_sec\": 30},\n  \"digest\": {\"enabled\": true, \"every\": \"24h\"}\n}"},
 		{Path: "/api/v1/settings/notifications/test", Methods: []string{http.MethodPost}, Description: "Operator+: send test notification(s) (delivery errors are URL-redacted)", SampleBody: "{\n  \"channel\": \"all\"\n}"},
 		{Path: "/api/v1/schedule", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET viewer+: read scheduler state; PUT operator+: create/update/apply a recurring run", SampleBody: "{\n  \"type\": \"cron\",\n  \"action\": \"create\",\n  \"cron\": \"15 */4 * * *\",\n  \"config\": \"config.yaml\",\n  \"print_only\": true,\n  \"apply\": false\n}"},
 		{Path: "/api/v1/schedule/health", Methods: []string{http.MethodGet}, Description: "Scheduler health snapshot (last run/success/error hints)"},
