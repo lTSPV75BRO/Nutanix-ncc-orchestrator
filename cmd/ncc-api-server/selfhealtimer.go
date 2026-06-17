@@ -106,6 +106,25 @@ func (s *apiServer) runSelfHealOnce(ctx context.Context, fix bool) (*selfHealRep
 	if rep.Summary["fail"] > 0 {
 		log.Printf("self-heal: %d failing check(s) (warn=%d, ok=%d)", rep.Summary["fail"], rep.Summary["warn"], rep.Summary["ok"])
 	}
+	// Notify only on a transition into a failing state (prev had no failures),
+	// so a persistently-failing check doesn't alert on every cycle.
+	prev := s.prevSelfHealFail.Swap(int64(rep.Summary["fail"]))
+	if rep.Summary["fail"] > 0 && prev == 0 {
+		failed := make([]string, 0, rep.Summary["fail"])
+		for _, r := range rep.Results {
+			if status, _ := r["status"].(string); status == "fail" {
+				if name, _ := r["name"].(string); name != "" {
+					failed = append(failed, name)
+				}
+			}
+		}
+		s.notifyOperationalFailure("selfheal_failure", fmt.Sprintf("NCC self-heal found %d failing check(s)", rep.Summary["fail"]), map[string]interface{}{
+			"fail":   rep.Summary["fail"],
+			"warn":   rep.Summary["warn"],
+			"ok":     rep.Summary["ok"],
+			"checks": failed,
+		})
+	}
 	return &rep, nil
 }
 

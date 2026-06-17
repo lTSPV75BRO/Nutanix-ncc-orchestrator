@@ -698,6 +698,54 @@ kubectl -n ncc-orchestrator-v2 get secret ncc-v2-users \
 kubectl -n ncc-orchestrator-v2 logs deploy/ncc-v2-api | grep -A4 "FIRST-RUN ADMIN"
 ```
 
+#### Backup archive encryption
+
+A backup is a **secrets bundle** — it bundles the API token, bcrypt/PAT hashes,
+the SAML SP key, the LDAP bind password, and usually a `config.yaml` with a
+plaintext Prism password. The on-disk archive is `0600`, but once it is
+downloaded or copied off the host those secrets are plaintext. `v2-backup
+--encrypt` seals the finished archive with **AES-256-GCM** and `v2-restore`
+transparently detects and decrypts it (an unencrypted archive restores
+unchanged). Verify-after-create runs on the plaintext first; only then is the
+file sealed. The envelope header (magic + mode + per-archive salt) is bound as
+GCM additional-authenticated data, so a wrong key/passphrase or any tampering
+**fails closed** instead of restoring garbage.
+
+Key material is **independent of the user-store master key** (`NCC_MASTER_KEY`),
+so the two concerns stay separate. Two sources are supported (precedence in
+order):
+
+- **Passphrase** — `--passphrase` or `NCC_BACKUP_PASSPHRASE` (scrypt-derived,
+  `N=2^15`, with a fresh random salt stored in the envelope). Best for ad-hoc,
+  human-driven backups. There is **no recovery for a lost passphrase** — a typo
+  yields an archive nobody can ever decrypt, so the web UI requires a
+  confirmation field and a minimum length.
+- **Raw 32-byte key** — `--key-file` / `NCC_BACKUP_KEY_FILE` (a file holding the
+  key, base64 or hex), or inline `NCC_BACKUP_KEY`. Best for **automated**
+  backups where no human is present to type a passphrase. Generate one with
+  `openssl rand -base64 32` and keep it off the protected disk/backup.
+
+The web UI wires this end to end (*Settings → Access → Backup & restore*):
+**Download backup** and **Create snapshot** take an optional passphrase (encrypted
+output saves as `…tar.gz.enc`), and **Restore** prompts for the passphrase when
+the archive is encrypted. Passphrases never touch argv or the URL — the UI sends
+them in the request body (or the `X-NCC-Backup-Passphrase` header for downloads),
+and the api-server hands them to the orchestrator child via
+`NCC_BACKUP_PASSPHRASE` in the environment.
+
+**Automated rollback points are sealed too.** When a backup key is configured in
+the api-server's environment (`NCC_BACKUP_KEY_FILE`, `NCC_BACKUP_KEY`, or
+`NCC_BACKUP_PASSPHRASE`), the in-app updater's pre-update snapshot is written
+encrypted (`pre-update-<stamp>.tar.gz.enc`). The auto-rollback restore reads the
+same environment key, so recovery stays transparent — but the rollback secrets
+bundle is no longer left plaintext on disk. With no key configured, behavior is
+unchanged (plaintext `.tar.gz`).
+
+Server-side snapshots also honor an optional **retention cap**: set
+`NCC_BACKUPS_RETAIN=<N>` to keep at most the N newest **manual** snapshots
+(`manual-*`), pruning older ones after each create. Pre-update rollback points
+are **never** pruned by this cap. Unset/`0` keeps all snapshots (the default).
+
 #### Local password accounts
 
 Admins manage accounts at runtime from **Settings → Access** (or the API):

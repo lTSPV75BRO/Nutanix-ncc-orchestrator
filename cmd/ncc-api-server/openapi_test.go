@@ -39,6 +39,7 @@ func TestBuildOpenAPISpecIncludesCorePaths(t *testing.T) {
 		"/api/v1/settings/restore",
 		"/api/v1/settings/backups",
 		"/api/v1/settings/backups/restore",
+		"/api/v1/settings/backups/verify",
 		"/api/v1/settings/backups/delete",
 		"/api/v1/settings/backups/download",
 		"/api/v1/health/diagnostics",

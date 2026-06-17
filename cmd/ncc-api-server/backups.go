@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -44,6 +45,78 @@ type backupEntry struct {
 // (plaintext .tar.gz or encrypted .tar.gz.enc).
 func isBackupArchiveName(name string) bool {
 	return strings.HasSuffix(name, backupFileSuffix) || strings.HasSuffix(name, backupEncSuffix)
+}
+
+// backupKeyConfigured reports whether a non-interactive backup encryption key is
+// available in the server's environment (a key file, a raw key, or a
+// passphrase). When set, automated backups (the updater's pre-update rollback
+// points) are sealed at rest with AES-256-GCM — v2-backup/v2-restore read the
+// same NCC_BACKUP_* variables from the inherited child environment, so no key
+// material is ever placed on argv.
+func backupKeyConfigured() bool {
+	for _, k := range []string{"NCC_BACKUP_KEY_FILE", "NCC_BACKUP_KEY", "NCC_BACKUP_PASSPHRASE"} {
+		if strings.TrimSpace(os.Getenv(k)) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// backupsRetainLimit reads the optional NCC_BACKUPS_RETAIN cap (number of manual
+// snapshots to keep). 0/unset/invalid means "keep all".
+func backupsRetainLimit() int {
+	n, err := strconv.Atoi(strings.TrimSpace(os.Getenv("NCC_BACKUPS_RETAIN")))
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// pruneManualBackups keeps at most retain newest manual-* snapshots in dir
+// (both .tar.gz and .tar.gz.enc), deleting older ones. It deliberately never
+// touches pre-update-* rollback points or other files. Returns names pruned.
+func pruneManualBackups(dir string, retain int) []string {
+	return pruneBackupsByPrefix(dir, "manual-", retain)
+}
+
+// pruneBackupsByPrefix keeps at most retain newest archives whose name starts
+// with prefix (matching both .tar.gz and .tar.gz.enc), deleting older ones. It
+// only ever touches archives with that exact prefix, so callers can prune one
+// producer's snapshots (manual-, ncc-backup-) without disturbing the
+// pre-update-* rollback points. Returns the names pruned (newest kept).
+func pruneBackupsByPrefix(dir, prefix string, retain int) []string {
+	if retain <= 0 {
+		return nil
+	}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	type bk struct {
+		path string
+		mod  time.Time
+	}
+	var list []bk
+	for _, e := range ents {
+		n := e.Name()
+		if e.IsDir() || !strings.HasPrefix(n, prefix) || !isBackupArchiveName(n) {
+			continue
+		}
+		if info, err := e.Info(); err == nil {
+			list = append(list, bk{filepath.Join(dir, n), info.ModTime()})
+		}
+	}
+	if len(list) <= retain {
+		return nil
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].mod.After(list[j].mod) })
+	var pruned []string
+	for _, b := range list[retain:] {
+		if os.Remove(b.path) == nil {
+			pruned = append(pruned, filepath.Base(b.path))
+		}
+	}
+	return pruned
 }
 
 func backupKind(name string) string {
@@ -178,6 +251,11 @@ func (s *apiServer) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if out, err := s.runOrchestratorEnv(args, 2*time.Minute, extraEnv); err != nil {
 		s.audit(r, "settings.backup.create", false, map[string]interface{}{"install_dir": installDir, "encrypted": encrypt})
+		s.notifyOperationalFailure("backup_failure", "NCC backup snapshot failed", map[string]interface{}{
+			"install_dir": installDir,
+			"encrypted":   encrypt,
+			"error":       firstNonEmptyLine(out, "snapshot failed"),
+		})
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "snapshot failed: " + strings.TrimSpace(out)})
 		return
 	}
@@ -185,6 +263,11 @@ func (s *apiServer) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
 	if info, err := os.Stat(outPath); err == nil {
 		entry.Size = info.Size()
 		entry.ModTime = info.ModTime().UTC().Format(time.RFC3339)
+	}
+	// Optional retention: keep at most N newest manual snapshots (rollback
+	// points are never pruned). Best-effort; failures don't fail the create.
+	if pruned := pruneManualBackups(dir, backupsRetainLimit()); len(pruned) > 0 {
+		s.audit(r, "settings.backup.prune", true, map[string]interface{}{"pruned": pruned, "retain": backupsRetainLimit()})
 	}
 	s.audit(r, "settings.backup.create", true, map[string]interface{}{"install_dir": installDir, "name": name, "bytes": entry.Size, "encrypted": encrypt})
 	msg := "Snapshot created."
@@ -255,6 +338,54 @@ func (s *apiServer) handleBackupRestoreNamed(w http.ResponseWriter, r *http.Requ
 			"output":           strings.TrimSpace(out),
 		},
 	})
+}
+
+// handleBackupVerifyNamed validates a server-side backup by name without
+// restoring it: it runs `v2-restore --verify-only`, which checks gzip+tar
+// integrity, the manifest, and confined paths (and, for an encrypted snapshot,
+// decrypts it first — so a correct passphrase is also confirmed). This lets an
+// admin confirm a snapshot is actually restorable before trusting it as a
+// recovery point, with no risk to the live stack. Admin-only via the
+// /settings/ prefix.
+func (s *apiServer) handleBackupVerifyNamed(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	var body struct {
+		Name       string `json:"name"`
+		Passphrase string `json:"passphrase"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "invalid JSON body"})
+		return
+	}
+	archivePath, ok := s.safeBackupPath(body.Name)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "invalid backup name", ErrorCode: "NCC_API_INVALID_INPUT"})
+		return
+	}
+	if _, err := os.Stat(archivePath); err != nil {
+		writeJSON(w, http.StatusNotFound, envelope{Success: false, Error: "backup not found"})
+		return
+	}
+	passphrase := strings.TrimSpace(body.Passphrase)
+	if len(passphrase) > 1024 {
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "passphrase too long"})
+		return
+	}
+	var extraEnv []string
+	if passphrase != "" {
+		extraEnv = []string{"NCC_BACKUP_PASSPHRASE=" + passphrase}
+	}
+	out, err := s.runOrchestratorEnv([]string{"v2-restore", "--input-file", archivePath, "--verify-only"}, 2*time.Minute, extraEnv)
+	if err != nil {
+		s.audit(r, "settings.backup.verify", false, map[string]interface{}{"name": filepath.Base(archivePath)})
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "verification failed: " + firstNonEmptyLine(out, err.Error()), Data: map[string]interface{}{"output": strings.TrimSpace(out)}})
+		return
+	}
+	s.audit(r, "settings.backup.verify", true, map[string]interface{}{"name": filepath.Base(archivePath)})
+	writeJSON(w, http.StatusOK, envelope{Success: true, Message: "Backup verified: the archive is intact and restorable.", Data: map[string]interface{}{"output": strings.TrimSpace(out)}})
 }
 
 // handleBackupDelete removes a server-side backup archive by name.

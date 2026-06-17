@@ -64,22 +64,23 @@ func init() {
 }
 
 type apiServer struct {
-	repoRoot              string
-	configPath            string
-	outputDir             string
-	logDir                string
-	runnerLogPath         string
-	scheduleStatePath     string
-	notificationStatePath string
-	auditLogPath          string
-	auditLogMaxBytes      int64
-	auditMu               sync.Mutex
-	loginLockThreshold    int           // failed logins before per-account lockout (0 disables)
-	loginLockWindow       time.Duration // window to accumulate failures
-	loginLockDuration     time.Duration // how long a locked account stays locked
-	loginGuard            *loginGuard
-	orchestratorBin       string
-	authToken             string
+	repoRoot                string
+	configPath              string
+	outputDir               string
+	logDir                  string
+	runnerLogPath           string
+	scheduleStatePath       string
+	backupScheduleStatePath string
+	notificationStatePath   string
+	auditLogPath            string
+	auditLogMaxBytes        int64
+	auditMu                 sync.Mutex
+	loginLockThreshold      int           // failed logins before per-account lockout (0 disables)
+	loginLockWindow         time.Duration // window to accumulate failures
+	loginLockDuration       time.Duration // how long a locked account stays locked
+	loginGuard              *loginGuard
+	orchestratorBin         string
+	authToken               string
 	// viewerToken, when set, grants a read-only role: holders can reach
 	// safe GET endpoints but are denied settings/* and all mutating
 	// requests (those require the full authToken / a session). When empty,
@@ -176,6 +177,9 @@ type apiServer struct {
 	lastSelfHeal       *selfHealReport
 	selfHealRunsTotal  atomic.Int64
 	selfHealFixesTotal atomic.Int64
+	// prevSelfHealFail holds the failing-check count from the previous self-heal
+	// cycle so we alert only on a healthy->failing transition (no per-cycle spam).
+	prevSelfHealFail atomic.Int64
 	// Authentication counters (interactive login: local + LDAP). SAML ACS has
 	// its own path and is not counted here.
 	loginSuccessTotal atomic.Int64
@@ -184,6 +188,13 @@ type apiServer struct {
 	// In-app software-update outcomes.
 	updateAppliedTotal atomic.Int64
 	updateFailedTotal  atomic.Int64
+	// Cached result of the most recent `update --check` (populated when the UI
+	// polls GET /api/v1/settings/update?check=1). Lets /metrics expose
+	// update-availability without running the ~40s subprocess at scrape time.
+	updateCheckMu        sync.RWMutex
+	updateCheckAt        time.Time
+	updateCheckAvailable bool
+	updateLatestVersion  string
 	// Run-duration accumulator (sum is milliseconds to stay integer-atomic;
 	// exposed as ncc_run_duration_seconds_{sum,count} so Prometheus can derive
 	// rate()/avg over time, and the avg backs the UI queue-ETA estimate).
@@ -240,6 +251,24 @@ type routeMeta struct {
 	Methods     []string `json:"methods"`
 	Description string   `json:"description,omitempty"`
 	SampleBody  string   `json:"sample_body,omitempty"`
+	// MinRole is the least-privileged role that may call the route (the most
+	// restrictive across its methods), surfaced so the API explorer can show
+	// what access each endpoint needs. Populated by apiRouteCatalog.
+	MinRole string `json:"min_role,omitempty"`
+}
+
+// routeRequiredRole returns the most restrictive minimum role across a route's
+// methods (e.g. a GET+PUT settings route reports "admin" because the PUT is
+// admin-only), as a display string ("viewer"/"operator"/"admin").
+func routeRequiredRole(path string, methods []string) string {
+	max := RoleViewer
+	for _, m := range methods {
+		isRead := m == http.MethodGet || m == http.MethodHead || m == http.MethodOptions
+		if rr := routeMinRoleFor(path, isRead); rr > max {
+			max = rr
+		}
+	}
+	return max.String()
 }
 
 type configUpdateRequest struct {
@@ -391,6 +420,7 @@ func main() {
 	flag.StringVar(&s.logDir, "log-dir", "nccfiles", "Raw logs directory")
 	flag.StringVar(&s.runnerLogPath, "runner-log-path", "logs/ncc-runner.log", "Runner log file path")
 	flag.StringVar(&s.scheduleStatePath, "schedule-state-path", ".ncc-api-schedule.json", "Schedule state file path")
+	flag.StringVar(&s.backupScheduleStatePath, "backup-schedule-state-path", ".ncc-api-backup-schedule.json", "Scheduled-backup state file path")
 	flag.StringVar(&s.notificationStatePath, "notifications-state-path", ".ncc-api-notifications.json", "Notifications state file path")
 	flag.StringVar(&s.auditLogPath, "audit-log-path", "logs/ncc-audit.log", "JSONL audit log file path")
 	flag.Int64Var(&s.auditLogMaxBytes, "audit-log-max-bytes", 5*1024*1024, "Audit log size before rotation (bytes); 0 disables rotation")
@@ -702,6 +732,7 @@ func main() {
 	s.ensureRunManager()
 	s.startedAt = time.Now().UTC()
 	s.startSelfHealLoop(context.Background())
+	s.startBackupScheduleLoop(context.Background())
 
 	handler := s.buildHandler()
 	srv := &http.Server{
@@ -1228,6 +1259,55 @@ func (s *apiServer) handlePrometheusMetrics(w http.ResponseWriter, r *http.Reque
 	fmt.Fprintf(w, "# HELP ncc_update_failed_total Cumulative in-app software updates that failed (backup or install error).\n")
 	fmt.Fprintf(w, "# TYPE ncc_update_failed_total counter\n")
 	fmt.Fprintf(w, "ncc_update_failed_total %d\n", s.updateFailedTotal.Load())
+
+	// Update-availability gauge from the cached `update --check` result (set
+	// when the UI last polled). Omitted entirely until a check has run so a
+	// stale 0 is never mistaken for "up to date".
+	if avail, _, at := s.updateCheckSnapshot(); !at.IsZero() {
+		availVal := 0
+		if avail {
+			availVal = 1
+		}
+		fmt.Fprintf(w, "# HELP ncc_update_available 1 when the last update check found a newer release in-track, else 0.\n")
+		fmt.Fprintf(w, "# TYPE ncc_update_available gauge\n")
+		fmt.Fprintf(w, "ncc_update_available %d\n", availVal)
+		fmt.Fprintf(w, "# HELP ncc_update_check_timestamp_seconds Unix epoch of the most recent successful update check.\n")
+		fmt.Fprintf(w, "# TYPE ncc_update_check_timestamp_seconds gauge\n")
+		fmt.Fprintf(w, "ncc_update_check_timestamp_seconds %d\n", at.Unix())
+	}
+
+	// Server-side backup inventory (best-effort; a missing/unreadable backups
+	// directory simply yields zeros). Lets Prometheus alert on "no recent
+	// snapshot" and track encryption coverage.
+	if entries, err := s.listBackupEntries(); err == nil {
+		byKind := map[string]int{"manual": 0, "pre-update": 0, "other": 0}
+		encrypted := 0
+		var newest time.Time
+		lastTS := int64(0)
+		for _, e := range entries {
+			byKind[e.Kind]++
+			if e.Encrypted {
+				encrypted++
+			}
+			if t, perr := time.Parse(time.RFC3339, e.ModTime); perr == nil && t.After(newest) {
+				newest = t
+			}
+		}
+		fmt.Fprintf(w, "# HELP ncc_backups Number of server-side backup snapshots present, by kind.\n")
+		fmt.Fprintf(w, "# TYPE ncc_backups gauge\n")
+		for _, k := range []string{"manual", "pre-update", "other"} {
+			fmt.Fprintf(w, "ncc_backups{kind=%q} %d\n", k, byKind[k])
+		}
+		fmt.Fprintf(w, "# HELP ncc_backups_encrypted Number of server-side backup snapshots sealed at rest (AES-256-GCM).\n")
+		fmt.Fprintf(w, "# TYPE ncc_backups_encrypted gauge\n")
+		fmt.Fprintf(w, "ncc_backups_encrypted %d\n", encrypted)
+		if !newest.IsZero() {
+			lastTS = newest.Unix()
+		}
+		fmt.Fprintf(w, "# HELP ncc_backup_last_timestamp_seconds Unix epoch modification time of the most recent backup snapshot (0 when none).\n")
+		fmt.Fprintf(w, "# TYPE ncc_backup_last_timestamp_seconds gauge\n")
+		fmt.Fprintf(w, "ncc_backup_last_timestamp_seconds %d\n", lastTS)
+	}
 
 	fmt.Fprintf(w, "# HELP ncc_go_goroutines Number of goroutines in the running api-server process.\n")
 	fmt.Fprintf(w, "# TYPE ncc_go_goroutines gauge\n")
@@ -3317,11 +3397,23 @@ func (s *apiServer) handleMetaRoutes(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
+	routes := apiRouteCatalog()
+	writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
+		"routes": routes,
+		"count":  len(routes),
+	}})
+}
+
+// apiRouteCatalog is the single source of truth for the REST surface: it powers
+// both /api/v1/meta/routes and (by gap-filling) the OpenAPI spec, so new routes
+// can't silently go undocumented in either. Each entry's MinRole is computed
+// from the same routeMinRole logic the auth middleware enforces.
+func apiRouteCatalog() []routeMeta {
 	routes := []routeMeta{
 		{Path: "/api/v1/health", Methods: []string{http.MethodGet}, Description: "Backend health, version, and resolved paths"},
 		{Path: "/api/v1/audit", Methods: []string{http.MethodGet}, Description: "Read recent audit log entries (limit, action, failures filters)"},
 		{Path: "/api/v1/metrics/rate-limit", Methods: []string{http.MethodGet}, Description: "Rate limiter configuration and counters"},
-		{Path: "/metrics", Methods: []string{http.MethodGet}, Description: "Prometheus exposition (run/notification counters, build info)"},
+		{Path: "/metrics", Methods: []string{http.MethodGet}, Description: "Prometheus exposition (run/auth/update counters, build info, self-heal, backup inventory gauges, update-availability)"},
 		{Path: "/api/v1/health/diagnostics", Methods: []string{http.MethodGet, http.MethodPost}, Description: "Admin-only: GET runs a read-only self-heal scan (doctor checks + live LDAP/SAML/clock probes) returning a ranked diagnostics list with an overall status; POST re-runs the doctor checks with --fix to apply safe remediations, then re-probes and returns the post-fix state."},
 		{Path: "/api/v1/auth/session", Methods: []string{http.MethodPost}, Description: "Issue short-lived session token"},
 		{Path: "/api/v1/auth/rotate", Methods: []string{http.MethodPost}, Description: "Rotate API token"},
@@ -3353,6 +3445,8 @@ func (s *apiServer) handleMetaRoutes(w http.ResponseWriter, r *http.Request) {
 		{Path: "/api/v1/settings/restore", Methods: []string{http.MethodPost}, Description: "Admin-only: restore a backup archive uploaded as multipart/form-data (field 'archive'; optional 'passphrase' field decrypts an encrypted archive); overwrites install-dir files with --force. Restart the stack afterward for it to take effect."},
 		{Path: "/api/v1/settings/backups", Methods: []string{http.MethodGet, http.MethodPost}, Description: "Admin-only: GET lists server-side backups under <install>/backups (manual snapshots + pre-update rollback points; each entry reports whether it is encrypted); POST creates a new persistent snapshot. Pass an optional {\"passphrase\":\"...\"} to encrypt the snapshot at rest with AES-256-GCM (stored as .tar.gz.enc).", SampleBody: "{\n  \"passphrase\": \"\"\n}"},
 		{Path: "/api/v1/settings/backups/restore", Methods: []string{http.MethodPost}, Description: "Admin-only: restore a server-side backup by name (no re-upload), then restart the stack. Also powers post-update rollback. Supply 'passphrase' to restore an encrypted (.tar.gz.enc) snapshot.", SampleBody: "{\n  \"name\": \"pre-update-20260610T120000Z.tar.gz\",\n  \"passphrase\": \"\"\n}"},
+		{Path: "/api/v1/settings/backups/verify", Methods: []string{http.MethodPost}, Description: "Admin-only: verify a server-side backup is intact and restorable (v2-restore --verify-only: gzip/tar integrity, manifest, confined paths) without restoring. For an encrypted (.tar.gz.enc) snapshot, supply 'passphrase' — a successful verify also confirms the passphrase decrypts it.", SampleBody: "{\n  \"name\": \"manual-20260610T120000Z.tar.gz\",\n  \"passphrase\": \"\"\n}"},
+		{Path: "/api/v1/settings/backups/schedule", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: get/set the in-process scheduled backup (interval, optional AES-256-GCM encryption using the API server's configured key, and retention of newest N scheduled archives). PUT with run_now=true takes one snapshot immediately.", SampleBody: "{\n  \"enabled\": true,\n  \"every\": \"24h\",\n  \"encrypt\": false,\n  \"retain\": 7,\n  \"run_now\": false\n}"},
 		{Path: "/api/v1/settings/backups/delete", Methods: []string{http.MethodPost}, Description: "Admin-only: delete a server-side backup by name", SampleBody: "{\n  \"name\": \"manual-20260610T120000Z.tar.gz\"\n}"},
 		{Path: "/api/v1/settings/backups/download", Methods: []string{http.MethodGet}, Description: "Admin-only: download a server-side backup by name (?name=...). Encrypted snapshots stream as the opaque .tar.gz.enc envelope (decrypt with v2-restore + the passphrase)."},
 		{Path: "/api/v1/settings/update", Methods: []string{http.MethodGet}, Description: "Admin-only: check for a newer release (current/latest version, update_available) and report any in-progress in-app update job/phase"},
@@ -3378,10 +3472,10 @@ func (s *apiServer) handleMetaRoutes(w http.ResponseWriter, r *http.Request) {
 		{Path: "/api/v1/openapi.json", Methods: []string{http.MethodGet}, Description: "OpenAPI 3.0 specification"},
 		{Path: "/api/v1/meta/routes", Methods: []string{http.MethodGet}, Description: "List available REST routes for API explorer"},
 	}
-	writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
-		"routes": routes,
-		"count":  len(routes),
-	}})
+	for i := range routes {
+		routes[i].MinRole = routeRequiredRole(routes[i].Path, routes[i].Methods)
+	}
+	return routes
 }
 
 func (s *apiServer) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
@@ -3395,7 +3489,62 @@ func (s *apiServer) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(spec)
 }
 
+// buildOpenAPISpec returns the hand-authored OpenAPI spec, then gap-fills it
+// from the canonical route catalog so every registered route is present (with a
+// summary, a request example where the catalog has one, and an x-required-role
+// annotation) even if it wasn't hand-written. This keeps /docs/ui (Swagger) and
+// the API explorer from drifting as routes are added.
 func (s *apiServer) buildOpenAPISpec() map[string]interface{} {
+	spec := s.buildOpenAPISpecBase()
+	paths, ok := spec["paths"].(map[string]interface{})
+	if !ok || paths == nil {
+		paths = map[string]interface{}{}
+		spec["paths"] = paths
+	}
+	for _, rt := range apiRouteCatalog() {
+		item, exists := paths[rt.Path].(map[string]interface{})
+		if !exists {
+			item = openAPIItemFromRoute(rt)
+			paths[rt.Path] = item
+		}
+		// Annotate the required role on each method operation (additive; never
+		// clobbers a hand-authored field).
+		role := routeRequiredRole(rt.Path, rt.Methods)
+		for _, m := range rt.Methods {
+			if op, okop := item[strings.ToLower(m)].(map[string]interface{}); okop {
+				if _, has := op["x-required-role"]; !has {
+					op["x-required-role"] = role
+				}
+			}
+		}
+	}
+	return spec
+}
+
+// openAPIItemFromRoute builds a minimal OpenAPI path item from a catalog entry:
+// a summary per method and, for mutating methods with a sample body, a JSON
+// request example.
+func openAPIItemFromRoute(rt routeMeta) map[string]interface{} {
+	item := map[string]interface{}{}
+	for _, m := range rt.Methods {
+		op := map[string]interface{}{"summary": rt.Description}
+		if rt.SampleBody != "" && (m == http.MethodPost || m == http.MethodPut) {
+			var example interface{}
+			if json.Unmarshal([]byte(rt.SampleBody), &example) == nil {
+				op["requestBody"] = map[string]interface{}{
+					"required": true,
+					"content": map[string]interface{}{
+						"application/json": map[string]interface{}{"example": example},
+					},
+				}
+			}
+		}
+		item[strings.ToLower(m)] = op
+	}
+	return item
+}
+
+func (s *apiServer) buildOpenAPISpecBase() map[string]interface{} {
 	return map[string]interface{}{
 		"openapi": "3.0.3",
 		"info": map[string]interface{}{
@@ -4625,6 +4774,8 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/api/v1/settings/restore", s.handleRestore)
 	mux.HandleFunc("/api/v1/settings/backups", s.handleBackups)
 	mux.HandleFunc("/api/v1/settings/backups/restore", s.handleBackupRestoreNamed)
+	mux.HandleFunc("/api/v1/settings/backups/verify", s.handleBackupVerifyNamed)
+	mux.HandleFunc("/api/v1/settings/backups/schedule", s.handleBackupSchedule)
 	mux.HandleFunc("/api/v1/settings/backups/delete", s.handleBackupDelete)
 	mux.HandleFunc("/api/v1/settings/backups/download", s.handleBackupDownloadNamed)
 	mux.HandleFunc("/api/v1/settings/update", s.handleUpdateCheck)

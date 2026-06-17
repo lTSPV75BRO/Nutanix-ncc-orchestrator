@@ -181,6 +181,24 @@ export type BackupEntry = {
   encrypted?: boolean;
 };
 
+export type BackupScheduleState = {
+  enabled: boolean;
+  every: string;
+  encrypt: boolean;
+  retain: number;
+  last_run_at?: string;
+  last_status?: "ok" | "error";
+  last_error?: string;
+  last_file?: string;
+  updated_at?: string;
+};
+
+export type BackupScheduleResponse = {
+  schedule: BackupScheduleState;
+  key_configured: boolean;
+  next_run?: string;
+};
+
 export type SSOConfig = {
   enabled: boolean;
   managed_by: "flags" | "runtime";

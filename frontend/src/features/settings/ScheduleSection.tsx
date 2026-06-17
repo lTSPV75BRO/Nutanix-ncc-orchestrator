@@ -492,10 +492,42 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
                 </Typography.Text>
               </Descriptions.Item>
               <Descriptions.Item label="Last run">
-                {health.last_run ? <Tooltip title={formatDateTime(health.last_run)}>{relativeTime(health.last_run)}</Tooltip> : "—"}
+                {health.log_exists && health.log_mod_time ? (
+                  <Space direction="vertical" size={0}>
+                    <Tooltip title={formatDateTime(health.log_mod_time)}>
+                      {relativeTime(health.log_mod_time)}
+                    </Tooltip>
+                    {health.last_run ? (
+                      <Typography.Text
+                        type="secondary"
+                        style={{ fontSize: 12 }}
+                        ellipsis={{ tooltip: health.last_run }}
+                      >
+                        {health.last_run}
+                      </Typography.Text>
+                    ) : null}
+                  </Space>
+                ) : (
+                  "—"
+                )}
               </Descriptions.Item>
-              <Descriptions.Item label="Last success">
-                {health.last_success ? <Tooltip title={formatDateTime(health.last_success)}>{relativeTime(health.last_success)}</Tooltip> : "—"}
+              <Descriptions.Item label="Last outcome">
+                {health.last_error ? (
+                  <Tag color="red">failed</Tag>
+                ) : health.last_success ? (
+                  <Space direction="vertical" size={0}>
+                    <Tag color="green">succeeded</Tag>
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: 12 }}
+                      ellipsis={{ tooltip: health.last_success }}
+                    >
+                      {health.last_success}
+                    </Typography.Text>
+                  </Space>
+                ) : (
+                  <Typography.Text type="secondary">—</Typography.Text>
+                )}
               </Descriptions.Item>
               <Descriptions.Item label="Next run (approx)">
                 {nextRun ? (

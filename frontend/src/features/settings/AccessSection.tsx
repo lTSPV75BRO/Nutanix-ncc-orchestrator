@@ -751,6 +751,21 @@ const BACKUP_KIND_META: Record<string, { color: string; label: string }> = {
   other: { color: "default", label: "other" },
 };
 
+const MIN_BACKUP_PASSPHRASE_LEN = 8;
+
+// passphraseIssue validates an (optional) encryption passphrase against its
+// confirmation. Returns a human message when the backup should be blocked, or
+// null when it's fine (including the empty/no-encryption case).
+function passphraseIssue(pass: string, confirm: string): string | null {
+  const p = pass.trim();
+  if (!p) return null; // no passphrase => unencrypted, allowed
+  if (p.length < MIN_BACKUP_PASSPHRASE_LEN) {
+    return `Use at least ${MIN_BACKUP_PASSPHRASE_LEN} characters (a lost passphrase cannot be recovered).`;
+  }
+  if (p !== confirm.trim()) return "Passphrases do not match.";
+  return null;
+}
+
 function BackupRestoreCard() {
   const qc = useQueryClient();
   const backupsQuery = useQuery({ queryKey: ["settings", "backups"], queryFn: api.listBackups });
@@ -759,12 +774,17 @@ function BackupRestoreCard() {
   const [busyName, setBusyName] = useState<string | null>(null);
   const [downloadModalOpen, setDownloadModalOpen] = useState(false);
   const [downloadPass, setDownloadPass] = useState("");
+  const [downloadPassConfirm, setDownloadPassConfirm] = useState("");
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
   const [restorePass, setRestorePass] = useState("");
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [createPass, setCreatePass] = useState("");
+  const [createPassConfirm, setCreatePassConfirm] = useState("");
   const [restoreNamedEntry, setRestoreNamedEntry] = useState<BackupEntry | null>(null);
   const [restoreNamedPass, setRestoreNamedPass] = useState("");
+  const [verifyEntry, setVerifyEntry] = useState<BackupEntry | null>(null);
+  const [verifyPass, setVerifyPass] = useState("");
+  const [verifyName, setVerifyName] = useState<string | null>(null);
 
   const backups = (backupsQuery.data?.backups ?? []) as BackupEntry[];
   const rollback = backups.find((b) => b.rollback_candidate);
@@ -779,6 +799,7 @@ function BackupRestoreCard() {
       notify.success(pass ? "Encrypted backup downloaded." : "Backup downloaded.");
       setDownloadModalOpen(false);
       setDownloadPass("");
+      setDownloadPassConfirm("");
     } catch (e) {
       notifyError(e, "Failed to create backup");
     } finally {
@@ -792,6 +813,7 @@ function BackupRestoreCard() {
       notify.success(res.message ?? "Snapshot created.");
       setCreateModalOpen(false);
       setCreatePass("");
+      setCreatePassConfirm("");
       void refresh();
     },
     onError: (e) => notifyError(e, "Failed to create snapshot"),
@@ -907,6 +929,35 @@ function BackupRestoreCard() {
     setRestoreNamedEntry(entry);
   };
 
+  // verify runs a non-destructive integrity check (v2-restore --verify-only).
+  // Encrypted snapshots need the passphrase (verifying also confirms it), so we
+  // collect it in a modal first; plaintext snapshots verify in one click.
+  const doVerify = async (name: string, passphrase?: string) => {
+    setVerifyName(name);
+    try {
+      const res = await api.verifyNamedBackup(name, passphrase);
+      setVerifyEntry(null);
+      setVerifyPass("");
+      Modal.success({
+        title: "Backup verified",
+        content: res.message ?? "The archive is intact and restorable.",
+      });
+    } catch (e) {
+      notifyError(e, "Verification failed");
+    } finally {
+      setVerifyName(null);
+    }
+  };
+
+  const confirmVerify = (entry: BackupEntry) => {
+    if (entry.encrypted) {
+      setVerifyPass("");
+      setVerifyEntry(entry);
+      return;
+    }
+    void doVerify(entry.name);
+  };
+
   // beforeUpload intercepts the selected file and opens a destructive-action
   // confirmation (with an optional decryption passphrase field), returning false
   // so antd never auto-uploads it.
@@ -965,6 +1016,14 @@ function BackupRestoreCard() {
             onClick={() => confirmRestoreNamed(rec)}
           >
             {rec.rollback_candidate ? "Roll back" : "Restore"}
+          </Button>
+          <Button
+            size="small"
+            icon={<SafetyCertificateOutlined />}
+            loading={verifyName === rec.name}
+            onClick={() => confirmVerify(rec)}
+          >
+            Verify
           </Button>
           <Button
             size="small"
@@ -1037,6 +1096,7 @@ function BackupRestoreCard() {
           icon={<PlusOutlined />}
           onClick={() => {
             setCreatePass("");
+            setCreatePassConfirm("");
             setCreateModalOpen(true);
           }}
           loading={createMut.isPending}
@@ -1047,6 +1107,7 @@ function BackupRestoreCard() {
           icon={<DownloadOutlined />}
           onClick={() => {
             setDownloadPass("");
+            setDownloadPassConfirm("");
             setDownloadModalOpen(true);
           }}
           loading={downloading}
@@ -1088,10 +1149,15 @@ function BackupRestoreCard() {
         onCancel={() => {
           setDownloadModalOpen(false);
           setDownloadPass("");
+          setDownloadPassConfirm("");
         }}
         onOk={handleDownload}
         okText={downloadPass.trim() ? "Encrypt and download" : "Download"}
-        okButtonProps={{ loading: downloading, icon: <DownloadOutlined /> }}
+        okButtonProps={{
+          loading: downloading,
+          icon: <DownloadOutlined />,
+          disabled: passphraseIssue(downloadPass, downloadPassConfirm) !== null,
+        }}
         cancelText="Cancel"
         destroyOnClose
       >
@@ -1101,14 +1167,28 @@ function BackupRestoreCard() {
           you&apos;ll need the same passphrase to restore. Leave blank to download an unencrypted{" "}
           <Typography.Text code>.tar.gz</Typography.Text>.
         </Typography.Paragraph>
-        <Input.Password
-          autoFocus
-          placeholder="Encryption passphrase (optional)"
-          value={downloadPass}
-          onChange={(e) => setDownloadPass(e.target.value)}
-          onPressEnter={() => void handleDownload()}
-          allowClear
-        />
+        <Space direction="vertical" size={8} style={{ width: "100%" }}>
+          <Input.Password
+            autoFocus
+            placeholder="Encryption passphrase (optional)"
+            value={downloadPass}
+            onChange={(e) => setDownloadPass(e.target.value)}
+            allowClear
+          />
+          {downloadPass.trim() ? (
+            <Input.Password
+              placeholder="Confirm passphrase"
+              value={downloadPassConfirm}
+              onChange={(e) => setDownloadPassConfirm(e.target.value)}
+              allowClear
+            />
+          ) : null}
+          {passphraseIssue(downloadPass, downloadPassConfirm) ? (
+            <Typography.Text type="danger" style={{ fontSize: 12 }}>
+              {passphraseIssue(downloadPass, downloadPassConfirm)}
+            </Typography.Text>
+          ) : null}
+        </Space>
       </Modal>
 
       <Modal
@@ -1147,10 +1227,15 @@ function BackupRestoreCard() {
         onCancel={() => {
           setCreateModalOpen(false);
           setCreatePass("");
+          setCreatePassConfirm("");
         }}
         onOk={() => createMut.mutate(createPass.trim() || undefined)}
         okText={createPass.trim() ? "Create encrypted snapshot" : "Create snapshot"}
-        okButtonProps={{ loading: createMut.isPending, icon: <PlusOutlined /> }}
+        okButtonProps={{
+          loading: createMut.isPending,
+          icon: <PlusOutlined />,
+          disabled: passphraseIssue(createPass, createPassConfirm) !== null,
+        }}
         cancelText="Cancel"
         destroyOnClose
       >
@@ -1160,14 +1245,28 @@ function BackupRestoreCard() {
           passphrase (stored as <Typography.Text code>.tar.gz.enc</Typography.Text>; restoring it
           later needs the same passphrase). Leave blank for a plain snapshot.
         </Typography.Paragraph>
-        <Input.Password
-          autoFocus
-          placeholder="Encryption passphrase (optional)"
-          value={createPass}
-          onChange={(e) => setCreatePass(e.target.value)}
-          onPressEnter={() => createMut.mutate(createPass.trim() || undefined)}
-          allowClear
-        />
+        <Space direction="vertical" size={8} style={{ width: "100%" }}>
+          <Input.Password
+            autoFocus
+            placeholder="Encryption passphrase (optional)"
+            value={createPass}
+            onChange={(e) => setCreatePass(e.target.value)}
+            allowClear
+          />
+          {createPass.trim() ? (
+            <Input.Password
+              placeholder="Confirm passphrase"
+              value={createPassConfirm}
+              onChange={(e) => setCreatePassConfirm(e.target.value)}
+              allowClear
+            />
+          ) : null}
+          {passphraseIssue(createPass, createPassConfirm) ? (
+            <Typography.Text type="danger" style={{ fontSize: 12 }}>
+              {passphraseIssue(createPass, createPassConfirm)}
+            </Typography.Text>
+          ) : null}
+        </Space>
       </Modal>
 
       <Modal
@@ -1212,6 +1311,200 @@ function BackupRestoreCard() {
           </>
         ) : null}
       </Modal>
+
+      <Modal
+        title="Verify encrypted backup"
+        open={verifyEntry !== null}
+        onCancel={() => {
+          setVerifyEntry(null);
+          setVerifyPass("");
+        }}
+        onOk={() => {
+          if (verifyEntry) void doVerify(verifyEntry.name, verifyPass.trim() || undefined);
+        }}
+        okText="Verify"
+        okButtonProps={{
+          icon: <SafetyCertificateOutlined />,
+          loading: verifyName === verifyEntry?.name,
+          disabled: !verifyPass.trim(),
+        }}
+        cancelText="Cancel"
+        width={520}
+        destroyOnClose
+      >
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
+          Checks that <b>{verifyEntry?.name}</b> is intact and restorable (gzip/tar integrity,
+          manifest, confined paths) without touching the live stack. Because it&apos;s encrypted,
+          enter the passphrase — a successful verify also confirms the passphrase decrypts it.
+        </Typography.Paragraph>
+        <Input.Password
+          autoFocus
+          placeholder="Decryption passphrase"
+          value={verifyPass}
+          onChange={(e) => setVerifyPass(e.target.value)}
+          onPressEnter={() => {
+            if (verifyEntry && verifyPass.trim()) void doVerify(verifyEntry.name, verifyPass.trim());
+          }}
+          allowClear
+        />
+      </Modal>
+    </Card>
+  );
+}
+
+const BACKUP_EVERY_OPTIONS = [
+  { value: "1h", label: "Every hour" },
+  { value: "6h", label: "Every 6 hours" },
+  { value: "12h", label: "Every 12 hours" },
+  { value: "24h", label: "Daily" },
+  { value: "7d", label: "Weekly" },
+  { value: "14d", label: "Every 2 weeks" },
+  { value: "30d", label: "Every month" },
+];
+
+function ScheduledBackupCard() {
+  const qc = useQueryClient();
+  const query = useQuery({
+    queryKey: ["settings", "backup-schedule"],
+    queryFn: api.getBackupSchedule,
+  });
+  const data = query.data;
+  const sched = data?.schedule;
+  const keyConfigured = Boolean(data?.key_configured);
+
+  const [enabled, setEnabled] = useState(false);
+  const [every, setEvery] = useState("24h");
+  const [encrypt, setEncrypt] = useState(false);
+  const [retain, setRetain] = useState<number>(7);
+
+  useEffect(() => {
+    if (sched) {
+      setEnabled(Boolean(sched.enabled));
+      setEvery(sched.every || "24h");
+      setEncrypt(Boolean(sched.encrypt));
+      setRetain(typeof sched.retain === "number" ? sched.retain : 7);
+    }
+  }, [sched]);
+
+  const saveMut = useMutation({
+    mutationFn: (runNow: boolean) =>
+      api.updateBackupSchedule({ enabled, every, encrypt, retain, run_now: runNow }),
+    onSuccess: (res, runNow) => {
+      notify.success(runNow ? "Schedule saved and a snapshot was taken." : "Scheduled backups updated.");
+      void qc.invalidateQueries({ queryKey: ["settings", "backup-schedule"] });
+      void qc.invalidateQueries({ queryKey: ["settings", "backups"] });
+      void res;
+    },
+    onError: (e) => notifyError(e, "Failed to update scheduled backups"),
+  });
+
+  return (
+    <Card
+      className="page-card"
+      title={
+        <Space>
+          <ClockCircleOutlined />
+          Scheduled backups
+        </Space>
+      }
+    >
+      <Typography.Paragraph type="secondary" style={{ marginTop: -4 }}>
+        Automatically take server-side snapshots on a fixed cadence. Backups run in-process, so
+        encryption uses the API server&apos;s configured key — a detached timer could not. Older
+        scheduled snapshots are pruned to your retention count; manual and pre-update rollback
+        points are never touched.
+      </Typography.Paragraph>
+
+      {!keyConfigured ? (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="No backup encryption key configured"
+          description="Set NCC_BACKUP_KEY_FILE, NCC_BACKUP_KEY, or NCC_BACKUP_PASSPHRASE on the API server to enable encrypted scheduled backups."
+        />
+      ) : null}
+
+      <Form layout="vertical" style={{ maxWidth: 480 }}>
+        <Form.Item label="Enable scheduled backups">
+          <Switch checked={enabled} onChange={setEnabled} />
+        </Form.Item>
+        <Form.Item label="Frequency">
+          <Select
+            disabled={!enabled}
+            value={every}
+            onChange={setEvery}
+            options={BACKUP_EVERY_OPTIONS}
+            style={{ width: 220 }}
+          />
+        </Form.Item>
+        <Form.Item label="Keep newest (retention)" extra="0 keeps every scheduled snapshot.">
+          <InputNumber
+            disabled={!enabled}
+            min={0}
+            max={365}
+            value={retain}
+            onChange={(v) => setRetain(typeof v === "number" ? v : 0)}
+          />
+        </Form.Item>
+        <Form.Item label="Encrypt at rest (AES-256-GCM)">
+          <Tooltip title={keyConfigured ? "" : "Configure a backup key on the API server first."}>
+            <Switch
+              checked={encrypt && keyConfigured}
+              disabled={!enabled || !keyConfigured}
+              onChange={setEncrypt}
+            />
+          </Tooltip>
+        </Form.Item>
+        <Space>
+          <Button
+            type="primary"
+            loading={saveMut.isPending}
+            onClick={() => saveMut.mutate(false)}
+          >
+            Save
+          </Button>
+          <Button
+            icon={<DatabaseOutlined />}
+            loading={saveMut.isPending}
+            disabled={!enabled}
+            onClick={() => saveMut.mutate(true)}
+          >
+            Save and back up now
+          </Button>
+        </Space>
+      </Form>
+
+      {sched?.last_run_at ? (
+        <>
+          <Divider style={{ margin: "16px 0" }} />
+          <Space direction="vertical" size={2}>
+            <Typography.Text type="secondary">
+              Last run: {formatDateTime(sched.last_run_at)}{" "}
+              {sched.last_status === "ok" ? (
+                <Tag color="green">ok</Tag>
+              ) : sched.last_status === "error" ? (
+                <Tag color="red">failed</Tag>
+              ) : null}
+            </Typography.Text>
+            {sched.last_status === "ok" && sched.last_file ? (
+              <Typography.Text type="secondary" className="mono" style={{ fontSize: 12 }}>
+                {sched.last_file}
+              </Typography.Text>
+            ) : null}
+            {sched.last_status === "error" && sched.last_error ? (
+              <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                {sched.last_error}
+              </Typography.Text>
+            ) : null}
+            {data?.next_run ? (
+              <Typography.Text type="secondary">
+                Next run (approx): {formatDateTime(data.next_run)}
+              </Typography.Text>
+            ) : null}
+          </Space>
+        </>
+      ) : null}
     </Card>
   );
 }
@@ -2537,6 +2830,7 @@ export function MaintenanceSection() {
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
       <UpdatesCard />
       <BackupRestoreCard />
+      <ScheduledBackupCard />
     </Space>
   );
 }

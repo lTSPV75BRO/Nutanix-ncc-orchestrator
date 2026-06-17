@@ -47,6 +47,13 @@ type RouteMeta = {
   methods: string[];
   description?: string;
   sample_body?: string;
+  min_role?: string;
+};
+
+const ROLE_COLOR: Record<string, string> = {
+  admin: "red",
+  operator: "gold",
+  viewer: "green",
 };
 
 type OpenAPISpec = {
@@ -217,6 +224,7 @@ export function ApiExplorerSection({ onError }: Props) {
       (r) =>
         r.path.toLowerCase().includes(q) ||
         (r.description || "").toLowerCase().includes(q) ||
+        (r.min_role || "").toLowerCase() === q ||
         r.methods.some((m) => m.toLowerCase() === q),
     );
   }, [routes, routeFilter]);
@@ -288,6 +296,7 @@ export function ApiExplorerSection({ onError }: Props) {
               methods: existing.methods.length ? existing.methods : r.methods,
               description: existing.description || r.description,
               sample_body: existing.sample_body || r.sample_body,
+              min_role: existing.min_role || r.min_role,
             });
           }
         }
@@ -598,6 +607,13 @@ export function ApiExplorerSection({ onError }: Props) {
                       </Tag>
                     ))}
                     <Typography.Text code style={{ fontSize: 12 }}>{route.path}</Typography.Text>
+                    {route.min_role ? (
+                      <Tooltip title={`Requires the ${route.min_role} role (or higher)`}>
+                        <Tag color={ROLE_COLOR[route.min_role] || "default"} style={{ marginInlineEnd: 0 }}>
+                          {route.min_role}
+                        </Tag>
+                      </Tooltip>
+                    ) : null}
                   </Space>
                   {route.description ? (
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>

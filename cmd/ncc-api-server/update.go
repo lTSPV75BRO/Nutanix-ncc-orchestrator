@@ -162,9 +162,32 @@ func (s *apiServer) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		}
 		if err != nil {
 			data["check_error"] = "could not check for updates: " + firstNonEmptyLine(out, err.Error())
+		} else {
+			// Cache the result so /metrics can expose update-availability
+			// without re-running the slow subprocess at scrape time.
+			avail, _ := data["update_available"].(bool)
+			latest, _ := data["latest_version"].(string)
+			s.setUpdateCheck(avail, latest)
 		}
 	}
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: data})
+}
+
+// setUpdateCheck caches the most recent update-availability result for /metrics.
+func (s *apiServer) setUpdateCheck(available bool, latest string) {
+	s.updateCheckMu.Lock()
+	s.updateCheckAt = time.Now().UTC()
+	s.updateCheckAvailable = available
+	s.updateLatestVersion = strings.TrimSpace(latest)
+	s.updateCheckMu.Unlock()
+}
+
+// updateCheckSnapshot returns the cached update-check result and the time it was
+// taken (zero time when no check has run yet).
+func (s *apiServer) updateCheckSnapshot() (available bool, latest string, at time.Time) {
+	s.updateCheckMu.RLock()
+	defer s.updateCheckMu.RUnlock()
+	return s.updateCheckAvailable, s.updateLatestVersion, s.updateCheckAt
 }
 
 // updateCheckJSONPrefix mirrors the orchestrator's sentinel for the
@@ -309,10 +332,27 @@ func (s *apiServer) runUpdateJob(req updateApplyRequest) {
 		return
 	}
 	stamp := time.Now().UTC().Format("20060102T150405Z")
-	backupPath := filepath.Join(backupDir, "pre-update-"+stamp+".tar.gz")
+	// Seal the rollback point at rest when a backup key is configured, so the
+	// pre-update secrets bundle isn't left plaintext on disk. v2-backup reads the
+	// key from the inherited NCC_BACKUP_* environment; rollback (v2-restore) picks
+	// up the same key the same way, so the auto-restore stays transparent.
+	encrypt := backupKeyConfigured()
+	backupName := "pre-update-" + stamp + backupFileSuffix
+	if encrypt {
+		backupName = "pre-update-" + stamp + backupEncSuffix
+	}
+	backupPath := filepath.Join(backupDir, backupName)
 	updateJob.set(updPhaseBackingUp, "Taking a pre-update backup…")
-	if out, err := s.runOrchestrator([]string{"v2-backup", "--install-dir", installDir, "--output-file", backupPath}, 3*time.Minute); err != nil {
+	backupArgs := []string{"v2-backup", "--install-dir", installDir, "--output-file", backupPath}
+	if encrypt {
+		backupArgs = append(backupArgs, "--encrypt")
+	}
+	if out, err := s.runOrchestrator(backupArgs, 3*time.Minute); err != nil {
 		s.updateFailedTotal.Add(1)
+		s.notifyOperationalFailure("backup_failure", "NCC pre-update backup failed — update aborted", map[string]interface{}{
+			"error":   firstNonEmptyLine(out, err.Error()),
+			"encrypt": encrypt,
+		})
 		updateJob.fail("pre-update backup failed (update not applied): " + firstNonEmptyLine(out, err.Error()))
 		return
 	}

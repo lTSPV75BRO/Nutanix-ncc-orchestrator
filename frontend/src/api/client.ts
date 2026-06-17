@@ -40,6 +40,8 @@ import type {
   UpdateStatus,
   UpdateJob,
   BackupEntry,
+  BackupScheduleResponse,
+  BackupScheduleState,
 } from "./types";
 
 // ApiError preserves both the human-readable message and the structured `data`
@@ -458,6 +460,25 @@ export const api = {
   restoreNamedBackup: (name: string, passphrase?: string) => {
     const pass = (passphrase ?? "").trim();
     return callApiEnvelope<{ restarting?: boolean }>("/api/v1/settings/backups/restore", {
+      method: "POST",
+      body: JSON.stringify(pass ? { name, passphrase: pass } : { name }),
+    });
+  },
+  getBackupSchedule: () => callApi<BackupScheduleResponse>("/api/v1/settings/backups/schedule"),
+  updateBackupSchedule: (payload: {
+    enabled: boolean;
+    every: string;
+    encrypt: boolean;
+    retain: number;
+    run_now?: boolean;
+  }) =>
+    callApiEnvelope<{ schedule: BackupScheduleState }>("/api/v1/settings/backups/schedule", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  verifyNamedBackup: (name: string, passphrase?: string) => {
+    const pass = (passphrase ?? "").trim();
+    return callApiEnvelope<{ output?: string }>("/api/v1/settings/backups/verify", {
       method: "POST",
       body: JSON.stringify(pass ? { name, passphrase: pass } : { name }),
     });

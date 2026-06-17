@@ -8693,6 +8693,11 @@ type backupEntry struct {
 type v2BackupOptions struct {
 	InstallDir string
 	OutputFile string
+	// OutputDir, when set and OutputFile is empty, writes the default
+	// timestamped ncc-backup-<UTC>.tar.gz into this directory instead of the
+	// current working directory. Lets a scheduled backup land in a fixed
+	// location (e.g. <install>/backups) without the caller computing the stamp.
+	OutputDir string
 	// Retain, when > 0, prunes older ncc-backup-*.tar.gz siblings of the output
 	// file so at most Retain backups are kept (newest wins).
 	Retain int
@@ -9196,7 +9201,12 @@ func runV2Backup(opts v2BackupOptions) error {
 	}
 	out := strings.TrimSpace(opts.OutputFile)
 	if out == "" {
-		out = fmt.Sprintf("ncc-backup-%s.tar.gz", time.Now().UTC().Format("20060102T150405Z"))
+		name := fmt.Sprintf("ncc-backup-%s.tar.gz", time.Now().UTC().Format("20060102T150405Z"))
+		if dir := strings.TrimSpace(opts.OutputDir); dir != "" {
+			out = filepath.Join(dir, name)
+		} else {
+			out = name
+		}
 	}
 	if abs, err := filepath.Abs(out); err == nil {
 		out = abs
@@ -10007,7 +10017,7 @@ func runV2Doctor(opts v2DoctorOptions) error {
 	fmt.Fprintln(w)
 
 	fmt.Fprintln(w, "-- 1. verify (build provenance) --")
-	_ = runVerifyCommand(w)
+	_ = runVerifyCommand(w, verifyOptions{})
 	fmt.Fprintln(w)
 
 	fmt.Fprintln(w, "-- 2. v2-check (install-dir layout) --")
@@ -14664,7 +14674,18 @@ func versionInfoString() string {
 // (MIT licensed) and is not affiliated with or endorsed by Nutanix,
 // Inc. The "project_url" field below is the source of truth for
 // where the binary came from.
-func runVerifyCommand(out io.Writer) error {
+// verifyOptions controls the `verify` subcommand. The default (zero value) is
+// the historical offline behavior — print the self-hash and a compare URL. With
+// Online set, verify fetches the matching release's checksums.txt from GitHub
+// and reports MATCH / MISMATCH / NOT FOUND, returning a non-zero error on
+// mismatch so it is usable in CI / health checks.
+type verifyOptions struct {
+	Online     bool
+	ReleaseTag string // override the release tag to check against ("" = stamped version)
+	Repo       string // override the GitHub repo ("" = default)
+}
+
+func runVerifyCommand(out io.Writer, opts verifyOptions) error {
 	exe, err := os.Executable()
 	if err != nil {
 		exe = "(unknown)"
@@ -14693,15 +14714,117 @@ func runVerifyCommand(out io.Writer) error {
 	fmt.Fprintf(out, "license:           MIT\n")
 	fmt.Fprintf(out, "project_url:       https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator\n")
 	fmt.Fprintf(out, "affiliation:       independent open-source project; not affiliated with or endorsed by Nutanix, Inc.\n")
-	fmt.Fprintf(out, "verify:            compare executable_sha256 against checksums.txt at\n")
+
 	// Strip git-rev / dirty suffixes (e.g. "2.0.2-<sha>" or "2.0.2-dirty")
-	// so the URL points at the canonical release tag.
+	// so the URL / release lookup points at the canonical release tag.
 	tagVersion := Version
 	if i := strings.IndexAny(tagVersion, "-+"); i >= 0 {
 		tagVersion = tagVersion[:i]
 	}
-	fmt.Fprintf(out, "                   https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v%s\n", tagVersion)
-	return nil
+	releaseTag := tagVersion
+	if t := strings.TrimSpace(opts.ReleaseTag); t != "" {
+		releaseTag = strings.TrimPrefix(t, "v")
+	}
+
+	if !opts.Online {
+		fmt.Fprintf(out, "verify:            compare executable_sha256 against checksums.txt at\n")
+		fmt.Fprintf(out, "                   https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v%s\n", releaseTag)
+		fmt.Fprintf(out, "                   (run `verify --online` to fetch and compare automatically)\n")
+		return nil
+	}
+
+	return runVerifyOnline(out, exeReal, hash, hashErr, gitDirty, releaseTag, opts.Repo)
+}
+
+// runVerifyOnline fetches the matching release's checksums.txt from GitHub and
+// compares the running executable's SHA-256 against the published value for the
+// platform's ncc-orchestrator-<os>-<arch> asset. It prints a verify_result line
+// and returns a non-zero error on MISMATCH / NOT FOUND so callers (and CI) can
+// branch on the exit code.
+//
+// Trust note: the checksum is fetched from the same repository that serves the
+// binary, so this authenticates an *accidentally corrupted, truncated, or
+// MITM'd* download and pins the *version* — it is not proof against a
+// compromised release. Cryptographic provenance (signed checksums / GitHub
+// artifact attestations) is tracked as future work.
+func runVerifyOnline(out io.Writer, exePath, localHash string, hashErr error, gitDirty bool, releaseTag, repoOverride string) error {
+	if hashErr != nil {
+		return fmt.Errorf("verify --online: cannot hash executable: %w", hashErr)
+	}
+	if gitDirty {
+		fmt.Fprintf(out, "verify_result:     SKIPPED — locally-modified build (git_dirty=true) will not match a published release\n")
+		return nil
+	}
+	repo := strings.TrimSpace(repoOverride)
+	if repo == "" {
+		repo = defaultGitHubRepo
+	}
+	repo, err := normalizeGitHubRepo(repo)
+	if err != nil {
+		return fmt.Errorf("verify --online: %w", err)
+	}
+	client := &http.Client{Timeout: 20 * time.Second}
+	fmt.Fprintf(out, "verify:            checking %s against %s release v%s checksums.txt …\n", filepath.Base(exePath), repo, releaseTag)
+	releases, err := fetchGitHubReleases(repo, client)
+	if err != nil {
+		return fmt.Errorf("verify --online: fetch releases: %w", err)
+	}
+	var rel *githubRelease
+	for i := range releases {
+		if strings.EqualFold(strings.TrimPrefix(strings.TrimSpace(releases[i].TagName), "v"), releaseTag) {
+			rel = &releases[i]
+			break
+		}
+	}
+	if rel == nil {
+		fmt.Fprintf(out, "verify_result:     NOT FOUND — no release tagged v%s in %s (dev build or unpublished version?)\n", releaseTag, repo)
+		return fmt.Errorf("release v%s not found in %s", releaseTag, repo)
+	}
+	_, assetName := pickAssetForCurrentPlatform(*rel)
+	if assetName == "" {
+		fmt.Fprintf(out, "verify_result:     NOT FOUND — release v%s has no asset for %s/%s\n", releaseTag, runtime.GOOS, runtime.GOARCH)
+		return fmt.Errorf("no asset for %s/%s in release v%s", runtime.GOOS, runtime.GOARCH, releaseTag)
+	}
+	expected, csAsset, err := fetchReleaseChecksum(rel, assetName, client)
+	if err != nil {
+		return fmt.Errorf("verify --online: %w", err)
+	}
+	fmt.Fprintf(out, "release_asset:     %s\n", assetName)
+	fmt.Fprintf(out, "checksum_source:   %s (%s)\n", csAsset, rel.TagName)
+	fmt.Fprintf(out, "expected_sha256:   %s\n", expected)
+	if strings.EqualFold(expected, localHash) {
+		fmt.Fprintf(out, "verify_result:     MATCH — executable matches the published checksum for v%s\n", releaseTag)
+		return nil
+	}
+	fmt.Fprintf(out, "verify_result:     MISMATCH — executable does NOT match the published checksum for v%s\n", releaseTag)
+	return fmt.Errorf("checksum mismatch for v%s: expected %s, got %s", releaseTag, expected, localHash)
+}
+
+// fetchReleaseChecksum finds the release's checksums.txt (or sha256/.sha256)
+// asset, downloads it, and returns the published SHA-256 for assetName plus the
+// checksum asset's name. Mirrors the asset selection in
+// verifyAssetAgainstReleaseChecksum but returns the hash for display/comparison
+// rather than verifying a downloaded body.
+func fetchReleaseChecksum(rel *githubRelease, assetName string, client *http.Client) (expected, checksumAsset string, err error) {
+	if rel == nil {
+		return "", "", errors.New("nil release passed to checksum fetcher")
+	}
+	for _, a := range rel.Assets {
+		an := strings.ToLower(a.Name)
+		if !(strings.Contains(an, "checksum") || strings.Contains(an, "sha256") || strings.HasSuffix(an, ".sha256")) {
+			continue
+		}
+		csBody, ferr := fetchURL(a.BrowserDownloadURL, client)
+		if ferr != nil {
+			return "", a.Name, fmt.Errorf("fetch checksum asset %s: %w", a.Name, ferr)
+		}
+		h := parseChecksumFile(csBody, assetName)
+		if h == "" {
+			return "", a.Name, fmt.Errorf("checksum entry for %s not found in %s", assetName, a.Name)
+		}
+		return h, a.Name, nil
+	}
+	return "", "", fmt.Errorf("no checksum asset found for release %s", rel.TagName)
 }
 
 // sha256OfFile streams a file through SHA-256. Streamed (rather than
@@ -16500,6 +16623,7 @@ it is written with 0600 permissions — store it securely. Restore it with
 		RunE: func(cmd *cobra.Command, args []string) error {
 			installDir, _ := cmd.Flags().GetString("install-dir")
 			outputFile, _ := cmd.Flags().GetString("output-file")
+			outputDir, _ := cmd.Flags().GetString("output-dir")
 			retain, _ := cmd.Flags().GetInt("retain")
 			encrypt, _ := cmd.Flags().GetBool("encrypt")
 			keyFile, _ := cmd.Flags().GetString("key-file")
@@ -16511,6 +16635,7 @@ it is written with 0600 permissions — store it securely. Restore it with
 			return runV2Backup(v2BackupOptions{
 				InstallDir: installDir,
 				OutputFile: outputFile,
+				OutputDir:  outputDir,
 				Retain:     retain,
 				Encrypt:    encrypt,
 				KeyFile:    keyFile,
@@ -16520,6 +16645,7 @@ it is written with 0600 permissions — store it securely. Restore it with
 	}
 	v2BackupCmd.Flags().String("install-dir", "", "Installation directory to back up (default: auto-detect, fallback .ncc-v2)")
 	v2BackupCmd.Flags().String("output-file", "", "Output archive path (default ./ncc-backup-<UTC-timestamp>.tar.gz)")
+	v2BackupCmd.Flags().String("output-dir", "", "Directory to write the default timestamped archive into (used when --output-file is empty; e.g. <install>/backups for scheduled backups)")
 	v2BackupCmd.Flags().Int("retain", 0, "Keep at most N newest ncc-backup-*.tar.gz files in the output directory, pruning older ones (0 = keep all)")
 	v2BackupCmd.Flags().Bool("encrypt", false, "Encrypt the archive at rest with AES-256-GCM (key from --passphrase/NCC_BACKUP_PASSPHRASE or --key-file/NCC_BACKUP_KEY_FILE/NCC_BACKUP_KEY)")
 	v2BackupCmd.Flags().String("passphrase", "", "Passphrase to derive the encryption key (scrypt); prefer NCC_BACKUP_PASSPHRASE to keep it out of the process list")
@@ -16774,11 +16900,24 @@ Compare the printed SHA-256 against the value next to the same
 ncc-orchestrator-<os>-<arch> filename in the release's checksums.txt
 (or release-attestation.json) on GitHub. If both match, the binary
 has not been tampered with in transit and originates from the build
-that produced the release.`,
+that produced the release.
+
+With --online, verify fetches the matching release's checksums.txt from
+GitHub and reports MATCH / MISMATCH / NOT FOUND, exiting non-zero on a
+mismatch (usable in CI / health checks). The checksum is fetched from the
+same repo that serves the binary, so it authenticates a corrupted or
+MITM'd download and pins the version — it is not proof against a
+compromised release (signed checksums / attestations are future work).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runVerifyCommand(os.Stdout)
+			online, _ := cmd.Flags().GetBool("online")
+			releaseTag, _ := cmd.Flags().GetString("release")
+			repo, _ := cmd.Flags().GetString("repo")
+			return runVerifyCommand(os.Stdout, verifyOptions{Online: online, ReleaseTag: releaseTag, Repo: repo})
 		},
 	}
+	verifyCmd.Flags().Bool("online", false, "Fetch the matching release's checksums.txt from GitHub and compare (exits non-zero on mismatch)")
+	verifyCmd.Flags().String("release", "", "Release tag to verify against (default: this binary's stamped version)")
+	verifyCmd.Flags().String("repo", "", "GitHub owner/repo to fetch the release from (default: the project repo)")
 	cmd.AddCommand(verifyCmd)
 
 	// completion subcommand: emit shell-completion scripts for bash,

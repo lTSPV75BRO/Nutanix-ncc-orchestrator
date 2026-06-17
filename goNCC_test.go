@@ -4285,6 +4285,46 @@ func TestPickAssetForPlatform_TrimmedV200Release(t *testing.T) {
 	}
 }
 
+// TestFetchReleaseChecksum pins that verify --online's checksum lookup finds the
+// checksums.txt asset, extracts the published hash for the platform asset, and
+// reports a clear error when the entry (or the asset) is absent.
+func TestFetchReleaseChecksum(t *testing.T) {
+	const wantHash = "deadbeef00000000000000000000000000000000000000000000000000000000"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "%s  ncc-orchestrator-linux-amd64\n", wantHash)
+		fmt.Fprintf(w, "%s  ncc-orchestrator-darwin-arm64\n", strings.Repeat("a", 64))
+	}))
+	defer srv.Close()
+	rel := &githubRelease{
+		TagName: "v2.1.0",
+		Assets: []githubAsset{
+			{Name: "ncc-orchestrator-linux-amd64", BrowserDownloadURL: srv.URL + "/bin"},
+			{Name: "checksums.txt", BrowserDownloadURL: srv.URL + "/checksums.txt"},
+		},
+	}
+	client := srv.Client()
+
+	got, csAsset, err := fetchReleaseChecksum(rel, "ncc-orchestrator-linux-amd64", client)
+	if err != nil {
+		t.Fatalf("fetchReleaseChecksum: %v", err)
+	}
+	if got != wantHash {
+		t.Errorf("expected hash %s, got %s", wantHash, got)
+	}
+	if csAsset != "checksums.txt" {
+		t.Errorf("expected checksum asset checksums.txt, got %s", csAsset)
+	}
+
+	if _, _, err := fetchReleaseChecksum(rel, "ncc-orchestrator-windows-amd64.exe", client); err == nil {
+		t.Error("expected error for an asset name absent from checksums.txt")
+	}
+
+	noChecksum := &githubRelease{TagName: "v2.1.0", Assets: []githubAsset{{Name: "ncc-orchestrator-linux-amd64", BrowserDownloadURL: srv.URL + "/bin"}}}
+	if _, _, err := fetchReleaseChecksum(noChecksum, "ncc-orchestrator-linux-amd64", client); err == nil {
+		t.Error("expected error when the release has no checksum asset")
+	}
+}
+
 // TestRunVerifyCommand_OutputContract pins the field set printed by
 // `ncc-orchestrator verify`: support tickets, scripts, and CI checks
 // will grep for these labels, so accidental renames must trip a test.
@@ -4293,8 +4333,11 @@ func TestPickAssetForPlatform_TrimmedV200Release(t *testing.T) {
 // real file rather than recomputing some metadata-only digest.
 func TestRunVerifyCommand_OutputContract(t *testing.T) {
 	var buf bytes.Buffer
-	if err := runVerifyCommand(&buf); err != nil {
+	if err := runVerifyCommand(&buf, verifyOptions{}); err != nil {
 		t.Fatalf("runVerifyCommand: %v", err)
+	}
+	if strings.Contains(buf.String(), "verify_result:") {
+		t.Errorf("offline verify must not perform an online check\n--- output ---\n%s", buf.String())
 	}
 	got := buf.String()
 	wantKeys := []string{

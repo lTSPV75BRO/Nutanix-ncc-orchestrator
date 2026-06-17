@@ -289,8 +289,14 @@ func (s *apiServer) resolvePrincipal(r *http.Request) (principal, bool) {
 // schedule, and sending a test notification). These are evaluated first so the
 // blanket /settings/ admin rule below does not shadow them.
 func routeMinRole(r *http.Request) Role {
-	p := r.URL.Path
 	isRead := r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions
+	return routeMinRoleFor(r.URL.Path, isRead)
+}
+
+// routeMinRoleFor is the request-free core of routeMinRole, so the route catalog
+// (meta/routes + OpenAPI) can advertise the minimum role for each path/method
+// without synthesizing an *http.Request.
+func routeMinRoleFor(p string, isRead bool) Role {
 
 	// Operator-accessible operational endpoints. These either expose no secrets
 	// (cluster topology is just names) or are operating actions adjacent to

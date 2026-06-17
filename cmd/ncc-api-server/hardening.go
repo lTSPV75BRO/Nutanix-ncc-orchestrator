@@ -500,6 +500,7 @@ func (s *apiServer) validatePathConfig() error {
 		s.logDir,
 		s.runnerLogPath,
 		s.scheduleStatePath,
+		s.backupScheduleStatePath,
 		s.notificationStatePath,
 		s.tokenFilePath,
 	}

@@ -333,6 +333,20 @@ func (s *apiServer) notifyRunFinished(runErr error) {
 	_ = s.dispatchNotifications(&st, event, title, details, nil)
 }
 
+// notifyOperationalFailure sends an alert for a non-run operational failure
+// (a failed backup snapshot or a self-heal cycle that found failing checks).
+// It piggybacks on the existing "run failure" toggle — an operator who asked to
+// be told about failures wants to hear about these too — so no new config knob
+// or UI is required, and existing notification states keep working unchanged.
+// Best-effort and non-blocking for callers: delivery errors are only logged.
+func (s *apiServer) notifyOperationalFailure(event, title string, details map[string]interface{}) {
+	st, err := s.loadNotifications()
+	if err != nil || !st.Enabled || !st.Events.RunFailure {
+		return
+	}
+	_ = s.dispatchNotifications(&st, event, title, details, nil)
+}
+
 func (s *apiServer) readPolicyViolations() []string {
 	outDir := s.selectBestReportOutDir()
 	b, err := os.ReadFile(filepath.Join(outDir, "policy-gates.txt"))
