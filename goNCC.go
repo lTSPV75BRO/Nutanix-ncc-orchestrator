@@ -15473,7 +15473,19 @@ Run 'ncc-orchestrator --help' for a full list of options.
 				cancel() // Cancel root context to stop all operations
 			}()
 
-			p := mpb.New(mpb.WithWidth(80))
+			// Live progress bars are for an interactive terminal only. When
+			// stdout is redirected to a file (the systemd-timer scheduler and
+			// the api-server both do `... >> ncc-runner.log 2>&1`), mpb's ANSI
+			// cursor-control frames (\x1b[<n>A, \x1b[J) pile up and a viewer
+			// collapses them to a single ~18-line final frame — making the
+			// runner log look truncated. Discard the bar output off-TTY; the
+			// structured zerolog lines below (phase change / cluster run
+			// completed / cluster run failed) still record per-cluster progress.
+			progressOpts := []mpb.ContainerOption{mpb.WithWidth(80)}
+			if !term.IsTerminal(int(os.Stdout.Fd())) {
+				progressOpts = append(progressOpts, mpb.WithOutput(io.Discard))
+			}
+			p := mpb.New(progressOpts...)
 			defer func() {
 				// Ensure progress bars are cleaned up on exit
 				p.Wait()

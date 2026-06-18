@@ -1,6 +1,6 @@
 # NCC Orchestrator — v2.1.0
 
-**Release date:** 2026-06-16
+**Release date:** 2026-06-18
 **Type:** Authentication + autonomic-operations + maintenance/hardening release. Recommended for everyone on v2.0.x.
 
 > **Affiliation:** This is an independent open-source project. It is **not** affiliated with or endorsed by Nutanix, Inc. NCC and Nutanix are trademarks of their respective owners. The project is MIT licensed; see [`LICENSE`](LICENSE).
