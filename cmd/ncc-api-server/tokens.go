@@ -56,7 +56,9 @@ func (s *apiServer) principalFromPAT(r *http.Request) (principal, bool) {
 		return principal{}, false
 	}
 	if pt.ExpiresAt != "" {
-		if exp, err := time.Parse(time.RFC3339, pt.ExpiresAt); err == nil && time.Now().After(exp) {
+		exp, err := time.Parse(time.RFC3339, pt.ExpiresAt)
+		// Fail closed: an invalid expiry format must never grant access.
+		if err != nil || !time.Now().Before(exp) {
 			return principal{}, false
 		}
 	}

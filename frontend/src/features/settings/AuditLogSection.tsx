@@ -52,9 +52,19 @@ function formatBytes(n: number): string {
 
 const ACTION_PRESETS: { label: string; value: string }[] = [
   { label: "All actions", value: "" },
-  { label: "Settings (config / files)", value: "settings" },
-  { label: "Schedule changes", value: "schedule" },
-  { label: "Runs (preflight + trigger)", value: "runs" },
+  { label: "Authentication (all auth events)", value: "auth." },
+  { label: "Token management (PAT/session token)", value: "auth.token." },
+  { label: "Settings (all settings changes)", value: "settings." },
+  { label: "Config changes (config + related files)", value: "settings.config" },
+  { label: "User & access management", value: "settings.users." },
+  { label: "Backups (create/restore/verify/delete/download)", value: "settings.backup." },
+  { label: "Notifications (save/test)", value: "settings.notifications." },
+  { label: "TLS / HTTPS", value: "settings.tls." },
+  { label: "Updates", value: "settings.update" },
+  { label: "Schedule changes", value: "schedule." },
+  { label: "Scheduled backup config", value: "schedule.backup." },
+  { label: "Runs (preflight + trigger + cancel)", value: "runs." },
+  { label: "Health diagnostics / self-heal", value: "health.diagnostics." },
 ];
 
 function actionTone(action: string): "blue" | "green" | "orange" | "purple" | "default" {
@@ -267,7 +277,7 @@ export function AuditLogSection({ onError }: Props) {
           value={actionFilter}
           onChange={setActionFilter}
           options={ACTION_PRESETS}
-          style={{ width: 220 }}
+          style={{ width: 320 }}
         />
         <Select
           id="audit-limit"

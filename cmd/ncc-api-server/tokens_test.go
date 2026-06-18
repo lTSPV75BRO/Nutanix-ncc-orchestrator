@@ -107,6 +107,15 @@ func TestPATRejectedWhenExpired(t *testing.T) {
 	}
 }
 
+func TestPATRejectedWhenExpiryMalformed(t *testing.T) {
+	s := newTokenTestServer(t)
+	addLocalAccount(t, s.users, "carol2", RoleAdmin)
+	secret, _ := mintToken(t, s, "carol2", true, RoleAdmin, "06/17/2026 10:21:31 PM")
+	if _, ok := s.principalFromPAT(reqWithToken(secret)); ok {
+		t.Fatal("token with malformed expires_at must be rejected")
+	}
+}
+
 func TestPATNonLocalOwnerUsesSnapshotRole(t *testing.T) {
 	s := newTokenTestServer(t)
 	// No local account: an AD/SAML-minted token relies on its snapshot role.

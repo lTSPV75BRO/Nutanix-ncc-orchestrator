@@ -211,6 +211,10 @@ export function DashboardPage() {
 
   const runSummary = asRecord(reportData.run_summary);
   const runTimestamp = String(runSummary.timestamp || "");
+  const runExitCode = toNumber(runSummary.exit_code);
+  const runTotalChecks = toNumber(runSummary.total_checks);
+  const runSource = String(runSummary.source || runSummary.run_source || "").trim();
+  const latestRunError = String(runActiveQuery.data?.last_error || "").trim();
   const fresh = freshnessTag(runTimestamp);
   const clustersOk = toNumber(runSummary.clusters_ok);
   const clustersFailed = toNumber(runSummary.clusters_failed);
@@ -629,6 +633,16 @@ export function DashboardPage() {
 
             // Either no run yet, or last run produced an error before any
             // alerts were collected (e.g. orchestrator failed pre-flight).
+            const sourceLabel =
+              runSource === "scheduled" ? "scheduled run" : runSource === "manual" ? "manual run" : "latest run";
+            const likelyEarlyFailure =
+              runSummary.success === false ||
+              runExitCode > 0 ||
+              clustersFailed > 0 ||
+              runTotalChecks === 0;
+            const artifactGap = runTotalChecks > 0 && clustersOk + clustersFailed > 0;
+            const summaryHint = runExitCode > 0 ? `Exit code ${runExitCode}.` : "";
+            const errorHint = latestRunError ? ` Last runtime error: ${latestRunError}.` : "";
             return (
               <Empty
                 description={
@@ -638,9 +652,20 @@ export function DashboardPage() {
                     </Typography.Text>
                     <Typography.Text type="secondary">
                       {hasPriorRun
-                        ? "The most recent run completed but didn't generate per-check findings. Re-run from Settings → Runs."
+                        ? likelyEarlyFailure
+                          ? `${sourceLabel[0].toUpperCase()}${sourceLabel.slice(1)} appears to have finished before per-check findings were generated. ${summaryHint}${errorHint} Re-run from Settings → Runs and check live output for the first failing stage.`
+                          : artifactGap
+                            ? `The ${sourceLabel} summary exists, but per-check artifacts are missing. This usually indicates incomplete report artifact generation or cleanup. Open Settings → Runs, inspect the latest run artifacts/logs, then re-run.`
+                            : `The ${sourceLabel} completed but did not emit per-check findings. Re-run from Settings → Runs with full output enabled.`
                         : "Trigger a run from Settings → Runs to populate this view."}
                     </Typography.Text>
+                    {hasPriorRun ? (
+                      <Link to="/settings?tab=runs">
+                        <Button size="small" type="link">
+                          Open Runs →
+                        </Button>
+                      </Link>
+                    ) : null}
                   </Space>
                 }
               />
