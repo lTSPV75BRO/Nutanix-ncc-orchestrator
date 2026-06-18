@@ -78,10 +78,10 @@ outputs: "html,csv"                        # Any subset of: html,csv,json,markdo
 output-dir-logs: "nccfiles"                # Raw NCC summary text
 output-dir-filtered: "outputfiles"         # Generated HTML/CSV/JSON reports
 single-report: false                       # Also emit ncc-report-single.html
-run-history: false                         # Save per-run snapshots
+run-history: true                          # Save per-run snapshots (needed for the dashboard "recent runs" history; scheduled runs only show up when this is on)
 run-history-dir: "outputfiles/runs"        # Snapshot base directory
-retain-last: 0                             # Keep last N snapshots (0 = unlimited)
-retain-days: 0                             # Keep snapshots newer than N days (0 = unlimited)
+retain-last: 500                           # Keep last N snapshots (0 = unlimited); bounds disk for frequent schedules
+retain-days: 30                            # Keep snapshots newer than N days (0 = unlimited)
 artifact-retain-days: 0                    # Prune generated artifacts older than N days (0 = unlimited)
 artifact-retain-max-files: 0               # Keep only N newest generated artifacts (0 = unlimited)
 adaptive-parallelism: true                 # Reduce/increase concurrency on 429s
