@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -70,9 +71,12 @@ var processCmdline = func(pid int) string {
 func processLooksLikeOrchestrator(pid int) bool {
 	cmd := strings.ToLower(strings.TrimSpace(processCmdline(pid)))
 	if cmd == "" {
-		// On platforms/environments where /proc cmdline is unavailable, keep
-		// backward-compatible behavior.
-		return true
+		// On Linux we expect /proc/<pid>/cmdline to exist for live processes.
+		// If it is unreadable/empty, fail closed to avoid stale-heartbeat ghosts.
+		if runtime.GOOS == "linux" {
+			return false
+		}
+		return true // non-Linux compatibility fallback
 	}
 	if !strings.Contains(cmd, "ncc-orchestrator") {
 		return false
