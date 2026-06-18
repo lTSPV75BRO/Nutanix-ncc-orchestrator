@@ -12831,6 +12831,17 @@ func scheduleMarker(taskName string) string {
 	return "ncc-orchestrator:" + name
 }
 
+// scheduleRunHistoryFlags are appended to generated schedule commands so a
+// scheduled run records a per-run snapshot under <output-dir-filtered>/runs.
+// Without this, scheduled scans only overwrite the single in-place
+// run-summary.json and never accumulate, so the dashboard "recent runs" history
+// omits them entirely (only API/UI-triggered runs, which the api-server archives
+// itself, would appear). The flag is passed explicitly rather than relying on
+// `run-history: true` in config because it is the authoritative source for the
+// run and is honored regardless of config-key precedence. Retention is bounded
+// so a frequent schedule can't grow the history dir without limit.
+const scheduleRunHistoryFlags = "--run-history --retain-last 500 --retain-days 30"
+
 func defaultScheduleCommand(configPath string) (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -12839,14 +12850,14 @@ func defaultScheduleCommand(configPath string) (string, error) {
 	exe = filepath.Clean(exe)
 	if runtime.GOOS == "windows" {
 		if strings.TrimSpace(configPath) == "" {
-			return fmt.Sprintf("\"%s\"", exe), nil
+			return fmt.Sprintf("\"%s\" %s", exe, scheduleRunHistoryFlags), nil
 		}
-		return fmt.Sprintf("\"%s\" --config \"%s\"", exe, configPath), nil
+		return fmt.Sprintf("\"%s\" --config \"%s\" %s", exe, configPath, scheduleRunHistoryFlags), nil
 	}
 	if strings.TrimSpace(configPath) == "" {
-		return fmt.Sprintf("%s", shellQuotePOSIX(exe)), nil
+		return fmt.Sprintf("%s %s", shellQuotePOSIX(exe), scheduleRunHistoryFlags), nil
 	}
-	return fmt.Sprintf("%s --config %s", shellQuotePOSIX(exe), shellQuotePOSIX(configPath)), nil
+	return fmt.Sprintf("%s --config %s %s", shellQuotePOSIX(exe), shellQuotePOSIX(configPath), scheduleRunHistoryFlags), nil
 }
 
 func upsertScheduleLine(content, marker, line string) string {
