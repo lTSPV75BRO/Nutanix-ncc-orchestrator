@@ -523,6 +523,7 @@ export type RunInfo = {
   info_total?: number;
   exit_code?: number;
   success?: boolean;
+  run_source?: string;
   client?: string;
   user_agent?: string;
   auth_mode?: string;
@@ -544,6 +545,10 @@ export type ActiveRunEntry = {
   live_output?: string;
   /** 1-based position in the FIFO queue (queued runs only). */
   queue_position?: number;
+  /** How the run was launched ("scheduled" | "manual" | "external"). */
+  source?: string;
+  /** True for runs not launched by the api-server (e.g. systemd-timer scheduled runs). */
+  external?: boolean;
 };
 
 export type RunActiveData = {

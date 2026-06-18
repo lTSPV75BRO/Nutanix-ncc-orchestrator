@@ -2535,6 +2535,10 @@ type RunSummaryJSON struct {
 	AvgHealthScore int                 `json:"avg_health_score,omitempty"`
 	MinHealthScore int                 `json:"min_health_score,omitempty"`
 	FailureClasses map[string]int      `json:"failure_classes,omitempty"`
+	// Source records how the run was launched ("scheduled", "manual", ""),
+	// taken from NCC_RUN_SOURCE, so the dashboard can distinguish a systemd-
+	// timer/cron scheduled run from an interactive/API-triggered one.
+	Source string `json:"source,omitempty"`
 }
 
 // RunClusterSummary is per-cluster stats for automation (run-summary.json).
@@ -15518,6 +15522,29 @@ Run 'ncc-orchestrator --help' for a full list of options.
 			runStart := time.Now()
 			notify.ResetMetrics()
 
+			// Run-activity heartbeat: write a tiny per-pid marker into the output
+			// dir for the lifetime of this run. The api-server reads these to
+			// surface runs it did NOT spawn — chiefly systemd-timer/cron
+			// *scheduled* runs — in its Active Runs view (it otherwise only knows
+			// about runs it launched itself). Removed on exit; stale markers from a
+			// crash are cleaned up by the reader once the pid is gone.
+			if hbDir := strings.TrimSpace(cfg.OutputDirFiltered); hbDir != "" {
+				hbSource := strings.TrimSpace(os.Getenv("NCC_RUN_SOURCE"))
+				if hbSource == "" {
+					hbSource = "manual"
+				}
+				hbPath := filepath.Join(hbDir, fmt.Sprintf(".ncc-run-active-%d.json", os.Getpid()))
+				if hb, err := json.Marshal(map[string]interface{}{
+					"pid":        os.Getpid(),
+					"started_at": runStart.UTC().Format(time.RFC3339),
+					"clusters":   cfg.Clusters,
+					"source":     hbSource,
+				}); err == nil {
+					_ = os.WriteFile(hbPath, hb, 0o644)
+					defer func() { _ = os.Remove(hbPath) }()
+				}
+			}
+
 			// Opt-in OpenTelemetry tracing (no-op unless an OTLP endpoint is
 			// configured). Spans are emitted per cluster below.
 			otelShutdown, otelErr := trace.Init(ctx, Version)
@@ -15764,6 +15791,7 @@ Run 'ncc-orchestrator --help' for a full list of options.
 				AvgHealthScore: avgHealth,
 				MinHealthScore: minHealth,
 				FailureClasses: failureCounts,
+				Source:         strings.TrimSpace(os.Getenv("NCC_RUN_SOURCE")),
 			}
 			if err := writeRunSummaryJSON(fs, cfg.OutputDirFiltered, runSummary); err != nil {
 				log.Error().Err(err).Msg("write run-summary.json failed (non-fatal)")

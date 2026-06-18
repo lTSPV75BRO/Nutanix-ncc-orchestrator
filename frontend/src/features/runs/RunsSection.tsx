@@ -301,10 +301,25 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
     );
   };
 
-  const renderSource = (src?: RunInfo["source"]) => {
-    if (src === "history") return <Tag color="blue" style={{ marginInlineEnd: 0 }}>Run</Tag>;
-    if (src === "summary") return <Tag color="cyan" style={{ marginInlineEnd: 0 }}>Latest</Tag>;
-    if (src === "trigger") return <Tag style={{ marginInlineEnd: 0 }}>Trigger</Tag>;
+  const renderSource = (row: RunInfo) => {
+    const scheduled = row.run_source === "scheduled";
+    if (row.source === "history") {
+      return scheduled ? (
+        <Tooltip title="Launched automatically by the schedule (systemd timer / cron)">
+          <Tag color="purple" style={{ marginInlineEnd: 0 }}>Scheduled</Tag>
+        </Tooltip>
+      ) : (
+        <Tag color="blue" style={{ marginInlineEnd: 0 }}>Run</Tag>
+      );
+    }
+    if (row.source === "summary") {
+      return scheduled ? (
+        <Tag color="purple" style={{ marginInlineEnd: 0 }}>Scheduled · latest</Tag>
+      ) : (
+        <Tag color="cyan" style={{ marginInlineEnd: 0 }}>Latest</Tag>
+      );
+    }
+    if (row.source === "trigger") return <Tag style={{ marginInlineEnd: 0 }}>Trigger</Tag>;
     return <Tag style={{ marginInlineEnd: 0 }}>—</Tag>;
   };
 
@@ -332,7 +347,7 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
       render: (v: string) => <Typography.Text code>{v}</Typography.Text>,
     },
     { title: "Started", dataIndex: "mod_time", key: "mod_time", width: 200, render: formatTime },
-    { title: "Type", dataIndex: "source", key: "source", width: 100, render: (_v, row) => renderSource(row.source) },
+    { title: "Type", dataIndex: "source", key: "source", width: 120, render: (_v, row) => renderSource(row) },
     { title: "Status", key: "status", width: 150, render: (_v, row) => renderStatus(row) },
     {
       title: "Duration",
@@ -408,11 +423,17 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
     const skipped = run.skipped ?? [];
     const waitSec = run.status === "queued" ? estimateWaitSec(run.queue_position) : undefined;
     const queuedLabel = run.queue_position ? `Queued · #${run.queue_position} in line` : "Queued";
+    const isScheduled = run.source === "scheduled" || run.external === true;
     const header = (
       <Space size={8} wrap>
         <Badge status={run.status === "running" ? "processing" : "default"} />
         <Typography.Text code>{run.id}</Typography.Text>
         {run.group ? <Tag color="purple">{run.group}</Tag> : null}
+        {isScheduled ? (
+          <Tooltip title="Launched by the schedule (systemd timer / cron) outside this server">
+            <Tag color="purple" icon={<ClockCircleOutlined />}>scheduled</Tag>
+          </Tooltip>
+        ) : null}
         {run.all_clusters ? <Tag color="geekblue">all clusters</Tag> : null}
         <Tag color={run.status === "running" ? "processing" : "default"}>
           {run.status === "running" ? `Running · ${formatElapsedSeconds(run.elapsed_sec)}` : queuedLabel}
@@ -427,7 +448,11 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
     return {
       key: run.id,
       label: header,
-      extra: (
+      // A scheduled/external run isn't owned by this server's run manager, so it
+      // can't be signalled here — show the log source instead of a Cancel button.
+      extra: isScheduled ? (
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>scheduler log</Typography.Text>
+      ) : (
         <Button
           danger
           size="small"

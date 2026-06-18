@@ -363,6 +363,8 @@ type runInfo struct {
 
 	// Where this row came from. One of: "history" | "summary" | "trigger".
 	Source string `json:"source,omitempty"`
+	// How the run was launched ("scheduled" | "manual"), from run-summary.json.
+	RunSource string `json:"run_source,omitempty"`
 
 	// Enrichment fields (populated from run-summary.json when available).
 	Timestamp      string  `json:"timestamp,omitempty"`
@@ -2762,6 +2764,7 @@ func enrichRunInfoFromSummary(ri *runInfo, summaryPath string) {
 		}
 	}
 	ri.DurationS = s.DurationS
+	ri.RunSource = strings.TrimSpace(s.Source)
 	ri.ClustersOK = s.ClustersOK
 	ri.ClustersFailed = s.ClustersFailed
 	ri.TotalChecks = s.TotalChecks
@@ -2838,10 +2841,20 @@ func (s *apiServer) handleRunActive(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	runningCount := 0
+	managedPIDs := map[int]bool{}
 	for _, rec := range s.runs {
 		if rec.status == "running" {
 			runningCount++
 		}
+		if rec.pid > 0 {
+			managedPIDs[rec.pid] = true
+		}
+	}
+	// Surface runs this api-server didn't launch (scheduled systemd-timer/cron
+	// runs, or a manual CLI run on the host) so they appear in Active Runs too.
+	if ext := s.externalActiveRuns(managedPIDs); len(ext) > 0 {
+		runs = append(runs, ext...)
+		runningCount += len(ext)
 	}
 	data := map[string]interface{}{
 		"active":            s.active,
@@ -3303,6 +3316,7 @@ type trendRunSummary struct {
 	AvgHealthScore int                   `json:"avg_health_score"`
 	MinHealthScore int                   `json:"min_health_score"`
 	ExitCode       *int                  `json:"exit_code,omitempty"`
+	Source         string                `json:"source,omitempty"`
 	Clusters       []trendClusterSummary `json:"clusters"`
 }
 
