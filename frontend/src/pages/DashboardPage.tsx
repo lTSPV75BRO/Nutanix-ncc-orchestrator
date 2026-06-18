@@ -226,6 +226,20 @@ export function DashboardPage() {
 
   // Severity totals fall back to agg_rows if NCC summary missing (e.g. some setups).
   const aggRows = asArray(reportData.agg_rows).map((r) => asRecord(r));
+  // checks_snapshot can be either:
+  // 1) a flat row array, or
+  // 2) legacy/object form {clusters:[{checks:[...]}]}.
+  // Treat either shape as "has alert data" so we don't show a false empty state.
+  const hasChecksSnapshotData = useMemo(() => {
+    const flat = asArray(reportData.checks_snapshot);
+    if (flat.length > 0) return true;
+    const snap = asRecord(reportData.checks_snapshot);
+    const clusters = asArray(snap.clusters).map((c) => asRecord(c));
+    for (const c of clusters) {
+      if (asArray(c.checks).length > 0) return true;
+    }
+    return false;
+  }, [reportData.checks_snapshot]);
   const aggFail = aggRows.filter((r) => String(r.severity || "").toUpperCase() === "FAIL").length;
   const aggErr = aggRows.filter((r) => String(r.severity || "").toUpperCase() === "ERR").length;
   const aggWarn = aggRows.filter((r) => String(r.severity || "").toUpperCase() === "WARN").length;
@@ -573,7 +587,7 @@ export function DashboardPage() {
       </Card>
 
       {/* MAIN ALERTS TABLE */}
-      {aggRows.length === 0 && asArray(reportData.checks_snapshot).length === 0 ? (
+      {aggRows.length === 0 && !hasChecksSnapshotData ? (
         <Card className="page-card">
           {(() => {
             // Empty-state copy is contextual:

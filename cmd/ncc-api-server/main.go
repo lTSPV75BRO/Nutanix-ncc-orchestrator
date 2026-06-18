@@ -3196,7 +3196,6 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 	}
 	runSummary = deepFilterClusters(runSummary, access)
 	checksSnapshot := deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "checks-snapshot.json"), []interface{}{}), access)
-	checksSnapshot = normalizeChecksSnapshot(checksSnapshot)
 	drilldownDiff := deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "drilldown-diff.json"), map[string]interface{}{}), access)
 	flakyChecks := deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "flaky-checks.json"), map[string]interface{}{}), access)
 	regressionSummary := deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "regression-summary.json"), map[string]interface{}{}), access)
@@ -3244,53 +3243,6 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 		"report_source_dir":   outDir,
 		"pagination":          pagination,
 	}})
-}
-
-// normalizeChecksSnapshot returns a flat []interface{} of check rows expected by
-// the UI. Modern runs already write a flat list; some older/alternate writers
-// persist {"clusters":[{"address":...,"checks":[...]}]}, which we flatten here.
-func normalizeChecksSnapshot(v interface{}) interface{} {
-	if rows, ok := v.([]interface{}); ok {
-		return rows
-	}
-	root, ok := v.(map[string]interface{})
-	if !ok {
-		return []interface{}{}
-	}
-	clusters, ok := root["clusters"].([]interface{})
-	if !ok {
-		return []interface{}{}
-	}
-	out := make([]interface{}, 0, len(clusters)*8)
-	for _, c := range clusters {
-		cm, ok := c.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		clusterName, _ := objClusterName(cm)
-		checks, ok := cm["checks"].([]interface{})
-		if !ok {
-			continue
-		}
-		for _, chk := range checks {
-			m, ok := chk.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			row := map[string]interface{}{}
-			for k, val := range m {
-				row[k] = val
-			}
-			if clusterName != "" {
-				row["cluster"] = clusterName
-				if _, exists := row["address"]; !exists {
-					row["address"] = clusterName
-				}
-			}
-			out = append(out, row)
-		}
-	}
-	return out
 }
 
 type reportDataPagination struct {
