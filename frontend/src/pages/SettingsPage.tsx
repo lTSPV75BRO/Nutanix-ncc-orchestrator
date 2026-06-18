@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import type { ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Button,
   Card,
@@ -399,6 +400,7 @@ function DeveloperTab({ onError }: { onError: (e: unknown) => void }) {
 
 export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
   const [tab, setTab] = useLocalStorageState("settings.activeTab", "connection");
+  const [searchParams, setSearchParams] = useSearchParams();
   const health = useQuery({ queryKey: ["health"], queryFn: api.health });
   const report = useQuery({ queryKey: ["report-data"], queryFn: api.reportData });
   const backendConfigPath = (health.data as { config_path?: string } | undefined)?.config_path ?? "";
@@ -505,7 +507,43 @@ export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
   // the server-side RBAC on those endpoints.
   const operatorTabs = new Set(["connection", "schedule", "runs", "logs", "audit"]);
   const visibleItems = isAdmin ? items : items.filter((it) => operatorTabs.has(it.key));
-  const activeTab = visibleItems.some((it) => it.key === tab) ? tab : (visibleItems[0]?.key ?? "connection");
+  const requestedTab = (searchParams.get("tab") || "").trim();
+  const requestedTabAllowed = visibleItems.some((it) => it.key === requestedTab);
+  const storedTabAllowed = visibleItems.some((it) => it.key === tab);
+  const activeTab = requestedTabAllowed
+    ? requestedTab
+    : storedTabAllowed
+      ? tab
+      : (visibleItems[0]?.key ?? "connection");
 
-  return <Tabs activeKey={activeTab} onChange={setTab} size="large" className="settings-tabs" items={visibleItems} />;
+  // Keep the remembered tab in sync with the currently active tab.
+  useEffect(() => {
+    if (tab !== activeTab) {
+      setTab(activeTab);
+    }
+  }, [activeTab, tab, setTab]);
+
+  // Keep the URL query param in sync so deep links like /settings?tab=runs
+  // work and the current tab is shareable/bookmarkable.
+  useEffect(() => {
+    if ((searchParams.get("tab") || "") === activeTab) return;
+    const next = new URLSearchParams(searchParams);
+    next.set("tab", activeTab);
+    setSearchParams(next, { replace: true });
+  }, [activeTab, searchParams, setSearchParams]);
+
+  return (
+    <Tabs
+      activeKey={activeTab}
+      onChange={(nextTab) => {
+        setTab(nextTab);
+        const next = new URLSearchParams(searchParams);
+        next.set("tab", nextTab);
+        setSearchParams(next, { replace: true });
+      }}
+      size="large"
+      className="settings-tabs"
+      items={visibleItems}
+    />
+  );
 }
