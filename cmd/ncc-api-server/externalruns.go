@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -49,6 +50,33 @@ func safeErr(err error) string {
 	return err.Error()
 }
 
+// processCmdline reads the process command line for pid from /proc. It returns
+// empty when unavailable (non-Linux or insufficient permissions).
+var processCmdline = func(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	b, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
+	if err != nil || len(b) == 0 {
+		return ""
+	}
+	// cmdline is NUL-separated.
+	return strings.ReplaceAll(string(b), "\x00", " ")
+}
+
+// processLooksLikeOrchestrator checks whether pid appears to be an
+// ncc-orchestrator process. This avoids stale heartbeat false positives when a
+// dead run's pid gets reused by an unrelated process.
+func processLooksLikeOrchestrator(pid int) bool {
+	cmd := strings.ToLower(strings.TrimSpace(processCmdline(pid)))
+	if cmd == "" {
+		// On platforms/environments where /proc cmdline is unavailable, keep
+		// backward-compatible behavior.
+		return true
+	}
+	return strings.Contains(cmd, "ncc-orchestrator")
+}
+
 // externalActiveRuns returns synthetic active-run entries for orchestrator runs
 // not managed by this api-server (managedPIDs are the pids it owns). Entry shape
 // matches activeRunsSnapshot so the UI renders them uniformly.
@@ -67,6 +95,10 @@ func (s *apiServer) externalActiveRuns(managedPIDs map[int]bool) []map[string]in
 		}
 		if !processAlive(hb.PID) {
 			_ = os.Remove(m) // stale heartbeat from a crashed/finished run
+			continue
+		}
+		if !processLooksLikeOrchestrator(hb.PID) {
+			_ = os.Remove(m) // stale heartbeat for a pid reused by another process
 			continue
 		}
 		if managedPIDs[hb.PID] {

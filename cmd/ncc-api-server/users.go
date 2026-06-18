@@ -833,14 +833,50 @@ func tokenView(t personalToken) personalToken {
 	return c
 }
 
+// tokenExpired reports whether a PAT should be considered expired at `now`.
+// Empty ExpiresAt means no expiry. Malformed timestamps are treated as expired
+// (fail-closed) so bad data cannot remain "active" indefinitely.
+func tokenExpired(t personalToken, now time.Time) bool {
+	if strings.TrimSpace(t.ExpiresAt) == "" {
+		return false
+	}
+	exp, err := time.Parse(time.RFC3339, t.ExpiresAt)
+	if err != nil {
+		return true
+	}
+	return !now.Before(exp)
+}
+
+// pruneExpiredTokensLocked removes expired PATs in-place and persists changes.
+// Caller must hold db.mu.
+func (db *userDB) pruneExpiredTokensLocked(now time.Time) {
+	if db == nil || len(db.tokens) == 0 {
+		return
+	}
+	kept := db.tokens[:0]
+	changed := false
+	for _, t := range db.tokens {
+		if tokenExpired(t, now) {
+			changed = true
+			continue
+		}
+		kept = append(kept, t)
+	}
+	db.tokens = kept
+	if changed {
+		_ = db.saveLocked()
+	}
+}
+
 // listTokensForOwner returns the caller's own tokens (hash blanked), newest first.
 func (db *userDB) listTokensForOwner(owner string) []personalToken {
 	out := []personalToken{}
 	if db == nil {
 		return out
 	}
-	db.mu.RLock()
-	defer db.mu.RUnlock()
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.pruneExpiredTokensLocked(time.Now().UTC())
 	for _, t := range db.tokens {
 		if strings.EqualFold(t.Owner, owner) {
 			out = append(out, tokenView(t))
@@ -856,8 +892,9 @@ func (db *userDB) listAllTokens() []personalToken {
 	if db == nil {
 		return out
 	}
-	db.mu.RLock()
-	defer db.mu.RUnlock()
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.pruneExpiredTokensLocked(time.Now().UTC())
 	for _, t := range db.tokens {
 		out = append(out, tokenView(t))
 	}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -68,5 +69,30 @@ func TestExternalActiveRunsLiveAndStale(t *testing.T) {
 	// When the pid is managed (already shown), it should be excluded.
 	if got := s.externalActiveRuns(map[int]bool{live: true}); len(got) != 0 {
 		t.Fatalf("managed pid should be excluded, got %d", len(got))
+	}
+}
+
+func TestExternalActiveRunsRemovesPidReuseHeartbeat(t *testing.T) {
+	dir := t.TempDir()
+	s := &apiServer{repoRoot: dir, outputDir: dir, configPath: filepath.Join(dir, "config.yaml")}
+
+	pid := os.Getpid()
+	hbPath := writeHeartbeat(t, dir, pid, "scheduled")
+
+	orig := processCmdline
+	processCmdline = func(p int) string {
+		if p == pid {
+			return "bash -lc sleep 1"
+		}
+		return orig(p)
+	}
+	defer func() { processCmdline = orig }()
+
+	got := s.externalActiveRuns(map[int]bool{})
+	if len(got) != 0 {
+		t.Fatalf("expected reused non-orchestrator pid heartbeat to be filtered, got %d entries", len(got))
+	}
+	if _, err := os.Stat(hbPath); !os.IsNotExist(err) {
+		t.Fatalf("expected stale heartbeat %s to be removed", strconv.Itoa(pid))
 	}
 }

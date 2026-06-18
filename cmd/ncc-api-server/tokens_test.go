@@ -181,6 +181,33 @@ func TestPATResolvesNeverExpiringToken(t *testing.T) {
 	}
 }
 
+func TestTokenListsPruneExpiredAndMalformed(t *testing.T) {
+	s := newTokenTestServer(t)
+	addLocalAccount(t, s.users, "ivy", RoleViewer)
+
+	future := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)
+	past := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+	_, keepID := mintToken(t, s, "ivy", true, RoleViewer, future)
+	_, _ = mintToken(t, s, "ivy", true, RoleViewer, past)
+	_, _ = mintToken(t, s, "ivy", true, RoleViewer, "06/17/2026 10:21:31 PM")
+
+	ownerList := s.users.listTokensForOwner("ivy")
+	if len(ownerList) != 1 {
+		t.Fatalf("expected only 1 active owner token after prune, got %d", len(ownerList))
+	}
+	if ownerList[0].ID != keepID {
+		t.Fatalf("unexpected active token id: got %q want %q", ownerList[0].ID, keepID)
+	}
+
+	all := s.users.listAllTokens()
+	if len(all) != 1 {
+		t.Fatalf("expected only 1 active token globally after prune, got %d", len(all))
+	}
+	if all[0].ID != keepID {
+		t.Fatalf("unexpected global active token id: got %q want %q", all[0].ID, keepID)
+	}
+}
+
 func TestCreateTokenNeverExpiryViaHandler(t *testing.T) {
 	s := newTokenTestServer(t)
 	addLocalAccount(t, s.users, "ivan", RoleViewer)
