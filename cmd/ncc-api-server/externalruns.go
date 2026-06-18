@@ -74,7 +74,16 @@ func processLooksLikeOrchestrator(pid int) bool {
 		// backward-compatible behavior.
 		return true
 	}
-	return strings.Contains(cmd, "ncc-orchestrator")
+	if !strings.Contains(cmd, "ncc-orchestrator") {
+		return false
+	}
+	// Exclude the long-lived stack supervisor process. A stale heartbeat pid
+	// reused by supervisor would otherwise look "alive" forever in Active Runs.
+	if strings.Contains(cmd, "v2-supervise") {
+		return false
+	}
+	// Real run invocations include run-oriented flags such as --config.
+	return strings.Contains(cmd, "--config")
 }
 
 // externalActiveRuns returns synthetic active-run entries for orchestrator runs

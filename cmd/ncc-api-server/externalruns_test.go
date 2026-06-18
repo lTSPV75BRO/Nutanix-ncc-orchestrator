@@ -96,3 +96,28 @@ func TestExternalActiveRunsRemovesPidReuseHeartbeat(t *testing.T) {
 		t.Fatalf("expected stale heartbeat %s to be removed", strconv.Itoa(pid))
 	}
 }
+
+func TestExternalActiveRunsIgnoresSupervisorCmdline(t *testing.T) {
+	dir := t.TempDir()
+	s := &apiServer{repoRoot: dir, outputDir: dir, configPath: filepath.Join(dir, "config.yaml")}
+
+	pid := os.Getpid()
+	hbPath := writeHeartbeat(t, dir, pid, "scheduled")
+
+	orig := processCmdline
+	processCmdline = func(p int) string {
+		if p == pid {
+			return "/root/ncc-orchestrator/bin/ncc-orchestrator v2-supervise --install-dir /root/ncc-orchestrator"
+		}
+		return orig(p)
+	}
+	defer func() { processCmdline = orig }()
+
+	got := s.externalActiveRuns(map[int]bool{})
+	if len(got) != 0 {
+		t.Fatalf("expected supervisor cmdline heartbeat to be filtered, got %d entries", len(got))
+	}
+	if _, err := os.Stat(hbPath); !os.IsNotExist(err) {
+		t.Fatalf("expected stale supervisor heartbeat %s to be removed", strconv.Itoa(pid))
+	}
+}
