@@ -2,8 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -20,6 +24,7 @@ type unifiedCheck struct {
 	Fixed    bool   `json:"fixed,omitempty"`
 	FixMsg   string `json:"fix_message,omitempty"`
 	Source   string `json:"source"`
+	Disruptive bool `json:"disruptive,omitempty"`
 }
 
 // handleHealthDiagnostics powers the Settings → System Health view (admin-only).
@@ -30,15 +35,48 @@ type unifiedCheck struct {
 func (s *apiServer) handleHealthDiagnostics(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		s.writeDiagnostics(w, r, false)
+		s.writeDiagnostics(w, r, diagnosticsRequest{})
 	case http.MethodPost:
-		s.writeDiagnostics(w, r, true)
+		var req diagnosticsRequest
+		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&req)
+		req.Fix = true
+		s.writeDiagnostics(w, r, req)
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 	}
 }
 
-func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, fix bool) {
+func (s *apiServer) handleHealthSupportBundle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	installDir := filepath.Dir(s.absPath(s.configPath))
+	outPath := filepath.Join(installDir, "logs", fmt.Sprintf("ncc-support-%s.tar.gz", time.Now().UTC().Format("20060102T150405Z")))
+	out, err := s.runOrchestrator([]string{"doctor", "--install-dir", installDir, "--output-file", outPath}, 2*time.Minute)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, envelope{Success: false, Error: "support bundle generation failed: " + strings.TrimSpace(out)})
+		return
+	}
+	s.audit(r, "health.diagnostics.bundle", true, map[string]interface{}{"path": outPath})
+	writeJSON(w, http.StatusOK, envelope{Success: true, Message: "support bundle generated", Data: map[string]interface{}{"path": outPath}})
+}
+
+type diagnosticsRequest struct {
+	Fix             bool     `json:"fix,omitempty"`
+	CheckIDs        []string `json:"check_ids,omitempty"`
+	VerifyAfterFix  bool     `json:"verify_after_fix,omitempty"`
+	NoDisruptive    bool     `json:"no_disruptive,omitempty"`
+}
+
+func (s *apiServer) hasInFlightRuns() bool {
+	if len(s.activeRunsSnapshot()) > 0 {
+		return true
+	}
+	return s.queuedCount() > 0
+}
+
+func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, req diagnosticsRequest) {
 	ctx, cancel := context.WithTimeout(r.Context(), 100*time.Second)
 	defer cancel()
 
@@ -53,8 +91,18 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, fix
 
 	// Orchestrator-side self-heal (config, storage, encryption perms, backups,
 	// runs, TLS, process, logs) via the doctor subprocess.
-	rep, derr := s.runSelfHealOnce(ctx, fix)
+	noDisruptive := req.NoDisruptive
+	if req.Fix && s.hasInFlightRuns() {
+		noDisruptive = true
+	}
+	rep, derr := s.runSelfHealOnceWithOptions(ctx, selfHealRunOptions{
+		Fix:          req.Fix,
+		CheckIDs:     req.CheckIDs,
+		NoDisruptive: noDisruptive,
+	})
 	orchestratorErr := ""
+	fixedIDs := []string{}
+	fixedTitles := []string{}
 	if derr != nil {
 		orchestratorErr = derr.Error()
 	} else if rep != nil {
@@ -68,8 +116,15 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, fix
 			c.Hint, _ = raw["hint"].(string)
 			c.Fixed, _ = raw["fixed"].(bool)
 			c.FixMsg, _ = raw["fix_message"].(string)
+			if d, ok := raw["disruptive"].(bool); ok {
+				c.Disruptive = d
+			}
 			checks = append(checks, c)
 			tally(c.Status)
+			if c.Fixed {
+				fixedIDs = append(fixedIDs, c.ID)
+				fixedTitles = append(fixedTitles, c.Title)
+			}
 		}
 	}
 
@@ -104,19 +159,50 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, fix
 		worst = "fail"
 	}
 
-	if fix {
+	verificationRuns := 0
+	verifiedStable := false
+	if req.Fix && req.VerifyAfterFix {
+		// Re-scan briefly to ensure post-fix state remains stable.
+		stablePasses := 0
+		for i := 0; i < 3; i++ {
+			verificationRuns++
+			time.Sleep(2 * time.Second)
+			rep2, _ := s.runSelfHealOnceWithOptions(ctx, selfHealRunOptions{
+				Fix:          false,
+				CheckIDs:     req.CheckIDs,
+				NoDisruptive: noDisruptive,
+			})
+			if rep2 != nil && rep2.Summary["fail"] == 0 {
+				stablePasses++
+			}
+		}
+		verifiedStable = stablePasses >= 2
+	}
+
+	if req.Fix {
 		s.audit(r, "health.diagnostics.heal", true, map[string]interface{}{
-			"ok": summary["ok"], "warn": summary["warn"], "fail": summary["fail"],
+			"ok": summary["ok"], "warn": summary["warn"], "fail": summary["fail"], "check_ids": req.CheckIDs, "fixed_ids": fixedIDs,
 		})
 	}
 
 	data := map[string]interface{}{
 		"generated_at":  time.Now().UTC().Format(time.RFC3339),
-		"fix_applied":   fix,
+		"fix_applied":   req.Fix,
 		"overall":       worst,
 		"summary":       summary,
 		"checks":        checks,
 		"auto_fix_loop": s.selfHealInterval > 0,
+		"fix_history": map[string]interface{}{
+			"fixed_ids":    fixedIDs,
+			"fixed_titles": fixedTitles,
+			"count":        len(fixedIDs),
+		},
+		"guardrails": map[string]interface{}{
+			"no_disruptive":    noDisruptive,
+			"active_run_guard": req.Fix && s.hasInFlightRuns(),
+		},
+		"verification_runs": verificationRuns,
+		"verified_stable":   verifiedStable,
 	}
 	if orchestratorErr != "" {
 		data["orchestrator_error"] = orchestratorErr

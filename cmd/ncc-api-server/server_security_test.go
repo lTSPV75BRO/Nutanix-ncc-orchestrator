@@ -180,6 +180,21 @@ func TestWithCORSDeniesUnknownOrigin(t *testing.T) {
 	}
 }
 
+func TestWithCORSAllowsSameHostDifferentPort(t *testing.T) {
+	s := &apiServer{corsOrigin: "http://localhost:8080"}
+	next := s.withCORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "http://10.21.88.27:8081/api/v1/health", nil)
+	req.Host = "10.21.88.27:8081"
+	req.Header.Set("Origin", "https://10.21.88.27:8080")
+	rr := httptest.NewRecorder()
+	next.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for same host origin, got %d", rr.Code)
+	}
+}
+
 func TestCleanClientIPTrustsForwardedOnlyFromTrustedProxy(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
 	req.RemoteAddr = "198.51.100.10:12345"

@@ -540,6 +540,18 @@ export function ApiExplorerSection({ onError }: Props) {
                 }}
               />
             </Tooltip>
+            {response.status >= 200 && response.status < 300 && method !== "GET" ? (
+              <Button
+                size="small"
+                icon={<WarningOutlined />}
+                onClick={() => {
+                  const actionPrefix = path.includes("/settings/") ? "settings." : method === "POST" ? "runs." : "";
+                  window.location.assign(`/settings?tab=audit${actionPrefix ? `&action=${encodeURIComponent(actionPrefix)}` : ""}`);
+                }}
+              >
+                Trace in audit
+              </Button>
+            ) : null}
           </Space>
           <Segmented
             value={responseTab}

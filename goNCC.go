@@ -9972,6 +9972,8 @@ type v2DoctorOptions struct {
 	ConfigPath string // override for the self-heal config checks
 	Fix        bool   // apply safe self-heal remediations
 	JSON       bool   // emit the self-heal report as JSON (skips the human report + bundle)
+	OnlyChecks string // optional comma-separated check ids
+	NoDisruptive bool // skip disruptive checks/fixes (service restarts, etc.)
 }
 
 // runV2Doctor is the "something's broken, give me everything"
@@ -10009,7 +10011,11 @@ func runV2Doctor(opts v2DoctorOptions) error {
 	// JSON mode is the machine-readable self-heal report only: no human report,
 	// no support bundle. Used by automation and the api-server diagnostics view.
 	if opts.JSON {
-		hr := runSelfHeal(installDir, opts.ConfigPath, opts.Fix)
+		hr := runSelfHealWithOptions(installDir, opts.ConfigPath, healRunOptions{
+			Fix:          opts.Fix,
+			OnlyChecks:   parseDoctorOnlyChecks(opts.OnlyChecks),
+			NoDisruptive: opts.NoDisruptive,
+		})
 		out, err := json.MarshalIndent(hr, "", "  ")
 		if err != nil {
 			return err
@@ -10080,7 +10086,11 @@ func runV2Doctor(opts v2DoctorOptions) error {
 		heading = "-- 6. self-heal checks (--fix: applying safe remediations) --"
 	}
 	fmt.Fprintln(w, heading)
-	hr := runSelfHeal(installDir, opts.ConfigPath, opts.Fix)
+	hr := runSelfHealWithOptions(installDir, opts.ConfigPath, healRunOptions{
+		Fix:          opts.Fix,
+		OnlyChecks:   parseDoctorOnlyChecks(opts.OnlyChecks),
+		NoDisruptive: opts.NoDisruptive,
+	})
 	doctorPrintSelfHeal(w, hr)
 	fmt.Fprintln(w)
 
@@ -10133,6 +10143,25 @@ func doctorPrintSelfHeal(w io.Writer, hr healReport) {
 		}
 	}
 	fmt.Fprintf(w, "summary: %d ok, %d warn, %d fail\n", hr.Summary["ok"], hr.Summary["warn"], hr.Summary["fail"])
+}
+
+func parseDoctorOnlyChecks(raw string) map[string]bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, part := range strings.Split(raw, ",") {
+		id := strings.TrimSpace(part)
+		if id == "" {
+			continue
+		}
+		out[id] = true
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // doctorPrintRedactedEnv prints NCC_* env var NAMES only — values
@@ -16910,6 +16939,8 @@ replaced by ***REDACTED***.`,
 			configPath, _ := cmd.Flags().GetString("config")
 			fix, _ := cmd.Flags().GetBool("fix")
 			jsonOut, _ := cmd.Flags().GetBool("json")
+			onlyChecks, _ := cmd.Flags().GetString("only-checks")
+			noDisruptive, _ := cmd.Flags().GetBool("no-disruptive")
 			return runV2Doctor(v2DoctorOptions{
 				InstallDir: installDir,
 				APIListen:  apiListen,
@@ -16919,6 +16950,8 @@ replaced by ***REDACTED***.`,
 				ConfigPath: configPath,
 				Fix:        fix,
 				JSON:       jsonOut,
+				OnlyChecks: onlyChecks,
+				NoDisruptive: noDisruptive,
 			})
 		},
 	}
@@ -16930,6 +16963,8 @@ replaced by ***REDACTED***.`,
 	v2DoctorCmd.Flags().String("config", "", "Config file for self-heal checks (default <install-dir>/config.yaml)")
 	v2DoctorCmd.Flags().Bool("fix", false, "Apply safe self-heal remediations (create missing output dirs, anchor relative paths, tighten secret-file perms, repair config)")
 	v2DoctorCmd.Flags().Bool("json", false, "Emit the self-heal report as JSON (skips the human report and support bundle)")
+	v2DoctorCmd.Flags().String("only-checks", "", "Comma-separated self-heal check IDs to run (e.g. stale-pids,runtime-mode-drift)")
+	v2DoctorCmd.Flags().Bool("no-disruptive", false, "Skip disruptive checks/fixes (e.g. service restarts)")
 	cmd.AddCommand(v2DoctorCmd)
 
 	genTestAggCmd := &cobra.Command{

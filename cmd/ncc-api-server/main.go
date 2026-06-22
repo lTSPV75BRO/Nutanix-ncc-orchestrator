@@ -17,6 +17,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -435,7 +436,7 @@ func main() {
 	flag.StringVar(&s.runnerLogPath, "runner-log-path", "logs/ncc-runner.log", "Runner log file path")
 	flag.StringVar(&s.scheduleStatePath, "schedule-state-path", ".ncc-api-schedule.json", "Schedule state file path")
 	flag.StringVar(&s.backupScheduleStatePath, "backup-schedule-state-path", ".ncc-api-backup-schedule.json", "Scheduled-backup state file path")
-	flag.StringVar(&s.notificationStatePath, "notifications-state-path", ".ncc-api-notifications.json", "Notifications state file path")
+	flag.StringVar(&s.notificationStatePath, "notifications-state-path", ".ncc-api-notifications.json", "Legacy notifications metadata path (delivery history/API-only fields)")
 	flag.StringVar(&s.auditLogPath, "audit-log-path", "logs/ncc-audit.log", "JSONL audit log file path")
 	flag.Int64Var(&s.auditLogMaxBytes, "audit-log-max-bytes", 5*1024*1024, "Audit log size before rotation (bytes); 0 disables rotation")
 	flag.StringVar(&s.auditForwardHTTPURL, "audit-forward-http-url", "", "Forward each audit event (JSON) to this HTTP collector endpoint (Splunk HEC, Elastic, Loki, generic webhook). Empty disables.")
@@ -883,7 +884,7 @@ func (s *apiServer) withCORS(next http.Handler) http.Handler {
 		// the relay-state cookie, so exempt /saml/ from origin enforcement.
 		isSAML := strings.HasPrefix(r.URL.Path, "/saml/")
 		if origin != "" && !isSAML {
-			if _, ok := allowedOrigins[origin]; !ok {
+			if _, ok := allowedOrigins[origin]; !ok && !sameHostOrigin(origin, r) {
 				writeJSON(w, http.StatusForbidden, envelope{Success: false, Error: "origin not allowed"})
 				return
 			}
@@ -925,6 +926,42 @@ func (s *apiServer) withCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// sameHostOrigin allows a browser Origin when it targets the same host as the
+// current request (hostname match, any port). This removes the need for users
+// to hand-edit CORS origins just because API and UI listen on different ports
+// on the same box (e.g. 8081 vs 8080).
+func sameHostOrigin(origin string, r *http.Request) bool {
+	ou, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	if ou.Scheme != "http" && ou.Scheme != "https" {
+		return false
+	}
+	originHost := strings.TrimSpace(strings.ToLower(ou.Hostname()))
+	if originHost == "" {
+		return false
+	}
+	reqHost := strings.TrimSpace(strings.ToLower(hostOnly(r.Host)))
+	if reqHost == "" {
+		// Fallback for proxied setups where Host can be rewritten.
+		reqHost = strings.TrimSpace(strings.ToLower(hostOnly(r.Header.Get("X-Forwarded-Host"))))
+	}
+	return reqHost != "" && originHost == reqHost
+}
+
+func hostOnly(hostport string) string {
+	hostport = strings.TrimSpace(hostport)
+	if hostport == "" {
+		return ""
+	}
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		return h
+	}
+	// Already host-only, or an unbracketed IPv6 literal.
+	return hostport
 }
 
 func (s *apiServer) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -3453,7 +3490,8 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/audit", Methods: []string{http.MethodGet}, Description: "Read recent audit log entries (limit, action, failures filters)"},
 		{Path: "/api/v1/metrics/rate-limit", Methods: []string{http.MethodGet}, Description: "Rate limiter configuration and counters"},
 		{Path: "/metrics", Methods: []string{http.MethodGet}, Description: "Prometheus exposition (run/auth/update counters, build info, self-heal, backup inventory gauges, update-availability, audit-forward drops)"},
-		{Path: "/api/v1/health/diagnostics", Methods: []string{http.MethodGet, http.MethodPost}, Description: "Admin-only: GET runs a read-only self-heal scan (doctor checks + live LDAP/SAML/clock probes) returning a ranked diagnostics list with an overall status; POST re-runs the doctor checks with --fix to apply safe remediations, then re-probes and returns the post-fix state."},
+		{Path: "/api/v1/health/diagnostics", Methods: []string{http.MethodGet, http.MethodPost}, Description: "Admin-only: GET runs a read-only self-heal scan (doctor checks + live LDAP/SAML/clock probes) returning a ranked diagnostics list with an overall status; POST supports targeted fixes (check_ids), guardrails (no_disruptive), and post-fix verification."},
+		{Path: "/api/v1/health/diagnostics/support-bundle", Methods: []string{http.MethodPost}, Description: "Admin-only: generate a redacted doctor support bundle and return its path on disk."},
 		{Path: "/api/v1/auth/session", Methods: []string{http.MethodPost}, Description: "Issue short-lived session token"},
 		{Path: "/api/v1/auth/rotate", Methods: []string{http.MethodPost}, Description: "Rotate API token"},
 		{Path: "/api/v1/auth/login", Methods: []string{http.MethodPost}, Description: "Local-account login; sets the httpOnly session + CSRF cookies and reports role/must-change", SampleBody: "{\n  \"username\": \"admin\",\n  \"password\": \"\"\n}"},
@@ -3874,7 +3912,10 @@ func (s *apiServer) buildOpenAPISpecBase() map[string]interface{} {
 			},
 			"/api/v1/health/diagnostics": map[string]interface{}{
 				"get":  map[string]interface{}{"summary": "Admin-only: read-only self-heal scan (doctor checks + live LDAP/SAML/clock probes) with a ranked diagnostics list and overall status."},
-				"post": map[string]interface{}{"summary": "Admin-only: re-run the doctor checks with --fix to apply safe remediations, re-probe auth, and return the post-fix state."},
+				"post": map[string]interface{}{"summary": "Admin-only: run self-heal with optional targeted checks (check_ids), disruptive-fix guardrails, and post-fix verification loops."},
+			},
+			"/api/v1/health/diagnostics/support-bundle": map[string]interface{}{
+				"post": map[string]interface{}{"summary": "Admin-only: generate a redacted doctor support bundle and return the bundle path."},
 			},
 			"/api/v1/settings/config": map[string]interface{}{
 				"get": map[string]interface{}{"summary": "Read runtime config"},
@@ -4827,6 +4868,7 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/api/v1/schedule", s.handleSchedule)
 	mux.HandleFunc("/api/v1/schedule/health", s.handleScheduleHealth)
 	mux.HandleFunc("/api/v1/health/diagnostics", s.handleHealthDiagnostics)
+	mux.HandleFunc("/api/v1/health/diagnostics/support-bundle", s.handleHealthSupportBundle)
 	mux.HandleFunc("/api/v1/artifacts", s.handleArtifacts)
 	mux.HandleFunc("/api/v1/artifacts/", s.handleArtifactByName)
 	mux.HandleFunc("/api/v1/runs", s.handleRuns)

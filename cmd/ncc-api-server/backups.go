@@ -321,7 +321,11 @@ func (s *apiServer) handleBackupRestoreNamed(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "restore failed: " + strings.TrimSpace(out)})
 		return
 	}
+	selfHealNotes := s.postRestoreValidateAndSelfHeal(installDir)
 	s.audit(r, "settings.backup.restore", true, map[string]interface{}{"install_dir": installDir, "name": filepath.Base(archivePath)})
+	if len(selfHealNotes) > 0 {
+		s.audit(r, "settings.backup.restore.selfheal", true, map[string]interface{}{"install_dir": installDir, "name": filepath.Base(archivePath), "notes": selfHealNotes})
+	}
 
 	restarting := s.spawnDetachedRestart(installDir)
 	msg := "Backup restored. The stack is restarting now to load the restored config, accounts, and token — this page will reconnect in a few seconds."
@@ -336,6 +340,7 @@ func (s *apiServer) handleBackupRestoreNamed(w http.ResponseWriter, r *http.Requ
 			"restarting":       restarting,
 			"restart_required": !restarting,
 			"output":           strings.TrimSpace(out),
+			"self_heal_notes":  selfHealNotes,
 		},
 	})
 }

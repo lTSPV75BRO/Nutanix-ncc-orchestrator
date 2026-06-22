@@ -25,6 +25,12 @@ type selfHealReport struct {
 	RanAt time.Time `json:"ran_at"`
 }
 
+type selfHealRunOptions struct {
+	Fix          bool
+	CheckIDs     []string
+	NoDisruptive bool
+}
+
 // startSelfHealLoop launches the periodic self-heal goroutine when an interval
 // is configured. The first cycle runs shortly after startup; subsequent cycles
 // run every selfHealInterval. The loop exits when ctx is cancelled.
@@ -61,13 +67,23 @@ func (s *apiServer) startSelfHealLoop(ctx context.Context) {
 // non-zero when a check fails, which is expected — the JSON is still valid and
 // is parsed regardless of exit code.
 func (s *apiServer) runSelfHealOnce(ctx context.Context, fix bool) (*selfHealReport, error) {
+	return s.runSelfHealOnceWithOptions(ctx, selfHealRunOptions{Fix: fix})
+}
+
+func (s *apiServer) runSelfHealOnceWithOptions(ctx context.Context, opts selfHealRunOptions) (*selfHealReport, error) {
 	bin := strings.TrimSpace(s.absPath(s.orchestratorBin))
 	if bin == "" {
 		return nil, fmt.Errorf("orchestrator binary path not configured")
 	}
 	args := []string{"doctor", "--json"}
-	if fix {
+	if opts.Fix {
 		args = append(args, "--fix")
+	}
+	if len(opts.CheckIDs) > 0 {
+		args = append(args, "--only-checks", strings.Join(opts.CheckIDs, ","))
+	}
+	if opts.NoDisruptive {
+		args = append(args, "--no-disruptive")
 	}
 	if cfg := strings.TrimSpace(s.configPath); cfg != "" {
 		args = append(args, "--config", s.absPath(cfg))

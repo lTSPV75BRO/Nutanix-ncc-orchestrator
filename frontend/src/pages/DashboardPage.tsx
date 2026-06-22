@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
@@ -83,6 +83,43 @@ export function DashboardPage() {
   const [compareMode, setCompareMode] = useLocalStorageState<CompareMode>("dashboard.compareMode", "all");
   const [selectedClusters, setSelectedClusters] = useLocalStorageState<string[]>("dashboard.selectedClusters", []);
   const [loadFullReport, setLoadFullReport] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  useEffect(() => {
+    const q = (searchParams.get("q") || "").trim();
+    const sev = (searchParams.get("sev") || "")
+      .split(",")
+      .map((s) => s.trim().toUpperCase())
+      .filter((s): s is Severity => ["FAIL", "WARN", "ERR", "INFO"].includes(s));
+    const mode = (searchParams.get("mode") || "").trim();
+    const clusters = (searchParams.get("clusters") || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (q && q !== filterText) setFilterText(q);
+    if (sev.length > 0 && sev.join(",") !== severityFilters.join(",")) setSeverityFilters(sev);
+    if (clusters.length > 0 && clusters.join(",") !== selectedClusters.join(",")) setSelectedClusters(clusters);
+    if ((mode === "all" || mode === "changed" || mode === "flaky") && mode !== compareMode) {
+      setCompareMode(mode);
+    }
+    // Mount/query driven sync.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams);
+    if (filterText.trim()) next.set("q", filterText.trim());
+    else next.delete("q");
+    if (severityFilters.length > 0) next.set("sev", severityFilters.join(","));
+    else next.delete("sev");
+    if (selectedClusters.length > 0) next.set("clusters", selectedClusters.join(","));
+    else next.delete("clusters");
+    if (compareMode !== "all") next.set("mode", compareMode);
+    else next.delete("mode");
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next, { replace: true });
+    }
+  }, [filterText, severityFilters, selectedClusters, compareMode, searchParams, setSearchParams]);
 
   const previewReport = useQuery({
     queryKey: ["report-data", "preview", PREVIEW_LIMIT],

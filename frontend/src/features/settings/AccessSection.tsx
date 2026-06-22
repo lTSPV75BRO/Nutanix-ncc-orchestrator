@@ -752,6 +752,11 @@ const BACKUP_KIND_META: Record<string, { color: string; label: string }> = {
 };
 
 const MIN_BACKUP_PASSPHRASE_LEN = 8;
+const SAFETY_TIER_TEXT = {
+  stateChange: "This changes server state.",
+  destructive: "This is destructive and may require manual recovery.",
+  irreversible: "This action is irreversible.",
+};
 
 // passphraseIssue validates an (optional) encryption passphrase against its
 // confirmation. Returns a human message when the backup should be blocked, or
@@ -1035,6 +1040,7 @@ function BackupRestoreCard() {
           </Button>
           <Popconfirm
             title={`Delete ${rec.name}?`}
+            description={`${SAFETY_TIER_TEXT.destructive} ${SAFETY_TIER_TEXT.irreversible}`}
             okText="Delete"
             okButtonProps={{ danger: true }}
             onConfirm={() => deleteMut.mutate(rec.name)}
@@ -1213,6 +1219,13 @@ function BackupRestoreCard() {
           or a passphrase-protected download), enter its passphrase. Leave blank for an unencrypted
           archive.
         </Typography.Paragraph>
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 8 }}
+          message={SAFETY_TIER_TEXT.destructive}
+          description="Restoring overwrites current runtime config, users, and tokens, then restarts services."
+        />
         <Input.Password
           placeholder="Decryption passphrase (only for encrypted archives)"
           value={restorePass}

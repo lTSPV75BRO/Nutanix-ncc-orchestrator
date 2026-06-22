@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Card, Col, Empty, Input, List, Row, Space, Tag, Tooltip, Typography } from "antd";
+import { Alert, Button, Card, Col, Empty, Input, List, Row, Space, Tag, Tooltip, Typography } from "antd";
 import {
   CopyOutlined,
   DownloadOutlined,
@@ -15,6 +15,7 @@ import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { CodeEditor, inferEditorLanguage } from "../../components/CodeEditor";
 import { notify } from "../../notify";
 import { formatDateTime, relativeTime } from "../../utils/datetime";
+import { ApiError } from "../../api/client";
 
 type Props = {
   onError: (e: unknown) => void;
@@ -41,10 +42,12 @@ export function RawOutputsSection({ onError }: Props) {
   const [raw, setRaw] = useState("");
   const [filter, setFilter] = useLocalStorageState("settings.rawOutputs.filter", "");
   const [loading, setLoading] = useState(false);
+  const [artifactsUnavailable, setArtifactsUnavailable] = useState(false);
 
   const loadArtifacts = async () => {
     try {
       const out = await api.artifacts();
+      setArtifactsUnavailable(false);
       setArtifacts(out);
       if (out.length === 0) {
         setSelected("");
@@ -57,6 +60,13 @@ export function RawOutputsSection({ onError }: Props) {
         setRaw("");
       }
     } catch (e) {
+      if (e instanceof ApiError && e.status === 404) {
+        setArtifactsUnavailable(true);
+        setArtifacts([]);
+        setSelected("");
+        setRaw("");
+        return;
+      }
       onError(e);
     }
   };
@@ -135,7 +145,14 @@ export function RawOutputsSection({ onError }: Props) {
             style={{ marginBottom: 10 }}
             autoComplete="off"
           />
-          {filtered.length === 0 ? (
+          {artifactsUnavailable ? (
+            <Alert
+              type="info"
+              showIcon
+              message="Artifacts endpoint unavailable"
+              description="This environment does not expose /api/v1/artifacts yet. Raw artifact browsing is disabled."
+            />
+          ) : filtered.length === 0 ? (
             <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No artifacts" />
           ) : (
             <List

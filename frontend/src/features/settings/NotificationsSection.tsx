@@ -51,9 +51,13 @@ export function NotificationsSection() {
   const qc = useQueryClient();
   const query = useQuery({ queryKey: ["settings", "notifications"], queryFn: api.getNotifications });
   const [state, setState] = useState<NotificationState>({});
+  const [baseline, setBaseline] = useState<NotificationState | null>(null);
 
   useEffect(() => {
-    if (query.data) setState(query.data);
+    if (query.data) {
+      setState(query.data);
+      setBaseline(query.data);
+    }
   }, [query.data]);
 
   const saveMut = useMutation({
@@ -66,6 +70,50 @@ export function NotificationsSection() {
   });
 
   const [testing, setTesting] = useState<string | null>(null);
+  const isDirty = JSON.stringify(state) !== JSON.stringify(baseline ?? {});
+  const channelStatus = (channel: string) => state.last_delivery?.[channel];
+  const fmtDelivery = (channel: string) => {
+    const d = channelStatus(channel);
+    if (!d) return "No delivery history yet.";
+    if (d.last_success_at) return `Last success: ${formatDateTime(d.last_success_at)}`;
+    if (d.last_attempt_at && d.last_error) return `Last failure: ${formatDateTime(d.last_attempt_at)} (${d.last_error})`;
+    return "No delivery history yet.";
+  };
+
+  const validHHMM = (v?: string) => !v || /^([01]\d|2[0-3]):([0-5]\d)$/.test(v.trim());
+  const validRFC3339 = (v: string) => {
+    if (!v.trim()) return false;
+    const t = Date.parse(v);
+    return Number.isFinite(t);
+  };
+
+  const validateState = (next: NotificationState): string | null => {
+    if (next.quiet?.enabled) {
+      if (!validHHMM(next.quiet.start) || !validHHMM(next.quiet.end)) {
+        return "Quiet hours must use HH:MM format (24-hour), e.g. 22:00.";
+      }
+      if (!next.quiet.timezone?.trim()) {
+        return "Quiet-hours timezone is required when quiet hours are enabled.";
+      }
+    }
+    for (const [i, w] of (next.maintenance ?? []).entries()) {
+      if (!validRFC3339(w.start) || !validRFC3339(w.end)) {
+        return `Maintenance window #${i + 1} must use RFC3339 timestamps.`;
+      }
+      if (Date.parse(w.start) >= Date.parse(w.end)) {
+        return `Maintenance window #${i + 1} start must be before end.`;
+      }
+    }
+    if ((next.throttle?.dedup_window_sec ?? 0) < 0 || (next.throttle?.min_interval_sec ?? 0) < 0) {
+      return "Throttle values cannot be negative.";
+    }
+    return null;
+  };
+
+  const canTestSlack = Boolean(state.slack?.enabled && state.slack?.webhook_url?.trim());
+  const canTestWebhook = Boolean(state.webhook?.enabled && state.webhook?.url?.trim());
+  const canTestEmail = Boolean(state.email?.enabled && state.email?.smtp_host?.trim() && state.email?.to?.trim());
+
   const sendTest = async (channel: string) => {
     setTesting(channel);
     try {
@@ -76,6 +124,15 @@ export function NotificationsSection() {
     } finally {
       setTesting(null);
     }
+  };
+
+  const onSave = () => {
+    const err = validateState(state);
+    if (err) {
+      notify.warning(err);
+      return;
+    }
+    saveMut.mutate(state);
   };
 
   // Shallow-merge helpers keep the controlled-state updates terse.
@@ -124,9 +181,19 @@ export function NotificationsSection() {
           </Space>
         }
         extra={
-          <Button type="primary" loading={saveMut.isPending} onClick={() => saveMut.mutate(state)}>
-            Save
-          </Button>
+          <Space>
+            <Button
+              disabled={!isDirty || saveMut.isPending}
+              onClick={() => {
+                if (baseline) setState(baseline);
+              }}
+            >
+              Reset
+            </Button>
+            <Button type="primary" loading={saveMut.isPending} disabled={!isDirty} onClick={onSave}>
+              Save
+            </Button>
+          </Space>
         }
       >
         <Typography.Paragraph type="secondary" style={{ marginTop: -4 }}>
@@ -165,6 +232,15 @@ export function NotificationsSection() {
             </Form.Item>
           </Space>
         </Form>
+        {isDirty ? (
+          <Alert
+            style={{ marginTop: 12 }}
+            type="warning"
+            showIcon
+            message="Unsaved changes"
+            description="Save to apply notification changes."
+          />
+        ) : null}
       </Card>
 
       {/* Channels */}
@@ -177,7 +253,7 @@ export function NotificationsSection() {
               icon={<SendOutlined />}
               style={{ marginLeft: 12 }}
               loading={testing === "slack"}
-              disabled={!state.slack?.enabled}
+              disabled={!canTestSlack}
               onClick={() => sendTest("slack")}
             >
               Test
@@ -204,6 +280,9 @@ export function NotificationsSection() {
               />
             </Form.Item>
           </Space>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {fmtDelivery("slack")}
+          </Typography.Text>
 
           <Divider titlePlacement="start">
             Webhook
@@ -212,7 +291,7 @@ export function NotificationsSection() {
               icon={<SendOutlined />}
               style={{ marginLeft: 12 }}
               loading={testing === "webhook"}
-              disabled={!state.webhook?.enabled}
+              disabled={!canTestWebhook}
               onClick={() => sendTest("webhook")}
             >
               Test
@@ -231,6 +310,9 @@ export function NotificationsSection() {
               />
             </Form.Item>
           </Space>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {fmtDelivery("webhook")}
+          </Typography.Text>
 
           <Divider titlePlacement="start">
             Email
@@ -239,7 +321,7 @@ export function NotificationsSection() {
               icon={<SendOutlined />}
               style={{ marginLeft: 12 }}
               loading={testing === "email"}
-              disabled={!state.email?.enabled}
+              disabled={!canTestEmail}
               onClick={() => sendTest("email")}
             >
               Test
@@ -304,6 +386,10 @@ export function NotificationsSection() {
             Leave the email password blank to keep the stored one. It is never returned to the
             browser.
           </Typography.Text>
+          <br />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {fmtDelivery("email")}
+          </Typography.Text>
         </Form>
       </Card>
 
@@ -325,6 +411,11 @@ export function NotificationsSection() {
           <Divider titlePlacement="start" style={{ marginTop: 0 }}>
             Quiet hours
           </Divider>
+          <Space size={8} wrap style={{ marginBottom: 8 }}>
+            <Typography.Text type="secondary">Quick presets:</Typography.Text>
+            <Button size="small" onClick={() => patchQuiet({ enabled: true, start: "22:00", end: "07:00" })}>Night (22:00-07:00)</Button>
+            <Button size="small" onClick={() => patchQuiet({ enabled: true, start: "00:00", end: "06:00" })}>Midnight (00:00-06:00)</Button>
+          </Space>
           <Space size={16} wrap align="end">
             <Form.Item label="Enabled" style={{ marginBottom: 8 }}>
               <Switch checked={Boolean(state.quiet?.enabled)} onChange={(v) => patchQuiet({ enabled: v })} />

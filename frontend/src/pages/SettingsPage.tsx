@@ -6,7 +6,6 @@ import {
   Card,
   Col,
   Row,
-  Skeleton,
   Space,
   Tabs,
   Tag,
@@ -46,6 +45,7 @@ import { NotificationsSection } from "../features/settings/NotificationsSection"
 import { SystemHealthSection } from "../features/settings/SystemHealthSection";
 import { api } from "../api/client";
 import { useLocalStorageState } from "../hooks/useLocalStorageState";
+import { ErrorStateCard, LoadingStateCard } from "../components/UxStates";
 import { notify, notifyError } from "../notify";
 import { localDateKey as localDayKey, relativeTime } from "../utils/datetime";
 
@@ -236,7 +236,8 @@ function ConnectionTab({
   const goVersion = String(data.go_version ?? "");
   const osName = String(data.os ?? "");
   const arch = String(data.arch ?? "");
-  const lastChecked = data.time ? new Date(data.time as string) : null;
+  const rawLastChecked = data.time ? new Date(data.time as string) : null;
+  const lastChecked = rawLastChecked && !Number.isNaN(rawLastChecked.getTime()) ? rawLastChecked : null;
   const isOk = status === "ok";
 
   const buildLabel = (() => {
@@ -376,6 +377,18 @@ function ConnectionTab({
 
 function DeveloperTab({ onError }: { onError: (e: unknown) => void }) {
   const [section, setSection] = useLocalStorageState("settings.developer.section", "api");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedDevTab = (searchParams.get("dev") || "").trim();
+  const activeSection = requestedDevTab || section;
+
+  useEffect(() => {
+    if (!requestedDevTab && section) {
+      const next = new URLSearchParams(searchParams);
+      next.set("dev", section);
+      setSearchParams(next, { replace: true });
+    }
+  }, [requestedDevTab, section, searchParams, setSearchParams]);
+
   return (
     <Card className="page-card">
       <Typography.Title level={4} className="section-title">
@@ -386,8 +399,13 @@ function DeveloperTab({ onError }: { onError: (e: unknown) => void }) {
       </Typography.Text>
       <Tabs
         style={{ marginTop: 12 }}
-        activeKey={section}
-        onChange={setSection}
+        activeKey={activeSection}
+        onChange={(nextSection) => {
+          setSection(nextSection);
+          const next = new URLSearchParams(searchParams);
+          next.set("dev", nextSection);
+          setSearchParams(next, { replace: true });
+        }}
         items={[
           { key: "api", label: "API Explorer", children: <ApiExplorerSection onError={onError} /> },
           { key: "json", label: "JSON Artifacts", children: <JsonOutputsSection onError={onError} /> },
@@ -400,6 +418,7 @@ function DeveloperTab({ onError }: { onError: (e: unknown) => void }) {
 
 export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
   const [tab, setTab] = useLocalStorageState("settings.activeTab", "connection");
+  const [devTab] = useLocalStorageState("settings.developer.section", "api");
   const [searchParams, setSearchParams] = useSearchParams();
   const health = useQuery({ queryKey: ["health"], queryFn: api.health });
   const report = useQuery({ queryKey: ["report-data"], queryFn: api.reportData });
@@ -412,19 +431,6 @@ export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
   useEffect(() => {
     if (report.error) notifyError(report.error, "Failed to fetch report data");
   }, [report.error]);
-
-  if (health.isLoading && !health.data) {
-    return (
-      <Space direction="vertical" size={16} style={{ width: "100%" }}>
-        <Card className="page-card">
-          <Skeleton active title paragraph={{ rows: 3 }} />
-        </Card>
-        <Card className="page-card">
-          <Skeleton active paragraph={{ rows: 6 }} />
-        </Card>
-      </Space>
-    );
-  }
 
   const apiOk = (health.data as { status?: string } | undefined)?.status === "ok";
   const loginEnabled = Boolean((health.data as { login_enabled?: boolean } | undefined)?.login_enabled);
@@ -532,6 +538,26 @@ export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
     setSearchParams(next, { replace: true });
   }, [activeTab, searchParams, setSearchParams]);
 
+  if (health.isLoading && !health.data) {
+    return (
+      <Space direction="vertical" size={16} style={{ width: "100%" }}>
+        <LoadingStateCard rows={3} />
+        <LoadingStateCard rows={6} />
+      </Space>
+    );
+  }
+  if (health.isError && !health.data) {
+    return (
+      <ErrorStateCard
+        title="Unable to load settings health context"
+        error={String((health.error as Error | undefined)?.message || "Unknown error")}
+        onRetry={() => {
+          void health.refetch();
+        }}
+      />
+    );
+  }
+
   return (
     <Tabs
       activeKey={activeTab}
@@ -539,6 +565,11 @@ export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
         setTab(nextTab);
         const next = new URLSearchParams(searchParams);
         next.set("tab", nextTab);
+        if (nextTab !== "developer") {
+          next.delete("dev");
+        } else if (!next.get("dev")) {
+          next.set("dev", devTab);
+        }
         setSearchParams(next, { replace: true });
       }}
       size="large"

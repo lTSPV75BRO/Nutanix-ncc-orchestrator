@@ -463,6 +463,7 @@ export type DiagnosticCheck = {
   fixed?: boolean;
   fix_message?: string;
   source: "orchestrator" | "api";
+  disruptive?: boolean;
 };
 
 export type DiagnosticsData = {
@@ -473,6 +474,17 @@ export type DiagnosticsData = {
   checks: DiagnosticCheck[];
   auto_fix_loop?: boolean;
   orchestrator_error?: string;
+  fix_history?: {
+    fixed_ids?: string[];
+    fixed_titles?: string[];
+    count?: number;
+  };
+  guardrails?: {
+    no_disruptive?: boolean;
+    active_run_guard?: boolean;
+  };
+  verification_runs?: number;
+  verified_stable?: boolean;
 };
 
 export type ScheduleHealthData = {

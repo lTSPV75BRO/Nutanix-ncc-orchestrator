@@ -28,6 +28,7 @@ import {
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import dayjs, { type Dayjs } from "dayjs";
+import { useSearchParams } from "react-router-dom";
 import { api, type AuditQuery } from "../../api/client";
 import type { AuditLogEntry } from "../../api/types";
 import { notify } from "../../notify";
@@ -78,6 +79,7 @@ function actionTone(action: string): "blue" | "green" | "orange" | "purple" | "d
 type AuditRow = AuditLogEntry & { __idx: number };
 
 export function AuditLogSection({ onError }: Props) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [actionFilter, setActionFilter] = useState<string>("");
   const [onlyFailures, setOnlyFailures] = useState(false);
   const [limit, setLimit] = useState(200);
@@ -86,6 +88,19 @@ export function AuditLogSection({ onError }: Props) {
   const [range, setRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
   const [exporting, setExporting] = useState(false);
   const [selected, setSelected] = useState<AuditLogEntry | null>(null);
+
+  useEffect(() => {
+    const action = (searchParams.get("action") || "").trim();
+    const user = (searchParams.get("user") || "").trim();
+    const searchText = (searchParams.get("search") || "").trim();
+    const failures = (searchParams.get("failures") || "").trim() === "1";
+    if (action && action !== actionFilter) setActionFilter(action);
+    if (user && user !== userFilter) setUserFilter(user);
+    if (searchText && searchText !== search) setSearch(searchText);
+    if (failures && failures !== onlyFailures) setOnlyFailures(true);
+    // Intentionally on mount/param change only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const since = range?.[0] ? range[0].format("YYYY-MM-DD") : undefined;
   const until = range?.[1] ? range[1].format("YYYY-MM-DD") : undefined;
@@ -104,6 +119,20 @@ export function AuditLogSection({ onError }: Props) {
     queryFn: () => api.audit(queryParams),
     staleTime: 5_000,
   });
+
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams);
+    if (actionFilter) next.set("action", actionFilter);
+    else next.delete("action");
+    if (userFilter.trim()) next.set("user", userFilter.trim());
+    else next.delete("user");
+    if (onlyFailures) next.set("failures", "1");
+    else next.delete("failures");
+    if (search.trim()) next.set("search", search.trim());
+    else next.delete("search");
+    const changed = next.toString() !== searchParams.toString();
+    if (changed) setSearchParams(next, { replace: true });
+  }, [actionFilter, onlyFailures, userFilter, search, searchParams, setSearchParams]);
 
   // Surface load errors exactly once per error change, not on every render
   // (otherwise notifyError fires for every re-render in an infinite spiral).

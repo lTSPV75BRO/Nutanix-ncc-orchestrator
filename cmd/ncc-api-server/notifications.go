@@ -12,8 +12,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
+
+	yaml "go.yaml.in/yaml/v3"
 )
 
 // urlRedactPattern matches http(s) URLs so they can be stripped from
@@ -297,17 +300,37 @@ func validateNotificationStateForChannels(st notificationState, channels map[str
 }
 
 func (s *apiServer) loadNotifications() (notificationState, error) {
-	path := s.absPath(s.notificationStatePath)
-	b, err := os.ReadFile(path)
+	st, err := s.loadNotificationsFromConfig()
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return defaultNotificationState(), nil
-		}
 		return notificationState{}, err
 	}
-	var st notificationState
-	if err := json.Unmarshal(b, &st); err != nil {
+	legacy, err := s.loadLegacyNotificationState()
+	if err != nil {
 		return notificationState{}, err
+	}
+	if migrated, migrateErr := s.migrateLegacyNotificationRuntimeFields(&st, legacy); migrateErr != nil {
+		log.Printf("notifications migration warning: unable to migrate legacy runtime settings to config.yaml: %v", migrateErr)
+	} else if migrated {
+		log.Printf("notifications migration: copied legacy runtime settings into config.yaml")
+	}
+	// Legacy state keeps API-local metadata and controls that do not have
+	// direct config.yaml equivalents yet.
+	if strings.TrimSpace(st.Email.Password) == "" {
+		st.Email.Password = legacy.Email.Password
+	}
+	st.Enabled = legacy.Enabled
+	st.Events = legacy.Events
+	st.Throttle = legacy.Throttle
+	if legacy.Quiet.Timezone != "" {
+		st.Quiet.Timezone = legacy.Quiet.Timezone
+	}
+	st.Quiet.AllowFailures = legacy.Quiet.AllowFailures
+	st.Digest.LastSentAt = legacy.Digest.LastSentAt
+	if legacy.LastDelivery != nil {
+		st.LastDelivery = legacy.LastDelivery
+	}
+	if legacy.UpdatedAt != "" {
+		st.UpdatedAt = legacy.UpdatedAt
 	}
 	def := defaultNotificationState()
 	if st.Email.SMTPPort == 0 {
@@ -320,6 +343,11 @@ func (s *apiServer) loadNotifications() (notificationState, error) {
 }
 
 func (s *apiServer) saveNotifications(st notificationState) error {
+	if err := s.saveNotificationsToConfig(st); err != nil {
+		return err
+	}
+	// Keep API-local metadata in the legacy sidecar file so delivery/test status
+	// and non-runtime controls survive restarts without polluting config.yaml.
 	path := s.absPath(s.notificationStatePath)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
@@ -329,6 +357,349 @@ func (s *apiServer) saveNotifications(st notificationState) error {
 		return err
 	}
 	return os.WriteFile(path, b, 0o600)
+}
+
+func (s *apiServer) loadLegacyNotificationState() (notificationState, error) {
+	path := s.absPath(s.notificationStatePath)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return defaultNotificationState(), nil
+		}
+		return notificationState{}, err
+	}
+	var st notificationState
+	if err := json.Unmarshal(b, &st); err != nil {
+		return notificationState{}, err
+	}
+	if st.LastDelivery == nil {
+		st.LastDelivery = map[string]notificationDeliveryStatus{}
+	}
+	return st, nil
+}
+
+func (s *apiServer) loadNotificationsFromConfig() (notificationState, error) {
+	st := defaultNotificationState()
+	cfg, err := s.loadRawConfigMap()
+	if err != nil {
+		return st, err
+	}
+	st.Email.Enabled = readMapBool(cfg, "email-enabled", st.Email.Enabled)
+	st.Email.SMTPHost = readMapString(cfg, "smtp-server", st.Email.SMTPHost)
+	st.Email.SMTPPort = readMapInt(cfg, "smtp-port", st.Email.SMTPPort)
+	st.Email.Username = readMapString(cfg, "smtp-user", st.Email.Username)
+	st.Email.Password = readMapString(cfg, "smtp-password", st.Email.Password)
+	st.Email.From = readMapString(cfg, "email-from", st.Email.From)
+	st.Email.To = strings.Join(readMapCSV(cfg, "email-to"), ",")
+
+	st.Webhook.Enabled = readMapBool(cfg, "webhook-enabled", st.Webhook.Enabled)
+	st.Webhook.URL = readMapString(cfg, "webhook-url", st.Webhook.URL)
+
+	st.Slack.Enabled = readMapBool(cfg, "slack-enabled", st.Slack.Enabled)
+	st.Slack.WebhookURL = readMapString(cfg, "slack-webhook-url", st.Slack.WebhookURL)
+	st.Slack.Channel = readMapString(cfg, "slack-channel", st.Slack.Channel)
+
+	st.Digest.Enabled = readMapBool(cfg, "notify-digest", st.Digest.Enabled)
+	st.Quiet = quietHoursFromConfig(cfg, st.Quiet)
+	st.Maintenance = maintenanceFromConfig(cfg)
+	return st, nil
+}
+
+func (s *apiServer) saveNotificationsToConfig(st notificationState) error {
+	cfgPath, err := s.validateConfigPath(s.configPath)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
+		return err
+	}
+	cfg, err := s.loadRawConfigMap()
+	if err != nil {
+		return err
+	}
+	cfg["email-enabled"] = st.Email.Enabled
+	cfg["smtp-server"] = strings.TrimSpace(st.Email.SMTPHost)
+	cfg["smtp-port"] = st.Email.SMTPPort
+	cfg["smtp-user"] = strings.TrimSpace(st.Email.Username)
+	cfg["smtp-password"] = st.Email.Password
+	cfg["email-from"] = strings.TrimSpace(st.Email.From)
+	cfg["email-to"] = strings.TrimSpace(st.Email.To)
+
+	cfg["webhook-enabled"] = st.Webhook.Enabled
+	cfg["webhook-url"] = strings.TrimSpace(st.Webhook.URL)
+
+	cfg["slack-enabled"] = st.Slack.Enabled
+	cfg["slack-webhook-url"] = strings.TrimSpace(st.Slack.WebhookURL)
+	cfg["slack-channel"] = strings.TrimSpace(st.Slack.Channel)
+
+	cfg["notify-digest"] = st.Digest.Enabled
+	cfg["quiet-hours"] = quietHoursToConfig(st.Quiet)
+	cfg["maintenance-windows"] = maintenanceToConfig(st.Maintenance)
+
+	out, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(cfgPath, out, 0o600)
+}
+
+func (s *apiServer) loadRawConfigMap() (map[string]interface{}, error) {
+	cfgPath, err := s.validateConfigPath(s.configPath)
+	if err != nil {
+		return nil, err
+	}
+	b, err := os.ReadFile(cfgPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return map[string]interface{}{}, nil
+		}
+		return nil, err
+	}
+	if len(strings.TrimSpace(string(b))) == 0 {
+		return map[string]interface{}{}, nil
+	}
+	out := map[string]interface{}{}
+	if err := yaml.Unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *apiServer) migrateLegacyNotificationRuntimeFields(st *notificationState, legacy notificationState) (bool, error) {
+	cfg, err := s.loadRawConfigMap()
+	if err != nil {
+		return false, err
+	}
+	changed := false
+	adoptBool := func(key string, src bool, dst *bool) {
+		if _, ok := cfg[key]; ok {
+			return
+		}
+		*dst = src
+		changed = true
+	}
+	adoptString := func(key, src string, dst *string) {
+		if _, ok := cfg[key]; ok {
+			return
+		}
+		src = strings.TrimSpace(src)
+		if src == "" {
+			return
+		}
+		*dst = src
+		changed = true
+	}
+	adoptInt := func(key string, src int, dst *int) {
+		if _, ok := cfg[key]; ok {
+			return
+		}
+		if src <= 0 {
+			return
+		}
+		*dst = src
+		changed = true
+	}
+
+	adoptBool("email-enabled", legacy.Email.Enabled, &st.Email.Enabled)
+	adoptString("smtp-server", legacy.Email.SMTPHost, &st.Email.SMTPHost)
+	adoptInt("smtp-port", legacy.Email.SMTPPort, &st.Email.SMTPPort)
+	adoptString("smtp-user", legacy.Email.Username, &st.Email.Username)
+	adoptString("smtp-password", legacy.Email.Password, &st.Email.Password)
+	adoptString("email-from", legacy.Email.From, &st.Email.From)
+	adoptString("email-to", legacy.Email.To, &st.Email.To)
+
+	adoptBool("webhook-enabled", legacy.Webhook.Enabled, &st.Webhook.Enabled)
+	adoptString("webhook-url", legacy.Webhook.URL, &st.Webhook.URL)
+
+	adoptBool("slack-enabled", legacy.Slack.Enabled, &st.Slack.Enabled)
+	adoptString("slack-webhook-url", legacy.Slack.WebhookURL, &st.Slack.WebhookURL)
+	adoptString("slack-channel", legacy.Slack.Channel, &st.Slack.Channel)
+
+	adoptBool("notify-digest", legacy.Digest.Enabled, &st.Digest.Enabled)
+	if _, ok := cfg["quiet-hours"]; !ok {
+		qh := quietHoursToConfig(legacy.Quiet)
+		if qh != "" {
+			st.Quiet.Enabled = legacy.Quiet.Enabled
+			st.Quiet.Start = legacy.Quiet.Start
+			st.Quiet.End = legacy.Quiet.End
+			changed = true
+		}
+	}
+	if _, ok := cfg["maintenance-windows"]; !ok {
+		mw := maintenanceToConfig(legacy.Maintenance)
+		if mw != "" {
+			st.Maintenance = legacy.Maintenance
+			changed = true
+		}
+	}
+	if !changed {
+		return false, nil
+	}
+	if err := s.saveNotificationsToConfig(*st); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func quietHoursFromConfig(cfg map[string]interface{}, def quietHoursConfig) quietHoursConfig {
+	spec := strings.TrimSpace(readMapString(cfg, "quiet-hours", ""))
+	if spec == "" {
+		return def
+	}
+	parts := strings.SplitN(spec, "-", 2)
+	if len(parts) != 2 {
+		return def
+	}
+	def.Enabled = true
+	def.Start = strings.TrimSpace(parts[0])
+	def.End = strings.TrimSpace(parts[1])
+	return def
+}
+
+func quietHoursToConfig(q quietHoursConfig) string {
+	if !q.Enabled {
+		return ""
+	}
+	start := strings.TrimSpace(q.Start)
+	end := strings.TrimSpace(q.End)
+	if start == "" || end == "" {
+		return ""
+	}
+	return start + "-" + end
+}
+
+func maintenanceFromConfig(cfg map[string]interface{}) []maintenanceWindow {
+	spec := strings.TrimSpace(readMapString(cfg, "maintenance-windows", ""))
+	if spec == "" {
+		return nil
+	}
+	var windows []maintenanceWindow
+	for _, pair := range strings.Split(spec, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		parts := strings.SplitN(pair, "/", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		windows = append(windows, maintenanceWindow{
+			Start: strings.TrimSpace(parts[0]),
+			End:   strings.TrimSpace(parts[1]),
+		})
+	}
+	return windows
+}
+
+func maintenanceToConfig(windows []maintenanceWindow) string {
+	if len(windows) == 0 {
+		return ""
+	}
+	var pairs []string
+	for _, w := range windows {
+		start := strings.TrimSpace(w.Start)
+		end := strings.TrimSpace(w.End)
+		if start == "" || end == "" {
+			continue
+		}
+		pairs = append(pairs, start+"/"+end)
+	}
+	return strings.Join(pairs, ",")
+}
+
+func readMapString(m map[string]interface{}, key, def string) string {
+	v, ok := m[key]
+	if !ok {
+		return def
+	}
+	switch t := v.(type) {
+	case string:
+		return strings.TrimSpace(t)
+	case []interface{}:
+		var parts []string
+		for _, it := range t {
+			parts = append(parts, strings.TrimSpace(fmt.Sprintf("%v", it)))
+		}
+		return strings.Join(parts, ",")
+	default:
+		return strings.TrimSpace(fmt.Sprintf("%v", v))
+	}
+}
+
+func readMapBool(m map[string]interface{}, key string, def bool) bool {
+	v, ok := m[key]
+	if !ok {
+		return def
+	}
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		b, err := strconv.ParseBool(strings.TrimSpace(t))
+		if err == nil {
+			return b
+		}
+	}
+	return def
+}
+
+func readMapInt(m map[string]interface{}, key string, def int) int {
+	v, ok := m[key]
+	if !ok {
+		return def
+	}
+	switch t := v.(type) {
+	case int:
+		return t
+	case int64:
+		return int(t)
+	case float64:
+		return int(t)
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(t))
+		if err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+func readMapCSV(m map[string]interface{}, key string) []string {
+	v, ok := m[key]
+	if !ok {
+		return nil
+	}
+	switch t := v.(type) {
+	case string:
+		return splitCSVValues(t)
+	case []interface{}:
+		out := make([]string, 0, len(t))
+		for _, it := range t {
+			val := strings.TrimSpace(fmt.Sprintf("%v", it))
+			if val != "" {
+				out = append(out, val)
+			}
+		}
+		return out
+	default:
+		return splitCSVValues(fmt.Sprintf("%v", v))
+	}
+}
+
+func splitCSVValues(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		v := strings.TrimSpace(p)
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func (s *apiServer) notifyRunFinished(runErr error) {

@@ -216,6 +216,58 @@ func TestCheckLogSizes(t *testing.T) {
 	}
 }
 
+func TestEvaluateRuntimeDrift(t *testing.T) {
+	cases := []struct {
+		name                               string
+		servicePresent, serviceActive      bool
+		supervisorAlive, apiAlive, uiAlive bool
+		wantStatus                         healStatus
+		wantCanFix                         bool
+	}{
+		{
+			name:          "service not installed",
+			servicePresent: false, serviceActive: false,
+			supervisorAlive: false, apiAlive: true, uiAlive: true,
+			wantStatus: healOK, wantCanFix: false,
+		},
+		{
+			name:          "service healthy",
+			servicePresent: true, serviceActive: true,
+			supervisorAlive: true, apiAlive: true, uiAlive: true,
+			wantStatus: healOK, wantCanFix: false,
+		},
+		{
+			name:          "drift with detached children",
+			servicePresent: true, serviceActive: true,
+			supervisorAlive: false, apiAlive: true, uiAlive: true,
+			wantStatus: healWarn, wantCanFix: true,
+		},
+		{
+			name:          "service active but supervisor gone",
+			servicePresent: true, serviceActive: true,
+			supervisorAlive: false, apiAlive: false, uiAlive: false,
+			wantStatus: healFail, wantCanFix: true,
+		},
+		{
+			name:          "service stopped detached running",
+			servicePresent: true, serviceActive: false,
+			supervisorAlive: false, apiAlive: true, uiAlive: false,
+			wantStatus: healWarn, wantCanFix: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := evaluateRuntimeDrift(tc.servicePresent, tc.serviceActive, tc.supervisorAlive, tc.apiAlive, tc.uiAlive)
+			if got.Status != tc.wantStatus {
+				t.Fatalf("status=%s want=%s (%+v)", got.Status, tc.wantStatus, got)
+			}
+			if got.CanAutoFix != tc.wantCanFix {
+				t.Fatalf("canAutoFix=%v want=%v (%+v)", got.CanAutoFix, tc.wantCanFix, got)
+			}
+		})
+	}
+}
+
 func TestBuildUIHealthProbeCmd(t *testing.T) {
 	if got := buildUIHealthProbeCmd("", ":8080", false); got != "" {
 		t.Errorf("empty bin must yield empty cmd, got %q", got)

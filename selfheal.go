@@ -6,6 +6,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -44,6 +45,7 @@ type healResult struct {
 	Hint     string     `json:"hint,omitempty"`
 	Fixed    bool       `json:"fixed,omitempty"`
 	FixMsg   string     `json:"fix_message,omitempty"`
+	Disruptive bool     `json:"disruptive,omitempty"`
 }
 
 // healContext carries shared, lazily-resolved state into each check.
@@ -59,6 +61,8 @@ type healCheck struct {
 	ID       string
 	Title    string
 	Category string
+	// Disruptive checks may restart services or otherwise perturb in-flight work.
+	Disruptive bool
 	Run      func(hc *healContext) healResult
 }
 
@@ -70,6 +74,12 @@ type healReport struct {
 	FixApplied  bool           `json:"fix_applied"`
 	Summary     map[string]int `json:"summary"`
 	Results     []healResult   `json:"results"`
+}
+
+type healRunOptions struct {
+	Fix           bool
+	OnlyChecks    map[string]bool
+	NoDisruptive  bool
 }
 
 // Worst returns the most severe status across all results, defaulting to ok.
@@ -100,6 +110,9 @@ func selfHealChecks() []healCheck {
 		{ID: "run-output-freshness", Title: "Run output freshness", Category: "runs", Run: checkRunOutputFreshness},
 		{ID: "tls-cert-expiry", Title: "TLS certificate validity", Category: "tls", Run: checkTLSCertExpiry},
 		{ID: "stale-pids", Title: "Stale PID files", Category: "process", Run: checkStalePIDs},
+		{ID: "runtime-mode-drift", Title: "Supervisor/runtime mode alignment", Category: "process", Disruptive: true, Run: checkRuntimeModeDrift},
+		{ID: "scheduler-integrity", Title: "Scheduler integrity", Category: "process", Run: checkSchedulerIntegrity},
+		{ID: "selinux-exec-context", Title: "SELinux executable context", Category: "process", Run: checkSELinuxExecContext},
 		{ID: "log-sizes", Title: "Log file sizes", Category: "storage", Run: checkLogSizes},
 	}
 }
@@ -215,6 +228,230 @@ func checkStalePIDs(hc *healContext) healResult {
 		res.Message = "stale pid file(s): " + strings.Join(stale, ", ")
 		res.Hint = "Re-run with --fix to remove them so the stack can restart cleanly."
 	}
+	return res
+}
+
+func hasSystemdServiceUnit(name string) bool {
+	if _, err := exec.LookPath("systemctl"); err != nil {
+		return false
+	}
+	return exec.Command("systemctl", "cat", name).Run() == nil
+}
+
+func isSystemdServiceActive(name string) bool {
+	if _, err := exec.LookPath("systemctl"); err != nil {
+		return false
+	}
+	return exec.Command("systemctl", "is-active", "--quiet", name).Run() == nil
+}
+
+type runtimeDriftEval struct {
+	Status    healStatus
+	Message   string
+	Hint      string
+	CanAutoFix bool
+}
+
+func evaluateRuntimeDrift(servicePresent, serviceActive, supervisorAlive, apiAlive, uiAlive bool) runtimeDriftEval {
+	switch {
+	case !servicePresent:
+		return runtimeDriftEval{
+			Status:  healOK,
+			Message: "service mode not installed (detached/shell-managed runtime)",
+		}
+	case serviceActive && supervisorAlive:
+		return runtimeDriftEval{
+			Status:  healOK,
+			Message: "service mode active and supervisor process is healthy",
+		}
+	case serviceActive && !supervisorAlive && (apiAlive || uiAlive):
+		return runtimeDriftEval{
+			Status:    healWarn,
+			Message:   "runtime drift: service is active but detached API/UI process(es) are running without a live supervisor",
+			Hint:      "Run self-heal with --fix to restart ncc-orchestrator.service and re-align process ownership.",
+			CanAutoFix: true,
+		}
+	case serviceActive && !supervisorAlive:
+		return runtimeDriftEval{
+			Status:    healFail,
+			Message:   "service is active but no live supervisor process was found",
+			Hint:      "Run self-heal with --fix (or `systemctl restart ncc-orchestrator.service`) to recover.",
+			CanAutoFix: true,
+		}
+	case !serviceActive && (apiAlive || uiAlive):
+		return runtimeDriftEval{
+			Status:    healWarn,
+			Message:   "detached API/UI process(es) are running while the systemd service is not active",
+			Hint:      "Run self-heal with --fix to bring the stack back under ncc-orchestrator.service supervision.",
+			CanAutoFix: true,
+		}
+	default:
+		return runtimeDriftEval{
+			Status:  healWarn,
+			Message: "service mode is installed but not active",
+			Hint:    "Start the stack with `systemctl start ncc-orchestrator.service`.",
+		}
+	}
+}
+
+func checkRuntimeModeDrift(hc *healContext) healResult {
+	res := healResult{ID: "runtime-mode-drift", Title: "Supervisor/runtime mode alignment", Category: "process"}
+	runDir := filepath.Join(hc.InstallDir, "run")
+	readAlive := func(name string) bool {
+		pid, err := readPIDFromFile(filepath.Join(runDir, name))
+		return err == nil && processIsAlive(pid)
+	}
+	supervisorAlive := readAlive("v2-supervisor.pid")
+	apiAlive := readAlive("v2-api.pid")
+	uiAlive := readAlive("v2-ui.pid")
+	serviceName := "ncc-orchestrator.service"
+	servicePresent := hasSystemdServiceUnit(serviceName)
+	serviceActive := isSystemdServiceActive(serviceName)
+
+	eval := evaluateRuntimeDrift(servicePresent, serviceActive, supervisorAlive, apiAlive, uiAlive)
+	res.Status = eval.Status
+	res.Message = eval.Message
+	res.Hint = eval.Hint
+
+	if !hc.Fix || !eval.CanAutoFix || !servicePresent {
+		return res
+	}
+	if out, err := exec.Command("systemctl", "restart", serviceName).CombinedOutput(); err == nil {
+		res.Status = healOK
+		res.Fixed = true
+		res.FixMsg = "restarted ncc-orchestrator.service to recover supervisor-managed runtime"
+		res.Message = "runtime ownership re-aligned under systemd supervisor"
+		res.Hint = ""
+		return res
+	} else {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		res.Hint = "auto-fix could not restart ncc-orchestrator.service: " + msg
+		return res
+	}
+}
+
+func checkSchedulerIntegrity(hc *healContext) healResult {
+	res := healResult{ID: "scheduler-integrity", Title: "Scheduler integrity", Category: "process"}
+	statePath := filepath.Join(hc.InstallDir, ".ncc-api-schedule.json")
+	raw, err := os.ReadFile(statePath)
+	if err != nil {
+		res.Status = healOK
+		res.Message = "no persisted scheduler state found"
+		return res
+	}
+	var st map[string]interface{}
+	if json.Unmarshal(raw, &st) != nil {
+		res.Status = healWarn
+		res.Message = "scheduler state is present but unreadable"
+		res.Hint = "Re-save scheduler settings from Settings -> Schedule."
+		return res
+	}
+	task := strings.TrimSpace(fmt.Sprintf("%v", st["task_name"]))
+	if task == "" {
+		task = "ncc-orchestrator"
+	}
+	typ := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", st["type"])))
+	logPath := strings.TrimSpace(fmt.Sprintf("%v", st["log_path"]))
+	if logPath == "" {
+		logPath = filepath.Join(hc.InstallDir, "logs", "ncc-scheduler.log")
+	}
+	if typ == "systemd" {
+		runner := filepath.Join(filepath.Dir(logPath), "ncc-sched-"+task+".sh")
+		timer := filepath.Join("/etc/systemd/system", "ncc-sched-"+task+".timer")
+		service := filepath.Join("/etc/systemd/system", "ncc-sched-"+task+".service")
+		missing := []string{}
+		for _, p := range []string{runner, timer, service} {
+			if !fileExists(p) {
+				missing = append(missing, filepath.Base(p))
+			}
+		}
+		if len(missing) > 0 {
+			res.Status = healWarn
+			res.Message = "scheduler artifacts missing: " + strings.Join(missing, ", ")
+			res.Hint = "Re-apply schedule (Settings -> Schedule -> Save + Apply) or run restore self-heal."
+			return res
+		}
+		res.Status = healOK
+		res.Message = "systemd scheduler state, units, and runner script are aligned"
+		return res
+	}
+	if typ == "cron" {
+		runner := filepath.Join(filepath.Dir(logPath), "ncc-scheduler.sh")
+		if !fileExists(runner) {
+			res.Status = healWarn
+			res.Message = "cron scheduler runner script is missing"
+			res.Hint = "Re-apply schedule to regenerate the runner script."
+			return res
+		}
+		res.Status = healOK
+		res.Message = "cron scheduler state and runner script are aligned"
+		return res
+	}
+	res.Status = healWarn
+	res.Message = "unknown scheduler type in persisted state: " + typ
+	res.Hint = "Re-save scheduler settings to normalize scheduler state."
+	return res
+}
+
+func checkSELinuxExecContext(hc *healContext) healResult {
+	res := healResult{ID: "selinux-exec-context", Title: "SELinux executable context", Category: "process"}
+	if runtime.GOOS != "linux" {
+		res.Status = healOK
+		res.Message = "not a Linux host"
+		return res
+	}
+	if _, err := exec.LookPath("getenforce"); err != nil {
+		res.Status = healOK
+		res.Message = "SELinux tools not present"
+		return res
+	}
+	out, err := exec.Command("getenforce").CombinedOutput()
+	mode := strings.ToLower(strings.TrimSpace(string(out)))
+	if err != nil || mode == "" || mode == "disabled" {
+		res.Status = healOK
+		res.Message = "SELinux disabled"
+		return res
+	}
+	if _, err := exec.LookPath("ls"); err != nil {
+		res.Status = healWarn
+		res.Message = "cannot verify SELinux context (ls not found)"
+		return res
+	}
+	bins := []string{
+		filepath.Join(hc.InstallDir, "bin", "ncc-orchestrator"),
+		filepath.Join(hc.InstallDir, "bin", "ncc-api-server"),
+		filepath.Join(hc.InstallDir, "bin", "ncc-ui-server"),
+	}
+	bad := []string{}
+	for _, b := range bins {
+		if !fileExists(b) {
+			continue
+		}
+		lo, lerr := exec.Command("ls", "-Z", b).CombinedOutput()
+		if lerr != nil || !strings.Contains(string(lo), ":bin_t:") {
+			bad = append(bad, filepath.Base(b))
+		}
+	}
+	if len(bad) == 0 {
+		res.Status = healOK
+		res.Message = "SELinux executable contexts look healthy (bin_t)"
+		return res
+	}
+	if hc.Fix {
+		if _, cerr := exec.Command("chcon", append([]string{"-t", "bin_t"}, bins...)...).CombinedOutput(); cerr == nil {
+			res.Status = healOK
+			res.Fixed = true
+			res.FixMsg = "re-labeled executable contexts for: " + strings.Join(bad, ", ")
+			res.Message = "SELinux executable context repaired"
+			return res
+		}
+	}
+	res.Status = healWarn
+	res.Message = "unexpected SELinux context on executable(s): " + strings.Join(bad, ", ")
+	res.Hint = "Set context to bin_t (e.g. `chcon -t bin_t <binary>`), then restart the service."
 	return res
 }
 
@@ -357,7 +594,17 @@ func checkRunOutputFreshness(hc *healContext) healResult {
 
 // runSelfHeal executes every registered check and returns an aggregate report.
 // When fix is true, checks may apply their safe remediations.
-func runSelfHeal(installDir, configPath string, fix bool) healReport {
+func shouldRunHealCheck(c healCheck, opts healRunOptions) bool {
+	if len(opts.OnlyChecks) > 0 && !opts.OnlyChecks[c.ID] {
+		return false
+	}
+	if opts.NoDisruptive && c.Disruptive {
+		return false
+	}
+	return true
+}
+
+func runSelfHealWithOptions(installDir, configPath string, opts healRunOptions) healReport {
 	installDir = strings.TrimSpace(installDir)
 	if installDir == "" {
 		installDir = defaultV2InstallDir()
@@ -370,7 +617,7 @@ func runSelfHeal(installDir, configPath string, fix bool) healReport {
 		configPath = resolveDoctorConfigPath(installDir)
 	}
 
-	hc := &healContext{InstallDir: installDir, ConfigPath: configPath, Fix: fix}
+	hc := &healContext{InstallDir: installDir, ConfigPath: configPath, Fix: opts.Fix}
 	// Best-effort config load so downstream checks can read resolved paths.
 	if configPath != "" {
 		if cfg, err := loadConfigForValidation(configPath); err == nil {
@@ -383,10 +630,13 @@ func runSelfHeal(installDir, configPath string, fix bool) healReport {
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 		InstallDir:  installDir,
 		ConfigPath:  configPath,
-		FixApplied:  fix,
+		FixApplied:  opts.Fix,
 		Summary:     map[string]int{"ok": 0, "warn": 0, "fail": 0},
 	}
 	for _, c := range selfHealChecks() {
+		if !shouldRunHealCheck(c, opts) {
+			continue
+		}
 		res := c.Run(hc)
 		if res.ID == "" {
 			res.ID = c.ID
@@ -397,10 +647,15 @@ func runSelfHeal(installDir, configPath string, fix bool) healReport {
 		if res.Category == "" {
 			res.Category = c.Category
 		}
+		res.Disruptive = c.Disruptive
 		report.Summary[string(res.Status)]++
 		report.Results = append(report.Results, res)
 	}
 	return report
+}
+
+func runSelfHeal(installDir, configPath string, fix bool) healReport {
+	return runSelfHealWithOptions(installDir, configPath, healRunOptions{Fix: fix})
 }
 
 // resolveDoctorConfigPath mirrors v2-start's config resolution: prefer

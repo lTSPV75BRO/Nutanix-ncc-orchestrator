@@ -103,7 +103,7 @@ func setStaticCacheHeaders(w http.ResponseWriter, urlPath string) {
 	case strings.HasPrefix(urlPath, "/assets/") && hashedAssetRe.MatchString(base):
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	case urlPath == "/" || urlPath == "/index.html" || filepath.Ext(base) == "":
-		w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+		w.Header().Set("Cache-Control", "no-store")
 	default:
 		w.Header().Set("Cache-Control", "public, max-age=300, must-revalidate")
 	}
@@ -678,6 +678,20 @@ func main() {
 	}))
 	staticFS := http.Dir(dir)
 	fileServer := http.FileServer(staticFS)
+	indexPath := filepath.Join(dir, "index.html")
+	serveIndex := func(w http.ResponseWriter, r *http.Request) {
+		b, err := os.ReadFile(indexPath)
+		if err != nil {
+			http.Error(w, "index.html not found", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		// Avoid 304/cached-shell edge cases on deep-link hard reloads.
+		w.Header().Del("Last-Modified")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(b)
+	}
 	// serveStatic adds Cache-Control and transparent gzip compression for
 	// text-y assets, then delegates to the underlying http.FileServer.
 	serveStatic := func(w http.ResponseWriter, r *http.Request) {
@@ -693,7 +707,7 @@ func main() {
 	}
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
-			serveStatic(w, r)
+			serveIndex(w, r)
 			return
 		}
 		cleanPath := pathpkg.Clean("/" + r.URL.Path)
@@ -710,9 +724,7 @@ func main() {
 			http.NotFound(w, r)
 			return
 		}
-		clone := r.Clone(r.Context())
-		clone.URL.Path = "/"
-		serveStatic(w, clone)
+		serveIndex(w, r)
 	}))
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/saml/") {
@@ -735,8 +747,8 @@ func main() {
 		if strings.TrimSpace(tlsCertFile) == "" || strings.TrimSpace(tlsKeyFile) == "" {
 			log.Fatal("both tls-cert-file and tls-key-file are required together")
 		}
-		log.Printf("TLS enabled: serving HTTPS and 308-redirecting plain HTTP to HTTPS on %s", listen)
-		if err := serveTLSWithRedirect(srv, listen, tlsCertFile, tlsKeyFile); err != nil {
+		log.Printf("TLS enabled: serving HTTPS on %s", listen)
+		if err := srv.ListenAndServeTLS(tlsCertFile, tlsKeyFile); err != nil {
 			log.Fatal(err)
 		}
 		return

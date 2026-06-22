@@ -24,6 +24,8 @@ import { LoginPage } from "./pages/LoginPage";
 import { ChangePasswordPage, ChangePasswordModal } from "./pages/ChangePasswordPage";
 import { PersonalTokensModal } from "./features/tokens/PersonalTokensModal";
 import { SessionIdleGuard } from "./components/SessionIdleGuard";
+import { FirstTimeSetupModal } from "./features/onboarding/FirstTimeSetupModal";
+import { useLocalStorageState } from "./hooks/useLocalStorageState";
 import { formatDateTime, formatTime, localDateKey, parseInstant } from "./utils/datetime";
 
 const { Header, Content } = Layout;
@@ -397,6 +399,12 @@ export default function App() {
   const authValue: AuthValue = { me: me ?? null, role, isAdmin, canOperate, loginEnabled, authenticated };
   const [changePwOpen, setChangePwOpen] = useState(false);
   const [tokensOpen, setTokensOpen] = useState(false);
+  const [firstSetupStatus, setFirstSetupStatus] = useLocalStorageState<"pending" | "completed" | "skipped">(
+    "ux.firstSetup.status",
+    "pending",
+  );
+  const [firstSetupPausedUntilMs, setFirstSetupPausedUntilMs] = useLocalStorageState<number>("ux.firstSetup.pausedUntilMs", 0);
+  const [showFirstSetup, setShowFirstSetup] = useState(false);
 
   const handleLogout = async () => {
     try {
@@ -438,6 +446,40 @@ export default function App() {
   // session is authenticated. Otherwise polling endpoints like /runs/active
   // 401 on every tick before login and flood the browser console.
   const appReady = !meQuery.isLoading && (authenticated || !loginEnabled);
+  const canSeeSettings = isAdmin || canOperate;
+
+  // If a new setup used "restore backup", skip the first-time guided flow.
+  const restoreAuditQuery = useQuery({
+    queryKey: ["audit", "first-setup-restore-detect"],
+    queryFn: () => api.audit({ limit: 20, action: "settings.backup.restore", failures: false }),
+    enabled: appReady && canSeeSettings && firstSetupStatus === "pending",
+    staleTime: 60_000,
+    retry: 0,
+  });
+
+  useEffect(() => {
+    if (firstSetupStatus !== "pending") return;
+    const now = Date.now();
+    if (firstSetupPausedUntilMs > now) {
+      setShowFirstSetup(false);
+      return;
+    }
+    const restored = (restoreAuditQuery.data?.entries?.length || 0) > 0;
+    if (restored) {
+      setFirstSetupStatus("skipped");
+      setShowFirstSetup(false);
+      return;
+    }
+    if (!restoreAuditQuery.isLoading) {
+      setShowFirstSetup(true);
+    }
+  }, [
+    firstSetupStatus,
+    firstSetupPausedUntilMs,
+    restoreAuditQuery.data?.entries?.length,
+    restoreAuditQuery.isLoading,
+    setFirstSetupStatus,
+  ]);
 
   const runActiveQuery = useQuery({
     queryKey: ["runs-active"],
@@ -501,7 +543,6 @@ export default function App() {
   // Settings is reachable by operators and admins (viewers have no settings
   // actions). Operators see a reduced set of tabs (see SettingsPage); the
   // secret-bearing tabs stay admin-only. Hide the nav pill from viewers.
-  const canSeeSettings = isAdmin || canOperate;
   const navItems = NAV_ITEMS.filter((item) => item.to !== "/settings" || canSeeSettings);
 
   return (
@@ -619,6 +660,26 @@ export default function App() {
           onStayLoggedIn={() => void meQuery.refetch()}
         />
       ) : null}
+      <FirstTimeSetupModal
+        open={showFirstSetup && firstSetupStatus === "pending"}
+        onPause={(forMs) => {
+          // Pause prompts long enough for users to complete current setup work.
+          const ms = typeof forMs === "number" && forMs > 0 ? forMs : 30 * 60 * 1000;
+          setFirstSetupPausedUntilMs(Date.now() + ms);
+          setShowFirstSetup(false);
+        }}
+        onSkip={() => {
+          setFirstSetupStatus("skipped");
+          setFirstSetupPausedUntilMs(0);
+          setShowFirstSetup(false);
+        }}
+        onComplete={() => {
+          setFirstSetupStatus("completed");
+          setFirstSetupPausedUntilMs(0);
+          setShowFirstSetup(false);
+          notify.success("First-time setup marked complete.");
+        }}
+      />
     </Layout>
     </AuthContext.Provider>
   );

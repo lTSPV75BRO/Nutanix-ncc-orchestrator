@@ -237,7 +237,18 @@ export const api = {
     }),
   scheduleHealth: () => callApi<ScheduleHealthData>("/api/v1/schedule/health"),
   diagnostics: () => callApi<DiagnosticsData>("/api/v1/health/diagnostics"),
-  healDiagnostics: () => callApi<DiagnosticsData>("/api/v1/health/diagnostics", { method: "POST" }),
+  healDiagnostics: (payload?: { check_ids?: string[]; verify_after_fix?: boolean; no_disruptive?: boolean }) =>
+    callApi<DiagnosticsData>("/api/v1/health/diagnostics", {
+      method: "POST",
+      ...(payload ? { body: JSON.stringify(payload) } : {}),
+    }),
+  healDiagnosticsForChecks: (checkIds: string[], verifyAfterFix = true) =>
+    callApi<DiagnosticsData>("/api/v1/health/diagnostics", {
+      method: "POST",
+      body: JSON.stringify({ check_ids: checkIds, verify_after_fix: verifyAfterFix }),
+    }),
+  createDiagnosticsSupportBundle: () =>
+    callApi<{ path: string }>("/api/v1/health/diagnostics/support-bundle", { method: "POST" }),
   runs: (opts?: { limit?: number; source?: "history" | "summary" | "trigger"; since?: string }) => {
     const params = new URLSearchParams();
     if (typeof opts?.limit === "number" && opts.limit > 0) params.set("limit", String(opts.limit));
@@ -269,7 +280,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  artifacts: () => callApi<ArtifactInfo[]>("/api/v1/artifacts"),
+  artifacts: async () => {
+    try {
+      return await callApi<ArtifactInfo[]>("/api/v1/artifacts");
+    } catch (e) {
+      // Some deployments may not expose artifact routes yet; treat as empty.
+      if (e instanceof ApiError && e.status === 404) return [];
+      throw e;
+    }
+  },
   artifactByName: (name: string) => callApi<{ name: string; content: string }>(`/api/v1/artifacts/${encodeURIComponent(name)}`),
   reportDataWithPagination: async (opts?: { limit?: number; offset?: number }) => {
     const params = new URLSearchParams();
