@@ -91,7 +91,13 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, req
 
 	// Orchestrator-side self-heal (config, storage, encryption perms, backups,
 	// runs, TLS, process, logs) via the doctor subprocess.
+	// API-triggered heals default to non-disruptive mode so a UI/operator
+	// "Heal now" action cannot restart/stop the running stack from inside the
+	// request path. CLI doctor remains the path for disruptive remediations.
 	noDisruptive := req.NoDisruptive
+	if req.Fix {
+		noDisruptive = true
+	}
 	if req.Fix && s.hasInFlightRuns() {
 		noDisruptive = true
 	}

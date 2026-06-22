@@ -190,7 +190,7 @@ export function SystemHealthSection() {
           : key === "supervisor"
             ? ["runtime-mode-drift", "stale-pids", "selinux-exec-context"]
             : ["stale-pids", "runtime-mode-drift"];
-      heal.mutate({ check_ids: ids, verify_after_fix: true });
+      heal.mutate({ check_ids: ids, verify_after_fix: true, no_disruptive: true });
       return;
     }
     navigate(path);
@@ -201,7 +201,7 @@ export function SystemHealthSection() {
       notify.info("This check is probe-only and cannot be auto-fixed.");
       return;
     }
-    heal.mutate({ check_ids: [check.id], verify_after_fix: true });
+    heal.mutate({ check_ids: [check.id], verify_after_fix: true, no_disruptive: true });
   };
 
   const readinessChecks = useMemo(() => {
@@ -325,9 +325,9 @@ export function SystemHealthSection() {
             </Button>
             <Popconfirm
               title="Apply safe remediations?"
-              description="Runs the self-heal fixers: anchor relative output paths, create missing dirs, tighten secret-file perms, repair config, renew the self-signed TLS cert, rotate oversized logs, and verify/auto-take a backup. No destructive actions."
+              description="Runs non-disruptive self-heal fixers (no restart/stop actions): anchor relative output paths, create missing dirs, tighten secret-file perms, repair config, renew the self-signed TLS cert, rotate oversized logs, and verify/auto-take a backup."
               okText="Heal now"
-              onConfirm={() => heal.mutate({ verify_after_fix: true })}
+              onConfirm={() => heal.mutate({ verify_after_fix: true, no_disruptive: true })}
             >
               <Button type="primary" icon={<ThunderboltOutlined />} loading={heal.isPending}>
                 Heal now
