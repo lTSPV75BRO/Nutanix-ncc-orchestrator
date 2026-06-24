@@ -1,0 +1,109 @@
+{
+  "schema_version": "1.0",
+  "framework": "NIST CSF 2.0",
+  "baseline_doc": "docs/NIST_CSF_BASELINE.md",
+  "controls": [
+    {
+      "id": "PR.AA-01",
+      "function": "PR",
+      "capability": "Role-based access control",
+      "status": "Implemented",
+      "evidence": [
+        "cmd/ncc-api-server/auth.go",
+        "cmd/ncc-api-server/users.go",
+        "cmd/ncc-api-server/usersapi.go",
+        "docs/SECURITY_AND_TRUST.md"
+      ]
+    },
+    {
+      "id": "PR.AA-02",
+      "function": "PR",
+      "capability": "Authentication modes (token/session/local/SAML/LDAP)",
+      "status": "Implemented",
+      "evidence": [
+        "cmd/ncc-api-server/auth.go",
+        "cmd/ncc-api-server/saml.go",
+        "cmd/ncc-api-server/ldap.go",
+        "frontend/src/pages/LoginPage.tsx"
+      ]
+    },
+    {
+      "id": "PR.DS-01",
+      "function": "PR",
+      "capability": "Data-at-rest protection for backups",
+      "status": "Implemented",
+      "evidence": [
+        "backupcrypt.go",
+        "cmd/ncc-api-server/backups.go",
+        "docs/SECURITY_AND_TRUST.md"
+      ]
+    },
+    {
+      "id": "PR.PT-01",
+      "function": "PR",
+      "capability": "TLS certificate management and secure defaults",
+      "status": "Implemented",
+      "evidence": [
+        "cmd/ncc-api-server/tls.go",
+        "cmd/ncc-ui-server/main.go",
+        "docs/TROUBLESHOOTING.md"
+      ]
+    },
+    {
+      "id": "DE.AE-01",
+      "function": "DE",
+      "capability": "Audit logging and filtering",
+      "status": "Implemented",
+      "evidence": [
+        "cmd/ncc-api-server/main.go",
+        "cmd/ncc-api-server/auditforward.go",
+        "frontend/src/features/settings/AuditLogSection.tsx"
+      ]
+    },
+    {
+      "id": "DE.CM-01",
+      "function": "DE",
+      "capability": "Continuous diagnostics and health checks",
+      "status": "Implemented",
+      "evidence": [
+        "cmd/ncc-api-server/diagnostics.go",
+        "selfheal.go",
+        "frontend/src/features/settings/SystemHealthSection.tsx"
+      ]
+    },
+    {
+      "id": "RC.RP-01",
+      "function": "RC",
+      "capability": "Backup/restore operations and post-restore self-heal",
+      "status": "Implemented",
+      "evidence": [
+        "cmd/ncc-api-server/backups.go",
+        "cmd/ncc-api-server/maintenance.go",
+        "cmd/ncc-api-server/maintenance_restore_selfheal_test.go"
+      ]
+    },
+    {
+      "id": "GV.OV-01",
+      "function": "GV",
+      "capability": "Control ownership and governance process",
+      "status": "Partial",
+      "evidence": [
+        "docs/NIST_CSF_BASELINE.md"
+      ]
+    },
+    {
+      "id": "ID.RA-01",
+      "function": "ID",
+      "capability": "Risk register and asset criticality mapping",
+      "status": "Missing",
+      "evidence": []
+    },
+    {
+      "id": "RS.RP-01",
+      "function": "RS",
+      "capability": "Incident response playbooks and communication matrix",
+      "status": "Missing",
+      "evidence": []
+    }
+  ]
+}

@@ -675,6 +675,8 @@ Raw NCC summaries land under `nccfiles/`. Runner JSON logs under `logs/ncc-runne
 | [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)                                  | TLS, Prism Central, API issues                                        |
 | [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md)                                            | Wire the orchestrator into AI tools via MCP                           |
 | [`docs/PRODUCTION_READINESS_v2.0.0.md`](docs/PRODUCTION_READINESS_v2.0.0.md)          | Release gate evidence and checklists                                  |
+| [`docs/NIST_CSF_BASELINE.md`](docs/NIST_CSF_BASELINE.md)                                | NIST CSF 2.0 control baseline, evidence map, and gap plan             |
+| [`docs/NIST_CSF_EVIDENCE_MANIFEST.json`](docs/NIST_CSF_EVIDENCE_MANIFEST.json)          | Machine-readable control-to-evidence mapping for compliance bundles    |
 | [`docs/RELEASE_CHECKSUMS.md`](docs/RELEASE_CHECKSUMS.md)                              | How `--update` verifies downloads                                     |
 | [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md)                            | Verify SHA-256, run unsigned binaries on macOS/Windows/Linux, GPG     |
 | [`k8s/README.md`](k8s/README.md)                                                     | Kubernetes deployment guide                                           |

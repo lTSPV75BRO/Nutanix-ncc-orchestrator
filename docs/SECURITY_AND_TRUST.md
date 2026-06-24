@@ -420,6 +420,9 @@ The trust steps above cover the binary you run. These options cover how it
 talks to Prism, SMTP, and webhook receivers at runtime, and who can change
 state through the api-server.
 
+For NIST CSF-aligned control tracking (implemented/partial/missing plus evidence
+references), see [`docs/NIST_CSF_BASELINE.md`](NIST_CSF_BASELINE.md).
+
 ### Prism TLS: prefer a CA bundle or pinning over `insecure-skip-verify`
 
 `--insecure-skip-verify` accepts **any** certificate (including a
