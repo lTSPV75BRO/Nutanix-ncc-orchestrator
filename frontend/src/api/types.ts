@@ -63,6 +63,8 @@ export type MeData = {
   cluster_access_unrestricted?: boolean;
   /** When restricted, the clusters the caller may see/act on. */
   allowed_clusters?: string[];
+  /** User's preferred run config path. */
+  run_config_path?: string;
 };
 
 export type SessionPolicy = {
@@ -418,6 +420,18 @@ export type AuditLogData = {
 export type ConfigData = {
   path: string;
   content: string;
+};
+
+export type ConfigListItem = {
+  path: string;
+  resolved: string;
+  exists: boolean;
+  is_active?: boolean;
+};
+
+export type ConfigListData = {
+  items: ConfigListItem[];
+  default_path?: string;
 };
 
 export type ConfigBatchOperation = {

@@ -319,6 +319,11 @@ func routeMinRoleFor(p string, isRead bool) Role {
 		return RoleOperator
 	case p == "/api/v1/settings/notifications/test":
 		return RoleOperator
+	case p == "/api/v1/runs/configs":
+		return RoleOperator
+	case p == "/api/v1/runs/config-preference":
+		// Any authenticated caller may store their own default run config.
+		return RoleViewer
 	case p == "/api/v1/schedule":
 		// Reading the schedule is a plain viewer read; creating/updating or
 		// applying a recurring run is an operator action (it automates the same
@@ -818,8 +823,11 @@ func (s *apiServer) handleMe(w http.ResponseWriter, r *http.Request) {
 		// can offer self-service password change). SSO/static-token sessions
 		// have no local password and are excluded.
 		if s.users != nil {
-			if _, ok := s.users.lookup(p.subject); ok {
+			if acct, ok := s.users.lookup(p.subject); ok {
 				data["is_local"] = true
+				if pref := strings.TrimSpace(acct.RunConfigPath); pref != "" {
+					data["run_config_path"] = pref
+				}
 			}
 		}
 		if !p.expiresAt.IsZero() {

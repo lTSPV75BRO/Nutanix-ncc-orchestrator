@@ -25,6 +25,8 @@ type account struct {
 	Username     string `json:"username" yaml:"username"`
 	PasswordHash string `json:"password_hash,omitempty" yaml:"password_hash"`
 	Role         string `json:"role" yaml:"role"`
+	// RunConfigPath is the user's preferred config file for run trigger/preflight.
+	RunConfigPath string `json:"run_config_path,omitempty" yaml:"-"`
 	// MustChange forces a password change on next login before any other
 	// action is allowed (used for the bootstrap admin and admin resets).
 	MustChange bool `json:"must_change_password,omitempty" yaml:"must_change_password,omitempty"`
@@ -552,6 +554,32 @@ func (db *userDB) revokeSessions(username string) error {
 		return errUserNotFound
 	}
 	a.TokenGen++
+	a.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	return db.saveLocked()
+}
+
+// getRunConfigPath returns a user's preferred run config path, if set.
+func (db *userDB) getRunConfigPath(username string) string {
+	key := strings.ToLower(strings.TrimSpace(username))
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	a, ok := db.accounts[key]
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(a.RunConfigPath)
+}
+
+// setRunConfigPath updates a user's preferred run config path.
+func (db *userDB) setRunConfigPath(username, runConfigPath string) error {
+	key := strings.ToLower(strings.TrimSpace(username))
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	a, ok := db.accounts[key]
+	if !ok {
+		return errUserNotFound
+	}
+	a.RunConfigPath = strings.TrimSpace(runConfigPath)
 	a.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	return db.saveLocked()
 }

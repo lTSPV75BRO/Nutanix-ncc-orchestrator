@@ -11,6 +11,7 @@ import {
   Input,
   InputNumber,
   List,
+  Modal,
   Radio,
   Row,
   Select,
@@ -35,12 +36,13 @@ import {
   SettingOutlined,
   ThunderboltOutlined,
   WarningOutlined,
+  DeleteOutlined,
 } from "@ant-design/icons";
 import type { ReactNode } from "react";
 import { Document, parseDocument } from "yaml";
 import { api } from "../../api/client";
 import { CodeEditor, inferEditorLanguage } from "../../components/CodeEditor";
-import type { ConfigBatchOperation, ConfigRelatedFileBatchOperation, ConfigRelatedFileInfo } from "../../api/types";
+import type { ConfigBatchOperation, ConfigListItem, ConfigRelatedFileBatchOperation, ConfigRelatedFileInfo } from "../../api/types";
 import { PolicyGateBuilderSection } from "./PolicyGateBuilderSection";
 import { SecretsMigrationModal } from "./SecretsMigrationModal";
 import { notify } from "../../notify";
@@ -421,12 +423,12 @@ export function ConfigSection({ onError }: Props) {
   const [content, setContent] = useState("");
   const [originalContent, setOriginalContent] = useState("");
   const [configPath, setConfigPath] = useState("");
+  const [configItems, setConfigItems] = useState<ConfigListItem[]>([]);
+  const [configDialogOpen, setConfigDialogOpen] = useState(false);
+  const [newConfigPath, setNewConfigPath] = useState("");
   const [files, setFiles] = useState<ConfigRelatedFileInfo[]>([]);
   const [activeFile, setActiveFile] = useState<string>("");
   const [activeFileContent, setActiveFileContent] = useState("");
-  const [bulkConfigPaths, setBulkConfigPaths] = useState("");
-  const [bulkConfigContent, setBulkConfigContent] = useState("");
-  const [bulkConfigRemovePaths, setBulkConfigRemovePaths] = useState<string[]>([]);
   const [bulkAddPaths, setBulkAddPaths] = useState("");
   const [bulkAddContent, setBulkAddContent] = useState("");
   const [bulkRemovePaths, setBulkRemovePaths] = useState<string[]>([]);
@@ -465,6 +467,12 @@ export function ConfigSection({ onError }: Props) {
     forceTick((n) => n + 1);
   }, []);
 
+  const refreshConfigOptions = useCallback(async () => {
+    const resp = await api.listConfigs();
+    setConfigItems(resp.items ?? []);
+    return resp.items ?? [];
+  }, []);
+
   const refreshConfigFiles = useCallback(async (preserveActivePath?: string) => {
     const resp = await api.listConfigFiles();
     const next = resp.items ?? [];
@@ -486,13 +494,14 @@ export function ConfigSection({ onError }: Props) {
     return next;
   }, [activeFile]);
 
-  const load = useCallback(async (suppressError = false, silent = false) => {
+  const load = useCallback(async (suppressError = false, silent = false, requestedPath?: string) => {
     try {
-      const cfg = await api.loadConfig();
+      const cfg = await api.loadConfig(requestedPath);
       const text = cfg.content ?? "";
       setContent(text);
       setOriginalContent(text);
       setConfigPath(cfg.path ?? "");
+      await refreshConfigOptions();
       await refreshConfigFiles();
       if (!silent) notify.success("Config loaded.");
       return true;
@@ -500,7 +509,7 @@ export function ConfigSection({ onError }: Props) {
       if (!suppressError) onError(e);
       return false;
     }
-  }, [onError, refreshConfigFiles]);
+  }, [onError, refreshConfigFiles, refreshConfigOptions]);
 
   useEffect(() => {
     let cancelled = false;
@@ -549,8 +558,9 @@ export function ConfigSection({ onError }: Props) {
       return;
     }
     try {
-      await api.saveConfig(content);
+      await api.saveConfig(content, configPath || undefined);
       setOriginalContent(content);
+      await refreshConfigOptions();
       await refreshConfigFiles(activeFile);
       notify.success("Config saved.");
     } catch (e) {
@@ -609,27 +619,35 @@ export function ConfigSection({ onError }: Props) {
       } else {
         notify.success(`${successVerb}: ${resp.ok}/${resp.total} succeeded.`);
       }
+      await refreshConfigOptions();
     } catch (e) {
       onError(e);
     }
   };
 
-  const bulkAddOrUpdateConfigs = async () => {
-    const paths = Array.from(
-      new Set(
-        bulkConfigPaths
-          .split("\n")
-          .map((p) => p.trim())
-          .filter(Boolean),
-      ),
-    );
-    const operations = paths.map((path) => ({ action: "add" as const, path, content: bulkConfigContent }));
-    await runBatchConfigOps(operations, "Bulk config add/update complete");
+  const addConfigFile = async () => {
+    const path = newConfigPath.trim();
+    if (!path) {
+      notify.info("Enter a config file path.");
+      return;
+    }
+    await runBatchConfigOps([{ action: "add", path, content: "" }], "Config file add complete");
+    setNewConfigPath("");
   };
 
-  const bulkRemoveConfigs = async () => {
-    const operations = bulkConfigRemovePaths.map((path) => ({ action: "remove" as const, path }));
-    await runBatchConfigOps(operations, "Bulk config remove complete");
+  const removeConfigFile = async (path: string) => {
+    await runBatchConfigOps([{ action: "remove", path }], "Config file remove complete");
+    if (path === configPath) {
+      await load(false, true);
+    }
+  };
+
+  const openConfigFile = async (path: string) => {
+    const ok = await load(false, true, path);
+    if (ok) {
+      notify.success(`Opened ${path}.`);
+      setConfigDialogOpen(false);
+    }
   };
 
   const runBatchFileOps = async (operations: ConfigRelatedFileBatchOperation[], successVerb: string) => {
@@ -759,6 +777,14 @@ export function ConfigSection({ onError }: Props) {
                   Reload
                 </Button>
               </Tooltip>
+              <Button
+                onClick={() => {
+                  void refreshConfigOptions();
+                  setConfigDialogOpen(true);
+                }}
+              >
+                Manage Config Files
+              </Button>
               <Tooltip title="Revert unsaved changes (⇧⌘Z / Ctrl+Shift+Z)">
                 <Button icon={<RocketOutlined />} onClick={revert} disabled={!dirty}>
                   Revert
@@ -792,53 +818,6 @@ export function ConfigSection({ onError }: Props) {
             description={`${dirtyCount} field${dirtyCount === 1 ? "" : "s"} changed since last load. Click Save to persist.`}
           />
         ) : null}
-      </Card>
-
-      <Card className="page-card">
-        <Typography.Title level={4} className="section-title">
-          Bulk Config YAML Operations
-        </Typography.Title>
-        <Typography.Text type="secondary" className="section-subtitle">
-          Add/update/remove multiple YAML config files in one action.
-        </Typography.Text>
-        <Card size="small" style={{ marginTop: 12, marginBottom: 12 }}>
-          <Space direction="vertical" size={10} style={{ width: "100%" }}>
-            <Typography.Text strong>Bulk add/update config files</Typography.Text>
-            <Typography.Text type="secondary">
-              Enter one `.yaml`/`.yml` path per line (for example: `configs/dev-a.yaml`) and apply the same content.
-            </Typography.Text>
-            <Input.TextArea
-              value={bulkConfigPaths}
-              onChange={(e) => setBulkConfigPaths(e.target.value)}
-              rows={3}
-              placeholder={"configs/dev-a.yaml\nconfigs/dev-b.yaml"}
-            />
-            <CodeEditor value={bulkConfigContent} onChange={setBulkConfigContent} language="yaml" height={180} />
-            <Button type="primary" onClick={() => void bulkAddOrUpdateConfigs()}>
-              Add/Update Multiple Config Files
-            </Button>
-          </Space>
-        </Card>
-        <Card size="small">
-          <Space direction="vertical" size={10} style={{ width: "100%" }}>
-            <Typography.Text strong>Bulk remove config files</Typography.Text>
-            <Typography.Text type="secondary">
-              Select YAML config files to remove. Active config-path cannot be removed.
-            </Typography.Text>
-            <Select
-              mode="tags"
-              allowClear
-              style={{ width: "100%" }}
-              value={bulkConfigRemovePaths}
-              onChange={(vals) => setBulkConfigRemovePaths(vals)}
-              tokenSeparators={[",", " "]}
-              placeholder="configs/old-a.yaml, configs/old-b.yaml"
-            />
-            <Button danger onClick={() => void bulkRemoveConfigs()}>
-              Remove Multiple Config Files
-            </Button>
-          </Space>
-        </Card>
       </Card>
 
       {/* Mode body */}
@@ -1032,6 +1011,63 @@ export function ConfigSection({ onError }: Props) {
         }}
         onClose={() => setSecretsModalOpen(false)}
       />
+      <Modal
+        title="Manage Config Files"
+        open={configDialogOpen}
+        onCancel={() => setConfigDialogOpen(false)}
+        footer={null}
+        width={760}
+      >
+        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+          <Typography.Text type="secondary">
+            Add/remove additional `config.yaml` files and open one for full Form/YAML editing.
+          </Typography.Text>
+          <Space.Compact style={{ width: "100%" }}>
+            <Input
+              value={newConfigPath}
+              onChange={(e) => setNewConfigPath(e.target.value)}
+              placeholder="configs/cluster-a.yaml"
+            />
+            <Button type="primary" onClick={() => void addConfigFile()}>
+              Add
+            </Button>
+          </Space.Compact>
+          <List
+            bordered
+            size="small"
+            dataSource={configItems}
+            locale={{ emptyText: "No config files discovered" }}
+            renderItem={(item) => (
+              <List.Item
+                actions={[
+                  <Button key="open" size="small" onClick={() => void openConfigFile(item.path)}>
+                    Open
+                  </Button>,
+                  <Button
+                    key="remove"
+                    size="small"
+                    danger
+                    icon={<DeleteOutlined />}
+                    disabled={item.is_active}
+                    onClick={() => void removeConfigFile(item.path)}
+                  >
+                    Remove
+                  </Button>,
+                ]}
+              >
+                <Space direction="vertical" size={0}>
+                  <Typography.Text code>{item.path}</Typography.Text>
+                  <Typography.Text type="secondary">{item.resolved}</Typography.Text>
+                </Space>
+                <Space>
+                  <Tag color={item.exists ? "success" : "default"}>{item.exists ? "exists" : "missing"}</Tag>
+                  {item.is_active ? <Tag color="processing">active</Tag> : null}
+                </Space>
+              </List.Item>
+            )}
+          />
+        </Space>
+      </Modal>
     </Space>
   );
 }

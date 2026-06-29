@@ -14,7 +14,7 @@ import {
   ClockCircleOutlined,
 } from "@ant-design/icons";
 import { api } from "../../api/client";
-import type { ActiveRunEntry, ArtifactInfo, RunActiveData, RunInfo, RunPreflightData } from "../../api/types";
+import type { ActiveRunEntry, ArtifactInfo, ConfigListItem, RunActiveData, RunInfo, RunPreflightData } from "../../api/types";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { CodeEditor } from "../../components/CodeEditor";
 import { notify } from "../../notify";
@@ -61,6 +61,7 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
   const allowedClusters = useMemo(() => me?.allowed_clusters ?? [], [me?.allowed_clusters]);
   const [selectedClusters, setSelectedClusters] = useState<string[]>([]);
   const [runConfigPath, setRunConfigPath] = useState("");
+  const [runConfigOptions, setRunConfigOptions] = useState<ConfigListItem[]>([]);
   const [runPassword, setRunPassword] = useState("");
   const [extraArgs, setExtraArgs] = useLocalStorageState("runs.extraArgs", "");
   const [runs, setRuns] = useState<RunInfo[]>([]);
@@ -81,8 +82,22 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
   const maxConcurrent = active?.max_concurrent ?? 0;
 
   useEffect(() => {
-    if (backendConfigPath) setRunConfigPath(backendConfigPath);
+    if (backendConfigPath && !runConfigPath) setRunConfigPath(backendConfigPath);
   }, [backendConfigPath]);
+
+  const loadRunConfigOptions = async () => {
+    try {
+      const [cfgs, pref] = await Promise.all([api.runConfigs(), api.getRunConfigPreference()]);
+      const items = cfgs.items ?? [];
+      setRunConfigOptions(items);
+      const fallbackPath = items.find((it) => it.is_active)?.path || backendConfigPath || "";
+      const preferred = (pref.path || cfgs.default_path || me?.run_config_path || "").trim();
+      const selected = preferred || fallbackPath;
+      if (selected) setRunConfigPath(selected);
+    } catch (e) {
+      onError(e);
+    }
+  };
 
   const triggerPayload = useMemo(
     () => ({
@@ -123,6 +138,7 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
 
   useEffect(() => {
     const bootstrap = async () => {
+      await loadRunConfigOptions();
       await loadRunActive();
       await refreshRuns();
       initialLoadCompletedRef.current = true;
@@ -266,6 +282,15 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
       }
     } catch (e) {
       notify.close("ncc-preflight");
+      onError(e);
+    }
+  };
+
+  const onRunConfigChange = async (value: string) => {
+    setRunConfigPath(value);
+    try {
+      await api.updateRunConfigPreference(value);
+    } catch (e) {
       onError(e);
     }
   };
@@ -554,13 +579,17 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
               <label htmlFor="run-config-path" style={{ display: "block", marginBottom: 4 }}>
                 <Typography.Text type="secondary">Config file</Typography.Text>
               </label>
-              <Input
+              <Select
                 id="run-config-path"
-                name="config-path"
                 value={runConfigPath}
-                onChange={(e) => setRunConfigPath(e.target.value)}
+                onChange={(v) => void onRunConfigChange(v)}
+                options={runConfigOptions.map((item) => ({
+                  value: item.path,
+                  label: item.path,
+                }))}
                 placeholder={backendConfigPath || "config.yaml"}
-                autoComplete="off"
+                style={{ width: "100%" }}
+                showSearch
               />
             </Col>
             <Col xs={24} md={12}>

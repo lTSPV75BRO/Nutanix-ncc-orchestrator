@@ -2,6 +2,7 @@ import type {
   ArtifactInfo,
   AuditLogData,
   ConfigData,
+  ConfigListData,
   ConfigBatchData,
   ConfigBatchOperation,
   ConfigRelatedFileData,
@@ -219,12 +220,14 @@ async function loadReportDataFallback(): Promise<ReportData> {
 
 export const api = {
   health: () => callApi<HealthData>("/api/v1/health"),
-  loadConfig: () => callApi<ConfigData>("/api/v1/settings/config"),
-  saveConfig: (content: string) =>
+  loadConfig: (path?: string) =>
+    callApi<ConfigData>(path ? `/api/v1/settings/config?path=${encodeURIComponent(path)}` : "/api/v1/settings/config"),
+  saveConfig: (content: string, path?: string) =>
     callApi<ConfigData>("/api/v1/settings/config", {
       method: "PUT",
-      body: JSON.stringify({ content }),
+      body: JSON.stringify(path ? { path, content } : { content }),
     }),
+  listConfigs: () => callApi<ConfigListData>("/api/v1/settings/configs"),
   batchConfigs: (operations: ConfigBatchOperation[]) =>
     callApi<ConfigBatchData>("/api/v1/settings/config/batch", {
       method: "POST",
@@ -274,6 +277,13 @@ export const api = {
   runById: (id: string) => callApi<RunByIdData>(`/api/v1/runs/${encodeURIComponent(id)}`),
   runSummary: () => callApi<unknown>("/api/v1/runs/summary"),
   runActive: () => callApi<RunActiveData>("/api/v1/runs/active"),
+  getRunConfigPreference: () => callApi<{ path?: string }>("/api/v1/runs/config-preference"),
+  updateRunConfigPreference: (path?: string) =>
+    callApi<{ path?: string }>("/api/v1/runs/config-preference", {
+      method: "PUT",
+      body: JSON.stringify({ path: path ?? "" }),
+    }),
+  runConfigs: () => callApi<ConfigListData>("/api/v1/runs/configs"),
   runCancel: (id?: string) =>
     callApi<RunCancelData>(id ? `/api/v1/runs/active?id=${encodeURIComponent(id)}` : "/api/v1/runs/active", {
       method: "DELETE",

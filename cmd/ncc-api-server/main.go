@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"io/fs"
 	"log"
 	"mime"
 	"net"
@@ -285,7 +286,19 @@ func routeRequiredRole(path string, methods []string) string {
 }
 
 type configUpdateRequest struct {
+	Path    string `json:"path,omitempty"`
 	Content string `json:"content"`
+}
+
+type runConfigPreferenceRequest struct {
+	Path string `json:"path,omitempty"`
+}
+
+type availableConfigFile struct {
+	Path     string `json:"path"`
+	Resolved string `json:"resolved"`
+	Exists   bool   `json:"exists"`
+	IsActive bool   `json:"is_active,omitempty"`
 }
 
 type configBatchOperation struct {
@@ -1691,7 +1704,12 @@ func (s *apiServer) handleAuthRotate(w http.ResponseWriter, r *http.Request) {
 func (s *apiServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		cfgPath, err := s.validateConfigPath(s.configPath)
+		reqPath := strings.TrimSpace(r.URL.Query().Get("path"))
+		targetPath := s.configPath
+		if reqPath != "" {
+			targetPath = reqPath
+		}
+		cfgPath, err := s.validateConfigPath(targetPath)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 			return
@@ -1735,7 +1753,11 @@ func (s *apiServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "content is required"})
 			return
 		}
-		cfgPath, err := s.validateConfigPath(s.configPath)
+		targetPath := s.configPath
+		if strings.TrimSpace(req.Path) != "" {
+			targetPath = strings.TrimSpace(req.Path)
+		}
+		cfgPath, err := s.validateConfigPath(targetPath)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 			return
@@ -1890,6 +1912,157 @@ func (s *apiServer) handleConfigBatch(w http.ResponseWriter, r *http.Request) {
 		"failed":  failCount,
 		"results": results,
 	}})
+}
+
+func (s *apiServer) discoverAvailableConfigFiles() ([]availableConfigFile, error) {
+	activeCfgPath, err := s.validateConfigPath(s.configPath)
+	if err != nil {
+		return nil, err
+	}
+	rootAbs, err := filepath.Abs(s.repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	rootAbs = filepath.Clean(rootAbs)
+	candidates := map[string]bool{activeCfgPath: true}
+
+	// "configs/" is the canonical home for additional per-cluster config files.
+	configsDir := filepath.Join(rootAbs, "configs")
+	_ = filepath.WalkDir(configsDir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		if ext != ".yaml" && ext != ".yml" {
+			return nil
+		}
+		if abs, err := s.validateConfigPath(path); err == nil {
+			candidates[abs] = true
+		}
+		return nil
+	})
+
+	// Also include any immediate sibling config*.ya?ml files near the active config.
+	activeDir := filepath.Dir(activeCfgPath)
+	if entries, readErr := os.ReadDir(activeDir); readErr == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := strings.ToLower(entry.Name())
+			ext := strings.ToLower(filepath.Ext(name))
+			if ext != ".yaml" && ext != ".yml" {
+				continue
+			}
+			if !strings.HasPrefix(name, "config") && name != strings.ToLower(filepath.Base(activeCfgPath)) {
+				continue
+			}
+			if abs, err := s.validateConfigPath(filepath.Join(activeDir, entry.Name())); err == nil {
+				candidates[abs] = true
+			}
+		}
+	}
+
+	items := make([]availableConfigFile, 0, len(candidates))
+	for abs := range candidates {
+		rel, relErr := filepath.Rel(rootAbs, abs)
+		pathVal := abs
+		if relErr == nil && rel != "" && !strings.HasPrefix(rel, "..") {
+			pathVal = filepath.ToSlash(rel)
+		}
+		_, statErr := os.Stat(abs)
+		items = append(items, availableConfigFile{
+			Path:     pathVal,
+			Resolved: abs,
+			Exists:   statErr == nil,
+			IsActive: strings.EqualFold(abs, activeCfgPath),
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].IsActive != items[j].IsActive {
+			return items[i].IsActive
+		}
+		return items[i].Path < items[j].Path
+	})
+	return items, nil
+}
+
+func (s *apiServer) resolvePreferredRunConfigPath(r *http.Request, requestedPath string) string {
+	if v := strings.TrimSpace(requestedPath); v != "" {
+		return v
+	}
+	if p, ok := principalFromContext(r.Context()); ok && s.users != nil {
+		if pref := strings.TrimSpace(s.users.getRunConfigPath(p.subject)); pref != "" {
+			return pref
+		}
+	}
+	return s.configPath
+}
+
+func (s *apiServer) handleConfigsList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	items, err := s.discoverAvailableConfigFiles()
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
+		return
+	}
+	defaultPath := ""
+	if p, ok := principalFromContext(r.Context()); ok && s.users != nil {
+		defaultPath = strings.TrimSpace(s.users.getRunConfigPath(p.subject))
+	}
+	writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
+		"items":        items,
+		"default_path": defaultPath,
+	}})
+}
+
+func (s *apiServer) handleRunConfigPreference(w http.ResponseWriter, r *http.Request) {
+	if s.users == nil {
+		writeJSON(w, http.StatusNotFound, envelope{Success: false, Error: "user preferences require a writable user database"})
+		return
+	}
+	p, ok := principalFromContext(r.Context())
+	if !ok || strings.TrimSpace(p.subject) == "" {
+		writeJSON(w, http.StatusUnauthorized, envelope{Success: false, Error: "unauthorized"})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
+			"path": strings.TrimSpace(s.users.getRunConfigPath(p.subject)),
+		}})
+	case http.MethodPut:
+		if err := requireJSONContentType(r); err != nil {
+			writeJSON(w, http.StatusUnsupportedMediaType, envelope{Success: false, Error: err.Error()})
+			return
+		}
+		var req runConfigPreferenceRequest
+		if err := decodeJSON(r.Body, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
+			return
+		}
+		val := strings.TrimSpace(req.Path)
+		if val != "" {
+			if _, err := s.validateConfigPath(val); err != nil {
+				writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
+				return
+			}
+		}
+		if err := s.users.setRunConfigPath(p.subject, val); err != nil {
+			writeUserStoreError(w, err)
+			return
+		}
+		s.audit(r, "runs.config_preference.update", true, map[string]interface{}{"path": val})
+		writeJSON(w, http.StatusOK, envelope{Success: true, Message: "run config preference updated", Data: map[string]interface{}{"path": val}})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+	}
 }
 
 func parseScalarConfigValue(v interface{}) string {
@@ -3217,10 +3390,7 @@ func (s *apiServer) handleRunPreflight(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	cfgPath := strings.TrimSpace(req.ConfigPath)
-	if cfgPath == "" {
-		cfgPath = s.configPath
-	}
+	cfgPath := s.resolvePreferredRunConfigPath(r, req.ConfigPath)
 	resolvedCfgPath, err := s.validateConfigPath(cfgPath)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
@@ -3281,10 +3451,7 @@ func (s *apiServer) handleRunTrigger(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 		return
 	}
-	cfgPath := s.configPath
-	if strings.TrimSpace(req.ConfigPath) != "" {
-		cfgPath = strings.TrimSpace(req.ConfigPath)
-	}
+	cfgPath := s.resolvePreferredRunConfigPath(r, req.ConfigPath)
 	resolvedCfgPath, err := s.validateConfigPath(cfgPath)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
@@ -5124,6 +5291,7 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/api/v1/settings/update/apply", s.handleUpdateApply)
 	mux.HandleFunc("/api/v1/settings/config", s.handleConfig)
 	mux.HandleFunc("/api/v1/settings/config/batch", s.handleConfigBatch)
+	mux.HandleFunc("/api/v1/settings/configs", s.handleConfigsList)
 	mux.HandleFunc("/api/v1/settings/config-files", s.handleConfigFiles)
 	mux.HandleFunc("/api/v1/settings/config-file", s.handleConfigFile)
 	mux.HandleFunc("/api/v1/settings/config-files/batch", s.handleConfigFilesBatch)
@@ -5139,6 +5307,8 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/api/v1/runs/", s.handleRunsRouter)
 	mux.HandleFunc("/api/v1/runs/summary", s.handleRunSummary)
 	mux.HandleFunc("/api/v1/runs/active", s.handleRunActive)
+	mux.HandleFunc("/api/v1/runs/config-preference", s.handleRunConfigPreference)
+	mux.HandleFunc("/api/v1/runs/configs", s.handleConfigsList)
 	mux.HandleFunc("/api/v1/runs/preflight", s.handleRunPreflight)
 	mux.HandleFunc("/api/v1/runs/trigger", s.handleRunTrigger)
 	mux.HandleFunc("/api/v1/report/data", s.handleReportData)
