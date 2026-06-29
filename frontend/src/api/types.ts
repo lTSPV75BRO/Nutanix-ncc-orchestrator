@@ -420,6 +420,29 @@ export type ConfigData = {
   content: string;
 };
 
+export type ConfigBatchOperation = {
+  action: "add" | "update" | "remove" | "delete";
+  path: string;
+  content?: string;
+};
+
+export type ConfigBatchResult = {
+  action: string;
+  path: string;
+  resolved?: string;
+  exists?: boolean;
+  ok: boolean;
+  error?: string;
+  validate_output?: string;
+};
+
+export type ConfigBatchData = {
+  total: number;
+  ok: number;
+  failed: number;
+  results: ConfigBatchResult[];
+};
+
 export type ConfigRelatedFileInfo = {
   key: string;
   path: string;

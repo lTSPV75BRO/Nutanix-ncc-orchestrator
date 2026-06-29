@@ -2,6 +2,8 @@ import type {
   ArtifactInfo,
   AuditLogData,
   ConfigData,
+  ConfigBatchData,
+  ConfigBatchOperation,
   ConfigRelatedFileData,
   ConfigRelatedFileBatchOperation,
   ConfigRelatedFilesBatchData,
@@ -222,6 +224,11 @@ export const api = {
     callApi<ConfigData>("/api/v1/settings/config", {
       method: "PUT",
       body: JSON.stringify({ content }),
+    }),
+  batchConfigs: (operations: ConfigBatchOperation[]) =>
+    callApi<ConfigBatchData>("/api/v1/settings/config/batch", {
+      method: "POST",
+      body: JSON.stringify({ operations }),
     }),
   listConfigFiles: () => callApi<ConfigRelatedFilesData>("/api/v1/settings/config-files"),
   loadConfigFile: (path: string) =>

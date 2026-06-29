@@ -288,6 +288,16 @@ type configUpdateRequest struct {
 	Content string `json:"content"`
 }
 
+type configBatchOperation struct {
+	Action  string `json:"action"`
+	Path    string `json:"path"`
+	Content string `json:"content,omitempty"`
+}
+
+type configBatchRequest struct {
+	Operations []configBatchOperation `json:"operations"`
+}
+
 type configRelatedFile struct {
 	Key          string `json:"key"`
 	Path         string `json:"path"`
@@ -1770,6 +1780,116 @@ func (s *apiServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 	}
+}
+
+func (s *apiServer) applyConfigBatchOperation(r *http.Request, op configBatchOperation) map[string]interface{} {
+	action := strings.ToLower(strings.TrimSpace(op.Action))
+	result := map[string]interface{}{
+		"action": action,
+		"path":   strings.TrimSpace(op.Path),
+		"ok":     false,
+	}
+	cfgPath, err := s.validateConfigPath(op.Path)
+	if err != nil {
+		result["error"] = err.Error()
+		return result
+	}
+	result["resolved"] = cfgPath
+	activeCfgPath, _ := s.validateConfigPath(s.configPath)
+	switch action {
+	case "add", "update":
+		if strings.TrimSpace(op.Content) == "" {
+			result["error"] = "content is required for add/update"
+			return result
+		}
+		if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+			result["error"] = err.Error()
+			return result
+		}
+		ext := filepath.Ext(cfgPath)
+		base := strings.TrimSuffix(cfgPath, ext)
+		if ext == "" {
+			ext = ".yaml"
+			base = cfgPath
+		}
+		tmpPath := base + ".tmp" + ext
+		if err := os.WriteFile(tmpPath, []byte(op.Content), 0o600); err != nil {
+			result["error"] = err.Error()
+			return result
+		}
+		defer os.Remove(tmpPath)
+		cmd := s.makeOrchestratorCommand(context.TODO(), "validate-config", "--config", tmpPath)
+		cmd.Dir = s.absPath(s.repoRoot)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			result["error"] = fmt.Sprintf("strict config validation failed: %v", err)
+			result["validate_output"] = tailString(redactSensitiveText(string(out)), 2000)
+			return result
+		}
+		if err := os.Rename(tmpPath, cfgPath); err != nil {
+			result["error"] = err.Error()
+			return result
+		}
+		result["ok"] = true
+		result["exists"] = true
+		s.audit(r, "settings.config.batch_update", true, map[string]interface{}{"config_path": cfgPath, "action": action})
+		return result
+	case "remove", "delete":
+		if activeCfgPath != "" && strings.EqualFold(cfgPath, activeCfgPath) {
+			result["error"] = "cannot remove active config-path"
+			return result
+		}
+		if err := os.Remove(cfgPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			result["error"] = err.Error()
+			return result
+		}
+		result["ok"] = true
+		result["exists"] = false
+		s.audit(r, "settings.config.batch_delete", true, map[string]interface{}{"config_path": cfgPath, "action": action})
+		return result
+	default:
+		result["error"] = "action must be one of: add, update, remove, delete"
+		return result
+	}
+}
+
+func (s *apiServer) handleConfigBatch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	if err := requireJSONContentType(r); err != nil {
+		writeJSON(w, http.StatusUnsupportedMediaType, envelope{Success: false, Error: err.Error()})
+		return
+	}
+	var req configBatchRequest
+	if err := decodeJSON(r.Body, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
+		return
+	}
+	if len(req.Operations) == 0 {
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "operations must not be empty"})
+		return
+	}
+	results := make([]map[string]interface{}, 0, len(req.Operations))
+	okCount := 0
+	failCount := 0
+	for _, op := range req.Operations {
+		res := s.applyConfigBatchOperation(r, op)
+		if ok, _ := res["ok"].(bool); ok {
+			okCount++
+		} else {
+			failCount++
+		}
+		results = append(results, res)
+	}
+	msg := fmt.Sprintf("processed %d operation(s): %d succeeded, %d failed", len(req.Operations), okCount, failCount)
+	writeJSON(w, http.StatusOK, envelope{Success: true, Message: msg, Data: map[string]interface{}{
+		"total":   len(req.Operations),
+		"ok":      okCount,
+		"failed":  failCount,
+		"results": results,
+	}})
 }
 
 func parseScalarConfigValue(v interface{}) string {
@@ -3633,6 +3753,7 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/settings/update", Methods: []string{http.MethodGet}, Description: "Admin-only: check for a newer release (current/latest version, update_available) and report any in-progress in-app update job/phase"},
 		{Path: "/api/v1/settings/update/apply", Methods: []string{http.MethodPost}, Description: "Admin-only: apply an in-app update — takes a pre-update backup, installs the latest stack (orchestrator+api+ui+frontend, always checksum-verified against the release checksums.txt), then restarts the stack. Runs in the background; poll GET /api/v1/settings/update for progress.", SampleBody: "{\n  \"target_version\": \"\"\n}"},
 		{Path: "/api/v1/settings/config", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write runtime config", SampleBody: "{\n  \"content\": \"clusters: \\\"10.0.0.1\\\"\\nusername: \\\"admin\\\"\\n\"\n}"},
+		{Path: "/api/v1/settings/config/batch", Methods: []string{http.MethodPost}, Description: "Bulk add/update/remove YAML config files", SampleBody: "{\n  \"operations\": [\n    {\"action\": \"add\", \"path\": \"configs/dev-a.yaml\", \"content\": \"clusters: \\\"10.0.0.1\\\"\\nusername: \\\"admin\\\"\\n\"},\n    {\"action\": \"remove\", \"path\": \"configs/old.yaml\"}\n  ]\n}"},
 		{Path: "/api/v1/settings/config-files", Methods: []string{http.MethodGet}, Description: "List config-referenced files (clusters, exclusions, secrets)"},
 		{Path: "/api/v1/settings/config-file", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write one config-referenced file", SampleBody: "{\n  \"path\": \"alerts-exclude.txt\",\n  \"content\": \"AHV_MemoryUsage\\n\"\n}"},
 		{Path: "/api/v1/settings/config-files/batch", Methods: []string{http.MethodPost}, Description: "Bulk add/update/remove config-referenced files", SampleBody: "{\n  \"operations\": [\n    {\"action\": \"add\", \"path\": \"clusters.txt\", \"content\": \"10.0.0.1\\n\"},\n    {\"action\": \"remove\", \"path\": \"exclude.txt\"}\n  ]\n}"},
@@ -4032,6 +4153,24 @@ func (s *apiServer) buildOpenAPISpecBase() map[string]interface{} {
 							"application/json": map[string]interface{}{
 								"example": map[string]interface{}{
 									"content": "clusters: \"10.0.0.1\"\nusername: \"admin\"\n",
+								},
+							},
+						},
+					},
+				},
+			},
+			"/api/v1/settings/config/batch": map[string]interface{}{
+				"post": map[string]interface{}{
+					"summary": "Bulk add/update/remove YAML config files",
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"example": map[string]interface{}{
+									"operations": []map[string]interface{}{
+										{"action": "add", "path": "configs/dev-a.yaml", "content": "clusters: \"10.0.0.1\"\nusername: \"admin\"\n"},
+										{"action": "remove", "path": "configs/old.yaml"},
+									},
 								},
 							},
 						},
@@ -4984,6 +5123,7 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/api/v1/settings/update", s.handleUpdateCheck)
 	mux.HandleFunc("/api/v1/settings/update/apply", s.handleUpdateApply)
 	mux.HandleFunc("/api/v1/settings/config", s.handleConfig)
+	mux.HandleFunc("/api/v1/settings/config/batch", s.handleConfigBatch)
 	mux.HandleFunc("/api/v1/settings/config-files", s.handleConfigFiles)
 	mux.HandleFunc("/api/v1/settings/config-file", s.handleConfigFile)
 	mux.HandleFunc("/api/v1/settings/config-files/batch", s.handleConfigFilesBatch)

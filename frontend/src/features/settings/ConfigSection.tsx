@@ -40,7 +40,7 @@ import type { ReactNode } from "react";
 import { Document, parseDocument } from "yaml";
 import { api } from "../../api/client";
 import { CodeEditor, inferEditorLanguage } from "../../components/CodeEditor";
-import type { ConfigRelatedFileBatchOperation, ConfigRelatedFileInfo } from "../../api/types";
+import type { ConfigBatchOperation, ConfigRelatedFileBatchOperation, ConfigRelatedFileInfo } from "../../api/types";
 import { PolicyGateBuilderSection } from "./PolicyGateBuilderSection";
 import { SecretsMigrationModal } from "./SecretsMigrationModal";
 import { notify } from "../../notify";
@@ -424,6 +424,9 @@ export function ConfigSection({ onError }: Props) {
   const [files, setFiles] = useState<ConfigRelatedFileInfo[]>([]);
   const [activeFile, setActiveFile] = useState<string>("");
   const [activeFileContent, setActiveFileContent] = useState("");
+  const [bulkConfigPaths, setBulkConfigPaths] = useState("");
+  const [bulkConfigContent, setBulkConfigContent] = useState("");
+  const [bulkConfigRemovePaths, setBulkConfigRemovePaths] = useState<string[]>([]);
   const [bulkAddPaths, setBulkAddPaths] = useState("");
   const [bulkAddContent, setBulkAddContent] = useState("");
   const [bulkRemovePaths, setBulkRemovePaths] = useState<string[]>([]);
@@ -590,6 +593,45 @@ export function ConfigSection({ onError }: Props) {
     }
   };
 
+  const runBatchConfigOps = async (operations: ConfigBatchOperation[], successVerb: string) => {
+    if (operations.length === 0) {
+      notify.info("No config file operations to apply.");
+      return;
+    }
+    try {
+      const resp = await api.batchConfigs(operations);
+      const firstError = resp.results.find((r) => !r.ok)?.error;
+      if (resp.failed > 0) {
+        notify.warning({
+          message: `${successVerb}: ${resp.ok}/${resp.total} succeeded`,
+          description: firstError ? `First error: ${firstError}` : undefined,
+        });
+      } else {
+        notify.success(`${successVerb}: ${resp.ok}/${resp.total} succeeded.`);
+      }
+    } catch (e) {
+      onError(e);
+    }
+  };
+
+  const bulkAddOrUpdateConfigs = async () => {
+    const paths = Array.from(
+      new Set(
+        bulkConfigPaths
+          .split("\n")
+          .map((p) => p.trim())
+          .filter(Boolean),
+      ),
+    );
+    const operations = paths.map((path) => ({ action: "add" as const, path, content: bulkConfigContent }));
+    await runBatchConfigOps(operations, "Bulk config add/update complete");
+  };
+
+  const bulkRemoveConfigs = async () => {
+    const operations = bulkConfigRemovePaths.map((path) => ({ action: "remove" as const, path }));
+    await runBatchConfigOps(operations, "Bulk config remove complete");
+  };
+
   const runBatchFileOps = async (operations: ConfigRelatedFileBatchOperation[], successVerb: string) => {
     if (operations.length === 0) {
       notify.info("No file operations to apply.");
@@ -750,6 +792,53 @@ export function ConfigSection({ onError }: Props) {
             description={`${dirtyCount} field${dirtyCount === 1 ? "" : "s"} changed since last load. Click Save to persist.`}
           />
         ) : null}
+      </Card>
+
+      <Card className="page-card">
+        <Typography.Title level={4} className="section-title">
+          Bulk Config YAML Operations
+        </Typography.Title>
+        <Typography.Text type="secondary" className="section-subtitle">
+          Add/update/remove multiple YAML config files in one action.
+        </Typography.Text>
+        <Card size="small" style={{ marginTop: 12, marginBottom: 12 }}>
+          <Space direction="vertical" size={10} style={{ width: "100%" }}>
+            <Typography.Text strong>Bulk add/update config files</Typography.Text>
+            <Typography.Text type="secondary">
+              Enter one `.yaml`/`.yml` path per line (for example: `configs/dev-a.yaml`) and apply the same content.
+            </Typography.Text>
+            <Input.TextArea
+              value={bulkConfigPaths}
+              onChange={(e) => setBulkConfigPaths(e.target.value)}
+              rows={3}
+              placeholder={"configs/dev-a.yaml\nconfigs/dev-b.yaml"}
+            />
+            <CodeEditor value={bulkConfigContent} onChange={setBulkConfigContent} language="yaml" height={180} />
+            <Button type="primary" onClick={() => void bulkAddOrUpdateConfigs()}>
+              Add/Update Multiple Config Files
+            </Button>
+          </Space>
+        </Card>
+        <Card size="small">
+          <Space direction="vertical" size={10} style={{ width: "100%" }}>
+            <Typography.Text strong>Bulk remove config files</Typography.Text>
+            <Typography.Text type="secondary">
+              Select YAML config files to remove. Active config-path cannot be removed.
+            </Typography.Text>
+            <Select
+              mode="tags"
+              allowClear
+              style={{ width: "100%" }}
+              value={bulkConfigRemovePaths}
+              onChange={(vals) => setBulkConfigRemovePaths(vals)}
+              tokenSeparators={[",", " "]}
+              placeholder="configs/old-a.yaml, configs/old-b.yaml"
+            />
+            <Button danger onClick={() => void bulkRemoveConfigs()}>
+              Remove Multiple Config Files
+            </Button>
+          </Space>
+        </Card>
       </Card>
 
       {/* Mode body */}
