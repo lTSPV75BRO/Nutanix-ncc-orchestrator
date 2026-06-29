@@ -40,7 +40,7 @@ import type { ReactNode } from "react";
 import { Document, parseDocument } from "yaml";
 import { api } from "../../api/client";
 import { CodeEditor, inferEditorLanguage } from "../../components/CodeEditor";
-import type { ConfigRelatedFileInfo } from "../../api/types";
+import type { ConfigRelatedFileBatchOperation, ConfigRelatedFileInfo } from "../../api/types";
 import { PolicyGateBuilderSection } from "./PolicyGateBuilderSection";
 import { SecretsMigrationModal } from "./SecretsMigrationModal";
 import { notify } from "../../notify";
@@ -424,6 +424,9 @@ export function ConfigSection({ onError }: Props) {
   const [files, setFiles] = useState<ConfigRelatedFileInfo[]>([]);
   const [activeFile, setActiveFile] = useState<string>("");
   const [activeFileContent, setActiveFileContent] = useState("");
+  const [bulkAddPaths, setBulkAddPaths] = useState("");
+  const [bulkAddContent, setBulkAddContent] = useState("");
+  const [bulkRemovePaths, setBulkRemovePaths] = useState<string[]>([]);
   const [parseError, setParseError] = useState<string | null>(null);
   const [secretsModalOpen, setSecretsModalOpen] = useState(false);
   const [, forceTick] = useState(0);
@@ -585,6 +588,46 @@ export function ConfigSection({ onError }: Props) {
     } catch (e) {
       onError(e);
     }
+  };
+
+  const runBatchFileOps = async (operations: ConfigRelatedFileBatchOperation[], successVerb: string) => {
+    if (operations.length === 0) {
+      notify.info("No file operations to apply.");
+      return;
+    }
+    try {
+      const resp = await api.batchConfigFiles(operations);
+      await refreshConfigFiles(activeFile);
+      const firstError = resp.results.find((r) => !r.ok)?.error;
+      if (resp.failed > 0) {
+        notify.warning({
+          message: `${successVerb}: ${resp.ok}/${resp.total} succeeded`,
+          description: firstError ? `First error: ${firstError}` : undefined,
+        });
+      } else {
+        notify.success(`${successVerb}: ${resp.ok}/${resp.total} succeeded.`);
+      }
+    } catch (e) {
+      onError(e);
+    }
+  };
+
+  const bulkAddOrUpdateFiles = async () => {
+    const paths = Array.from(
+      new Set(
+        bulkAddPaths
+          .split("\n")
+          .map((p) => p.trim())
+          .filter(Boolean),
+      ),
+    );
+    const operations = paths.map((path) => ({ action: "add" as const, path, content: bulkAddContent }));
+    await runBatchFileOps(operations, "Bulk add/update complete");
+  };
+
+  const bulkRemoveFiles = async () => {
+    const operations = bulkRemovePaths.map((path) => ({ action: "remove" as const, path }));
+    await runBatchFileOps(operations, "Bulk remove complete");
   };
 
   const applyPolicyGates = (csv: string) => {
@@ -797,6 +840,49 @@ export function ConfigSection({ onError }: Props) {
             Refresh
           </Button>
         </Space>
+        <Card size="small" style={{ marginBottom: 12 }}>
+          <Space direction="vertical" size={10} style={{ width: "100%" }}>
+            <Typography.Text strong>Bulk add/update files</Typography.Text>
+            <Typography.Text type="secondary">
+              Enter one referenced config file path per line and apply the same content to all.
+            </Typography.Text>
+            <Input.TextArea
+              value={bulkAddPaths}
+              onChange={(e) => setBulkAddPaths(e.target.value)}
+              rows={3}
+              placeholder={"clusters.txt\nexclude.txt\nsecrets.yaml"}
+            />
+            <CodeEditor
+              value={bulkAddContent}
+              onChange={setBulkAddContent}
+              language={inferEditorLanguage((bulkAddPaths.split("\n")[0] || "").trim() || "txt")}
+              height={160}
+            />
+            <Button type="primary" onClick={() => void bulkAddOrUpdateFiles()}>
+              Add/Update Multiple Files
+            </Button>
+          </Space>
+        </Card>
+        <Card size="small" style={{ marginBottom: 12 }}>
+          <Space direction="vertical" size={10} style={{ width: "100%" }}>
+            <Typography.Text strong>Bulk remove files</Typography.Text>
+            <Typography.Text type="secondary">
+              Select one or more referenced files to delete from disk.
+            </Typography.Text>
+            <Select
+              mode="multiple"
+              allowClear
+              style={{ width: "100%" }}
+              value={bulkRemovePaths}
+              onChange={(vals) => setBulkRemovePaths(vals)}
+              options={files.map((f) => ({ label: `${f.key}: ${f.path}`, value: f.path }))}
+              placeholder="Select files to remove"
+            />
+            <Button danger onClick={() => void bulkRemoveFiles()}>
+              Remove Selected Files
+            </Button>
+          </Space>
+        </Card>
         {files.length === 0 ? (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No related files detected in config yet" />
         ) : (

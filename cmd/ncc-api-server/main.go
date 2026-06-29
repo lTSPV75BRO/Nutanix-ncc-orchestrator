@@ -301,6 +301,16 @@ type configRelatedFileUpdateRequest struct {
 	Content string `json:"content"`
 }
 
+type configRelatedFileBatchOperation struct {
+	Action  string `json:"action"`
+	Path    string `json:"path"`
+	Content string `json:"content,omitempty"`
+}
+
+type configRelatedFileBatchRequest struct {
+	Operations []configRelatedFileBatchOperation `json:"operations"`
+}
+
 type scheduleState struct {
 	Type      string `json:"type"`
 	Action    string `json:"action"`
@@ -2129,6 +2139,100 @@ func (s *apiServer) handleConfigFile(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *apiServer) applyConfigFileOperation(r *http.Request, op configRelatedFileBatchOperation) map[string]interface{} {
+	action := strings.ToLower(strings.TrimSpace(op.Action))
+	result := map[string]interface{}{
+		"action": action,
+		"path":   strings.TrimSpace(op.Path),
+		"ok":     false,
+	}
+	ref, err := s.relatedConfigFileByPath(op.Path)
+	if err != nil {
+		result["error"] = err.Error()
+		return result
+	}
+	result["key"] = ref.Key
+	result["resolved"] = ref.ResolvedPath
+	if ref.ResolvedPath == "" {
+		result["error"] = "path cannot be resolved inside repo root"
+		return result
+	}
+	switch action {
+	case "add", "update":
+		if err := s.validateConfigRelatedFileContent(ref, op.Content); err != nil {
+			result["error"] = fmt.Sprintf("validation failed for %s: %v", ref.Key, err)
+			return result
+		}
+		if err := os.MkdirAll(filepath.Dir(ref.ResolvedPath), 0o755); err != nil {
+			result["error"] = err.Error()
+			return result
+		}
+		if err := os.WriteFile(ref.ResolvedPath, []byte(op.Content), 0o600); err != nil {
+			result["error"] = err.Error()
+			return result
+		}
+		result["ok"] = true
+		result["exists"] = true
+		s.audit(r, "settings.config_file.update", true, map[string]interface{}{
+			"key": ref.Key, "path": ref.Path, "resolved": ref.ResolvedPath, "action": action,
+		})
+		return result
+	case "remove", "delete":
+		if err := os.Remove(ref.ResolvedPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			result["error"] = err.Error()
+			return result
+		}
+		result["ok"] = true
+		result["exists"] = false
+		s.audit(r, "settings.config_file.delete", true, map[string]interface{}{
+			"key": ref.Key, "path": ref.Path, "resolved": ref.ResolvedPath, "action": action,
+		})
+		return result
+	default:
+		result["error"] = "action must be one of: add, update, remove, delete"
+		return result
+	}
+}
+
+func (s *apiServer) handleConfigFilesBatch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	if err := requireJSONContentType(r); err != nil {
+		writeJSON(w, http.StatusUnsupportedMediaType, envelope{Success: false, Error: err.Error()})
+		return
+	}
+	var req configRelatedFileBatchRequest
+	if err := decodeJSON(r.Body, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
+		return
+	}
+	if len(req.Operations) == 0 {
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "operations must not be empty"})
+		return
+	}
+	results := make([]map[string]interface{}, 0, len(req.Operations))
+	okCount := 0
+	failCount := 0
+	for _, op := range req.Operations {
+		res := s.applyConfigFileOperation(r, op)
+		if ok, _ := res["ok"].(bool); ok {
+			okCount++
+		} else {
+			failCount++
+		}
+		results = append(results, res)
+	}
+	msg := fmt.Sprintf("processed %d operation(s): %d succeeded, %d failed", len(req.Operations), okCount, failCount)
+	writeJSON(w, http.StatusOK, envelope{Success: true, Message: msg, Data: map[string]interface{}{
+		"total":   len(req.Operations),
+		"ok":      okCount,
+		"failed":  failCount,
+		"results": results,
+	}})
+}
+
 func (s *apiServer) handleSchedule(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -3531,6 +3635,7 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/settings/config", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write runtime config", SampleBody: "{\n  \"content\": \"clusters: \\\"10.0.0.1\\\"\\nusername: \\\"admin\\\"\\n\"\n}"},
 		{Path: "/api/v1/settings/config-files", Methods: []string{http.MethodGet}, Description: "List config-referenced files (clusters, exclusions, secrets)"},
 		{Path: "/api/v1/settings/config-file", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write one config-referenced file", SampleBody: "{\n  \"path\": \"alerts-exclude.txt\",\n  \"content\": \"AHV_MemoryUsage\\n\"\n}"},
+		{Path: "/api/v1/settings/config-files/batch", Methods: []string{http.MethodPost}, Description: "Bulk add/update/remove config-referenced files", SampleBody: "{\n  \"operations\": [\n    {\"action\": \"add\", \"path\": \"clusters.txt\", \"content\": \"10.0.0.1\\n\"},\n    {\"action\": \"remove\", \"path\": \"exclude.txt\"}\n  ]\n}"},
 		{Path: "/api/v1/settings/notifications", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/write notification channels (slack/webhook/email), events, and delivery controls — quiet hours, maintenance windows, dedup/rate-limit throttle, and the scheduled health digest. Failures (run/backup/self-heal) reuse the run_failure toggle.", SampleBody: "{\n  \"enabled\": true,\n  \"events\": {\"run_failure\": true, \"run_success\": false, \"policy_violations\": true},\n  \"email\": {\"enabled\": true, \"smtp_host\": \"smtp.example.com\", \"smtp_port\": 587, \"from\": \"ncc@example.com\", \"to\": \"sre@example.com\"},\n  \"quiet\": {\"enabled\": true, \"start\": \"22:00\", \"end\": \"07:00\", \"timezone\": \"UTC\", \"allow_failures\": true},\n  \"maintenance\": [{\"start\": \"2026-07-01T01:00:00Z\", \"end\": \"2026-07-01T03:00:00Z\", \"note\": \"patching\"}],\n  \"throttle\": {\"dedup_window_sec\": 300, \"min_interval_sec\": 30},\n  \"digest\": {\"enabled\": true, \"every\": \"24h\"}\n}"},
 		{Path: "/api/v1/settings/notifications/test", Methods: []string{http.MethodPost}, Description: "Operator+: send test notification(s) (delivery errors are URL-redacted)", SampleBody: "{\n  \"channel\": \"all\"\n}"},
 		{Path: "/api/v1/schedule", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET viewer+: read scheduler state; PUT operator+: create/update/apply a recurring run", SampleBody: "{\n  \"type\": \"cron\",\n  \"action\": \"create\",\n  \"cron\": \"15 */4 * * *\",\n  \"config\": \"config.yaml\",\n  \"print_only\": true,\n  \"apply\": false\n}"},
@@ -3947,6 +4052,24 @@ func (s *apiServer) buildOpenAPISpecBase() map[string]interface{} {
 								"example": map[string]interface{}{
 									"path":    "alerts-exclude.txt",
 									"content": "AHV_MemoryUsage\n",
+								},
+							},
+						},
+					},
+				},
+			},
+			"/api/v1/settings/config-files/batch": map[string]interface{}{
+				"post": map[string]interface{}{
+					"summary": "Bulk add/update/remove config-referenced files",
+					"requestBody": map[string]interface{}{
+						"required": true,
+						"content": map[string]interface{}{
+							"application/json": map[string]interface{}{
+								"example": map[string]interface{}{
+									"operations": []map[string]interface{}{
+										{"action": "add", "path": "clusters.txt", "content": "10.0.0.1\n"},
+										{"action": "remove", "path": "exclude.txt"},
+									},
 								},
 							},
 						},
@@ -4863,6 +4986,7 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/api/v1/settings/config", s.handleConfig)
 	mux.HandleFunc("/api/v1/settings/config-files", s.handleConfigFiles)
 	mux.HandleFunc("/api/v1/settings/config-file", s.handleConfigFile)
+	mux.HandleFunc("/api/v1/settings/config-files/batch", s.handleConfigFilesBatch)
 	mux.HandleFunc("/api/v1/settings/notifications", s.handleNotifications)
 	mux.HandleFunc("/api/v1/settings/notifications/test", s.handleNotificationsTest)
 	mux.HandleFunc("/api/v1/schedule", s.handleSchedule)

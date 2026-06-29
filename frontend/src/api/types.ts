@@ -440,6 +440,29 @@ export type ConfigRelatedFileData = {
   content: string;
 };
 
+export type ConfigRelatedFileBatchOperation = {
+  action: "add" | "update" | "remove" | "delete";
+  path: string;
+  content?: string;
+};
+
+export type ConfigRelatedFileBatchResult = {
+  action: string;
+  path: string;
+  key?: string;
+  resolved?: string;
+  exists?: boolean;
+  ok: boolean;
+  error?: string;
+};
+
+export type ConfigRelatedFilesBatchData = {
+  total: number;
+  ok: number;
+  failed: number;
+  results: ConfigRelatedFileBatchResult[];
+};
+
 export type ScheduleState = {
   type: string;
   action: string;

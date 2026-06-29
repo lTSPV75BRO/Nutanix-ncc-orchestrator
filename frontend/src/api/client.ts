@@ -3,6 +3,8 @@ import type {
   AuditLogData,
   ConfigData,
   ConfigRelatedFileData,
+  ConfigRelatedFileBatchOperation,
+  ConfigRelatedFilesBatchData,
   ConfigRelatedFilesData,
   Envelope,
   HealthData,
@@ -228,6 +230,11 @@ export const api = {
     callApi<ConfigRelatedFileData>("/api/v1/settings/config-file", {
       method: "PUT",
       body: JSON.stringify({ path, content }),
+    }),
+  batchConfigFiles: (operations: ConfigRelatedFileBatchOperation[]) =>
+    callApi<ConfigRelatedFilesBatchData>("/api/v1/settings/config-files/batch", {
+      method: "POST",
+      body: JSON.stringify({ operations }),
     }),
   loadSchedule: () => callApi<ScheduleState>("/api/v1/schedule"),
   saveSchedule: (payload: Partial<ScheduleState> & { apply: boolean }) =>
