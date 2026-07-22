@@ -1945,7 +1945,8 @@ func (s *apiServer) discoverAvailableConfigFiles() ([]availableConfigFile, error
 		return nil
 	})
 
-	// Also include any immediate sibling config*.ya?ml files near the active config.
+	// Also include any immediate sibling .ya?ml files near the active config.
+	// Operators commonly create per-cluster files with non-"config*" names.
 	activeDir := filepath.Dir(activeCfgPath)
 	if entries, readErr := os.ReadDir(activeDir); readErr == nil {
 		for _, entry := range entries {
@@ -1955,9 +1956,6 @@ func (s *apiServer) discoverAvailableConfigFiles() ([]availableConfigFile, error
 			name := strings.ToLower(entry.Name())
 			ext := strings.ToLower(filepath.Ext(name))
 			if ext != ".yaml" && ext != ".yml" {
-				continue
-			}
-			if !strings.HasPrefix(name, "config") && name != strings.ToLower(filepath.Base(activeCfgPath)) {
 				continue
 			}
 			if abs, err := s.validateConfigPath(filepath.Join(activeDir, entry.Name())); err == nil {

@@ -5,6 +5,7 @@ import { api } from "../../api/client";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { notify } from "../../notify";
 import { formatDateTime as formatTime, formatDateTime, relativeTime } from "../../utils/datetime";
+import type { ConfigListItem } from "../../api/types";
 
 type Props = {
   backendConfigPath: string;
@@ -109,6 +110,7 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
   const [printOnly, setPrintOnly] = useLocalStorageState("settings.schedule.printOnly", true);
   const [apply, setApply] = useLocalStorageState("settings.schedule.apply", false);
   const [health, setHealth] = useState<ScheduleHealth | null>(null);
+  const [configOptions, setConfigOptions] = useState<ConfigListItem[]>([]);
 
   // systemd timers gate overlapping activations themselves, so the file lock is
   // redundant (and the toggle is shown disabled/forced-on for that backend).
@@ -153,6 +155,22 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
       }
       setMode((s.type !== "auto" || s.action !== "create" || (s.cron || "").trim()) ? "advanced" : "simple");
       notify.success("Schedule loaded.");
+    } catch (e) {
+      onError(e);
+    }
+  };
+
+  const loadConfigOptions = async (silent = true) => {
+    try {
+      const resp = await api.listConfigs();
+      const items = resp.items ?? [];
+      setConfigOptions(items);
+      const current = config.trim();
+      if (!current) {
+        const fallback = resp.default_path || items.find((it) => it.is_active)?.path || backendConfigPath || "config.yaml";
+        setConfig(fallback);
+      }
+      if (!silent) notify.success("Config file options refreshed.");
     } catch (e) {
       onError(e);
     }
@@ -215,7 +233,17 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
 
   useEffect(() => {
     void loadHealth(true);
+    void loadConfigOptions(true);
   }, []);
+
+  const configSelectOptions = useMemo(
+    () =>
+      configOptions.map((item) => ({
+        value: item.path,
+        label: item.is_active ? `${item.path} (active)` : item.path,
+      })),
+    [configOptions],
+  );
 
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
@@ -263,8 +291,39 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
-              <Form.Item label="Config file" htmlFor="sched-config">
-                <Input id="sched-config" name="config-path" value={config} onChange={(e) => setConfig(e.target.value)} placeholder="config.yaml" autoComplete="off" />
+              <Form.Item
+                label="Config file"
+                tooltip="Select an available config file for scheduled runs. You can still type a custom path if needed."
+                htmlFor="sched-config-select"
+              >
+                <Space.Compact style={{ width: "100%" }}>
+                  <Select
+                    id="sched-config-select"
+                    showSearch
+                    allowClear
+                    value={config || undefined}
+                    placeholder="Select config.yaml"
+                    options={configSelectOptions}
+                    optionFilterProp="label"
+                    onChange={(value) => setConfig(String(value || ""))}
+                    style={{ width: "100%" }}
+                  />
+                  <Button
+                    icon={<ReloadOutlined />}
+                    onClick={() => void loadConfigOptions(false)}
+                    aria-label="Refresh config options"
+                  />
+                </Space.Compact>
+              </Form.Item>
+              <Form.Item label="Custom config path (optional)" htmlFor="sched-config-custom">
+                <Input
+                  id="sched-config-custom"
+                  name="config-path"
+                  value={config}
+                  onChange={(e) => setConfig(e.target.value)}
+                  placeholder="config.yaml"
+                  autoComplete="off"
+                />
               </Form.Item>
             </Col>
           </Row>

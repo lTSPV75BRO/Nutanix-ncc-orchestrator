@@ -47,12 +47,22 @@ import { PolicyGateBuilderSection } from "./PolicyGateBuilderSection";
 import { SecretsMigrationModal } from "./SecretsMigrationModal";
 import { notify } from "../../notify";
 import { SECTIONS, KNOWN_KEYS, type FieldDef, type SectionDef } from "./configSchema";
+import defaultConfigTemplate from "../../../../example_config.yaml?raw";
 
 type Props = {
   onError: (e: unknown) => void;
 };
 
 type Mode = "form" | "yaml";
+
+// Runtime-safe defaults used when strict validation rejects the richer example
+// template (for example due unresolved secret:// placeholders).
+const SAFE_DEFAULT_CONFIG = `clusters: "10.0.0.1"
+username: "admin"
+password: "admin"
+outputs: "html,csv"
+insecure-skip-verify: false
+`;
 
 const SECTION_ICONS: Record<SectionDef["icon"], ReactNode> = {
   cluster: <CloudServerOutlined />,
@@ -606,7 +616,7 @@ export function ConfigSection({ onError }: Props) {
   const runBatchConfigOps = async (operations: ConfigBatchOperation[], successVerb: string) => {
     if (operations.length === 0) {
       notify.info("No config file operations to apply.");
-      return;
+      return undefined;
     }
     try {
       const resp = await api.batchConfigs(operations);
@@ -620,8 +630,10 @@ export function ConfigSection({ onError }: Props) {
         notify.success(`${successVerb}: ${resp.ok}/${resp.total} succeeded.`);
       }
       await refreshConfigOptions();
+      return resp;
     } catch (e) {
       onError(e);
+      return undefined;
     }
   };
 
@@ -631,8 +643,38 @@ export function ConfigSection({ onError }: Props) {
       notify.info("Enter a config file path.");
       return;
     }
-    await runBatchConfigOps([{ action: "add", path, content: "" }], "Config file add complete");
-    setNewConfigPath("");
+    const seedContent = `${defaultConfigTemplate.trim()}\n`;
+    try {
+      const first = await api.batchConfigs([{ action: "add", path, content: seedContent }]);
+      if (first.failed === 0) {
+        await refreshConfigOptions();
+        notify.success("Config file add complete: 1/1 succeeded.");
+        setNewConfigPath("");
+        return;
+      }
+      const firstError = first.results.find((r) => !r.ok)?.error || "";
+      if (/strict config validation failed/i.test(firstError)) {
+        const second = await api.batchConfigs([{ action: "add", path, content: SAFE_DEFAULT_CONFIG }]);
+        await refreshConfigOptions();
+        if (second.failed === 0) {
+          notify.success("Config file created with default values.");
+          setNewConfigPath("");
+          return;
+        }
+        const secondError = second.results.find((r) => !r.ok)?.error || "unknown error";
+        notify.warning({
+          message: "Config file add complete: 0/1 succeeded",
+          description: `First error: ${secondError}`,
+        });
+        return;
+      }
+      notify.warning({
+        message: "Config file add complete: 0/1 succeeded",
+        description: `First error: ${firstError || "unknown error"}`,
+      });
+    } catch (e) {
+      onError(e);
+    }
   };
 
   const removeConfigFile = async (path: string) => {

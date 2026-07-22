@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -197,7 +198,13 @@ func checkStalePIDs(hc *healContext) healResult {
 	res := healResult{ID: "stale-pids", Title: "Stale PID files", Category: "process"}
 	runDir := filepath.Join(hc.InstallDir, "run")
 	pidFiles, _ := filepath.Glob(filepath.Join(runDir, "*.pid"))
-	var stale, cleaned []string
+	supervisorPID, apiPID, uiPID := detectRuntimePIDs(hc.InstallDir)
+	liveForFile := map[string]int{
+		"v2-supervisor.pid": supervisorPID,
+		"v2-api.pid":        apiPID,
+		"v2-ui.pid":         uiPID,
+	}
+	var stale, cleaned, reconciled []string
 	for _, pf := range pidFiles {
 		pid, err := readPIDFromFile(pf)
 		if err != nil {
@@ -207,6 +214,12 @@ func checkStalePIDs(hc *healContext) healResult {
 			continue
 		}
 		if hc.Fix {
+			if live := liveForFile[filepath.Base(pf)]; live > 0 {
+				if reconcilePIDFile(pf, live) {
+					reconciled = append(reconciled, fmt.Sprintf("%s -> pid %d", filepath.Base(pf), live))
+					continue
+				}
+			}
 			if os.Remove(pf) == nil {
 				cleaned = append(cleaned, filepath.Base(pf))
 				continue
@@ -215,14 +228,21 @@ func checkStalePIDs(hc *healContext) healResult {
 		stale = append(stale, fmt.Sprintf("%s (pid %d dead)", filepath.Base(pf), pid))
 	}
 	switch {
-	case len(stale) == 0 && len(cleaned) == 0:
+	case len(stale) == 0 && len(cleaned) == 0 && len(reconciled) == 0:
 		res.Status = healOK
 		res.Message = "no stale pid files"
 	case len(stale) == 0:
 		res.Status = healOK
 		res.Fixed = true
-		res.FixMsg = "removed stale pid file(s): " + strings.Join(cleaned, ", ")
-		res.Message = "stale pid files cleaned"
+		parts := []string{}
+		if len(cleaned) > 0 {
+			parts = append(parts, "removed stale pid file(s): "+strings.Join(cleaned, ", "))
+		}
+		if len(reconciled) > 0 {
+			parts = append(parts, "reconciled live pid file(s): "+strings.Join(reconciled, ", "))
+		}
+		res.FixMsg = strings.Join(parts, "; ")
+		res.Message = "stale pid files cleaned/reconciled"
 	default:
 		res.Status = healWarn
 		res.Message = "stale pid file(s): " + strings.Join(stale, ", ")
@@ -294,16 +314,94 @@ func evaluateRuntimeDrift(servicePresent, serviceActive, supervisorAlive, apiAli
 	}
 }
 
+func alivePIDFromFile(path string) (int, bool) {
+	pid, err := readPIDFromFile(path)
+	if err != nil || !processIsAlive(pid) {
+		return 0, false
+	}
+	return pid, true
+}
+
+func alivePIDByPattern(patterns ...string) (int, bool) {
+	if _, err := exec.LookPath("pgrep"); err != nil {
+		return 0, false
+	}
+	for _, pattern := range patterns {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			continue
+		}
+		out, err := exec.Command("pgrep", "-f", pattern).Output()
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		best := 0
+		for _, line := range lines {
+			pid, err := strconv.Atoi(strings.TrimSpace(line))
+			if err != nil || pid <= 0 {
+				continue
+			}
+			if processIsAlive(pid) && pid > best {
+				best = pid
+			}
+		}
+		if best > 0 {
+			return best, true
+		}
+	}
+	return 0, false
+}
+
+func detectRuntimePIDs(installDir string) (supervisorPID, apiPID, uiPID int) {
+	runDir := filepath.Join(installDir, "run")
+	if pid, ok := alivePIDFromFile(filepath.Join(runDir, "v2-supervisor.pid")); ok {
+		supervisorPID = pid
+	} else if pid, ok := alivePIDByPattern(
+		filepath.Join(installDir, "bin", "ncc-orchestrator")+" v2-supervise",
+		"ncc-orchestrator v2-supervise",
+	); ok {
+		supervisorPID = pid
+	}
+	if pid, ok := alivePIDFromFile(filepath.Join(runDir, "v2-api.pid")); ok {
+		apiPID = pid
+	} else if pid, ok := alivePIDByPattern(
+		filepath.Join(installDir, "bin", "ncc-api-server"),
+		"ncc-api-server",
+	); ok {
+		apiPID = pid
+	}
+	if pid, ok := alivePIDFromFile(filepath.Join(runDir, "v2-ui.pid")); ok {
+		uiPID = pid
+	} else if pid, ok := alivePIDByPattern(
+		filepath.Join(installDir, "bin", "ncc-ui-server"),
+		"ncc-ui-server",
+	); ok {
+		uiPID = pid
+	}
+	return supervisorPID, apiPID, uiPID
+}
+
+func reconcilePIDFile(path string, pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	cur, err := readPIDFromFile(path)
+	if err == nil && cur == pid {
+		return false
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return false
+	}
+	return os.WriteFile(path, []byte(fmt.Sprintf("%d\n", pid)), 0o644) == nil
+}
+
 func checkRuntimeModeDrift(hc *healContext) healResult {
 	res := healResult{ID: "runtime-mode-drift", Title: "Supervisor/runtime mode alignment", Category: "process"}
-	runDir := filepath.Join(hc.InstallDir, "run")
-	readAlive := func(name string) bool {
-		pid, err := readPIDFromFile(filepath.Join(runDir, name))
-		return err == nil && processIsAlive(pid)
-	}
-	supervisorAlive := readAlive("v2-supervisor.pid")
-	apiAlive := readAlive("v2-api.pid")
-	uiAlive := readAlive("v2-ui.pid")
+	supervisorPID, apiPID, uiPID := detectRuntimePIDs(hc.InstallDir)
+	supervisorAlive := supervisorPID > 0
+	apiAlive := apiPID > 0
+	uiAlive := uiPID > 0
 	serviceName := "ncc-orchestrator.service"
 	servicePresent := hasSystemdServiceUnit(serviceName)
 	serviceActive := isSystemdServiceActive(serviceName)
@@ -312,6 +410,27 @@ func checkRuntimeModeDrift(hc *healContext) healResult {
 	res.Status = eval.Status
 	res.Message = eval.Message
 	res.Hint = eval.Hint
+
+	// In service-managed mode, stale/missing pid files can survive a crash/recover
+	// cycle even when the live processes are healthy. Reconcile them under --fix so
+	// status/health checks converge without requiring a disruptive restart.
+	if hc.Fix && servicePresent && serviceActive && supervisorAlive {
+		runDir := filepath.Join(hc.InstallDir, "run")
+		updated := []string{}
+		if reconcilePIDFile(filepath.Join(runDir, "v2-supervisor.pid"), supervisorPID) {
+			updated = append(updated, "v2-supervisor.pid")
+		}
+		if apiPID > 0 && reconcilePIDFile(filepath.Join(runDir, "v2-api.pid"), apiPID) {
+			updated = append(updated, "v2-api.pid")
+		}
+		if uiPID > 0 && reconcilePIDFile(filepath.Join(runDir, "v2-ui.pid"), uiPID) {
+			updated = append(updated, "v2-ui.pid")
+		}
+		if len(updated) > 0 {
+			res.Fixed = true
+			res.FixMsg = "reconciled runtime pid file(s): " + strings.Join(updated, ", ")
+		}
+	}
 
 	if !hc.Fix || !eval.CanAutoFix || !servicePresent {
 		return res
@@ -369,6 +488,15 @@ func checkSchedulerIntegrity(hc *healContext) healResult {
 			}
 		}
 		if len(missing) > 0 {
+			if hc.Fix {
+				if fixed, msg := repairSchedulerArtifactsFromState(hc.InstallDir, st, typ, task, logPath); fixed {
+					res.Status = healOK
+					res.Fixed = true
+					res.FixMsg = msg
+					res.Message = "repaired missing scheduler artifacts from persisted state"
+					return res
+				}
+			}
 			res.Status = healWarn
 			res.Message = "scheduler artifacts missing: " + strings.Join(missing, ", ")
 			res.Hint = "Re-apply schedule (Settings -> Schedule -> Save + Apply) or run restore self-heal."
@@ -381,6 +509,15 @@ func checkSchedulerIntegrity(hc *healContext) healResult {
 	if typ == "cron" {
 		runner := filepath.Join(filepath.Dir(logPath), "ncc-scheduler.sh")
 		if !fileExists(runner) {
+			if hc.Fix {
+				if fixed, msg := repairSchedulerArtifactsFromState(hc.InstallDir, st, typ, task, logPath); fixed {
+					res.Status = healOK
+					res.Fixed = true
+					res.FixMsg = msg
+					res.Message = "repaired missing scheduler artifacts from persisted state"
+					return res
+				}
+			}
 			res.Status = healWarn
 			res.Message = "cron scheduler runner script is missing"
 			res.Hint = "Re-apply schedule to regenerate the runner script."
@@ -394,6 +531,55 @@ func checkSchedulerIntegrity(hc *healContext) healResult {
 	res.Message = "unknown scheduler type in persisted state: " + typ
 	res.Hint = "Re-save scheduler settings to normalize scheduler state."
 	return res
+}
+
+func repairSchedulerArtifactsFromState(installDir string, st map[string]interface{}, typ, task, logPath string) (bool, string) {
+	action := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", st["action"])))
+	if action != "" && action != "create" {
+		return false, ""
+	}
+	every := strings.TrimSpace(fmt.Sprintf("%v", st["every"]))
+	if every == "" {
+		every = "4h"
+	}
+	withLock := strings.TrimSpace(fmt.Sprintf("%v", st["with_lock"]))
+	if withLock == "" {
+		withLock = "true"
+	}
+	configPath := strings.TrimSpace(fmt.Sprintf("%v", st["config"]))
+	if configPath == "" {
+		configPath = filepath.Join(installDir, "config.yaml")
+	}
+	if !filepath.IsAbs(configPath) {
+		configPath = filepath.Join(installDir, configPath)
+	}
+	if logPath == "" {
+		logPath = filepath.Join(installDir, "logs", "ncc-scheduler.log")
+	}
+	if !filepath.IsAbs(logPath) {
+		logPath = filepath.Join(installDir, logPath)
+	}
+
+	orch := filepath.Join(installDir, "bin", "ncc-orchestrator")
+	if !fileExists(orch) {
+		orch = "ncc-orchestrator"
+	}
+	args := []string{
+		"--config", configPath,
+		"create-schedule",
+		"--type", typ,
+		"--every", every,
+		"--log-path", logPath,
+		"--task-name", task,
+		"--with-lock", withLock,
+		"--print-only=false",
+	}
+	out, err := exec.Command(orch, args...).CombinedOutput()
+	if err != nil {
+		_ = out
+		return false, ""
+	}
+	return true, "re-applied scheduler via create-schedule using persisted state"
 }
 
 func checkSELinuxExecContext(hc *healContext) healResult {
@@ -555,6 +741,9 @@ func checkRecentRunHealth(hc *healContext) healResult {
 	}
 	res.Message = fmt.Sprintf("last run %s: %d failed / %d OK; dominant cause: %s", sum.Timestamp, sum.ClustersFailed, sum.ClustersOK, dominant)
 	res.Hint = runClassMitigation(dominant)
+	if hc.Fix {
+		res.Hint += "; this check reports run quality and does not apply an automatic fix"
+	}
 	if sum.ClustersOK == 0 {
 		res.Status = healFail // total failure
 	} else {
