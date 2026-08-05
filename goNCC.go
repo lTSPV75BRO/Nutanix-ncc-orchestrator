@@ -9938,6 +9938,10 @@ func v2StartArgsFromState(installDir string) (args []string, ok bool) {
 }
 
 func restartV2Stack(installDir string) error {
+	if systemdStackIsActive() {
+		fmt.Println("\nRestarting stack (systemd-managed)...")
+		return restartSystemdStack()
+	}
 	self, err := os.Executable()
 	if err != nil || strings.TrimSpace(self) == "" {
 		return fmt.Errorf("locate orchestrator binary: %w", err)
@@ -9964,16 +9968,16 @@ func restartV2Stack(installDir string) error {
 
 // v2DoctorOptions wires the `doctor` subcommand's flags.
 type v2DoctorOptions struct {
-	InstallDir string
-	APIListen  string
-	UIListen   string
-	OutputFile string // when set, writes a redacted support tarball
-	NoBundle   bool
-	ConfigPath string // override for the self-heal config checks
-	Fix        bool   // apply safe self-heal remediations
-	JSON       bool   // emit the self-heal report as JSON (skips the human report + bundle)
-	OnlyChecks string // optional comma-separated check ids
-	NoDisruptive bool // skip disruptive checks/fixes (service restarts, etc.)
+	InstallDir   string
+	APIListen    string
+	UIListen     string
+	OutputFile   string // when set, writes a redacted support tarball
+	NoBundle     bool
+	ConfigPath   string // override for the self-heal config checks
+	Fix          bool   // apply safe self-heal remediations
+	JSON         bool   // emit the self-heal report as JSON (skips the human report + bundle)
+	OnlyChecks   string // optional comma-separated check ids
+	NoDisruptive bool   // skip disruptive checks/fixes (service restarts, etc.)
 }
 
 // runV2Doctor is the "something's broken, give me everything"
@@ -10879,6 +10883,75 @@ func runUninstallCommand(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// systemdStackIsActive reports whether the installed stack service is
+// currently active. v2-start/v2-restart must not launch a second detached
+// runtime beside the native systemd supervisor: both copies would race for
+// :8080/:8081 and the supervisor would only report opaque exit status 1s.
+func systemdStackIsActive() bool {
+	if runtime.GOOS == "windows" {
+		return false
+	}
+	if _, err := exec.LookPath("systemctl"); err != nil {
+		return false
+	}
+	return exec.Command("systemctl", "is-active", "--quiet", "ncc-orchestrator.service").Run() == nil
+}
+
+func restartSystemdStack() error {
+	out, err := exec.Command("systemctl", "restart", "ncc-orchestrator.service").CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("restart ncc-orchestrator.service: %s", msg)
+	}
+	return nil
+}
+
+// ensureV2StartSlotsAvailable prevents a second detached runtime from being
+// created after a stale/partial stop. Stale pid files are safe to remove; a
+// live PID or an occupied listen address is never killed automatically because
+// it may belong to an unrelated service.
+func ensureV2StartSlotsAvailable(installDir string, opts v2StartOptions) error {
+	runDir := filepath.Join(installDir, "run")
+	pids := []struct {
+		name string
+		path string
+	}{
+		{"supervisor", filepath.Join(runDir, "v2-supervisor.pid")},
+		{"api", filepath.Join(runDir, "v2-api.pid")},
+	}
+	if !opts.APIOnly {
+		pids = append(pids, struct {
+			name string
+			path string
+		}{"ui", filepath.Join(runDir, "v2-ui.pid")})
+	}
+	for _, item := range pids {
+		pid, err := readPIDFromFile(item.path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("cannot inspect %s pid file: %w", item.name, err)
+		}
+		if processIsAlive(pid) {
+			return fmt.Errorf("%s is already running (pid %d); stop it with `ncc-orchestrator v2-stop --install-dir %s` before starting another stack", item.name, pid, installDir)
+		}
+		_ = os.Remove(item.path)
+	}
+	if err := canBindListenAddress(opts.APIListen); err != nil {
+		return fmt.Errorf("api listen address %s is unavailable: %w (another process may already own the port)", opts.APIListen, err)
+	}
+	if !opts.APIOnly {
+		if err := canBindListenAddress(opts.UIListen); err != nil {
+			return fmt.Errorf("ui listen address %s is unavailable: %w (another process may already own the port)", opts.UIListen, err)
+		}
+	}
+	return nil
+}
+
 func runV2Start(opts v2StartOptions) error {
 	installDir := strings.TrimSpace(opts.InstallDir)
 	if installDir == "" {
@@ -10886,6 +10959,9 @@ func runV2Start(opts v2StartOptions) error {
 	}
 	if absInstallDir, err := filepath.Abs(installDir); err == nil {
 		installDir = absInstallDir
+	}
+	if opts.Detach && !opts.Supervise && systemdStackIsActive() {
+		return fmt.Errorf("ncc-orchestrator.service is already active; use `systemctl restart ncc-orchestrator.service` or `ncc-orchestrator v2-restart` instead of starting a detached duplicate")
 	}
 	// Record the portable start settings so backups carry them and an
 	// orchestrator-managed restart (after a restore, or via v2-restart) reuses
@@ -11018,6 +11094,11 @@ func runV2Start(opts v2StartOptions) error {
 	}
 	if opts.SelfHealUnhealthyThreshold <= 0 {
 		opts.SelfHealUnhealthyThreshold = 3
+	}
+	if opts.Detach && !opts.Supervise {
+		if err := ensureV2StartSlotsAvailable(installDir, opts); err != nil {
+			return err
+		}
 	}
 	if opts.SelfHeal && !opts.Detach {
 		fmt.Fprintln(os.Stderr, "warning: --self-heal is effective only with --detach; continuing without detached self-heal monitor")
@@ -11222,6 +11303,7 @@ func runV2Start(opts v2StartOptions) error {
 			name:       "api",
 			bin:        apiBin,
 			args:       apiArgs,
+			listen:     opts.APIListen,
 			pidPath:    apiPIDPath,
 			logPath:    apiLogPath,
 			healthArgs: apiHealthArgs,
@@ -11239,6 +11321,7 @@ func runV2Start(opts v2StartOptions) error {
 				name:       "ui",
 				bin:        uiBin,
 				args:       uiArgs,
+				listen:     opts.UIListen,
 				pidPath:    uiPIDPath,
 				logPath:    uiLogPath,
 				healthArgs: buildUIHealthProbeArgs(uiBin, opts.UIListen, uiTLSActive),
@@ -16942,15 +17025,15 @@ replaced by ***REDACTED***.`,
 			onlyChecks, _ := cmd.Flags().GetString("only-checks")
 			noDisruptive, _ := cmd.Flags().GetBool("no-disruptive")
 			return runV2Doctor(v2DoctorOptions{
-				InstallDir: installDir,
-				APIListen:  apiListen,
-				UIListen:   uiListen,
-				OutputFile: outputFile,
-				NoBundle:   noBundle,
-				ConfigPath: configPath,
-				Fix:        fix,
-				JSON:       jsonOut,
-				OnlyChecks: onlyChecks,
+				InstallDir:   installDir,
+				APIListen:    apiListen,
+				UIListen:     uiListen,
+				OutputFile:   outputFile,
+				NoBundle:     noBundle,
+				ConfigPath:   configPath,
+				Fix:          fix,
+				JSON:         jsonOut,
+				OnlyChecks:   onlyChecks,
 				NoDisruptive: noDisruptive,
 			})
 		},

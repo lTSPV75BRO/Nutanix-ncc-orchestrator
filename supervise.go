@@ -36,6 +36,7 @@ type superviseChild struct {
 	name       string   // "api" / "ui"; drives the log prefix
 	bin        string   // absolute path to the server binary
 	args       []string // argv passed on every (re)start
+	listen     string   // listen address; used for an early bind-conflict check
 	pidPath    string   // pid file updated with the live child PID
 	logPath    string   // child stdout/stderr is appended here
 	healthArgs []string // argv for a `--health-check` self-probe (nil = liveness-only)
@@ -245,6 +246,16 @@ func runChildOnce(ctx context.Context, cfg *superviseConfig, c *superviseChild, 
 		return childExited
 	}
 	defer logFile.Close()
+
+	// Fail clearly before spawning a child when another process already owns
+	// its port. Without this check the child only reports a generic exit 1 and
+	// the supervisor appears to be endlessly restarting a healthy process.
+	if strings.TrimSpace(c.listen) != "" {
+		if err := canBindListenAddress(c.listen); err != nil {
+			logf("%s: listen address %s unavailable: %v; refusing to spawn duplicate listener", c.name, c.listen, err)
+			return childExited
+		}
+	}
 
 	cmd := exec.Command(c.bin, c.args...)
 	cmd.Stdout = logFile

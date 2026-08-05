@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -28,6 +29,53 @@ import (
 
 	"goncc/internal/notify"
 )
+
+func TestEnsureV2StartSlotsAvailable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("listen probing uses POSIX-style process semantics")
+	}
+	dir := t.TempDir()
+	runDir := filepath.Join(dir, "run")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(runDir, "v2-api.pid")
+	if err := os.WriteFile(stale, []byte("99999999\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().String()
+	_ = ln.Close()
+
+	if err := ensureV2StartSlotsAvailable(dir, v2StartOptions{
+		InstallDir: dir,
+		APIOnly:    true,
+		APIListen:  port,
+	}); err != nil {
+		t.Fatalf("expected stale pid cleanup and free port to pass: %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale pid file was not removed: %v", err)
+	}
+
+	ln, err = net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	err = ensureV2StartSlotsAvailable(dir, v2StartOptions{
+		InstallDir: dir,
+		APIOnly:    true,
+		APIListen:  ln.Addr().String(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("expected occupied port error, got %v", err)
+	}
+}
 
 // ==================== Utility Function Tests ====================
 
