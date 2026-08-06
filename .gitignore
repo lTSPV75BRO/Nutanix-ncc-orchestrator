@@ -15,6 +15,7 @@ nccfiles/
 outputfiles/
 logs/
 dist/
+/frontend-dist/
 k8s/configmap.yaml
 k8s/secret.yaml
 
@@ -35,6 +36,7 @@ ncc-mcp-server
 # Frontend dependencies/cache
 frontend/node_modules/
 frontend/*.tsbuildinfo
+/frontend/coverage/
 
 # Local runtime state/secrets
 .ncc-api-token
@@ -45,6 +47,7 @@ frontend/*.tsbuildinfo
 
 # Local scratch/temp files
 .tmp_*
+/.tmp-greenfield/
 
 # Local packaged release bundles
 ncc-v2-stack-*.tar.gz

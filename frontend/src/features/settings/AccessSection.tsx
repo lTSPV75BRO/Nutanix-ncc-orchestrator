@@ -542,14 +542,14 @@ function SSOCard({ embedded }: { embedded?: boolean }) {
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          message="SAML is configured via startup flags and is read-only here."
+          title="SAML is configured via startup flags and is read-only here."
         />
       ) : (
         <Alert
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          message="The SP signing key is generated on the server. Publish the SP metadata URL below to your IdP — no private key leaves the server."
+          title="The SP signing key is generated on the server. Publish the SP metadata URL below to your IdP — no private key leaves the server."
         />
       )}
       {cfg?.sp_metadata_url ? (
@@ -1165,7 +1165,7 @@ function BackupRestoreCard() {
           disabled: passphraseIssue(downloadPass, downloadPassConfirm) !== null,
         }}
         cancelText="Cancel"
-        destroyOnClose
+        destroyOnHidden
       >
         <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
           The archive contains secrets (API token, password hashes, SAML SP key, LDAP bind
@@ -1173,7 +1173,7 @@ function BackupRestoreCard() {
           you&apos;ll need the same passphrase to restore. Leave blank to download an unencrypted{" "}
           <Typography.Text code>.tar.gz</Typography.Text>.
         </Typography.Paragraph>
-        <Space direction="vertical" size={8} style={{ width: "100%" }}>
+        <Space orientation="vertical" size={8} style={{ width: "100%" }}>
           <Input.Password
             autoFocus
             placeholder="Encryption passphrase (optional)"
@@ -1211,7 +1211,7 @@ function BackupRestoreCard() {
         okButtonProps={{ danger: true, loading: restoring }}
         cancelText="Cancel"
         width={540}
-        destroyOnClose
+        destroyOnHidden
       >
         {restoreFile ? restoreBody(restoreFile.name, false) : null}
         <Typography.Paragraph type="secondary" style={{ marginTop: 4, marginBottom: 6 }}>
@@ -1223,7 +1223,7 @@ function BackupRestoreCard() {
           type="warning"
           showIcon
           style={{ marginBottom: 8 }}
-          message={SAFETY_TIER_TEXT.destructive}
+          title={SAFETY_TIER_TEXT.destructive}
           description="Restoring overwrites current runtime config, users, and tokens, then restarts services."
         />
         <Input.Password
@@ -1250,7 +1250,7 @@ function BackupRestoreCard() {
           disabled: passphraseIssue(createPass, createPassConfirm) !== null,
         }}
         cancelText="Cancel"
-        destroyOnClose
+        destroyOnHidden
       >
         <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
           Saves a snapshot on the server under <Typography.Text code>backups/</Typography.Text>. It
@@ -1258,7 +1258,7 @@ function BackupRestoreCard() {
           passphrase (stored as <Typography.Text code>.tar.gz.enc</Typography.Text>; restoring it
           later needs the same passphrase). Leave blank for a plain snapshot.
         </Typography.Paragraph>
-        <Space direction="vertical" size={8} style={{ width: "100%" }}>
+        <Space orientation="vertical" size={8} style={{ width: "100%" }}>
           <Input.Password
             autoFocus
             placeholder="Encryption passphrase (optional)"
@@ -1304,7 +1304,7 @@ function BackupRestoreCard() {
         okButtonProps={{ danger: true, loading: busyName === restoreNamedEntry?.name }}
         cancelText="Cancel"
         width={540}
-        destroyOnClose
+        destroyOnHidden
       >
         {restoreNamedEntry
           ? restoreBody(restoreNamedEntry.name, Boolean(restoreNamedEntry.rollback_candidate))
@@ -1343,7 +1343,7 @@ function BackupRestoreCard() {
         }}
         cancelText="Cancel"
         width={520}
-        destroyOnClose
+        destroyOnHidden
       >
         <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
           Checks that <b>{verifyEntry?.name}</b> is intact and restorable (gzip/tar integrity,
@@ -1433,7 +1433,7 @@ function ScheduledBackupCard() {
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message="No backup encryption key configured"
+          title="No backup encryption key configured"
           description="Set NCC_BACKUP_KEY_FILE, NCC_BACKUP_KEY, or NCC_BACKUP_PASSPHRASE on the API server to enable encrypted scheduled backups."
         />
       ) : null}
@@ -1491,7 +1491,7 @@ function ScheduledBackupCard() {
       {sched?.last_run_at ? (
         <>
           <Divider style={{ margin: "16px 0" }} />
-          <Space direction="vertical" size={2}>
+          <Space orientation="vertical" size={2}>
             <Typography.Text type="secondary">
               Last run: {formatDateTime(sched.last_run_at)}{" "}
               {sched.last_status === "ok" ? (
@@ -1619,14 +1619,14 @@ function LDAPCard({ embedded }: { embedded?: boolean }) {
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          message="LDAP is configured via startup flags and is read-only here."
+          title="LDAP is configured via startup flags and is read-only here."
         />
       ) : (
         <Alert
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          message="Users sign in on the normal login form with their AD credentials. Local accounts are tried first, then AD — so the built-in admin keeps working even if AD is unreachable."
+          title="Users sign in on the normal login form with their AD credentials. Local accounts are tried first, then AD — so the built-in admin keeps working even if AD is unreachable."
         />
       )}
       <Form
@@ -1750,7 +1750,7 @@ function LDAPCard({ embedded }: { embedded?: boolean }) {
         onOk={handleTest}
         okText="Run test"
         confirmLoading={testing}
-        destroyOnClose
+        destroyOnHidden
       >
         <Typography.Paragraph type="secondary">
           Uses the configuration entered above (not yet saved) to authenticate a real AD user, so you
@@ -1789,7 +1789,7 @@ function ExternalAuthCard() {
 
   return (
     <Card className="page-card" title="External authentication">
-      <Space direction="vertical" size={16} style={{ width: "100%" }}>
+      <Space orientation="vertical" size={16} style={{ width: "100%" }}>
         <div>
           <Space align="center" wrap>
             <Typography.Text strong>Provider</Typography.Text>
@@ -1934,7 +1934,7 @@ function PrismCentralField({ value, onChange }: PrismCentralFieldProps) {
   };
 
   return (
-    <Space direction="vertical" size={8} style={{ width: "100%" }}>
+    <Space orientation="vertical" size={8} style={{ width: "100%" }}>
       <Space.Compact style={{ width: "100%" }}>
         <Select
           mode="tags"
@@ -1952,13 +1952,13 @@ function PrismCentralField({ value, onChange }: PrismCentralFieldProps) {
       {pcs.map((pc) =>
         results[pc] ? (
           results[pc].error ? (
-            <Alert key={pc} type="error" showIcon message={`${pc}: ${results[pc].error}`} />
+            <Alert key={pc} type="error" showIcon title={`${pc}: ${results[pc].error}`} />
           ) : (
             <Alert
               key={pc}
               type="success"
               showIcon
-              message={`${pc}: ${results[pc].count} cluster(s)`}
+              title={`${pc}: ${results[pc].count} cluster(s)`}
               description={
                 results[pc].clusters && results[pc].clusters!.length > 0 ? (
                   <Space size={[4, 4]} wrap>
@@ -2064,7 +2064,7 @@ function ClusterGroupsCard() {
           return <Typography.Text type="secondary">—</Typography.Text>;
         }
         return (
-          <Space direction="vertical" size={2}>
+          <Space orientation="vertical" size={2}>
             {clusters.length > 0 && (
               <Space size={[4, 4]} wrap>
                 {clusters.map((x) => (
@@ -2090,7 +2090,7 @@ function ClusterGroupsCard() {
       title: "Members",
       key: "members",
       render: (_: unknown, g: ClusterGroup) => (
-        <Space direction="vertical" size={2}>
+        <Space orientation="vertical" size={2}>
           {g.local_users && g.local_users.length > 0 && (
             <span>
               <Typography.Text type="secondary">Users: </Typography.Text>
@@ -2500,9 +2500,9 @@ function TLSCard() {
           showIcon
           icon={<LockOutlined />}
           style={{ marginBottom: 16 }}
-          message="HTTPS is enabled"
+          title="HTTPS is enabled"
           description={
-            <Space direction="vertical" size={2} style={{ width: "100%" }}>
+            <Space orientation="vertical" size={2} style={{ width: "100%" }}>
               <span>
                 <Typography.Text type="secondary">Subject: </Typography.Text>
                 <Typography.Text code>{cfg?.subject || "—"}</Typography.Text>
@@ -2757,7 +2757,7 @@ function UpdatesCard() {
         release checksums), then restarts the stack automatically to activate the new version.
       </Typography.Paragraph>
 
-      <Space direction="vertical" size={12} style={{ width: "100%" }}>
+      <Space orientation="vertical" size={12} style={{ width: "100%" }}>
         <Space wrap>
           <Typography.Text type="secondary">Current version:</Typography.Text>
           <Tag>{status?.current_version ? `v${status.current_version}` : "unknown"}</Tag>
@@ -2773,24 +2773,24 @@ function UpdatesCard() {
           <Alert
             type="info"
             showIcon
-            message="In-app updates are not available"
+            title="In-app updates are not available"
             description="Updating from the UI requires a compiled ncc-orchestrator binary, which is not present in this development environment."
           />
         ) : null}
 
         {supported && !inProgress && !restarting && status?.check_error ? (
-          <Alert type="warning" showIcon message="Unable to check for updates" description={status.check_error} />
+          <Alert type="warning" showIcon title="Unable to check for updates" description={status.check_error} />
         ) : null}
 
         {supported && !inProgress && !restarting && status?.update_available === false ? (
-          <Alert type="success" showIcon message="This installation is running the latest available release." />
+          <Alert type="success" showIcon title="This installation is running the latest available release." />
         ) : null}
 
         {supported && !inProgress && !restarting && updateAvailable ? (
           <Alert
             type="warning"
             showIcon
-            message={`Update available: v${status?.latest_version}`}
+            title={`Update available: v${status?.latest_version}`}
             description="Select “Back up and update” to create a backup, install the update, and restart the stack."
             action={
               <Button type="primary" icon={<CloudDownloadOutlined />} onClick={confirmApply}>
@@ -2804,7 +2804,7 @@ function UpdatesCard() {
           <Alert
             type="info"
             showIcon
-            message={`Update in progress — ${UPDATE_PHASE_LABEL[restarting ? "restarting" : phase] ?? phase}`}
+            title={`Update in progress — ${UPDATE_PHASE_LABEL[restarting ? "restarting" : phase] ?? phase}`}
             description={
               restarting
                 ? "The stack is restarting to load the new version. This page will reconnect automatically."
@@ -2814,7 +2814,7 @@ function UpdatesCard() {
         ) : null}
 
         {!inProgress && !restarting && phase === "error" && job?.error ? (
-          <Alert type="error" showIcon message="Last update failed" description={job.error} />
+          <Alert type="error" showIcon title="Last update failed" description={job.error} />
         ) : null}
       </Space>
     </Card>
@@ -2823,7 +2823,7 @@ function UpdatesCard() {
 
 export function AccessSection() {
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+    <Space orientation="vertical" size={16} style={{ width: "100%" }}>
       <UsersCard />
       <PasswordResetRequestsCard />
       <TokensCard />
@@ -2840,7 +2840,7 @@ export function AccessSection() {
 // separate from access control.
 export function MaintenanceSection() {
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+    <Space orientation="vertical" size={16} style={{ width: "100%" }}>
       <UpdatesCard />
       <BackupRestoreCard />
       <ScheduledBackupCard />

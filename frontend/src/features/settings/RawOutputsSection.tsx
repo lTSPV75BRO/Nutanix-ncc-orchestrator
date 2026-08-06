@@ -149,7 +149,7 @@ export function RawOutputsSection({ onError }: Props) {
             <Alert
               type="info"
               showIcon
-              message="Artifacts endpoint unavailable"
+              title="Artifacts endpoint unavailable"
               description="This environment does not expose /api/v1/artifacts yet. Raw artifact browsing is disabled."
             />
           ) : filtered.length === 0 ? (
@@ -168,7 +168,7 @@ export function RawOutputsSection({ onError }: Props) {
                     className={`artifact-row${isSelected ? " selected" : ""}`}
                     onClick={() => setSelected(a.name)}
                   >
-                    <Space direction="vertical" size={2} style={{ width: "100%" }}>
+                    <Space orientation="vertical" size={2} style={{ width: "100%" }}>
                       <Space size={6} align="center">
                         <span className="artifact-row-icon">{iconForName(a.name)}</span>
                         <Typography.Text strong ellipsis style={{ maxWidth: 240 }}>

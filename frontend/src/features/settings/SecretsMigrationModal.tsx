@@ -122,7 +122,7 @@ export function SecretsMigrationModal({
         onClose();
       }}
       width={720}
-      destroyOnClose
+      destroyOnHidden
       footer={null}
     >
       <Steps
@@ -137,7 +137,7 @@ export function SecretsMigrationModal({
       />
 
       {step === 0 ? (
-        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+        <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
             Choose where the orchestrator should read the password from. Both options replace the
             plaintext value with a <Typography.Text code>secret://</Typography.Text> reference, and
@@ -151,7 +151,7 @@ export function SecretsMigrationModal({
             onChange={(e) => setMode(e.target.value)}
             style={{ width: "100%" }}
           >
-            <Space direction="vertical" size={10} style={{ width: "100%" }}>
+            <Space orientation="vertical" size={10} style={{ width: "100%" }}>
               <Radio value="env" style={{ alignItems: "flex-start" }}>
                 <div>
                   <Typography.Text strong>Environment variable</Typography.Text>{" "}
@@ -182,7 +182,7 @@ export function SecretsMigrationModal({
             <Alert
               type="info"
               showIcon
-              message="A secrets-provider is already configured"
+              title="A secrets-provider is already configured"
               description="The wizard will overwrite the existing provider/file settings and the password key."
             />
           ) : null}
@@ -196,7 +196,7 @@ export function SecretsMigrationModal({
       ) : null}
 
       {step === 1 ? (
-        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+        <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           {mode === "env" ? (
             <>
               <Typography.Paragraph style={{ marginBottom: 0 }}>
@@ -246,7 +246,7 @@ export function SecretsMigrationModal({
               <Alert
                 type="warning"
                 showIcon
-                message="Restrict permissions"
+                title="Restrict permissions"
                 description={
                   <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" }}>
                     chmod 600 secrets.yaml
@@ -268,12 +268,12 @@ export function SecretsMigrationModal({
       ) : null}
 
       {step === 2 ? (
-        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+        <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <Alert
             type="success"
             showIcon
             icon={<CheckCircleOutlined />}
-            message="Password replaced with a secret reference"
+            title="Password replaced with a secret reference"
             description={
               <>
                 Don't forget to click <Typography.Text strong>Save Config</Typography.Text> on the

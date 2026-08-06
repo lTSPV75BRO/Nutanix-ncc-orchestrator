@@ -28,7 +28,7 @@ import {
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import dayjs, { type Dayjs } from "dayjs";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router";
 import { api, type AuditQuery } from "../../api/client";
 import type { AuditLogEntry } from "../../api/types";
 import { notify } from "../../notify";
@@ -395,7 +395,7 @@ export function AuditLogSection({ onError }: Props) {
           type="error"
           showIcon
           style={{ marginTop: 12 }}
-          message="Could not load audit entries"
+          title="Could not load audit entries"
           description={String(audit.error)}
         />
       ) : null}

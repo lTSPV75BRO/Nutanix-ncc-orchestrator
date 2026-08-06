@@ -18,6 +18,7 @@ import (
 	pathpkg "path"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -215,11 +216,29 @@ func detectBackendLogin(backendURL string, transport *http.Transport) bool {
 // package. Without this match the ui-server would silently keep its
 // in-source defaults (e.g. `stream: dev`) even on a tagged release.
 var (
-	Version   = "2.1.0"
-	BuildDate = "unknown"
-	Stream    = "dev"
-	GoVersion = "unknown"
+	Version     = "2.1.0"
+	BuildDate   = "unknown"
+	Stream      = "dev"
+	GoVersion   = "unknown"
+	GitRevision = ""
 )
+
+func init() {
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		for _, setting := range bi.Settings {
+			switch setting.Key {
+			case "vcs.revision":
+				if GitRevision == "" {
+					GitRevision = setting.Value
+				}
+			case "vcs.time":
+				if BuildDate == "unknown" {
+					BuildDate = setting.Value
+				}
+			}
+		}
+	}
+}
 
 // uiHandleSubcommandArgs reacts to positional args left over after
 // flag.Parse. See the matching helper in cmd/ncc-api-server for the
@@ -233,8 +252,8 @@ func uiHandleSubcommandArgs(args []string) {
 	first := strings.ToLower(strings.TrimSpace(args[0]))
 	switch first {
 	case "version", "--version", "-version":
-		fmt.Printf("ncc-ui-server\n  version: %s\n  stream:  %s\n  build:   %s\n  go:      %s\n",
-			Version, Stream, BuildDate, GoVersion)
+		fmt.Printf("ncc-ui-server\n  version: %s\n  commit:  %s\n  stream:  %s\n  build:   %s\n  go:      %s\n",
+			Version, GitRevision, Stream, BuildDate, GoVersion)
 		os.Exit(0)
 	case "help", "--help", "-help", "-h":
 		flag.Usage()

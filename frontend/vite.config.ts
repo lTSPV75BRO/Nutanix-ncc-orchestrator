@@ -54,7 +54,7 @@ export default defineConfig({
     chunkSizeWarningLimit: 900,
     rolldownOptions: {
       output: {
-        advancedChunks: {
+        codeSplitting: {
           groups: [
             // Only extract the framework runtime that every route needs anyway
             // (so it never adds unused bytes to a route) into a stable,
@@ -64,7 +64,7 @@ export default defineConfig({
             // auto-split antd keeps each route's antd surface with its chunk.
             {
               name: "react-vendor",
-              test: /[\\/]node_modules[\\/](react|react-dom|scheduler|react-router|react-router-dom)[\\/]/,
+              test: /[\\/]node_modules[\\/](react|react-dom|scheduler|react-router)[\\/]/,
             },
           ],
         },

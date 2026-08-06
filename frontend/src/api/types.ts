@@ -542,9 +542,17 @@ export type DiagnosticsData = {
   guardrails?: {
     no_disruptive?: boolean;
     active_run_guard?: boolean;
+    allow_disruptive_requested?: boolean;
+    allow_disruptive_applied?: boolean;
   };
   verification_runs?: number;
   verified_stable?: boolean;
+  actionable?: {
+    count?: number;
+    auto_fixable?: number;
+    manual_action?: number;
+    disruptive_skipped?: number;
+  };
 };
 
 export type ScheduleHealthData = {

@@ -120,21 +120,21 @@ export function FirstTimeSetupModal({ open, onComplete, onSkip, onPause }: Props
           </Button>
         </Space>
       }
-      destroyOnClose
-      maskClosable={false}
+      destroyOnHidden
+      mask={{ closable: false }}
     >
-      <Space direction="vertical" size={12} style={{ width: "100%" }}>
+      <Space orientation="vertical" size={12} style={{ width: "100%" }}>
         <Alert
           type="info"
           showIcon
-          message="New install detected"
+          title="New install detected"
           description="Work through this once to validate runtime, schedule, and recovery readiness. Progress is saved automatically."
         />
         <Typography.Text type="secondary">{guidedHint}</Typography.Text>
         <Progress percent={percent} size="small" />
         <Steps
           current={normalizedStep}
-          size="default"
+          size="medium"
           onChange={(i) => setCurrentStep(i)}
           items={SETUP_STEPS.map((s) => ({
             key: s.tab,
@@ -143,7 +143,7 @@ export function FirstTimeSetupModal({ open, onComplete, onSkip, onPause }: Props
           }))}
         />
         <div style={{ border: "1px solid var(--ant-color-border-secondary, #e5e7eb)", borderRadius: 8, padding: 12 }}>
-          <Space direction="vertical" size={6} style={{ width: "100%" }}>
+          <Space orientation="vertical" size={6} style={{ width: "100%" }}>
             <Typography.Text strong>
               Step {normalizedStep + 1}: {step.title}
             </Typography.Text>
@@ -152,20 +152,20 @@ export function FirstTimeSetupModal({ open, onComplete, onSkip, onPause }: Props
               <Tag color={isCurrentDone ? "success" : "processing"}>{isCurrentDone ? "Completed" : "In progress"}</Tag>
               <Tag>{`ETA ${step.eta}`}</Tag>
             </Space>
-            <Card size="small" bordered={false} style={{ background: "var(--ant-color-fill-quaternary, #fafafa)" }}>
-              <Space direction="vertical" size={4} style={{ width: "100%" }}>
+            <Card size="small" variant="borderless" style={{ background: "var(--ant-color-fill-quaternary, #fafafa)" }}>
+              <Space orientation="vertical" size={4} style={{ width: "100%" }}>
                 <Typography.Text strong>Why this matters</Typography.Text>
                 <Typography.Text type="secondary">{step.why}</Typography.Text>
               </Space>
             </Card>
             <Card size="small" title="Checklist">
-              <Space direction="vertical" size={4} style={{ width: "100%" }}>
+              <Space orientation="vertical" size={4} style={{ width: "100%" }}>
                 {step.checklist.map((item) => (
                   <Typography.Text key={item}>- {item}</Typography.Text>
                 ))}
               </Space>
             </Card>
-            <Alert type="success" showIcon message="Success criteria" description={step.success} />
+            <Alert type="success" showIcon title="Success criteria" description={step.success} />
             <Space wrap>
               <Button type="primary" onClick={() => openTab(step.tab)}>
                 Open this step

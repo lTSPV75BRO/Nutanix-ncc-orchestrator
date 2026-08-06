@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   Empty,
+  Input,
   Popconfirm,
   Progress,
   Row,
@@ -15,16 +16,18 @@ import {
   Tooltip,
   Typography,
   Col,
+  Switch,
 } from "antd";
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   ExclamationCircleOutlined,
+  SearchOutlined,
   ReloadOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router";
 import { api } from "../../api/client";
 import type { DiagnosticCheck, DiagnosticsData } from "../../api/types";
 import { notify, notifyError } from "../../notify";
@@ -75,6 +78,8 @@ function CheckRow({ check }: { check: DiagnosticCheck }) {
               auto-fixed
             </Tag>
           ) : null}
+          {check.source === "api" ? <Tag bordered={false}>probe-only</Tag> : null}
+          {check.disruptive ? <Tag color="warning" bordered={false}>may restart services</Tag> : null}
         </Space>
         <Tag color={meta.color}>{meta.label}</Tag>
       </div>
@@ -99,6 +104,8 @@ export function SystemHealthSection() {
   const navigate = useNavigate();
   // Lightweight local filter state without introducing additional persisted prefs.
   const [severityFilter, setSeverityFilter] = useState<"fail_warn" | "fail" | "all">("all");
+  const [searchText, setSearchText] = useState("");
+  const [hideHealthy, setHideHealthy] = useState(true);
   const health = useQuery({
     queryKey: ["health"],
     queryFn: api.health,
@@ -127,7 +134,7 @@ export function SystemHealthSection() {
   });
 
   const heal = useMutation({
-    mutationFn: (payload?: { check_ids?: string[]; verify_after_fix?: boolean; no_disruptive?: boolean }) =>
+    mutationFn: (payload?: { check_ids?: string[]; verify_after_fix?: boolean; no_disruptive?: boolean; allow_disruptive?: boolean }) =>
       api.healDiagnostics(payload),
     onSuccess: (data: DiagnosticsData) => {
       const fixed = data.checks.filter((c) => c.fixed).length;
@@ -161,10 +168,19 @@ export function SystemHealthSection() {
 
   const filteredChecks = useMemo(() => {
     const checks = data?.checks ?? [];
-    if (severityFilter === "all") return checks;
-    if (severityFilter === "fail") return checks.filter((c) => c.status === "fail");
-    return checks.filter((c) => c.status === "fail" || c.status === "warn");
-  }, [data?.checks, severityFilter]);
+    const search = searchText.trim().toLowerCase();
+    return checks.filter((c) => {
+      if (hideHealthy && c.status === "ok") return false;
+      if (severityFilter === "fail" && c.status !== "fail") return false;
+      if (severityFilter === "fail_warn" && !(c.status === "fail" || c.status === "warn")) return false;
+      if (!search) return true;
+      const haystack = `${c.id} ${c.title} ${c.category} ${c.message} ${c.hint ?? ""}`.toLowerCase();
+      return haystack.includes(search);
+    });
+  }, [data?.checks, severityFilter, searchText, hideHealthy]);
+
+  const actionableSummary = data?.actionable;
+  const actionableCount = actionableSummary?.count ?? (data?.summary.warn ?? 0) + (data?.summary.fail ?? 0);
 
   const remediationTarget = (category: string): string => {
     if (category === "config") return "/settings?tab=config";
@@ -196,12 +212,21 @@ export function SystemHealthSection() {
     navigate(path);
   };
 
-  const healSingleCheck = (check: DiagnosticCheck) => {
+  const healSingleCheck = (check: DiagnosticCheck, allowDisruptive = false) => {
+    if (check.status === "ok") {
+      notify.info("This check is already healthy.");
+      return;
+    }
     if (check.source !== "orchestrator") {
       notify.info("This check is probe-only and cannot be auto-fixed.");
       return;
     }
-    heal.mutate({ check_ids: [check.id], verify_after_fix: true, no_disruptive: true });
+    heal.mutate({
+      check_ids: [check.id],
+      verify_after_fix: true,
+      no_disruptive: !allowDisruptive,
+      allow_disruptive: allowDisruptive,
+    });
   };
 
   const readinessChecks = useMemo(() => {
@@ -259,6 +284,21 @@ export function SystemHealthSection() {
     return Math.round((score / checks.length) * 100);
   }, [data?.checks]);
 
+  const healableCheckIDs = useMemo(
+    () =>
+      (data?.checks ?? [])
+        .filter((c) => c.source === "orchestrator" && c.status !== "ok" && !c.disruptive)
+        .map((c) => c.id),
+    [data?.checks],
+  );
+  const disruptiveHealableCheckIDs = useMemo(
+    () =>
+      (data?.checks ?? [])
+        .filter((c) => c.source === "orchestrator" && c.status !== "ok" && c.disruptive)
+        .map((c) => c.id),
+    [data?.checks],
+  );
+
   if (diag.isLoading && !data) {
     return (
       <Card className="page-card">
@@ -270,11 +310,11 @@ export function SystemHealthSection() {
   if (diag.isError && !data) {
     return (
       <Card className="page-card">
-        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+        <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <Alert
             type="error"
             showIcon
-            message="Unable to load system health diagnostics"
+            title="Unable to load system health diagnostics"
             description={diagErrorMessage}
           />
           <Space>
@@ -289,7 +329,7 @@ export function SystemHealthSection() {
   }
 
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+    <Space orientation="vertical" size={16} style={{ width: "100%" }}>
       <Card className="page-card">
         <div className="health-overview-head">
           <Space size={16} align="start">
@@ -302,6 +342,10 @@ export function SystemHealthSection() {
                 Self-heal checks across configuration, storage, secrets, backups, runs, directory/SSO, TLS, and
                 processes. Safe remediations can be applied with one click.
               </Typography.Text>
+              <Typography.Paragraph type="secondary" style={{ margin: "6px 0 0 0" }}>
+                {actionableCount} actionable issue{actionableCount === 1 ? "" : "s"}:{" "}
+                {actionableSummary?.auto_fixable ?? 0} auto-fixable, {actionableSummary?.manual_action ?? 0} manual follow-up.
+              </Typography.Paragraph>
               <div style={{ marginTop: 8 }}>
                 <Space size={[8, 8]} wrap>
                   <Tag color="success">{data?.summary.ok ?? 0} OK</Tag>
@@ -330,7 +374,38 @@ export function SystemHealthSection() {
               onConfirm={() => heal.mutate({ verify_after_fix: true, no_disruptive: true })}
             >
               <Button type="primary" icon={<ThunderboltOutlined />} loading={heal.isPending}>
-                Heal now
+                {heal.isPending ? "Healing…" : "Heal now"}
+              </Button>
+            </Popconfirm>
+            <Button
+              icon={<ThunderboltOutlined />}
+              loading={heal.isPending}
+              disabled={healableCheckIDs.length === 0}
+              onClick={() => heal.mutate({ check_ids: healableCheckIDs, verify_after_fix: true, no_disruptive: true })}
+            >
+              Heal all actionable
+            </Button>
+            <Popconfirm
+              title="Apply disruptive self-heal fixes?"
+              description="This may restart NCC services to re-align runtime ownership. Use only in a maintenance window. If a run is active, disruptive actions are automatically blocked."
+              okText="Heal with restart"
+              okButtonProps={{ danger: true }}
+              onConfirm={() =>
+                heal.mutate({
+                  check_ids: disruptiveHealableCheckIDs,
+                  verify_after_fix: true,
+                  no_disruptive: false,
+                  allow_disruptive: true,
+                })
+              }
+            >
+              <Button
+                danger
+                icon={<ThunderboltOutlined />}
+                loading={heal.isPending}
+                disabled={disruptiveHealableCheckIDs.length === 0}
+              >
+                Heal disruptive issues
               </Button>
             </Popconfirm>
             <Button onClick={() => bundle.mutate()} loading={bundle.isPending}>
@@ -343,9 +418,9 @@ export function SystemHealthSection() {
             style={{ marginTop: 12 }}
             type={data.verified_stable ? "success" : "info"}
             showIcon
-            message={`Last heal fixed ${data.fix_history.count} check(s)`}
+            title={`Last heal fixed ${data.fix_history.count} check(s)`}
             description={
-              <Space direction="vertical" size={2}>
+              <Space orientation="vertical" size={2}>
                 <Typography.Text type="secondary">
                   {(data.fix_history.fixed_titles || data.fix_history.fixed_ids || []).join(", ")}
                 </Typography.Text>
@@ -354,6 +429,17 @@ export function SystemHealthSection() {
                 </Typography.Text>
                 {data.guardrails?.active_run_guard ? (
                   <Typography.Text type="warning">Disruptive fixes were deferred due to active runs.</Typography.Text>
+                ) : null}
+                {data.guardrails?.allow_disruptive_requested && !data.guardrails?.allow_disruptive_applied ? (
+                  <Typography.Text type="warning">
+                    Disruptive heal was requested but guardrails kept execution non-disruptive.
+                  </Typography.Text>
+                ) : null}
+                {(data.actionable?.disruptive_skipped ?? 0) > 0 ? (
+                  <Typography.Text type="warning">
+                    {(data.actionable?.disruptive_skipped ?? 0).toLocaleString()} disruptive check(s) require CLI doctor without
+                    `--no-disruptive`.
+                  </Typography.Text>
                 ) : null}
               </Space>
             }
@@ -364,14 +450,23 @@ export function SystemHealthSection() {
             style={{ marginTop: 12 }}
             type="warning"
             showIcon
-            message="Orchestrator self-heal checks unavailable"
+            title="Orchestrator self-heal checks unavailable"
             description={data.orchestrator_error}
+          />
+        ) : null}
+        {heal.error ? (
+          <Alert
+            style={{ marginTop: 12 }}
+            type="error"
+            showIcon
+            title="Self-heal failed"
+            description={heal.error instanceof Error ? heal.error.message : "The remediation request could not be completed."}
           />
         ) : null}
       </Card>
 
       <Card className="page-card" size="small">
-        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+        <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <Space align="center" style={{ justifyContent: "space-between", width: "100%" }}>
             <Typography.Title level={5} style={{ margin: 0 }}>
               Release Readiness Gates
@@ -385,13 +480,13 @@ export function SystemHealthSection() {
             {readinessChecks.map((c) => (
               <Col xs={24} md={12} lg={8} key={c.key}>
                 <Card size="small" className="health-gate-card">
-                  <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                  <Space orientation="vertical" size={8} style={{ width: "100%" }}>
                     <Space align="center" style={{ justifyContent: "space-between", width: "100%" }}>
                       <Typography.Text strong>{c.label}</Typography.Text>
                       <Tag color={c.ok ? "success" : "error"}>{c.ok ? "pass" : "fail"}</Tag>
                     </Space>
                     {c.key === "supervisor" && Array.isArray((c as { details?: Array<{ title: string; status: string; message: string }> }).details) ? (
-                      <Space direction="vertical" size={4} style={{ width: "100%" }}>
+                      <Space orientation="vertical" size={4} style={{ width: "100%" }}>
                         {(c as { details?: Array<{ title: string; status: string; message: string }> }).details?.map((d) => (
                           <Space key={`${d.title}-${d.status}`} size={6} wrap>
                             <Tag color={d.status === "ok" ? "success" : d.status === "warn" ? "warning" : "error"}>
@@ -424,7 +519,7 @@ export function SystemHealthSection() {
       </Card>
 
       <Card className="page-card" size="small">
-        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+        <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <Space align="center" style={{ justifyContent: "space-between", width: "100%" }} wrap>
             <Typography.Title level={5} style={{ margin: 0 }}>
               Guided Remediation
@@ -443,16 +538,31 @@ export function SystemHealthSection() {
               <Button icon={<ReloadOutlined />} size="small" onClick={() => diag.refetch()} loading={diag.isFetching}>
                 Refresh
               </Button>
+              <Input
+                allowClear
+                size="small"
+                placeholder="Search checks"
+                prefix={<SearchOutlined />}
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                style={{ width: 220 }}
+              />
+              <Space size={4} align="center">
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Hide healthy
+                </Typography.Text>
+                <Switch size="small" checked={hideHealthy} onChange={setHideHealthy} />
+              </Space>
             </Space>
           </Space>
 
           {(filteredChecks.length ?? 0) === 0 ? (
-            <Alert type="success" showIcon message="No actionable issues. System is healthy." />
+            <Alert type="success" showIcon title="No actionable issues. System is healthy." />
           ) : (
-            <Space direction="vertical" size={10} style={{ width: "100%" }}>
+            <Space orientation="vertical" size={10} style={{ width: "100%" }}>
               {filteredChecks.map((c) => (
                 <Card key={`guide-${c.source}-${c.id}`} size="small" className="health-gate-card">
-                  <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                  <Space orientation="vertical" size={8} style={{ width: "100%" }}>
                     <Space wrap style={{ justifyContent: "space-between", width: "100%" }}>
                       <Space wrap>
                         <Tag color={c.status === "fail" ? "error" : c.status === "warn" ? "warning" : "success"}>
@@ -461,6 +571,8 @@ export function SystemHealthSection() {
                         <Tag bordered={false}>
                           <CategoryLabel value={c.category} />
                         </Tag>
+                        {c.source === "api" ? <Tag bordered={false}>probe-only</Tag> : null}
+                        {c.disruptive ? <Tag color="warning" bordered={false}>may restart services</Tag> : null}
                         <Typography.Text strong>{c.title}</Typography.Text>
                       </Space>
                     </Space>
@@ -474,11 +586,24 @@ export function SystemHealthSection() {
                         size="small"
                         icon={<ThunderboltOutlined />}
                         loading={heal.isPending}
-                        onClick={() => healSingleCheck(c)}
-                        disabled={c.source !== "orchestrator"}
+                        onClick={() => healSingleCheck(c, false)}
+                        disabled={c.source !== "orchestrator" || c.status === "ok" || heal.isPending}
                       >
                         Heal this check
                       </Button>
+                      {c.disruptive && c.source === "orchestrator" && c.status !== "ok" ? (
+                        <Popconfirm
+                          title="Run disruptive fix for this check?"
+                          description="This action may restart NCC services. It is blocked automatically while runs are active."
+                          okText="Run disruptive fix"
+                          okButtonProps={{ danger: true }}
+                          onConfirm={() => healSingleCheck(c, true)}
+                        >
+                          <Button size="small" danger loading={heal.isPending} disabled={heal.isPending}>
+                            Heal with restart
+                          </Button>
+                        </Popconfirm>
+                      ) : null}
                     </Space>
                   </Space>
                 </Card>
@@ -523,7 +648,7 @@ export function SystemHealthSection() {
             <Typography.Title level={5} style={{ marginTop: 0 }}>
               <CategoryLabel value={category} />
             </Typography.Title>
-            <Space direction="vertical" size={10} style={{ width: "100%" }}>
+            <Space orientation="vertical" size={10} style={{ width: "100%" }}>
               {checks
                 .filter((c) => filteredChecks.some((fc) => fc.id === c.id && fc.source === c.source))
                 .map((c) => (

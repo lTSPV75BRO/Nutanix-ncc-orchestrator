@@ -153,7 +153,7 @@ function SecretInput({
   onMigrate?: () => void;
 }) {
   return (
-    <Space direction="vertical" size={4} style={{ width: "100%" }}>
+    <Space orientation="vertical" size={4} style={{ width: "100%" }}>
       <Input.Password
         id={id}
         name={name}
@@ -778,7 +778,7 @@ export function ConfigSection({ onError }: Props) {
   }, [dirty, fieldStatuses]);
 
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+    <Space orientation="vertical" size={16} style={{ width: "100%" }}>
       {/* Toolbar */}
       <Card className="page-card config-toolbar-card">
         <Row gutter={[16, 12]} align="middle">
@@ -847,7 +847,7 @@ export function ConfigSection({ onError }: Props) {
             type="error"
             showIcon
             style={{ marginTop: 12 }}
-            message="YAML parse error"
+            title="YAML parse error"
             description={parseError}
           />
         ) : null}
@@ -856,7 +856,7 @@ export function ConfigSection({ onError }: Props) {
             type="info"
             showIcon
             style={{ marginTop: 12 }}
-            message="Unsaved changes"
+            title="Unsaved changes"
             description={`${dirtyCount} field${dirtyCount === 1 ? "" : "s"} changed since last load. Click Save to persist.`}
           />
         ) : null}
@@ -887,7 +887,7 @@ export function ConfigSection({ onError }: Props) {
             </Card>
           </Col>
           <Col xs={24} md={18} lg={19}>
-            <Space direction="vertical" size={16} style={{ width: "100%" }}>
+            <Space orientation="vertical" size={16} style={{ width: "100%" }}>
               {SECTIONS.map((section) => (
                 <SectionForm
                   key={section.id}
@@ -951,7 +951,7 @@ export function ConfigSection({ onError }: Props) {
           </Button>
         </Space>
         <Card size="small" style={{ marginBottom: 12 }}>
-          <Space direction="vertical" size={10} style={{ width: "100%" }}>
+          <Space orientation="vertical" size={10} style={{ width: "100%" }}>
             <Typography.Text strong>Bulk add/update files</Typography.Text>
             <Typography.Text type="secondary">
               Enter one referenced config file path per line and apply the same content to all.
@@ -974,7 +974,7 @@ export function ConfigSection({ onError }: Props) {
           </Space>
         </Card>
         <Card size="small" style={{ marginBottom: 12 }}>
-          <Space direction="vertical" size={10} style={{ width: "100%" }}>
+          <Space orientation="vertical" size={10} style={{ width: "100%" }}>
             <Typography.Text strong>Bulk remove files</Typography.Text>
             <Typography.Text type="secondary">
               Select one or more referenced files to delete from disk.
@@ -1008,7 +1008,7 @@ export function ConfigSection({ onError }: Props) {
                   </Button>,
                 ]}
               >
-                <Space direction="vertical" size={0}>
+                <Space orientation="vertical" size={0}>
                   <Typography.Text code>{item.key}</Typography.Text>
                   <Typography.Text>{item.path}</Typography.Text>
                   {item.resolved_path ? (
@@ -1060,7 +1060,7 @@ export function ConfigSection({ onError }: Props) {
         footer={null}
         width={760}
       >
-        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+        <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <Typography.Text type="secondary">
             Add/remove additional `config.yaml` files and open one for full Form/YAML editing.
           </Typography.Text>
@@ -1097,7 +1097,7 @@ export function ConfigSection({ onError }: Props) {
                   </Button>,
                 ]}
               >
-                <Space direction="vertical" size={0}>
+                <Space orientation="vertical" size={0}>
                   <Typography.Text code>{item.path}</Typography.Text>
                   <Typography.Text type="secondary">{item.resolved}</Typography.Text>
                 </Space>

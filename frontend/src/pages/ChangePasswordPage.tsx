@@ -146,7 +146,7 @@ export function ChangePasswordForm({ submitLabel = "Change password", onSuccess 
   return (
     <>
       {error ? (
-        <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} closable onClose={() => setError(null)} />
+        <Alert type="error" showIcon title={error} style={{ marginBottom: 16 }} closable onClose={() => setError(null)} />
       ) : null}
       <Form layout="vertical" onFinish={handleFinish} requiredMark={false} disabled={submitting}>
         <Form.Item name="current" label="Current password" rules={[{ required: true, message: "Enter your current password" }]}>
@@ -218,7 +218,7 @@ type ChangePasswordModalProps = {
  */
 export function ChangePasswordModal({ open, onClose, onSuccess }: ChangePasswordModalProps) {
   return (
-    <Modal title="Change password" open={open} onCancel={onClose} footer={null} destroyOnClose>
+    <Modal title="Change password" open={open} onCancel={onClose} footer={null} destroyOnHidden>
       <ChangePasswordForm
         onSuccess={() => {
           onSuccess();

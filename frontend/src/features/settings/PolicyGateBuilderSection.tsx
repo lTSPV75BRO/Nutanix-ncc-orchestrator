@@ -221,7 +221,7 @@ export function PolicyGateBuilderSection({ configContent, onApplyPolicyGates }: 
         type="info"
         showIcon
         style={{ marginTop: 16 }}
-        message={
+        title={
           <Typography.Text>
             Generated value:&nbsp;
             <Typography.Text code copyable={csv ? { text: csv } : false}>

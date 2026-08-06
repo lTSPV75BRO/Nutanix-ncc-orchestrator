@@ -38,15 +38,15 @@ const (
 
 // healResult is the outcome of a single check.
 type healResult struct {
-	ID       string     `json:"id"`
-	Title    string     `json:"title"`
-	Category string     `json:"category"`
-	Status   healStatus `json:"status"`
-	Message  string     `json:"message"`
-	Hint     string     `json:"hint,omitempty"`
-	Fixed    bool       `json:"fixed,omitempty"`
-	FixMsg   string     `json:"fix_message,omitempty"`
-	Disruptive bool     `json:"disruptive,omitempty"`
+	ID         string     `json:"id"`
+	Title      string     `json:"title"`
+	Category   string     `json:"category"`
+	Status     healStatus `json:"status"`
+	Message    string     `json:"message"`
+	Hint       string     `json:"hint,omitempty"`
+	Fixed      bool       `json:"fixed,omitempty"`
+	FixMsg     string     `json:"fix_message,omitempty"`
+	Disruptive bool       `json:"disruptive,omitempty"`
 }
 
 // healContext carries shared, lazily-resolved state into each check.
@@ -64,7 +64,7 @@ type healCheck struct {
 	Category string
 	// Disruptive checks may restart services or otherwise perturb in-flight work.
 	Disruptive bool
-	Run      func(hc *healContext) healResult
+	Run        func(hc *healContext) healResult
 }
 
 // healReport is the aggregate, JSON-serializable result of a self-heal run.
@@ -78,9 +78,9 @@ type healReport struct {
 }
 
 type healRunOptions struct {
-	Fix           bool
-	OnlyChecks    map[string]bool
-	NoDisruptive  bool
+	Fix          bool
+	OnlyChecks   map[string]bool
+	NoDisruptive bool
 }
 
 // Worst returns the most severe status across all results, defaulting to ok.
@@ -204,13 +204,22 @@ func checkStalePIDs(hc *healContext) healResult {
 		"v2-api.pid":        apiPID,
 		"v2-ui.pid":         uiPID,
 	}
-	var stale, cleaned, reconciled []string
+	var stale, malformed, cleaned, reconciled []string
 	for _, pf := range pidFiles {
 		pid, err := readPIDFromFile(pf)
 		if err != nil {
+			name := filepath.Base(pf)
+			if hc.Fix {
+				if os.Remove(pf) == nil {
+					cleaned = append(cleaned, name+" (invalid contents)")
+					continue
+				}
+			}
+			malformed = append(malformed, fmt.Sprintf("%s (%v)", name, err))
 			continue
 		}
-		if processIsAlive(pid) {
+		known, matches := processIdentityMatchesForPIDFile(filepath.Base(pf), pid)
+		if processIsAlive(pid) && (!known || matches) {
 			continue
 		}
 		if hc.Fix {
@@ -225,13 +234,17 @@ func checkStalePIDs(hc *healContext) healResult {
 				continue
 			}
 		}
-		stale = append(stale, fmt.Sprintf("%s (pid %d dead)", filepath.Base(pf), pid))
+		reason := "dead"
+		if processIsAlive(pid) && known && !matches {
+			reason = "pid reused by an unrelated process"
+		}
+		stale = append(stale, fmt.Sprintf("%s (pid %d %s)", filepath.Base(pf), pid, reason))
 	}
 	switch {
-	case len(stale) == 0 && len(cleaned) == 0 && len(reconciled) == 0:
+	case len(stale) == 0 && len(malformed) == 0 && len(cleaned) == 0 && len(reconciled) == 0:
 		res.Status = healOK
 		res.Message = "no stale pid files"
-	case len(stale) == 0:
+	case len(stale) == 0 && len(malformed) == 0:
 		res.Status = healOK
 		res.Fixed = true
 		parts := []string{}
@@ -245,7 +258,9 @@ func checkStalePIDs(hc *healContext) healResult {
 		res.Message = "stale pid files cleaned/reconciled"
 	default:
 		res.Status = healWarn
-		res.Message = "stale pid file(s): " + strings.Join(stale, ", ")
+		issues := append([]string{}, stale...)
+		issues = append(issues, malformed...)
+		res.Message = "stale/invalid pid file(s): " + strings.Join(issues, ", ")
 		res.Hint = "Re-run with --fix to remove them so the stack can restart cleanly."
 	}
 	return res
@@ -266,9 +281,9 @@ func isSystemdServiceActive(name string) bool {
 }
 
 type runtimeDriftEval struct {
-	Status    healStatus
-	Message   string
-	Hint      string
+	Status     healStatus
+	Message    string
+	Hint       string
 	CanAutoFix bool
 }
 
@@ -286,23 +301,23 @@ func evaluateRuntimeDrift(servicePresent, serviceActive, supervisorAlive, apiAli
 		}
 	case serviceActive && !supervisorAlive && (apiAlive || uiAlive):
 		return runtimeDriftEval{
-			Status:    healWarn,
-			Message:   "runtime drift: service is active but detached API/UI process(es) are running without a live supervisor",
-			Hint:      "Run self-heal with --fix to restart ncc-orchestrator.service and re-align process ownership.",
+			Status:     healWarn,
+			Message:    "runtime drift: service is active but detached API/UI process(es) are running without a live supervisor",
+			Hint:       "Run self-heal with --fix to restart ncc-orchestrator.service and re-align process ownership.",
 			CanAutoFix: true,
 		}
 	case serviceActive && !supervisorAlive:
 		return runtimeDriftEval{
-			Status:    healFail,
-			Message:   "service is active but no live supervisor process was found",
-			Hint:      "Run self-heal with --fix (or `systemctl restart ncc-orchestrator.service`) to recover.",
+			Status:     healFail,
+			Message:    "service is active but no live supervisor process was found",
+			Hint:       "Run self-heal with --fix (or `systemctl restart ncc-orchestrator.service`) to recover.",
 			CanAutoFix: true,
 		}
 	case !serviceActive && (apiAlive || uiAlive):
 		return runtimeDriftEval{
-			Status:    healWarn,
-			Message:   "detached API/UI process(es) are running while the systemd service is not active",
-			Hint:      "Run self-heal with --fix to bring the stack back under ncc-orchestrator.service supervision.",
+			Status:     healWarn,
+			Message:    "detached API/UI process(es) are running while the systemd service is not active",
+			Hint:       "Run self-heal with --fix to bring the stack back under ncc-orchestrator.service supervision.",
 			CanAutoFix: true,
 		}
 	default:
@@ -319,7 +334,24 @@ func alivePIDFromFile(path string) (int, bool) {
 	if err != nil || !processIsAlive(pid) {
 		return 0, false
 	}
+	known, matches := processIdentityMatchesForPIDFile(filepath.Base(path), pid)
+	if known && !matches {
+		return 0, false
+	}
 	return pid, true
+}
+
+func processIdentityMatchesForPIDFile(name string, pid int) (bool, bool) {
+	switch name {
+	case "v2-supervisor.pid":
+		return processIdentityMatches(pid, "ncc-orchestrator", "v2-supervise")
+	case "v2-api.pid":
+		return processIdentityMatches(pid, "ncc-api-server")
+	case "v2-ui.pid":
+		return processIdentityMatches(pid, "ncc-ui-server")
+	default:
+		return false, true
+	}
 }
 
 func alivePIDByPattern(patterns ...string) (int, bool) {
@@ -342,7 +374,9 @@ func alivePIDByPattern(patterns ...string) (int, bool) {
 			if err != nil || pid <= 0 {
 				continue
 			}
-			if processIsAlive(pid) && pid > best {
+			identity := filepath.Base(pattern)
+			known, matches := processIdentityMatches(pid, identity)
+			if processIsAlive(pid) && (!known || matches) && pid > best {
 				best = pid
 			}
 		}

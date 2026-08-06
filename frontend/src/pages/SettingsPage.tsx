@@ -1,6 +1,6 @@
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import type { ReactNode } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router";
 import {
   Button,
   Card,
@@ -32,22 +32,52 @@ import {
   ToolOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { ConfigSection } from "../features/settings/ConfigSection";
-import { ScheduleSection } from "../features/settings/ScheduleSection";
-import { RunsSection } from "../features/runs/RunsSection";
-import { LogsSection } from "../features/settings/LogsSection";
-import { JsonOutputsSection } from "../features/settings/JsonOutputsSection";
-import { RawOutputsSection } from "../features/settings/RawOutputsSection";
-import { ApiExplorerSection } from "../features/settings/ApiExplorerSection";
-import { AuditLogSection } from "../features/settings/AuditLogSection";
-import { AccessSection, MaintenanceSection } from "../features/settings/AccessSection";
-import { NotificationsSection } from "../features/settings/NotificationsSection";
-import { SystemHealthSection } from "../features/settings/SystemHealthSection";
 import { api } from "../api/client";
 import { useLocalStorageState } from "../hooks/useLocalStorageState";
 import { ErrorStateCard, LoadingStateCard } from "../components/UxStates";
 import { notify, notifyError } from "../notify";
 import { localDateKey as localDayKey, relativeTime } from "../utils/datetime";
+
+const ConfigSection = lazy(() =>
+  import("../features/settings/ConfigSection").then(({ ConfigSection: Component }) => ({ default: Component })),
+);
+const ScheduleSection = lazy(() =>
+  import("../features/settings/ScheduleSection").then(({ ScheduleSection: Component }) => ({ default: Component })),
+);
+const RunsSection = lazy(() =>
+  import("../features/runs/RunsSection").then(({ RunsSection: Component }) => ({ default: Component })),
+);
+const LogsSection = lazy(() =>
+  import("../features/settings/LogsSection").then(({ LogsSection: Component }) => ({ default: Component })),
+);
+const JsonOutputsSection = lazy(() =>
+  import("../features/settings/JsonOutputsSection").then(({ JsonOutputsSection: Component }) => ({ default: Component })),
+);
+const RawOutputsSection = lazy(() =>
+  import("../features/settings/RawOutputsSection").then(({ RawOutputsSection: Component }) => ({ default: Component })),
+);
+const ApiExplorerSection = lazy(() =>
+  import("../features/settings/ApiExplorerSection").then(({ ApiExplorerSection: Component }) => ({ default: Component })),
+);
+const AuditLogSection = lazy(() =>
+  import("../features/settings/AuditLogSection").then(({ AuditLogSection: Component }) => ({ default: Component })),
+);
+const AccessSection = lazy(() =>
+  import("../features/settings/AccessSection").then(({ AccessSection: Component }) => ({ default: Component })),
+);
+const MaintenanceSection = lazy(() =>
+  import("../features/settings/AccessSection").then(({ MaintenanceSection: Component }) => ({ default: Component })),
+);
+const NotificationsSection = lazy(() =>
+  import("../features/settings/NotificationsSection").then(({ NotificationsSection: Component }) => ({ default: Component })),
+);
+const SystemHealthSection = lazy(() =>
+  import("../features/settings/SystemHealthSection").then(({ SystemHealthSection: Component }) => ({ default: Component })),
+);
+
+function lazySection(children: ReactNode) {
+  return <Suspense fallback={<LoadingStateCard rows={4} />}>{children}</Suspense>;
+}
 
 /**
  * Compact bar-sparkline of *completed* runs per day for the trailing N days.
@@ -246,7 +276,7 @@ function ConnectionTab({
   })();
 
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+    <Space orientation="vertical" size={16} style={{ width: "100%" }}>
       <Card className="page-card connection-status-card">
         <Row gutter={[16, 16]} align="middle">
           <Col xs={24} md={14}>
@@ -298,7 +328,7 @@ function ConnectionTab({
           </Col>
           <Col xs={24} md={10}>
             <Space
-              direction="vertical"
+              orientation="vertical"
               size={12}
               style={{ display: "flex", alignItems: "flex-end", width: "100%" }}
             >
@@ -407,9 +437,9 @@ function DeveloperTab({ onError }: { onError: (e: unknown) => void }) {
           setSearchParams(next, { replace: true });
         }}
         items={[
-          { key: "api", label: "API Explorer", children: <ApiExplorerSection onError={onError} /> },
-          { key: "json", label: "JSON Artifacts", children: <JsonOutputsSection onError={onError} /> },
-          { key: "raw", label: "Raw Files", children: <RawOutputsSection onError={onError} /> },
+          { key: "api", label: "API Explorer", children: lazySection(<ApiExplorerSection onError={onError} />) },
+          { key: "json", label: "JSON Artifacts", children: lazySection(<JsonOutputsSection onError={onError} />) },
+          { key: "raw", label: "Raw Files", children: lazySection(<RawOutputsSection onError={onError} />) },
         ]}
       />
     </Card>
@@ -451,47 +481,47 @@ export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
         {
           key: "config",
           label: tabLabel(<SettingOutlined />, "Config"),
-          children: <ConfigSection onError={notifyError} />,
+          children: lazySection(<ConfigSection onError={notifyError} />),
         },
         {
           key: "schedule",
           label: tabLabel(<CalendarOutlined />, "Schedule"),
-          children: <ScheduleSection backendConfigPath={backendConfigPath} onError={notifyError} />,
+          children: lazySection(<ScheduleSection backendConfigPath={backendConfigPath} onError={notifyError} />),
         },
         {
           key: "runs",
           label: tabLabel(<ThunderboltOutlined />, "Runs"),
-          children: <RunsSection backendConfigPath={backendConfigPath} onError={notifyError} />,
+          children: lazySection(<RunsSection backendConfigPath={backendConfigPath} onError={notifyError} />),
         },
         {
           key: "logs",
           label: tabLabel(<FileTextOutlined />, "Logs"),
-          children: <LogsSection onError={notifyError} />,
+          children: lazySection(<LogsSection onError={notifyError} />),
         },
         {
           key: "audit",
           label: tabLabel(<AuditOutlined />, "Audit"),
-          children: <AuditLogSection onError={notifyError} />,
+          children: lazySection(<AuditLogSection onError={notifyError} />),
         },
         {
           key: "notifications",
           label: tabLabel(<BellOutlined />, "Notifications"),
-          children: <NotificationsSection />,
+          children: lazySection(<NotificationsSection />),
         },
         {
           key: "health",
           label: tabLabel(<HeartOutlined />, "System Health"),
-          children: <SystemHealthSection />,
+          children: lazySection(<SystemHealthSection />),
         },
         {
           key: "maintenance",
           label: tabLabel(<ToolOutlined />, "Maintenance"),
-          children: <MaintenanceSection />,
+          children: lazySection(<MaintenanceSection />),
         },
         {
           key: "developer",
           label: tabLabel(<LinkOutlined />, "Developer"),
-          children: <DeveloperTab onError={notifyError} />,
+          children: lazySection(<DeveloperTab onError={notifyError} />),
         },
   ];
   if (loginEnabled) {
@@ -502,7 +532,7 @@ export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
     items.splice(insertAt, 0, {
       key: "access",
       label: tabLabel(<TeamOutlined />, "Access"),
-      children: <AccessSection />,
+      children: lazySection(<AccessSection />),
     });
   }
 
@@ -540,7 +570,7 @@ export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
 
   if (health.isLoading && !health.data) {
     return (
-      <Space direction="vertical" size={16} style={{ width: "100%" }}>
+      <Space orientation="vertical" size={16} style={{ width: "100%" }}>
         <LoadingStateCard rows={3} />
         <LoadingStateCard rows={6} />
       </Space>

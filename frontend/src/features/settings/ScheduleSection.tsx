@@ -246,7 +246,7 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
   );
 
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+    <Space orientation="vertical" size={16} style={{ width: "100%" }}>
       <Card className="page-card">
         <Typography.Title level={4} className="section-title">
           Schedule
@@ -389,7 +389,7 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
                   type="info"
                   showIcon
                   style={{ marginBottom: 12 }}
-                  message="systemd timer backend"
+                  title="systemd timer backend"
                   description="Installs a systemd .timer + oneshot .service under /etc/systemd/system (requires root). Overlapping runs are prevented automatically (the file lock is not needed), missed runs replay on boot (Persistent=true), and the run uses the config file's directory as its working directory. Day-of-week cron fields are not supported — use an interval or a cron without a DOW field."
                 />
               ) : null}
@@ -481,7 +481,7 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
                 type="warning"
                 showIcon
                 style={{ marginBottom: 12 }}
-                message="Schedule saved but not installed"
+                title="Schedule saved but not installed"
                 description={
                   <>
                     A schedule configuration is stored in the API state file but no matching entry was found in{" "}
@@ -503,7 +503,7 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
                 showIcon
                 icon={<InfoCircleOutlined />}
                 style={{ marginBottom: 12 }}
-                message="No schedule configured"
+                title="No schedule configured"
                 description={
                   <>
                     Pick an interval above (default <Typography.Text code>4h</Typography.Text> works well) and click{" "}
@@ -523,7 +523,7 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
                 type="error"
                 showIcon
                 style={{ marginBottom: 12 }}
-                message="Last scheduled run failed"
+                title="Last scheduled run failed"
                 description={<Typography.Text code>{health.last_error}</Typography.Text>}
               />
             ) : null}
@@ -552,7 +552,7 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
               </Descriptions.Item>
               <Descriptions.Item label="Last run">
                 {health.log_exists && health.log_mod_time ? (
-                  <Space direction="vertical" size={0}>
+                  <Space orientation="vertical" size={0}>
                     <Tooltip title={formatDateTime(health.log_mod_time)}>
                       {relativeTime(health.log_mod_time)}
                     </Tooltip>
@@ -574,7 +574,7 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
                 {health.last_error ? (
                   <Tag color="red">failed</Tag>
                 ) : health.last_success ? (
-                  <Space direction="vertical" size={0}>
+                  <Space orientation="vertical" size={0}>
                     <Tag color="green">succeeded</Tag>
                     <Typography.Text
                       type="secondary"
@@ -601,7 +601,7 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
               </Descriptions.Item>
               <Descriptions.Item label="State updated">{formatTime(health.last_updated_at)}</Descriptions.Item>
               <Descriptions.Item label="Log file">
-                <Space direction="vertical" size={2}>
+                <Space orientation="vertical" size={2}>
                   <Typography.Text className="mono" copyable={{ text: health.log_path }}>
                     {health.log_path || "—"}
                   </Typography.Text>

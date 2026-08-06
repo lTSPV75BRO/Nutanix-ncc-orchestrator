@@ -261,7 +261,7 @@ export function LoginPage({ localEnabled, samlEnabled, bootstrapPending, onSucce
         </div>
 
         {error ? (
-          <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} closable onClose={() => setError(null)} />
+          <Alert type="error" showIcon title={error} style={{ marginBottom: 16 }} closable onClose={() => setError(null)} />
         ) : null}
 
         {localEnabled ? (
@@ -308,7 +308,7 @@ export function LoginPage({ localEnabled, samlEnabled, bootstrapPending, onSucce
         ) : null}
 
         {!localEnabled && !samlEnabled ? (
-          <Alert type="info" showIcon message="No login methods are configured on the server." />
+          <Alert type="info" showIcon title="No login methods are configured on the server." />
         ) : null}
 
         {localEnabled && bootstrapPending ? (
@@ -322,7 +322,7 @@ export function LoginPage({ localEnabled, samlEnabled, bootstrapPending, onSucce
               type="info"
               showIcon
               icon={<InfoCircleOutlined />}
-              message="Initial administrator password"
+              title="Initial administrator password"
               description={
                 <Typography.Paragraph style={{ marginBottom: 0, fontSize: 12 }}>
                   On first launch, the server creates an <Text code>admin</Text> account with a
@@ -371,7 +371,7 @@ export function LoginPage({ localEnabled, samlEnabled, bootstrapPending, onSucce
         okText="Send request"
         confirmLoading={forgotSubmitting}
         onOk={() => forgotForm.submit()}
-        destroyOnClose
+        destroyOnHidden
       >
         <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
           Enter your username and an administrator will be asked to reset your
@@ -403,7 +403,7 @@ export function LoginPage({ localEnabled, samlEnabled, bootstrapPending, onSucce
         okButtonProps={{ danger: true, icon: <CloudUploadOutlined /> }}
         confirmLoading={restoreSubmitting}
         onOk={() => restoreForm.submit()}
-        destroyOnClose
+        destroyOnHidden
       >
         <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
           Recover an existing deployment onto this fresh install. Sign in with the current{" "}

@@ -193,7 +193,7 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
         notify.info({
           message: `Run queued (position ${out.queue_position ?? "?"})`,
           description: (
-            <Space direction="vertical" size={2}>
+            <Space orientation="vertical" size={2}>
               <span>All concurrency slots are busy — this run will start automatically when one frees.</span>
               {skippedNote}
             </Space>
@@ -205,7 +205,7 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
         notify.info({
           message: "Already running",
           description: (
-            <Space direction="vertical" size={2}>
+            <Space orientation="vertical" size={2}>
               <span>All requested clusters are already being refreshed by an in-progress run. Their results will update when it finishes.</span>
               {skippedNote}
             </Space>
@@ -217,7 +217,7 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
         notify.success({
           message: "Run triggered",
           description: (
-            <Space direction="vertical" size={2}>
+            <Space orientation="vertical" size={2}>
               <span>
                 {ran.length > 0 ? `Running ${ran.length} cluster(s).` : "Running all clusters."}
                 {typeof out.running_count === "number" ? ` ${out.running_count} run(s) now active.` : ""}
@@ -491,7 +491,7 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
         </Button>
       ),
       children: (
-        <Space direction="vertical" size={10} style={{ width: "100%" }}>
+        <Space orientation="vertical" size={10} style={{ width: "100%" }}>
           <div>
             <Typography.Text type="secondary" style={{ marginRight: 8 }}>Clusters:</Typography.Text>
             {clusters.length > 0 ? (
@@ -506,9 +506,9 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
             <Alert
               type="info"
               showIcon
-              message="Some clusters were skipped (already running in another run)"
+              title="Some clusters were skipped (already running in another run)"
               description={
-                <Space direction="vertical" size={2}>
+                <Space orientation="vertical" size={2}>
                   {skipped.map((c) => (
                     <Typography.Text key={c}>
                       {c}
@@ -545,7 +545,7 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
   };
 
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+    <Space orientation="vertical" size={16} style={{ width: "100%" }}>
       <Card className="page-card">
         <Typography.Title level={4} className="section-title">
           Trigger Run
@@ -559,7 +559,7 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
             type="info"
             showIcon
             style={{ marginTop: 12 }}
-            message="Your access is limited to your cluster groups"
+            title="Your access is limited to your cluster groups"
             description={
               allowedClusters.length > 0
                 ? `You can run and view ${allowedClusters.length} cluster(s): ${allowedClusters.join(", ")}.`
@@ -669,7 +669,7 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
           <Alert
             type={preflight.ok ? "success" : "error"}
             showIcon
-            message={preflight.ok ? "Preflight passed" : "Preflight has blocking failures"}
+            title={preflight.ok ? "Preflight passed" : "Preflight has blocking failures"}
             description={`Config: ${preflight.config_path} · Failed: ${preflight.failed} · Warnings: ${preflight.warn}`}
           />
           <List
@@ -679,7 +679,7 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
             dataSource={preflight.checks}
             renderItem={(item) => (
               <List.Item>
-                <Space direction="vertical" size={2} style={{ width: "100%" }}>
+                <Space orientation="vertical" size={2} style={{ width: "100%" }}>
                   <Space size={6} wrap>
                     <Typography.Text strong>{item.title}</Typography.Text>
                     <Tag color={item.status === "pass" ? "success" : item.status === "warn" ? "warning" : "error"}>
@@ -735,7 +735,7 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
             type="error"
             showIcon
             icon={<StopOutlined />}
-            message="Last run failed"
+            title="Last run failed"
             description={<Typography.Text>{active.last_error}</Typography.Text>}
           />
         ) : (

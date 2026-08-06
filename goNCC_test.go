@@ -62,6 +62,26 @@ func TestEnsureV2StartSlotsAvailable(t *testing.T) {
 		t.Fatalf("stale pid file was not removed: %v", err)
 	}
 
+	holder := exec.Command("sleep", "30")
+	if err := holder.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Process.Kill(); _, _ = holder.Process.Wait() }()
+	reused := filepath.Join(runDir, "v2-api.pid")
+	if err := os.WriteFile(reused, []byte(fmt.Sprintf("%d\n", holder.Process.Pid)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureV2StartSlotsAvailable(dir, v2StartOptions{
+		InstallDir: dir,
+		APIOnly:    true,
+		APIListen:  port,
+	}); err != nil {
+		t.Fatalf("expected unrelated live PID to be treated as stale: %v", err)
+	}
+	if _, err := os.Stat(reused); !os.IsNotExist(err) {
+		t.Fatalf("reused PID file was not removed: %v", err)
+	}
+
 	ln, err = net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

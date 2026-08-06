@@ -1,6 +1,6 @@
 import { Button, Space, Typography } from "antd";
 import { ArrowLeftOutlined, CompassOutlined, HomeOutlined } from "@ant-design/icons";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router";
 
 // Scoped styles for the 404 hero. Kept inline (like the login background) so the
 // page is self-contained and reuses the app's brand gradient + theme tokens.

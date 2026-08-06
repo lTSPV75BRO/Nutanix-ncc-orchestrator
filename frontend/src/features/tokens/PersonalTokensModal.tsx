@@ -149,7 +149,7 @@ export function PersonalTokensModal({
       }}
       footer={null}
       width={720}
-      destroyOnClose
+      destroyOnHidden
     >
       <Paragraph type="secondary" style={{ marginTop: 0 }}>
         Generate a bearer token to call the API from scripts, <code>curl</code>, Postman, or CI. A
@@ -163,7 +163,7 @@ export function PersonalTokensModal({
           type="success"
           showIcon
           style={{ marginBottom: 16 }}
-          message={`Token "${created.name}" created`}
+          title={`Token "${created.name}" created`}
           description={
             <div>
               <Paragraph style={{ marginBottom: 8 }}>

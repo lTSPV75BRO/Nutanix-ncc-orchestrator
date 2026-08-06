@@ -363,7 +363,7 @@ export function InsightsPage() {
       title: "Check",
       key: "name",
       render: (_, row) => (
-        <Space direction="vertical" size={0}>
+        <Space orientation="vertical" size={0}>
           <Typography.Text strong>{row.name}</Typography.Text>
           {row.clusterList.length > 0 ? (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
@@ -410,7 +410,7 @@ export function InsightsPage() {
 
   return (
     <>
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+    <Space orientation="vertical" size={16} style={{ width: "100%" }}>
       {/* HERO HEADER */}
       <Card className="page-card insights-hero">
         <Row gutter={[16, 16]} align="middle">
@@ -527,7 +527,7 @@ export function InsightsPage() {
             type="warning"
             showIcon
             style={{ marginTop: 16 }}
-            message="Summary count mismatch"
+            title="Summary count mismatch"
             description="The sum of PASS/FAIL/WARN/ERR/INFO/UNKNOWN does not equal total plugins. Re-run NCC if the numbers look off."
           />
         ) : null}
@@ -635,7 +635,7 @@ export function InsightsPage() {
             {actionableFindings.length === 0 ? (
               <Empty description="No FAIL/ERR findings in the current snapshot." />
             ) : (
-              <Space direction="vertical" size={10} style={{ width: "100%" }}>
+              <Space orientation="vertical" size={10} style={{ width: "100%" }}>
                 {actionableFindings.map((item, idx) => {
                   const cluster = resolveClusterName(String(item.row.cluster || "-"), clusterNameMap);
                   const reason = deriveReason(item.row, item.severity);
@@ -680,7 +680,7 @@ export function InsightsPage() {
             {clusterRanking.length === 0 ? (
               <Empty description="No cluster summaries available." />
             ) : (
-              <Space direction="vertical" size={10} style={{ width: "100%", marginTop: 8 }}>
+              <Space orientation="vertical" size={10} style={{ width: "100%", marginTop: 8 }}>
                 {clusterRanking.map((c) => (
                   <div key={c.address}>
                     <Space size={8} style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
@@ -718,7 +718,7 @@ export function InsightsPage() {
             {recentTrends.length === 0 ? (
               <Empty description="No trend points available yet." />
             ) : (
-              <Space direction="vertical" size={6} style={{ width: "100%", marginTop: 8 }}>
+              <Space orientation="vertical" size={6} style={{ width: "100%", marginTop: 8 }}>
                 {recentTrends.map((p, idx) => {
                   const total = Math.max(1, toNumber(p.total_checks, 1));
                   const riskPct = Math.min(100, ((toNumber(p.fail_total) + toNumber(p.err_total)) / total) * 100);
@@ -793,9 +793,9 @@ export function InsightsPage() {
               Failure classes encountered during cluster polling.
             </Typography.Text>
             {failureClassEntries.length === 0 ? (
-              <Alert type="success" showIcon style={{ marginTop: 8 }} message="All clusters polled cleanly. No transport, auth, or rate-limit errors." />
+              <Alert type="success" showIcon style={{ marginTop: 8 }} title="All clusters polled cleanly. No transport, auth, or rate-limit errors." />
             ) : (
-              <Space direction="vertical" size={8} style={{ width: "100%", marginTop: 8 }}>
+              <Space orientation="vertical" size={8} style={{ width: "100%", marginTop: 8 }}>
                 {failureClassEntries.map((e) => (
                   <div key={e.name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <Tag color={e.name === "rate_limit" || e.name === "timeout" ? "warning" : "error"}>{e.name.replace(/_/g, " ")}</Tag>
@@ -888,7 +888,7 @@ export function InsightsPage() {
       open={Boolean(drillCheck)}
       onClose={() => setDrillCheck(null)}
       width={Math.min(720, typeof window !== "undefined" ? window.innerWidth - 64 : 720)}
-      destroyOnClose
+      destroyOnHidden
       title={
         drillCheck ? (
           <Space size={8} wrap>
@@ -910,7 +910,7 @@ export function InsightsPage() {
       }
     >
       {drillCheck ? (
-        <Space direction="vertical" size={16} style={{ width: "100%" }}>
+        <Space orientation="vertical" size={16} style={{ width: "100%" }}>
           <Descriptions size="small" column={2} bordered>
             <Descriptions.Item label="Occurrences">{drillCheck.count}</Descriptions.Item>
             <Descriptions.Item label="Affected clusters">{drillCheck.clusterList.length}</Descriptions.Item>

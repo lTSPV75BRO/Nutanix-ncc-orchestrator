@@ -84,6 +84,11 @@ func TestSuperviseRefusesSecondInstance(t *testing.T) {
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		t.Fatalf("mkdir run: %v", err)
 	}
+	unlock, err := acquireSupervisorLock(filepath.Join(runDir, "v2-supervisor.lock"))
+	if err != nil {
+		t.Fatalf("acquire supervisor lock: %v", err)
+	}
+	defer unlock()
 
 	// Hold a real, live pid to stand in for an already-running supervisor.
 	holder := exec.Command("/bin/sh", "-c", "sleep 30")

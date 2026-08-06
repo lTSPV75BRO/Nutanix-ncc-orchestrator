@@ -291,7 +291,7 @@ export function ClusterTable({
       render: (_, row) => {
         const url = clusterPrismURL(row.cluster, clusterNameMap);
         return (
-          <Space direction="vertical" size={0}>
+          <Space orientation="vertical" size={0}>
             {url ? (
               <a
                 href={url}
@@ -329,7 +329,7 @@ export function ClusterTable({
       width: 280,
       sorter: (a, b) => a.alert.localeCompare(b.alert),
       render: (value: string, row) => (
-        <Space direction="vertical" size={2} style={{ width: "100%" }}>
+        <Space orientation="vertical" size={2} style={{ width: "100%" }}>
           <Typography.Text strong style={{ wordBreak: "break-word" }}>
             {value}
           </Typography.Text>
@@ -444,7 +444,7 @@ export function ClusterTable({
         <Empty
           style={{ padding: "32px 0" }}
           description={
-            <Space direction="vertical" size={2} align="center">
+            <Space orientation="vertical" size={2} align="center">
               <Typography.Text strong>No alerts match the current filters</Typography.Text>
               <Typography.Text type="secondary">
                 Try clearing severity chips or the cluster filter.
@@ -517,7 +517,7 @@ export function ClusterTable({
         }
       >
         {drawerRow ? (
-          <Space direction="vertical" size={16} style={{ width: "100%" }}>
+          <Space orientation="vertical" size={16} style={{ width: "100%" }}>
             <div>
               <Typography.Text strong>Cluster</Typography.Text>
               <div>

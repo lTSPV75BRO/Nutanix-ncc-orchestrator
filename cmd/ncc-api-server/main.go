@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -44,10 +45,11 @@ import (
 // They are surfaced on /api/v1/health so support teams can see the exact build
 // the API server is running.
 var (
-	Version   string
-	BuildDate string
-	Stream    string
-	GoVersion string
+	Version     string
+	BuildDate   string
+	Stream      string
+	GoVersion   string
+	GitRevision string
 )
 
 func init() {
@@ -62,6 +64,20 @@ func init() {
 	}
 	if GoVersion == "" {
 		GoVersion = runtime.Version()
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		for _, setting := range bi.Settings {
+			switch setting.Key {
+			case "vcs.revision":
+				if GitRevision == "" {
+					GitRevision = setting.Value
+				}
+			case "vcs.time":
+				if BuildDate == "unknown" {
+					BuildDate = setting.Value
+				}
+			}
+		}
 	}
 }
 
@@ -182,6 +198,7 @@ type apiServer struct {
 	// perms, config repair) are applied unattended.
 	selfHealInterval   time.Duration
 	selfHealAutoFix    bool
+	selfHealRunMu      sync.Mutex
 	selfHealMu         sync.RWMutex
 	lastSelfHeal       *selfHealReport
 	selfHealRunsTotal  atomic.Int64
@@ -1019,6 +1036,7 @@ func (s *apiServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"token_file":            s.absPath(s.tokenFilePath),
 		"orchestrator_bin":      s.absPath(s.orchestratorBin),
 		"version":               Version,
+		"git_revision":          GitRevision,
 		"build_date":            BuildDate,
 		"stream":                Stream,
 		"go_version":            GoVersion,

@@ -171,7 +171,7 @@ export function NotificationsSection() {
   }
 
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+    <Space orientation="vertical" size={16} style={{ width: "100%" }}>
       <Card
         className="page-card"
         title={
@@ -237,7 +237,7 @@ export function NotificationsSection() {
             style={{ marginTop: 12 }}
             type="warning"
             showIcon
-            message="Unsaved changes"
+            title="Unsaved changes"
             description="Save to apply notification changes."
           />
         ) : null}
@@ -498,7 +498,7 @@ export function NotificationsSection() {
           {windows.length === 0 ? (
             <Typography.Text type="secondary">No maintenance windows.</Typography.Text>
           ) : (
-            <Space direction="vertical" size={8} style={{ width: "100%" }}>
+            <Space orientation="vertical" size={8} style={{ width: "100%" }}>
               {windows.map((w, i) => (
                 <Space key={i} size={8} wrap align="center">
                   <Input
@@ -566,7 +566,7 @@ export function NotificationsSection() {
         <Alert
           type="info"
           showIcon
-          message="Notifications are disabled"
+          title="Notifications are disabled"
           description="Enable notifications above for channels, alerts, and the digest to be delivered."
         />
       ) : null}

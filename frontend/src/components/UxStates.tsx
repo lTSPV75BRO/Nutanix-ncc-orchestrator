@@ -51,11 +51,11 @@ export function ErrorStateCard({
 }) {
   return (
     <Card className="page-card">
-      <Space direction="vertical" size={12} style={{ width: "100%" }}>
+      <Space orientation="vertical" size={12} style={{ width: "100%" }}>
         <Alert
           type="error"
           showIcon
-          message={title}
+          title={title}
           description={error ? <Typography.Text type="secondary">{error}</Typography.Text> : undefined}
         />
         {onRetry ? (

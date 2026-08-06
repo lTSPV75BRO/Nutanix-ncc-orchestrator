@@ -71,6 +71,11 @@ func (s *apiServer) runSelfHealOnce(ctx context.Context, fix bool) (*selfHealRep
 }
 
 func (s *apiServer) runSelfHealOnceWithOptions(ctx context.Context, opts selfHealRunOptions) (*selfHealReport, error) {
+	if !s.selfHealRunMu.TryLock() {
+		return nil, fmt.Errorf("self-heal is already running; try again shortly")
+	}
+	defer s.selfHealRunMu.Unlock()
+
 	bin := strings.TrimSpace(s.absPath(s.orchestratorBin))
 	if bin == "" {
 		return nil, fmt.Errorf("orchestrator binary path not configured")
@@ -129,8 +134,12 @@ func (s *apiServer) runSelfHealOnceWithOptions(ctx context.Context, opts selfHea
 		failed := make([]string, 0, rep.Summary["fail"])
 		for _, r := range rep.Results {
 			if status, _ := r["status"].(string); status == "fail" {
-				if name, _ := r["name"].(string); name != "" {
-					failed = append(failed, name)
+				if title, _ := r["title"].(string); strings.TrimSpace(title) != "" {
+					failed = append(failed, title)
+					continue
+				}
+				if id, _ := r["id"].(string); strings.TrimSpace(id) != "" {
+					failed = append(failed, id)
 				}
 			}
 		}

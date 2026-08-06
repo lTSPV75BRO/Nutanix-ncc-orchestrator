@@ -7120,10 +7120,11 @@ func versionLessLegacy(a, b string) bool {
 }
 
 var (
-	Version   string
-	BuildDate string
-	GoVersion string
-	Stream    string // e.g., "prod", "dev", "beta"
+	Version     string
+	BuildDate   string
+	GoVersion   string
+	Stream      string // e.g., "prod", "dev", "beta"
+	GitRevision string
 )
 
 func init() {
@@ -7146,9 +7147,16 @@ func init() {
 
 		var gitRevision string
 		for _, s := range bi.Settings {
-			if s.Key == "vcs.revision" && s.Value != "" {
-				gitRevision = s.Value
-				break
+			switch s.Key {
+			case "vcs.revision":
+				if s.Value != "" {
+					gitRevision = s.Value
+					GitRevision = s.Value
+				}
+			case "vcs.time":
+				if BuildDate == "unknown" && s.Value != "" {
+					BuildDate = s.Value
+				}
 			}
 		}
 		if gitRevision != "" {
@@ -8521,20 +8529,21 @@ func runV2Status(opts v2StatusOptions) error {
 	tokenPath := filepath.Join(installDir, ".ncc-api-token")
 
 	type svc struct {
-		name    string
-		pidFile string
-		listen  string
-		logFile string
-		probe   bool
+		name     string
+		pidFile  string
+		listen   string
+		logFile  string
+		probe    bool
+		identity []string
 	}
 	services := []svc{
 		// Native foreground supervisor (v2-supervise); owns both children.
-		{"supervisor", filepath.Join(runDir, "v2-supervisor.pid"), "", filepath.Join(logDir, "v2-supervisor.log"), false},
+		{"supervisor", filepath.Join(runDir, "v2-supervisor.pid"), "", filepath.Join(logDir, "v2-supervisor.log"), false, []string{"ncc-orchestrator", "v2-supervise"}},
 		// Legacy per-service sh supervisors (v2-start --detach --self-heal).
-		{"api-supervisor", filepath.Join(runDir, "v2-api-supervisor.pid"), "", filepath.Join(logDir, "v2-api-supervisor.log"), false},
-		{"ncc-api-server", filepath.Join(runDir, "v2-api.pid"), apiListen, filepath.Join(logDir, "v2-api.log"), true},
-		{"ui-supervisor", filepath.Join(runDir, "v2-ui-supervisor.pid"), "", filepath.Join(logDir, "v2-ui-supervisor.log"), false},
-		{"ncc-ui-server", filepath.Join(runDir, "v2-ui.pid"), uiListen, filepath.Join(logDir, "v2-ui.log"), false},
+		{"api-supervisor", filepath.Join(runDir, "v2-api-supervisor.pid"), "", filepath.Join(logDir, "v2-api-supervisor.log"), false, []string{"v2-api-supervisor", "ncc-api-server"}},
+		{"ncc-api-server", filepath.Join(runDir, "v2-api.pid"), apiListen, filepath.Join(logDir, "v2-api.log"), true, []string{"ncc-api-server"}},
+		{"ui-supervisor", filepath.Join(runDir, "v2-ui-supervisor.pid"), "", filepath.Join(logDir, "v2-ui-supervisor.log"), false, []string{"v2-ui-supervisor", "ncc-ui-server"}},
+		{"ncc-ui-server", filepath.Join(runDir, "v2-ui.pid"), uiListen, filepath.Join(logDir, "v2-ui.log"), false, []string{"ncc-ui-server"}},
 	}
 
 	out := make([]v2StatusEntry, 0, len(services))
@@ -8561,10 +8570,11 @@ func runV2Status(opts v2StatusOptions) error {
 			entry.Error = err.Error()
 		default:
 			entry.PID = pid
-			if processIsAlive(pid) {
+			if processIsExpected(pid, s.identity...) {
 				entry.State = "alive"
 			} else {
 				entry.State = "dead-stale-pid"
+				entry.Error = fmt.Sprintf("pid %d is not an NCC %s process", pid, s.name)
 			}
 		}
 
@@ -10675,17 +10685,18 @@ func runV2Stop(opts v2StopOptions) error {
 		uiPIDPath = filepath.Join(runDir, "v2-ui.pid")
 	}
 	targets := []struct {
-		name    string
-		pidPath string
+		name     string
+		pidPath  string
+		identity []string
 	}{
 		// Stop the native foreground supervisor first: on SIGTERM it gracefully
 		// stops its own children and clears their pid files, so the api/ui
 		// targets below become no-ops (or clean up anything it missed).
-		{name: "supervisor", pidPath: filepath.Join(runDir, "v2-supervisor.pid")},
-		{name: "api-supervisor", pidPath: filepath.Join(runDir, "v2-api-supervisor.pid")},
-		{name: "ui-supervisor", pidPath: filepath.Join(runDir, "v2-ui-supervisor.pid")},
-		{name: "api", pidPath: apiPIDPath},
-		{name: "ui", pidPath: uiPIDPath},
+		{name: "supervisor", pidPath: filepath.Join(runDir, "v2-supervisor.pid"), identity: []string{"ncc-orchestrator", "v2-supervise"}},
+		{name: "api-supervisor", pidPath: filepath.Join(runDir, "v2-api-supervisor.pid"), identity: []string{"v2-api-supervisor", "ncc-api-server"}},
+		{name: "ui-supervisor", pidPath: filepath.Join(runDir, "v2-ui-supervisor.pid"), identity: []string{"v2-ui-supervisor", "ncc-ui-server"}},
+		{name: "api", pidPath: apiPIDPath, identity: []string{"ncc-api-server"}},
+		{name: "ui", pidPath: uiPIDPath, identity: []string{"ncc-ui-server"}},
 	}
 
 	foundAny := false
@@ -10701,6 +10712,15 @@ func runV2Stop(opts v2StopOptions) error {
 			continue
 		}
 		foundAny = true
+		if processIsAlive(pid) {
+			known, matches := processIdentityMatches(pid, t.identity...)
+			if known && !matches {
+				_ = os.Remove(t.pidPath)
+				cleanedStaleAny = true
+				fmt.Fprintf(os.Stderr, "removed stale %s pid file (pid=%d belongs to an unrelated process)\n", t.name, pid)
+				continue
+			}
+		}
 		if err := signalPIDStop(pid, opts.Force); err != nil {
 			if errors.Is(err, os.ErrProcessDone) {
 				_ = os.Remove(t.pidPath)
@@ -10916,17 +10936,19 @@ func restartSystemdStack() error {
 func ensureV2StartSlotsAvailable(installDir string, opts v2StartOptions) error {
 	runDir := filepath.Join(installDir, "run")
 	pids := []struct {
-		name string
-		path string
+		name     string
+		path     string
+		identity []string
 	}{
-		{"supervisor", filepath.Join(runDir, "v2-supervisor.pid")},
-		{"api", filepath.Join(runDir, "v2-api.pid")},
+		{"supervisor", filepath.Join(runDir, "v2-supervisor.pid"), []string{"ncc-orchestrator", "v2-supervise"}},
+		{"api", filepath.Join(runDir, "v2-api.pid"), []string{"ncc-api-server"}},
 	}
 	if !opts.APIOnly {
 		pids = append(pids, struct {
-			name string
-			path string
-		}{"ui", filepath.Join(runDir, "v2-ui.pid")})
+			name     string
+			path     string
+			identity []string
+		}{"ui", filepath.Join(runDir, "v2-ui.pid"), []string{"ncc-ui-server"}})
 	}
 	for _, item := range pids {
 		pid, err := readPIDFromFile(item.path)
@@ -10936,9 +10958,11 @@ func ensureV2StartSlotsAvailable(installDir string, opts v2StartOptions) error {
 		if err != nil {
 			return fmt.Errorf("cannot inspect %s pid file: %w", item.name, err)
 		}
-		if processIsAlive(pid) {
+		if processIsExpected(pid, item.identity...) {
 			return fmt.Errorf("%s is already running (pid %d); stop it with `ncc-orchestrator v2-stop --install-dir %s` before starting another stack", item.name, pid, installDir)
 		}
+		// A live PID with a known non-NCC command is a reused PID. Do not
+		// signal it; remove only the stale metadata and continue.
 		_ = os.Remove(item.path)
 	}
 	if err := canBindListenAddress(opts.APIListen); err != nil {
@@ -14793,8 +14817,8 @@ func extractClusterAddressV3(entity map[string]interface{}) string {
 
 func versionInfoString() string {
 	return fmt.Sprintf(
-		"Version: %s\nStream: %s\nBuild Date: %s\nGo Version: %s\nOS: %s\nArch: %s",
-		Version, Stream, BuildDate, GoVersion, runtime.GOOS, runtime.GOARCH,
+		"Version: %s\nCommit: %s\nStream: %s\nBuild Date: %s\nGo Version: %s\nOS: %s\nArch: %s",
+		Version, GitRevision, Stream, BuildDate, GoVersion, runtime.GOOS, runtime.GOARCH,
 	)
 }
 

@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { Button, Card, List, Progress, Space, Tag, Typography } from "antd";
 import { CheckCircleOutlined, ClockCircleOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { api } from "../../api/client";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 
@@ -106,7 +106,7 @@ export function OnboardingSection() {
 
   return (
     <Card className="page-card">
-      <Space direction="vertical" style={{ width: "100%" }} size={14}>
+      <Space orientation="vertical" style={{ width: "100%" }} size={14}>
         <Typography.Title level={4} className="section-title">
           Guided First-Run Onboarding
         </Typography.Title>

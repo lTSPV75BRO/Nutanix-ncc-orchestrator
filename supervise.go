@@ -99,6 +99,11 @@ func runV2Supervise(cfg superviseConfig) error {
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return fmt.Errorf("supervisor: prepare log dir: %w", err)
 	}
+	unlock, err := acquireSupervisorLock(filepath.Join(runDir, "v2-supervisor.lock"))
+	if err != nil {
+		return fmt.Errorf("supervisor: another instance is already running: %w", err)
+	}
+	defer unlock()
 
 	supLogPath := filepath.Join(logDir, "v2-supervisor.log")
 	supLogFile, err := os.OpenFile(supLogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -124,7 +129,13 @@ func runV2Supervise(cfg superviseConfig) error {
 	// blinding v2-status/v2-stop. Aborting early keeps the live stack's state
 	// intact. A stale pid file (process gone) is ignored and overwritten.
 	if existing, perr := readPIDFromFile(supPIDPath); perr == nil && existing != os.Getpid() && processIsAlive(existing) {
-		return fmt.Errorf("supervisor: another ncc-orchestrator supervisor is already running (pid %d); stop it first (`systemctl stop ncc-orchestrator` or `ncc-orchestrator v2-stop`) before starting another", existing)
+		known, matches := processIdentityMatches(existing, filepath.Base(os.Args[0]), "v2-supervise")
+		if !known || matches {
+			return fmt.Errorf("supervisor: another ncc-orchestrator supervisor is already running (pid %d); stop it first (`systemctl stop ncc-orchestrator` or `ncc-orchestrator v2-stop`) before starting another", existing)
+		}
+		// A live PID with a different command is a reused PID, not a running
+		// supervisor. It is safe to replace only this stale metadata file.
+		_ = os.Remove(supPIDPath)
 	}
 	if err := os.WriteFile(supPIDPath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644); err != nil {
 		return fmt.Errorf("supervisor: write pid file: %w", err)

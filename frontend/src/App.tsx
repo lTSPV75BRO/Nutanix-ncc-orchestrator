@@ -14,7 +14,7 @@ import {
 } from "@ant-design/icons";
 import { Button, Dropdown, Layout, Spin, Tag, Tooltip } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { Link, Navigate, NavLink, Route, Routes, useLocation } from "react-router";
 import { THEME_OPTIONS, useAppTheme, type AppThemeSelection } from "./theme";
 import { api, ApiError } from "./api/client";
 import type { MeData, RunActiveData, RunConflictData, UserRole } from "./api/types";

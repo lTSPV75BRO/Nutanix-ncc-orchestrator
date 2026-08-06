@@ -15,16 +15,16 @@ import (
 // orchestrator's doctor self-heal checks (source "orchestrator") with the
 // api-server's live external-auth probes (source "api").
 type unifiedCheck struct {
-	ID       string `json:"id"`
-	Title    string `json:"title"`
-	Category string `json:"category"`
-	Status   string `json:"status"` // ok | warn | fail
-	Message  string `json:"message"`
-	Hint     string `json:"hint,omitempty"`
-	Fixed    bool   `json:"fixed,omitempty"`
-	FixMsg   string `json:"fix_message,omitempty"`
-	Source   string `json:"source"`
-	Disruptive bool `json:"disruptive,omitempty"`
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	Category   string `json:"category"`
+	Status     string `json:"status"` // ok | warn | fail
+	Message    string `json:"message"`
+	Hint       string `json:"hint,omitempty"`
+	Fixed      bool   `json:"fixed,omitempty"`
+	FixMsg     string `json:"fix_message,omitempty"`
+	Source     string `json:"source"`
+	Disruptive bool   `json:"disruptive,omitempty"`
 }
 
 // handleHealthDiagnostics powers the Settings → System Health view (admin-only).
@@ -63,10 +63,13 @@ func (s *apiServer) handleHealthSupportBundle(w http.ResponseWriter, r *http.Req
 }
 
 type diagnosticsRequest struct {
-	Fix             bool     `json:"fix,omitempty"`
-	CheckIDs        []string `json:"check_ids,omitempty"`
-	VerifyAfterFix  bool     `json:"verify_after_fix,omitempty"`
-	NoDisruptive    bool     `json:"no_disruptive,omitempty"`
+	Fix            bool     `json:"fix,omitempty"`
+	CheckIDs       []string `json:"check_ids,omitempty"`
+	VerifyAfterFix bool     `json:"verify_after_fix,omitempty"`
+	NoDisruptive   bool     `json:"no_disruptive,omitempty"`
+	// AllowDisruptive opts into restart-capable remediations. This is still
+	// force-disabled while runs are active.
+	AllowDisruptive bool `json:"allow_disruptive,omitempty"`
 }
 
 func (s *apiServer) hasInFlightRuns() bool {
@@ -94,11 +97,13 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, req
 	// API-triggered heals default to non-disruptive mode so a UI/operator
 	// "Heal now" action cannot restart/stop the running stack from inside the
 	// request path. CLI doctor remains the path for disruptive remediations.
+	activeRunGuard := req.Fix && s.hasInFlightRuns()
 	noDisruptive := req.NoDisruptive
 	if req.Fix {
-		noDisruptive = true
+		// Keep API heals non-disruptive by default; require explicit opt-in.
+		noDisruptive = !req.AllowDisruptive
 	}
-	if req.Fix && s.hasInFlightRuns() {
+	if activeRunGuard {
 		noDisruptive = true
 	}
 	rep, derr := s.runSelfHealOnceWithOptions(ctx, selfHealRunOptions{
@@ -164,6 +169,24 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, req
 	if summary["fail"] > 0 {
 		worst = "fail"
 	}
+	actionableCount := 0
+	autoFixableCount := 0
+	manualActionCount := 0
+	disruptiveSkippedCount := 0
+	for _, c := range checks {
+		if c.Status == "ok" {
+			continue
+		}
+		actionableCount++
+		if c.Source == "orchestrator" {
+			autoFixableCount++
+			if c.Disruptive && noDisruptive {
+				disruptiveSkippedCount++
+			}
+			continue
+		}
+		manualActionCount++
+	}
 
 	verificationRuns := 0
 	verifiedStable := false
@@ -172,13 +195,23 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, req
 		stablePasses := 0
 		for i := 0; i < 3; i++ {
 			verificationRuns++
-			time.Sleep(2 * time.Second)
-			rep2, _ := s.runSelfHealOnceWithOptions(ctx, selfHealRunOptions{
+			timer := time.NewTimer(2 * time.Second)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+			case <-timer.C:
+			}
+			if ctx.Err() != nil {
+				break
+			}
+			rep2, err2 := s.runSelfHealOnceWithOptions(ctx, selfHealRunOptions{
 				Fix:          false,
 				CheckIDs:     req.CheckIDs,
 				NoDisruptive: noDisruptive,
 			})
-			if rep2 != nil && rep2.Summary["fail"] == 0 {
+			if err2 == nil && rep2 != nil && rep2.Summary["fail"] == 0 {
 				stablePasses++
 			}
 		}
@@ -204,11 +237,19 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, req
 			"count":        len(fixedIDs),
 		},
 		"guardrails": map[string]interface{}{
-			"no_disruptive":    noDisruptive,
-			"active_run_guard": req.Fix && s.hasInFlightRuns(),
+			"no_disruptive":             noDisruptive,
+			"active_run_guard":          activeRunGuard,
+			"allow_disruptive_requested": req.Fix && req.AllowDisruptive,
+			"allow_disruptive_applied":   req.Fix && req.AllowDisruptive && !noDisruptive,
 		},
 		"verification_runs": verificationRuns,
 		"verified_stable":   verifiedStable,
+		"actionable": map[string]interface{}{
+			"count":              actionableCount,
+			"auto_fixable":       autoFixableCount,
+			"manual_action":      manualActionCount,
+			"disruptive_skipped": disruptiveSkippedCount,
+		},
 	}
 	if orchestratorErr != "" {
 		data["orchestrator_error"] = orchestratorErr

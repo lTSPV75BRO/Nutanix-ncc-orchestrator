@@ -254,7 +254,7 @@ export const api = {
     }),
   scheduleHealth: () => callApi<ScheduleHealthData>("/api/v1/schedule/health"),
   diagnostics: () => callApi<DiagnosticsData>("/api/v1/health/diagnostics"),
-  healDiagnostics: (payload?: { check_ids?: string[]; verify_after_fix?: boolean; no_disruptive?: boolean }) =>
+  healDiagnostics: (payload?: { check_ids?: string[]; verify_after_fix?: boolean; no_disruptive?: boolean; allow_disruptive?: boolean }) =>
     callApi<DiagnosticsData>("/api/v1/health/diagnostics", {
       method: "POST",
       ...(payload ? { body: JSON.stringify(payload) } : {}),

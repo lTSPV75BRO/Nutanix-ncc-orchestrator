@@ -511,7 +511,7 @@ export function ApiExplorerSection({ onError }: Props) {
         showIcon
         icon={<SafetyCertificateOutlined />}
         style={{ marginTop: 12 }}
-        message="Sensitive request headers/body are not persisted in browser storage."
+        title="Sensitive request headers/body are not persisted in browser storage."
       />
 
       {response ? (
@@ -595,7 +595,7 @@ export function ApiExplorerSection({ onError }: Props) {
           autoComplete="off"
         />
         {routesError ? (
-          <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={routesError} />
+          <Alert type="warning" showIcon style={{ marginBottom: 12 }} title={routesError} />
         ) : null}
         {filteredRoutes.length === 0 ? (
           <Empty description="No routes match" />
@@ -611,7 +611,7 @@ export function ApiExplorerSection({ onError }: Props) {
                   </Button>,
                 ]}
               >
-                <Space direction="vertical" size={2} style={{ width: "100%" }}>
+                <Space orientation="vertical" size={2} style={{ width: "100%" }}>
                   <Space size={6} wrap>
                     {route.methods.map((m) => (
                       <Tag key={`${route.path}-${m}`} color={METHOD_COLOR[m as HttpMethod] || "default"}>

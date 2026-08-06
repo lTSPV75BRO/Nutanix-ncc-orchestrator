@@ -89,7 +89,7 @@ export function SessionIdleGuard({ onLogout, onStayLoggedIn }: SessionIdleGuardP
       onCancel={onLogout}
       confirmLoading={staying}
       closable={false}
-      maskClosable={false}
+      mask={{ closable: false }}
       keyboard={false}
     >
       Your session has been inactive. For your security, you will be signed out in{" "}

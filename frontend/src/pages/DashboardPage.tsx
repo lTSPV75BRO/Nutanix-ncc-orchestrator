@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
@@ -322,7 +322,7 @@ export function DashboardPage() {
     // (lower CLS). Numbers render as "—" placeholders that swap to real values
     // in place without resizing their rows.
     return (
-      <Space direction="vertical" size={16} style={{ width: "100%" }}>
+      <Space orientation="vertical" size={16} style={{ width: "100%" }}>
         {/* HERO STRIP */}
         <Card className="page-card dashboard-hero">
           <Row gutter={[12, 12]} align="middle">
@@ -405,7 +405,7 @@ export function DashboardPage() {
   }
 
   return (
-    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+    <Space orientation="vertical" size={16} style={{ width: "100%" }}>
       {/* HERO STRIP */}
       <Card className="page-card dashboard-hero">
         <Row gutter={[12, 12]} align="middle">
@@ -497,7 +497,7 @@ export function DashboardPage() {
         <Alert
           type="error"
           showIcon
-          message="Regression detected vs previous run"
+          title="Regression detected vs previous run"
           description={`FAIL count increased by ${deltaFail}. Check Insights → Run-over-Run Comparison for details.`}
           action={
             <Link to="/insights">
@@ -513,7 +513,7 @@ export function DashboardPage() {
         <Alert
           type="warning"
           showIcon
-          message={`${policyViolations.length} policy gate violation${policyViolations.length > 1 ? "s" : ""}`}
+          title={`${policyViolations.length} policy gate violation${policyViolations.length > 1 ? "s" : ""}`}
           description={
             <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
               {policyViolations.slice(0, 5).map((v, i) => (
@@ -529,7 +529,7 @@ export function DashboardPage() {
         <Alert
           type="info"
           showIcon
-          message="Loading complete dataset in background"
+          title="Loading complete dataset in background"
           description="A fast preview is shown first. Full report rows are being fetched."
         />
       )}
@@ -647,7 +647,7 @@ export function DashboardPage() {
                   image={<PlayCircleOutlined spin style={{ fontSize: 48, color: "var(--ant-color-primary, #1677ff)" }} />}
                   imageStyle={{ height: 56 }}
                   description={
-                    <Space direction="vertical" size={4} align="center">
+                    <Space orientation="vertical" size={4} align="center">
                       <Typography.Text strong>Run in progress · alerts will populate when it completes</Typography.Text>
                       <Typography.Text type="secondary">
                         Started {startedAt}. The dashboard will refresh automatically — there's nothing to do.
@@ -669,7 +669,7 @@ export function DashboardPage() {
                   image={<CheckCircleOutlined style={{ fontSize: 48, color: "#22c55e" }} />}
                   imageStyle={{ height: 56 }}
                   description={
-                    <Space direction="vertical" size={4} align="center">
+                    <Space orientation="vertical" size={4} align="center">
                       <Typography.Text strong>All clusters clean — no alerts in the latest run</Typography.Text>
                       <Typography.Text type="secondary">
                         {hasPriorRun
@@ -697,7 +697,7 @@ export function DashboardPage() {
             return (
               <Empty
                 description={
-                  <Space direction="vertical" size={4} align="center">
+                  <Space orientation="vertical" size={4} align="center">
                     <Typography.Text strong>
                       {hasPriorRun ? "Latest run produced no alerts data" : "No alerts yet"}
                     </Typography.Text>

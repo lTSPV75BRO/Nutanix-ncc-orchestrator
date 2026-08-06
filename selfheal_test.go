@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -167,9 +168,10 @@ func TestCheckStalePIDs(t *testing.T) {
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// A pid that is essentially never alive.
+	// The test process is alive but is not an API server: this also exercises
+	// PID reuse without depending on a platform-specific maximum PID.
 	deadPID := filepath.Join(runDir, "v2-api.pid")
-	if err := os.WriteFile(deadPID, []byte("999999\n"), 0o644); err != nil {
+	if err := os.WriteFile(deadPID, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -189,6 +191,37 @@ func TestCheckStalePIDs(t *testing.T) {
 	}
 	if fileExists(deadPID) {
 		t.Error("--fix should have removed the stale pid file")
+	}
+
+	holder := exec.Command("sleep", "30")
+	if err := holder.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Process.Kill(); _, _ = holder.Process.Wait() }()
+	reusedPID := filepath.Join(runDir, "v2-api.pid")
+	if err := os.WriteFile(reusedPID, []byte(fmt.Sprintf("%d\n", holder.Process.Pid)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res = checkStalePIDs(&healContext{InstallDir: dir, Fix: false})
+	if res.Status != healWarn || !fileExists(reusedPID) {
+		t.Fatalf("live unrelated PID should be reported stale without mutation: status=%s exists=%v", res.Status, fileExists(reusedPID))
+	}
+	res = checkStalePIDs(&healContext{InstallDir: dir, Fix: true})
+	if res.Status != healOK || !res.Fixed || fileExists(reusedPID) {
+		t.Fatalf("live unrelated PID should be cleaned with --fix: status=%s fixed=%v exists=%v", res.Status, res.Fixed, fileExists(reusedPID))
+	}
+
+	invalidPID := filepath.Join(runDir, "v2-ui.pid")
+	if err := os.WriteFile(invalidPID, []byte("not-a-pid\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res = checkStalePIDs(&healContext{InstallDir: dir, Fix: false})
+	if res.Status != healWarn || !fileExists(invalidPID) {
+		t.Fatalf("invalid PID should be reported without mutation: status=%s exists=%v", res.Status, fileExists(invalidPID))
+	}
+	res = checkStalePIDs(&healContext{InstallDir: dir, Fix: true})
+	if res.Status != healOK || !res.Fixed || fileExists(invalidPID) {
+		t.Fatalf("invalid PID should be removed with --fix: status=%s fixed=%v exists=%v", res.Status, res.Fixed, fileExists(invalidPID))
 	}
 }
 
@@ -225,31 +258,31 @@ func TestEvaluateRuntimeDrift(t *testing.T) {
 		wantCanFix                         bool
 	}{
 		{
-			name:          "service not installed",
+			name:           "service not installed",
 			servicePresent: false, serviceActive: false,
 			supervisorAlive: false, apiAlive: true, uiAlive: true,
 			wantStatus: healOK, wantCanFix: false,
 		},
 		{
-			name:          "service healthy",
+			name:           "service healthy",
 			servicePresent: true, serviceActive: true,
 			supervisorAlive: true, apiAlive: true, uiAlive: true,
 			wantStatus: healOK, wantCanFix: false,
 		},
 		{
-			name:          "drift with detached children",
+			name:           "drift with detached children",
 			servicePresent: true, serviceActive: true,
 			supervisorAlive: false, apiAlive: true, uiAlive: true,
 			wantStatus: healWarn, wantCanFix: true,
 		},
 		{
-			name:          "service active but supervisor gone",
+			name:           "service active but supervisor gone",
 			servicePresent: true, serviceActive: true,
 			supervisorAlive: false, apiAlive: false, uiAlive: false,
 			wantStatus: healFail, wantCanFix: true,
 		},
 		{
-			name:          "service stopped detached running",
+			name:           "service stopped detached running",
 			servicePresent: true, serviceActive: false,
 			supervisorAlive: false, apiAlive: true, uiAlive: false,
 			wantStatus: healWarn, wantCanFix: true,

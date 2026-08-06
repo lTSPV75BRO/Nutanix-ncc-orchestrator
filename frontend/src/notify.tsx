@@ -32,7 +32,10 @@ export function setNotificationApi(api: NotificationInstance | null): void {
 }
 
 function open(variant: ToastVariant, input: ToastInput): void {
-  const payload = typeof input === "string" ? { message: input } : input;
+  const payload =
+    typeof input === "string"
+      ? { title: input }
+      : (({ message, ...rest }) => ({ title: message, ...rest }))(input);
   const args = {
     ...COMMON_OPTS,
     ...payload,

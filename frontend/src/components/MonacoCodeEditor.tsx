@@ -13,8 +13,8 @@ import type { CodeEditorProps } from "./CodeEditor";
 // the JSON worker (used for our artifact JSON viewer); the YAML "language"
 // is just basic-languages tokenization which runs on the main thread and
 // doesn't need a worker.
-import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
-import JsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
+import EditorWorker from "monaco-editor/editor/editor.worker.js?worker";
+import JsonWorker from "monaco-editor/language/json/json.worker.js?worker";
 
 // `@monaco-editor/react` defaults to fetching its loader script from
 // https://cdn.jsdelivr.net, which is blocked by our strict CSP and wouldn't
