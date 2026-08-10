@@ -90,4 +90,3 @@ func TestPostRestoreSelfHealIncludesSchedulerNormalizationNote(t *testing.T) {
 		t.Fatalf("expected normalization note, got: %v", notes)
 	}
 }
-

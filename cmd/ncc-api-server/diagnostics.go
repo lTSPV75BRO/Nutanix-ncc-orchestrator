@@ -237,8 +237,8 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, req
 			"count":        len(fixedIDs),
 		},
 		"guardrails": map[string]interface{}{
-			"no_disruptive":             noDisruptive,
-			"active_run_guard":          activeRunGuard,
+			"no_disruptive":              noDisruptive,
+			"active_run_guard":           activeRunGuard,
 			"allow_disruptive_requested": req.Fix && req.AllowDisruptive,
 			"allow_disruptive_applied":   req.Fix && req.AllowDisruptive && !noDisruptive,
 		},
