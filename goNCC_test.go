@@ -67,6 +67,22 @@ func TestEnsureV2StartSlotsAvailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = holder.Process.Kill(); _, _ = holder.Process.Wait() }()
+	// On Linux, processIdentityMatches reads /proc/<pid>/cmdline; immediately
+	// after Start() returns, some CI runners haven't yet populated it (a
+	// transient empty read is treated conservatively as "unknown, assume
+	// match" to avoid mistaking a real running instance for a stale one).
+	// Poll until the child's real identity is visible so this test isn't
+	// flaky on process-startup timing.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if known, matches := processIdentityMatches(holder.Process.Pid, "ncc-api-server"); known && !matches {
+			break
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	reused := filepath.Join(runDir, "v2-api.pid")
 	if err := os.WriteFile(reused, []byte(fmt.Sprintf("%d\n", holder.Process.Pid)), 0o600); err != nil {
 		t.Fatal(err)
