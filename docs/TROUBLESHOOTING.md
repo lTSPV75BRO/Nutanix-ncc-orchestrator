@@ -60,6 +60,24 @@ See **`outputfiles/run-summary.json`** for `exit_code` and per-cluster `clusters
 - **Cause (older builds):** Restore overwrote the host's `.ncc-v2-start.json` networking with the backup's values, dropping the local `ui-allowed-origins`.
 - **Fix:** The current `v2-restore` **preserves host-specific networking/TLS** (CORS origins, advertise/backend URLs, listen addresses, `--ui-insecure-http`, UI TLS paths). Upgrade and re-restore, or add the current origin under Settings/`--cors-origin` and restart.
 
+## `v2-install-service` / systemd fails with `status=203/EXEC` on SELinux hosts
+
+- **Symptom:** `systemctl status ncc-orchestrator.service` shows `Active: activating (auto-restart) ... (Result: exit-code)` and `Main PID ... (code=exited, status=203/EXEC)`. `journalctl -u ncc-orchestrator.service` shows `Unable to locate executable '<path>/bin/ncc-orchestrator': Permission denied` even though the file exists, is `0755`, and **running it directly in an interactive shell works fine**. `ausearch -m avc` shows no denials, so it looks like there's no SELinux problem at all.
+- **Cause:** On RHEL/Rocky/CentOS/Fedora with SELinux **enforcing**, a binary under a home directory (e.g. `/root/<install-dir>/bin/...`) is labeled `admin_home_t` by policy default. `systemd` execs services in the `init_t` domain, which the targeted policy denies from executing `admin_home_t` content — but that specific denial is `dontaudited`, so it never shows up in the audit log even though it's actually being blocked. Interactive shells run unconfined (`unconfined_t`), which is why running the same binary by hand "just works" and makes this look like a permissions/corruption bug instead of SELinux. Builds before the fix below only ran `restorecon` during `v2-install-service`, which resets a file to its *policy default* context (`admin_home_t` here) rather than forcing it — so it didn't help.
+- **Fix (upgrade):** Builds containing the `v2-install-service` SELinux fix relabel the whole `<install-dir>/bin/` directory to `bin_t` with `chcon` and persist it with `semanage fcontext` (so a later `restorecon`/`fixfiles` won't silently revert it) whenever the service is (re)installed. Re-run `ncc-orchestrator v2-install-service --install-dir <dir> --now` after upgrading to pick up the relabel, or just restart the service if it's already installed with a fixed binary in `bin/`.
+- **Immediate workaround (any build, no reboot/reinstall required):**
+
+  ```bash
+  chcon -R -t bin_t /path/to/install-dir/bin
+  # Optional but recommended: persist across future relabels/security scans
+  semanage fcontext -a -t bin_t '/path/to/install-dir/bin(/.*)?'
+  restorecon -R -v /path/to/install-dir/bin
+  systemctl restart ncc-orchestrator.service   # or your --service-name
+  ```
+
+  Confirm with `ls -laZ /path/to/install-dir/bin` (expect `..._t:bin_t:s0` on each binary) and `systemctl status ncc-orchestrator.service` (expect `Active: active (running)`).
+- **Not affected:** Hosts with SELinux `disabled`/`permissive` (`getenforce`), and non-systemd platforms (Windows Task Scheduler, macOS launchd).
+
 ## Scheduled runs (cron / systemd timer)
 
 ### A scheduled run produces no output / the dashboard data goes stale
