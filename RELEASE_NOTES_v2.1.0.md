@@ -1,6 +1,6 @@
 # NCC Orchestrator — v2.1.0
 
-**Release date:** 2026-06-18
+**Release date:** 2026-08-10
 **Type:** Authentication + autonomic-operations + maintenance/hardening release. Recommended for everyone on v2.0.x.
 
 > **Affiliation:** This is an independent open-source project. It is **not** affiliated with or endorsed by Nutanix, Inc. NCC and Nutanix are trademarks of their respective owners. The project is MIT licensed; see [`LICENSE`](LICENSE).
@@ -199,6 +199,14 @@ Behavior is identical — the orchestrator's existing test suite is unchanged an
 
 ---
 
+## Bug fixes
+
+- **Alerts table could lose data after a failed or merged concurrent run.** A cluster whose NCC run failed outright (network/auth/timeout) used to vanish from the Alerts table with no indication anything went wrong; it now shows a visible `FAIL` **"NCC run failed"** row with the real error as its detail. Separately, the code that reads/patches the `AGG` JSON embedded in `index.html` — including on every concurrent/scoped-run merge — used a regex that stopped at the *first* semicolon it found, which is common inside real NCC check details (e.g. "Description: X; Recommendation: Y"). That could silently truncate the report on read and, worse, **permanently corrupt the canonical report on merge** by splicing new data together with a dangling fragment of the old. It's replaced with a proper JSON-aware scanner. Finally, the startup permission probe that verifies the report directory is writable could leave a 0-byte `index.html` stub behind when a run aborted early (e.g. cluster discovery failing outright); the artifact-merge step used to read that stub as "this run legitimately found zero alerts" and wipe the entire canonical report. The probe no longer touches real report content, and merges now treat an empty artifact as "nothing to merge" rather than "replace with nothing."
+- **Dashboard hero counts could disagree with the Alerts table for RBAC-restricted users.** The FAIL/ERR/WARN/INFO hero cards were computed before cluster-group access filtering was applied, so a viewer confined to a subset of clusters could see hero totals that didn't match what they could actually see in the table below. Both now derive from the same filtered, single source of truth.
+- **Self-heal false positives from an unanchored install path and a process-identity mix-up.** The periodic self-heal timer now anchors its `doctor` checks to the api-server's actual install directory (`--install-dir`), and the runtime-drift detector's process-identity check now compares against the real binary name instead of the raw search pattern, closing a path where a legitimately-running process could be misclassified as drifted.
+
+---
+
 ## Upgrade
 
 From any v2.0.x install:
@@ -226,10 +234,13 @@ kubectl -n ncc-orchestrator-v2 get secret ncc-v2-users \
 
 Headless/automation users are unaffected: static `NCC_API_TOKEN` keeps full admin access. To run without interactive login, omit `--users-db` / `--users-db-secret`.
 
+**Coming from v2.0.2 specifically** (the last release before RBAC and backup/restore existed at all): see [`docs/MIGRATION_v2.0.2_TO_v2.1.0.md`](docs/MIGRATION_v2.0.2_TO_v2.1.0.md) for a full behavior-change rundown and what was verified for this upgrade path.
+
 ---
 
 ## Tests
 
+- The bug-fix pass above adds `TestBuildClusterChecksSnapshotFromResultFailure`, `TestReadInlineJSONVarSemicolonInValue`, `TestReplaceInlineJSONVarSemicolonInOldValue`, `TestMergeIndexHTMLEmptyPerRunFileDoesNotWipeCanonical`, `TestMergeClusterArrayArtifactEmptyPerRunFileDoesNotWipeCanonical`, and new `TestCheckOutputPermissions` subtests, and was additionally verified by simulating a v2.0.2 → v2.1.0 upgrade end-to-end (old-format `config.yaml`, no pre-existing user database or backup-schedule state) — see [`docs/MIGRATION_v2.0.2_TO_v2.1.0.md`](docs/MIGRATION_v2.0.2_TO_v2.1.0.md).
 - Full Go suite passes with `-race -count=1`, including the authentication/RBAC suite (`TestRouteMinRole`, `TestParseRole`, `TestUserStoreVerify`, `TestHandleLoginAndSessionRole`, `TestWithAuthCookieSessionRBACAndCSRF`, `TestStaticAdminTokenExemptFromCSRF`, `TestBootstrapAdminAndPersistence`, `TestForcedPasswordChangeFlow`, `TestUserCRUDAndLastAdminProtection`, `TestSSOConfigPersistAndCertGeneration`, `TestK8sSecretBackendRoundTrip`, and the end-to-end `TestEndToEndFirstRunAdminFlow`), the new `TestVerifyDownloadedAsset` and `TestWriteWindowsUpdateSwapHelper`, the viewer-token RBAC test (`TestWithAuthRBACViewer`), the mock-Prism integration tests (`TestIntegration_DiscoverClustersV4_MockPC`, `TestIntegration_DiscoverClustersV3_MockPC`, `TestIntegration_TaskPoll_MockPrism`), the security/observability unit tests (`TestSignWebhookBody`, `TestWriteDeadLetter`, `TestNormalizePin`, `TestPinVerifier`, `TestRenderRunSummaryMetrics`), and the two fuzz targets with checked-in corpora (`FuzzParseSummary`, `FuzzRedactJSONPasswordValue`), plus the `internal/` package suites (`internal/model`, `internal/promtext`, `internal/retryutil`, `internal/notify`, `internal/nccparse`, `internal/httpclient`, `internal/trace`). The autonomic-operations work adds the supervisor/boot-service suite (`TestSuperviseRestartsAndStops`, `TestSuperviseWaitTokenGatesStart`, `TestSuperviseRefusesSecondInstance`, `TestSystemdSupervisorUnit`), the systemd-scheduler suite (`TestCronToOnCalendar`, `TestOnCalendarFromSchedule`, `TestSanitizeSystemdName`, `TestBuildSystemdScheduleUnits`, `TestNormalizeScheduleTypeSystemd`), the self-heal/`doctor --fix` suite (`TestRunSelfHealFixesRoutingAndDirs`, `TestCheckSecretsPermsChmod`, `TestVerifyBackupArchiveAndRetention`, `TestClassifyRunOutput`, `TestMitigationArgsForClass`, `TestDecideRunHeal`, `TestCheckStalePIDs`, `TestCheckLogSizes`, `TestCertExpiryStatus`, `TestResolveUserStoreBackendFailsFastOnEncryptedWithoutKey`), and the user-store envelope-encryption suite (`TestSealOpenRoundTrip`, `TestOpenWithWrongKeyFails`, `TestNoncesAreUnique`, `TestDecodeMasterKeyFormats`, `TestEncryptingBackendMigratesPlaintext`).
 - `go vet`, `gofmt -l`, `govulncheck`, and frontend `npm audit` all clean. CI now enforces these plus `golangci-lint` and a Trivy scan on every push and PR.
 
