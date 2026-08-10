@@ -48,9 +48,14 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        # v6 + "latest" was resolving to a stale cached v1.64.8 binary (built
+        # with go1.24), which can't analyze a go.mod targeting a newer Go
+        # toolchain (golangci-lint doesn't support forward Go versions). v9
+        # pinned to a current v2.x release actually supports the toolchain
+        # this project targets.
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.12
           args: --timeout=5m
 
   govulncheck:
@@ -73,7 +78,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Trivy vulnerability + config scan
-        uses: aquasecurity/trivy-action@0.24.0
+        # Pinned to the v0.35.0 commit SHA rather than a floating tag: in
+        # March 2026 an attacker force-pushed malicious code onto 75 of 76
+        # existing trivy-action version tags (a supply-chain compromise);
+        # v0.35.0 was the sole tag left untouched. Pinning by SHA means this
+        # reference can't be silently repointed by any future tag rewrite.
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
           scan-type: fs
           scan-ref: .
