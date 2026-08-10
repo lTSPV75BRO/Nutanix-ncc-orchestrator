@@ -50,7 +50,20 @@ func TestExternalActiveRunsLiveAndStale(t *testing.T) {
 	s := &apiServer{repoRoot: dir, outputDir: dir, configPath: filepath.Join(dir, "config.yaml")}
 
 	// A live, unmanaged run (our own pid) should surface as a scheduled entry.
+	// Stub processCmdline so the check is deterministic across platforms/CI:
+	// the real cmdline here is the `go test` binary's own, which never looks
+	// like an orchestrator run and would otherwise fail closed on Linux (see
+	// processLooksLikeOrchestrator), unlike on macOS where /proc doesn't
+	// exist and the non-Linux fallback masked this.
 	live := os.Getpid()
+	orig := processCmdline
+	processCmdline = func(p int) string {
+		if p == live {
+			return "/usr/local/bin/ncc-orchestrator run --config /etc/ncc/config.yaml"
+		}
+		return orig(p)
+	}
+	defer func() { processCmdline = orig }()
 	writeHeartbeat(t, dir, live, "scheduled")
 	// A dead pid should be skipped and its stale file removed.
 	deadPath := writeHeartbeat(t, dir, 2147483646, "scheduled")
