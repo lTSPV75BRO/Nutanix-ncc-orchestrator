@@ -15,7 +15,19 @@ export VERSION=2.1.0 STREAM=Release BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ') 
 if [ -n "${NCC_RELEASE_PUBKEY:-}" ]; then export LDFLAGS="${LDFLAGS} -X main.releaseSigningPublicKeyB64=${NCC_RELEASE_PUBKEY}"; fi
 
 # 1) Preflight: module integrity, vet, unit tests, frontend typecheck. Fails fast.
-go mod download && go mod verify && go vet ./... && go test ./cmd/... ./... -count=1 -short 2>&1 | tail -20 && (cd frontend && npm ci && npx tsc --noEmit -p tsconfig.json) && echo "PREFLIGHT_OK"
+# Split into separate statements (each ending in "|| exit 1") instead of one
+# long && chain: bash's `set -e` does NOT abort on a failing command unless
+# it's the last one in an AND-list, so a failing `go test` here used to be
+# silently swallowed and the script would plow ahead into steps 4-6 with a
+# frontend whose node_modules was never installed (regression caught when a
+# v2.1.0 release run failed opaquely with "cannot stat dist/frontend-dist").
+# tail -200 (was -20) so a real failure's test name/diff survives truncation.
+go mod download || exit 1
+go mod verify || exit 1
+go vet ./... || exit 1
+go test ./cmd/... ./... -count=1 -short 2>&1 | tail -200 || exit 1
+(cd frontend && npm ci && npx tsc --noEmit -p tsconfig.json) || exit 1
+echo "PREFLIGHT_OK"
 
 # 2) Build CLI/API/UI binaries for linux/darwin/windows × amd64/arm64.
 # -buildvcs=true (default) embeds git revision+dirty status accessible via debug.ReadBuildInfo().
@@ -104,7 +116,8 @@ fi
 LOCAL_OS=$(go env GOOS); LOCAL_ARCH=$(go env GOARCH); LOCAL_EXT=""; if [ "$LOCAL_OS" = "windows" ]; then LOCAL_EXT=".exe"; fi; for n in ncc-orchestrator ncc-api-server ncc-ui-server; do ln -sf "${n}-${LOCAL_OS}-${LOCAL_ARCH}${LOCAL_EXT}" "dist/${n}${LOCAL_EXT}"; done
 
 # 4) Build frontend bundle into dist/frontend-dist (deterministic).
-(cd frontend && npm run build) && rm -rf dist/frontend-dist && cp -R frontend/dist dist/frontend-dist
+(cd frontend && npm run build) || exit 1
+rm -rf dist/frontend-dist && cp -R frontend/dist dist/frontend-dist
 
 # 5) Copy example_config.yaml and docs into dist/ so the release zips include them.
 cp example_config.yaml dist/ 2>/dev/null; [ -f RELEASE_NOTES_v${VERSION}.md ] && cp "RELEASE_NOTES_v${VERSION}.md" dist/ || true
