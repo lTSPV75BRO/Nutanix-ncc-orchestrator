@@ -4796,18 +4796,124 @@ func loadReportMeta(outDir string) map[string]interface{} {
 	return out
 }
 
+// inlineVarPrefixPattern builds a regex matching only the `const NAME =` /
+// `var NAME =` declaration prefix (never the value itself). The value's end
+// is located separately via findJSONValueEnd, which is JSON-aware — see its
+// doc comment for why a naive `(.*?);` regex is unsafe here.
+func inlineVarPrefixPattern(varName string) *regexp.Regexp {
+	return regexp.MustCompile(`(?:const|var)\s+` + regexp.QuoteMeta(varName) + `\s*=\s*`)
+}
+
+// findJSONValueEnd scans the JSON value that starts at (or after) index i in
+// data — skipping leading whitespace — and returns the index just past its
+// final character.
+//
+// This exists because index.html embeds report data as
+// `const AGG = <json>;` and a naive `(.*?);` regex (the previous approach)
+// stops at the FIRST semicolon it finds, including one that appears inside a
+// quoted JSON string. NCC check titles/details very commonly contain literal
+// semicolons (e.g. "Description: X; Recommendation: Y"), so that regex would
+// silently truncate the embedded JSON mid-string, corrupting the value on
+// read AND, more seriously, on write: replaceInlineJSONVar used the same
+// pattern to locate the OLD value to overwrite during report merges, so a
+// semicolon anywhere in the previous AGG payload could cause a merge to
+// splice fresh JSON together with a dangling fragment of the old JSON,
+// permanently corrupting the canonical index.html until the next full
+// (non-merged) report write. This scanner instead tracks bracket depth and
+// string-escaping so it finds the true end of the array/object/string/
+// primitive, regardless of any semicolons embedded inside it.
+func findJSONValueEnd(data []byte, i int) (int, bool) {
+	n := len(data)
+	for i < n {
+		switch data[i] {
+		case ' ', '\t', '\n', '\r':
+			i++
+			continue
+		}
+		break
+	}
+	if i >= n {
+		return 0, false
+	}
+	start := i
+	switch data[i] {
+	case '[', '{':
+		depth := 0
+		inString := false
+		escaped := false
+		for ; i < n; i++ {
+			c := data[i]
+			if inString {
+				switch {
+				case escaped:
+					escaped = false
+				case c == '\\':
+					escaped = true
+				case c == '"':
+					inString = false
+				}
+				continue
+			}
+			switch c {
+			case '"':
+				inString = true
+			case '[', '{':
+				depth++
+			case ']', '}':
+				depth--
+				if depth == 0 {
+					return i + 1, true
+				}
+			}
+		}
+		return 0, false
+	case '"':
+		escaped := false
+		for i++; i < n; i++ {
+			c := data[i]
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				return i + 1, true
+			}
+		}
+		return 0, false
+	default:
+		// A bare primitive (number/true/false/null): ends at the next
+		// statement-terminating character.
+		for ; i < n; i++ {
+			switch data[i] {
+			case ';', ',', '\n', '\r', ' ', '\t':
+				if i == start {
+					return 0, false
+				}
+				return i, true
+			}
+		}
+		if i == start {
+			return 0, false
+		}
+		return i, true
+	}
+}
+
 func readInlineJSONVar(path, varName string, fallback interface{}) interface{} {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return fallback
 	}
-	pattern := `(?s)(?:const|var)\s+` + regexp.QuoteMeta(varName) + `\s*=\s*(.*?);`
-	re := regexp.MustCompile(pattern)
-	m := re.FindSubmatch(b)
-	if len(m) < 2 {
+	loc := inlineVarPrefixPattern(varName).FindIndex(b)
+	if loc == nil {
 		return fallback
 	}
-	raw := strings.TrimSpace(string(m[1]))
+	end, ok := findJSONValueEnd(b, loc[1])
+	if !ok {
+		return fallback
+	}
+	raw := strings.TrimSpace(string(b[loc[1]:end]))
 	if raw == "" {
 		return fallback
 	}

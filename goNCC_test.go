@@ -3057,6 +3057,49 @@ func TestCheckOutputPermissions(t *testing.T) {
 			t.Errorf("checkOutputPermissions: %v", err)
 		}
 	})
+
+	t.Run("does not leave a stub index.html behind", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := &Config{
+			LogFile:           filepath.Join(dir, "ncc-runner.log"),
+			OutputDirLogs:     filepath.Join(dir, "nccfiles"),
+			OutputDirFiltered: filepath.Join(dir, "outputfiles"),
+		}
+		if err := checkOutputPermissions(cfg); err != nil {
+			t.Fatalf("checkOutputPermissions: %v", err)
+		}
+		indexPath := filepath.Join(cfg.OutputDirFiltered, "index.html")
+		if _, err := os.Stat(indexPath); !os.IsNotExist(err) {
+			t.Errorf("expected probe to remove freshly-created index.html, stat err = %v", err)
+		}
+	})
+
+	t.Run("does not truncate a pre-existing index.html", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := &Config{
+			LogFile:           filepath.Join(dir, "ncc-runner.log"),
+			OutputDirLogs:     filepath.Join(dir, "nccfiles"),
+			OutputDirFiltered: filepath.Join(dir, "outputfiles"),
+		}
+		if err := os.MkdirAll(cfg.OutputDirFiltered, 0755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		indexPath := filepath.Join(cfg.OutputDirFiltered, "index.html")
+		const realReport = "<html>const AGG = [{\"cluster\":\"1.2.3.4\"}];</html>"
+		if err := os.WriteFile(indexPath, []byte(realReport), 0644); err != nil {
+			t.Fatalf("seed index.html: %v", err)
+		}
+		if err := checkOutputPermissions(cfg); err != nil {
+			t.Fatalf("checkOutputPermissions: %v", err)
+		}
+		got, err := os.ReadFile(indexPath)
+		if err != nil {
+			t.Fatalf("read index.html after probe: %v", err)
+		}
+		if string(got) != realReport {
+			t.Errorf("probe altered existing index.html content: got %q, want %q", got, realReport)
+		}
+	})
 }
 
 func TestMaskPassword(t *testing.T) {
@@ -3459,6 +3502,39 @@ func TestBuildRunClusterSummary(t *testing.T) {
 	s2 := buildRunClusterSummary(fail)
 	if s2.OK || s2.Error != "boom" {
 		t.Fatalf("unexpected failed summary: %+v", s2)
+	}
+}
+
+// TestBuildClusterChecksSnapshotFromResultFailure guards against a cluster
+// that fails to run (r.Err != nil) silently vanishing from the checks
+// snapshot with an empty Checks list. A failed cluster must still surface a
+// real, visible FAIL entry so downstream consumers (the dashboard Alerts
+// table, drilldown diffs, etc.) show the failure instead of nothing.
+func TestBuildClusterChecksSnapshotFromResultFailure(t *testing.T) {
+	fail := ClusterResult{Cluster: "10.0.0.2", Err: fmt.Errorf("connection refused")}
+	snap := buildClusterChecksSnapshotFromResult(fail)
+	if snap.Address != "10.0.0.2" {
+		t.Fatalf("unexpected address: %+v", snap)
+	}
+	if len(snap.Checks) != 1 {
+		t.Fatalf("want a synthetic failure check, got %+v", snap.Checks)
+	}
+	if snap.Checks[0].CheckName != clusterRunFailedCheckName || snap.Checks[0].Severity != "FAIL" {
+		t.Fatalf("unexpected synthetic check: %+v", snap.Checks[0])
+	}
+	if snap.FailCount != 1 || snap.ChecksTotal != 1 || snap.HealthScore != 0 {
+		t.Fatalf("unexpected counts: %+v", snap)
+	}
+
+	ok := ClusterResult{
+		Cluster: "10.0.0.1",
+		Blocks: []ParsedBlock{
+			{Severity: "FAIL", CheckName: "c1"},
+		},
+	}
+	okSnap := buildClusterChecksSnapshotFromResult(ok)
+	if len(okSnap.Checks) != 1 || okSnap.Checks[0].CheckName != "c1" {
+		t.Fatalf("successful cluster snapshot regressed: %+v", okSnap)
 	}
 }
 

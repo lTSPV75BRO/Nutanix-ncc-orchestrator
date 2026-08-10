@@ -1985,27 +1985,38 @@ func bindConfig() (Config, error) {
 // checkOutputPermissions verifies the process can create/open files for write in the log path
 // and in each output directory. Returns a clear error on first failure so permission issues
 // are reported early instead of during normal writes.
+//
+// The probe never truncates an existing target file (it opens with O_APPEND
+// only) and, when it has to create the file itself, removes it again once the
+// check passes. This matters most for "aggregated index.html": that path is
+// also the run's real report output, and in the scoped/per-run execution
+// model used by the API server it lives in a fresh, run-specific directory.
+// If a run aborts early (e.g. cluster discovery failure) after this probe
+// ran but before the real report was ever written, a truncated 0-byte
+// index.html left behind here would later be read by mergeIndexHTML (see
+// cmd/ncc-api-server/runmanager.go) as "this run legitimately produced zero
+// rows", wiping every owned cluster's entries from the canonical aggregated
+// report. Cleaning up the probe artifact (and never truncating real content)
+// avoids that.
 func checkOutputPermissions(cfg *Config) error {
 	probeName := ".ncc-writecheck"
 	indexHTML := filepath.Join(cfg.OutputDirFiltered, "index.html")
 	checks := []struct {
-		label    string
-		path     string
-		remove   bool
-		truncate bool // open with O_TRUNC so we can overwrite existing file (e.g. NFS stale ownership)
+		label  string
+		path   string
+		remove bool
 	}{
-		{"log file", cfg.LogFile, false, false},
-		{"output dir (raw logs)", filepath.Join(cfg.OutputDirLogs, probeName), true, false},
-		{"output dir (filtered)", filepath.Join(cfg.OutputDirFiltered, probeName), true, false},
-		{"aggregated index.html", indexHTML, false, true},
+		{"log file", cfg.LogFile, false},
+		{"output dir (raw logs)", filepath.Join(cfg.OutputDirLogs, probeName), true},
+		{"output dir (filtered)", filepath.Join(cfg.OutputDirFiltered, probeName), true},
+		{"aggregated index.html", indexHTML, true},
 	}
 	if cfg.PromEnabled {
 		checks = append(checks, struct {
-			label    string
-			path     string
-			remove   bool
-			truncate bool
-		}{"prom dir", filepath.Join(cfg.PromDir, probeName), true, false})
+			label  string
+			path   string
+			remove bool
+		}{"prom dir", filepath.Join(cfg.PromDir, probeName), true})
 	}
 	for _, c := range checks {
 		dir := filepath.Dir(c.path)
@@ -2014,18 +2025,18 @@ func checkOutputPermissions(cfg *Config) error {
 				return fmt.Errorf("cannot create directory %s: %w", dir, err)
 			}
 		}
-		flags := os.O_CREATE | os.O_WRONLY | os.O_APPEND
-		if c.truncate {
-			flags = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+		existedBefore := false
+		if _, statErr := os.Stat(c.path); statErr == nil {
+			existedBefore = true
 		}
-		f, err := os.OpenFile(c.path, flags, 0644)
+		f, err := os.OpenFile(c.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
 			return fmt.Errorf("cannot open/create file for write (%s): %w", c.label, err)
 		}
 		if err := f.Close(); err != nil {
 			return fmt.Errorf("close probe file %s: %w", c.path, err)
 		}
-		if c.remove {
+		if c.remove && !existedBefore {
 			_ = os.Remove(c.path)
 		}
 	}
@@ -2888,9 +2899,26 @@ func buildChecksSnapshot(results []ClusterResult) ChecksSnapshotJSON {
 	return snap
 }
 
+// clusterRunFailedCheckName is the synthetic check title used to surface a
+// cluster's connection/run failure as a real, visible alert row (severity
+// FAIL) instead of leaving the cluster's entry with no checks at all. Without
+// this, a cluster that fails to run simply vanishes from the Alerts table
+// (and from any downstream consumer that iterates a cluster's checks) with no
+// indication anything went wrong, and previously-known-good rows for that
+// cluster can be silently dropped when concurrent/scoped runs merge into the
+// canonical report — a state that only self-heals once a new run succeeds.
+const clusterRunFailedCheckName = "NCC run failed"
+
 func buildClusterChecksSnapshotFromResult(r ClusterResult) ClusterChecksSnapshot {
 	cluster := ClusterChecksSnapshot{Address: r.Cluster}
 	if r.Err != nil {
+		cluster.Checks = []CheckSnapshotEntry{{
+			CheckName: clusterRunFailedCheckName,
+			Severity:  "FAIL",
+		}}
+		cluster.FailCount = 1
+		cluster.ChecksTotal = 1
+		cluster.HealthScore = 0
 		return cluster
 	}
 	counts := map[string]int{"FAIL": 0, "WARN": 0, "ERR": 0, "INFO": 0}
@@ -15845,6 +15873,15 @@ Run 'ncc-orchestrator --help' for a full list of options.
 				incrementFailureClassCount(failureCounts, r)
 				if r.Err != nil {
 					failed = append(failed, r.Cluster)
+					// Surface the failure as a real, visible FAIL row rather than
+					// letting the cluster silently disappear from the aggregated
+					// report (see clusterRunFailedCheckName doc comment).
+					agg = append(agg, AggBlock{
+						Cluster:  r.Cluster,
+						Severity: "FAIL",
+						Check:    clusterRunFailedCheckName,
+						Detail:   r.Err.Error(),
+					})
 					continue
 				}
 				if len(r.ExcludedByTitle) > 0 {

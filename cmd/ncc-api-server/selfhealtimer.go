@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -81,6 +82,15 @@ func (s *apiServer) runSelfHealOnceWithOptions(ctx context.Context, opts selfHea
 		return nil, fmt.Errorf("orchestrator binary path not configured")
 	}
 	args := []string{"doctor", "--json"}
+	// Anchor doctor checks to the same install root the API server is managing.
+	// Without this, doctor may resolve paths relative to a default stack root,
+	// which can point at a different run/backup directory and misclassify
+	// supervisor/runtime alignment.
+	if cfg := strings.TrimSpace(s.configPath); cfg != "" {
+		if absCfg := strings.TrimSpace(s.absPath(cfg)); absCfg != "" {
+			args = append(args, "--install-dir", filepath.Dir(absCfg))
+		}
+	}
 	if opts.Fix {
 		args = append(args, "--fix")
 	}

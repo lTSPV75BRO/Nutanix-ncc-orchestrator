@@ -363,6 +363,10 @@ func alivePIDByPattern(patterns ...string) (int, bool) {
 		if pattern == "" {
 			continue
 		}
+		identity := "unknown"
+		if fields := strings.Fields(pattern); len(fields) > 0 {
+			identity = filepath.Base(fields[0])
+		}
 		out, err := exec.Command("pgrep", "-f", pattern).Output()
 		if err != nil {
 			continue
@@ -374,7 +378,6 @@ func alivePIDByPattern(patterns ...string) (int, bool) {
 			if err != nil || pid <= 0 {
 				continue
 			}
-			identity := filepath.Base(pattern)
 			known, matches := processIdentityMatches(pid, identity)
 			if processIsAlive(pid) && (!known || matches) && pid > best {
 				best = pid

@@ -32,7 +32,7 @@ import {
   SearchOutlined,
   WarningOutlined,
 } from "@ant-design/icons";
-import type { RunActiveData } from "../api/types";
+import type { RunActiveData, MeData } from "../api/types";
 import { api } from "../api/client";
 import { notify, notifyError } from "../notify";
 import { ClusterTable } from "../features/report/ClusterTable";
@@ -84,6 +84,14 @@ export function DashboardPage() {
   const [selectedClusters, setSelectedClusters] = useLocalStorageState<string[]>("dashboard.selectedClusters", []);
   const [loadFullReport, setLoadFullReport] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
+  const [tableSummary, setTableSummary] = useState<{
+    total: number;
+    fail: number;
+    err: number;
+    warn: number;
+    info: number;
+    unknown: number;
+  } | null>(null);
 
   useEffect(() => {
     const q = (searchParams.get("q") || "").trim();
@@ -144,6 +152,11 @@ export function DashboardPage() {
     refetchInterval: (q) => ((q.state.data as RunActiveData | undefined)?.active ? 3000 : 30000),
     staleTime: 1500,
   });
+  const meQuery = useQuery({
+    queryKey: ["auth", "me"],
+    queryFn: api.me,
+    staleTime: 30_000,
+  });
 
   useEffect(() => {
     if (!previewReport.data) return;
@@ -178,6 +191,18 @@ export function DashboardPage() {
     policy_violations: [],
   };
 
+  const me = meQuery.data as MeData | undefined;
+  const clusterRestricted = me?.cluster_access_unrestricted === false;
+  const allowedClustersSet = useMemo(
+    () =>
+      new Set(
+        (me?.allowed_clusters ?? [])
+          .map((c) => c.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    [me?.allowed_clusters],
+  );
+
   const clusterNameMap = useMemo(
     () =>
       buildClusterNameMap({
@@ -200,6 +225,37 @@ export function DashboardPage() {
     ],
   );
 
+  const isClusterAllowed = (rawCluster: unknown): boolean => {
+    if (!clusterRestricted) return true;
+    const raw = String(rawCluster ?? "").trim();
+    if (!raw) return false;
+    const resolved = resolveClusterName(raw, clusterNameMap).trim();
+    return allowedClustersSet.has(raw.toLowerCase()) || allowedClustersSet.has(resolved.toLowerCase());
+  };
+
+  const filteredAggRows = useMemo(
+    () =>
+      asArray(reportData.agg_rows)
+        .map((r) => asRecord(r))
+        .filter((r) => isClusterAllowed(displayClusterName(r))),
+    [reportData.agg_rows, clusterRestricted, allowedClustersSet, clusterNameMap],
+  );
+
+  const filteredChecksSnapshot = useMemo(() => {
+    if (!clusterRestricted) return reportData.checks_snapshot;
+    const snapshot = asRecord(reportData.checks_snapshot);
+    const legacyClusters = asArray(snapshot.clusters).map((c) => asRecord(c));
+    if (legacyClusters.length > 0) {
+      return {
+        ...snapshot,
+        clusters: legacyClusters.filter((c) => isClusterAllowed(displayClusterName(c))),
+      };
+    }
+    return asArray(reportData.checks_snapshot)
+      .map((r) => asRecord(r))
+      .filter((r) => isClusterAllowed(displayClusterName(r)));
+  }, [reportData.checks_snapshot, clusterRestricted, allowedClustersSet, clusterNameMap]);
+
   const clusterOptions = useMemo(() => {
     const names = new Set<string>();
     const add = (value: unknown) => {
@@ -210,13 +266,13 @@ export function DashboardPage() {
     asArray(asRecord(reportData.run_summary).clusters)
       .map((c) => asRecord(c))
       .forEach((c) => add(displayClusterName(c)));
-    asArray(reportData.agg_rows)
+    filteredAggRows
       .map((r) => asRecord(r))
       .forEach((r) => {
         add(displayClusterName(r));
         add(r.cluster);
       });
-    asArray(reportData.checks_snapshot)
+    asArray(filteredChecksSnapshot)
       .map((r) => asRecord(r))
       .forEach((r) => {
         add(displayClusterName(r));
@@ -225,7 +281,7 @@ export function DashboardPage() {
     return Array.from(names)
       .sort((a, b) => a.localeCompare(b))
       .map((name) => ({ label: name, value: name }));
-  }, [reportData.run_summary, reportData.agg_rows, reportData.checks_snapshot, clusterNameMap]);
+  }, [reportData.run_summary, filteredAggRows, filteredChecksSnapshot, clusterNameMap]);
 
   // ----------------- HERO METRICS -----------------
 
@@ -262,30 +318,30 @@ export function DashboardPage() {
   const policyViolations = Array.isArray(reportData.policy_violations) ? reportData.policy_violations : [];
 
   // Severity totals fall back to agg_rows if NCC summary missing (e.g. some setups).
-  const aggRows = asArray(reportData.agg_rows).map((r) => asRecord(r));
+  const aggRows = filteredAggRows.map((r) => asRecord(r));
   // checks_snapshot can be either:
   // 1) a flat row array, or
   // 2) legacy/object form {clusters:[{checks:[...]}]}.
   // Treat either shape as "has alert data" so we don't show a false empty state.
   const hasChecksSnapshotData = useMemo(() => {
-    const flat = asArray(reportData.checks_snapshot);
+    const flat = asArray(filteredChecksSnapshot);
     if (flat.length > 0) return true;
-    const snap = asRecord(reportData.checks_snapshot);
+    const snap = asRecord(filteredChecksSnapshot);
     const clusters = asArray(snap.clusters).map((c) => asRecord(c));
     for (const c of clusters) {
       if (asArray(c.checks).length > 0) return true;
     }
     return false;
-  }, [reportData.checks_snapshot]);
+  }, [filteredChecksSnapshot]);
   const aggFail = aggRows.filter((r) => String(r.severity || "").toUpperCase() === "FAIL").length;
   const aggErr = aggRows.filter((r) => String(r.severity || "").toUpperCase() === "ERR").length;
   const aggWarn = aggRows.filter((r) => String(r.severity || "").toUpperCase() === "WARN").length;
   const aggInfo = aggRows.filter((r) => String(r.severity || "").toUpperCase() === "INFO").length;
-  const sevTotals: Record<Severity, number> = {
-    FAIL: failCount || aggFail,
-    ERR: errorCount || aggErr,
-    WARN: warnCount || aggWarn,
-    INFO: infoCount || aggInfo,
+  const displayedSevTotals: Record<Severity, number> = {
+    FAIL: tableSummary?.fail ?? aggFail,
+    ERR: tableSummary?.err ?? aggErr,
+    WARN: tableSummary?.warn ?? aggWarn,
+    INFO: tableSummary?.info ?? aggInfo,
   };
 
   const refreshAll = async () => {
@@ -475,6 +531,15 @@ export function DashboardPage() {
         </Row>
 
         {/* Severity totals strip */}
+        {clusterRestricted ? (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginTop: 12 }}
+            title="Cluster-group view active"
+            description="Severity totals and alert table are scoped to your allowed cluster groups."
+          />
+        ) : null}
         <div className="severity-totals-row">
           {SEVERITY_META.map((sm) => (
             <div key={sm.key} className="severity-total-pill" style={{ borderColor: sm.color }}>
@@ -482,12 +547,12 @@ export function DashboardPage() {
               <Typography.Text strong style={{ color: sm.color }}>
                 {sm.label}
               </Typography.Text>
-              <Typography.Text strong>{sevTotals[sm.key].toLocaleString()}</Typography.Text>
+              <Typography.Text strong>{displayedSevTotals[sm.key].toLocaleString()}</Typography.Text>
             </div>
           ))}
           <div className="severity-total-pill subtle">
             <Typography.Text type="secondary">UNKNOWN</Typography.Text>
-            <Typography.Text strong>{unknownCount.toLocaleString()}</Typography.Text>
+            <Typography.Text strong>{(tableSummary?.unknown ?? unknownCount).toLocaleString()}</Typography.Text>
           </div>
         </div>
       </Card>
@@ -725,8 +790,8 @@ export function DashboardPage() {
         </Card>
       ) : (
         <ClusterTable
-          checksSnapshot={reportData.checks_snapshot}
-          aggRows={Array.isArray(reportData.agg_rows) ? reportData.agg_rows : []}
+          checksSnapshot={filteredChecksSnapshot}
+          aggRows={filteredAggRows}
           diffFlags={(reportData.diff_flags || {}) as Record<string, unknown>}
           flakyKeys={(reportData.flaky_keys || {}) as Record<string, unknown>}
           nccLogs={Array.isArray(reportData.ncc_logs) ? reportData.ncc_logs : []}
@@ -735,6 +800,7 @@ export function DashboardPage() {
           clusterNameMap={clusterNameMap}
           severityFilters={severityFilters}
           compareMode={compareMode}
+          onSummaryChange={setTableSummary}
         />
       )}
     </Space>

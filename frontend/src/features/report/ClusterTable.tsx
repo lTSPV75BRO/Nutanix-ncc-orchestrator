@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Button,
   Card,
@@ -32,6 +32,14 @@ type Props = {
   clusterNameMap: Record<string, string>;
   severityFilters: Array<"FAIL" | "WARN" | "ERR" | "INFO">;
   compareMode: "all" | "changed" | "flaky";
+  onSummaryChange?: (summary: {
+    total: number;
+    fail: number;
+    err: number;
+    warn: number;
+    info: number;
+    unknown: number;
+  }) => void;
 };
 
 type Severity = "FAIL" | "WARN" | "ERR" | "INFO" | "UNKNOWN";
@@ -133,6 +141,7 @@ export function ClusterTable({
   clusterNameMap,
   severityFilters,
   compareMode,
+  onSummaryChange,
 }: Props) {
   const [page, setPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useLocalStorageState("dashboard.alerts.rowsPerPage", 100);
@@ -407,6 +416,17 @@ export function ClusterTable({
   const warn = severityCounts.WARN || 0;
   const info = severityCounts.INFO || 0;
   const unknown = severityCounts.UNKNOWN || 0;
+
+  useEffect(() => {
+    onSummaryChange?.({
+      total: totalRows,
+      fail,
+      err,
+      warn,
+      info,
+      unknown,
+    });
+  }, [onSummaryChange, totalRows, fail, err, warn, info, unknown]);
 
   return (
     <Card className="alerts-card page-card">

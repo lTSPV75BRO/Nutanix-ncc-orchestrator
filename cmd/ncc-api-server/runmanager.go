@@ -11,7 +11,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -732,7 +731,7 @@ func mergeRunIntoCanonical(canonicalOut, perRunDir string, owned map[string]bool
 func mergeRunSummary(canonicalOut, perRunDir string, owned map[string]bool) {
 	perRunPath := filepath.Join(perRunDir, "run-summary.json")
 	perRunBytes, err := os.ReadFile(perRunPath)
-	if err != nil {
+	if err != nil || len(bytes.TrimSpace(perRunBytes)) == 0 {
 		return
 	}
 	canonicalPath := filepath.Join(canonicalOut, "run-summary.json")
@@ -834,7 +833,7 @@ func mergeRunSummary(canonicalOut, perRunDir string, owned map[string]bool) {
 // dropping the canonical entries for owned clusters and appending the run's.
 func mergeClusterArrayArtifact(canonicalPath, perRunPath string, owned map[string]bool) {
 	perRunBytes, err := os.ReadFile(perRunPath)
-	if err != nil {
+	if err != nil || len(bytes.TrimSpace(perRunBytes)) == 0 {
 		return
 	}
 	canonicalBytes, cErr := os.ReadFile(canonicalPath)
@@ -883,6 +882,15 @@ func mergeIndexHTML(canonicalOut, perRunDir string, owned map[string]bool) {
 	perRunPath := filepath.Join(perRunDir, "index.html")
 	perRunBytes, err := os.ReadFile(perRunPath)
 	if err != nil {
+		return
+	}
+	if len(bytes.TrimSpace(perRunBytes)) == 0 {
+		// A run that aborted before ever generating its real report (e.g. a
+		// permission probe left a 0-byte stub, or the process died early)
+		// produced no usable report at all. Treat it like a missing file
+		// rather than "this run legitimately produced zero rows", so we
+		// never wipe out the canonical report's owned-cluster entries with
+		// nothing to replace them.
 		return
 	}
 	if _, cErr := os.Stat(canonicalPath); cErr != nil {
@@ -1029,6 +1037,14 @@ func newestTimestamp(a, b interface{}) string {
 // replaceInlineJSONVar rewrites the value of an inline `var NAME = <json>;` (or
 // `const NAME = ...`) declaration in an HTML/JS file, preserving the rest of the
 // document byte-for-byte.
+//
+// The old value's span is located with findJSONValueEnd (JSON-aware bracket/
+// string scanning) rather than a `(.*?);` regex: the previous regex stopped
+// at the first literal semicolon it found, which is common inside check
+// detail/title text, so it could truncate the OLD value mid-string and splice
+// the new JSON together with a dangling fragment of the old one — corrupting
+// the canonical index.html on every merge that happened to contain a
+// semicolon anywhere in its embedded data.
 func replaceInlineJSONVar(path, varName string, value interface{}) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -1038,16 +1054,17 @@ func replaceInlineJSONVar(path, varName string, value interface{}) error {
 	if err != nil {
 		return err
 	}
-	pattern := `(?s)((?:const|var)\s+` + regexp.QuoteMeta(varName) + `\s*=\s*)(.*?)(;)`
-	re := regexp.MustCompile(pattern)
-	loc := re.FindSubmatchIndex(b)
+	loc := inlineVarPrefixPattern(varName).FindIndex(b)
 	if loc == nil {
 		return fmt.Errorf("inline var %s not found in %s", varName, path)
 	}
-	// loc[4]:loc[5] spans the old value (capture group 2).
+	end, ok := findJSONValueEnd(b, loc[1])
+	if !ok {
+		return fmt.Errorf("inline var %s: could not locate end of value in %s", varName, path)
+	}
 	var buf bytes.Buffer
-	buf.Write(b[:loc[4]])
+	buf.Write(b[:loc[1]])
 	buf.Write(nb)
-	buf.Write(b[loc[5]:])
+	buf.Write(b[end:])
 	return os.WriteFile(path, buf.Bytes(), 0o644)
 }
