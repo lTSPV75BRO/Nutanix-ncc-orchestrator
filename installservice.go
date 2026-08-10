@@ -133,11 +133,32 @@ func installSupervisorSystemd(o installServiceOptions) error {
 	if err := os.WriteFile(unitPath, []byte(unit), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", unitPath, err)
 	}
-	// SELinux: a binary under a home dir can carry a context systemd refuses to
-	// exec. Best-effort relabel to bin_t so the unit can start (no-op when
-	// SELinux is disabled or restorecon is absent).
+	// SELinux: a binary under a home dir (e.g. /root) is typically labeled
+	// admin_home_t by policy default. The init_t domain systemd execs units
+	// in is denied from executing admin_home_t content — and on a targeted
+	// policy that specific denial is usually "dontaudited", so it silently
+	// fails as EACCES (systemd reports "status=203/EXEC") without ever
+	// appearing in `ausearch -m avc`. `restorecon` alone does NOT fix this:
+	// it only resets a file to the policy's *default* context for its path,
+	// which for anything under a home directory is admin_home_t, not bin_t.
+	// Force bin_t directly with `chcon`, and best-effort persist the rule
+	// with `semanage fcontext` so a future relabel/restorecon (e.g. from a
+	// security scan or `fixfiles`) doesn't silently revert it. Relabel the
+	// whole bin/ dir, not just the orchestrator binary: the supervisor also
+	// execs ncc-api-server/ncc-ui-server as children from the same dir.
+	binDir := filepath.Dir(o.OrchestratorBin)
+	if _, err := exec.LookPath("chcon"); err == nil {
+		_, _ = exec.Command("chcon", "-R", "-t", "bin_t", binDir).CombinedOutput()
+	}
+	if _, err := exec.LookPath("semanage"); err == nil {
+		pattern := binDir + "(/.*)?"
+		if out, err := exec.Command("semanage", "fcontext", "-a", "-t", "bin_t", pattern).CombinedOutput(); err != nil {
+			_, _ = exec.Command("semanage", "fcontext", "-m", "-t", "bin_t", pattern).CombinedOutput()
+			_ = out
+		}
+	}
 	if _, err := exec.LookPath("restorecon"); err == nil {
-		_, _ = exec.Command("restorecon", "-v", o.OrchestratorBin).CombinedOutput()
+		_, _ = exec.Command("restorecon", "-R", "-v", binDir).CombinedOutput()
 	}
 	if out, err := exec.Command("systemctl", "daemon-reload").CombinedOutput(); err != nil {
 		return fmt.Errorf("systemctl daemon-reload: %v (%s)", err, strings.TrimSpace(string(out)))
