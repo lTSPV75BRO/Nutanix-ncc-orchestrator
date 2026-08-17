@@ -218,6 +218,20 @@ func (s *apiServer) postRestoreValidateAndSelfHeal(installDir string) []string {
 		notes = append(notes, "normalized scheduler state paths to install-root defaults")
 	}
 
+	// Normalize config.yaml's own output-dir-* values. The step above fixes the
+	// scheduler's *pointer* to config.yaml; it does nothing about output paths
+	// baked *inside* that file. v2-backup/v2-restore round-trip config.yaml
+	// byte-for-byte, so restoring a backup taken on a different install (e.g.
+	// /root/ncc-orchestrator) onto this one (e.g. /root/test) leaves
+	// output-dir-filtered/output-dir-logs/run-history-dir pointing at the OLD
+	// install's directory. Every subsequent scheduled run then succeeds
+	// silently against that stale directory — this api-server's dashboard
+	// reads <install-dir>/outputfiles and never sees the new reports, showing
+	// "Stale · Nd ago" even though the scheduler log records healthy runs.
+	if normalized := normalizeConfigOutputDirPaths(s.absPath(s.configPath), installDir); normalized {
+		notes = append(notes, "re-anchored config.yaml output-dir-filtered/output-dir-logs/run-history-dir to install-root")
+	}
+
 	// Validate and heal UI TLS file paths referenced by the persisted start state.
 	statePath := filepath.Join(installDir, startStateFileName)
 	raw, err := os.ReadFile(statePath)
@@ -344,6 +358,91 @@ func normalizeScheduleStatePaths(statePath, installDir string) bool {
 		return false
 	}
 	return os.WriteFile(statePath, updated, 0o600) == nil
+}
+
+// outputDirConfigKeys are the config.yaml keys naming a directory the
+// orchestrator writes NCC run output into. Distinct from (but mirrors) the
+// root package's outputDirKeyNames (selfheal.go), which heals *relative*
+// output-dir values; this heals a restore-specific failure mode: an
+// *absolute* value carried over from a different install root.
+var outputDirConfigKeys = []string{"output-dir-logs", "output-dir-filtered", "run-history-dir"}
+
+// normalizeConfigOutputDirPaths re-anchors config.yaml output-dir-* values
+// that still point at a DIFFERENT install root after a backup restore.
+//
+// Conservative like normalizeScheduleStatePaths: only rewrites a value that
+// is absolute, looks like another /root/<install>/... layout (the common
+// case for these installs), and isn't already under this install's
+// directory — a deliberately customized external path (NFS mount, /data/...,
+// etc.) is left untouched. run-history-dir keeps its "<parent>/runs" nesting
+// (the default derivation from output-dir-filtered) so a customized
+// output-dir-filtered name round-trips correctly.
+func normalizeConfigOutputDirPaths(configPath, installDir string) bool {
+	raw, err := os.ReadFile(configPath)
+	if err != nil || len(raw) == 0 {
+		return false
+	}
+	lines := strings.Split(string(raw), "\n")
+	changed := false
+	for i, line := range lines {
+		key, val, ok := parseConfigYAMLKV(line)
+		if !ok || !strInStrings(outputDirConfigKeys, key) || val == "" || !filepath.IsAbs(val) {
+			continue
+		}
+		if val == installDir || strings.HasPrefix(val, installDir+string(filepath.Separator)) {
+			continue
+		}
+		if !strings.HasPrefix(val, "/root/") {
+			continue
+		}
+		tail := filepath.Base(val)
+		if key == "run-history-dir" && strings.EqualFold(tail, "runs") {
+			tail = filepath.Join(filepath.Base(filepath.Dir(val)), tail)
+		}
+		newVal := filepath.Join(installDir, tail)
+		idx := strings.Index(line, val)
+		if idx < 0 {
+			continue
+		}
+		lines[i] = line[:idx] + newVal + line[idx+len(val):]
+		changed = true
+	}
+	if !changed {
+		return false
+	}
+	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0o600) == nil
+}
+
+// parseConfigYAMLKV parses a `key: value` line from config.yaml, stripping
+// surrounding quotes and a trailing inline comment. Returns ok=false for
+// blanks, comments, and list items.
+func parseConfigYAMLKV(line string) (key, val string, ok bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "-") {
+		return "", "", false
+	}
+	colon := strings.Index(trimmed, ":")
+	if colon < 0 {
+		return "", "", false
+	}
+	key = strings.TrimSpace(trimmed[:colon])
+	val = strings.TrimSpace(trimmed[colon+1:])
+	if !strings.HasPrefix(val, "\"") && !strings.HasPrefix(val, "'") {
+		if h := strings.Index(val, " #"); h >= 0 {
+			val = strings.TrimSpace(val[:h])
+		}
+	}
+	val = strings.Trim(val, "\"'")
+	return key, val, true
+}
+
+func strInStrings(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 func healMissingTLSPair(certPath, keyPath, installDir string) bool {

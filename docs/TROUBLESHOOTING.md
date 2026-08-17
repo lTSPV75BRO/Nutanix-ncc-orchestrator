@@ -86,6 +86,22 @@ See **`outputfiles/run-summary.json`** for `exit_code` and per-cluster `clusters
 - **Cause (older builds):** The generated runner executed the orchestrator without an **absolute** `--config` (and, for systemd, from a `WorkingDirectory` that is not the install dir), so `config.yaml` was never found and the run aborted before any output was written.
 - **Fix:** Upgrade to the current build and re-save the schedule from **Settings → Schedule** (or re-run `create-schedule` with an absolute `--config /path/to/config.yaml`). The api-server now anchors the schedule's config/log paths to absolute install-root paths, and the systemd backend refuses to install a config-less timer. Confirm in **Settings → Schedule** that **Config file** shows the expected absolute path (or inspect the generated runner under `logs/`).
 
+### Dashboard shows "Stale · Nd ago" even though the scheduler log shows healthy runs
+
+- **Symptom:** `tail logs/ncc-scheduler.log` (or `journalctl -u ncc-sched-<task>.service`) shows recent, successful runs — "report written for N successful cluster(s)" — but Settings/Dashboard still shows the last run as several days old, and new alerts never appear in the Alerts table.
+- **Cause:** `config.yaml`'s `output-dir-filtered`, `output-dir-logs`, and `run-history-dir` are **absolute** paths, and `v2-backup`/`v2-restore` round-trip `config.yaml` byte-for-byte. Restoring a backup that was taken on a **different install directory** (e.g. a backup from `/root/ncc-orchestrator` restored onto `/root/test`) leaves those three values pointing at the **old** install's directory. The scheduled run then keeps succeeding — it just silently writes every report to the old, unserved directory instead of the current install's `outputfiles/`, which is what the live api-server's dashboard actually reads. Builds before the fix below only re-anchored the *scheduler's pointer* to `config.yaml` on restore (fixing a related "Scheduler Health looks stale" issue), not the output-dir values recorded **inside** `config.yaml` itself.
+- **Confirm this is the cause:** compare `output-dir-filtered:` in `config.yaml` against the install directory (`dirname` of `config.yaml`) — if the run recorded in the scheduler log is fresh but `<install-dir>/outputfiles/run-summary.json`'s `timestamp` is not, check whether the path in `config.yaml` actually matches `<install-dir>/outputfiles`.
+- **Fix (upgrade):** Builds containing the restore self-heal fix re-anchor `output-dir-filtered`/`output-dir-logs`/`run-history-dir` to the current install directory automatically whenever a backup is restored (`POST /api/v1/settings/restore`), reported in the response's `self_heal_notes`.
+- **Immediate workaround (any build):** Edit `config.yaml` and point the three keys back at the current install directory, e.g.:
+
+  ```yaml
+  output-dir-filtered: /path/to/install-dir/outputfiles
+  output-dir-logs: /path/to/install-dir/nccfiles
+  run-history-dir: /path/to/install-dir/outputfiles/runs
+  ```
+
+  Then trigger a run (wait for the next scheduled tick, or run `ncc-orchestrator --config /path/to/install-dir/config.yaml` once by hand) so a fresh report lands in the directory the dashboard actually serves. Reports already written to the old directory aren't automatically moved — copy them over first if you want to keep that history, or just let the next run replace them.
+
 ### A systemd timer run is marked `failed` but reports were still written
 
 - **Symptom:** `systemctl status ncc-sched-<task>.service` shows `failed` / a non-zero `ExecMainStatus`, yet the dashboard shows fresh data.
