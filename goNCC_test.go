@@ -3524,10 +3524,13 @@ func TestBuildRunClusterSummary(t *testing.T) {
 // TestBuildClusterChecksSnapshotFromResultFailure guards against a cluster
 // that fails to run (r.Err != nil) silently vanishing from the checks
 // snapshot with an empty Checks list. A failed cluster must still surface a
-// real, visible FAIL entry so downstream consumers (the dashboard Alerts
-// table, drilldown diffs, etc.) show the failure instead of nothing.
+// real, visible entry so downstream consumers (the dashboard Alerts table,
+// drilldown diffs, etc.) show the failure instead of nothing — tagged
+// UNKNOWN (not FAIL, since NCC never actually ran any check against it) and
+// carrying an actionable remediation hint in Detail (no KB, since there's no
+// real NCC KB article for "couldn't reach the cluster").
 func TestBuildClusterChecksSnapshotFromResultFailure(t *testing.T) {
-	fail := ClusterResult{Cluster: "10.0.0.2", Err: fmt.Errorf("connection refused")}
+	fail := ClusterResult{Cluster: "10.0.0.2", Err: fmt.Errorf("dial tcp: connection refused"), ErrorClass: "network"}
 	snap := buildClusterChecksSnapshotFromResult(fail)
 	if snap.Address != "10.0.0.2" {
 		t.Fatalf("unexpected address: %+v", snap)
@@ -3535,10 +3538,16 @@ func TestBuildClusterChecksSnapshotFromResultFailure(t *testing.T) {
 	if len(snap.Checks) != 1 {
 		t.Fatalf("want a synthetic failure check, got %+v", snap.Checks)
 	}
-	if snap.Checks[0].CheckName != clusterRunFailedCheckName || snap.Checks[0].Severity != "FAIL" {
+	if snap.Checks[0].CheckName != clusterRunFailedCheckName || snap.Checks[0].Severity != "UNKNOWN" {
 		t.Fatalf("unexpected synthetic check: %+v", snap.Checks[0])
 	}
-	if snap.FailCount != 1 || snap.ChecksTotal != 1 || snap.HealthScore != 0 {
+	if !strings.Contains(snap.Checks[0].Detail, "dial tcp: connection refused") {
+		t.Fatalf("expected Detail to retain the real error, got %q", snap.Checks[0].Detail)
+	}
+	if !strings.Contains(snap.Checks[0].Detail, "routable") && !strings.Contains(snap.Checks[0].Detail, "firewall") {
+		t.Fatalf("expected Detail to carry a remediation hint, got %q", snap.Checks[0].Detail)
+	}
+	if snap.FailCount != 0 || snap.ChecksTotal != 1 || snap.HealthScore != 0 {
 		t.Fatalf("unexpected counts: %+v", snap)
 	}
 
@@ -3551,6 +3560,31 @@ func TestBuildClusterChecksSnapshotFromResultFailure(t *testing.T) {
 	okSnap := buildClusterChecksSnapshotFromResult(ok)
 	if len(okSnap.Checks) != 1 || okSnap.Checks[0].CheckName != "c1" {
 		t.Fatalf("successful cluster snapshot regressed: %+v", okSnap)
+	}
+}
+
+func TestRunFailedRemediation(t *testing.T) {
+	cases := []struct {
+		class string
+		want  string
+	}{
+		{"auth", "account lockout"},
+		{"timeout", "--request-timeout"},
+		{"network", "DNS/connection"},
+		{"rate_limit", "--max-parallel"},
+		{"api", "Prism services"},
+		{"parser", "output-dir-logs"},
+		{"unknown", "connectivity/credentials"},
+		{"", "connectivity/credentials"},
+	}
+	for _, c := range cases {
+		got := runFailedRemediation(fmt.Errorf("boom"), c.class)
+		if !strings.Contains(got, c.want) {
+			t.Errorf("class %q: remediation = %q, want it to contain %q", c.class, got, c.want)
+		}
+	}
+	if runFailedRemediation(nil, "network") != "" {
+		t.Error("expected empty remediation for a nil error")
 	}
 }
 

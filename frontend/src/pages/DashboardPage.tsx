@@ -50,10 +50,15 @@ import { ageMs, formatDateTime, formatTime, relativeTime } from "../utils/dateti
 type Severity = "FAIL" | "WARN" | "ERR" | "INFO";
 type CompareMode = "all" | "changed" | "flaky";
 
+// Ordered by severity priority: FAIL, then WARN (ahead of ERR — a warning on
+// a known check is generally more actionable than an unclassified runtime
+// error), then ERR, then INFO. Drives both display order (hero pills, filter
+// chips) and the Alerts table's severity sort (see severityRank in
+// ClusterTable.tsx, which must be kept in sync with this ordering).
 const SEVERITY_META: Array<{ key: Severity; color: string; label: string; icon: ReactNode }> = [
   { key: "FAIL", color: "#f43f5e", label: "FAIL", icon: <ExclamationCircleOutlined /> },
-  { key: "ERR", color: "#f97316", label: "ERR", icon: <CloseCircleOutlined /> },
   { key: "WARN", color: "#f59e0b", label: "WARN", icon: <WarningOutlined /> },
+  { key: "ERR", color: "#f97316", label: "ERR", icon: <CloseCircleOutlined /> },
   { key: "INFO", color: "#38bdf8", label: "INFO", icon: <InfoCircleOutlined /> },
 ];
 

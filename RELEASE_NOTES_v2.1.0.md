@@ -5,6 +5,12 @@
 
 > **Affiliation:** This is an independent open-source project. It is **not** affiliated with or endorsed by Nutanix, Inc. NCC and Nutanix are trademarks of their respective owners. The project is MIT licensed; see [`LICENSE`](LICENSE).
 
+> ## Known issue — please use [v2.1.1](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.1.1) (or newer) instead
+>
+> v2.1.0 has one known cosmetic issue, fixed in **v2.1.1**: a cluster whose NCC run fails outright (connection/auth/timeout) is surfaced in the Alerts table as a `FAIL`-severity `"NCC run failed"` row instead of `UNKNOWN`. This **does not lose or corrupt any data** — the row is visible, its Detail carries the real error — but it overstates the finding (conflating "NCC never ran" with "NCC found a real failing check") and can skew FAIL totals / regression "new failures" counts with connectivity noise. See [Known issues](#known-issue-ncc-run-failed-rows-tagged-fail-instead-of-unknown) below for the full description, workaround, and the v2.1.1 fix.
+>
+> **Upgrade in place:** `./ncc-orchestrator update` (or, from the UI, **Settings → Access → Software updates**).
+
 v2.1.0 brings real **multi-user authentication and RBAC** to the api-server — local password accounts, **SAML SSO**, and **LDAP / Active Directory** login, a first-run admin bootstrap with a forced password change, runtime user/SSO/LDAP management in the UI, self-service **personal access tokens**, **cluster groups** for membership-based access control, and a Kubernetes Secret-backed user store that is encrypted at rest. The browser-facing UI now serves **HTTPS by default** (auto-generated self-signed cert, HTTP→HTTPS redirect, in-app certificate management).
 
 On top of that, v2.1.0 makes the v2 stack **self-running and self-healing**: a single native **supervisor** (`v2-supervise`) with a cross-platform **boot-service installer** (`v2-install-service`) keeps the API + UI alive across crashes, hangs, *and* reboots; a **systemd-timer scheduler backend** joins cron; an active **`doctor --fix` self-heal subsystem** detects and remediates latent faults (config/storage/secrets/backups/runs/TLS/process/log) and is surfaced in a new **System Health** admin panel and a `/api/v1/health/diagnostics` endpoint; the api-server now serves **operational `/metrics`** with a starter **Grafana dashboard**; the file-backed user store gains optional **AES-256-GCM envelope encryption**; and the UI standardizes on **UTC-on-the-wire / browser-local** timestamps.
@@ -206,6 +212,24 @@ Behavior is identical — the orchestrator's existing test suite is unchanged an
 - **Self-heal false positives from an unanchored install path and a process-identity mix-up.** The periodic self-heal timer now anchors its `doctor` checks to the api-server's actual install directory (`--install-dir`), and the runtime-drift detector's process-identity check now compares against the real binary name instead of the raw search pattern, closing a path where a legitimately-running process could be misclassified as drifted.
 - **Restoring a backup taken on a different install directory left the dashboard permanently "Stale" even with a healthy scheduler.** `config.yaml`'s output-dir paths are absolute and restore round-trips the file byte-for-byte, so restoring a backup from one install path onto another left scheduled runs silently succeeding and writing fresh reports to the *old* directory — one the running dashboard never reads. The post-restore self-heal now also re-anchors `output-dir-filtered`/`output-dir-logs`/`run-history-dir` to the current install directory (reported in the restore response's `self_heal_notes`). **If you already hit this**, see [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md#dashboard-shows-stale--nd-ago-even-though-the-scheduler-log-shows-healthy-runs) for the manual fix (no reinstall required).
 - **`v2-install-service` failed on SELinux-enforcing hosts (RHEL/Rocky/CentOS/Fedora) with `systemctl` reporting `status=203/EXEC`.** A binary under a home directory is labeled `admin_home_t` by SELinux policy default, and systemd execs units in the `init_t` domain, which is denied from executing it — a denial that's silently `dontaudited` on a targeted policy, so nothing shows up in `ausearch -m avc` even though the exec is blocked. `restorecon` (the previous best-effort fix) only resets a file to its policy-*default* context, which for a home dir is `admin_home_t`, not `bin_t` — so it never actually fixed this. `v2-install-service` now forces `bin_t` on the whole `bin/` directory with `chcon` and persists the rule with `semanage fcontext`. **If you already hit this on an existing install**, see [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md#v2-install-service--systemd-fails-with-status203exec-on-selinux-hosts) for the one-line workaround — no reinstall required.
+
+---
+
+## Known issues (fixed in v2.1.1)
+
+### Known issue: "NCC run failed" rows tagged `FAIL` instead of `UNKNOWN`
+
+**Issue:** When a cluster's NCC run fails outright (connection refused, DNS failure, auth rejection, timeout, etc.), v2.1.0 synthesizes a visible `"NCC run failed"` row in the Alerts table so the cluster doesn't silently vanish from the report (see Bug fixes above). That row is tagged **`FAIL`** severity — the same severity used for a genuine failing NCC check.
+
+**Impact:** Cosmetic/classification only — **no data is lost, hidden, or corrupted**. However:
+- The row is indistinguishable from a real NCC finding, so "the cluster is unreachable" reads the same as "NCC found an actual problem on this cluster."
+- FAIL totals (Alerts table hero pill, dashboard hero cards) and the drilldown diff's `new_failures` / `resolved_failures` regression counters are inflated by connectivity/auth/timeout noise that has nothing to do with the cluster's actual NCC health.
+- The row's Detail carries only the raw error, with no specific remediation guidance.
+- Separately (unrelated root cause, same area of the UI): the Alerts table's severity priority ranks `ERR` ahead of `WARN` (`FAIL > ERR > WARN > INFO`) in the default sort and the dashboard's hero pills/filter-chip order, which does not match the intended priority of `WARN` ahead of `ERR`.
+
+**Workaround (no upgrade required):** Treat any `"NCC run failed"` row as informational rather than a real check failure when reviewing FAIL counts or regression deltas — cross-reference the cluster's `run-summary.json` entry (`ok: false`, `error`, `error_class`) or the Runs table, which already correctly reports these as connectivity/run failures rather than fabricated FAIL counts.
+
+**Permanent fix:** Shipped as **v2.1.1** — the synthetic `"NCC run failed"` row is now tagged **`UNKNOWN`** severity (a KB-less, informational classification already recognized by the Alerts table and dashboard), its Detail carries the real error plus an actionable, error-class-specific remediation hint (e.g. "reduce --max-parallel, increase --timeout" for a network/timeout failure), and the KB column is intentionally left empty (there's no real NCC KB article for "couldn't reach the cluster"). Severity priority is also corrected app-wide so `WARN` outranks `ERR`. See [`RELEASE_NOTES_v2.1.1.md`](RELEASE_NOTES_v2.1.1.md).
 
 ---
 

@@ -4,7 +4,21 @@ All notable changes to the Nutanix NCC Orchestrator are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-**Release checklist (for maintainers):** Ensure [`VERSION`](VERSION) matches the intended tag; default `main.Version` in code is `2.1.0` when not set via ldflags. Run `go vet ./...`, `go test -race ./...`, and `go build ./...` (and `go build ./cmd/ncc-mcp-server`). Confirm `k8s/` and `helm/` image tags match `VERSION`. Tag `v2.1.0` and create a GitHub release using the matching `RELEASE_NOTES_v*.md`; attach `ncc-orchestrator-*` standalone binaries, `ncc-v2-stack-*` archives, and `checksums.txt` only — **do not** attach standalone `ncc-api-server-*` / `ncc-ui-server-*` binaries (the v1.x self-updater would silently mis-select them; see [2.0.0] known-issue note below and the v2.0.1 selector fix).
+**Release checklist (for maintainers):** Ensure [`VERSION`](VERSION) matches the intended tag; default `main.Version` in code is `2.1.1` when not set via ldflags. Run `go vet ./...`, `go test -race ./...`, and `go build ./...` (and `go build ./cmd/ncc-mcp-server`). Confirm `k8s/` and `helm/` image tags match `VERSION`. Tag `v2.1.1` and create a GitHub release using the matching `RELEASE_NOTES_v*.md`; attach `ncc-orchestrator-*` standalone binaries, `ncc-v2-stack-*` archives, and `checksums.txt` only — **do not** attach standalone `ncc-api-server-*` / `ncc-ui-server-*` binaries (the v1.x self-updater would silently mis-select them; see [2.0.0] known-issue note below and the v2.0.1 selector fix).
+
+---
+
+## [2.1.1] - 2026-08-17
+
+Patch release fixing a severity-classification issue in v2.1.0's Alerts table: a cluster whose NCC run fails outright is no longer tagged `FAIL` (misrepresenting "NCC never ran" as "NCC found a real failing check"). No breaking changes; all v2.1.0 invocations keep working.
+
+### Fixed
+
+- **A cluster that failed to run showed as a `FAIL` alert, misrepresenting "NCC never ran" as "NCC found a real failing check".** The synthetic `"NCC run failed"` row (added in v2.1.0 to keep a connection/auth/timeout failure visible in the Alerts table instead of the cluster silently vanishing) was tagged `FAIL`, the same severity as a genuine failing NCC check, which conflated "no finding" with "a real finding" and inflated FAIL totals/regression counts (`new_failures`) with connectivity noise unrelated to actual cluster health. It's now tagged `UNKNOWN` (already a recognized severity in the Alerts table/dashboard), and its Detail carries the real error plus an actionable, error-class-specific remediation hint (`runFailedRemediation` — e.g. "reduce --max-parallel, increase --timeout" for a network/timeout failure, "verify the username/password" for auth) instead of just the raw error; there's no real NCC KB article for "couldn't reach the cluster", so the KB column intentionally stays empty. Separately, severity priority (Alerts table default sort, dashboard hero pills/filter chips) now ranks `WARN` ahead of `ERR` — previously `ERR` outranked `WARN`, which is corrected app-wide (`ClusterTable.tsx`'s `severityRank`, `DashboardPage.tsx`'s `SEVERITY_META`) to `FAIL > WARN > ERR > INFO > UNKNOWN`. See [`RELEASE_NOTES_v2.1.0.md`](RELEASE_NOTES_v2.1.0.md#known-issues-fixed-in-v211) for the known-issue writeup and workaround that applied to v2.1.0. Pinned by `TestBuildClusterChecksSnapshotFromResultFailure`, `TestRunFailedRemediation`.
+
+### Changed
+
+- Version bumped to `2.1.1` across `VERSION`, the orchestrator/api/ui/mcp `main.Version`/`serverVersion` defaults, the OpenAPI spec version, `binaryGO.txt`, `frontend/package.json`, the Helm chart, and the `k8s/` image tags.
 
 ---
 
@@ -142,6 +156,10 @@ Major **authentication + autonomic-operations** release on top of a maintenance/
 ### Remaining (tracked in IMPROVEMENTS.md)
 
 - **`goNCC.go` slimming (continued).** The extraction (`internal/model`, `internal/promtext`, `internal/retryutil`, `internal/notify`, `internal/nccparse`, `internal/httpclient`) is complete for v2.1.0. `goNCC.go` is still large; the remaining obvious candidate is the report renderers (`generateHTML` / `generateCSV` / `generateMarkdown` / `generateJSON` / `generateSARIF`), which are coupled to the combined-HTML and drilldown code and need a coordinated move. It can follow the same alias-backed, behavior-preserving pattern. See [`IMPROVEMENTS.md`](IMPROVEMENTS.md).
+
+### Known issues (fixed in v2.1.1)
+
+- **`"NCC run failed"` Alerts-table rows are tagged `FAIL` instead of `UNKNOWN`.** Cosmetic/classification only — no data is lost or corrupted — but a cluster that couldn't be reached at all (connection/auth/timeout error) reads identically to a genuine failing NCC check, and inflates FAIL totals / drilldown-diff `new_failures` counts with connectivity noise. Severity priority also ranks `ERR` ahead of `WARN` in the Alerts table's default sort and the dashboard's hero pills/filter chips, rather than `WARN` ahead of `ERR`. **Workaround:** cross-reference `run-summary.json`'s per-cluster `ok`/`error`/`error_class` (already correct) rather than trusting FAIL counts derived from the Alerts table when a `"NCC run failed"` row is present. **Fixed in v2.1.1** — see below. See [`RELEASE_NOTES_v2.1.0.md`](RELEASE_NOTES_v2.1.0.md#known-issues-fixed-in-v211) for full detail.
 
 ---
 

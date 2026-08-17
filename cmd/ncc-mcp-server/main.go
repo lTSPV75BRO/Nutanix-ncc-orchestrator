@@ -24,7 +24,7 @@ const serverName = "ncc-orchestrator"
 // serverVersion is the advertised MCP server version. It is overridable at build
 // time via -ldflags "-X main.serverVersion=<v>" (the release build stamps the
 // orchestrator version here) and otherwise defaults to the current release.
-var serverVersion = "2.1.0"
+var serverVersion = "2.1.1"
 
 // orchestratorBinaryName is the platform-specific orchestrator executable name.
 func orchestratorBinaryName() string {

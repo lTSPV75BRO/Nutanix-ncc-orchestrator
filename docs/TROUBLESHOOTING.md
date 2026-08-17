@@ -60,6 +60,16 @@ See **`outputfiles/run-summary.json`** for `exit_code` and per-cluster `clusters
 - **Cause (older builds):** Restore overwrote the host's `.ncc-v2-start.json` networking with the backup's values, dropping the local `ui-allowed-origins`.
 - **Fix:** The current `v2-restore` **preserves host-specific networking/TLS** (CORS origins, advertise/backend URLs, listen addresses, `--ui-insecure-http`, UI TLS paths). Upgrade and re-restore, or add the current origin under Settings/`--cors-origin` and restart.
 
+## Alerts table
+
+### `"NCC run failed"` rows show `FAIL` severity and inflate FAIL/regression counts (v2.1.0)
+
+- **Symptom:** A cluster that couldn't be reached at all (connection refused, DNS failure, auth rejection, timeout) shows up in the Alerts table as a `"NCC run failed"` row tagged **`FAIL`** — indistinguishable from a real failing NCC check — and the FAIL totals (Alerts hero pill, dashboard hero cards) and the drilldown diff's "new failures" count include it.
+- **Cause:** v2.1.0 introduced this synthetic row so a cluster whose run fails outright no longer silently vanishes from the report, but tagged it `FAIL` — the same severity as a genuine finding — which overstates "NCC never ran against this cluster" as "NCC found a real problem." No data is lost or corrupted; it's a classification issue only.
+- **Fix (upgrade):** v2.1.1 and later tag this row `UNKNOWN` instead, add an actionable remediation hint to its Detail (alongside the real error), and leave the KB column empty (there's no real KB article for a connectivity failure). Severity priority is also corrected so `WARN` outranks `ERR` in the Alerts table's default sort and the dashboard's hero pills/filter chips. Upgrade with `ncc-orchestrator update` (or **Settings → Access → Software updates** in the UI); the fix applies to runs going forward, it does not rewrite historical reports.
+- **Workaround (no upgrade required):** Cross-reference the cluster's entry in `run-summary.json` (`ok: false`, `error`, `error_class`) or the Runs table — both already correctly report these as connectivity/run failures rather than fabricated FAIL counts — instead of trusting Alerts-table FAIL totals when a `"NCC run failed"` row is present.
+- **Not affected:** Real NCC check findings (a genuine `FAIL`/`WARN`/`ERR`/`INFO` from NCC itself) are unaffected either way; this only concerns the synthetic row generated when the run against a cluster couldn't happen at all.
+
 ## `v2-install-service` / systemd fails with `status=203/EXEC` on SELinux hosts
 
 - **Symptom:** `systemctl status ncc-orchestrator.service` shows `Active: activating (auto-restart) ... (Result: exit-code)` and `Main PID ... (code=exited, status=203/EXEC)`. `journalctl -u ncc-orchestrator.service` shows `Unable to locate executable '<path>/bin/ncc-orchestrator': Permission denied` even though the file exists, is `0755`, and **running it directly in an interactive shell works fine**. `ausearch -m avc` shows no denials, so it looks like there's no SELinux problem at all.

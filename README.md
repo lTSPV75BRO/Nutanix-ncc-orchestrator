@@ -1,6 +1,6 @@
 # Nutanix NCC Orchestrator
 
-[![Version](https://img.shields.io/badge/version-2.1.0-blue)](RELEASE_NOTES_v2.1.0.md)
+[![Version](https://img.shields.io/badge/version-2.1.1-blue)](RELEASE_NOTES_v2.1.1.md)
 [![Go](https://img.shields.io/badge/go-1.26.4-00ADD8)](go.mod)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Status](https://img.shields.io/badge/release-GA-success)](docs/PRODUCTION_READINESS_v2.0.0.md)
@@ -52,10 +52,10 @@ Every release ships a self-contained `ncc-v2-stack-*` archive on the [Releases p
 
 ```bash
 # 1. Download for your platform (linux-amd64 shown here)
-curl -LO https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/v2.1.0/ncc-v2-stack-linux-amd64.tar.gz
+curl -LO https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/v2.1.1/ncc-v2-stack-linux-amd64.tar.gz
 
 # 2. Verify checksum (recommended)
-curl -LO https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/v2.1.0/checksums.txt
+curl -LO https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/v2.1.1/checksums.txt
 shasum -a 256 -c checksums.txt --ignore-missing | grep ncc-v2-stack-linux-amd64
 
 # 3. Extract
@@ -224,14 +224,14 @@ SHA-256 of the running executable. Cross-check against `checksums.txt`
 
 ```text
 $ ncc-orchestrator verify
-version:           2.1.0
+version:           2.1.1
 git_revision:      914c71d27fb1...
 executable_sha256: 23ee3cad876c...
 license:           MIT
 project_url:       https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator
 affiliation:       independent open-source project; not affiliated with or endorsed by Nutanix, Inc.
 verify:            compare executable_sha256 against checksums.txt at
-                   https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.1.0
+                   https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.1.1
 ```
 
 On Windows, the file Properties dialog also displays the project name
@@ -421,7 +421,7 @@ on stdout.
 The api-server now exposes a Prometheus-compatible `/metrics` endpoint:
 
 ```text
-ncc_build_info{version="2.1.0",stream="Release",go_version="go1.26.4",os="linux",arch="amd64"} 1
+ncc_build_info{version="2.1.1",stream="Release",go_version="go1.26.4",os="linux",arch="amd64"} 1
 ncc_process_uptime_seconds 3601.42
 ncc_run_active 0
 ncc_runs_triggered_total 42
@@ -720,10 +720,10 @@ Add the resulting binary in your MCP client (Cursor, Claude Desktop, etc.) — s
 
 ## Release status
 
-- **Current GA:** [`v2.1.0`](RELEASE_NOTES_v2.1.0.md). See [`RELEASE_NOTES_v2.0.0.md`](RELEASE_NOTES_v2.0.0.md), [`RELEASE_NOTES_v2.0.1.md`](RELEASE_NOTES_v2.0.1.md), [`RELEASE_NOTES_v2.0.2.md`](RELEASE_NOTES_v2.0.2.md), [`RELEASE_NOTES_v2.1.0.md`](RELEASE_NOTES_v2.1.0.md) for the cumulative change log.
+- **Current GA:** [`v2.1.1`](RELEASE_NOTES_v2.1.1.md). See [`RELEASE_NOTES_v2.0.0.md`](RELEASE_NOTES_v2.0.0.md), [`RELEASE_NOTES_v2.0.1.md`](RELEASE_NOTES_v2.0.1.md), [`RELEASE_NOTES_v2.0.2.md`](RELEASE_NOTES_v2.0.2.md), [`RELEASE_NOTES_v2.1.0.md`](RELEASE_NOTES_v2.1.0.md), [`RELEASE_NOTES_v2.1.1.md`](RELEASE_NOTES_v2.1.1.md) for the cumulative change log.
 - **Build provenance:** every binary embeds `Version`, `BuildDate`, `Stream`, `GoVersion`, and the git revision (via `-buildvcs=true`); inspect with `./ncc-orchestrator verify`. Releases additionally ship `release-attestation.json` (per-release manifest), CycloneDX SBOMs, and a SLSA build-provenance attestation produced by `.github/workflows/release.yml` (verify with `gh attestation verify`).
 - **Checksums:** `dist/checksums.txt` (or the `checksums.txt` attached to the GitHub release) — SHA-256, sorted, includes every binary, every stack archive, `example_config.yaml`, `release-attestation.json`, every `bom-*.cdx.json`, and the matching `RELEASE_NOTES_v*.md`.
-- **Docker:** `prajwalnutant/nutanix-ncc-orchestrator:2.1.0` (and `:latest`).
+- **Docker:** `prajwalnutant/nutanix-ncc-orchestrator:2.1.1` (and `:latest`).
 
 ---
 

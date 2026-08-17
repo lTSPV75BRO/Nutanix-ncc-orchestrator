@@ -2569,6 +2569,7 @@ type RunClusterSummary struct {
 type CheckSnapshotEntry struct {
 	CheckName string `json:"check_name"`
 	Severity  string `json:"severity"`
+	Detail    string `json:"detail,omitempty"`
 }
 
 type ClusterChecksSnapshot struct {
@@ -2900,13 +2901,20 @@ func buildChecksSnapshot(results []ClusterResult) ChecksSnapshotJSON {
 }
 
 // clusterRunFailedCheckName is the synthetic check title used to surface a
-// cluster's connection/run failure as a real, visible alert row (severity
-// FAIL) instead of leaving the cluster's entry with no checks at all. Without
-// this, a cluster that fails to run simply vanishes from the Alerts table
-// (and from any downstream consumer that iterates a cluster's checks) with no
-// indication anything went wrong, and previously-known-good rows for that
-// cluster can be silently dropped when concurrent/scoped runs merge into the
-// canonical report — a state that only self-heals once a new run succeeds.
+// cluster's connection/run failure as a real, visible alert row instead of
+// leaving the cluster's entry with no checks at all. Without this, a cluster
+// that fails to run simply vanishes from the Alerts table (and from any
+// downstream consumer that iterates a cluster's checks) with no indication
+// anything went wrong, and previously-known-good rows for that cluster can be
+// silently dropped when concurrent/scoped runs merge into the canonical
+// report — a state that only self-heals once a new run succeeds.
+//
+// Severity is UNKNOWN, not FAIL: the orchestrator couldn't even reach the
+// cluster to run any NCC checks, so it has no finding to report — FAIL would
+// misrepresent "we don't know this cluster's health" as "NCC found a real
+// failing check". There's no NCC KB for "the run itself didn't happen", so
+// the KB column stays empty; Detail instead carries an actionable remediation
+// hint (see runFailedRemediation) so the row is still useful without one.
 const clusterRunFailedCheckName = "NCC run failed"
 
 func buildClusterChecksSnapshotFromResult(r ClusterResult) ClusterChecksSnapshot {
@@ -2914,9 +2922,9 @@ func buildClusterChecksSnapshotFromResult(r ClusterResult) ClusterChecksSnapshot
 	if r.Err != nil {
 		cluster.Checks = []CheckSnapshotEntry{{
 			CheckName: clusterRunFailedCheckName,
-			Severity:  "FAIL",
+			Severity:  "UNKNOWN",
+			Detail:    r.Err.Error() + " — " + runFailedRemediation(r.Err, r.ErrorClass),
 		}}
-		cluster.FailCount = 1
 		cluster.ChecksTotal = 1
 		cluster.HealthScore = 0
 		return cluster
@@ -3468,6 +3476,40 @@ func classifyClusterError(err error) string {
 	default:
 		return "unknown"
 	}
+}
+
+// runFailedRemediation returns an actionable, single-line hint for the
+// synthetic clusterRunFailedCheckName alert's Detail field, based on the
+// cluster's classified error bucket (classifyClusterError). Deliberately
+// plain text with no URL — the Alerts table's KB column derives from a
+// portal.nutanix.com link in Detail, and there's no real NCC KB article for
+// "the run couldn't reach this cluster", so KB is left empty on purpose.
+func runFailedRemediation(err error, errorClass string) string {
+	if err == nil {
+		return ""
+	}
+	class := strings.TrimSpace(errorClass)
+	if class == "" {
+		class = classifyClusterError(err)
+	}
+	var hint string
+	switch class {
+	case "auth":
+		hint = "Verify the username/password (or secret:// source) and check for an account lockout in Prism. Try: ncc-orchestrator preflight-check --config <config.yaml>"
+	case "timeout":
+		hint = "The cluster didn't respond in time. Increase --timeout/--request-timeout, reduce --max-parallel, and verify routing to the cluster."
+	case "network":
+		hint = "Could not reach the cluster (DNS/connection failure). Verify the address resolves and is routable, and check firewall/VPN. Try: ncc-orchestrator discover-clusters --prism-central-url <pc-url>"
+	case "rate_limit":
+		hint = "The cluster is rate-limiting requests. Lower --max-parallel and increase --retry-max-attempts/--retry-base-delay."
+	case "api":
+		hint = "The Prism API rejected the request. Verify --ncc-api-version/--nutanix-v4-api-version and that Prism services are healthy."
+	case "parser":
+		hint = "NCC output could not be parsed. Inspect the raw log under output-dir-logs for an unexpected payload format."
+	default:
+		hint = "Investigate connectivity/credentials for this cluster, then re-run. Try: ncc-orchestrator preflight-check --config <config.yaml>"
+	}
+	return hint
 }
 
 func buildRunClusterSummary(r ClusterResult) RunClusterSummary {
@@ -7158,7 +7200,7 @@ var (
 func init() {
 	// Defaults
 	if Version == "" {
-		Version = "2.1.0"
+		Version = "2.1.1"
 	}
 	if BuildDate == "" {
 		BuildDate = "unknown"
@@ -15873,14 +15915,14 @@ Run 'ncc-orchestrator --help' for a full list of options.
 				incrementFailureClassCount(failureCounts, r)
 				if r.Err != nil {
 					failed = append(failed, r.Cluster)
-					// Surface the failure as a real, visible FAIL row rather than
-					// letting the cluster silently disappear from the aggregated
-					// report (see clusterRunFailedCheckName doc comment).
+					// Surface the failure as a real, visible UNKNOWN-severity row
+					// rather than letting the cluster silently disappear from the
+					// aggregated report (see clusterRunFailedCheckName doc comment).
 					agg = append(agg, AggBlock{
 						Cluster:  r.Cluster,
-						Severity: "FAIL",
+						Severity: "UNKNOWN",
 						Check:    clusterRunFailedCheckName,
-						Detail:   r.Err.Error(),
+						Detail:   r.Err.Error() + " — " + runFailedRemediation(r.Err, r.ErrorClass),
 					})
 					continue
 				}

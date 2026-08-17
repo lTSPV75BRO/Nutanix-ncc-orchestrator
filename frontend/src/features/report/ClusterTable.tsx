@@ -64,8 +64,8 @@ type RowRecord = {
 
 const SEVERITY_TAG_COLOR: Record<Severity, string> = {
   FAIL: "error",
-  ERR: "volcano",
   WARN: "warning",
+  ERR: "volcano",
   INFO: "processing",
   UNKNOWN: "default",
 };
@@ -271,7 +271,11 @@ export function ClusterTable({
     return counts;
   }, [rows]);
 
-  const severityRank: Record<Severity, number> = { FAIL: 5, ERR: 4, WARN: 3, INFO: 2, UNKNOWN: 1 };
+  // Priority order: FAIL, then WARN (ahead of ERR — a warning on a known
+  // check is generally more actionable than an unclassified runtime error),
+  // then ERR, then INFO, then UNKNOWN lowest. Keep in sync with
+  // DashboardPage's SEVERITY_META ordering.
+  const severityRank: Record<Severity, number> = { FAIL: 5, WARN: 4, ERR: 3, INFO: 2, UNKNOWN: 1 };
 
   const columns: ColumnsType<RowRecord> = [
     {
@@ -441,8 +445,8 @@ export function ClusterTable({
         </div>
         <Space size={[8, 8]} wrap className="alerts-summary-pills">
           <Tag color="error">FAIL {fail}</Tag>
-          <Tag color="volcano">ERR {err}</Tag>
           <Tag color="warning">WARN {warn}</Tag>
+          <Tag color="volcano">ERR {err}</Tag>
           <Tag color="processing">INFO {info}</Tag>
           {unknown > 0 ? (
             <Tag className="severity-pill severity-pill-unknown" color="default">

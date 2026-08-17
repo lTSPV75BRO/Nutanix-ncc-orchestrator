@@ -2,7 +2,7 @@
 
 The **NCC MCP server** exposes the Nutanix NCC Orchestrator to AI assistants (Cursor, Claude Desktop, etc.) via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). The AI can validate configs, run preflight checks, run NCC checks, discover clusters from Prism Central, read run summaries, and replay reports.
 
-Current server implementation version: **`2.1.0`** (overridable at build time via `-ldflags "-X main.serverVersion=<v>"`).
+Current server implementation version: **`2.1.1`** (overridable at build time via `-ldflags "-X main.serverVersion=<v>"`).
 
 Every tool advertises MCP **annotations** (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) and a human-readable title, so MCP hosts can present read-only tools differently from mutating/destructive ones (e.g. ask for confirmation before `delete_schedule`).
 
