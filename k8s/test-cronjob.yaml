@@ -1,0 +1,57 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ncc-v2-runner
+  namespace: ncc-orchestrator-v2
+spec:
+  schedule: "15 */4 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            fsGroup: 1000
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+          initContainers:
+            - name: setup-permissions
+              image: busybox:1.36
+              command: ["sh", "-c", "mkdir -p /data/logs /data/outputfiles/runs /data/nccfiles /data/auth && chmod -R 777 /data"]
+              securityContext:
+                runAsUser: 0
+                runAsNonRoot: false
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+          containers:
+            - name: ncc-orchestrator
+              image: docker.io/prajwalnutant/nutanix-ncc-orchestrator:2.1.1
+              workingDir: /data
+              command: ["/usr/local/bin/ncc-orchestrator"]
+              args: 
+                - "--config"
+                - "/config/config.yaml"
+                - "--log-file"
+                - "/data/logs/ncc-runner.log"
+                - "--output-dir-filtered"
+                - "/data/outputfiles"
+                - "--output-dir-logs"
+                - "/data/nccfiles"
+                - "--run-history"
+                - "--run-history-dir"
+                - "/data/outputfiles/runs"
+                - "--skip-preflight-check"
+              volumeMounts:
+                - name: config
+                  mountPath: /config
+                - name: data
+                  mountPath: /data
+          volumes:
+            - name: config
+              configMap:
+                name: ncc-v2-config
+            - name: data
+              persistentVolumeClaim:
+                claimName: ncc-v2-data

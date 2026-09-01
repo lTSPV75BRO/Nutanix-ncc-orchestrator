@@ -65,7 +65,7 @@ Environment/access prerequisites:
 ```bash
 git clone https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator.git
 cd Nutanix-ncc-orchestrator
-git checkout v2.0.0
+git checkout v2.1.1
 ```
 
 Sanity-check important paths:
@@ -286,7 +286,7 @@ Typical release maintainer steps:
 Use:
 
 - `CHANGELOG.md`
-- `RELEASE_NOTES_v2.0.0.md`
+- `RELEASE_NOTES_v2.1.1.md`
 - `docs/RELEASE_CHECKSUMS.md`
 
 ---

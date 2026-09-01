@@ -62,7 +62,7 @@ See **`outputfiles/run-summary.json`** for `exit_code` and per-cluster `clusters
 
 ## Alerts table
 
-### `"NCC run failed"` rows show `FAIL` severity and inflate FAIL/regression counts (v2.1.0)
+### Historical `"NCC run failed"` rows show `FAIL` severity (fixed in v2.1.1)
 
 - **Symptom:** A cluster that couldn't be reached at all (connection refused, DNS failure, auth rejection, timeout) shows up in the Alerts table as a `"NCC run failed"` row tagged **`FAIL`** — indistinguishable from a real failing NCC check — and the FAIL totals (Alerts hero pill, dashboard hero cards) and the drilldown diff's "new failures" count include it.
 - **Cause:** v2.1.0 introduced this synthetic row so a cluster whose run fails outright no longer silently vanishes from the report, but tagged it `FAIL` — the same severity as a genuine finding — which overstates "NCC never ran against this cluster" as "NCC found a real problem." No data is lost or corrupted; it's a classification issue only.

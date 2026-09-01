@@ -1,7 +1,7 @@
 # Production readiness – v1.0.0
 
 > Historical reference for the `v1.0.0` release.
-> For the current release train, use [docs/PRODUCTION_READINESS_v2.0.0.md](./PRODUCTION_READINESS_v2.0.0.md).
+> For the current release train, use [RELEASE_NOTES_v2.1.1.md](../RELEASE_NOTES_v2.1.1.md).
 
 Checklist and status for releasing **Nutanix NCC Orchestrator** v1.0.0 to production.
 

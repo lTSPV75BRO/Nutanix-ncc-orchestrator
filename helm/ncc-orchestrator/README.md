@@ -9,7 +9,7 @@ This Helm chart is currently **runner-only** (CronJob). For full v2 API/UI/front
 ```bash
 helm install ncc-orchestrator ./helm/ncc-orchestrator \
   --namespace ncc-orchestrator-v2 --create-namespace \
-  --set image.tag=2.0.0
+  --set image.tag=2.1.1
 ```
 
 Apply prerequisites first (namespace, config, secret, PVC, storage), or use **`kubectl apply -k k8s/`** with [`k8s/kustomization.yaml`](../../k8s/kustomization.yaml).

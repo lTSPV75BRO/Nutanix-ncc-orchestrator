@@ -1,6 +1,6 @@
 name: Release
 
-# Tag-driven release pipeline. Pushing a `v*` tag (e.g. v2.0.2) builds
+# Tag-driven release pipeline. Pushing a `v*` tag (e.g. v2.1.1) builds
 # every binary + every stack archive via binaryGO.txt, generates SBOMs
 # and a release-attestation.json, signs each artifact with a GitHub
 # Actions SLSA build-provenance attestation, and publishes the result

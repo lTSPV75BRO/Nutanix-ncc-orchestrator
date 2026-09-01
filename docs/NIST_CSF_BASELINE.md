@@ -1,4 +1,4 @@
-# NIST CSF Baseline (v2.1.0)
+# NIST CSF Baseline (v2.1.1)
 
 This document is the repository's first structured NIST Cybersecurity Framework
 (CSF 2.0) baseline. It maps currently implemented capabilities to CSF functions,

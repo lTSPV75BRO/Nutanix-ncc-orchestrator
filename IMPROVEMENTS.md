@@ -2,7 +2,7 @@
 
 A project-wide list of improvements and new features for the NCC Orchestrator: application, scripts, Kubernetes, CI/CD, and documentation. Use as a backlog; prioritize by impact and effort.
 
-For the latest completed milestone summary, see [docs/MILESTONE_v2.0.0.md](docs/MILESTONE_v2.0.0.md).
+For the latest completed release summary, see [RELEASE_NOTES_v2.1.1.md](RELEASE_NOTES_v2.1.1.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -346,4 +346,4 @@ These rows in the sections below are now **done** and kept only for history:
 
 ---
 
-*Last updated: 2026-06 (post v2.1.0 release prep). The first wave of the `goNCC.go` package extraction is complete (six `internal/` packages); the next wave (report renderers → `internal/report`) is the headline structural item — see "Top of backlog". Revisit as the project evolves.*
+*Last updated: 2026-09 (post v2.1.1 release). The first wave of the `goNCC.go` package extraction is complete (six `internal/` packages); the next wave (report renderers → `internal/report`) is the headline structural item — see "Top of backlog". Revisit as the project evolves.*

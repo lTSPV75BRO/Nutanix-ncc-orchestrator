@@ -9,7 +9,7 @@ For first-time setup and full local build instructions, start with:
 ## Branching and scope
 
 - Use topic branches: `feature/<name>` or `fix/<name>`.
-- For v2 stack work, target branch `v2.0.0` unless maintainers request otherwise.
+- For v2 stack work, target the current `main` branch unless maintainers request otherwise.
 - Keep changes focused: one feature/fix per PR whenever possible.
 
 ## Repository map
@@ -63,7 +63,7 @@ If your change affects behavior, flags, APIs, setup, operations, or security:
   - `docs/MIGRATION_v1_TO_v2.md`
   - `Prometheus.md` (if metrics/monitoring changed)
 - For v2 release-line changes, update:
-  - `RELEASE_NOTES_v2.0.0.md`
+  - `RELEASE_NOTES_v2.1.1.md`
   - `CHANGELOG.md`
 
 ## Testing expectations by area

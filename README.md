@@ -3,7 +3,7 @@
 [![Version](https://img.shields.io/badge/version-2.1.1-blue)](RELEASE_NOTES_v2.1.1.md)
 [![Go](https://img.shields.io/badge/go-1.26.4-00ADD8)](go.mod)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Status](https://img.shields.io/badge/release-GA-success)](docs/PRODUCTION_READINESS_v2.0.0.md)
+[![Status](https://img.shields.io/badge/release-GA-success)](RELEASE_NOTES_v2.1.1.md)
 
 > A production-ready stack for running Nutanix Cluster Check (NCC) across many clusters in parallel, aggregating results, and serving them through a hardened API and modern web UI.
 
@@ -96,7 +96,7 @@ cd ncc-v2-stack-linux-amd64/bin
 
 When binding the API to a loopback IP (e.g. `--api-listen 127.0.0.1:8081`), the orchestrator now preserves the IP for connection URLs (so `wait-ready` and the UI backend hit the right address family on macOS, where `localhost` resolves to `::1` first) and additionally adds `http://localhost:port` to the CORS allow-list so browsers can reach the UI under either name.
 
-Older releases (v2.0.0 / v2.0.1) require the explicit form below; it still works in v2.0.2:
+Older releases (v2.0.0 / v2.0.1) require the explicit form below; it still works in v2.1.1:
 
 ```bash
 ./bin/ncc-orchestrator-linux-amd64 v2-check \
@@ -355,7 +355,7 @@ curl -s -X POST http://localhost:8081/api/v1/runs/trigger \
 
 ## Operability: status, doctor, metrics, completions
 
-v2.0.2 ships an opinionated set of operator-experience subcommands that
+v2.1.1 ships an opinionated set of operator-experience subcommands that
 remove the need for ad-hoc `ps | grep` / `lsof` / `curl` invocations
 when something looks wrong.
 
@@ -617,7 +617,7 @@ below and the [`helm/`](helm/) chart.
 | Secrets               | `secret://NAME` refs with `env` or `file` provider; plaintext-in-config triggers a startup warning                     |
 | Vulnerability scans   | `govulncheck ./...` and `npm audit --omit=dev` clean (Go 1.26.4, DOMPurify ≥ 3.4.7 enforced); enforced in CI (`.github/workflows/ci.yml`) |
 
-Full release-gate checklist with evidence: [`docs/PRODUCTION_READINESS_v2.0.0.md`](docs/PRODUCTION_READINESS_v2.0.0.md).
+Release details and validation evidence: [`RELEASE_NOTES_v2.1.1.md`](RELEASE_NOTES_v2.1.1.md).
 
 ---
 
@@ -675,7 +675,7 @@ Raw NCC summaries land under `nccfiles/`. Runner JSON logs under `logs/ncc-runne
 | [`docs/MIGRATION_v2.0.2_TO_v2.1.0.md`](docs/MIGRATION_v2.0.2_TO_v2.1.0.md)            | Upgrading from v2.0.2 (pre-RBAC/pre-backup) to v2.1.0                 |
 | [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)                                  | TLS, Prism Central, API issues                                        |
 | [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md)                                            | Wire the orchestrator into AI tools via MCP                           |
-| [`docs/PRODUCTION_READINESS_v2.0.0.md`](docs/PRODUCTION_READINESS_v2.0.0.md)          | Release gate evidence and checklists                                  |
+| [`RELEASE_NOTES_v2.1.1.md`](RELEASE_NOTES_v2.1.1.md)                                  | Current release details, validation, and upgrade guidance              |
 | [`docs/NIST_CSF_BASELINE.md`](docs/NIST_CSF_BASELINE.md)                                | NIST CSF 2.0 control baseline, evidence map, and gap plan             |
 | [`docs/NIST_CSF_EVIDENCE_MANIFEST.json`](docs/NIST_CSF_EVIDENCE_MANIFEST.json)          | Machine-readable control-to-evidence mapping for compliance bundles    |
 | [`docs/RELEASE_CHECKSUMS.md`](docs/RELEASE_CHECKSUMS.md)                              | How `--update` verifies downloads                                     |

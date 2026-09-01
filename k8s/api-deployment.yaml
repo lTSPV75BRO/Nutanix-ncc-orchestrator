@@ -15,10 +15,6 @@ spec:
         app: ncc-orchestrator-v2
         component: api
     spec:
-      # Dedicated service account whose RBAC (see rbac.yaml) lets the
-      # api-server read/create/patch ONLY the ncc-v2-users Secret that backs
-      # the user database. The Secret is encrypted at rest by etcd when the
-      # cluster has an EncryptionConfiguration (see encryption-config.example.yaml).
       serviceAccountName: ncc-v2-api
       securityContext:
         fsGroup: 1000
@@ -30,7 +26,6 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: stage-orchestrator-binary
-          # Pull ncc-orchestrator from the runner image and share it with API container.
           image: docker.io/prajwalnutant/nutanix-ncc-orchestrator:2.1.1
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "cp /usr/local/bin/ncc-orchestrator /tools/ncc-orchestrator && chmod 0755 /tools/ncc-orchestrator"]
@@ -41,9 +36,19 @@ spec:
           volumeMounts:
             - name: tools
               mountPath: /tools
+
+        # Stages ConfigMap into writeable emptyDir volume
+        - name: stage-config
+          image: busybox:1.36
+          command: ["sh", "-c", "cp /config-cm/config.yaml /config-writeable/config.yaml"]
+          volumeMounts:
+            - name: config-cm-vol
+              mountPath: /config-cm
+            - name: config-writeable-vol
+              mountPath: /config-writeable
+
       containers:
         - name: api
-          # Replace with your v2 api image that contains ncc-api-server.
           image: docker.io/prajwalnutant/ncc-api-server:2.1.1
           imagePullPolicy: IfNotPresent
           args:
@@ -61,17 +66,14 @@ spec:
             - "/data/logs/ncc-runner.log"
             - "--orchestrator-bin"
             - "/tools/ncc-orchestrator"
+            - "--audit-log-path"
+            - "/data/logs/ncc-audit.log"
+            - "--notifications-state-path"
+            - "/data/logs/.ncc-api-notifications.json"
             - "--token-file-path"
             - "/data/auth/.ncc-api-token"
-            # User database stored in a Kubernetes Secret (encrypted at rest by
-            # etcd) instead of a file on the PVC. On first launch the api-server
-            # provisions an `admin` account with a random password and writes it
-            # to the same Secret under `initial-admin-password`. Retrieve it via:
-            #   kubectl -n ncc-orchestrator-v2 get secret ncc-v2-users \
-            #     -o jsonpath='{.data.initial-admin-password}' | base64 -d
-            # (also printed to `kubectl logs deploy/ncc-v2-api`). You must change
-            # it on first login; auth-mode auto-upgrades to hybrid so the
-            # NCC_API_TOKEN automation path keeps working.
+            - "--users-db"
+            - ""
             - "--users-db-secret"
             - "ncc-v2-users"
             - "--auth-mode"
@@ -120,9 +122,8 @@ spec:
             capabilities:
               drop: ["ALL"]
           volumeMounts:
-            - name: config
+            - name: config-writeable-vol
               mountPath: /config
-              readOnly: true
             - name: data
               mountPath: /data
             - name: tools
@@ -136,9 +137,11 @@ spec:
               cpu: "1"
               memory: "1Gi"
       volumes:
-        - name: config
+        - name: config-cm-vol
           configMap:
             name: ncc-v2-config
+        - name: config-writeable-vol
+          emptyDir: {}
         - name: data
           persistentVolumeClaim:
             claimName: ncc-v2-data

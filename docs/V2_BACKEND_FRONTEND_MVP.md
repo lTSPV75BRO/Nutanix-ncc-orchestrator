@@ -297,7 +297,7 @@ This writes:
 
 Optional flags for customized bootstrap:
 
-- `--version 2.0.0` to pin release version
+- `--version 2.1.1` to pin release version
 - `--install-dir /opt/ncc-v2` to install in custom location
 - `--api-listen :18081` and `--ui-listen :18080` for custom ports
 - `--orchestrator-bin /usr/local/bin/ncc-orchestrator` for explicit CLI binary path
