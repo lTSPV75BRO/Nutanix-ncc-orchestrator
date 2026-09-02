@@ -1,12 +1,26 @@
-# Run from repo root once per release. Edit VERSION/STREAM if needed.
-# Each line is independently re-runnable (no shared shell state required).
+# Run from repo root once per release. Override VERSION/STREAM when needed.
+# Example: VERSION=2.2.0 STREAM=Release bash binaryGO.txt
+set -euo pipefail
 if [ -n "${ZSH_VERSION:-}" ]; then setopt nonomatch; fi
+SKIP_TESTS="${SKIP_TESTS:-0}"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --skip-test|--skip-tests) SKIP_TESTS=1 ;;
+    --help|-h)
+      echo "Usage: $0 [--skip-tests]"
+      echo "       SKIP_TESTS=1 $0"
+      exit 0
+      ;;
+    *) echo "Unknown option: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
 
 # 0) Variables. Re-source this block (or copy/paste) before any subsequent step.
 # Note: git revision is picked up automatically by Go's build info (-buildvcs=true,
 # default), surfaced as `gitRevision` inside the binaries. We only thread the
 # `-dirty` suffix into Version so support tickets can spot uncommitted builds.
-export VERSION=2.2.0 STREAM=Release BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ') GO_VER=$(go version | awk '{print $3}') GIT_REVISION=$(git rev-parse HEAD 2>/dev/null || echo "unknown") GIT_DIRTY=$(git diff --quiet 2>/dev/null || echo "-dirty"); export LDFLAGS="-w -s -X main.Version=${VERSION}${GIT_DIRTY} -X main.GitRevision=${GIT_REVISION} -X main.BuildDate=${BUILD_DATE} -X main.Stream=${STREAM} -X main.GoVersion=${GO_VER}"; mkdir -p dist
+export VERSION="${VERSION:-$(tr -d '[:space:]' < VERSION)}" STREAM="${STREAM:-Release}" BUILD_DATE="${BUILD_DATE:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}" GO_VER="${GO_VER:-$(go version | awk '{print $3}')}" GIT_REVISION="${GIT_REVISION:-$(git rev-parse HEAD 2>/dev/null || echo "unknown")}" GIT_DIRTY="${GIT_DIRTY:-$(git diff --quiet 2>/dev/null || echo "-dirty")}"; export LDFLAGS="-w -s -X main.Version=${VERSION}${GIT_DIRTY} -X main.GitRevision=${GIT_REVISION} -X main.BuildDate=${BUILD_DATE} -X main.Stream=${STREAM} -X main.GoVersion=${GO_VER}"; rm -rf dist; mkdir -p dist
 # Signed releases (optional): set NCC_RELEASE_PUBKEY to the base64 Ed25519 public key
 # (from `ncc-orchestrator release-keygen`) to EMBED it in every binary, so `verify
 # --online` and the in-app updater verify the Ed25519 signature over checksums.txt.
@@ -25,7 +39,11 @@ if [ -n "${NCC_RELEASE_PUBKEY:-}" ]; then export LDFLAGS="${LDFLAGS} -X main.rel
 go mod download || exit 1
 go mod verify || exit 1
 go vet ./... || exit 1
-go test ./cmd/... ./... -count=1 -short 2>&1 | tail -200 || exit 1
+if [ "$SKIP_TESTS" = "1" ]; then
+  echo "    [SKIP] Go unit tests skipped via --skip-tests / SKIP_TESTS=1"
+else
+  go test ./... -count=1 -short 2>&1 | tail -200 || exit 1
+fi
 (cd frontend && npm ci && npx tsc --noEmit -p tsconfig.json) || exit 1
 echo "PREFLIGHT_OK"
 

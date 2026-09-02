@@ -57,6 +57,16 @@ spec:
               args:
                 - "--config"
                 - "/data/config/config.yaml"
+                - "--log-file"
+                - "/data/logs/ncc-runner.log"
+                - "--output-dir-filtered"
+                - "/data/outputfiles"
+                - "--output-dir-logs"
+                - "/data/nccfiles"
+                - "--run-history"
+                - "--run-history-dir"
+                - "/data/outputfiles/runs"
+                - "--skip-preflight-check"
               env:
                 - name: NCC_RUNTIME_MODE
                   value: "kubernetes"
