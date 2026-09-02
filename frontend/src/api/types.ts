@@ -758,6 +758,32 @@ export type ReportData = {
   >;
 };
 
+export type AlertSource = "NCC" | "PC";
+
+export type ComponentStatus = {
+  version?: string;
+  status: string;
+};
+
+export type ComponentsData = {
+  components: {
+    orchestrator: ComponentStatus;
+    "api-server": ComponentStatus;
+    "ui-server": ComponentStatus;
+    consistent: boolean;
+  };
+};
+
+export type PCAlertsData = {
+  alerts: Array<Record<string, unknown>>;
+  source: "PC";
+  fetched_at?: string;
+  cache_hit?: boolean;
+  cache_ttl_s?: number;
+  errors?: string[];
+  configured?: boolean;
+};
+
 export type TrendPoint = {
   timestamp: string;
   duration_s: number;

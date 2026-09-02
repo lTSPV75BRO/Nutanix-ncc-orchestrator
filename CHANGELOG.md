@@ -4,9 +4,29 @@ All notable changes to the Nutanix NCC Orchestrator are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-**Release checklist (for maintainers):** Ensure [`VERSION`](VERSION) matches the intended tag; default `main.Version` in code is `2.1.1` when not set via ldflags. Run `go vet ./...`, `go test -race ./...`, and `go build ./...` (and `go build ./cmd/ncc-mcp-server`). Confirm `k8s/` and `helm/` image tags match `VERSION`. Tag `v2.1.1` and create a GitHub release using the matching `RELEASE_NOTES_v*.md`; attach `ncc-orchestrator-*` standalone binaries, `ncc-v2-stack-*` archives, and `checksums.txt` only — **do not** attach standalone `ncc-api-server-*` / `ncc-ui-server-*` binaries (the v1.x self-updater would silently mis-select them; see [2.0.0] known-issue note below and the v2.0.1 selector fix).
+**Release checklist (for maintainers):** Ensure [`VERSION`](VERSION) matches the intended tag; default `main.Version` in code is `2.2.0` when not set via ldflags. Run `go vet ./...`, `go test -race ./...`, and `go build ./...` (and `go build ./cmd/ncc-mcp-server`). Confirm `k8s/` and `helm/` image tags match `VERSION`. Tag `v2.2.0` and create a GitHub release using the matching `RELEASE_NOTES_v*.md`; attach `ncc-orchestrator-*` standalone binaries, `ncc-v2-stack-*` archives, and `checksums.txt` only — **do not** attach standalone `ncc-api-server-*` / `ncc-ui-server-*` binaries (the v1.x self-updater would silently mis-select them; see [2.0.0] known-issue note below and the v2.0.1 selector fix).
 
 ---
+
+## [2.2.0] - Unreleased
+
+Adds Prism Central serviceability alerts to the dashboard alongside NCC
+findings, with an NCC / PC source selector.
+
+### Added
+
+- **Prism Central alert retrieval and filtering.** `GET /api/v1/alerts` reads
+  configured `pcs` / `prism-central-url` targets using the configured
+  `nutanix-v4-api-version`, fetches targets concurrently, applies
+  `isResolved` filtering at Prism Central, and returns normalized PC alert
+  rows. The endpoint accepts `resolved=No|Yes|all` and defaults to `No`.
+- **Fast dashboard alert loading.** The dashboard renders unresolved PC alerts
+  first, warms the complete alert-history cache in the background, and shows a
+  loading indicator while that background request is active. PC responses use
+  a configurable five-minute cache (`pc-alerts-cache-ttl`).
+- **Source-aware PC details.** NCC and PC tables retain separate layouts. PC
+  detail panels show alert metadata and status badges, while cluster names
+  remain display labels and links resolve through the cluster IP mapping.
 
 ## [2.1.1] - 2026-08-17
 

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Button,
   Card,
+  Descriptions,
   Drawer,
   Empty,
   Space,
@@ -31,6 +32,9 @@ type Props = {
   selectedClusters: string[];
   clusterNameMap: Record<string, string>;
   severityFilters: Array<"FAIL" | "WARN" | "ERR" | "INFO">;
+  pcAlerts?: unknown[];
+  alertSource: "NCC" | "PC";
+  pcResolvedFilter: "all" | "No" | "Yes";
   compareMode: "all" | "changed" | "flaky";
   onSummaryChange?: (summary: {
     total: number;
@@ -50,6 +54,16 @@ type RowRecord = {
   clusterName: string;
   cluster: string;
   alert: string;
+  entityName: string;
+  entityType: string;
+  lastOccurred: string;
+  lastOccurredTime: number;
+  status: string;
+  impactType: string;
+  alertType: string;
+  acknowledged: string;
+  resolved: string;
+  source: "NCC" | "PC";
   severity: Severity;
   isUnknownSeverity: boolean;
   detail: string;
@@ -101,15 +115,22 @@ function normalizeClusterHost(cluster: string): string {
   return clean;
 }
 
-function clusterPrismURL(cluster: string, clusterNameMap: Record<string, string>): string {
-  const raw = cluster.trim();
-  if (!raw) return "";
-  if (/^https?:\/\//i.test(raw)) return raw;
-  const clean = normalizeClusterHost(raw);
-  if (isIPv4Like(clean)) return `https://${clean}:9440`;
-  const mappedIP = Object.entries(clusterNameMap).find(([key, name]) => isIPv4Like(key) && name === raw)?.[0];
-  if (mappedIP) return `https://${mappedIP}:9440`;
-  return `https://${clean}:9440`;
+function clusterPrismURL(
+  cluster: string,
+  clusterNameMap: Record<string, string>,
+  displayName = "",
+): string {
+  const candidates = [cluster, displayName].map((value) => value.trim()).filter(Boolean);
+  for (const candidate of candidates) {
+    const clean = normalizeClusterHost(candidate);
+    if (isIPv4Like(clean)) return `https://${clean}:9440`;
+  }
+  const mappedIP = Object.entries(clusterNameMap).find(
+    ([key, name]) =>
+      isIPv4Like(normalizeClusterHost(key)) &&
+      candidates.some((candidate) => name.trim().toLowerCase() === candidate.toLowerCase()),
+  )?.[0];
+  return mappedIP ? `https://${normalizeClusterHost(mappedIP)}:9440` : "";
 }
 
 function matchingLogForCluster(
@@ -130,6 +151,16 @@ function previewDetail(detail: string): string {
     .slice(0, 220);
 }
 
+function displayPCStatus(raw: Record<string, unknown>): string {
+  const status = String(raw.status ?? "").toUpperCase();
+  if (status === "AUTO_RESOLVED" || raw.isAutoResolved === true || raw.auto_resolved === true) {
+    const resolved = String(raw.resolvedTime ?? raw.resolved_at ?? "").trim();
+    return resolved ? `Auto Resolved (${new Date(resolved).toLocaleString()})` : "Auto Resolved";
+  }
+  if (status === "OPEN") return "—";
+  return String(raw.status ?? "—").replace(/_/g, " ");
+}
+
 export function ClusterTable({
   checksSnapshot,
   aggRows,
@@ -140,6 +171,9 @@ export function ClusterTable({
   selectedClusters,
   clusterNameMap,
   severityFilters,
+  pcAlerts,
+  alertSource,
+  pcResolvedFilter,
   compareMode,
   onSummaryChange,
 }: Props) {
@@ -179,8 +213,33 @@ export function ClusterTable({
       return {};
     };
     const mapToRow = (raw: Record<string, unknown>, idx: number): RowRecord => {
-      const cluster = String(raw.cluster || raw.address || "-");
-      const alert = normalizeCheckTitle(String(raw.check_name ?? raw.check ?? "-"));
+      const cluster = String(raw.cluster || raw.address || raw.cluster_name || "-");
+      const alert = normalizeCheckTitle(String(raw.check_name ?? raw.check ?? raw.title ?? raw.alert ?? "-"));
+      const entityName = String(
+        raw.entity_name ??
+          raw.entityName ??
+          raw.source_entity_name ??
+          asRecord(raw.sourceEntity).name ??
+          raw.entity ??
+          cluster ??
+          "-",
+      );
+      const entityType = String(raw.entity_type ?? raw.entityType ?? asRecord(raw.sourceEntity).type ?? "—");
+      const lastOccurred = String(
+        raw.last_occurred ??
+          raw.lastOccurred ??
+          raw.lastUpdatedTime ??
+          raw.updated_at ??
+          raw.creationTime ??
+          raw.created_at ??
+          "—",
+      );
+      const lastOccurredTime = Date.parse(lastOccurred) || 0;
+      const status = String(raw.source || "").toUpperCase() === "PC" ? displayPCStatus(raw) : String(raw.status ?? "—");
+      const impactType = String(raw.impact_type ?? raw.impactType ?? "—");
+      const alertType = String(raw.alert_type ?? raw.alertType ?? "—");
+      const acknowledged = raw.acknowledged === true ? "Yes" : raw.acknowledged === false ? "No" : "—";
+      const resolved = raw.resolved === true ? "Yes" : raw.resolved === false ? "No" : "—";
       const severityRaw = String(raw.severity || "UNKNOWN").toUpperCase();
       const isUnknownSeverity = !["FAIL", "WARN", "ERR", "INFO"].includes(severityRaw);
       const severity = (isUnknownSeverity ? "ERR" : severityRaw) as Severity;
@@ -194,6 +253,16 @@ export function ClusterTable({
         clusterName: resolveClusterName(displayClusterName(raw), clusterNameMap),
         cluster,
         alert,
+        entityName,
+        entityType,
+        lastOccurred,
+        lastOccurredTime,
+        status,
+        impactType,
+        alertType,
+        acknowledged,
+        resolved,
+        source: String(raw.source || "NCC").toUpperCase() === "PC" ? "PC" : "NCC",
         severity,
         isUnknownSeverity,
         detail,
@@ -208,7 +277,11 @@ export function ClusterTable({
     };
 
     let baseRows: RowRecord[] = [];
-    const baseAgg = (aggRows || []).map((r) => asRecord(r));
+    const activeSourceFilter = String(alertSource || "NCC").toUpperCase();
+    const baseAgg = [
+      ...(aggRows || []).map((r) => ({ ...asRecord(r), source: "NCC" })),
+      ...(pcAlerts || []).map((r) => ({ ...asRecord(r), source: "PC" })),
+    ].filter((r) => activeSourceFilter === "ALL" || r.source === activeSourceFilter);
     if (baseAgg.length > 0) {
       baseRows = baseAgg.map((r, idx) => mapToRow(r, idx));
     } else {
@@ -246,6 +319,7 @@ export function ClusterTable({
       if (parsedTokens.flaky && !r.isFlaky) return false;
       if (compareMode === "changed" && !r.isChanged) return false;
       if (compareMode === "flaky" && !r.isFlaky) return false;
+      if (alertSource === "PC" && pcResolvedFilter !== "all" && r.resolved !== pcResolvedFilter) return false;
       const hay = `${r.clusterName} ${r.cluster} ${r.severity} ${r.alert}`.toLowerCase();
       return parsedTokens.terms.every((t) => hay.includes(t));
     });
@@ -259,6 +333,9 @@ export function ClusterTable({
     selectedClusters,
     clusterNameMap,
     severityFilters,
+    pcAlerts,
+    alertSource,
+    pcResolvedFilter,
     compareMode,
   ]);
 
@@ -277,23 +354,142 @@ export function ClusterTable({
   // DashboardPage's SEVERITY_META ordering.
   const severityRank: Record<Severity, number> = { FAIL: 5, WARN: 4, ERR: 3, INFO: 2, UNKNOWN: 1 };
 
-  const columns: ColumnsType<RowRecord> = [
+  const titleColumn = {
+    title: "Alert",
+    dataIndex: "alert",
+    key: "alert",
+    width: 280,
+    sorter: (a: RowRecord, b: RowRecord) => a.alert.localeCompare(b.alert),
+    render: (value: string, row: RowRecord) => (
+      <Space orientation="vertical" size={2} style={{ width: "100%" }}>
+        <Typography.Text strong style={{ wordBreak: "break-word" }}>
+          {value}
+        </Typography.Text>
+        <Space size={4} wrap>
+          {row.isChanged ? <Tag color="gold" style={{ margin: 0 }}>changed</Tag> : null}
+          {row.isFlaky ? <Tag color="purple" style={{ margin: 0 }}>flaky</Tag> : null}
+        </Space>
+      </Space>
+    ),
+  };
+  const severityColumn = {
+    title: "Severity",
+    dataIndex: "severity",
+    key: "severity",
+    width: 110,
+    sorter: (a: RowRecord, b: RowRecord) => severityRank[a.severity] - severityRank[b.severity],
+    defaultSortOrder: "descend" as const,
+    render: (value: Severity, row: RowRecord) => {
+      const sev = row.isUnknownSeverity ? "UNKNOWN" : value;
+      const className = row.isUnknownSeverity ? "severity-pill severity-pill-unknown" : "severity-pill";
+      return <Tag className={className} color={SEVERITY_TAG_COLOR[sev]}>{sev}</Tag>;
+    },
+  };
+  const actionColumn = {
+    title: " ",
+    key: "actions",
+    width: 50,
+    align: "center" as const,
+    render: (_: unknown, row: RowRecord) => (
+      <Tooltip title="Open details">
+        <Button
+          type="text"
+          size="small"
+          icon={<ExpandAltOutlined />}
+          onClick={(e) => {
+            e.stopPropagation();
+            setDrawerRow(row);
+          }}
+        />
+      </Tooltip>
+    ),
+  };
+
+  const nccColumns: ColumnsType<RowRecord> = [
+    severityColumn,
     {
-      title: "Severity",
-      dataIndex: "severity",
-      key: "severity",
-      width: 110,
-      sorter: (a, b) => severityRank[a.severity] - severityRank[b.severity],
-      defaultSortOrder: "descend",
-      render: (value: Severity, row) => {
-        const sev = row.isUnknownSeverity ? "UNKNOWN" : value;
-        const className = row.isUnknownSeverity ? "severity-pill severity-pill-unknown" : "severity-pill";
+      title: "Source",
+      dataIndex: "source",
+      key: "source",
+      width: 90,
+      filters: [
+        { text: "NCC", value: "NCC" },
+        { text: "PC", value: "PC" },
+      ],
+      onFilter: (value, row) => row.source === value,
+      render: (value: "NCC" | "PC") => <Tag color={value === "PC" ? "purple" : "blue"}>{value}</Tag>,
+    },
+    {
+      title: "Cluster",
+      dataIndex: "clusterName",
+      key: "clusterName",
+      width: 240,
+      sorter: (a, b) => a.clusterName.localeCompare(b.clusterName),
+      render: (_, row) => {
+        const url = clusterPrismURL(row.cluster, clusterNameMap);
         return (
-          <Tag className={className} color={SEVERITY_TAG_COLOR[sev]}>
-            {sev}
-          </Tag>
+          <Space orientation="vertical" size={0}>
+            {url ? (
+              <a href={url} target="_blank" rel="noreferrer" className="cluster-link kb-like-link" onClick={(e) => e.stopPropagation()}>
+                {row.clusterName}
+              </a>
+            ) : <Typography.Text strong>{row.clusterName}</Typography.Text>}
+            <Typography.Text type="secondary" style={{ fontSize: 12 }} className="mono">{row.cluster}</Typography.Text>
+            {(row.clusterVersion || row.nccVersion) && (
+              <Space size={4} wrap style={{ marginTop: 2 }}>
+                {row.clusterVersion ? <Tag style={{ fontSize: 11, lineHeight: "16px", padding: "0 6px" }}>{row.clusterVersion}</Tag> : null}
+                {row.nccVersion ? <Tag style={{ fontSize: 11, lineHeight: "16px", padding: "0 6px" }}>NCC {row.nccVersion}</Tag> : null}
+              </Space>
+            )}
+          </Space>
         );
       },
+    },
+    titleColumn,
+    {
+      title: "KB",
+      key: "kb",
+      width: 100,
+      render: (_, row) => row.kb ? (
+        <a href={row.kb} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+          <Tag color="processing" icon={<LinkOutlined />} style={{ margin: 0 }}>{kbLabel(row.kb)}</Tag>
+        </a>
+      ) : <Typography.Text type="secondary">—</Typography.Text>,
+    },
+    {
+      title: "Detail",
+      dataIndex: "detail",
+      key: "detail",
+      render: (value: string) => (
+        <Typography.Paragraph type="secondary" ellipsis={{ rows: density === "compact" ? 1 : 2, tooltip: false }} style={{ margin: 0 }}>
+          {previewDetail(value)}
+        </Typography.Paragraph>
+      ),
+    },
+    actionColumn,
+  ];
+
+  const pcColumns: ColumnsType<RowRecord> = [
+    {
+      title: "Title",
+      dataIndex: "alert",
+      key: "title",
+      width: 280,
+      sorter: (a, b) => a.alert.localeCompare(b.alert),
+    },
+    severityColumn,
+    {
+      title: "Entity Name",
+      dataIndex: "entityName",
+      key: "entityName",
+      width: 220,
+      sorter: (a, b) => a.entityName.localeCompare(b.entityName),
+    },
+    {
+      title: "Entity Type",
+      dataIndex: "entityType",
+      key: "entityType",
+      width: 150,
     },
     {
       title: "Cluster",
@@ -336,72 +532,35 @@ export function ClusterTable({
       },
     },
     {
-      title: "Alert",
-      dataIndex: "alert",
-      key: "alert",
-      width: 280,
-      sorter: (a, b) => a.alert.localeCompare(b.alert),
-      render: (value: string, row) => (
-        <Space orientation="vertical" size={2} style={{ width: "100%" }}>
-          <Typography.Text strong style={{ wordBreak: "break-word" }}>
-            {value}
-          </Typography.Text>
-          <Space size={4} wrap>
-            {row.isChanged ? <Tag color="gold" style={{ margin: 0 }}>changed</Tag> : null}
-            {row.isFlaky ? <Tag color="purple" style={{ margin: 0 }}>flaky</Tag> : null}
-          </Space>
-        </Space>
-      ),
+      title: "Last Occurred",
+      dataIndex: "lastOccurred",
+      key: "lastOccurred",
+      width: 190,
+      sorter: (a, b) => a.lastOccurredTime - b.lastOccurredTime,
+      render: (value: string) => value === "—" ? value : new Date(value).toLocaleString(),
     },
     {
-      title: "KB",
-      key: "kb",
-      width: 100,
-      render: (_, row) =>
-        row.kb ? (
-          <a href={row.kb} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
-            <Tag color="processing" icon={<LinkOutlined />} style={{ margin: 0 }}>
-              {kbLabel(row.kb)}
-            </Tag>
-          </a>
-        ) : (
-          <Typography.Text type="secondary">—</Typography.Text>
-        ),
+      title: "Status",
+      dataIndex: "status",
+      key: "status",
+      width: 130,
     },
     {
-      title: "Detail",
-      dataIndex: "detail",
-      key: "detail",
-      render: (value: string) => (
-        <Typography.Paragraph
-          type="secondary"
-          ellipsis={{ rows: density === "compact" ? 1 : 2, tooltip: false }}
-          style={{ margin: 0 }}
-        >
-          {previewDetail(value)}
-        </Typography.Paragraph>
-      ),
+      title: "Resolved",
+      dataIndex: "resolved",
+      key: "resolved",
+      width: 110,
+      render: (value: string) => <Tag color={value === "Yes" ? "green" : "blue"}>{value}</Tag>,
     },
     {
-      title: " ",
-      key: "actions",
-      width: 50,
-      align: "center",
-      render: (_, row) => (
-        <Tooltip title="Open details">
-          <Button
-            type="text"
-            size="small"
-            icon={<ExpandAltOutlined />}
-            onClick={(e) => {
-              e.stopPropagation();
-              setDrawerRow(row);
-            }}
-          />
-        </Tooltip>
-      ),
+      title: "Impact Type",
+      dataIndex: "impactType",
+      key: "impactType",
+      width: 150,
     },
+    actionColumn,
   ];
+  const columns = alertSource === "PC" ? pcColumns : nccColumns;
 
   const copyDetail = async (text: string) => {
     try {
@@ -507,16 +666,23 @@ export function ClusterTable({
         open={Boolean(drawerRow)}
         title={
           drawerRow ? (
-            <Space size={8} wrap>
-              <Tag
-                color={SEVERITY_TAG_COLOR[drawerRow.severity]}
-                className={drawerRow.isUnknownSeverity ? "severity-pill severity-pill-unknown" : "severity-pill"}
-              >
-                {drawerRow.isUnknownSeverity ? "UNKNOWN" : drawerRow.severity}
-              </Tag>
-              <Typography.Text strong>{drawerRow.clusterName}</Typography.Text>
-              <Typography.Text type="secondary">·</Typography.Text>
-              <Typography.Text>{drawerRow.alert}</Typography.Text>
+            <Space orientation="vertical" size={4} style={{ width: "100%" }}>
+              <Typography.Text type="secondary" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                {drawerRow.source === "PC" ? "Prism Central alert" : "NCC alert"}
+              </Typography.Text>
+              <Typography.Title level={4} style={{ margin: 0, paddingRight: 24 }}>
+                {drawerRow.alert}
+              </Typography.Title>
+              <Space size={6} wrap>
+                <Tag
+                  color={SEVERITY_TAG_COLOR[drawerRow.severity]}
+                  className={drawerRow.isUnknownSeverity ? "severity-pill severity-pill-unknown" : "severity-pill"}
+                >
+                  {drawerRow.isUnknownSeverity ? "UNKNOWN" : drawerRow.severity}
+                </Tag>
+                <Tag color={drawerRow.source === "PC" ? "purple" : "blue"}>{drawerRow.source}</Tag>
+                {drawerRow.status !== "—" ? <Tag>{drawerRow.status}</Tag> : null}
+              </Space>
             </Space>
           ) : null
         }
@@ -542,37 +708,71 @@ export function ClusterTable({
       >
         {drawerRow ? (
           <Space orientation="vertical" size={16} style={{ width: "100%" }}>
-            <div>
-              <Typography.Text strong>Cluster</Typography.Text>
-              <div>
-                <a
-                  href={clusterPrismURL(drawerRow.cluster, clusterNameMap)}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="kb-like-link"
+            {drawerRow.source === "PC" ? (
+              <Space orientation="vertical" size={12} style={{ width: "100%" }}>
+                <Card
+                  size="small"
+                  title="Alert overview"
+                  style={{ borderRadius: 8, background: "var(--ant-color-fill-quaternary)" }}
                 >
-                  {drawerRow.clusterName}
-                </a>
-                <Typography.Text type="secondary" style={{ marginLeft: 8 }} className="mono">
-                  ({drawerRow.cluster})
-                </Typography.Text>
-              </div>
-              <Space size={6} wrap style={{ marginTop: 6 }}>
+                  <Space size={[8, 8]} wrap>
+                    <Tag color={SEVERITY_TAG_COLOR[drawerRow.severity]}>
+                      Severity: {drawerRow.isUnknownSeverity ? "UNKNOWN" : drawerRow.severity}
+                    </Tag>
+                    <Tag color={drawerRow.resolved === "Yes" ? "success" : "processing"}>
+                      Resolved: {drawerRow.resolved}
+                    </Tag>
+                    <Tag color={drawerRow.acknowledged === "Yes" ? "success" : "default"}>
+                      Acknowledged: {drawerRow.acknowledged}
+                    </Tag>
+                  </Space>
+                </Card>
+                <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }} title="Alert information">
+                  <Descriptions.Item label="Alert Type">{drawerRow.alertType}</Descriptions.Item>
+                  <Descriptions.Item label="Impact Type">{drawerRow.impactType}</Descriptions.Item>
+                  <Descriptions.Item label="Entity Name">{drawerRow.entityName}</Descriptions.Item>
+                  <Descriptions.Item label="Entity Type">{drawerRow.entityType}</Descriptions.Item>
+                  <Descriptions.Item label="Cluster">
+                    {clusterPrismURL(drawerRow.cluster, clusterNameMap, drawerRow.clusterName) ? (
+                      <a
+                        href={clusterPrismURL(drawerRow.cluster, clusterNameMap, drawerRow.clusterName)}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {drawerRow.clusterName}
+                      </a>
+                    ) : (
+                      drawerRow.clusterName
+                    )}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Last Occurred">
+                    {drawerRow.lastOccurred === "—" ? "—" : new Date(drawerRow.lastOccurred).toLocaleString()}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="Status">{drawerRow.status}</Descriptions.Item>
+                  <Descriptions.Item label="Resolved">{drawerRow.resolved}</Descriptions.Item>
+                </Descriptions>
+              </Space>
+            ) : (
+              <Space size={6} wrap>
+                <Typography.Text strong>Cluster:</Typography.Text>
+                <Typography.Text>{drawerRow.clusterName}</Typography.Text>
                 {drawerRow.clusterVersion ? <Tag>{drawerRow.clusterVersion}</Tag> : null}
                 {drawerRow.nccVersion ? <Tag>NCC {drawerRow.nccVersion}</Tag> : null}
                 {drawerRow.isChanged ? <Tag color="gold">changed</Tag> : null}
                 {drawerRow.isFlaky ? <Tag color="purple">flaky</Tag> : null}
-                {drawerRow.logName ? (
-                  <Tooltip title={drawerRow.logPath}>
-                    <Tag>{drawerRow.logName}</Tag>
-                  </Tooltip>
-                ) : null}
+                {drawerRow.logName ? <Tooltip title={drawerRow.logPath}><Tag>{drawerRow.logName}</Tag></Tooltip> : null}
               </Space>
-            </div>
-            <div>
-              <Typography.Text strong>Detail</Typography.Text>
-              <pre className="alert-detail-block">{drawerRow.detail || "(no detail)"}</pre>
-            </div>
+            )}
+            <Card
+              size="small"
+              title="Alert detail"
+              style={{ borderRadius: 8 }}
+              styles={{ body: { background: "rgba(0, 0, 0, 0.02)" } }}
+            >
+                <Typography.Paragraph style={{ margin: 0, whiteSpace: "pre-wrap" }}>
+                  {drawerRow.detail || "(no detail)"}
+                </Typography.Paragraph>
+            </Card>
           </Space>
         ) : null}
       </Drawer>

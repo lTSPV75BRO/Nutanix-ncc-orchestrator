@@ -62,6 +62,30 @@ See **`outputfiles/run-summary.json`** for `exit_code` and per-cluster `clusters
 
 ## Alerts table
 
+### Prism Central alerts are unavailable
+
+- **Symptom:** The dashboard shows NCC findings, but the PC source is empty or
+  reports that Prism Central alerts are unavailable.
+- **Fix:** Confirm that `pcs` or `prism-central-url` is configured, the active
+  username/password can view alerts, and the Prism Central endpoint is
+  reachable. For internal certificates, configure `ca-bundle` or use the
+  existing TLS policy. The API caches successful PC responses briefly; use
+  Refresh after correcting configuration.
+
+### PC alerts take a long time to appear
+
+- **Expected behavior:** The dashboard first requests unresolved alerts with
+  `GET /api/v1/alerts?resolved=No`, so the initial table can render without
+  downloading the full history. It then warms the `resolved=all` response in
+  the background and shows a loading indicator while that request is active.
+- **If unresolved alerts are also slow:** Check the API server log and
+  Prism Central reachability. The API applies `$filter=isResolved eq false`
+  before pagination, fetches configured PC targets concurrently, and caches
+  each filter response independently.
+- **Tune caching:** Set `pc-alerts-cache-ttl: 5m` (or a longer duration) in
+  the config for fewer Prism Central requests. Set it to `0` to disable the
+  cache. Use `?refresh=1` only when a forced refresh is required.
+
 ### Historical `"NCC run failed"` rows show `FAIL` severity (fixed in v2.1.1)
 
 - **Symptom:** A cluster that couldn't be reached at all (connection refused, DNS failure, auth rejection, timeout) shows up in the Alerts table as a `"NCC run failed"` row tagged **`FAIL`** — indistinguishable from a real failing NCC check — and the FAIL totals (Alerts hero pill, dashboard hero cards) and the drilldown diff's "new failures" count include it.

@@ -1,5 +1,5 @@
 # =============================================================================
-# Nutanix NCC Orchestrator - example configuration  (v2.1.1)
+# Nutanix NCC Orchestrator - example configuration  (v2.2.0)
 # =============================================================================
 #
 # This file is a reference template. Copy it to `config.yaml` and edit the
@@ -55,6 +55,7 @@ username: "admin"                          # Prism Element username
 password: "secret://NCC_PASSWORD"          # Prefer secret:// + env, never plain text
 ncc-api-version: v4                        # v4 (default) or Legacy (Prism Gateway v1 only)
 nutanix-v4-api-version: v4.2               # v4 path revision (e.g. v4.1, v4.0.a1)
+pc-alerts-cache-ttl: 5m                   # Prism Central alerts cache duration; 0 disables caching
 
 
 # -----------------------------------------------------------------------------

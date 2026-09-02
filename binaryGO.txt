@@ -6,7 +6,7 @@ if [ -n "${ZSH_VERSION:-}" ]; then setopt nonomatch; fi
 # Note: git revision is picked up automatically by Go's build info (-buildvcs=true,
 # default), surfaced as `gitRevision` inside the binaries. We only thread the
 # `-dirty` suffix into Version so support tickets can spot uncommitted builds.
-export VERSION=2.1.1 STREAM=Release BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ') GO_VER=$(go version | awk '{print $3}') GIT_REVISION=$(git rev-parse HEAD 2>/dev/null || echo "unknown") GIT_DIRTY=$(git diff --quiet 2>/dev/null || echo "-dirty"); export LDFLAGS="-w -s -X main.Version=${VERSION}${GIT_DIRTY} -X main.GitRevision=${GIT_REVISION} -X main.BuildDate=${BUILD_DATE} -X main.Stream=${STREAM} -X main.GoVersion=${GO_VER}"; mkdir -p dist
+export VERSION=2.2.0 STREAM=Release BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ') GO_VER=$(go version | awk '{print $3}') GIT_REVISION=$(git rev-parse HEAD 2>/dev/null || echo "unknown") GIT_DIRTY=$(git diff --quiet 2>/dev/null || echo "-dirty"); export LDFLAGS="-w -s -X main.Version=${VERSION}${GIT_DIRTY} -X main.GitRevision=${GIT_REVISION} -X main.BuildDate=${BUILD_DATE} -X main.Stream=${STREAM} -X main.GoVersion=${GO_VER}"; mkdir -p dist
 # Signed releases (optional): set NCC_RELEASE_PUBKEY to the base64 Ed25519 public key
 # (from `ncc-orchestrator release-keygen`) to EMBED it in every binary, so `verify
 # --online` and the in-app updater verify the Ed25519 signature over checksums.txt.

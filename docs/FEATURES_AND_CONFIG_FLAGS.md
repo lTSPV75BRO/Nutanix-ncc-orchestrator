@@ -1,4 +1,4 @@
-# Features and Config Flags (v2.1.1)
+# Features and Config Flags (v2.2.0)
 
 Comprehensive reference for NCC Orchestrator features, configuration keys, and CLI flags.
 
@@ -7,6 +7,12 @@ Comprehensive reference for NCC Orchestrator features, configuration keys, and C
 ## 1) What this tool does
 
 `ncc-orchestrator` runs Nutanix NCC checks across one or more clusters, collects and parses results, and generates automation-friendly artifacts plus human-readable reports.
+
+The v2.2.0 dashboard can also fetch Prism Central serviceability alerts on
+demand from configured `pcs` or `prism-central-url` targets. The API/UI source
+selector keeps these live PC alerts separate from persisted NCC findings.
+Unresolved alerts are fetched first for fast initial rendering; the complete
+history is warmed in the background when the PC source is selected.
 
 ## 2) Feature reference with examples
 
@@ -57,6 +63,28 @@ Write to file for later runs:
 ```bash
 ncc-orchestrator discover-clusters --prism-central-url https://pc:9440 --output clusters.txt
 ```
+
+### 2.3a Prism Central alerts
+
+The viewer-accessible `GET /api/v1/alerts` endpoint fetches and normalizes
+serviceability alerts from configured Prism Central targets. It uses the
+configured `nutanix-v4-api-version`, defaults to unresolved alerts, and
+supports:
+
+```text
+GET /api/v1/alerts?resolved=No
+GET /api/v1/alerts?resolved=Yes
+GET /api/v1/alerts?resolved=all
+GET /api/v1/alerts?resolved=No&refresh=1
+```
+
+The API translates the resolved choice into Prism Central's
+`$filter=isResolved eq false|true` before fetching paginated results. Targets
+are fetched concurrently, successful responses are cached independently by
+filter, and per-target failures are returned without discarding successful
+results. The dashboard shows unresolved alerts immediately and displays a
+loading indicator while the all-status history is fetched in the background.
+PC cluster names remain display labels; mapped cluster IPs are used for links.
 
 ### 2.4 Replay mode
 
@@ -521,6 +549,7 @@ Highest to lowest precedence:
 | `password` | string | — | `"secret://NCC_PRISM_PASSWORD"` |
 | `ncc-api-version` | string | `v4` | `"Legacy"` |
 | `nutanix-v4-api-version` | string | `v4.2` | `"v4.1"` |
+| `pc-alerts-cache-ttl` | duration | `5m` | `"0"` |
 | `insecure-skip-verify` | bool | `false` | `true` |
 | `ca-bundle` | string | — | `"/etc/ncc/prism-ca.pem"` |
 | `pin-sha256` | csv string | — | `"aa:bb:..,cc:dd:.."` |

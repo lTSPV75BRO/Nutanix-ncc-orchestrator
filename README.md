@@ -1,9 +1,9 @@
 # Nutanix NCC Orchestrator
 
-[![Version](https://img.shields.io/badge/version-2.1.1-blue)](RELEASE_NOTES_v2.1.1.md)
+[![Version](https://img.shields.io/badge/version-2.2.0-blue)](RELEASE_NOTES_v2.2.0.md)
 [![Go](https://img.shields.io/badge/go-1.26.4-00ADD8)](go.mod)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Status](https://img.shields.io/badge/release-GA-success)](RELEASE_NOTES_v2.1.1.md)
+[![Status](https://img.shields.io/badge/release-development-yellow)](RELEASE_NOTES_v2.2.0.md)
 
 > A production-ready stack for running Nutanix Cluster Check (NCC) across many clusters in parallel, aggregating results, and serving them through a hardened API and modern web UI.
 
@@ -307,11 +307,28 @@ Theme-aware (light/dark/IT-Pro), keyboard-friendly, accessible form fields (ever
 
 ## HTTP API
 
+The v2.2.0 dashboard can combine persisted NCC findings with live Prism
+Central serviceability alerts. Configure `pcs` or `prism-central-url` in the
+existing config, then use the dashboard's **NCC** and **PC** source selector.
+PC alerts are fetched on demand and cached briefly by the API. Unresolved
+alerts load first; the complete alert history is fetched in the background
+for the resolved/all-status views.
+
+`GET /api/v1/alerts` returns normalized PC alert rows with `source: "PC"`,
+severity, cluster, status, timestamps, detail, and KB metadata. It is
+viewer-readable and respects cluster-group restrictions. The `resolved`
+parameter accepts `No`, `Yes`, or `all` and defaults to `No`; the API translates
+this into the Prism Central `isResolved` filter before pagination. Set
+`pc-alerts-cache-ttl` to control caching (default `5m`; `0` disables it).
+Cluster names are displayed using the NCC cluster mapping while links target
+the mapped cluster IP on port `9440`.
+
 Major endpoints (full surface at `GET /api/v1/meta/routes`, OpenAPI at `GET /api/v1/openapi.json`):
 
 | Path                                | Methods    | Notes                                                              |
 | ----------------------------------- | ---------- | ------------------------------------------------------------------ |
 | `/api/v1/health`                    | GET        | Version, build date, paths, auth mode, token source                |
+| `/api/v1/alerts`                   | GET        | PC alerts; `resolved=No`, `resolved=Yes`, or `resolved=all`; optional `refresh=1` |
 | `/api/v1/runs`                      | GET        | List runs (`?source=history\|summary\|trigger`, `?since=RFC3339`) |
 | `/api/v1/runs/{id}`                 | GET        | Single archived run + embedded artifacts                          |
 | `/api/v1/runs/active`               | GET, DELETE| Active run snapshot; DELETE cancels a stuck run                   |

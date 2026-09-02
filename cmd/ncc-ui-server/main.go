@@ -216,7 +216,7 @@ func detectBackendLogin(backendURL string, transport *http.Transport) bool {
 // package. Without this match the ui-server would silently keep its
 // in-source defaults (e.g. `stream: dev`) even on a tagged release.
 var (
-	Version     = "2.1.1"
+	Version     = "2.2.0"
 	BuildDate   = "unknown"
 	Stream      = "dev"
 	GoVersion   = "unknown"

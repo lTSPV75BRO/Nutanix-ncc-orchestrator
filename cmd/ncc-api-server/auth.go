@@ -321,6 +321,10 @@ func routeMinRoleFor(p string, isRead bool) Role {
 		return RoleOperator
 	case p == "/api/v1/runs/configs":
 		return RoleOperator
+	case p == "/api/v1/alerts":
+		return RoleViewer
+	case p == "/api/v1/components":
+		return RoleViewer
 	case p == "/api/v1/runs/config-preference":
 		// Any authenticated caller may store their own default run config.
 		return RoleViewer

@@ -40,6 +40,7 @@ import { api } from "../../api/client";
 import type {
   BackupEntry,
   ClusterGroup,
+  ComponentsData,
   DirectoryEntry,
   LDAPConfig,
   PasswordResetRequest,
@@ -2582,6 +2583,7 @@ const UPDATE_PHASE_LABEL: Record<string, string> = {
 // the job phase and reconnects the page once the restarted stack is healthy.
 function UpdatesCard() {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
+  const [components, setComponents] = useState<ComponentsData["components"] | null>(null);
   const [checking, setChecking] = useState(false);
   const [applying, setApplying] = useState(false);
   const [restarting, setRestarting] = useState(false);
@@ -2648,11 +2650,11 @@ function UpdatesCard() {
 
   useEffect(() => {
     let cancelled = false;
-    void api
-      .updateStatus()
-      .then((s) => {
+    void Promise.all([api.updateStatus(), api.components()])
+      .then(([s, componentData]) => {
         if (cancelled) return;
         setStatus(s);
+        setComponents(componentData.components);
         if (s.job?.in_progress) {
           setApplying(true);
           startPolling();
@@ -2669,8 +2671,12 @@ function UpdatesCard() {
   const handleCheck = async () => {
     setChecking(true);
     try {
-      const s = await api.checkUpdate();
+      const [s, componentData] = await Promise.all([api.checkUpdate(), api.components()]);
       setStatus(s);
+      setComponents(componentData.components);
+      if (!componentData.components.consistent) {
+        notify.warning("NCC components are running different versions.");
+      }
     } catch (e) {
       notifyError(e, "Could not check for updates");
     } finally {
@@ -2768,6 +2774,29 @@ function UpdatesCard() {
             </>
           ) : null}
         </Space>
+        {components ? (
+          <>
+            <Typography.Text strong>Installed components</Typography.Text>
+            <Space wrap size={[8, 8]}>
+              {(["orchestrator", "api-server", "ui-server"] as const).map((name) => {
+                const component = components[name];
+                return (
+                  <Tag key={name} color={component.status === "ok" ? "green" : "red"}>
+                    {name}: {component.status === "ok" ? `v${component.version}` : "Component not found"}
+                  </Tag>
+                );
+              })}
+            </Space>
+            {!components.consistent ? (
+              <Alert
+                type="warning"
+                showIcon
+                title="Installed components are out of sync"
+                description="The orchestrator, API server, and UI server must be updated together. Apply the available stack update to restore consistency."
+              />
+            ) : null}
+          </>
+        ) : null}
 
         {!supported ? (
           <Alert

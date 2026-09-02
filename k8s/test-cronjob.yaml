@@ -27,7 +27,7 @@ spec:
                   mountPath: /data
           containers:
             - name: ncc-orchestrator
-              image: docker.io/prajwalnutant/nutanix-ncc-orchestrator:2.1.1
+              image: docker.io/prajwalnutant/nutanix-ncc-orchestrator:2.2.0
               workingDir: /data
               command: ["/usr/local/bin/ncc-orchestrator"]
               args: 

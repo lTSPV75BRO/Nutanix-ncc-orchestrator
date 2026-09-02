@@ -7200,7 +7200,7 @@ var (
 func init() {
 	// Defaults
 	if Version == "" {
-		Version = "2.1.1"
+		Version = "2.2.0"
 	}
 	if BuildDate == "" {
 		BuildDate = "unknown"

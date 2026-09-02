@@ -54,7 +54,7 @@ var (
 
 func init() {
 	if Version == "" {
-		Version = "2.1.1"
+		Version = "2.2.0"
 	}
 	if BuildDate == "" {
 		BuildDate = "unknown"
@@ -149,9 +149,12 @@ type apiServer struct {
 	ldap                 ldapAuthenticator
 	// pcCacheMu guards the Prism Central -> managed-clusters discovery cache used
 	// to expand cluster-group PC entries into their registered clusters.
-	pcCacheMu  sync.Mutex
-	pcCache    map[string]*pcCacheEntry
-	pcInflight map[string]bool
+	pcCacheMu        sync.Mutex
+	pcCache          map[string]*pcCacheEntry
+	pcInflight       map[string]bool
+	pcAlertsMu       sync.Mutex
+	pcAlertsCache    *pcAlertsCacheEntry
+	pcAlertsCacheTTL time.Duration
 	// cookieInsecure forces the Secure attribute OFF on session cookies even
 	// when HTTPS is enabled (useful only behind a TLS-terminating proxy that
 	// re-presents plain http to the stack). Insecure is already the default.
@@ -517,6 +520,7 @@ func main() {
 	flag.DurationVar(&s.readTimeout, "read-timeout", 15*time.Second, "HTTP server read timeout")
 	flag.DurationVar(&s.writeTimeout, "write-timeout", 60*time.Second, "HTTP server write timeout")
 	flag.DurationVar(&s.idleTimeout, "idle-timeout", 60*time.Second, "HTTP server idle timeout")
+	flag.DurationVar(&s.pcAlertsCacheTTL, "pc-alerts-cache-ttl", 5*time.Minute, "Prism Central alerts cache TTL (config key: pc-alerts-cache-ttl; 0 disables caching)")
 	flag.BoolVar(&s.metricsPublic, "metrics-public", false, "Allow unauthenticated GET /metrics for Prometheus scrapers (off by default; on private networks behind a service mesh this is safe)")
 	flag.StringVar(&s.usersFilePath, "users-file", "", "Path to a read-only YAML seed of local accounts (imported into --users-db on first run)")
 	flag.StringVar(&s.usersDBPath, "users-db", "", "Path to the writable JSON user database file; enables login, first-run admin bootstrap, and runtime user/SSO management")
@@ -3894,6 +3898,8 @@ func (s *apiServer) handleMetaRoutes(w http.ResponseWriter, r *http.Request) {
 func apiRouteCatalog() []routeMeta {
 	routes := []routeMeta{
 		{Path: "/api/v1/health", Methods: []string{http.MethodGet}, Description: "Backend health, version, and resolved paths"},
+		{Path: "/api/v1/components", Methods: []string{http.MethodGet}, Description: "Viewer+: report orchestrator, API server, and UI server versions"},
+		{Path: "/api/v1/alerts", Methods: []string{http.MethodGet}, Description: "Viewer+: fetch normalized Prism Central alerts with bounded caching and per-source errors"},
 		{Path: "/api/v1/audit", Methods: []string{http.MethodGet}, Description: "Read recent audit log entries (limit, action, failures filters)"},
 		{Path: "/api/v1/metrics/rate-limit", Methods: []string{http.MethodGet}, Description: "Rate limiter configuration and counters"},
 		{Path: "/metrics", Methods: []string{http.MethodGet}, Description: "Prometheus exposition (run/auth/update counters, build info, self-heal, backup inventory gauges, update-availability, audit-forward drops)"},
@@ -4035,7 +4041,7 @@ func (s *apiServer) buildOpenAPISpecBase() map[string]interface{} {
 		"openapi": "3.0.3",
 		"info": map[string]interface{}{
 			"title":       "NCC Orchestrator API",
-			"version":     "2.1.1",
+			"version":     "2.2.0",
 			"description": "REST API for NCC orchestrator run control, artifacts, settings, and analytics.",
 		},
 		"servers": []map[string]interface{}{
@@ -5360,6 +5366,8 @@ func handleSubcommandArgs(args []string) {
 func (s *apiServer) buildHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/health", s.handleHealth)
+	mux.HandleFunc("/api/v1/components", s.handleComponents)
+	mux.HandleFunc("/api/v1/alerts", s.handleAlerts)
 	mux.HandleFunc("/api/v1/audit", s.handleAudit)
 	mux.HandleFunc("/api/v1/metrics/rate-limit", s.handleRateLimitMetrics)
 	mux.HandleFunc("/metrics", s.handlePrometheusMetrics)

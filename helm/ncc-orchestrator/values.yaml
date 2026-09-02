@@ -2,7 +2,7 @@ namespace: ncc-orchestrator
 
 image:
   repository: docker.io/prajwalnutant/nutanix-ncc-orchestrator
-  tag: "2.1.1"
+  tag: "2.2.0"
   pullPolicy: IfNotPresent
 
 cronjob:

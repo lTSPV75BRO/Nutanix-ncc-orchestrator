@@ -48,6 +48,8 @@ import type {
   BackupScheduleResponse,
   BackupScheduleState,
   NotificationState,
+  PCAlertsData,
+  ComponentsData,
 } from "./types";
 
 // ApiError preserves both the human-readable message and the structured `data`
@@ -220,6 +222,11 @@ async function loadReportDataFallback(): Promise<ReportData> {
 
 export const api = {
   health: () => callApi<HealthData>("/api/v1/health"),
+  alerts: (force = false, resolved: "No" | "Yes" | "all" = "No") =>
+    callApi<PCAlertsData>(
+      `/api/v1/alerts?resolved=${encodeURIComponent(resolved)}${force ? "&refresh=1" : ""}`,
+    ),
+  components: () => callApi<ComponentsData>("/api/v1/components"),
   loadConfig: (path?: string) =>
     callApi<ConfigData>(path ? `/api/v1/settings/config?path=${encodeURIComponent(path)}` : "/api/v1/settings/config"),
   saveConfig: (content: string, path?: string) =>

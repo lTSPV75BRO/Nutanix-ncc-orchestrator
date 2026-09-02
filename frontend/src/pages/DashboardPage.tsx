@@ -9,15 +9,18 @@ import {
   Card,
   Col,
   Empty,
+  Flex,
   Input,
   Row,
   Select,
+  Segmented,
   Skeleton,
   Space,
   Statistic,
   Tag,
   Tooltip,
   Typography,
+  Divider,
 } from "antd";
 import {
   ArrowRightOutlined,
@@ -26,13 +29,15 @@ import {
   ClearOutlined,
   CloseCircleOutlined,
   ExclamationCircleOutlined,
+  FilterOutlined,
   InfoCircleOutlined,
+  LoadingOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
   SearchOutlined,
   WarningOutlined,
 } from "@ant-design/icons";
-import type { RunActiveData, MeData } from "../api/types";
+import type { AlertSource, RunActiveData, MeData } from "../api/types";
 import { api } from "../api/client";
 import { notify, notifyError } from "../notify";
 import { ClusterTable } from "../features/report/ClusterTable";
@@ -87,6 +92,8 @@ export function DashboardPage() {
   const [severityFilters, setSeverityFilters] = useLocalStorageState<Severity[]>("dashboard.severityFilters", []);
   const [compareMode, setCompareMode] = useLocalStorageState<CompareMode>("dashboard.compareMode", "all");
   const [selectedClusters, setSelectedClusters] = useLocalStorageState<string[]>("dashboard.selectedClusters", []);
+  const [alertSource, setAlertSource] = useState<AlertSource>("NCC");
+  const [pcResolvedFilter, setPcResolvedFilter] = useState<"all" | "No" | "Yes">("No");
   const [loadFullReport, setLoadFullReport] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const [tableSummary, setTableSummary] = useState<{
@@ -105,6 +112,8 @@ export function DashboardPage() {
       .map((s) => s.trim().toUpperCase())
       .filter((s): s is Severity => ["FAIL", "WARN", "ERR", "INFO"].includes(s));
     const mode = (searchParams.get("mode") || "").trim();
+    const source = (searchParams.get("source") || "").trim().toUpperCase();
+    const resolved = (searchParams.get("resolved") || "").trim();
     const clusters = (searchParams.get("clusters") || "")
       .split(",")
       .map((s) => s.trim())
@@ -114,6 +123,10 @@ export function DashboardPage() {
     if (clusters.length > 0 && clusters.join(",") !== selectedClusters.join(",")) setSelectedClusters(clusters);
     if ((mode === "all" || mode === "changed" || mode === "flaky") && mode !== compareMode) {
       setCompareMode(mode);
+    }
+    if ((source === "NCC" || source === "PC") && source !== alertSource) setAlertSource(source);
+    if ((resolved === "No" || resolved === "Yes" || resolved === "all") && resolved !== pcResolvedFilter) {
+      setPcResolvedFilter(resolved);
     }
     // Mount/query driven sync.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -129,10 +142,23 @@ export function DashboardPage() {
     else next.delete("clusters");
     if (compareMode !== "all") next.set("mode", compareMode);
     else next.delete("mode");
+    if (alertSource !== "NCC") next.set("source", alertSource.toLowerCase());
+    else next.delete("source");
+    if (alertSource === "PC" && pcResolvedFilter !== "No") next.set("resolved", pcResolvedFilter);
+    else next.delete("resolved");
     if (next.toString() !== searchParams.toString()) {
       setSearchParams(next, { replace: true });
     }
-  }, [filterText, severityFilters, selectedClusters, compareMode, searchParams, setSearchParams]);
+  }, [
+    filterText,
+    severityFilters,
+    selectedClusters,
+    compareMode,
+    alertSource,
+    pcResolvedFilter,
+    searchParams,
+    setSearchParams,
+  ]);
 
   const previewReport = useQuery({
     queryKey: ["report-data", "preview", PREVIEW_LIMIT],
@@ -145,6 +171,21 @@ export function DashboardPage() {
     queryFn: () => api.reportData(),
     enabled: loadFullReport,
     staleTime: 30_000,
+  });
+
+  const pcUnresolvedAlertsQuery = useQuery({
+    queryKey: ["pc-alerts", "No"],
+    queryFn: () => api.alerts(false, "No"),
+    enabled: alertSource === "PC",
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+  const pcAllAlertsQuery = useQuery({
+    queryKey: ["pc-alerts", "all"],
+    queryFn: () => api.alerts(false, "all"),
+    enabled: alertSource === "PC",
+    staleTime: 5 * 60_000,
+    refetchInterval: false,
   });
 
   // Reuse the same query key the header trigger button uses so react-query
@@ -350,7 +391,20 @@ export function DashboardPage() {
   };
 
   const refreshAll = async () => {
-    await Promise.all([previewReport.refetch(), loadFullReport ? fullReport.refetch() : Promise.resolve()]);
+    await Promise.all([
+      previewReport.refetch(),
+      loadFullReport ? fullReport.refetch() : Promise.resolve(),
+      alertSource === "PC"
+        ? Promise.all([
+            api.alerts(true, "No").then((data) => {
+              queryClient.setQueryData(["pc-alerts", "No"], data);
+            }),
+            api.alerts(true, "all").then((data) => {
+              queryClient.setQueryData(["pc-alerts", "all"], data);
+            }),
+          ])
+        : Promise.resolve(),
+    ]);
     notify.success("Dashboard refreshed.");
   };
 
@@ -363,13 +417,16 @@ export function DashboardPage() {
     setSeverityFilters([]);
     setSelectedClusters([]);
     setCompareMode("all");
+    setAlertSource("NCC");
+    setPcResolvedFilter("No");
   };
 
   const filtersActive =
     filterText.trim().length > 0 ||
     severityFilters.length > 0 ||
     selectedClusters.length > 0 ||
-    compareMode !== "all";
+    compareMode !== "all" ||
+    alertSource !== "NCC";
 
   const initialLoading = previewReport.isLoading && !previewReport.data && !fullReport.data;
 
@@ -605,48 +662,57 @@ export function DashboardPage() {
       )}
 
       {/* FILTER TOOLBAR */}
-      <Card className="page-card filter-toolbar-card">
-        <Typography.Title level={5} className="section-title" style={{ marginBottom: 8 }}>
-          Alert Filters
-        </Typography.Title>
-        <Row gutter={[12, 12]} align="middle">
-          <Col xs={24} md={12} lg={10}>
-            <Tooltip
-              title={
-                <div style={{ fontSize: 12 }}>
-                  Tokens: <code>sev:FAIL</code> <code>cluster:10.1</code> <code>changed:true</code>{" "}
-                  <code>flaky:true</code>
-                </div>
+      <Card
+        className="page-card filter-toolbar-card"
+        bordered={false}
+        style={{ borderRadius: 12, boxShadow: "0 2px 8px rgba(0, 0, 0, 0.04)" }}
+        styles={{ body: { padding: "20px 24px" } }}
+      >
+        <Flex align="center" justify="space-between" style={{ marginBottom: 16 }}>
+          <Flex align="center" gap={8}>
+            <FilterOutlined style={{ color: "#1677ff", fontSize: 16 }} />
+            <Typography.Title level={5} style={{ margin: 0, fontWeight: 600 }}>Alert Filters</Typography.Title>
+          </Flex>
+          {filtersActive ? (
+            <Button type="text" danger icon={<ClearOutlined />} onClick={clearFilters} size="small">
+              Reset filters
+            </Button>
+          ) : null}
+        </Flex>
+        <Flex gap={12} wrap="wrap" align="center">
+          <div style={{ flex: "1 1 280px", minWidth: 260 }}>
+            <Input
+              id="alerts-search"
+              name="alerts-search"
+              aria-label="Search alerts"
+              allowClear
+              prefix={<SearchOutlined style={{ color: "#bfbfbf" }} />}
+              value={filterText}
+              onChange={(e) => setFilterText(e.target.value)}
+              placeholder="Search alerts (e.g. cluster:10.1)"
+              autoComplete="off"
+              suffix={
+                <Tooltip title={<div style={{ fontSize: 12 }}><strong>Supported tokens:</strong><br /><code>sev:FAIL</code> <code>cluster:10.1</code> <code>changed:true</code> <code>flaky:true</code></div>}>
+                  <InfoCircleOutlined style={{ color: "#bfbfbf", cursor: "pointer" }} />
+                </Tooltip>
               }
-            >
-              <Input
-                id="alerts-search"
-                name="alerts-search"
-                aria-label="Search alerts"
-                allowClear
-                prefix={<SearchOutlined />}
-                value={filterText}
-                onChange={(e) => setFilterText(e.target.value)}
-                placeholder="Search alerts… try sev:FAIL, cluster:10.1, changed:true"
-                autoComplete="off"
-              />
-            </Tooltip>
-          </Col>
-          <Col xs={24} md={12} lg={8}>
+            />
+          </div>
+          <div style={{ flex: "1 1 200px", minWidth: 180 }}>
             <Select
               id="dashboard-cluster-filter"
               aria-label="Filter alerts by cluster"
               mode="multiple"
               allowClear
-              placeholder="Filter by cluster"
+              placeholder="All Clusters"
               maxTagCount="responsive"
               style={{ width: "100%" }}
               value={selectedClusters}
               onChange={(values) => setSelectedClusters(values)}
               options={clusterOptions}
             />
-          </Col>
-          <Col xs={24} md={12} lg={4}>
+          </div>
+          <div style={{ width: 140 }}>
             <Select
               id="dashboard-compare-mode"
               aria-label="Compare mode"
@@ -654,47 +720,71 @@ export function DashboardPage() {
               value={compareMode}
               onChange={(value) => setCompareMode(value as CompareMode)}
               options={[
-                { value: "all", label: "All rows" },
-                { value: "changed", label: "Changed only" },
-                { value: "flaky", label: "Flaky only" },
+                { value: "all", label: "All Rows" },
+                { value: "changed", label: "Changed Only" },
+                { value: "flaky", label: "Flaky Only" },
               ]}
             />
-          </Col>
-          <Col xs={24} md={12} lg={2}>
-            <Button
-              icon={<ClearOutlined />}
-              disabled={!filtersActive}
-              onClick={clearFilters}
-              style={{ width: "100%" }}
-            >
-              Clear
-            </Button>
-          </Col>
-        </Row>
-        <Space size={[6, 6]} wrap style={{ marginTop: 12 }}>
-          <Tag.CheckableTag
-            checked={severityFilters.length === 0}
-            onChange={(checked) => checked && setSeverityFilters([])}
-          >
+          </div>
+        </Flex>
+        <Flex align="center" gap={8} wrap="wrap" style={{ marginTop: 16 }}>
+          <Typography.Text type="secondary" style={{ fontSize: 13, marginRight: 4 }}>Severity:</Typography.Text>
+          <Tag.CheckableTag checked={severityFilters.length === 0} onChange={(checked) => checked && setSeverityFilters([])} style={{ borderRadius: 4, padding: "2px 10px" }}>
             ALL
           </Tag.CheckableTag>
           {SEVERITY_META.map((sm) => (
-            <Tag.CheckableTag
-              key={sm.key}
-              checked={severityFilters.includes(sm.key)}
-              onChange={() => toggleSeverity(sm.key)}
-            >
-              <Space size={4}>
-                {sm.icon}
-                {sm.label}
-              </Space>
+            <Tag.CheckableTag key={sm.key} checked={severityFilters.includes(sm.key)} onChange={() => toggleSeverity(sm.key)} style={{ borderRadius: 4, padding: "2px 10px" }}>
+              <Space size={4}>{sm.icon}<span>{sm.label}</span></Space>
             </Tag.CheckableTag>
           ))}
-        </Space>
+        </Flex>
+        <Divider style={{ margin: "16px 0" }} />
+        <Flex align="center" justify="space-between" wrap="wrap" gap={16}>
+          <Flex align="center" gap={12}>
+            <Typography.Text strong style={{ fontSize: 13 }}>Alert Type:</Typography.Text>
+            <Segmented aria-label="Alert source" size="middle" value={alertSource} onChange={(value) => setAlertSource(value as AlertSource)} options={[
+              { label: "NCC", value: "NCC" },
+              { label: "PC", value: "PC" },
+            ]} />
+          </Flex>
+          {alertSource === "PC" ? (
+            <Flex align="center" gap={8}>
+              <Typography.Text type="secondary" style={{ fontSize: 13 }}>PC Alerts Filter:</Typography.Text>
+              <Select aria-label="PC resolved filter" value={pcResolvedFilter} onChange={(value) => setPcResolvedFilter(value as "all" | "No" | "Yes")} style={{ width: 160 }} options={[
+                { value: "No", label: "Resolved: No" },
+                { value: "Yes", label: "Resolved: Yes" },
+                { value: "all", label: "All Statuses" },
+              ]} />
+            </Flex>
+          ) : null}
+        </Flex>
       </Card>
 
+      {alertSource === "PC" && pcAllAlertsQuery.isFetching ? (
+        <Alert
+          type="info"
+          showIcon
+          icon={<LoadingOutlined spin />}
+          message="Loading complete Prism Central alert history…"
+          description="Unresolved alerts are available now. Resolved and all-status results are loading in the background."
+        />
+      ) : null}
+
+      {pcUnresolvedAlertsQuery.error || pcAllAlertsQuery.error ? (
+        <Alert
+          type="warning"
+          showIcon
+          message="Prism Central alerts unavailable"
+          description="NCC alerts remain available. Check the configured Prism Central URL, credentials, and TLS settings."
+        />
+      ) : null}
+
       {/* MAIN ALERTS TABLE */}
-      {aggRows.length === 0 && !hasChecksSnapshotData ? (
+      {aggRows.length === 0 &&
+      !hasChecksSnapshotData &&
+      ((pcResolvedFilter === "No"
+        ? pcUnresolvedAlertsQuery.data?.alerts?.length
+        : pcAllAlertsQuery.data?.alerts?.length) ?? 0) === 0 ? (
         <Card className="page-card">
           {(() => {
             // Empty-state copy is contextual:
@@ -797,6 +887,11 @@ export function DashboardPage() {
         <ClusterTable
           checksSnapshot={filteredChecksSnapshot}
           aggRows={filteredAggRows}
+          pcAlerts={
+            (pcResolvedFilter === "No"
+              ? pcUnresolvedAlertsQuery.data?.alerts
+              : pcAllAlertsQuery.data?.alerts) ?? []
+          }
           diffFlags={(reportData.diff_flags || {}) as Record<string, unknown>}
           flakyKeys={(reportData.flaky_keys || {}) as Record<string, unknown>}
           nccLogs={Array.isArray(reportData.ncc_logs) ? reportData.ncc_logs : []}
@@ -804,6 +899,8 @@ export function DashboardPage() {
           selectedClusters={selectedClusters}
           clusterNameMap={clusterNameMap}
           severityFilters={severityFilters}
+          alertSource={alertSource}
+          pcResolvedFilter={pcResolvedFilter}
           compareMode={compareMode}
           onSummaryChange={setTableSummary}
         />
