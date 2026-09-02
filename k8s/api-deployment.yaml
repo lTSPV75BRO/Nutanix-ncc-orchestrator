@@ -4,7 +4,7 @@ metadata:
   name: ncc-v2-api
   namespace: ncc-orchestrator-v2
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: ncc-orchestrator-v2
@@ -16,6 +16,14 @@ spec:
         component: api
     spec:
       serviceAccountName: ncc-v2-api
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: ncc-orchestrator-v2
+              component: api
       securityContext:
         fsGroup: 1000
         fsGroupChangePolicy: "OnRootMismatch"
@@ -37,15 +45,15 @@ spec:
             - name: tools
               mountPath: /tools
 
-        # Stages ConfigMap into writeable emptyDir volume
+        # Seeds the PVC-backed canonical config without overwriting UI edits.
         - name: stage-config
           image: busybox:1.36
-          command: ["sh", "-c", "cp /config-cm/config.yaml /config-writeable/config.yaml"]
+          command: ["sh", "-c", "mkdir -p /data/config && test -f /data/config/config.yaml || cp /config-cm/config.yaml /data/config/config.yaml"]
           volumeMounts:
             - name: config-cm-vol
               mountPath: /config-cm
-            - name: config-writeable-vol
-              mountPath: /config-writeable
+            - name: data
+              mountPath: /data
 
       containers:
         - name: api
@@ -55,9 +63,9 @@ spec:
             - "--listen"
             - ":8081"
             - "--repo-root"
-            - "/"
+            - "/data"
             - "--config-path"
-            - "/config/config.yaml"
+            - "/data/config/config.yaml"
             - "--output-dir"
             - "/data/outputfiles"
             - "--log-dir"
@@ -79,8 +87,15 @@ spec:
             - "--auth-mode"
             - "token"
             - "--cors-origin"
-            - "http://localhost:8080"
+            - "$(NCC_UI_ORIGIN)"
           env:
+            - name: NCC_RUNTIME_MODE
+              value: "kubernetes"
+            - name: NCC_UI_ORIGIN
+              valueFrom:
+                configMapKeyRef:
+                  name: ncc-v2-config
+                  key: ui-origin
             - name: NCC_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -122,8 +137,6 @@ spec:
             capabilities:
               drop: ["ALL"]
           volumeMounts:
-            - name: config-writeable-vol
-              mountPath: /config
             - name: data
               mountPath: /data
             - name: tools
@@ -140,8 +153,6 @@ spec:
         - name: config-cm-vol
           configMap:
             name: ncc-v2-config
-        - name: config-writeable-vol
-          emptyDir: {}
         - name: data
           persistentVolumeClaim:
             claimName: ncc-v2-data

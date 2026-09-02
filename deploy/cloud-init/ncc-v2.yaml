@@ -1,0 +1,144 @@
+#cloud-config
+#
+# Set NCC_VERSION and NCC_RELEASE_BASE_URL before applying this file.
+# The generated service starts the v2 stack with HTTPS enabled by default.
+
+package_update: true
+packages:
+  - curl
+  - ca-certificates
+  - tar
+
+write_files:
+  - path: /etc/ncc/ncc-install.env
+    permissions: "0600"
+    content: |
+      NCC_VERSION="2.2.0"
+      NCC_RELEASE_BASE_URL="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download"
+      NCC_INSTALL_DIR="/opt/ncc-v2"
+      NCC_CONFIG="/opt/ncc-v2/config.yaml"
+      NCC_API_PORT="8081"
+      NCC_UI_PORT="8080"
+      NCC_CLUSTERS=""
+      NCC_PCS=""
+      NCC_USERNAME="admin"
+      NCC_PASSWORD="CHANGE_ME"
+
+  - path: /usr/local/sbin/install-ncc-v2
+    permissions: "0750"
+    owner: root:root
+    content: |
+      #!/bin/sh
+      set -eu
+      . /etc/ncc/ncc-install.env
+
+      arch="$(uname -m)"
+      case "$arch" in
+        x86_64) arch="amd64" ;;
+        aarch64|arm64) arch="arm64" ;;
+        *) echo "Unsupported architecture: $arch" >&2; exit 1 ;;
+      esac
+
+      archive="ncc-v2-stack-linux-${arch}.tar.gz"
+      base="${NCC_RELEASE_BASE_URL%/}/${NCC_VERSION}"
+      tmp="$(mktemp -d)"
+      trap 'rm -rf "$tmp"' EXIT
+
+      curl --fail --location --silent --show-error \
+        "$base/$archive" -o "$tmp/$archive"
+      curl --fail --location --silent --show-error \
+        "$base/checksums.txt" -o "$tmp/checksums.txt"
+      expected="$(awk -v name="$archive" '$2 == name { print $1; exit }' "$tmp/checksums.txt")"
+      actual="$(sha256sum "$tmp/$archive" | awk '{print $1}')"
+      [ -n "$expected" ] && [ "$expected" = "$actual" ] || {
+        echo "Release checksum verification failed for $archive" >&2
+        exit 1
+      }
+
+      rm -rf "$NCC_INSTALL_DIR"
+      mkdir -p "$NCC_INSTALL_DIR"
+      tar -xzf "$tmp/$archive" -C "$NCC_INSTALL_DIR"
+      bin="$NCC_INSTALL_DIR/bin/ncc-orchestrator"
+      chmod 0755 "$NCC_INSTALL_DIR"/bin/*
+
+      mkdir -p "$(dirname "$NCC_CONFIG")" "$NCC_INSTALL_DIR/outputfiles" "$NCC_INSTALL_DIR/logs"
+      cat > "$NCC_CONFIG" <<EOF
+      schema-version: 1
+      runner:
+        targets:
+          mode: clusters
+          clusters: [${NCC_CLUSTERS}]
+          pcs: [${NCC_PCS}]
+        credentials:
+          username: "${NCC_USERNAME}"
+          password: "secret://NCC_PASSWORD"
+        execution:
+          timeout: "15m"
+          request-timeout: "20s"
+          max-parallel: 4
+        retry:
+          max-attempts: 6
+          base-delay: "400ms"
+          max-delay: "8s"
+          circuit-breaker: 3
+      storage:
+        output-dir: "${NCC_INSTALL_DIR}/outputfiles"
+        logs-dir: "${NCC_INSTALL_DIR}/logs"
+        run-history-dir: "${NCC_INSTALL_DIR}/outputfiles/runs"
+      api:
+        cache:
+          pc-alerts-cache-ttl: "5m"
+      deployment:
+        platform: host
+        self-heal: true
+      secrets-provider: env
+      EOF
+      chmod 0600 "$NCC_CONFIG"
+
+      if command -v ufw >/dev/null 2>&1; then
+        ufw allow "$NCC_UI_PORT/tcp"
+        ufw allow "$NCC_API_PORT/tcp"
+      elif command -v firewall-cmd >/dev/null 2>&1; then
+        firewall-cmd --permanent --add-port="$NCC_UI_PORT/tcp"
+        firewall-cmd --permanent --add-port="$NCC_API_PORT/tcp"
+        firewall-cmd --reload
+      fi
+
+      "$bin" v2-install-service \
+        --install-dir "$NCC_INSTALL_DIR" \
+        --config-path "$NCC_CONFIG" \
+        --output-dir "$NCC_INSTALL_DIR/outputfiles" \
+        --log-dir "$NCC_INSTALL_DIR/logs" \
+        --orchestrator-bin "$bin" \
+        --token-file "$NCC_INSTALL_DIR/.ncc-api-token" \
+        --api-listen ":$NCC_API_PORT" \
+        --ui-listen ":$NCC_UI_PORT" \
+        --self-heal --now
+
+      cat > /etc/systemd/system/ncc-log-maintenance.service <<EOF
+      [Unit]
+      Description=NCC log size check and rotation
+
+      [Service]
+      Type=oneshot
+      ExecStart=/bin/sh -c '${bin} doctor --install-dir ${NCC_INSTALL_DIR} --fix --only-checks log-sizes --json >> ${NCC_INSTALL_DIR}/logs/doctor.log 2>&1 || true'
+      EOF
+      cat > /etc/systemd/system/ncc-log-maintenance.timer <<EOF
+      [Unit]
+      Description=Check NCC log sizes every 15 minutes
+
+      [Timer]
+      OnBootSec=5min
+      OnUnitActiveSec=15min
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+      EOF
+      systemctl daemon-reload
+      systemctl enable --now ncc-log-maintenance.timer
+
+      echo "NCC v${NCC_VERSION} installed. Edit $NCC_CONFIG and replace CHANGE_ME before running checks."
+
+runcmd:
+  - [sh, -c, /usr/local/sbin/install-ncc-v2]

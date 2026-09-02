@@ -18,6 +18,7 @@ import (
 
 // Config is the fully-resolved runtime configuration for an NCC run.
 type Config struct {
+	SchemaVersion      int `mapstructure:"schema-version" yaml:"schema-version" json:"schema-version"`
 	Clusters           []string
 	ClustersFile       string                       // Optional: cluster file; lines are cluster or cluster,username[,password] (overrides/supplements clusters when set)
 	ClusterCredentials map[string]ClusterCredential `mapstructure:"-"`
@@ -148,7 +149,98 @@ type Config struct {
 	NCCAPIVersion string `mapstructure:"ncc-api-version"`
 
 	// NutanixV4APIVersion is the v4 REST API path revision (e.g. v4.2, v4.1, v4.0.a1) for /api/clustermgmt/{ver}/ and /api/monitoring/{ver}/.
-	NutanixV4APIVersion string `mapstructure:"nutanix-v4-api-version"`
+	NutanixV4APIVersion string        `mapstructure:"nutanix-v4-api-version"`
+	PCAlertsCacheTTL    time.Duration `mapstructure:"pc-alerts-cache-ttl" yaml:"pc-alerts-cache-ttl" json:"pc-alerts-cache-ttl"`
+}
+
+// CanonicalConfig is the versioned, deployment-neutral YAML shape. The flat
+// fields on Config remain the compatibility representation used by existing
+// callers; loaders normalize this shape into those fields before binding.
+type CanonicalConfig struct {
+	SchemaVersion int                    `yaml:"schema-version" json:"schema-version"`
+	Runner        CanonicalRunner        `yaml:"runner" json:"runner"`
+	Storage       CanonicalStorage       `yaml:"storage" json:"storage"`
+	API           CanonicalAPI           `yaml:"api" json:"api"`
+	UI            CanonicalUI            `yaml:"ui" json:"ui"`
+	Deployment    CanonicalDeployment    `yaml:"deployment" json:"deployment"`
+	Notifications CanonicalNotifications `yaml:"notifications" json:"notifications"`
+}
+
+type CanonicalRunner struct {
+	Targets     CanonicalTargets     `yaml:"targets" json:"targets"`
+	Credentials CanonicalCredentials `yaml:"credentials" json:"credentials"`
+	Execution   CanonicalExecution   `yaml:"execution" json:"execution"`
+	Retry       CanonicalRetry       `yaml:"retry" json:"retry"`
+	Filtering   CanonicalFiltering   `yaml:"filtering" json:"filtering"`
+}
+
+type CanonicalTargets struct {
+	Mode            string   `yaml:"mode" json:"mode"`
+	Clusters        []string `yaml:"clusters" json:"clusters"`
+	ClustersFile    string   `yaml:"clusters-file" json:"clusters-file"`
+	PCs             []string `yaml:"pcs" json:"pcs"`
+	PCsFile         string   `yaml:"pcs-file" json:"pcs-file"`
+	PrismCentralURL string   `yaml:"prism-central-url" json:"prism-central-url"`
+}
+
+type CanonicalCredentials struct {
+	Username string `yaml:"username" json:"username"`
+	Password string `yaml:"password" json:"password" secret:"true"`
+}
+
+type CanonicalExecution struct {
+	Timeout        string `yaml:"timeout" json:"timeout"`
+	RequestTimeout string `yaml:"request-timeout" json:"request-timeout"`
+	MaxParallel    int    `yaml:"max-parallel" json:"max-parallel"`
+	PollInterval   string `yaml:"poll-interval" json:"poll-interval"`
+	PollJitter     string `yaml:"poll-jitter" json:"poll-jitter"`
+}
+
+type CanonicalRetry struct {
+	MaxAttempts    int    `yaml:"max-attempts" json:"max-attempts"`
+	BaseDelay      string `yaml:"base-delay" json:"base-delay"`
+	MaxDelay       string `yaml:"max-delay" json:"max-delay"`
+	CircuitBreaker int    `yaml:"circuit-breaker" json:"circuit-breaker"`
+}
+
+type CanonicalFiltering struct {
+	PolicyGates         string   `yaml:"policy-gates" json:"policy-gates"`
+	Severity            []string `yaml:"severity" json:"severity"`
+	ExcludeAlertTitles  []string `yaml:"exclude-alert-titles" json:"exclude-alert-titles"`
+	FlakyLookbackRuns   int      `yaml:"flaky-lookback-runs" json:"flaky-lookback-runs"`
+	FlakyMinTransitions int      `yaml:"flaky-min-transitions" json:"flaky-min-transitions"`
+}
+
+type CanonicalStorage struct {
+	OutputDir     string `yaml:"output-dir" json:"output-dir"`
+	LogsDir       string `yaml:"logs-dir" json:"logs-dir"`
+	RunHistoryDir string `yaml:"run-history-dir" json:"run-history-dir"`
+	PromDir       string `yaml:"prom-dir" json:"prom-dir"`
+}
+
+type CanonicalAPI struct {
+	Listen      string `yaml:"listen" json:"listen"`
+	AuthMode    string `yaml:"auth-mode" json:"auth-mode"`
+	PCAlertsTTL string `yaml:"pc-alerts-cache-ttl" json:"pc-alerts-cache-ttl"`
+}
+
+type CanonicalUI struct {
+	Listen       string `yaml:"listen" json:"listen"`
+	BackendURL   string `yaml:"backend-url" json:"backend-url"`
+	Origin       string `yaml:"origin" json:"origin"`
+	InsecureHTTP bool   `yaml:"insecure-http" json:"insecure-http"`
+}
+
+type CanonicalDeployment struct {
+	Platform string `yaml:"platform" json:"platform"`
+	SelfHeal bool   `yaml:"self-heal" json:"self-heal"`
+}
+
+type CanonicalNotifications struct {
+	EmailEnabled bool   `yaml:"email-enabled" json:"email-enabled"`
+	SMTPServer   string `yaml:"smtp-server" json:"smtp-server"`
+	SMTPPort     int    `yaml:"smtp-port" json:"smtp-port"`
+	WebhookURL   string `yaml:"webhook-url" json:"webhook-url" secret:"true"`
 }
 
 // ClusterCredential is an optional per-cluster username/password override.

@@ -15,6 +15,13 @@ metadata:
   namespace: ncc-orchestrator-v2
 automountServiceAccountToken: true
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ncc-v2-runner
+  namespace: ncc-orchestrator-v2
+automountServiceAccountToken: false
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -25,7 +32,7 @@ rules:
   # namespace only. The Deployment fixes the name to `ncc-v2-users`.
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
+    verbs: ["get", "create"]
   - apiGroups: ["batch"]
     resources: ["cronjobs", "jobs"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

@@ -10,6 +10,7 @@ import type { ConfigListItem } from "../../api/types";
 type Props = {
   backendConfigPath: string;
   onError: (e: unknown) => void;
+  isKubernetes?: boolean;
 };
 
 type Mode = "simple" | "advanced";
@@ -96,7 +97,7 @@ function approxNextRun(every?: string, cron?: string, lastModIso?: string): Date
   return new Date(base + k * ms);
 }
 
-export function ScheduleSection({ backendConfigPath, onError }: Props) {
+export function ScheduleSection({ backendConfigPath, onError, isKubernetes = false }: Props) {
   const [mode, setMode] = useLocalStorageState<Mode>("settings.schedule.mode", "simple");
   const [type, setType] = useLocalStorageState("settings.schedule.type", "auto");
   const [action, setAction] = useLocalStorageState("settings.schedule.action", "create");
@@ -244,6 +245,17 @@ export function ScheduleSection({ backendConfigPath, onError }: Props) {
       })),
     [configOptions],
   );
+
+  if (isKubernetes) {
+    return (
+      <Alert
+        type="info"
+        showIcon
+        message="Scheduling is managed by Kubernetes"
+        description="The ncc-v2-runner CronJob is authoritative. Configure its schedule in Helm or Kustomize; host cron, systemd timers, and Windows Scheduled Tasks are not used."
+      />
+    );
+  }
 
   return (
     <Space orientation="vertical" size={16} style={{ width: "100%" }}>

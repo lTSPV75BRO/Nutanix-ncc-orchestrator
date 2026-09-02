@@ -1,0 +1,39 @@
+{{- if .Values.ui.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ncc-v2-ui
+  namespace: {{ .Values.namespace }}
+spec:
+  replicas: {{ .Values.ui.replicas }}
+  selector:
+    matchLabels: { app: ncc-orchestrator-v2, component: ui }
+  template:
+    metadata:
+      labels: { app: ncc-orchestrator-v2, component: ui }
+    spec:
+      containers:
+        - name: ui
+          image: "{{ .Values.images.ui.repository }}:{{ .Values.images.ui.tag }}"
+          imagePullPolicy: {{ .Values.images.ui.pullPolicy }}
+          args: ["--listen", ":8080", "--dir", "/app/frontend/dist", "--backend-url", "http://ncc-v2-api:{{ .Values.api.service.port }}", "--allowed-origins", {{ .Values.ui.origin | quote }}]
+          ports: [{ name: http, containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /, port: 8080 } }
+          livenessProbe: { httpGet: { path: /, port: 8080 }, initialDelaySeconds: 10 }
+          resources: {{ .Values.resources.ui | toYaml | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ncc-v2-ui
+  namespace: {{ .Values.namespace }}
+spec:
+  type: {{ .Values.ui.service.type }}
+  selector: { app: ncc-orchestrator-v2, component: ui }
+  ports: [{ name: http, port: {{ .Values.ui.service.port }}, targetPort: 8080 }]
+{{- end }}

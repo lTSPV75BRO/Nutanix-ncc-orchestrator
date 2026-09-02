@@ -453,6 +453,9 @@ export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
   const health = useQuery({ queryKey: ["health"], queryFn: api.health });
   const report = useQuery({ queryKey: ["report-data"], queryFn: api.reportData });
   const backendConfigPath = (health.data as { config_path?: string } | undefined)?.config_path ?? "";
+  const isKubernetes = Boolean(
+    (health.data as { runtime?: { kubernetes?: boolean } } | undefined)?.runtime?.kubernetes,
+  );
 
   useEffect(() => {
     if (health.error) notifyError(health.error, "Failed to fetch API health");
@@ -486,7 +489,13 @@ export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
         {
           key: "schedule",
           label: tabLabel(<CalendarOutlined />, "Schedule"),
-          children: lazySection(<ScheduleSection backendConfigPath={backendConfigPath} onError={notifyError} />),
+          children: lazySection(
+            <ScheduleSection
+              backendConfigPath={backendConfigPath}
+              onError={notifyError}
+              isKubernetes={isKubernetes}
+            />,
+          ),
         },
         {
           key: "runs",
@@ -516,7 +525,7 @@ export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
         {
           key: "maintenance",
           label: tabLabel(<ToolOutlined />, "Maintenance"),
-          children: lazySection(<MaintenanceSection />),
+          children: lazySection(<MaintenanceSection isKubernetes={isKubernetes} />),
         },
         {
           key: "developer",

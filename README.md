@@ -250,11 +250,13 @@ detached signatures, troubleshooting AV quarantines), see
 
 ## Configuration
 
-**[`example_config.yaml`](example_config.yaml)** is the canonical, validator-clean template. Every release archive bundles a copy. Three layered sources are honored (later wins):
+**[`example_config.yaml`](example_config.yaml)** is the canonical, validator-clean template. Every release archive bundles a copy. Configuration precedence is:
 
-1. Config file (YAML or JSON, default `config.yaml`)
-2. Environment variables with the **`NCC_`** prefix (e.g. `NCC_MAX_PARALLEL=8`)
-3. CLI flags
+1. Built-in defaults
+2. Canonical YAML (nested schema version 1; legacy flat keys remain supported)
+3. Environment variables with the **`NCC_`** prefix
+4. Platform/deployment overlay
+5. Explicit CLI flags
 
 ### Secret handling
 
@@ -262,13 +264,19 @@ Plaintext credentials in config files are explicitly rejected by `validate-secre
 
 ```yaml
 # Option A — env-backed (recommended for CLI/CI)
-secrets-provider: env
-password: "secret://NCC_PASSWORD"     # then: export NCC_PASSWORD=...
+secrets:
+  provider: env
+runner:
+  credentials:
+    password: "secret://NCC_PASSWORD" # then: export NCC_PASSWORD=...
 
 # Option B — file-backed (recommended for hardened deployments)
-secrets-provider: file
-secrets-file: /run/secrets/ncc.yaml
-password: "secret://NCC_PASSWORD"
+secrets:
+  provider: file
+  file: /run/secrets/ncc.yaml
+runner:
+  credentials:
+    password: "secret://NCC_PASSWORD"
 ```
 
 Validate before you run:
@@ -697,6 +705,7 @@ Raw NCC summaries land under `nccfiles/`. Runner JSON logs under `logs/ncc-runne
 | [`docs/NIST_CSF_EVIDENCE_MANIFEST.json`](docs/NIST_CSF_EVIDENCE_MANIFEST.json)          | Machine-readable control-to-evidence mapping for compliance bundles    |
 | [`docs/RELEASE_CHECKSUMS.md`](docs/RELEASE_CHECKSUMS.md)                              | How `--update` verifies downloads                                     |
 | [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md)                            | Verify SHA-256, run unsigned binaries on macOS/Windows/Linux, GPG     |
+| [`deploy/README.md`](deploy/README.md)                                                | Provision Linux and Windows VMs with cloud-init or Sysprep            |
 | [`k8s/README.md`](k8s/README.md)                                                     | Kubernetes deployment guide                                           |
 | [`Prometheus.md`](Prometheus.md)                                                     | Prometheus setup: `.prom` textfile collector + scraping run metrics from the api-server `/metrics` |
 | [`CHANGELOG.md`](CHANGELOG.md)                                                       | Full version history                                                  |

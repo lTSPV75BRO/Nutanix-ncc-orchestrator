@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	yaml "go.yaml.in/yaml/v3"
 	"goncc/internal/selfsigned"
 )
 
@@ -100,6 +101,7 @@ func (r healReport) Worst() healStatus {
 // selfHealChecks is the check registry. Order here is the report order.
 func selfHealChecks() []healCheck {
 	return []healCheck{
+		{ID: "config-schema", Title: "Canonical configuration schema", Category: "config", Run: checkConfigSchema},
 		{ID: "config-valid", Title: "Configuration validity", Category: "config", Run: checkConfigValid},
 		{ID: "config-output-routing", Title: "Output-dir path routing", Category: "config", Run: checkConfigOutputRouting},
 		{ID: "output-dirs-writable", Title: "Output directories writable", Category: "storage", Run: checkOutputDirsWritable},
@@ -116,6 +118,50 @@ func selfHealChecks() []healCheck {
 		{ID: "selinux-exec-context", Title: "SELinux executable context", Category: "process", Run: checkSELinuxExecContext},
 		{ID: "log-sizes", Title: "Log file sizes", Category: "storage", Run: checkLogSizes},
 	}
+}
+
+func checkConfigSchema(hc *healContext) healResult {
+	res := healResult{ID: "config-schema", Title: "Canonical configuration schema", Category: "config"}
+	raw, err := os.ReadFile(hc.ConfigPath)
+	if err != nil {
+		res.Status = healWarn
+		res.Message = "config unavailable; schema check skipped"
+		return res
+	}
+	var doc map[string]interface{}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		res.Status = healFail
+		res.Message = "YAML parse failed: " + err.Error()
+		return res
+	}
+	version, exists := doc["schema-version"]
+	if !exists {
+		res.Status = healWarn
+		res.Message = "configuration has no schema-version and uses legacy compatibility mode"
+		if hc.Fix {
+			updated := append([]byte("schema-version: 1\n"), raw...)
+			if err := os.WriteFile(hc.ConfigPath, updated, 0o600); err == nil {
+				res.Status = healOK
+				res.Fixed = true
+				res.FixMsg = "added schema-version: 1; legacy flat keys remain supported"
+				res.Message = "configuration is now versioned"
+			} else {
+				res.Hint = "Could not write schema-version; update the file manually."
+			}
+		} else {
+			res.Hint = "Run with --fix to add schema-version: 1, or migrate the file to the nested canonical structure."
+		}
+		return res
+	}
+	if fmt.Sprint(version) != "1" {
+		res.Status = healFail
+		res.Message = fmt.Sprintf("unsupported schema-version %v (supported: 1)", version)
+		res.Hint = "Migrate the configuration to schema-version: 1."
+		return res
+	}
+	res.Status = healOK
+	res.Message = "schema-version 1 detected; canonical and legacy keys are supported"
+	return res
 }
 
 func parseCertFile(path string) (*x509.Certificate, error) {

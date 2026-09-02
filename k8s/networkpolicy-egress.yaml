@@ -1,0 +1,34 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ncc-v2-allow-egress
+  namespace: ncc-orchestrator-v2
+spec:
+  podSelector:
+    matchLabels:
+      app: ncc-orchestrator-v2
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Prism Central, Prism Element, HTTPS webhooks, and SMTP submission.
+    # Production overlays should replace this broad CIDR with destination
+    # CIDRs appropriate to the environment.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 9440
+        - protocol: TCP
+          port: 587

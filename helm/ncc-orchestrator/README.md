@@ -1,19 +1,23 @@
-# Helm chart: ncc-orchestrator
+# NCC Orchestrator Helm chart
 
-Renders the **CronJob** that runs `ncc-orchestrator` on a schedule. You still need **ConfigMap**, **Secret** (password), **PVC**, and **namespace** from `k8s/` manifests or your own.
+This chart renders the Kubernetes-native NCC v2 stack: API and UI
+Deployments, internal Services, the TLS Ingress, RBAC, and the authoritative
+runner CronJob. Kubernetes controllers own scheduling, restarts, and image
+rollouts.
 
-This Helm chart is currently **runner-only** (CronJob). For full v2 API/UI/frontend deployment, use `k8s/` manifests (`kubectl apply -k k8s/`).
-
-## Install
+Prerequisites are a ConfigMap named by `configMapName`, a PVC named by
+`pvcName`, a TLS Secret, and credentials provisioned out-of-band under
+`secretName`.
 
 ```bash
 helm install ncc-orchestrator ./helm/ncc-orchestrator \
   --namespace ncc-orchestrator-v2 --create-namespace \
-  --set image.tag=2.1.1
+  --set images.runner.tag=2.2.0 \
+  --set images.api.tag=2.2.0 \
+  --set images.ui.tag=2.2.0
 ```
 
-Apply prerequisites first (namespace, config, secret, PVC, storage), or use **`kubectl apply -k k8s/`** with [`k8s/kustomization.yaml`](../../k8s/kustomization.yaml).
-
-## Values
-
-See `values.yaml` for `image.repository`, `image.tag`, `cronjob.schedule`, and resource names (`configMapName`, `pvcName`, `secretName`).
+Set `ui.origin`, `ingress.host`, `ingress.tlsSecret`, storage names, and
+destination-specific NetworkPolicies in an environment values file. Pin
+production images by digest where supported. Never commit credentials or
+private TLS keys.

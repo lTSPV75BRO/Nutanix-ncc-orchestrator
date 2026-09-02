@@ -37,12 +37,13 @@ services:
       # "127.0.0.1:" prefix to expose the API to the host network.
       - "127.0.0.1:8081:8081"
     volumes:
-      - ./config:/app/config:ro
+      - ./config:/app/config
       - ncc-output:/app/outputfiles
       - ncc-logs:/app/logs
       - ncc-ncc:/app/nccfiles
       - ncc-api-token:/app/data/auth
     environment:
+      - NCC_RUNTIME_MODE=host
       # NCC_PASSWORD picked up by the api-server when triggering
       # runs that reference secret://NCC_PASSWORD in config.yaml.
       - NCC_PASSWORD=${NCC_PASSWORD:-}
@@ -63,7 +64,7 @@ services:
       - "--users-db=/app/data/auth/.ncc-api-users.json"
       - "--orchestrator-bin=/usr/local/bin/ncc-orchestrator"
       - "--auth-mode=token"
-      - "--cors-origin=http://localhost:8080"
+      - "--cors-origin=${UI_ORIGIN:-http://localhost:8080}"
       # Prometheus scrapers can hit /metrics directly without a token
       # because compose's `ncc` network is private. Drop this flag in
       # production deployments unless you put the api-server behind a

@@ -27,6 +27,26 @@ findings, with an NCC / PC source selector.
 - **Source-aware PC details.** NCC and PC tables retain separate layouts. PC
   detail panels show alert metadata and status badges, while cluster names
   remain display labels and links resolve through the cluster IP mapping.
+- **VM provisioning templates.** Added cloud-init for Ubuntu/Debian and
+  RHEL/Rocky plus Windows Sysprep/PowerShell templates. They download and
+  verify a configurable full-stack release, install boot-starting services,
+  create configuration placeholders, and prepare the standard UI/API ports.
+- **Unified rotating logs.** Supervised API/UI output now uses bounded
+  50-MiB rotating writers with five compressed backups and 30-day retention.
+  VM templates place runner, API, UI, scheduler, and supervisor logs under one
+  `logs/` directory, while `doctor --fix` remains available for size checks
+  and immediate cleanup.
+- **Canonical configuration schema.** `example_config.yaml` now uses
+  `schema-version: 1` with nested runner, storage, API, UI, deployment,
+  logging, and notification sections. Legacy flat keys are normalized into the
+  same runtime model, and the UI can edit canonical values.
+- **Canonical preflight and self-heal validation.** `validate-config`,
+  `preflight-check`, and `doctor` share schema validation. `doctor --fix` can
+  add a missing schema version safely, while unsupported versions fail closed.
+  Kubernetes skips host-only lifecycle checks.
+- **Persistent Kubernetes configuration edits.** The API and runner now share
+  a PVC-backed config file seeded from the ConfigMap only when absent, so
+  Settings changes survive API restarts and apply to future CronJob runs.
 
 ## [2.1.1] - 2026-08-17
 

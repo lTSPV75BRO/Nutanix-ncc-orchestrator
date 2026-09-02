@@ -75,6 +75,11 @@ const SECTION_ICONS: Record<SectionDef["icon"], ReactNode> = {
 };
 
 function applyPolicyGatesToConfigContent(content: string, gatesCsv: string): string {
+  const parsed = safeParse(content);
+  if (!parsed.error && canonicalDocument(parsed.doc)) {
+    parsed.doc.setIn(["runner", "filtering", "policy-gates"], gatesCsv);
+    return parsed.doc.toString();
+  }
   const line = `policy-gates: "${gatesCsv}"`;
   const pattern = /^\s*policy-gates:\s*.*$/m;
   if (pattern.test(content)) {
@@ -85,29 +90,85 @@ function applyPolicyGatesToConfigContent(content: string, gatesCsv: string): str
   return `${trimmed}\n${line}\n`;
 }
 
+const CANONICAL_PATHS: Record<string, string[]> = {
+  "cluster-source-mode": ["runner", "targets", "mode"],
+  clusters: ["runner", "targets", "clusters"],
+  "clusters-file": ["runner", "targets", "clusters-file"],
+  pcs: ["runner", "targets", "pcs"],
+  "pcs-file": ["runner", "targets", "pcs-file"],
+  "prism-central-url": ["runner", "targets", "prism-central-url"],
+  username: ["runner", "credentials", "username"],
+  password: ["runner", "credentials", "password"],
+  timeout: ["runner", "execution", "timeout"],
+  "request-timeout": ["runner", "execution", "request-timeout"],
+  "max-parallel": ["runner", "execution", "max-parallel"],
+  "poll-interval": ["runner", "execution", "poll-interval"],
+  "poll-jitter": ["runner", "execution", "poll-jitter"],
+  "retry-max-attempts": ["runner", "retry", "max-attempts"],
+  "retry-base-delay": ["runner", "retry", "base-delay"],
+  "retry-max-delay": ["runner", "retry", "max-delay"],
+  "retry-circuit-breaker": ["runner", "retry", "circuit-breaker"],
+  "policy-gates": ["runner", "filtering", "policy-gates"],
+  "severity-filter": ["runner", "filtering", "severity"],
+  "exclude-alert-titles": ["runner", "filtering", "exclude-alert-titles"],
+  "flaky-lookback-runs": ["runner", "filtering", "flaky-lookback-runs"],
+  "flaky-min-transitions": ["runner", "filtering", "flaky-min-transitions"],
+  "output-dir-filtered": ["storage", "output-dir"],
+  "output-dir-logs": ["storage", "logs-dir"],
+  "run-history-dir": ["storage", "run-history-dir"],
+  "prom-dir": ["storage", "prom-dir"],
+  "email-enabled": ["notifications", "email-enabled"],
+  "smtp-server": ["notifications", "smtp-server"],
+  "smtp-port": ["notifications", "smtp-port"],
+  "webhook-url": ["notifications", "webhook-url"],
+  "pc-alerts-cache-ttl": ["api", "cache", "pc-alerts-cache-ttl"],
+};
+const CANONICAL_ARRAY_KEYS = new Set(["clusters", "pcs", "severity-filter", "exclude-alert-titles"]);
+
+function canonicalDocument(doc: Document): boolean {
+  return doc.get("schema-version") !== null && doc.get("schema-version") !== undefined;
+}
+
+function configValue(doc: Document, key: string): unknown {
+  const path = CANONICAL_PATHS[key];
+  if (canonicalDocument(doc) && path) {
+    const nested = doc.getIn(path);
+    if (nested !== null && nested !== undefined) return nested;
+  }
+  return doc.get(key);
+}
+
 /** Tolerantly read a key from a YAML document as a string for form display. */
 function readString(doc: Document, key: string): string {
-  const v = doc.get(key);
+  const v = configValue(doc, key);
   if (v === null || v === undefined) return "";
   if (typeof v === "boolean") return v ? "true" : "false";
   return String(v);
 }
 
 function readBoolean(doc: Document, key: string): boolean {
-  const v = doc.get(key);
+  const v = configValue(doc, key);
   if (typeof v === "boolean") return v;
   if (typeof v === "string") return v.trim().toLowerCase() === "true";
   return Boolean(v);
 }
 
 function readNumber(doc: Document, key: string): number | null {
-  const v = doc.get(key);
+  const v = configValue(doc, key);
   if (v === null || v === undefined || v === "") return null;
   const n = typeof v === "number" ? v : Number(v);
   return Number.isFinite(n) ? n : null;
 }
 
 function writeKey(doc: Document, key: string, value: unknown): void {
+  const path = CANONICAL_PATHS[key];
+  if (canonicalDocument(doc) && path) {
+    if (value === null || value === undefined) doc.deleteIn(path);
+    else if (CANONICAL_ARRAY_KEYS.has(key) && typeof value === "string") {
+      doc.setIn(path, value.split(",").map((item) => item.trim()).filter(Boolean));
+    } else doc.setIn(path, value);
+    return;
+  }
   if (value === null || value === undefined) {
     doc.delete(key);
     return;
@@ -743,8 +804,8 @@ export function ConfigSection({ onError }: Props) {
     const { doc: origDoc } = safeParse(originalContent);
     const currDoc = docRef.current;
     for (const k of KNOWN_KEYS) {
-      const a = ensureString(origDoc.get(k));
-      const b = ensureString(currDoc.get(k));
+      const a = ensureString(configValue(origDoc, k));
+      const b = ensureString(configValue(currDoc, k));
       if (a !== b) map[k] = "info";
     }
     if (readString(currDoc, "password").trim()) {

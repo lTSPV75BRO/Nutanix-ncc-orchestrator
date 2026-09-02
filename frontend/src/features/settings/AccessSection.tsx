@@ -2581,7 +2581,7 @@ const UPDATE_PHASE_LABEL: Record<string, string> = {
 // backend takes a pre-update backup, installs the new stack (orchestrator + api
 // + ui + frontend, checksum-verified), then restarts the stack; this card polls
 // the job phase and reconnects the page once the restarted stack is healthy.
-function UpdatesCard() {
+function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [components, setComponents] = useState<ComponentsData["components"] | null>(null);
   const [checking, setChecking] = useState(false);
@@ -2751,12 +2751,20 @@ function UpdatesCard() {
           icon={<ReloadOutlined />}
           onClick={handleCheck}
           loading={checking}
-          disabled={busy && !checking}
+          disabled={isKubernetes || (busy && !checking)}
         >
           Check for updates
         </Button>
       }
     >
+      {isKubernetes ? (
+        <Alert
+          type="info"
+          showIcon
+          title="Container image rollout required"
+          description="In Kubernetes mode, update the immutable API/UI/runner image tags through Helm or Kustomize and let the Deployments roll out. In-place binary replacement is disabled."
+        />
+      ) : null}
       <Typography.Paragraph type="secondary">
         Check for a newer release and apply it in place. The update creates a backup first, installs
         the latest orchestrator, API, UI, and frontend components (verified against the published
@@ -2815,7 +2823,7 @@ function UpdatesCard() {
           <Alert type="success" showIcon title="This installation is running the latest available release." />
         ) : null}
 
-        {supported && !inProgress && !restarting && updateAvailable ? (
+        {!isKubernetes && supported && !inProgress && !restarting && updateAvailable ? (
           <Alert
             type="warning"
             showIcon
@@ -2867,10 +2875,10 @@ export function AccessSection() {
 // MaintenanceSection groups the lifecycle/operations tooling — in-place software
 // updates and full backup/restore of the installation — into a dedicated tab,
 // separate from access control.
-export function MaintenanceSection() {
+export function MaintenanceSection({ isKubernetes = false }: { isKubernetes?: boolean }) {
   return (
     <Space orientation="vertical" size={16} style={{ width: "100%" }}>
-      <UpdatesCard />
+      <UpdatesCard isKubernetes={isKubernetes} />
       <BackupRestoreCard />
       <ScheduledBackupCard />
     </Space>

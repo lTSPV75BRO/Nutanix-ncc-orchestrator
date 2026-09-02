@@ -50,3 +50,31 @@ configurable with `pc-alerts-cache-ttl` (default `5m`; `0` disables caching).
 No existing NCC report or configuration keys are removed. Prism Central alert
 retrieval is enabled when an existing `pcs` or `prism-central-url` target is
 configured; otherwise the dashboard continues to show NCC findings normally.
+
+## VM provisioning
+
+The release includes [`deploy/README.md`](deploy/README.md) with cloud-init
+and Windows Sysprep templates. They download and checksum-verify the selected
+`ncc-v2-stack` archive, install the full CLI/API/UI stack, create configuration
+and output locations, enable boot startup, and leave credential placeholders
+for secure image or first-boot secret injection.
+
+## Unified logging
+
+The VM templates route runner, API, UI, scheduler, and supervisor output below
+the install's `logs/` directory. Supervised API/UI logs rotate at 50 MiB,
+retain five compressed backups for up to 30 days, and the existing
+`doctor --fix` log-size check can rotate any oversized `logs/*.log` file.
+
+## Canonical configuration and self-heal
+
+`example_config.yaml` now uses schema version 1 with deployment-neutral nested
+sections for runner, storage, API, UI, deployment, logging, and
+notifications. Legacy flat keys remain supported through normalization.
+`validate-config`, `preflight-check`, and `doctor` share the same schema and
+secret validation path. `doctor --fix` can safely add a missing schema version,
+while unsupported versions fail closed.
+
+The Settings UI edits canonical nested values and, in Kubernetes, persists the
+active configuration on the shared PVC so API and CronJob executions use the
+same file.

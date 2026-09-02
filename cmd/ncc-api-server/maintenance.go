@@ -182,6 +182,23 @@ func (s *apiServer) handleRestore(w http.ResponseWriter, r *http.Request) {
 		s.audit(r, "settings.restore.selfheal", true, map[string]interface{}{"install_dir": installDir, "notes": selfHealNotes})
 	}
 
+	if s.capabilities.Kubernetes {
+		writeJSON(w, http.StatusOK, envelope{
+			Success: true,
+			Message: "Backup restored. Restart the API/UI Deployments to load the restored state.",
+			Data: map[string]interface{}{
+				"install_dir":        installDir,
+				"restarting":         false,
+				"restart_required":   true,
+				"controller_managed": true,
+				"rollout_command":    "kubectl rollout restart deployment/ncc-v2-api deployment/ncc-v2-ui",
+				"output":             strings.TrimSpace(out),
+				"self_heal_notes":    selfHealNotes,
+			},
+		})
+		return
+	}
+
 	// Launch the restart detached and slightly delayed so this HTTP response
 	// reaches the browser before v2-stop terminates us. The orchestrator binary
 	// performs the actual stop + start --detach, so the stack comes back with

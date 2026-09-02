@@ -462,7 +462,49 @@ func (s *apiServer) loadRawConfigMap() (map[string]interface{}, error) {
 	if err := yaml.Unmarshal(b, &out); err != nil {
 		return nil, err
 	}
+	flattenCanonicalConfigMap(out)
 	return out, nil
+}
+
+func flattenCanonicalConfigMap(cfg map[string]interface{}) {
+	paths := map[string][]string{
+		"pcs":                 {"runner", "targets", "pcs"},
+		"prism-central-url":   {"runner", "targets", "prism-central-url"},
+		"username":            {"runner", "credentials", "username"},
+		"password":            {"runner", "credentials", "password"},
+		"pc-alerts-cache-ttl": {"api", "cache", "pc-alerts-cache-ttl"},
+		"email-enabled":       {"notifications", "email", "enabled"},
+		"smtp-server":         {"notifications", "email", "smtp-server"},
+		"smtp-port":           {"notifications", "email", "smtp-port"},
+		"smtp-user":           {"notifications", "email", "smtp-user"},
+		"smtp-password":       {"notifications", "email", "smtp-password"},
+		"email-from":          {"notifications", "email", "from"},
+		"email-to":            {"notifications", "email", "to"},
+		"email-use-tls":       {"notifications", "email", "use-tls"},
+		"webhook-enabled":     {"notifications", "webhook", "enabled"},
+		"webhook-url":         {"notifications", "webhook", "url"},
+		"webhook-headers":     {"notifications", "webhook", "headers"},
+		"slack-enabled":       {"notifications", "slack", "enabled"},
+		"slack-webhook-url":   {"notifications", "slack", "webhook-url"},
+		"slack-channel":       {"notifications", "slack", "channel"},
+	}
+	for flat, path := range paths {
+		if _, exists := cfg[flat]; exists {
+			continue
+		}
+		var current interface{} = cfg
+		for _, part := range path {
+			values, ok := current.(map[string]interface{})
+			if !ok {
+				current = nil
+				break
+			}
+			current = values[part]
+		}
+		if current != nil {
+			cfg[flat] = current
+		}
+	}
 }
 
 func (s *apiServer) migrateLegacyNotificationRuntimeFields(st *notificationState, legacy notificationState) (bool, error) {

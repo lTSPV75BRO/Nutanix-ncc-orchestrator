@@ -36,7 +36,7 @@ If you are starting from a fresh machine and need full source build steps first,
 Users / Browser
       |
       v
-Service (LoadBalancer) -> UI Deployment (`ncc-ui-server`)
+Ingress (TLS) -> UI Service (ClusterIP) -> UI Deployment (`ncc-ui-server`)
       |                               |
       |                               +--> serves frontend static app
       |                               +--> proxies /api/v1/*
@@ -45,7 +45,7 @@ API Service (ClusterIP) -> API Deployment (`ncc-api-server`)
       |
       +--> triggers runner jobs / reads artifacts
 
-CronJob (`ncc-orchestrator`) ---> shared PVC (/data/*)
+CronJob (`ncc-v2-runner`) ---> shared PVC (/data/*)
                                   - /data/logs
                                   - /data/nccfiles
                                   - /data/outputfiles
@@ -84,15 +84,15 @@ Applying `k8s/` creates:
    - Update `k8s/pvc.yaml` if your class differs
 
 3. **Ingress / exposure (optional)**
-   - Default UI service is `LoadBalancer` with MetalLB annotation in `k8s/ui-service.yaml`
-   - If not using MetalLB, change service type to `NodePort` or use `port-forward`
+   - An Ingress controller and TLS Secret named `ncc-v2-ui-tls`
+   - Change `k8s/ingress.yaml` hostname and TLS settings for your environment
 
 4. **Published images**
    - API image must include:
      - `ncc-api-server`
    - Runner image must include:
      - `ncc-orchestrator` at `/usr/local/bin/ncc-orchestrator`
-   - Note: API deployment stages the runner binary from the runner image via init container.
+   - API deployment stages the runner binary from the API image contract.
    - UI image must include:
      - `ncc-ui-server`
      - frontend build at `/app/frontend/dist`
@@ -101,8 +101,9 @@ Applying `k8s/` creates:
      - `k8s/ui-deployment.yaml`
      - `k8s/runner-cronjob.yaml`
 
-5. **Prism credentials**
-   - Set in secret `ncc-v2-secrets` (`prism-password`)
+5. **Credentials**
+   - Provision `ncc-v2-secrets` out-of-band; do not commit credentials.
+   - Enable etcd encryption and use External Secrets/CSI where available.
 
 ---
 
@@ -119,10 +120,12 @@ Applying `k8s/` creates:
 | `api-deployment.yaml` | Backend API server deployment |
 | `api-service.yaml` | Internal API service (`ClusterIP`) |
 | `ui-deployment.yaml` | UI server + frontend deployment |
-| `ui-service.yaml` | External UI service (`LoadBalancer`) |
+| `ui-service.yaml` | Internal UI service (`ClusterIP`) |
+| `ingress.yaml` | TLS-enabled external UI entrypoint |
 | `networkpolicy-default-deny-ingress.yaml` | Baseline deny-all ingress policy |
 | `networkpolicy-ui-ingress.yaml` | Allows UI ingress on TCP 8080 |
 | `networkpolicy-api-ingress.yaml` | Allows API ingress from UI pods on TCP 8081 |
+| `networkpolicy-egress.yaml` | DNS, Prism, HTTPS webhook, and SMTP egress baseline |
 
 ---
 
@@ -130,11 +133,8 @@ Applying `k8s/` creates:
 
 ### 1) Configure images
 
-Edit these files to your image registry/tag:
-
-- `k8s/runner-cronjob.yaml`
-- `k8s/api-deployment.yaml`
-- `k8s/ui-deployment.yaml`
+Edit the image tags in `k8s/kustomization.yaml`, or create an environment
+overlay with your registry, tags, pull secrets, and immutable digests.
 
 ### 2) Configure runtime settings
 
@@ -147,12 +147,8 @@ Edit `k8s/configmap.yaml`:
 
 ### 3) Set secrets
 
-Edit `k8s/secret.yaml` values:
-
-- `prism-password`
-- `api-token`
-
-Or override using `kubectl create secret ... --dry-run=client -o yaml | kubectl apply -f -`.
+Provision the empty Secret template using the `kubectl create secret` command
+shown in `k8s/secret.yaml`, or connect it to External Secrets/CSI.
 
 ### 4) Apply
 
@@ -167,6 +163,7 @@ kubectl get all -n ncc-orchestrator-v2
 kubectl get pvc -n ncc-orchestrator-v2
 kubectl get cronjob -n ncc-orchestrator-v2
 kubectl get networkpolicy -n ncc-orchestrator-v2
+kubectl get ingress -n ncc-orchestrator-v2
 ```
 
 ---
@@ -274,10 +271,10 @@ Use a temporary debug pod mounting `ncc-v2-data`, or expose via API/UI artifact 
 
 - Create manual job from cronjob and inspect logs
 
-### 5) LoadBalancer has no external IP
+### 5) Ingress has no address
 
-- Check MetalLB annotation in `k8s/ui-service.yaml`
-- If unavailable, use port-forward or switch service type
+- Check the Ingress controller and TLS Secret
+- For temporary access, use `kubectl port-forward svc/ncc-v2-ui 8080:80`
 
 ---
 

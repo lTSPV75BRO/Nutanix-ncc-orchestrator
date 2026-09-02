@@ -86,6 +86,52 @@ results. The dashboard shows unresolved alerts immediately and displays a
 loading indicator while the all-status history is fetched in the background.
 PC cluster names remain display labels; mapped cluster IPs are used for links.
 
+## 1.1 Canonical configuration
+
+New deployments may use the versioned nested form below. The loader normalizes
+it to the legacy flat keys, so existing configuration files remain supported:
+
+```yaml
+schema-version: 1
+runner:
+  targets:
+    mode: clusters
+    clusters: ["10.2.0.20"]
+  credentials:
+    username: admin
+    password: secret://NCC_PASSWORD
+  execution:
+    timeout: 15m
+    request-timeout: 20s
+    max-parallel: 4
+storage:
+  output-dir: outputfiles
+  logs-dir: nccfiles
+api:
+  cache:
+    pc-alerts-cache-ttl: 5m
+deployment:
+  platform: host
+```
+
+Precedence is CLI override, deployment overlay, environment/secret
+resolution, YAML, then built-in defaults. One-shot controls such as
+`--help`, `--version`, `doctor --fix`, and `v2-restore --force` remain
+command-line-only.
+
+## 1.2 Validation, preflight, and self-heal
+
+`validate-config` and `preflight-check` load the canonical schema through the
+same compatibility normalizer used for runs. They validate schema version,
+target mode, durations, retry limits, output paths, notification types,
+secret references, and writable storage paths.
+
+`doctor`/self-heal adds a `config-schema` check. Legacy files without a
+`schema-version` are reported as compatibility mode; `doctor --fix` safely
+adds `schema-version: 1` without changing credentials. Unsupported schema
+versions fail closed. Kubernetes deployments skip host-only PID, scheduler,
+supervisor, and SELinux remediations because controllers own those concerns.
+
 ### 2.4 Replay mode
 
 Regenerate reports/artifacts from existing logs without invoking NCC APIs:
@@ -119,6 +165,15 @@ Outputs under `output-dir-filtered` include:
 - `regression-summary.json`
 - `slo-dashboard.json`
 - `policy-gates.txt` (only on violations)
+
+### 2.7a Unified logs and rotation
+
+For VM deployments, place all operational logs under `<install-dir>/logs`:
+runner summaries, runner JSON logs, API/UI service output, supervisor events,
+and scheduler output. Supervised API/UI child logs rotate automatically at
+50 MiB, retain five compressed backups, and expire after 30 days. The
+`doctor` `log-sizes` check monitors `logs/*.log` and can rotate oversized
+files with `doctor --fix`.
 
 ### 2.7 Policy gates (CI/CD enforcement)
 

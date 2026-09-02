@@ -10,9 +10,11 @@ spec:
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: {{ .Values.cronjob.successfulJobsHistoryLimit }}
   failedJobsHistoryLimit: {{ .Values.cronjob.failedJobsHistoryLimit }}
+  startingDeadlineSeconds: {{ .Values.cronjob.startingDeadlineSeconds }}
   jobTemplate:
     spec:
       backoffLimit: {{ .Values.cronjob.backoffLimit }}
+      activeDeadlineSeconds: 7200
       ttlSecondsAfterFinished: {{ .Values.cronjob.ttlSecondsAfterFinished }}
       template:
         metadata:
@@ -20,35 +22,45 @@ spec:
             app: ncc-orchestrator
             component: runner
         spec:
+          serviceAccountName: ncc-v2-runner
+          automountServiceAccountToken: false
           restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
           initContainers:
-            - name: create-dirs
-              image: {{ .Values.initImage | quote }}
-              command: ["sh", "-c", "mkdir -p /data/logs /data/nccfiles /data/outputfiles /data/promfiles && rm -f /data/logs/ncc-runner.log /data/nccfiles/*.log /data/outputfiles/*.log /data/outputfiles/index.html /data/outputfiles/*.log.html /data/outputfiles/*.log.csv /data/outputfiles/*.log.json /data/promfiles/*.prom && chmod -R 777 /data 2>/dev/null || true"]
+            - name: seed-config
+              image: busybox:1.36
+              command: ["sh", "-c", "mkdir -p /data/config && test -f /data/config/config.yaml || cp /config-cm/config.yaml /data/config/config.yaml"]
               volumeMounts:
-                - name: output
-                  mountPath: /data
+                - { name: config-cm, mountPath: /config-cm, readOnly: true }
+                - { name: output, mountPath: /data }
           containers:
             - name: ncc-orchestrator
-              image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-              imagePullPolicy: {{ .Values.image.pullPolicy }}
-              args:
-                - "--config"
-                - "/config/config.yaml"
+              image: "{{ .Values.images.runner.repository }}:{{ .Values.images.runner.tag }}"
+              imagePullPolicy: {{ .Values.images.runner.pullPolicy }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              args: ["--config", "/data/config/config.yaml"]
               env:
+                - name: NCC_RUNTIME_MODE
+                  value: kubernetes
                 - name: NCC_PASSWORD
                   valueFrom:
                     secretKeyRef:
                       name: {{ .Values.secretName }}
                       key: password
               volumeMounts:
-                - name: config
-                  mountPath: /config
-                  readOnly: true
                 - name: output
                   mountPath: /data
           volumes:
-            - name: config
+            - name: config-cm
               configMap:
                 name: {{ .Values.configMapName }}
             - name: output

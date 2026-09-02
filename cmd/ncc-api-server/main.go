@@ -34,6 +34,7 @@ import (
 
 	yaml "go.yaml.in/yaml/v3"
 	"goncc/internal/promtext"
+	"goncc/internal/runtimecaps"
 	"goncc/internal/v2layout"
 )
 
@@ -82,6 +83,7 @@ func init() {
 }
 
 type apiServer struct {
+	capabilities            runtimecaps.Capabilities
 	repoRoot                string
 	configPath              string
 	outputDir               string
@@ -479,6 +481,7 @@ func (t *tailBuffer) String() string {
 
 func main() {
 	var s apiServer
+	s.capabilities = runtimecaps.Detect()
 	var listen string
 
 	flag.StringVar(&listen, "listen", ":8081", "HTTP listen address")
@@ -1046,6 +1049,7 @@ func (s *apiServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"go_version":            GoVersion,
 		"os":                    runtime.GOOS,
 		"arch":                  runtime.GOARCH,
+		"runtime":               s.capabilities,
 	}
 	if s.debugExpose {
 		data["repo_root"] = s.absPath(s.repoRoot)
@@ -1762,6 +1766,10 @@ func (s *apiServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 			"content_redacted": redactSensitiveText(string(b)),
 		}})
 	case http.MethodPut:
+		if err := s.capabilities.RejectHostOperation("host schedule changes"); err != nil {
+			writeJSON(w, http.StatusConflict, envelope{Success: false, Error: err.Error(), ErrorCode: "NCC_KUBERNETES_CONTROLLER_MANAGED"})
+			return
+		}
 		if err := requireJSONContentType(r); err != nil {
 			writeJSON(w, http.StatusUnsupportedMediaType, envelope{Success: false, Error: err.Error()})
 			return
@@ -2278,9 +2286,49 @@ func (s *apiServer) configScalarValue(key string, def string) string {
 	}
 	val := strings.TrimSpace(extractRelatedFilePathFromConfig(string(content), key))
 	if val == "" {
+		val = strings.TrimSpace(extractCanonicalConfigValue(string(content), key))
+	}
+	if val == "" {
 		return def
 	}
 	return val
+}
+
+func extractCanonicalConfigValue(content, key string) string {
+	paths := map[string][]string{
+		"cluster-source-mode": {"runner", "targets", "mode"},
+		"clusters":            {"runner", "targets", "clusters"},
+		"pcs":                 {"runner", "targets", "pcs"},
+		"pc-alerts-cache-ttl": {"api", "cache", "pc-alerts-cache-ttl"},
+	}
+	path, ok := paths[key]
+	if !ok {
+		return ""
+	}
+	var root map[string]interface{}
+	if err := yaml.Unmarshal([]byte(content), &root); err != nil {
+		return ""
+	}
+	var current interface{} = root
+	for _, part := range path {
+		values, ok := current.(map[string]interface{})
+		if !ok {
+			return ""
+		}
+		current = values[part]
+	}
+	switch values := current.(type) {
+	case []interface{}:
+		parts := make([]string, 0, len(values))
+		for _, value := range values {
+			if item := strings.TrimSpace(fmt.Sprint(value)); item != "" {
+				parts = append(parts, item)
+			}
+		}
+		return strings.Join(parts, ",")
+	default:
+		return fmt.Sprint(values)
+	}
 }
 
 func (s *apiServer) validateConfigRelatedFileContent(ref *configRelatedFile, content string) error {
@@ -2690,6 +2738,15 @@ func parseScheduleHealthFromLog(path string) map[string]string {
 func (s *apiServer) handleScheduleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	if s.capabilities.Kubernetes {
+		writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
+			"configured": true, "saved": true, "installed": true,
+			"controller_managed": true, "controller": "CronJob",
+			"detector": "Kubernetes CronJob",
+			"message":  "Scheduling is managed by the ncc-v2-runner CronJob.",
+		}})
 		return
 	}
 	// loadSchedule returns a default state when no file is present, so we

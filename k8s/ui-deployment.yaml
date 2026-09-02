@@ -4,7 +4,7 @@ metadata:
   name: ncc-v2-ui
   namespace: ncc-orchestrator-v2
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: ncc-orchestrator-v2
@@ -15,6 +15,14 @@ spec:
         app: ncc-orchestrator-v2
         component: ui
     spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: ncc-orchestrator-v2
+              component: ui
       securityContext:
         fsGroup: 1000
         fsGroupChangePolicy: "OnRootMismatch"
@@ -40,7 +48,15 @@ spec:
             - "--api-auth-mode"
             - "token"
             - "--allowed-origins"
-            - "http://localhost:8080"
+            - "$(NCC_UI_ORIGIN)"
+          env:
+            - name: NCC_RUNTIME_MODE
+              value: "kubernetes"
+            - name: NCC_UI_ORIGIN
+              valueFrom:
+                configMapKeyRef:
+                  name: ncc-v2-config
+                  key: ui-origin
           ports:
             - containerPort: 8080
               name: http

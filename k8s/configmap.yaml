@@ -4,50 +4,44 @@ metadata:
   name: ncc-v2-config
   namespace: ncc-orchestrator-v2
 data:
+  ui-origin: "https://ncc.example.com"
   config.yaml: |
-    cluster-source-mode: "clusters"
-    clusters: "10.48.XX.XX,10.48.XX.XX"
-    username: "admin"
-    password: ""
-    ncc-api-version: "v4"
-    nutanix-v4-api-version: "v4.2"
-    insecure-skip-verify: false
-
-    timeout: "15m"
-    request-timeout: "20s"
-    poll-interval: "15s"
-    poll-jitter: "2s"
-    max-parallel: 4
-    adaptive-parallelism: true
-
-    outputs: "html,csv"
-    output-dir-logs: "/data/nccfiles"
-    output-dir-filtered: "/data/outputfiles"
-    log-file: "/data/logs/ncc-runner.log"
-    log-level: "info"
-    log-http: false
-    prom-dir: "/data/promfiles"
-
-    run-history: true
-    run-history-dir: "/data/outputfiles/runs"
-    retain-last: 20
-    retain-days: 0
-
-    artifact-retain-days: 0
-    artifact-retain-max-files: 0
-    severity-filter: ""
-    exclude-alert-titles: ""
-    exclude-alert-match-mode: "exact"
-
-    policy-gates: ""
-    notify-on-regression: false
-    quiet-hours: ""
-    maintenance-windows: ""
-
-    retry-max-attempts: 6
-    retry-base-delay: "400ms"
-    retry-max-delay: "8s"
-    retry-circuit-breaker: 3
-
-    secrets-provider: "env"
-    secrets-file: ""
+    schema-version: 1
+    runner:
+      targets:
+        mode: clusters
+        clusters: []
+        pcs: []
+      credentials:
+        username: admin
+        password: secret://NCC_PASSWORD
+      execution:
+        timeout: 15m
+        request-timeout: 20s
+        poll-interval: 15s
+        poll-jitter: 2s
+        max-parallel: 4
+      retry:
+        max-attempts: 6
+        base-delay: 400ms
+        max-delay: 8s
+        circuit-breaker: 3
+      filtering:
+        policy-gates: ""
+        severity: []
+        exclude-alert-titles: []
+        flaky-lookback-runs: 6
+        flaky-min-transitions: 2
+    storage:
+      output-dir: /data/outputfiles
+      logs-dir: /data/nccfiles
+      run-history-dir: /data/outputfiles/runs
+      prom-dir: /data/promfiles
+    api:
+      cache:
+        pc-alerts-cache-ttl: 5m
+    notifications:
+      smtp-port: 587
+    deployment:
+      platform: kubernetes
+      self-heal: false

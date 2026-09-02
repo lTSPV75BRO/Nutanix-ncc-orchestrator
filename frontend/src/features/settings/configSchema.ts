@@ -152,6 +152,13 @@ export const SECTIONS: SectionDef[] = [
         placeholder: "v4.2",
         help: "v4.2 default; e.g. v4.1, v4.0.a1.",
       },
+      {
+        key: "pc-alerts-cache-ttl",
+        label: "Prism Central alert cache TTL",
+        type: "duration",
+        placeholder: "5m",
+        help: "Cache duration for Prism Central alerts. Set 0 to disable caching.",
+      },
     ],
   },
   {

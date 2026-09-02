@@ -7,6 +7,16 @@ export type Envelope<T> = {
 
 export type HealthData = {
   status: string;
+  runtime?: {
+    mode?: "host" | "kubernetes" | string;
+    kubernetes?: boolean;
+    controller_managed_restart?: boolean;
+    controller_managed_schedule?: boolean;
+    immutable_updates?: boolean;
+    pvc_storage?: boolean;
+    namespace?: string;
+    service_account?: boolean;
+  };
   time: string;
   config_path: string;
   output_dir: string;

@@ -3,16 +3,30 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+namespace: ncc-orchestrator-v2
+
+images:
+  - name: docker.io/prajwalnutant/nutanix-ncc-orchestrator
+    newTag: "2.2.0"
+  - name: docker.io/prajwalnutant/ncc-api-server
+    newTag: "2.2.0"
+  - name: docker.io/prajwalnutant/ncc-ui-server
+    newTag: "2.2.0"
+
 resources:
   - namespace.yaml
   - configmap.yaml
   - secret.yaml
   - pvc.yaml
   - runner-cronjob.yaml
+  - rbac.yaml
   - api-deployment.yaml
   - api-service.yaml
   - ui-deployment.yaml
   - ui-service.yaml
+  - ingress.yaml
+  - pdb.yaml
   - networkpolicy-default-deny-ingress.yaml
   - networkpolicy-ui-ingress.yaml
   - networkpolicy-api-ingress.yaml
+  - networkpolicy-egress.yaml

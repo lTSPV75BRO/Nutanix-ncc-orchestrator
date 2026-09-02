@@ -106,11 +106,15 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, req
 	if activeRunGuard {
 		noDisruptive = true
 	}
-	rep, derr := s.runSelfHealOnceWithOptions(ctx, selfHealRunOptions{
-		Fix:          req.Fix,
-		CheckIDs:     req.CheckIDs,
-		NoDisruptive: noDisruptive,
-	})
+	var rep *selfHealReport
+	var derr error
+	if !s.capabilities.Kubernetes {
+		rep, derr = s.runSelfHealOnceWithOptions(ctx, selfHealRunOptions{
+			Fix:          req.Fix,
+			CheckIDs:     req.CheckIDs,
+			NoDisruptive: noDisruptive,
+		})
+	}
 	orchestratorErr := ""
 	fixedIDs := []string{}
 	fixedTitles := []string{}
@@ -190,7 +194,7 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, req
 
 	verificationRuns := 0
 	verifiedStable := false
-	if req.Fix && req.VerifyAfterFix {
+	if req.Fix && req.VerifyAfterFix && !s.capabilities.Kubernetes {
 		// Re-scan briefly to ensure post-fix state remains stable.
 		stablePasses := 0
 		for i := 0; i < 3; i++ {

@@ -281,6 +281,14 @@ func (s *apiServer) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
+	if err := s.capabilities.RejectHostOperation("in-place software updates"); err != nil {
+		writeJSON(w, http.StatusConflict, envelope{
+			Success:   false,
+			Error:     err.Error() + "; update the container image and roll out the Deployment",
+			ErrorCode: "NCC_KUBERNETES_IMMUTABLE_UPDATE",
+		})
+		return
+	}
 
 	// A self-update needs a real built binary; reject the dev `go run` fallback
 	// up front so we never half-apply.

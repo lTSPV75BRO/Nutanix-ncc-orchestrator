@@ -46,6 +46,7 @@ import (
 	"goncc/internal/notify"
 	"goncc/internal/promtext"
 	"goncc/internal/retryutil"
+	"goncc/internal/runtimecaps"
 	"goncc/internal/selfsigned"
 	"goncc/internal/trace"
 	"goncc/internal/v2layout"
@@ -207,6 +208,28 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+func splitCSVValue(v interface{}) []string {
+	if v == nil {
+		return nil
+	}
+	switch values := v.(type) {
+	case []string:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			out = append(out, splitCSV(value)...)
+		}
+		return out
+	case []interface{}:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			out = append(out, splitCSV(fmt.Sprint(value))...)
+		}
+		return out
+	default:
+		return splitCSV(fmt.Sprint(v))
+	}
 }
 
 func normalizeClusterSourceMode(s string) (string, error) {
@@ -1566,11 +1589,13 @@ func validateConfigFileRawTypes() error {
 		return nil
 	}
 	allowedTopKeys := map[string]bool{
-		"config":               true,
-		"update":               true,
+		"config":         true,
+		"update":         true,
+		"schema-version": true,
+		"runner":         true, "storage": true, "api": true, "ui": true, "deployment": true, "notifications": true, "logging": true, "prometheus": true, "secrets": true,
 		"skip-preflight-check": true,
 		"clusters":             true, "clusters-file": true, "cluster-source-mode": true, "pcs": true, "pcs-file": true, "prism-central-url": true, "discover-api-version": true,
-		"username": true, "password": true, "ncc-api-version": true, "nutanix-v4-api-version": true,
+		"username": true, "password": true, "ncc-api-version": true, "nutanix-v4-api-version": true, "pc-alerts-cache-ttl": true,
 		"insecure-skip-verify": true, "ca-bundle": true, "pin-sha256": true, "timeout": true, "request-timeout": true, "poll-interval": true, "poll-jitter": true,
 		"max-parallel": true, "outputs": true, "output-dir-logs": true, "output-dir-filtered": true,
 		"single-report": true, "run-history": true, "run-history-dir": true, "retain-last": true, "retain-days": true, "artifact-retain-days": true, "artifact-retain-max-files": true,
@@ -1641,7 +1666,7 @@ func validateConfigFileRawTypes() error {
 		}
 	}
 	intKeys := []string{
-		"max-parallel", "retry-max-attempts", "retry-circuit-breaker", "max-idle-conns", "max-idle-conns-per-host",
+		"schema-version", "max-parallel", "retry-max-attempts", "retry-circuit-breaker", "max-idle-conns", "max-idle-conns-per-host",
 		"max-conns-per-host", "smtp-port", "retain-last", "retain-days", "artifact-retain-days", "artifact-retain-max-files", "gen-test-agg",
 		"flaky-lookback-runs", "flaky-min-transitions",
 	}
@@ -1655,7 +1680,7 @@ func validateConfigFileRawTypes() error {
 	}
 	durationKeys := []string{
 		"timeout", "request-timeout", "poll-interval", "poll-jitter",
-		"retry-base-delay", "retry-max-delay", "idle-conn-timeout",
+		"retry-base-delay", "retry-max-delay", "idle-conn-timeout", "pc-alerts-cache-ttl",
 	}
 	for _, key := range durationKeys {
 		if !viper.InConfig(key) {
@@ -1718,6 +1743,109 @@ func resolveUnderBase(p, base string) string {
 	return filepath.Join(base, p)
 }
 
+// normalizeCanonicalConfig bridges the versioned nested YAML shape to the
+// legacy flat keys consumed by the existing runner. Flat keys win whenever
+// they are present in the file or environment, which keeps old deployments
+// compatible while allowing new deployments to use one canonical structure.
+func normalizeCanonicalConfig() {
+	if version := viper.GetInt("schema-version"); version != 0 && version != 1 {
+		return
+	}
+	mappings := map[string]string{
+		"runner.targets.mode":                        "cluster-source-mode",
+		"runner.targets.clusters":                    "clusters",
+		"runner.targets.clusters-file":               "clusters-file",
+		"runner.targets.pcs":                         "pcs",
+		"runner.targets.pcs-file":                    "pcs-file",
+		"runner.targets.prism-central-url":           "prism-central-url",
+		"runner.targets.discover-api-version":        "discover-api-version",
+		"runner.credentials.username":                "username",
+		"runner.credentials.password":                "password",
+		"runner.connection.insecure-skip-verify":     "insecure-skip-verify",
+		"runner.connection.ca-bundle":                "ca-bundle",
+		"runner.connection.pin-sha256":               "pin-sha256",
+		"runner.connection.ncc-api-version":          "ncc-api-version",
+		"runner.connection.nutanix-v4-api-version":   "nutanix-v4-api-version",
+		"runner.execution.timeout":                   "timeout",
+		"runner.execution.request-timeout":           "request-timeout",
+		"runner.execution.max-parallel":              "max-parallel",
+		"runner.execution.poll-interval":             "poll-interval",
+		"runner.execution.poll-jitter":               "poll-jitter",
+		"runner.execution.adaptive-parallelism":      "adaptive-parallelism",
+		"runner.execution.dry-run":                   "dry-run",
+		"runner.retry.max-attempts":                  "retry-max-attempts",
+		"runner.retry.base-delay":                    "retry-base-delay",
+		"runner.retry.max-delay":                     "retry-max-delay",
+		"runner.retry.circuit-breaker":               "retry-circuit-breaker",
+		"runner.filtering.severity":                  "severity-filter",
+		"runner.filtering.policy-gates":              "policy-gates",
+		"runner.filtering.exclude-alert-titles":      "exclude-alert-titles",
+		"runner.filtering.flaky-lookback-runs":       "flaky-lookback-runs",
+		"runner.filtering.flaky-min-transitions":     "flaky-min-transitions",
+		"runner.filtering.exclude-alert-titles-file": "exclude-alert-titles-file",
+		"runner.filtering.exclude-alert-match-mode":  "exclude-alert-match-mode",
+		"runner.outputs.formats":                     "outputs",
+		"runner.outputs.single-report":               "single-report",
+		"runner.history.enabled":                     "run-history",
+		"runner.history.retain-last":                 "retain-last",
+		"runner.history.retain-days":                 "retain-days",
+		"runner.history.artifact-retain-days":        "artifact-retain-days",
+		"runner.history.artifact-retain-max-files":   "artifact-retain-max-files",
+		"runner.policy.gates":                        "policy-gates",
+		"runner.policy.notify-on-regression":         "notify-on-regression",
+		"runner.http-pool.max-idle-conns":            "max-idle-conns",
+		"runner.http-pool.max-idle-conns-per-host":   "max-idle-conns-per-host",
+		"runner.http-pool.max-conns-per-host":        "max-conns-per-host",
+		"runner.http-pool.idle-conn-timeout":         "idle-conn-timeout",
+		"storage.output-dir":                         "output-dir-filtered",
+		"storage.logs-dir":                           "output-dir-logs",
+		"storage.run-history-dir":                    "run-history-dir",
+		"storage.prom-dir":                           "prom-dir",
+		"storage.notification-deadletter-dir":        "notification-deadletter-dir",
+		"logging.file":                               "log-file",
+		"logging.level":                              "log-level",
+		"logging.http":                               "log-http",
+		"prometheus.enabled":                         "prom-enabled",
+		"notifications.quiet-hours":                  "quiet-hours",
+		"notifications.maintenance-windows":          "maintenance-windows",
+		"notifications.email-enabled":                "email-enabled",
+		"notifications.smtp-server":                  "smtp-server",
+		"notifications.smtp-port":                    "smtp-port",
+		"notifications.webhook-url":                  "webhook-url",
+		"notifications.email.enabled":                "email-enabled",
+		"notifications.email.attach-html":            "email-attach-html",
+		"notifications.email.digest":                 "notify-digest",
+		"notifications.email.smtp-user":              "smtp-user",
+		"notifications.email.smtp-password":          "smtp-password",
+		"notifications.email.from":                   "email-from",
+		"notifications.email.to":                     "email-to",
+		"notifications.email.use-tls":                "email-use-tls",
+		"notifications.email.insecure-skip-verify":   "smtp-insecure-skip-verify",
+		"notifications.email.subject-template":       "email-subject-template",
+		"notifications.email.body-template":          "email-body-template",
+		"notifications.webhook.enabled":              "webhook-enabled",
+		"notifications.webhook.include-html":         "webhook-include-html",
+		"notifications.webhook.headers":              "webhook-headers",
+		"notifications.webhook.template":             "webhook-template",
+		"notifications.webhook.secret":               "webhook-secret",
+		"notifications.slack.enabled":                "slack-enabled",
+		"notifications.slack.webhook-url":            "slack-webhook-url",
+		"notifications.slack.channel":                "slack-channel",
+		"secrets.provider":                           "secrets-provider",
+		"secrets.file":                               "secrets-file",
+		"api.cache.pc-alerts-cache-ttl":              "pc-alerts-cache-ttl",
+	}
+	for nested, flat := range mappings {
+		if !viper.IsSet(nested) || viper.InConfig(flat) {
+			continue
+		}
+		if _, ok := os.LookupEnv("NCC_" + strings.ToUpper(strings.ReplaceAll(flat, "-", "_"))); ok {
+			continue
+		}
+		viper.Set(flat, viper.Get(nested))
+	}
+}
+
 func bindConfig() (Config, error) {
 	cfgFile := viper.GetString("config")
 	if cfgFile != "" {
@@ -1743,10 +1871,11 @@ func bindConfig() (Config, error) {
 	viper.SetEnvPrefix("ncc")
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	viper.AutomaticEnv()
+	normalizeCanonicalConfig()
 
-	clustersFromFlag := splitCSV(viper.GetString("clusters"))
+	clustersFromFlag := splitCSVValue(viper.Get("clusters"))
 	clustersFile := strings.TrimSpace(viper.GetString("clusters-file"))
-	pcsFromFlag := splitCSV(viper.GetString("pcs"))
+	pcsFromFlag := splitCSVValue(viper.Get("pcs"))
 	pcsFile := strings.TrimSpace(viper.GetString("pcs-file"))
 	clusterSourceMode := strings.TrimSpace(viper.GetString("cluster-source-mode"))
 	clusterCreds := map[string]ClusterCredential{}
@@ -1798,6 +1927,7 @@ func bindConfig() (Config, error) {
 		return Config{}, fmt.Errorf("ncc-api-version: %w", err)
 	}
 	cfg := Config{
+		SchemaVersion:             viper.GetInt("schema-version"),
 		Clusters:                  clustersFromFlag,
 		ClustersFile:              clustersFile,
 		ClusterCredentials:        clusterCreds,
@@ -1810,14 +1940,14 @@ func bindConfig() (Config, error) {
 		Password:                  viper.GetString("password"),
 		InsecureSkipVerify:        viper.GetBool("insecure-skip-verify"),
 		CABundle:                  strings.TrimSpace(viper.GetString("ca-bundle")),
-		PinSHA256:                 splitCSV(viper.GetString("pin-sha256")),
+		PinSHA256:                 splitCSVValue(viper.Get("pin-sha256")),
 		Timeout:                   mustParseDur(viper.GetString("timeout"), defaultTimeout),
 		RequestTimeout:            mustParseDur(viper.GetString("request-timeout"), defaultRequestTimeout),
 		PollInterval:              mustParseDur(viper.GetString("poll-interval"), defaultPollInterval),
 		PollJitter:                mustParseDur(viper.GetString("poll-jitter"), defaultPollJitter),
 		OutputDirLogs:             viper.GetString("output-dir-logs"),
 		OutputDirFiltered:         viper.GetString("output-dir-filtered"),
-		OutputFormats:             splitCSV(viper.GetString("outputs")),
+		OutputFormats:             splitCSVValue(viper.Get("outputs")),
 		MaxParallel:               viper.GetInt("max-parallel"),
 		TLSMinVersion:             tls.VersionTLS12,
 		LogFile:                   viper.GetString("log-file"),
@@ -1839,7 +1969,7 @@ func bindConfig() (Config, error) {
 		SMTPUser:                  viper.GetString("smtp-user"),
 		SMTPPassword:              viper.GetString("smtp-password"),
 		EmailFrom:                 viper.GetString("email-from"),
-		EmailTo:                   splitCSV(viper.GetString("email-to")),
+		EmailTo:                   splitCSVValue(viper.Get("email-to")),
 		EmailUseTLS:               viper.GetBool("email-use-tls"),
 		SMTPInsecureSkipVerify:    viper.GetBool("smtp-insecure-skip-verify"),
 		EmailSubjectTemplate:      viper.GetString("email-subject-template"),
@@ -1851,8 +1981,8 @@ func bindConfig() (Config, error) {
 		WebhookTemplate:           viper.GetString("webhook-template"),
 		WebhookSecret:             viper.GetString("webhook-secret"),
 		NotificationDeadLetterDir: strings.TrimSpace(viper.GetString("notification-deadletter-dir")),
-		SeverityFilter:            splitCSV(viper.GetString("severity-filter")),
-		ExcludeAlertTitles:        splitCSV(viper.GetString("exclude-alert-titles")),
+		SeverityFilter:            splitCSVValue(viper.Get("severity-filter")),
+		ExcludeAlertTitles:        splitCSVValue(viper.Get("exclude-alert-titles")),
 		ExcludeAlertTitlesFile:    strings.TrimSpace(viper.GetString("exclude-alert-titles-file")),
 		ExcludeAlertMatchMode:     strings.TrimSpace(viper.GetString("exclude-alert-match-mode")),
 		DryRun:                    viper.GetBool("dry-run"),
@@ -1867,7 +1997,7 @@ func bindConfig() (Config, error) {
 		AdaptiveParallelism:       viper.GetBool("adaptive-parallelism"),
 		PolicyGates:               splitCSV(viper.GetString("policy-gates")),
 		QuietHours:                strings.TrimSpace(viper.GetString("quiet-hours")),
-		MaintenanceWindows:        splitCSV(viper.GetString("maintenance-windows")),
+		MaintenanceWindows:        splitCSVValue(viper.Get("maintenance-windows")),
 		FlakyLookbackRuns:         viper.GetInt("flaky-lookback-runs"),
 		FlakyMinTransitions:       viper.GetInt("flaky-min-transitions"),
 		SlackEnabled:              viper.GetBool("slack-enabled"),
@@ -1877,6 +2007,7 @@ func bindConfig() (Config, error) {
 		SecretsFile:               strings.TrimSpace(viper.GetString("secrets-file")),
 		NCCAPIVersion:             nccAPIVer,
 		NutanixV4APIVersion:       strings.ToLower(strings.TrimSpace(viper.GetString("nutanix-v4-api-version"))),
+		PCAlertsCacheTTL:          mustParseDur(viper.GetString("pc-alerts-cache-ttl"), 5*time.Minute),
 	}
 	// Apply defaults
 	if cfg.NutanixV4APIVersion == "" {
@@ -10737,6 +10868,9 @@ func startSelfHealSupervisor(serviceName string, bin string, args []string, pidP
 }
 
 func runV2Stop(opts v2StopOptions) error {
+	if err := runtimecaps.Detect().RejectHostOperation("local stack stop/restart"); err != nil {
+		return err
+	}
 	installDir := strings.TrimSpace(opts.InstallDir)
 	if installDir == "" {
 		installDir = defaultV2InstallDir()
@@ -11047,6 +11181,9 @@ func ensureV2StartSlotsAvailable(installDir string, opts v2StartOptions) error {
 }
 
 func runV2Start(opts v2StartOptions) error {
+	if err := runtimecaps.Detect().RejectHostOperation("local stack start/restart"); err != nil {
+		return err
+	}
 	installDir := strings.TrimSpace(opts.InstallDir)
 	if installDir == "" {
 		installDir = defaultV2InstallDir()
@@ -12158,6 +12295,9 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 
 // runUpdate fetches release metadata and updates or checks binary availability.
 func runUpdate(opts updateOptions) error {
+	if err := runtimecaps.Detect().RejectHostOperation("in-place software updates"); err != nil {
+		return fmt.Errorf("%w; update the container image and roll out the Deployment", err)
+	}
 	currentVer := stripGoBuildGitSuffix(Version)
 	client := &http.Client{Timeout: 20 * time.Second}
 	providedSHA256 := strings.TrimSpace(opts.BinarySHA256)
@@ -13268,6 +13408,9 @@ func installWindowsSchedule(taskName, runCmd string, every time.Duration) error 
 }
 
 func runCreateSchedule(cmd *cobra.Command, args []string) error {
+	if err := runtimecaps.Detect().RejectHostOperation("host schedule changes"); err != nil {
+		return exitConfig(err)
+	}
 	scheduleTypeRaw, _ := cmd.Flags().GetString("type")
 	scheduleType, err := normalizeScheduleType(scheduleTypeRaw)
 	if err != nil {
@@ -13789,6 +13932,17 @@ func buildPreflightReport(cfgPath string) preflightReport {
 		loadedCfg = cfg
 		cfgLoaded = true
 		add(preflightCheck{ID: "validate-config", Status: "pass", Title: "validate-config", Message: "config is valid"})
+		schemaCheck := checkConfigSchema(&healContext{ConfigPath: cfgPath})
+		schemaStatus := "pass"
+		if schemaCheck.Status == healWarn {
+			schemaStatus = "warn"
+		} else if schemaCheck.Status == healFail {
+			schemaStatus = "fail"
+		}
+		add(preflightCheck{
+			ID: schemaCheck.ID, Status: schemaStatus, Title: schemaCheck.Title,
+			Message: schemaCheck.Message, Hint: schemaCheck.Hint,
+		})
 		dirs := []struct {
 			id    string
 			path  string

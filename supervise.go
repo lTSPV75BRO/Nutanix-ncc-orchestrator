@@ -11,6 +11,9 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"goncc/internal/runtimecaps"
+	lumberjack "gopkg.in/natefinch/lumberjack.v2"
 )
 
 // This file implements the native, in-process foreground supervisor used by
@@ -86,6 +89,9 @@ func (c *superviseConfig) applyDefaults() {
 // (or, under systemd, until the unit is stopped). It never returns on its own
 // while children keep restarting; it returns nil after a clean shutdown.
 func runV2Supervise(cfg superviseConfig) error {
+	if err := runtimecaps.Detect().RejectHostOperation("native stack supervision"); err != nil {
+		return err
+	}
 	cfg.applyDefaults()
 	if len(cfg.children) == 0 {
 		return fmt.Errorf("supervisor: no child processes configured")
@@ -246,15 +252,12 @@ func superviseChildLoop(ctx context.Context, wg *sync.WaitGroup, cfg *superviseC
 // runChildOnce starts the child, supervises it until it exits / is found
 // unhealthy / the supervisor is shutting down, and returns the reason.
 func runChildOnce(ctx context.Context, cfg *superviseConfig, c *superviseChild, logf func(string, ...any)) childStopReason {
-	logFile, err := os.OpenFile(c.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		logf("%s: open log %s failed: %v", c.name, c.logPath, err)
-		// Treat as a failed start; caller applies backoff.
-		_ = sleepCtx(ctx, time.Second)
-		if ctx.Err() != nil {
-			return childShutdown
-		}
-		return childExited
+	logFile := &lumberjack.Logger{
+		Filename:   c.logPath,
+		MaxSize:    50,
+		MaxBackups: 5,
+		MaxAge:     30,
+		Compress:   true,
 	}
 	defer logFile.Close()
 

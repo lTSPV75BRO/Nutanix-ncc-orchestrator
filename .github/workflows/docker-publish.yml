@@ -1,29 +1,22 @@
-# Build and push Docker image to Docker Hub.
-# Image tag = version from VERSION file (on push to main) or from release tag (on release).
-# Required repo secrets: DOCKERHUB_USERNAME, DOCKERHUB_TOKEN (Docker Hub access token).
 name: Docker build and push
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
-      - '**.go'
-      - 'go.mod'
-      - 'go.sum'
-      - 'Dockerfile'
-      - 'VERSION'
-      - '.github/workflows/docker-publish.yml'
+      - "**.go"
+      - "frontend/**"
+      - "go.mod"
+      - "go.sum"
+      - "Dockerfile*"
+      - "VERSION"
+      - ".github/workflows/docker-publish.yml"
   release:
     types: [published]
-  # Optional: uncomment to also run on version tags (e.g. v1.1.0)
-  # push:
-  #   tags:
-  #     - 'v*'
 
 env:
   REGISTRY: docker.io
-  IMAGE_NAME: prajwalnutant/nutanix-ncc-orchestrator
+  IMAGE_PREFIX: prajwalnutant
 
 jobs:
   build-and-push:
@@ -31,6 +24,16 @@ jobs:
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: nutanix-ncc-orchestrator
+            dockerfile: Dockerfile
+          - name: ncc-api-server
+            dockerfile: Dockerfile.api
+          - name: ncc-ui-server
+            dockerfile: Dockerfile.ui
 
     steps:
       - name: Checkout
@@ -40,39 +43,33 @@ jobs:
 
       - name: Set version
         id: version
+        shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            VERSION="${{ github.event.release.tag_name }}"
-            VERSION="${VERSION#v}"
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            version="${{ github.event.release.tag_name }}"
+            version="${version#v}"
           else
-            VERSION=$(cat VERSION 2>/dev/null || echo "0.0.0-dev")
+            version="$(tr -d '[:space:]' < VERSION)"
           fi
-          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
-          echo "Using version: ${VERSION}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: 'go.mod'
+          go-version-file: go.mod
 
-      - name: Build Linux binary
+      - name: Build runner binary
+        if: matrix.name == 'nutanix-ncc-orchestrator'
         run: |
           mkdir -p dist
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          GIT_REVISION="${GITHUB_SHA:-unknown}"
-          GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=true -ldflags "-w -s \
-            -X main.Version=${VERSION} \
-            -X main.GitRevision=${GIT_REVISION} \
-            -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
-            -X main.Stream=Release \
-            -X main.GoVersion=$(go version | cut -d ' ' -f 3)" \
+          GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=true \
+            -ldflags "-w -s -X main.Version=${{ steps.version.outputs.version }} -X main.GitRevision=${GITHUB_SHA}" \
             -o dist/ncc-orchestrator-linux-amd64 .
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to Docker Hub
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -82,9 +79,11 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: ${{ github.event_name != 'pull_request' }}
+          file: ${{ matrix.dockerfile }}
+          push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.name }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.name }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: true

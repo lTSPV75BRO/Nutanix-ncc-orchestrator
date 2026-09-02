@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"goncc/internal/runtimecaps"
 )
 
 // This file installs the v2 stack *supervisor* (`ncc-orchestrator v2-supervise`)
@@ -85,6 +87,9 @@ func systemdSupervisorUnit(o installServiceOptions) string {
 }
 
 func runV2InstallService(o installServiceOptions) error {
+	if err := runtimecaps.Detect().RejectHostOperation("native service installation"); err != nil {
+		return err
+	}
 	if err := o.resolve(); err != nil {
 		return err
 	}
@@ -101,6 +106,9 @@ func runV2InstallService(o installServiceOptions) error {
 }
 
 func runV2UninstallService(o installServiceOptions) error {
+	if err := runtimecaps.Detect().RejectHostOperation("native service removal"); err != nil {
+		return err
+	}
 	if err := o.resolve(); err != nil {
 		return err
 	}

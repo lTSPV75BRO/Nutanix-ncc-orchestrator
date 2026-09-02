@@ -1,0 +1,65 @@
+{{- if .Values.api.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ncc-v2-api
+  namespace: {{ .Values.namespace }}
+spec:
+  replicas: {{ .Values.api.replicas }}
+  selector:
+    matchLabels: { app: ncc-orchestrator-v2, component: api }
+  template:
+    metadata:
+      labels: { app: ncc-orchestrator-v2, component: api }
+    spec:
+      serviceAccountName: ncc-v2-api
+      initContainers:
+        - name: seed-config
+          image: busybox:1.36
+          command: ["sh", "-c", "mkdir -p /data/config && test -f /data/config/config.yaml || cp /config-cm/config.yaml /data/config/config.yaml"]
+          volumeMounts:
+            - { name: config-cm, mountPath: /config-cm, readOnly: true }
+            - { name: data, mountPath: /data }
+      containers:
+        - name: api
+          image: "{{ .Values.images.api.repository }}:{{ .Values.images.api.tag }}"
+          imagePullPolicy: {{ .Values.images.api.pullPolicy }}
+          args: ["--listen", ":8081", "--repo-root", "/data", "--config-path", "/data/config/config.yaml", "--output-dir", "/data/outputfiles", "--orchestrator-bin", "/usr/local/bin/ncc-orchestrator", "--cors-origin", "$(NCC_UI_ORIGIN)", "--users-db-secret", "ncc-v2-users"]
+          env:
+            - name: NCC_RUNTIME_MODE
+              value: kubernetes
+            - name: NCC_UI_ORIGIN
+              value: {{ .Values.ui.origin | quote }}
+            - name: NCC_API_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secretName }}, key: api-token }
+            - name: NCC_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secretName }}, key: password }
+          ports: [{ name: http, containerPort: 8081 }]
+          readinessProbe: { httpGet: { path: /api/v1/health, port: 8081 } }
+          livenessProbe: { httpGet: { path: /api/v1/health, port: 8081 }, initialDelaySeconds: 10 }
+          resources: {{ .Values.resources.api | toYaml | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: config-cm
+          configMap: { name: {{ .Values.configMapName }} }
+        - name: data
+          persistentVolumeClaim: { claimName: {{ .Values.pvcName }} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ncc-v2-api
+  namespace: {{ .Values.namespace }}
+spec:
+  type: ClusterIP
+  selector: { app: ncc-orchestrator-v2, component: api }
+  ports: [{ name: http, port: {{ .Values.api.service.port }}, targetPort: 8081 }]
+{{- end }}
