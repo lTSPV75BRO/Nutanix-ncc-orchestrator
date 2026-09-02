@@ -16,6 +16,7 @@ func TestNormalizeCanonicalConfig(t *testing.T) {
 	viper.Set("schema-version", 1)
 	viper.Set("runner.execution.request-timeout", "45s")
 	viper.Set("runner.retry.circuit-breaker", 7)
+	viper.Set("runner.targets.pcs", []string{"pc-a", "pc-b"})
 	viper.Set("storage.logs-dir", "/var/lib/ncc/logs")
 
 	normalizeCanonicalConfig()
@@ -28,5 +29,8 @@ func TestNormalizeCanonicalConfig(t *testing.T) {
 	}
 	if got := viper.GetString("output-dir-logs"); got != "/var/lib/ncc/logs" {
 		t.Fatalf("output-dir-logs = %q", got)
+	}
+	if got := viper.GetString("pcs"); got != "pc-a,pc-b" {
+		t.Fatalf("pcs = %q, want pc-a,pc-b", got)
 	}
 }

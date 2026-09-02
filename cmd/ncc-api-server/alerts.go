@@ -355,7 +355,11 @@ func pcAlertTargets(cfg map[string]interface{}) []string {
 }
 
 func rawString(cfg map[string]interface{}, key string) string {
-	return strings.TrimSpace(fmt.Sprint(cfg[key]))
+	value, ok := cfg[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
 }
 
 func rawBool(cfg map[string]interface{}, key string) bool {

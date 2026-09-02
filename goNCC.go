@@ -1842,7 +1842,21 @@ func normalizeCanonicalConfig() {
 		if _, ok := os.LookupEnv("NCC_" + strings.ToUpper(strings.ReplaceAll(flat, "-", "_"))); ok {
 			continue
 		}
-		viper.Set(flat, viper.Get(nested))
+		// Legacy flags represent list-valued settings as comma-separated
+		// strings, while the canonical YAML schema represents them as arrays.
+		// Normalize arrays before the strict legacy type validation runs.
+		value := viper.Get(nested)
+		switch values := value.(type) {
+		case []string:
+			value = strings.Join(values, ",")
+		case []interface{}:
+			items := make([]string, 0, len(values))
+			for _, item := range values {
+				items = append(items, fmt.Sprint(item))
+			}
+			value = strings.Join(items, ",")
+		}
+		viper.Set(flat, value)
 	}
 }
 
