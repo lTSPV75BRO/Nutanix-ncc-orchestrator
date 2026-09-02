@@ -1766,10 +1766,10 @@ func (s *apiServer) handleConfig(w http.ResponseWriter, r *http.Request) {
 			"content_redacted": redactSensitiveText(string(b)),
 		}})
 	case http.MethodPut:
-		if err := s.capabilities.RejectHostOperation("host schedule changes"); err != nil {
-			writeJSON(w, http.StatusConflict, envelope{Success: false, Error: err.Error(), ErrorCode: "NCC_KUBERNETES_CONTROLLER_MANAGED"})
-			return
-		}
+		// Configuration is intentionally writable in Kubernetes: the active
+		// file lives on the shared PVC and is consumed by both the API and
+		// controller-managed runner. Only host lifecycle mutations are blocked
+		// by runtime capabilities.
 		if err := requireJSONContentType(r); err != nil {
 			writeJSON(w, http.StatusUnsupportedMediaType, envelope{Success: false, Error: err.Error()})
 			return

@@ -30,3 +30,4 @@ resources:
   - networkpolicy-ui-ingress.yaml
   - networkpolicy-api-ingress.yaml
   - networkpolicy-egress.yaml
+  - networkpolicy-kube-api.yaml

@@ -19,6 +19,15 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
+    # The UI reaches the API through the ncc-v2-api Service DNS name.
+    - to:
+        - podSelector:
+            matchLabels:
+              app: ncc-orchestrator-v2
+              component: api
+      ports:
+        - protocol: TCP
+          port: 8081
     # Prism Central, Prism Element, HTTPS webhooks, and SMTP submission.
     # Production overlays should replace this broad CIDR with destination
     # CIDRs appropriate to the environment.

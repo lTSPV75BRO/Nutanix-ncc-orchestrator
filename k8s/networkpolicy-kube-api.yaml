@@ -1,0 +1,18 @@
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: ncc-v2-allow-kube-api
+  namespace: ncc-orchestrator-v2
+spec:
+  endpointSelector:
+    matchLabels:
+      app: ncc-orchestrator-v2
+  egress:
+    - toEntities:
+        - kube-apiserver
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+            - port: "6443"
+              protocol: TCP
