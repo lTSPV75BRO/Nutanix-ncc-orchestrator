@@ -33,6 +33,7 @@ import (
 	"time"
 
 	yaml "go.yaml.in/yaml/v3"
+	"goncc/internal/auth"
 	"goncc/internal/promtext"
 	"goncc/internal/runtimecaps"
 	"goncc/internal/v2layout"
@@ -166,6 +167,7 @@ type apiServer struct {
 	// stack (reverse proxy / load balancer) yet still want Secure cookies.
 	cookieSecureForce  bool
 	sessionSecret      string
+	jwtSecret          []byte // HS256 key for stateless session JWTs (NCC_JWT_SECRET)
 	sessionTTL         time.Duration
 	sessionIssuer      string
 	runTimeout         time.Duration
@@ -616,9 +618,17 @@ func main() {
 	applyStackAwareDefaults(&s, os.Args[1:])
 
 	s.authToken = strings.TrimSpace(os.Getenv("NCC_API_TOKEN"))
+	if s.authToken == "" {
+		s.authToken = strings.TrimSpace(os.Getenv("NCC_API_STATIC_TOKEN"))
+	} else if static := strings.TrimSpace(os.Getenv("NCC_API_STATIC_TOKEN")); static != "" && !secureCompare(static, s.authToken) {
+		log.Fatal("NCC_API_STATIC_TOKEN must match NCC_API_TOKEN when both are set")
+	}
 	s.viewerToken = strings.TrimSpace(os.Getenv("NCC_API_VIEWER_TOKEN"))
 	if s.viewerToken != "" && s.authToken != "" && secureCompare(s.viewerToken, s.authToken) {
 		log.Fatal("NCC_API_VIEWER_TOKEN must differ from the admin NCC_API_TOKEN")
+	}
+	if env := strings.TrimSpace(os.Getenv("NCC_CORS_ORIGIN")); env != "" {
+		s.corsOrigin = env
 	}
 	if strings.Contains(s.corsOrigin, "*") {
 		log.Fatal("wildcard cors-origin is not allowed in strict mode")
@@ -780,6 +790,13 @@ func main() {
 	if s.loginEnabled() && s.authMode == "token" {
 		s.authMode = "hybrid"
 	}
+	if env := strings.TrimSpace(os.Getenv("NCC_TOKEN_EXPIRY")); env != "" {
+		d, err := time.ParseDuration(env)
+		if err != nil {
+			log.Fatalf("NCC_TOKEN_EXPIRY: parse %q: %v", env, err)
+		}
+		s.sessionTTL = d
+	}
 	if s.sessionTTL <= 0 || s.sessionTTL > 24*time.Hour {
 		log.Fatal("session-ttl must be > 0 and <= 24h")
 	}
@@ -792,13 +809,7 @@ func main() {
 	if err := s.ensureAuthToken(); err != nil {
 		log.Fatal(err)
 	}
-	if s.sessionsHonored() && strings.TrimSpace(s.sessionSecret) == "" {
-		b := make([]byte, 32)
-		if _, err := crand.Read(b); err != nil {
-			log.Fatalf("generate session secret: %v", err)
-		}
-		s.sessionSecret = base64.RawURLEncoding.EncodeToString(b)
-	}
+	s.initJWTSecret()
 	if err := s.validatePathConfig(); err != nil {
 		log.Fatal(err)
 	}
@@ -851,82 +862,94 @@ func main() {
 }
 
 func (s *apiServer) withAuth(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodOptions || r.URL.Path == "/api/v1/health" {
-			next.ServeHTTP(w, r)
-			return
-		}
-		if r.Method == http.MethodGet && (r.URL.Path == "/api/v1/openapi.json" || r.URL.Path == "/api/v1/meta/routes" || r.URL.Path == "/api/v1/metrics/rate-limit") {
-			next.ServeHTTP(w, r)
-			return
-		}
-		// /metrics is publicly readable when the operator explicitly
-		// opts in via --metrics-public so vanilla Prometheus scrapers
-		// (which don't easily set X-Api-Token) can ingest the
-		// endpoint. Off by default; same auth as everything else
-		// otherwise.
-		if r.Method == http.MethodGet && r.URL.Path == "/metrics" && s.metricsPublic {
-			next.ServeHTTP(w, r)
-			return
-		}
-		if r.URL.Path == "/" || r.URL.Path == "/docs" || r.URL.Path == "/docs/ui" ||
-			strings.HasPrefix(r.URL.Path, "/docs/assets/") {
-			next.ServeHTTP(w, r)
-			return
-		}
-		if r.URL.Path == "/api/v1/auth/session" {
-			next.ServeHTTP(w, r)
-			return
-		}
-		// Login/logout/me, password change, and the SAML SP endpoints
-		// authenticate (or report status) on their own and must be reachable
-		// without a fully-privileged session.
-		if r.URL.Path == "/api/v1/auth/login" ||
-			r.URL.Path == "/api/v1/auth/logout" ||
-			r.URL.Path == "/api/v1/auth/me" ||
-			r.URL.Path == "/api/v1/auth/change-password" ||
-			r.URL.Path == "/api/v1/auth/forgot-password" ||
-			strings.HasPrefix(r.URL.Path, "/saml/") {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		p, ok := s.resolvePrincipal(r)
+	// After AuthMiddleware injects jwt/pat/static identity, map it onto the
+	// api-server principal and enforce RBAC + CSRF.
+	afterStateless := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ident, ok := auth.IdentityFromContext(r.Context())
 		if !ok {
 			writeJSON(w, http.StatusUnauthorized, envelope{Success: false, Error: "unauthorized"})
 			return
 		}
-		// Forced password change: a flagged local account may do nothing else
-		// until it sets a new password (the allowlisted endpoints above let it
-		// reach /auth/me, /auth/change-password, and /auth/logout).
-		//
-		// Exception: a backup restore is allowed during forced change so the
-		// first-login admin can recover an existing deployment instead of
-		// setting a new password — the restore replaces the user database with
-		// the backed-up one (old admin hash, must_change=false), making a
-		// password change pointless. The RBAC check below still confines this to
-		// the admin role, and CSRF still applies, so a non-admin flagged account
-		// cannot use it.
-		if p.mustChange && r.URL.Path != "/api/v1/settings/restore" {
-			writeJSON(w, http.StatusForbidden, envelope{Success: false, Error: "password change required", ErrorCode: "NCC_API_PASSWORD_CHANGE_REQUIRED"})
+		p, ok := s.principalFromIdentity(&ident)
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, envelope{Success: false, Error: "unauthorized"})
 			return
 		}
-		// Role-based access control: the caller's role must meet the route's
-		// minimum (viewer < operator < admin).
-		if need := routeMinRole(r); p.role < need {
-			writeJSON(w, http.StatusForbidden, envelope{Success: false, Error: fmt.Sprintf("forbidden: this action requires the %q role", need.String())})
-			return
-		}
-		// CSRF: browser cookie sessions must echo the double-submit token on
-		// any mutating request. Token/bearer automation is exempt (no cookie).
-		if p.method == authSessionCookie && isMutating(r) && !s.csrfValid(r) {
-			writeJSON(w, http.StatusForbidden, envelope{Success: false, Error: "forbidden: missing or invalid CSRF token"})
-			return
-		}
-		// Carry the resolved identity forward so audit entries are attributed to
-		// the acting user + role (see apiServer.audit).
-		next.ServeHTTP(w, withPrincipal(r, p))
+		s.authorizePrincipal(next, w, r, p)
 	})
+	stateless := auth.AuthMiddleware(s.jwtSecret, s, s.staticTokenForMode())(afterStateless)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.isPublicAuthPath(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// Legacy HMAC ncc_session cookies and the static viewer token. JWT,
+		// hashed PATs, and the admin static bearer are handled below by
+		// AuthMiddleware so every replica sharing NCC_JWT_SECRET can verify
+		// them without a local session file.
+		if p, err := s.resolveLegacyPrincipal(r); err == nil {
+			auth.RecordSuccess()
+			s.authorizePrincipal(next, w, r, p)
+			return
+		}
+		stateless.ServeHTTP(w, r)
+	})
+}
+
+func (s *apiServer) isPublicAuthPath(r *http.Request) bool {
+	if r.Method == http.MethodOptions || r.URL.Path == "/api/v1/health" {
+		return true
+	}
+	if r.Method == http.MethodGet && (r.URL.Path == "/api/v1/openapi.json" || r.URL.Path == "/api/v1/meta/routes" || r.URL.Path == "/api/v1/metrics/rate-limit") {
+		return true
+	}
+	if r.Method == http.MethodGet && r.URL.Path == "/metrics" && s.metricsPublic {
+		return true
+	}
+	if r.URL.Path == "/" || r.URL.Path == "/docs" || r.URL.Path == "/docs/ui" ||
+		strings.HasPrefix(r.URL.Path, "/docs/assets/") {
+		return true
+	}
+	if r.URL.Path == "/api/v1/auth/session" {
+		return true
+	}
+	if r.URL.Path == "/api/v1/auth/login" ||
+		r.URL.Path == "/api/v1/auth/logout" ||
+		r.URL.Path == "/api/v1/auth/me" ||
+		r.URL.Path == "/api/v1/auth/change-password" ||
+		r.URL.Path == "/api/v1/auth/forgot-password" ||
+		strings.HasPrefix(r.URL.Path, "/saml/") {
+		return true
+	}
+	return false
+}
+
+func (s *apiServer) authorizePrincipal(next http.Handler, w http.ResponseWriter, r *http.Request, p principal) {
+	// Forced password change: a flagged local account may do nothing else
+	// until it sets a new password (the allowlisted endpoints above let it
+	// reach /auth/me, /auth/change-password, and /auth/logout).
+	//
+	// Exception: a backup restore is allowed during forced change so the
+	// first-login admin can recover an existing deployment instead of
+	// setting a new password — the restore replaces the user database with
+	// the backed-up one (old admin hash, must_change=false), making a
+	// password change pointless. The RBAC check below still confines this to
+	// the admin role, and CSRF still applies, so a non-admin flagged account
+	// cannot use it.
+	if p.mustChange && r.URL.Path != "/api/v1/settings/restore" {
+		writeJSON(w, http.StatusForbidden, envelope{Success: false, Error: "password change required", ErrorCode: "NCC_API_PASSWORD_CHANGE_REQUIRED"})
+		return
+	}
+	if need := routeMinRole(r); p.role < need {
+		writeJSON(w, http.StatusForbidden, envelope{Success: false, Error: fmt.Sprintf("forbidden: this action requires the %q role", need.String())})
+		return
+	}
+	if p.method == authSessionCookie && isMutating(r) && !s.csrfValid(r) {
+		writeJSON(w, http.StatusForbidden, envelope{Success: false, Error: "forbidden: missing or invalid CSRF token"})
+		return
+	}
+	next.ServeHTTP(w, withPrincipal(r, p))
 }
 
 func (s *apiServer) withCORS(next http.Handler) http.Handler {
@@ -946,6 +969,7 @@ func (s *apiServer) withCORS(next http.Handler) http.Handler {
 				return
 			}
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Vary", "Origin")
 		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -1368,6 +1392,8 @@ func (s *apiServer) handlePrometheusMetrics(w http.ResponseWriter, r *http.Reque
 	fmt.Fprintf(w, "# HELP ncc_auth_lockouts_total Cumulative account lockouts triggered by the brute-force guard.\n")
 	fmt.Fprintf(w, "# TYPE ncc_auth_lockouts_total counter\n")
 	fmt.Fprintf(w, "ncc_auth_lockouts_total %d\n", s.lockoutTotal.Load())
+
+	auth.WritePrometheus(w)
 
 	fmt.Fprintf(w, "# HELP ncc_update_applied_total Cumulative in-app software updates successfully installed.\n")
 	fmt.Fprintf(w, "# TYPE ncc_update_applied_total counter\n")
@@ -3972,6 +3998,8 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/auth/forgot-password", Methods: []string{http.MethodPost}, Description: "Public self-service: queue a password-reset request for an admin to action; always returns a generic 200 (no account enumeration)", SampleBody: "{\n  \"username\": \"alice\"\n}"},
 		{Path: "/api/v1/auth/tokens", Methods: []string{http.MethodGet, http.MethodPost}, Description: "Self-service personal access tokens (any signed-in user): GET lists your tokens (metadata only); POST mints a bearer token inheriting your role, returned once. Use it as 'X-API-Token: <token>' or 'Authorization: Bearer <token>'.", SampleBody: "{\n  \"name\": \"laptop-cli\",\n  \"expires_in_days\": 90\n}"},
 		{Path: "/api/v1/auth/tokens/{id}", Methods: []string{http.MethodDelete}, Description: "Self-service: revoke one of your own personal access tokens by id"},
+		{Path: "/api/v1/users/me/pats", Methods: []string{http.MethodGet, http.MethodPost}, Description: "Alias of /api/v1/auth/tokens: mint or list hashed personal access tokens for the authenticated user. POST returns the plaintext PAT once (ncc_pat_...).", SampleBody: "{\n  \"name\": \"ci-runner\",\n  \"expires_in_days\": 90\n}"},
+		{Path: "/api/v1/users/me/pats/{id}", Methods: []string{http.MethodDelete}, Description: "Alias of /api/v1/auth/tokens/{id}: revoke one of your own hashed personal access tokens by id"},
 		{Path: "/api/v1/settings/password-resets", Methods: []string{http.MethodGet}, Description: "Admin-only: list pending self-service password-reset requests"},
 		{Path: "/api/v1/settings/password-resets/{name}", Methods: []string{http.MethodDelete}, Description: "Admin-only: dismiss a pending password-reset request without resetting the password (resetting it clears the request automatically)"},
 		{Path: "/api/v1/settings/users", Methods: []string{http.MethodGet, http.MethodPost}, Description: "Admin-only: list local accounts / create one (last-admin + reserved-admin protection)", SampleBody: "{\n  \"username\": \"alice\",\n  \"password\": \"\",\n  \"role\": \"operator\",\n  \"must_change_password\": true\n}"},
@@ -5441,6 +5469,11 @@ func (s *apiServer) buildHandler() http.Handler {
 	// own (handlers 501 when the store is not writable).
 	mux.HandleFunc("/api/v1/auth/tokens", s.handleAuthTokens)
 	mux.HandleFunc("/api/v1/auth/tokens/", s.handleAuthTokenByID)
+	// Stateless hybrid-auth aliases for the same self-service PAT store
+	// (POST mints a hashed PAT; DELETE revokes by id). Reachable with JWT,
+	// PAT, or static token so horizontally scaled replicas behave the same.
+	mux.HandleFunc("/api/v1/users/me/pats", s.handleAuthTokens)
+	mux.HandleFunc("/api/v1/users/me/pats/", s.handleAuthTokenByID)
 	// Register SAML endpoints when SAML is active now or could be enabled at
 	// runtime (a writable user db is present). Handlers 503 when no provider.
 	if s.samlEnabled || s.users.writable() {
@@ -5507,6 +5540,31 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/", s.handleAPIDocsHome)
 
 	return s.withCORS(s.withRateLimit(s.withAuth(mux)))
+}
+
+// initJWTSecret loads NCC_JWT_SECRET (or reuses --session-secret) for HS256
+// session JWTs. When neither is set, a 32-byte secret is generated in memory
+// and a prominent warning is logged: replicas cannot share sessions without a
+// configured secret. An empty --session-secret is filled from the JWT key so
+// legacy HMAC cookies also verify across replicas that share NCC_JWT_SECRET.
+func (s *apiServer) initJWTSecret() {
+	raw := strings.TrimSpace(os.Getenv("NCC_JWT_SECRET"))
+	if raw == "" {
+		raw = strings.TrimSpace(s.sessionSecret)
+	}
+	if raw == "" {
+		b := make([]byte, 32)
+		if _, err := crand.Read(b); err != nil {
+			log.Fatalf("generate jwt secret: %v", err)
+		}
+		s.jwtSecret = b
+		log.Printf("WARNING: NCC_JWT_SECRET is not set; generated an ephemeral 32-byte HMAC-SHA256 signing secret in memory. Browser sessions will not validate across process restarts or additional replicas. Set NCC_JWT_SECRET to the same value on every replica for horizontal scaling.")
+	} else {
+		s.jwtSecret = []byte(raw)
+	}
+	if strings.TrimSpace(s.sessionSecret) == "" {
+		s.sessionSecret = string(s.jwtSecret)
+	}
 }
 
 // defaultUsersDBPath returns the writable user-database path used when no

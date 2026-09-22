@@ -43,6 +43,8 @@ func TestBuildOpenAPISpecIncludesCorePaths(t *testing.T) {
 		"/api/v1/settings/backups/delete",
 		"/api/v1/settings/backups/download",
 		"/api/v1/health/diagnostics",
+		"/api/v1/users/me/pats",
+		"/api/v1/users/me/pats/{id}",
 	}
 	for _, p := range required {
 		if _, exists := paths[p]; !exists {

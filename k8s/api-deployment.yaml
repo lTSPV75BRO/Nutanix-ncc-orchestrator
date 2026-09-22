@@ -106,6 +106,17 @@ spec:
                 secretKeyRef:
                   name: ncc-v2-secrets
                   key: api-token
+            - name: NCC_API_STATIC_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ncc-v2-secrets
+                  key: api-token
+            - name: NCC_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ncc-v2-secrets
+                  key: jwt-secret
+                  optional: true
           ports:
             - containerPort: 8081
               name: http

@@ -988,6 +988,7 @@ These are runtime flags for v2 services (`cmd/ncc-api-server`, `cmd/ncc-ui-serve
 | `ncc-api-server` | `--auth-mode` | `token` | API auth mode: `token`, `session`, `hybrid`. |
 | `ncc-api-server` | `--token-file-path` | `.ncc-api-token` | Token file used by UI proxy and local tooling. |
 | `ncc-api-server` | `--cookie-secure` / `--cookie-insecure` | auto | Force the session cookie `Secure` attribute on/off. Auto-set by `v2-start` to track whether the UI is on HTTPS (the default); set `--cookie-insecure` only when serving plain HTTP. |
+| `ncc-api-server` | `--cors-origin` | `http://localhost:8080` | Comma-separated browser origins allowed to call the API with cookies (`Access-Control-Allow-Credentials: true`). Wildcards are rejected. Override with `NCC_CORS_ORIGIN`. |
 | `ncc-ui-server` | `--allowed-origins` | `http://localhost:8080` | Browser origin allowlist for proxied API calls. |
 | `ncc-ui-server` | `--api-auth-mode` | `token` | Backend auth forwarding mode (`token` or `session`). |
 | `ncc-ui-server` | `--ui-insecure-http` | `false` | Serve plain HTTP instead of the default self-signed HTTPS (use only behind a trusted proxy/loopback). |
@@ -1318,6 +1319,10 @@ ncc-orchestrator env-info
 | Variable | Purpose |
 |---|---|
 | `NCC_API_TOKEN` | Admin token for the api-server (full access). |
+| `NCC_API_STATIC_TOKEN` | Alias of `NCC_API_TOKEN` for the static bearer used by runners/internal clients. Must match `NCC_API_TOKEN` when both are set. |
+| `NCC_JWT_SECRET` | Shared HMAC-SHA256 secret for stateless session JWTs. Required for 2+ API replicas; if unset, a 32-byte secret is generated in memory (sessions will not survive restart or another replica). Also fills `--session-secret` when that flag is empty so legacy HMAC cookies share the same key. Set the same value on every replica: Kubernetes Secret key `jwt-secret`, systemd `Environment=`/`EnvironmentFile=`, or a Windows machine / Task Scheduler environment variable. |
+| `NCC_TOKEN_EXPIRY` | Session/JWT lifetime (Go duration, default from `--session-ttl` / 6h; max 24h). Example: `24h`. |
+| `NCC_CORS_ORIGIN` | Overrides `--cors-origin` (comma-separated allowlist). Set the UI origin so the SPA can send the HttpOnly `auth_token` cookie with `credentials: include`. Wildcards are rejected. |
 | `NCC_API_VIEWER_TOKEN` | Optional read-only viewer token (RBAC). Holders may read non-settings `GET` endpoints but get `403` on `/api/v1/settings/*` and any mutating request. Must differ from `NCC_API_TOKEN`. |
 | `NCC_USERS_DB` | Path to the writable JSON user database file (enables login, first-run admin bootstrap, and runtime user/SSO management). Equivalent to `--users-db`. Defaults to `<root>/.ncc-api-users.json` inside a v2 stack. |
 | `NCC_USERS_DB_SECRET` | Kubernetes Secret name to store the user database in (encrypted at rest by etcd). Equivalent to `--users-db-secret`. Mutually exclusive with `NCC_USERS_DB`. Requires in-cluster execution + RBAC (`k8s/rbac.yaml`). |

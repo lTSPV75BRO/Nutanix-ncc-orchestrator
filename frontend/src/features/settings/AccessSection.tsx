@@ -842,7 +842,7 @@ function BackupRestoreCard() {
     await new Promise((r) => setTimeout(r, 4000));
     while (Date.now() < deadline) {
       try {
-        const resp = await fetch("/api/v1/health", { cache: "no-store" });
+        const resp = await fetch("/api/v1/health", { cache: "no-store", credentials: "include" });
         if (resp.ok) break;
       } catch {
         // still down — keep waiting
@@ -2609,7 +2609,7 @@ function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
     await new Promise((r) => setTimeout(r, 4000));
     while (Date.now() < deadline) {
       try {
-        const resp = await fetch("/api/v1/health", { cache: "no-store" });
+        const resp = await fetch("/api/v1/health", { cache: "no-store", credentials: "include" });
         if (resp.ok) break;
       } catch {
         // still down — keep waiting

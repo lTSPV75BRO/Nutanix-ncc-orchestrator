@@ -16,7 +16,7 @@ import { Button, Dropdown, Layout, Spin, Tag, Tooltip } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, NavLink, Route, Routes, useLocation } from "react-router";
 import { THEME_OPTIONS, useAppTheme, type AppThemeSelection } from "./theme";
-import { api, ApiError } from "./api/client";
+import { api, ApiError, setOnUnauthorized, resetUnauthorizedRedirect } from "./api/client";
 import type { MeData, RunActiveData, RunConflictData, UserRole } from "./api/types";
 import { notify, notifyError } from "./notify";
 import { AuthContext, useAuth, type AuthValue } from "./auth/AuthContext";
@@ -416,7 +416,8 @@ export default function App() {
     // a clean re-bootstrap. A hard navigation guarantees the UI returns to the
     // login screen regardless of any in-flight query or cached auth state.
     queryClient.clear();
-    window.location.assign("/");
+    resetUnauthorizedRedirect();
+    window.location.assign("/login");
   };
 
   const handleLogoutEverywhere = async () => {
@@ -427,8 +428,27 @@ export default function App() {
       notifyError(e, "Could not sign out other sessions");
     }
     queryClient.clear();
-    window.location.assign("/");
+    resetUnauthorizedRedirect();
+    window.location.assign("/login");
   };
+
+  useEffect(() => {
+    setOnUnauthorized(() => {
+      const previous = queryClient.getQueryData<MeData>(["me"]);
+      queryClient.setQueryData<MeData>(["me"], {
+        authenticated: false,
+        login_enabled: previous?.login_enabled ?? true,
+        local_enabled: previous?.local_enabled ?? true,
+        saml_enabled: previous?.saml_enabled ?? false,
+        ldap_enabled: previous?.ldap_enabled,
+      });
+      void queryClient.cancelQueries();
+      queryClient.removeQueries({
+        predicate: (q) => q.queryKey[0] !== "me" && q.queryKey[0] !== "health",
+      });
+    });
+    return () => setOnUnauthorized(undefined);
+  }, [queryClient]);
 
   const healthQuery = useQuery({
     queryKey: ["health"],
@@ -508,15 +528,36 @@ export default function App() {
     return location.pathname.startsWith(to);
   };
 
+  // Wait for /auth/me before routing. While it is in flight, login_enabled is
+  // unknown (falsy), so rendering the app would mount Dashboard queries that
+  // 401 and bounce /login → / forever.
+  if (meQuery.isLoading || meQuery.isPending) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Spin size="large" />
+      </div>
+    );
+  }
+
   // Login gate: when the backend requires login and this browser has no
   // authenticated session, show the full-screen login instead of the app.
-  if (loginEnabled && !authenticated && !meQuery.isLoading) {
+  // A failed /me is treated as signed-out (not as "login disabled") so a 401
+  // cannot open the dashboard.
+  if ((loginEnabled || meQuery.isError) && !authenticated) {
     return (
       <LoginPage
         localEnabled={Boolean(me?.local_enabled)}
         samlEnabled={Boolean(me?.saml_enabled)}
         bootstrapPending={Boolean(me?.bootstrap_pending)}
         onSuccess={() => {
+          resetUnauthorizedRedirect();
           void queryClient.invalidateQueries();
           void meQuery.refetch();
         }}
@@ -533,6 +574,7 @@ export default function App() {
         forced
         username={me?.username}
         onSuccess={() => {
+          resetUnauthorizedRedirect();
           void queryClient.invalidateQueries();
           void meQuery.refetch();
         }}
@@ -635,6 +677,7 @@ export default function App() {
           >
             <Routes>
               <Route path="/" element={<DashboardPage />} />
+              <Route path="/login" element={<Navigate to="/" replace />} />
               <Route
                 path="/settings"
                 element={canSeeSettings ? <SettingsPage isAdmin={isAdmin} /> : <Navigate to="/" replace />}

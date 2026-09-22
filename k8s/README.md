@@ -114,7 +114,7 @@ Applying `k8s/` creates:
 | `kustomization.yaml` | Single apply entrypoint (`kubectl apply -k k8s/`) |
 | `namespace.yaml` | Creates `ncc-orchestrator-v2` namespace |
 | `configmap.yaml` | Runtime `config.yaml` consumed by runner/API |
-| `secret.yaml` | `prism-password` and `api-token` |
+| `secret.yaml` | `prism-password`, `api-token`, and optional `jwt-secret` (shared HS256 key for stateless session JWTs across API replicas) |
 | `pvc.yaml` | Shared RWX storage for logs/artifacts/history |
 | `runner-cronjob.yaml` | Scheduled NCC runs |
 | `api-deployment.yaml` | Backend API server deployment |

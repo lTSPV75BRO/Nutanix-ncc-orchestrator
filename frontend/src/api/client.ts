@@ -79,6 +79,69 @@ function readCookie(name: string): string {
 
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
+// Cookie-backed JWT sessions (auth_token) and HMAC sessions (ncc_session) must
+// be sent cross-origin when the UI and API are on different ports/hosts.
+export const API_CREDENTIALS: RequestCredentials = "include";
+
+const AUTH_PUBLIC_PATHS = new Set([
+  "/api/v1/auth/login",
+  "/api/v1/auth/me",
+  "/api/v1/auth/forgot-password",
+  "/api/v1/health",
+]);
+
+let unauthorizedRedirecting = false;
+let onUnauthorized: (() => void) | undefined;
+
+/** Register a callback invoked once when a protected request returns 401. */
+export function setOnUnauthorized(handler?: () => void): void {
+  onUnauthorized = handler;
+}
+
+/** Test hook: reset the 401 redirect latch. */
+export function resetUnauthorizedRedirect(): void {
+  unauthorizedRedirecting = false;
+}
+
+function requestPath(input: string): string {
+  const q = input.indexOf("?");
+  return q >= 0 ? input.slice(0, q) : input;
+}
+
+function maybeRedirectToLogin(path: string, status: number): void {
+  if (status !== 401) return;
+  if (AUTH_PUBLIC_PATHS.has(requestPath(path))) return;
+  if (typeof window !== "undefined" && window.location.pathname === "/login") return;
+  if (unauthorizedRedirecting) return;
+  unauthorizedRedirecting = true;
+  if (onUnauthorized) {
+    onUnauthorized();
+    return;
+  }
+  window.location.assign("/login");
+}
+
+function csrfHeaders(method: string): Record<string, string> {
+  if (!MUTATING_METHODS.has(method)) return {};
+  const csrf = readCookie("ncc_csrf");
+  return csrf ? { "X-CSRF-Token": csrf } : {};
+}
+
+async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const response = await fetch(path, {
+    ...init,
+    credentials: API_CREDENTIALS,
+    headers: {
+      "X-Requested-With": "ncc-ui",
+      ...csrfHeaders(method),
+      ...(init?.headers ?? {}),
+    },
+  });
+  maybeRedirectToLogin(path, response.status);
+  return response;
+}
+
 export type AuditQuery = {
   limit?: number;
   action?: string;
@@ -104,23 +167,11 @@ function buildAuditPath(opts?: AuditQuery): string {
 async function callApi<T>(path: string, init?: RequestInit): Promise<T> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 30000);
-  const method = (init?.method ?? "GET").toUpperCase();
-  // Cookie-based sessions require the CSRF double-submit token on mutations.
-  // The token is harmless to send otherwise (static-token automation ignores
-  // it), so attach it whenever it's present and the method is state-changing.
-  const csrfHeader: Record<string, string> = {};
-  if (MUTATING_METHODS.has(method)) {
-    const csrf = readCookie("ncc_csrf");
-    if (csrf) csrfHeader["X-CSRF-Token"] = csrf;
-  }
-  const response = await fetch(path, {
+  const response = await apiFetch(path, {
     ...init,
-    credentials: "same-origin",
     signal: ctl.signal,
     headers: {
       "Content-Type": "application/json",
-      "X-Requested-With": "ncc-ui",
-      ...csrfHeader,
       ...(init?.headers ?? {}),
     },
   }).finally(() => clearTimeout(timer));
@@ -146,20 +197,11 @@ async function callApi<T>(path: string, init?: RequestInit): Promise<T> {
 async function callApiEnvelope<T>(path: string, init?: RequestInit): Promise<Envelope<T>> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 30000);
-  const method = (init?.method ?? "GET").toUpperCase();
-  const csrfHeader: Record<string, string> = {};
-  if (MUTATING_METHODS.has(method)) {
-    const csrf = readCookie("ncc_csrf");
-    if (csrf) csrfHeader["X-CSRF-Token"] = csrf;
-  }
-  const response = await fetch(path, {
+  const response = await apiFetch(path, {
     ...init,
-    credentials: "same-origin",
     signal: ctl.signal,
     headers: {
       "Content-Type": "application/json",
-      "X-Requested-With": "ncc-ui",
-      ...csrfHeader,
       ...(init?.headers ?? {}),
     },
   }).finally(() => clearTimeout(timer));
@@ -350,8 +392,7 @@ export const api = {
   // Blob download; uses a raw fetch because the response is not JSON.
   auditExportCSV: async (opts?: AuditQuery): Promise<string> => {
     const path = buildAuditPath({ ...opts, format: "csv" });
-    const response = await fetch(path, {
-      credentials: "same-origin",
+    const response = await apiFetch(path, {
       headers: { "X-Requested-With": "ncc-ui" },
     });
     if (!response.ok) {
@@ -428,14 +469,10 @@ export const api = {
   downloadBackup: async (
     passphrase?: string,
   ): Promise<{ blob: Blob; filename: string }> => {
-    const csrf = readCookie("ncc_csrf");
     const pass = (passphrase ?? "").trim();
-    const response = await fetch("/api/v1/settings/backup", {
+    const response = await apiFetch("/api/v1/settings/backup", {
       method: "GET",
-      credentials: "same-origin",
       headers: {
-        "X-Requested-With": "ncc-ui",
-        ...(csrf ? { "X-CSRF-Token": csrf } : {}),
         ...(pass ? { "X-NCC-Backup-Passphrase": pass } : {}),
       },
     });
@@ -450,18 +487,12 @@ export const api = {
     return { blob: await response.blob(), filename };
   },
   restoreBackup: async (file: File, passphrase?: string): Promise<Envelope<unknown>> => {
-    const csrf = readCookie("ncc_csrf");
     const form = new FormData();
     form.append("archive", file);
     const pass = (passphrase ?? "").trim();
     if (pass) form.append("passphrase", pass);
-    const response = await fetch("/api/v1/settings/restore", {
+    const response = await apiFetch("/api/v1/settings/restore", {
       method: "POST",
-      credentials: "same-origin",
-      headers: {
-        "X-Requested-With": "ncc-ui",
-        ...(csrf ? { "X-CSRF-Token": csrf } : {}),
-      },
       body: form,
     });
     const payload = (await response.json().catch(() => ({}))) as Envelope<unknown>;
@@ -476,11 +507,11 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
-  listTokens: () => callApi<{ tokens: PersonalToken[] }>("/api/v1/auth/tokens"),
+  listTokens: () => callApi<{ tokens: PersonalToken[] }>("/api/v1/users/me/pats"),
   createToken: (payload: { name: string; expires_in_days?: number }) =>
-    callApi<CreatedToken>("/api/v1/auth/tokens", { method: "POST", body: JSON.stringify(payload) }),
+    callApi<CreatedToken>("/api/v1/users/me/pats", { method: "POST", body: JSON.stringify(payload) }),
   revokeToken: (id: string) =>
-    callApi<unknown>(`/api/v1/auth/tokens/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    callApi<unknown>(`/api/v1/users/me/pats/${encodeURIComponent(id)}`, { method: "DELETE" }),
   listAllTokens: () => callApi<{ tokens: PersonalToken[] }>("/api/v1/settings/tokens"),
   adminRevokeToken: (id: string) =>
     callApi<unknown>(`/api/v1/settings/tokens/${encodeURIComponent(id)}`, { method: "DELETE" }),
@@ -551,17 +582,9 @@ export const api = {
       body: JSON.stringify({ name }),
     }),
   downloadNamedBackup: async (name: string): Promise<{ blob: Blob; filename: string }> => {
-    const csrf = readCookie("ncc_csrf");
-    const response = await fetch(
+    const response = await apiFetch(
       `/api/v1/settings/backups/download?name=${encodeURIComponent(name)}`,
-      {
-        method: "GET",
-        credentials: "same-origin",
-        headers: {
-          "X-Requested-With": "ncc-ui",
-          ...(csrf ? { "X-CSRF-Token": csrf } : {}),
-        },
-      },
+      { method: "GET" },
     );
     const contentType = (response.headers.get("content-type") || "").toLowerCase();
     if (!response.ok || contentType.includes("application/json")) {

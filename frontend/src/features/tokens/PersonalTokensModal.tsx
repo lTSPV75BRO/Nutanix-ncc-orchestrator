@@ -34,8 +34,6 @@ const EXPIRY_OPTIONS = [
 
 const fmtDate = (s?: string): string => formatDateTime(s);
 
-// An empty expiry means the token never expires (long-lived automation
-// credential), so render it explicitly rather than as a missing value.
 function fmtExpiry(s?: string): ReactNode {
   if (!s) return <Tag color="orange">Never</Tag>;
   return fmtDate(s);
@@ -47,8 +45,8 @@ function roleColor(role: string): string {
 
 /**
  * Self-service personal access token manager. Any signed-in user can mint a
- * bearer token that inherits their own role, list their tokens, and revoke
- * them. The secret is shown exactly once, right after creation.
+ * hashed PAT (`ncc_pat_…`) that inherits their role, list metadata, and revoke
+ * tokens. The plaintext secret is shown exactly once after creation.
  */
 export function PersonalTokensModal({
   open,
@@ -61,6 +59,7 @@ export function PersonalTokensModal({
 }) {
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
+  const [mintOpen, setMintOpen] = useState(false);
   const [created, setCreated] = useState<CreatedToken | null>(null);
 
   const tokensQuery = useQuery({
@@ -74,6 +73,7 @@ export function PersonalTokensModal({
     mutationFn: (values: { name: string; expires_in_days: number }) => api.createToken(values),
     onSuccess: (data) => {
       setCreated(data);
+      setMintOpen(false);
       form.resetFields();
       void queryClient.invalidateQueries({ queryKey: ["personal-tokens"] });
     },
@@ -135,86 +135,117 @@ export function PersonalTokensModal({
   ];
 
   return (
-    <Modal
-      title={
-        <Space>
-          <KeyOutlined />
-          Personal access tokens
-        </Space>
-      }
-      open={open}
-      onCancel={() => {
-        setCreated(null);
-        onClose();
-      }}
-      footer={null}
-      width={720}
-      destroyOnHidden
-    >
-      <Paragraph type="secondary" style={{ marginTop: 0 }}>
-        Generate a bearer token to call the API from scripts, <code>curl</code>, Postman, or CI. A
-        token carries your current role (<Tag color={roleColor(role)} style={{ marginInlineEnd: 0 }}>{role || "—"}</Tag>)
-        and can do anything you can. Send it as an <code>X-API-Token</code> header or{" "}
-        <code>Authorization: Bearer &lt;token&gt;</code>.
-      </Paragraph>
-
-      {created ? (
-        <Alert
-          type="success"
-          showIcon
-          style={{ marginBottom: 16 }}
-          title={`Token "${created.name}" created`}
-          description={
-            <div>
-              <Paragraph style={{ marginBottom: 8 }}>
-                Copy it now — for security it will <b>not</b> be shown again.
-              </Paragraph>
-              <Space.Compact style={{ width: "100%" }}>
-                <Input readOnly value={created.token} onFocus={(e) => e.currentTarget.select()} />
-                <Tooltip title="Copy">
-                  <Button icon={<CopyOutlined />} onClick={() => copySecret(created.token)} />
-                </Tooltip>
-              </Space.Compact>
-            </div>
-          }
-          closable
-          onClose={() => setCreated(null)}
-        />
-      ) : null}
-
-      <Form
-        form={form}
-        layout="inline"
-        initialValues={{ expires_in_days: 90 }}
-        onFinish={(values) => createMutation.mutate(values)}
-        style={{ marginBottom: 16, rowGap: 8 }}
+    <>
+      <Modal
+        title={
+          <Space>
+            <KeyOutlined />
+            Personal access tokens
+          </Space>
+        }
+        open={open}
+        onCancel={() => {
+          setCreated(null);
+          setMintOpen(false);
+          onClose();
+        }}
+        footer={null}
+        width={720}
+        destroyOnHidden
       >
-        <Form.Item
-          name="name"
-          rules={[{ required: true, message: "Name your token" }]}
-          style={{ flex: 1, minWidth: 200 }}
-        >
-          <Input placeholder="Token name (e.g. laptop-cli)" maxLength={80} />
-        </Form.Item>
-        <Form.Item name="expires_in_days">
-          <Select options={EXPIRY_OPTIONS} style={{ width: 120 }} />
-        </Form.Item>
-        <Form.Item>
-          <Button type="primary" htmlType="submit" icon={<PlusOutlined />} loading={createMutation.isPending}>
-            Generate
-          </Button>
-        </Form.Item>
-      </Form>
+        <Paragraph type="secondary" style={{ marginTop: 0 }}>
+          Generate a bearer token to call the API from scripts, <code>curl</code>, Postman, or CI. A
+          token carries your current role (
+          <Tag color={roleColor(role)} style={{ marginInlineEnd: 0 }}>
+            {role || "—"}
+          </Tag>
+          ) and can do anything you can. Send it as an <code>X-API-Token</code> header or{" "}
+          <code>Authorization: Bearer &lt;token&gt;</code>. Only a SHA-256 hash is stored on the
+          server.
+        </Paragraph>
 
-      <Table<PersonalToken>
-        size="small"
-        rowKey="id"
-        columns={columns}
-        dataSource={tokens}
-        loading={tokensQuery.isLoading}
-        pagination={false}
-        locale={{ emptyText: "No tokens yet." }}
-      />
-    </Modal>
+        <Space style={{ marginBottom: 16 }}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setMintOpen(true)}>
+            Create token
+          </Button>
+        </Space>
+
+        <Table<PersonalToken>
+          size="small"
+          rowKey="id"
+          columns={columns}
+          dataSource={tokens}
+          loading={tokensQuery.isLoading}
+          pagination={false}
+          locale={{ emptyText: "No tokens yet." }}
+        />
+      </Modal>
+
+      <Modal
+        title="Create personal access token"
+        open={mintOpen}
+        onCancel={() => setMintOpen(false)}
+        okText="Generate"
+        confirmLoading={createMutation.isPending}
+        onOk={() => form.submit()}
+        destroyOnHidden
+      >
+        <Paragraph type="secondary">
+          The plaintext <code>ncc_pat_…</code> secret is shown once. Copy it immediately — it cannot
+          be recovered later.
+        </Paragraph>
+        <Form
+          form={form}
+          layout="vertical"
+          initialValues={{ expires_in_days: 90 }}
+          onFinish={(values) => createMutation.mutate(values)}
+        >
+          <Form.Item
+            name="name"
+            label="Name"
+            rules={[{ required: true, message: "Name your token" }]}
+          >
+            <Input placeholder="Token name (e.g. laptop-cli)" maxLength={80} />
+          </Form.Item>
+          <Form.Item name="expires_in_days" label="Expires">
+            <Select options={EXPIRY_OPTIONS} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={`Token "${created?.name ?? ""}" created`}
+        open={Boolean(created)}
+        onCancel={() => setCreated(null)}
+        footer={
+          <Button type="primary" onClick={() => setCreated(null)}>
+            Done
+          </Button>
+        }
+        destroyOnHidden
+      >
+        {created ? (
+          <Alert
+            type="warning"
+            showIcon
+            title="Copy this token now"
+            description={
+              <div>
+                <Paragraph style={{ marginBottom: 8 }}>
+                  This is the only time the plaintext token is shown. Store it in a secret manager;
+                  anyone with this value can act as you until it expires or is revoked.
+                </Paragraph>
+                <Space.Compact style={{ width: "100%" }}>
+                  <Input readOnly value={created.token} onFocus={(e) => e.currentTarget.select()} />
+                  <Tooltip title="Copy to clipboard">
+                    <Button icon={<CopyOutlined />} onClick={() => copySecret(created.token)} />
+                  </Tooltip>
+                </Space.Compact>
+              </div>
+            }
+          />
+        ) : null}
+      </Modal>
+    </>
   );
 }

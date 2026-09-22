@@ -12,7 +12,7 @@ vi.mock("./notify", () => ({
 }));
 
 describe("App", () => {
-  it("renders the accessible home link", () => {
+  it("renders the accessible home link", async () => {
     globalThis.fetch = vi.fn(async () => ({
       ok: true,
       status: 200,
@@ -31,7 +31,7 @@ describe("App", () => {
       </AppThemeProvider>,
     );
     expect(
-      screen.getByRole("link", { name: /NCC Orchestrator home/i }),
+      await screen.findByRole("link", { name: /NCC Orchestrator home/i }),
     ).toBeInTheDocument();
   });
 });

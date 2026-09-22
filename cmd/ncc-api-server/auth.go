@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"goncc/internal/auth"
 )
 
 // Role is an ordered authorization level. Higher values are strictly more
@@ -211,70 +213,138 @@ type authError struct{ msg string }
 func (e *authError) Error() string { return e.msg }
 
 // resolvePrincipal determines the caller's role and how they authenticated.
-// Resolution order: static admin token, signed session (cookie/bearer), then
-// static viewer token. ok is false when no valid credential is present.
+// Resolution order: stateless JWT / hashed PAT / static token (internal/auth),
+// then legacy HMAC session cookies, then the static viewer token. ok is false
+// when no valid credential is present.
 func (s *apiServer) resolvePrincipal(r *http.Request) (principal, bool) {
+	p, err := s.resolvePrincipalErr(r)
+	return p, err == nil
+}
+
+func (s *apiServer) staticTokenForMode() string {
 	if s.authMode == "token" || s.authMode == "hybrid" {
-		tok := strings.TrimSpace(r.Header.Get("X-API-Token"))
-		if tok != "" && secureCompare(tok, s.authToken) {
-			return principal{role: RoleAdmin, subject: "static-admin-token", method: authStaticAdminToken}, true
+		return s.authToken
+	}
+	return ""
+}
+
+func (s *apiServer) resolvePrincipalErr(r *http.Request) (principal, error) {
+	ident, aerr := auth.Authenticate(r, s.jwtSecret, s, s.staticTokenForMode())
+	if ident != nil {
+		if p, ok := s.principalFromIdentity(ident); ok {
+			return p, nil
 		}
+		return principal{}, auth.ErrInvalid
 	}
-	// Personal access tokens: user-minted bearer credentials carried in
-	// X-API-Token or Authorization: Bearer. Honored in any auth mode (they are
-	// explicit, revocable, owner-scoped credentials), but only when a writable
-	// user store exists to verify and re-resolve them.
-	if p, ok := s.principalFromPAT(r); ok {
-		return p, true
+	if p, err := s.resolveLegacyPrincipal(r); err == nil {
+		return p, nil
 	}
+	if aerr != nil {
+		return principal{}, aerr
+	}
+	return principal{}, auth.ErrMissing
+}
+
+// resolveLegacyPrincipal accepts HMAC ncc_session cookies (and 2-part bearer
+// sessions) plus the static viewer token. JWT / hashed PAT / admin static
+// tokens are handled by auth.AuthMiddleware on the HTTP path.
+func (s *apiServer) resolveLegacyPrincipal(r *http.Request) (principal, error) {
 	if s.sessionsHonored() {
 		if claims, method, err := s.sessionFromRequest(r); err == nil {
-			role, ok := parseRole(claims.Role)
-			if !ok {
-				// Legacy sessions issued before role claims existed were
-				// only ever minted for admins (loopback + admin token).
-				role = RoleAdmin
-			}
-			subject := claims.Sub
-			if subject == "" {
-				subject = "session"
-			}
-			// Resolve the live must-change flag (and current role) from the
-			// store so a password change or admin reset takes effect on the
-			// next request without re-issuing the token.
-			mustChange := false
-			validSession := true
-			if s.users != nil && subject != "" {
-				if acct, ok := s.users.lookup(subject); ok {
-					// A password change/reset bumps the account's token
-					// generation; a session minted under an older generation is
-					// no longer valid, so every other device is signed out.
-					if claims.Gen != acct.TokenGen {
-						validSession = false
-					} else {
-						mustChange = acct.MustChange
-						if r2, ok := parseRole(acct.Role); ok {
-							role = r2
-						}
-					}
-				}
-			}
-			if validSession {
-				exp := time.Time{}
-				if claims.Exp > 0 {
-					exp = time.Unix(claims.Exp, 0).UTC()
-				}
-				return principal{role: role, subject: subject, method: method, mustChange: mustChange, expiresAt: exp, groups: claims.Grps}, true
+			if p, ok := s.principalFromHMACClaims(claims, method); ok {
+				return p, nil
 			}
 		}
 	}
 	if s.viewerToken != "" {
 		tok := strings.TrimSpace(r.Header.Get("X-API-Token"))
 		if tok != "" && secureCompare(tok, s.viewerToken) {
-			return principal{role: RoleViewer, subject: "static-viewer-token", method: authStaticViewerToken}, true
+			return principal{role: RoleViewer, subject: "static-viewer-token", method: authStaticViewerToken}, nil
 		}
 	}
-	return principal{}, false
+	return principal{}, auth.ErrMissing
+}
+
+func (s *apiServer) principalFromHMACClaims(claims sessionClaims, method authMethod) (principal, bool) {
+	role, ok := parseRole(claims.Role)
+	if !ok {
+		role = RoleAdmin
+	}
+	subject := claims.Sub
+	if subject == "" {
+		subject = "session"
+	}
+	mustChange := false
+	validSession := true
+	if s.users != nil && subject != "" {
+		if acct, found := s.users.lookup(subject); found {
+			if claims.Gen != acct.TokenGen {
+				validSession = false
+			} else {
+				mustChange = acct.MustChange
+				if r2, ok := parseRole(acct.Role); ok {
+					role = r2
+				}
+			}
+		}
+	}
+	if !validSession {
+		return principal{}, false
+	}
+	exp := time.Time{}
+	if claims.Exp > 0 {
+		exp = time.Unix(claims.Exp, 0).UTC()
+	}
+	return principal{role: role, subject: subject, method: method, mustChange: mustChange, expiresAt: exp, groups: claims.Grps}, true
+}
+
+func (s *apiServer) principalFromIdentity(ident *auth.Identity) (principal, bool) {
+	if ident == nil {
+		return principal{}, false
+	}
+	switch ident.AuthType {
+	case auth.AuthTypeStatic:
+		return principal{role: RoleAdmin, subject: "static-admin-token", method: authStaticAdminToken}, true
+	case auth.AuthTypePAT:
+		role, ok := parseRole(ident.Role)
+		if !ok || role == RoleNone {
+			return principal{}, false
+		}
+		return principal{role: role, subject: ident.UserID, method: authPAT, groups: ident.Groups}, true
+	case auth.AuthTypeJWT:
+		role, ok := parseRole(ident.Role)
+		if !ok {
+			role = RoleAdmin
+		}
+		method := authSessionBearer
+		if ident.Source == auth.SourceCookie {
+			method = authSessionCookie
+		}
+		subject := ident.UserID
+		if subject == "" {
+			subject = "session"
+		}
+		mustChange := false
+		validSession := true
+		if s.users != nil && subject != "" {
+			if acct, found := s.users.lookup(subject); found {
+				if ident.Gen != acct.TokenGen {
+					validSession = false
+				} else {
+					mustChange = acct.MustChange
+					if r2, ok := parseRole(acct.Role); ok {
+						role = r2
+					}
+				}
+			}
+		}
+		if !validSession {
+			return principal{}, false
+		}
+		return principal{role: role, subject: subject, method: method, mustChange: mustChange, groups: ident.Groups}, true
+	default:
+		return principal{}, false
+	}
 }
 
 // routeMinRole reports the minimum role required to access a request.
@@ -311,7 +381,8 @@ func routeMinRoleFor(p string, isRead bool) Role {
 	// scope every operation to the caller's subject, and a created token can
 	// never exceed the caller's own role. Admin-wide token management lives
 	// under /settings/tokens (covered by the admin rule below).
-	case p == "/api/v1/auth/tokens" || strings.HasPrefix(p, "/api/v1/auth/tokens/"):
+	case p == "/api/v1/auth/tokens" || strings.HasPrefix(p, "/api/v1/auth/tokens/") ||
+		p == "/api/v1/users/me/pats" || strings.HasPrefix(p, "/api/v1/users/me/pats/"):
 		return RoleViewer
 	case isRead && p == "/api/v1/settings/clusters":
 		return RoleOperator
@@ -414,7 +485,38 @@ func (s *apiServer) setSessionCookies(w http.ResponseWriter, token string, exp t
 		Secure:   s.cookieSecure(),
 		SameSite: http.SameSiteStrictMode,
 	})
+	s.setAuthTokenCookie(w, token, exp)
 	return nil
+}
+
+// setAuthTokenCookie mints a stateless HS256 session JWT into the auth_token
+// cookie so any replica that shares NCC_JWT_SECRET can authenticate the
+// browser without reading a local session file.
+func (s *apiServer) setAuthTokenCookie(w http.ResponseWriter, hmacToken string, exp time.Time) {
+	if w == nil || len(s.jwtSecret) == 0 {
+		return
+	}
+	claims, err := s.verifySession(hmacToken, "")
+	if err != nil {
+		return
+	}
+	dur := time.Until(exp)
+	if dur < time.Second {
+		dur = s.effectiveSessionTTL()
+	}
+	sub := strings.TrimSpace(claims.Sub)
+	if sub == "" {
+		sub = "session"
+	}
+	role := strings.TrimSpace(claims.Role)
+	if role == "" {
+		role = RoleAdmin.String()
+	}
+	jwtTok, err := auth.GenerateSessionJWTWithMeta(sub, role, dur, s.jwtSecret, claims.Gen, claims.Grps)
+	if err != nil {
+		return
+	}
+	http.SetCookie(w, auth.NewSessionCookie(jwtTok, exp, s.cookieSecure()))
 }
 
 // clearSessionCookies expires the session and CSRF cookies (logout).
@@ -431,6 +533,7 @@ func (s *apiServer) clearSessionCookies(w http.ResponseWriter) {
 			SameSite: http.SameSiteStrictMode,
 		})
 	}
+	http.SetCookie(w, auth.ExpiredSessionCookie(s.cookieSecure()))
 }
 
 // handleLogin authenticates a local username/password against the user store

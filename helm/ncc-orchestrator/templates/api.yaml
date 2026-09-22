@@ -33,6 +33,12 @@ spec:
             - name: NCC_API_TOKEN
               valueFrom:
                 secretKeyRef: { name: {{ .Values.secretName }}, key: api-token }
+            - name: NCC_API_STATIC_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secretName }}, key: api-token }
+            - name: NCC_JWT_SECRET
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secretName }}, key: jwt-secret, optional: true }
             - name: NCC_PASSWORD
               valueFrom:
                 secretKeyRef: { name: {{ .Values.secretName }}, key: password }

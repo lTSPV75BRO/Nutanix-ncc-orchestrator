@@ -193,6 +193,9 @@ func TestWithCORSAllowsSameHostDifferentPort(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200 for same host origin, got %d", rr.Code)
 	}
+	if rr.Header().Get("Access-Control-Allow-Credentials") != "true" {
+		t.Fatal("CORS must allow credentials so auth_token cookies are sent")
+	}
 }
 
 func TestCleanClientIPTrustsForwardedOnlyFromTrustedProxy(t *testing.T) {

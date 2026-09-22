@@ -63,7 +63,7 @@ spec:
                 - "/data/outputfiles"
                 - "--output-dir-logs"
                 - "/data/nccfiles"
-                - "--run-history"
+                - "--run-history=true"
                 - "--run-history-dir"
                 - "/data/outputfiles/runs"
                 - "--skip-preflight-check"

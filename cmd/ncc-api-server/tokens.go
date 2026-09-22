@@ -1,17 +1,17 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"net/http"
 	"strings"
 	"time"
+
+	"goncc/internal/auth"
 )
 
 // patPrefix tags every personal access token so it is easy to recognize in
 // logs/secret scanners and so PAT verification can skip non-PAT credentials
 // (static tokens, signed sessions) cheaply.
-const patPrefix = "ncc_pat_"
+const patPrefix = auth.PATPrefix
 
 // Personal access token expiry policy (in days). A bounded, non-zero expiry is
 // required so a leaked token cannot live forever.
@@ -33,12 +33,19 @@ func extractAPIToken(r *http.Request) string {
 	return ""
 }
 
-// patHash returns the SHA-256 hex digest of a token secret. The secret is
-// high-entropy (256 bits), so a plain digest is a safe, fast lookup key — no
-// per-request bcrypt is needed and we never persist the plaintext.
+// patHash returns the SHA-256 hex digest of a token secret.
 func patHash(secret string) string {
-	sum := sha256.Sum256([]byte(secret))
-	return hex.EncodeToString(sum[:])
+	return auth.HashPAT(secret)
+}
+
+// LookupPAT implements auth.UserStore: resolve a hashed PAT to its owner,
+// applying expiry, live role re-resolution, and must-change checks.
+func (s *apiServer) LookupPAT(tokenHash string) (auth.PATOwner, bool) {
+	p, ok := s.principalFromPATHash(tokenHash, "")
+	if !ok {
+		return auth.PATOwner{}, false
+	}
+	return auth.PATOwner{UserID: p.subject, Role: p.role.String(), Groups: append([]string(nil), p.groups...)}, true
 }
 
 // principalFromPAT resolves a request authenticated by a personal access token.
@@ -51,7 +58,14 @@ func (s *apiServer) principalFromPAT(r *http.Request) (principal, bool) {
 	if !strings.HasPrefix(tok, patPrefix) {
 		return principal{}, false
 	}
-	pt, found := s.users.findTokenByHash(patHash(tok))
+	return s.principalFromPATHash(patHash(tok), cleanClientIP(r))
+}
+
+func (s *apiServer) principalFromPATHash(hash, clientIP string) (principal, bool) {
+	if s.users == nil {
+		return principal{}, false
+	}
+	pt, found := s.users.findTokenByHash(hash)
 	if !found {
 		return principal{}, false
 	}
@@ -83,9 +97,7 @@ func (s *apiServer) principalFromPAT(r *http.Request) (principal, bool) {
 	if role == RoleNone {
 		return principal{}, false
 	}
-	// Record last-used time (throttled to at most once a minute per token inside,
-	// so this rarely touches the store on the auth path).
-	s.users.touchTokenLastUsed(pt.ID, cleanClientIP(r))
+	s.users.touchTokenLastUsed(pt.ID, clientIP)
 	return principal{role: role, subject: subject, method: authPAT, groups: groups}, true
 }
 
@@ -93,6 +105,8 @@ func (s *apiServer) principalFromPAT(r *http.Request) (principal, bool) {
 //
 //	GET  /api/v1/auth/tokens  -> list the caller's own tokens (metadata only)
 //	POST /api/v1/auth/tokens  -> mint a new token (plaintext returned once)
+//
+// The same handler also serves /api/v1/users/me/pats.
 func (s *apiServer) handleAuthTokens(w http.ResponseWriter, r *http.Request) {
 	if s.users == nil || !s.users.writable() {
 		writeJSON(w, http.StatusNotImplemented, envelope{Success: false, Error: "personal access tokens require a writable user store (enable local accounts)"})
@@ -143,12 +157,11 @@ func (s *apiServer) handleAuthTokens(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		secret, err := randToken(32)
+		secret, tokenHash, err := auth.GeneratePAT()
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "failed to generate token"})
 			return
 		}
-		secret = patPrefix + secret
 		id, err := randToken(9)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "failed to generate token id"})
@@ -167,7 +180,7 @@ func (s *apiServer) handleAuthTokens(w http.ResponseWriter, r *http.Request) {
 			OwnerLocal: ownerLocal,
 			Role:       p.role.String(),
 			Groups:     append([]string(nil), p.groups...),
-			Hash:       patHash(secret),
+			Hash:       tokenHash,
 			CreatedAt:  now.Format(time.RFC3339),
 			ExpiresAt:  expiresAt,
 			CreatedIP:  cleanClientIP(r),
@@ -191,9 +204,19 @@ func (s *apiServer) handleAuthTokens(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func selfServicePATID(path string) string {
+	for _, prefix := range []string{"/api/v1/auth/tokens/", "/api/v1/users/me/pats/"} {
+		if strings.HasPrefix(path, prefix) {
+			return strings.TrimSpace(strings.Trim(strings.TrimPrefix(path, prefix), "/"))
+		}
+	}
+	return ""
+}
+
 // handleAuthTokenByID revokes one of the caller's own tokens:
 //
 //	DELETE /api/v1/auth/tokens/<id>
+//	DELETE /api/v1/users/me/pats/<id>
 func (s *apiServer) handleAuthTokenByID(w http.ResponseWriter, r *http.Request) {
 	if s.users == nil || !s.users.writable() {
 		writeJSON(w, http.StatusNotImplemented, envelope{Success: false, Error: "personal access tokens require a writable user store (enable local accounts)"})
@@ -203,8 +226,7 @@ func (s *apiServer) handleAuthTokenByID(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
-	id := strings.TrimPrefix(r.URL.Path, "/api/v1/auth/tokens/")
-	id = strings.TrimSpace(strings.Trim(id, "/"))
+	id := selfServicePATID(r.URL.Path)
 	if id == "" || strings.Contains(id, "/") {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "token id is required"})
 		return

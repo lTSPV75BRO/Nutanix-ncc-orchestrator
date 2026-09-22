@@ -78,3 +78,22 @@ while unsupported versions fail closed.
 The Settings UI edits canonical nested values and, in Kubernetes, persists the
 active configuration on the shared PVC so API and CronJob executions use the
 same file.
+
+## Stateless hybrid authentication
+
+v2.2.0 API replicas authenticate without a local session file. Interactive
+sessions are HMAC-SHA256 JWTs signed with `NCC_JWT_SECRET` (cookie `auth_token`
+or `Authorization: Bearer`). Personal access tokens remain `ncc_pat_` secrets
+whose SHA-256 hashes live in the shared user store. Set the same
+`NCC_JWT_SECRET` (and `NCC_API_TOKEN` / `NCC_API_STATIC_TOKEN`) on every
+replica; if the JWT secret is omitted the process generates one in memory and
+logs a warning that sessions will not survive a restart or another pod.
+
+The UI sends cookies with every request (`credentials: include`) and treats a
+401 on a protected route as a sign-out (redirect to `/login`). Personal access
+tokens are managed from the header user menu against `/api/v1/users/me/pats`;
+the plaintext `ncc_pat_…` value is shown once. On Linux systemd, Windows
+services, or extra API replicas, set the same `NCC_JWT_SECRET` (and
+`NCC_API_TOKEN` / `NCC_API_STATIC_TOKEN`) in the process environment so
+sessions and automation tokens verify everywhere. `NCC_CORS_ORIGIN` overrides
+`--cors-origin` when the browser origin is not the default.

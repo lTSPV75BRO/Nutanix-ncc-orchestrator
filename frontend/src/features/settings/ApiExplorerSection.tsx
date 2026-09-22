@@ -262,7 +262,7 @@ export function ApiExplorerSection({ onError }: Props) {
     try {
       const openAPIRes = await fetch("/api/v1/openapi.json", {
         method: "GET",
-        credentials: "same-origin",
+        credentials: "include",
         headers,
       });
       const openAPI = (await openAPIRes.json().catch(() => ({}))) as OpenAPISpec;
@@ -277,7 +277,7 @@ export function ApiExplorerSection({ onError }: Props) {
     try {
       const res = await fetch("/api/v1/meta/routes", {
         method: "GET",
-        credentials: "same-origin",
+        credentials: "include",
         headers,
       });
       const payload = (await res.json().catch(() => ({}))) as {
@@ -329,7 +329,7 @@ export function ApiExplorerSection({ onError }: Props) {
       setIsLoading(true);
       const extraHeaders = parseHeaderLines(headerLines);
       const headers = new Headers({ "X-Requested-With": "ncc-ui", ...extraHeaders });
-      const init: RequestInit = { method, credentials: "same-origin", headers };
+      const init: RequestInit = { method, credentials: "include", headers };
       if (method === "POST" || method === "PUT" || method === "DELETE") {
         const payload = body.trim();
         if (payload) {

@@ -20,6 +20,29 @@ findings, with an NCC / PC source selector.
   `nutanix-v4-api-version`, fetches targets concurrently, applies
   `isResolved` filtering at Prism Central, and returns normalized PC alert
   rows. The endpoint accepts `resolved=No|Yes|all` and defaults to `No`.
+- **Stateless hybrid auth (JWT + hashed PATs) for horizontally scaled API replicas.**
+  Browser sessions are HMAC-SHA256 JWTs (`Authorization: Bearer` or HttpOnly
+  `auth_token` cookie, `SameSite=Lax`) signed with shared `NCC_JWT_SECRET`, so
+  2+ Kubernetes / systemd / Windows replicas can verify sessions without a
+  local session file. Personal access tokens stay SHA-256 hashed at rest
+  (`ncc_pat_` + 32 random bytes) and are compared with constant-time
+  equality. Legacy `NCC_API_TOKEN` / `NCC_API_STATIC_TOKEN` / `--token-file-path`
+  static bearers and HMAC `ncc_session` cookies keep working. New self-service
+  aliases: `POST /api/v1/users/me/pats` (plaintext shown once) and
+  `DELETE /api/v1/users/me/pats/{id}`. Auth attempts are counted on `/metrics`
+  as `ncc_api_auth_success_total` and `ncc_api_auth_failure_total{reason=}`.
+  If `NCC_JWT_SECRET` is unset, a 32-byte secret is generated in memory with a
+  prominent warning (replicas will not share sessions). Pinned by
+  `internal/auth` tests and `TestJWTAuthTokenCookieAccepted`,
+  `TestUsersMePATsCreateAndRevoke`.
+- **UI cookie credentials and self-service PAT manager.** The SPA sends
+  `credentials: include` on every API call so the HttpOnly `auth_token` JWT
+  cookie is presented even when the UI and API differ by host or port. A 401 on
+  a protected route clears client cache and redirects to `/login`. Users mint,
+  list, and revoke personal access tokens against `GET/POST/DELETE
+  /api/v1/users/me/pats`; the plaintext `ncc_pat_…` secret is shown once with a
+  copy button. `NCC_CORS_ORIGIN` overrides `--cors-origin` and CORS responses
+  include `Access-Control-Allow-Credentials: true`.
 - **Fast dashboard alert loading.** The dashboard renders unresolved PC alerts
   first, warms the complete alert-history cache in the background, and shows a
   loading indicator while that background request is active. PC responses use

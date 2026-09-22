@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"goncc/internal/auth"
 )
 
 func TestRouteMinRole(t *testing.T) {
@@ -36,6 +38,9 @@ func TestRouteMinRole(t *testing.T) {
 		// Secret-bearing settings reads stay admin-only.
 		{http.MethodGet, "/api/v1/settings/notifications", RoleAdmin},
 		{http.MethodGet, "/api/v1/settings/users", RoleAdmin},
+		{http.MethodPost, "/api/v1/users/me/pats", RoleViewer},
+		{http.MethodDelete, "/api/v1/users/me/pats/abc", RoleViewer},
+		{http.MethodGet, "/api/v1/auth/tokens", RoleViewer},
 	}
 	for _, c := range cases {
 		r := httptest.NewRequest(c.method, c.path, nil)
@@ -323,5 +328,81 @@ func TestSAMLRoleFromValues(t *testing.T) {
 	}
 	if got := p.roleFromValues(nil); got != RoleViewer {
 		t.Errorf("nil values default: got %v", got)
+	}
+}
+
+func TestJWTAuthTokenCookieAccepted(t *testing.T) {
+	s := newLoginServer(t)
+	s.jwtSecret = []byte("0123456789abcdef0123456789abcdef")
+	tok, err := auth.GenerateSessionJWT("op1", "operator", time.Hour, s.jwtSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := s.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, ok := principalFromContext(r.Context())
+		if !ok || p.subject != "op1" || p.role != RoleOperator || p.method != authSessionCookie {
+			t.Errorf("principal = ok=%v subject=%q role=%v method=%v", ok, p.subject, p.role, p.method)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil)
+	req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: tok})
+	rr := httptest.NewRecorder()
+	next.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("JWT cookie: want 200, got %d (%s)", rr.Code, rr.Body.String())
+	}
+}
+
+func TestJWTBearerHeaderAccepted(t *testing.T) {
+	s := newLoginServer(t)
+	s.jwtSecret = []byte("0123456789abcdef0123456789abcdef")
+	tok, err := auth.GenerateSessionJWT("op1", "operator", time.Hour, s.jwtSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := s.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rr := httptest.NewRecorder()
+	next.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("JWT bearer: want 200, got %d", rr.Code)
+	}
+}
+
+func TestLoginSetsAuthTokenCookie(t *testing.T) {
+	s := newLoginServer(t)
+	s.jwtSecret = []byte("0123456789abcdef0123456789abcdef")
+	body := strings.NewReader(`{"username":"op1","password":"pw-op"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", body)
+	rr := httptest.NewRecorder()
+	s.handleLogin(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("login: want 200, got %d (%s)", rr.Code, rr.Body.String())
+	}
+	var authCookie *http.Cookie
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == auth.CookieName {
+			authCookie = c
+		}
+	}
+	if authCookie == nil || authCookie.Value == "" {
+		t.Fatal("login must set HttpOnly auth_token JWT cookie")
+	}
+	if !authCookie.HttpOnly {
+		t.Error("auth_token must be HttpOnly")
+	}
+	if authCookie.SameSite != http.SameSiteLaxMode {
+		t.Errorf("auth_token SameSite=%v, want Lax", authCookie.SameSite)
+	}
+	claims, err := auth.ValidateJWT(authCookie.Value, s.jwtSecret)
+	if err != nil {
+		t.Fatalf("ValidateJWT: %v", err)
+	}
+	if claims.Subject != "op1" || claims.Role != "operator" || claims.TokenType != auth.TokenTypeSession {
+		t.Fatalf("jwt claims = sub=%q role=%q type=%q", claims.Subject, claims.Role, claims.TokenType)
 	}
 }

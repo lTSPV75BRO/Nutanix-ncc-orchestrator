@@ -239,6 +239,58 @@ func TestCreateTokenNeverExpiryViaHandler(t *testing.T) {
 	}
 }
 
+func TestUsersMePATsCreateAndRevoke(t *testing.T) {
+	s := newTokenTestServer(t)
+	addLocalAccount(t, s.users, "ivy", RoleOperator)
+
+	body := strings.NewReader(`{"name":"ci","expires_in_days":30}`)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/users/me/pats", body)
+	r.Header.Set("Content-Type", "application/json")
+	r = withPrincipal(r, principal{subject: "ivy", role: RoleOperator, method: authSessionCookie})
+	rr := httptest.NewRecorder()
+	s.handleAuthTokens(rr, r)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("POST /users/me/pats: want 201, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			ID    string `json:"id"`
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !strings.HasPrefix(resp.Data.Token, patPrefix) {
+		t.Fatalf("plaintext PAT must use ncc_pat_ prefix, got %q", resp.Data.Token)
+	}
+	if _, ok := s.principalFromPAT(reqWithToken(resp.Data.Token)); !ok {
+		t.Fatal("minted PAT should authenticate")
+	}
+
+	list := httptest.NewRequest(http.MethodGet, "/api/v1/users/me/pats", nil)
+	list = withPrincipal(list, principal{subject: "ivy", role: RoleOperator, method: authSessionCookie})
+	lrr := httptest.NewRecorder()
+	s.handleAuthTokens(lrr, list)
+	if lrr.Code != http.StatusOK {
+		t.Fatalf("GET /users/me/pats: want 200, got %d: %s", lrr.Code, lrr.Body.String())
+	}
+	if !strings.Contains(lrr.Body.String(), `"name":"ci"`) || strings.Contains(lrr.Body.String(), "ncc_pat_") {
+		t.Fatalf("GET /users/me/pats must return metadata without plaintext: %s", lrr.Body.String())
+	}
+
+	del := httptest.NewRequest(http.MethodDelete, "/api/v1/users/me/pats/"+resp.Data.ID, nil)
+	del = withPrincipal(del, principal{subject: "ivy", role: RoleOperator, method: authSessionCookie})
+	drr := httptest.NewRecorder()
+	s.handleAuthTokenByID(drr, del)
+	if drr.Code != http.StatusOK {
+		t.Fatalf("DELETE /users/me/pats/:id: want 200, got %d: %s", drr.Code, drr.Body.String())
+	}
+	if _, ok := s.principalFromPAT(reqWithToken(resp.Data.Token)); ok {
+		t.Fatal("revoked PAT must not authenticate")
+	}
+}
+
 func TestCookieSecureDefaultsInsecure(t *testing.T) {
 	s := newTokenTestServer(t)
 	if s.cookieSecure() {

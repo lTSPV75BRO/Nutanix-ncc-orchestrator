@@ -477,11 +477,15 @@ The operator scope is deliberately limited to **operating** NCC (running it, sch
 
 A role can be presented four ways:
 
-1. **Static admin token** (`NCC_API_TOKEN`) — full admin. For automation/CI.
+1. **Static admin token** (`NCC_API_TOKEN` or `NCC_API_STATIC_TOKEN`) — full admin. For automation/CI. Verified in memory (the on-disk `--token-file-path` copy is only for the UI proxy).
 2. **Static viewer token** (`NCC_API_VIEWER_TOKEN`) — read-only. Hand to
    dashboards/scrapers. Must differ from the admin token.
-3. **Interactive login** (browser) — a role-bearing, signed **session cookie**
-   minted by either local password accounts, SAML SSO, or LDAP/AD.
+3. **Interactive login** (browser) — a role-bearing, **stateless HS256 JWT**
+   (`Authorization: Bearer` or HttpOnly `auth_token` cookie, `SameSite=Lax`,
+   `Secure` when HTTPS is on) minted by local password accounts, SAML SSO, or
+   LDAP/AD. Sign with a shared `NCC_JWT_SECRET` so every API replica can verify
+   the same session without a local session file. Legacy HMAC `ncc_session`
+   cookies remain valid when `--session-secret` / `NCC_JWT_SECRET` is shared.
 4. **Personal access token (PAT)** — a user-minted bearer credential that
    inherits the owner's role (see below).
 
@@ -513,7 +517,8 @@ tokens from the header user menu → **Personal access tokens**:
   but the endpoints that *create/list/revoke* tokens from the browser are normal
   cookie-session mutations and so still require CSRF.
 - Self-service: `GET/POST /api/v1/auth/tokens` and
-  `DELETE /api/v1/auth/tokens/{id}` are reachable by **any** authenticated role
+  `DELETE /api/v1/auth/tokens/{id}` (aliases: `GET/POST /api/v1/users/me/pats` and
+  `DELETE /api/v1/users/me/pats/{id}`) are reachable by **any** authenticated role
   (viewer included) and are scoped to the caller's **own** tokens. Admin-wide
   audit/revocation lives at `GET /api/v1/settings/tokens` and
   `DELETE /api/v1/settings/tokens/{id}` (Settings → Access → *Personal access
