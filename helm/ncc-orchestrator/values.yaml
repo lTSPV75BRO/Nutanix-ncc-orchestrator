@@ -46,6 +46,9 @@ ingress:
   className: nginx
   host: ncc.example.com
   tlsSecret: ncc-v2-ui-tls
+  certManager:
+    enabled: false
+    clusterIssuer: letsencrypt-prod
 
 resources:
   api: {}

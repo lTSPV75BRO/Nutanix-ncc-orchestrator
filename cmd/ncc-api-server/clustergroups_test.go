@@ -116,8 +116,8 @@ func TestAllowedClustersPrismCentralExpansion(t *testing.T) {
 	s.pcCache = map[string]*pcCacheEntry{
 		normClusterName("https://pc.corp.example.com:9440"): {
 			clusters: []pcCluster{
-				{Name: "PC-EAST", Address: "10.0.0.1"},
-				{Name: "PC-WEST", Address: "10.0.0.2"},
+				{Name: "PC-EAST", Address: "10.0.0.1", ExtID: "uuid-east"},
+				{Name: "PC-WEST", Address: "10.0.0.2", ExtID: "uuid-west"},
 			},
 			fetchedAt: time.Now(),
 		},
@@ -127,7 +127,7 @@ func TestAllowedClustersPrismCentralExpansion(t *testing.T) {
 	if access.unrestricted {
 		t.Fatal("expected restricted access")
 	}
-	for _, want := range []string{"PC-EAST", "PC-WEST", "10.0.0.1", "10.0.0.2"} {
+	for _, want := range []string{"PC-EAST", "PC-WEST", "10.0.0.1", "10.0.0.2", "uuid-east", "uuid-west"} {
 		if !access.permits(want) {
 			t.Fatalf("expected PC-expanded cluster %q to be permitted; allowed=%v", want, access.displayList())
 		}

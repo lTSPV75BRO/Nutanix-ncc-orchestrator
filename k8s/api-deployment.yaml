@@ -4,7 +4,7 @@ metadata:
   name: ncc-v2-api
   namespace: ncc-orchestrator-v2
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: ncc-orchestrator-v2
@@ -86,11 +86,20 @@ spec:
             - "ncc-v2-users"
             - "--auth-mode"
             - "token"
+            - "--cookie-secure"
             - "--cors-origin"
             - "$(NCC_UI_ORIGIN)"
           env:
             - name: NCC_RUNTIME_MODE
               value: "kubernetes"
+            - name: NCC_IMAGE_TAG
+              value: "2.2.0"
+            - name: NCC_ORCHESTRATOR_IMAGE_TAG
+              value: "2.2.0"
+            - name: NCC_UI_IMAGE_TAG
+              value: "2.2.0"
+            - name: NCC_INGRESS_TLS_SECRET
+              value: "ncc-v2-ui-tls"
             - name: NCC_UI_ORIGIN
               valueFrom:
                 configMapKeyRef:
@@ -116,7 +125,6 @@ spec:
                 secretKeyRef:
                   name: ncc-v2-secrets
                   key: jwt-secret
-                  optional: true
           ports:
             - containerPort: 8081
               name: http

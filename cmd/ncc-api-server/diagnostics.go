@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -51,7 +52,7 @@ func (s *apiServer) handleHealthSupportBundle(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
-	installDir := filepath.Dir(s.absPath(s.configPath))
+	installDir := s.maintenanceInstallDir()
 	outPath := filepath.Join(installDir, "logs", fmt.Sprintf("ncc-support-%s.tar.gz", time.Now().UTC().Format("20060102T150405Z")))
 	out, err := s.runOrchestrator([]string{"doctor", "--install-dir", installDir, "--output-file", outPath}, 2*time.Minute)
 	if err != nil {
@@ -106,12 +107,14 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, req
 	if activeRunGuard {
 		noDisruptive = true
 	}
+	doctorIDs := s.doctorCheckIDs(req.CheckIDs)
 	var rep *selfHealReport
 	var derr error
-	if !s.capabilities.Kubernetes {
+	runDoctor := !s.capabilities.Kubernetes || len(req.CheckIDs) == 0 || len(doctorIDs) > 0
+	if runDoctor {
 		rep, derr = s.runSelfHealOnceWithOptions(ctx, selfHealRunOptions{
 			Fix:          req.Fix,
-			CheckIDs:     req.CheckIDs,
+			CheckIDs:     doctorIDs,
 			NoDisruptive: noDisruptive,
 		})
 	}
@@ -145,6 +148,14 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, req
 
 	// Api-server-side live auth probes (LDAP/AD bind, SAML SP cert, clock skew).
 	for _, d := range s.authDiagnostics() {
+		checks = append(checks, unifiedCheck{
+			ID: d.ID, Title: d.Title, Category: d.Category,
+			Status: string(d.Status), Message: d.Message, Hint: d.Hint,
+			Source: "api",
+		})
+		tally(string(d.Status))
+	}
+	for _, d := range s.k8sRuntimeDiagnostics() {
 		checks = append(checks, unifiedCheck{
 			ID: d.ID, Title: d.Title, Category: d.Category,
 			Status: string(d.Status), Message: d.Message, Hint: d.Hint,
@@ -194,7 +205,7 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, req
 
 	verificationRuns := 0
 	verifiedStable := false
-	if req.Fix && req.VerifyAfterFix && !s.capabilities.Kubernetes {
+	if req.Fix && req.VerifyAfterFix && (!s.capabilities.Kubernetes || len(doctorIDs) > 0) {
 		// Re-scan briefly to ensure post-fix state remains stable.
 		stablePasses := 0
 		for i := 0; i < 3; i++ {
@@ -212,7 +223,7 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, req
 			}
 			rep2, err2 := s.runSelfHealOnceWithOptions(ctx, selfHealRunOptions{
 				Fix:          false,
-				CheckIDs:     req.CheckIDs,
+				CheckIDs:     doctorIDs,
 				NoDisruptive: noDisruptive,
 			})
 			if err2 == nil && rep2 != nil && rep2.Summary["fail"] == 0 {
@@ -259,4 +270,125 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, req
 		data["orchestrator_error"] = orchestratorErr
 	}
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: data})
+}
+
+// k8sDoctorCheckIDs are PVC-safe orchestrator doctor checks. Host supervisor,
+// PID, SELinux, and in-process TLS-file checks do not apply when Kubernetes
+// controllers own process lifecycle and Ingress terminates TLS.
+var k8sDoctorCheckIDs = []string{
+	"config-schema",
+	"config-valid",
+	"config-output-routing",
+	"output-dirs-writable",
+	"disk-space",
+	"secrets-perms",
+	"backup-staleness",
+	"backup-restorable",
+	"recent-run-health",
+	"run-output-freshness",
+	"log-sizes",
+}
+
+func (s *apiServer) doctorCheckIDs(requested []string) []string {
+	if s == nil || !s.capabilities.Kubernetes {
+		return requested
+	}
+	allow := make(map[string]bool, len(k8sDoctorCheckIDs))
+	for _, id := range k8sDoctorCheckIDs {
+		allow[id] = true
+	}
+	if len(requested) == 0 {
+		out := make([]string, len(k8sDoctorCheckIDs))
+		copy(out, k8sDoctorCheckIDs)
+		return out
+	}
+	out := make([]string, 0, len(requested))
+	for _, id := range requested {
+		if allow[strings.TrimSpace(id)] {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func (s *apiServer) k8sRuntimeDiagnostics() []diagResult {
+	if s == nil || !s.capabilities.Kubernetes {
+		return nil
+	}
+	out := []diagResult{
+		{
+			ID:       "k8s-runtime",
+			Title:    "Kubernetes runtime",
+			Category: "runtime",
+			Status:   diagOK,
+			Message:  "API is running in Kubernetes mode. Deployments and the runner CronJob own process lifecycle.",
+		},
+	}
+
+	jwt := diagResult{ID: "k8s-jwt-secret", Title: "Shared JWT signing secret", Category: "runtime"}
+	if s.jwtSecretEphemeral || len(s.jwtSecret) == 0 {
+		jwt.Status = diagFail
+		jwt.Message = "NCC_JWT_SECRET is missing; session JWTs cannot be shared across API replicas."
+		jwt.Hint = "Set the jwt-secret key on ncc-v2-secrets (or Helm secretName) to the same value on every replica."
+	} else {
+		jwt.Status = diagOK
+		jwt.Message = "NCC_JWT_SECRET is configured so API replicas can validate the same session JWTs."
+	}
+	out = append(out, jwt)
+
+	users := diagResult{ID: "k8s-users-store", Title: "Shared user store", Category: "runtime"}
+	if s.users == nil || !s.users.writable() {
+		users.Status = diagWarn
+		users.Message = "No writable user store is configured."
+		users.Hint = "Set --users-db-secret so accounts live in a Kubernetes Secret visible to every replica."
+	} else {
+		users.Status = diagOK
+		users.Message = "User database is persisted at " + s.users.location() + "."
+	}
+	out = append(out, users)
+
+	cookie := diagResult{ID: "k8s-cookie-secure", Title: "Secure session cookies", Category: "tls"}
+	if s.cookieSecure() {
+		cookie.Status = diagOK
+		cookie.Message = "Session cookies are marked Secure for Ingress-terminated HTTPS."
+	} else {
+		cookie.Status = diagWarn
+		cookie.Message = "Session cookies are not marked Secure."
+		cookie.Hint = "Pass --cookie-secure (or unset --cookie-insecure) so browsers keep auth_token on https origins."
+	}
+	out = append(out, cookie)
+
+	tls := diagResult{ID: "k8s-ingress-tls", Title: "Ingress TLS termination", Category: "tls"}
+	tls.Status = diagOK
+	tls.Message = "HTTPS is terminated at the Ingress (secret " + k8sIngressTLSSecret() + "). Manage certificates on that secret or with cert-manager."
+	out = append(out, tls)
+
+	pvc := diagResult{ID: "k8s-pvc-writable", Title: "Shared PVC writable", Category: "storage"}
+	root := strings.TrimSpace(s.absPath(s.repoRoot))
+	if root == "" {
+		root = "/data"
+	}
+	if st, err := os.Stat(root); err != nil || !st.IsDir() {
+		pvc.Status = diagFail
+		pvc.Message = "Shared data root " + root + " is not available."
+		pvc.Hint = "Confirm the ncc-v2-data PVC is bound and mounted at /data."
+	} else if f, err := os.CreateTemp(root, ".ncc-health-*"); err != nil {
+		pvc.Status = diagFail
+		pvc.Message = "Shared data root " + root + " is not writable: " + err.Error()
+	} else {
+		name := f.Name()
+		_ = f.Close()
+		_ = os.Remove(name)
+		pvc.Status = diagOK
+		pvc.Message = "Shared volume at " + root + " is writable."
+	}
+	out = append(out, pvc)
+	return out
+}
+
+func k8sIngressTLSSecret() string {
+	if v := strings.TrimSpace(os.Getenv("NCC_INGRESS_TLS_SECRET")); v != "" {
+		return v
+	}
+	return "ncc-v2-ui-tls"
 }

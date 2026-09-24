@@ -16,7 +16,7 @@ spec:
         - name: ui
           image: "{{ .Values.images.ui.repository }}:{{ .Values.images.ui.tag }}"
           imagePullPolicy: {{ .Values.images.ui.pullPolicy }}
-          args: ["--listen", ":8080", "--dir", "/app/frontend/dist", "--backend-url", "http://ncc-v2-api:{{ .Values.api.service.port }}", "--allowed-origins", {{ .Values.ui.origin | quote }}]
+          args: ["--listen", ":8080", "--dir", "/app/frontend/dist", "--backend-url", "http://ncc-v2-api:{{ .Values.api.service.port }}", "--allowed-origins", {{ .Values.ui.origin | quote }}, "--login-mode", "on"]
           ports: [{ name: http, containerPort: 8080 }]
           readinessProbe: { httpGet: { path: /, port: 8080 } }
           livenessProbe: { httpGet: { path: /, port: 8080 }, initialDelaySeconds: 10 }

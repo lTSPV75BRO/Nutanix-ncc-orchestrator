@@ -146,6 +146,10 @@ func (s *apiServer) cookieSecure() bool {
 	if s.cookieSecureForce {
 		return true
 	}
+	if s.capabilities.Kubernetes {
+		// Ingress (or another front-proxy) terminates TLS; browsers talk HTTPS.
+		return true
+	}
 	if s.users != nil {
 		if p := s.users.getTLSPolicy(); p != nil && p.HTTPSEnabled {
 			return true

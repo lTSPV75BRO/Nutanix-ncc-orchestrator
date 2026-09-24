@@ -233,6 +233,12 @@ func (s *apiServer) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
 
 	installDir := s.maintenanceInstallDir()
 	dir := s.backupsDir()
+	release, lockErr := acquireBackupLock(dir)
+	if lockErr != nil {
+		writeJSON(w, http.StatusConflict, envelope{Success: false, Error: "a backup is already in progress on another replica; retry shortly"})
+		return
+	}
+	defer release()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "create backups dir: " + err.Error()})
 		return

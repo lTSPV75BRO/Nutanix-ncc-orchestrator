@@ -47,6 +47,8 @@ spec:
             - "/data/auth/.ncc-api-token"
             - "--api-auth-mode"
             - "token"
+            - "--login-mode"
+            - "on"
             - "--allowed-origins"
             - "$(NCC_UI_ORIGIN)"
           env:

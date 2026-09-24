@@ -310,6 +310,18 @@ func TestCookieSecureDefaultsInsecure(t *testing.T) {
 	}
 }
 
+func TestCookieSecureKubernetesDefaultsOn(t *testing.T) {
+	s := newTokenTestServer(t)
+	s.capabilities.Kubernetes = true
+	if !s.cookieSecure() {
+		t.Fatal("Kubernetes deployments terminate TLS at Ingress; session cookies must be Secure")
+	}
+	s.cookieInsecure = true
+	if s.cookieSecure() {
+		t.Fatal("--cookie-insecure must still force Secure off on Kubernetes")
+	}
+}
+
 func TestPatchV2StartStateUITLS(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, v2StartStateFileName)

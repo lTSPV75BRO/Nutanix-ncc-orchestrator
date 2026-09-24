@@ -117,6 +117,7 @@ func (s *apiServer) allowedClusters(p principal) clusterAccess {
 			for _, c := range s.expandPrismCentral(pc) {
 				add(c.Name)
 				add(c.Address)
+				add(c.ExtID)
 			}
 		}
 	}

@@ -22,6 +22,7 @@ const pcDiscoveryTimeout = 45 * time.Second
 type pcCluster struct {
 	Name    string `json:"name"`
 	Address string `json:"address"`
+	ExtID   string `json:"ext_id,omitempty"`
 }
 
 // pcCacheEntry is the cached discovery result for a single PC.
@@ -123,6 +124,7 @@ func (s *apiServer) discoverPrismCentralClusters(pc string) ([]pcCluster, error)
 	var rows []struct {
 		Name    string `json:"name"`
 		Address string `json:"address"`
+		ExtID   string `json:"ext_id"`
 	}
 	if err := json.Unmarshal(b, &rows); err != nil {
 		return nil, fmt.Errorf("parse discover-clusters output: %w", err)
@@ -131,10 +133,11 @@ func (s *apiServer) discoverPrismCentralClusters(pc string) ([]pcCluster, error)
 	for _, r := range rows {
 		name := strings.TrimSpace(r.Name)
 		addr := strings.TrimSpace(r.Address)
-		if name == "" && addr == "" {
+		extID := strings.TrimSpace(r.ExtID)
+		if name == "" && addr == "" && extID == "" {
 			continue
 		}
-		clusters = append(clusters, pcCluster{Name: name, Address: addr})
+		clusters = append(clusters, pcCluster{Name: name, Address: addr, ExtID: extID})
 	}
 	return clusters, nil
 }
@@ -205,4 +208,107 @@ func (s *apiServer) primePrismCentralCache(groups []clusterGroup) {
 			s.pcCacheMu.Unlock()
 		}
 	}
+}
+
+func (c pcCluster) identityKeys() []string {
+	out := make([]string, 0, 3)
+	for _, k := range []string{c.ExtID, c.Name, c.Address} {
+		k = strings.TrimSpace(k)
+		if k != "" {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// kickPCDiscovery starts background discovery for every Prism Central we know
+// about (alert targets + cluster-group assignments) without blocking.
+func (s *apiServer) kickPCDiscovery() {
+	if s == nil {
+		return
+	}
+	seen := map[string]bool{}
+	add := func(pc string) {
+		pc = strings.TrimSpace(pc)
+		if pc == "" {
+			return
+		}
+		key := normClusterName(pc)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		s.expandPrismCentral(pc)
+	}
+	if cfg, err := s.loadRawConfigMap(); err == nil {
+		for _, t := range pcAlertTargets(cfg) {
+			add(t)
+		}
+	}
+	if s.users != nil {
+		for _, g := range s.users.getClusterGroups() {
+			for _, pc := range g.PrismCentrals {
+				add(pc)
+			}
+		}
+	}
+}
+
+// pcIdentityIndex is a UUID/name/IP dictionary of clusters discovered from
+// Prism Central. Keys are normalized (lowercased) so lookups match whatever
+// identity an alert or access check uses.
+func (s *apiServer) pcIdentityIndex() map[string]pcCluster {
+	idx := map[string]pcCluster{}
+	if s == nil {
+		return idx
+	}
+	s.kickPCDiscovery()
+	s.pcCacheMu.Lock()
+	defer s.pcCacheMu.Unlock()
+	for _, e := range s.pcCache {
+		if e == nil {
+			continue
+		}
+		for _, c := range e.clusters {
+			for _, k := range c.identityKeys() {
+				idx[normClusterName(k)] = c
+			}
+		}
+	}
+	return idx
+}
+
+// pcClusterMapView shapes the discovery dictionary for the alerts API: each
+// UUID, name, and IP maps to name/address/ext_id so the UI can resolve PC
+// alerts that only carry a cluster UUID.
+func pcClusterMapView(idx map[string]pcCluster) map[string]map[string]string {
+	out := map[string]map[string]string{}
+	if len(idx) == 0 {
+		return out
+	}
+	seen := map[string]bool{}
+	for _, c := range idx {
+		sig := strings.ToLower(strings.TrimSpace(c.ExtID) + "|" + strings.TrimSpace(c.Name) + "|" + strings.TrimSpace(c.Address))
+		if seen[sig] {
+			continue
+		}
+		seen[sig] = true
+		entry := map[string]string{}
+		if n := strings.TrimSpace(c.Name); n != "" {
+			entry["name"] = n
+		}
+		if a := strings.TrimSpace(c.Address); a != "" {
+			entry["address"] = a
+		}
+		if id := strings.TrimSpace(c.ExtID); id != "" {
+			entry["ext_id"] = id
+		}
+		if len(entry) == 0 {
+			continue
+		}
+		for _, k := range c.identityKeys() {
+			out[k] = entry
+		}
+	}
+	return out
 }

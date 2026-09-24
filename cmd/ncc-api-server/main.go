@@ -168,6 +168,7 @@ type apiServer struct {
 	cookieSecureForce  bool
 	sessionSecret      string
 	jwtSecret          []byte // HS256 key for stateless session JWTs (NCC_JWT_SECRET)
+	jwtSecretEphemeral bool   // true when the JWT key was generated in-process (not replica-safe)
 	sessionTTL         time.Duration
 	sessionIssuer      string
 	runTimeout         time.Duration
@@ -823,6 +824,7 @@ func main() {
 	s.startSelfHealLoop(context.Background())
 	s.startBackupScheduleLoop(context.Background())
 	s.startNotificationDigestLoop(context.Background())
+	s.startUserDBReloadLoop(context.Background())
 
 	handler := s.buildHandler()
 	srv := &http.Server{
@@ -5553,11 +5555,15 @@ func (s *apiServer) initJWTSecret() {
 		raw = strings.TrimSpace(s.sessionSecret)
 	}
 	if raw == "" {
+		if s.capabilities.Kubernetes {
+			log.Fatal("NCC_JWT_SECRET is required in Kubernetes so API replicas can validate the same session JWTs. Create the jwt-secret key in ncc-v2-secrets (or Helm secretName) and restart the API Deployment.")
+		}
 		b := make([]byte, 32)
 		if _, err := crand.Read(b); err != nil {
 			log.Fatalf("generate jwt secret: %v", err)
 		}
 		s.jwtSecret = b
+		s.jwtSecretEphemeral = true
 		log.Printf("WARNING: NCC_JWT_SECRET is not set; generated an ephemeral 32-byte HMAC-SHA256 signing secret in memory. Browser sessions will not validate across process restarts or additional replicas. Set NCC_JWT_SECRET to the same value on every replica for horizontal scaling.")
 	} else {
 		s.jwtSecret = []byte(raw)

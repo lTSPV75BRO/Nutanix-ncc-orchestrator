@@ -140,6 +140,10 @@ export type TLSPolicy = {
   not_after?: string;
   dns_names?: string[];
   updated_at?: string;
+  managed_by?: "stack" | "ingress";
+  secret_name?: string;
+  mutation_supported?: boolean;
+  message?: string;
 };
 
 /** Response from enabling/disabling HTTPS — the stack restarts to apply it. */
@@ -792,6 +796,7 @@ export type PCAlertsData = {
   cache_ttl_s?: number;
   errors?: string[];
   configured?: boolean;
+  cluster_map?: Record<string, { name?: string; address?: string; ext_id?: string }>;
 };
 
 export type TrendPoint = {

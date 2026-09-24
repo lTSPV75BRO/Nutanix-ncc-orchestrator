@@ -39,6 +39,10 @@ const maxTLSUploadBytes = 256 * 1024
 // loopback HTTP behind it. Enabling HTTPS also flips session cookies to Secure
 // (see cookieSecure) on the next start.
 func (s *apiServer) handleTLSSettings(w http.ResponseWriter, r *http.Request) {
+	if s.capabilities.Kubernetes {
+		s.handleKubernetesTLS(w, r)
+		return
+	}
 	if s.users == nil || !s.users.writable() {
 		writeJSON(w, http.StatusNotImplemented, envelope{Success: false, Error: "HTTPS/TLS management requires a writable user store (enable local accounts)"})
 		return
@@ -50,6 +54,23 @@ func (s *apiServer) handleTLSSettings(w http.ResponseWriter, r *http.Request) {
 		s.handleTLSInstall(w, r)
 	case http.MethodDelete:
 		s.handleTLSDisable(w, r)
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+	}
+}
+
+func (s *apiServer) handleKubernetesTLS(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
+			"https_enabled":      true,
+			"managed_by":         "ingress",
+			"secret_name":        k8sIngressTLSSecret(),
+			"mutation_supported": false,
+			"message":            "HTTPS is terminated at the Kubernetes Ingress. Manage certificates via the Ingress TLS secret (or cert-manager), not this Settings form. Session cookies are marked Secure.",
+		}})
+	case http.MethodPut, http.MethodDelete:
+		writeJSON(w, http.StatusConflict, envelope{Success: false, Error: "HTTPS/TLS is managed by the Kubernetes Ingress secret " + k8sIngressTLSSecret() + ". Update that secret or enable cert-manager; in-app certificate upload is not supported on Kubernetes."})
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 	}
@@ -83,6 +104,10 @@ func tlsPolicyView(p *tlsPolicy) map[string]interface{} {
 func (s *apiServer) handleTLSGenerate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	if s.capabilities.Kubernetes {
+		writeJSON(w, http.StatusConflict, envelope{Success: false, Error: "HTTPS/TLS is managed by the Kubernetes Ingress secret " + k8sIngressTLSSecret() + ". Update that secret or enable cert-manager; in-app certificate generation is not supported on Kubernetes."})
 		return
 	}
 	if s.users == nil || !s.users.writable() {

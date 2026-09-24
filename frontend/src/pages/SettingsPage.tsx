@@ -541,7 +541,7 @@ export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
     items.splice(insertAt, 0, {
       key: "access",
       label: tabLabel(<TeamOutlined />, "Access"),
-      children: lazySection(<AccessSection />),
+          children: lazySection(<AccessSection isKubernetes={isKubernetes} />),
     });
   }
 

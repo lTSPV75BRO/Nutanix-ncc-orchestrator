@@ -111,6 +111,23 @@ export function buildClusterNameMap(input: ClusterMapInput): Record<string, stri
   return Object.fromEntries(map.entries());
 }
 
+export function mergePCClusterIdentityMap(
+  base: Record<string, string>,
+  clusterMap?: Record<string, { name?: string; address?: string; ext_id?: string }>,
+): Record<string, string> {
+  if (!clusterMap) return base;
+  const out = { ...base };
+  for (const ident of Object.values(clusterMap)) {
+    const name = String(ident.name || ident.address || "").trim();
+    if (!name) continue;
+    for (const key of [ident.ext_id, ident.address, ident.name]) {
+      const normalized = normalizeClusterKey(key);
+      if (normalized) out[normalized] = name;
+    }
+  }
+  return out;
+}
+
 export function resolveClusterName(value: unknown, clusterNameMap: Record<string, string>): string {
   const raw = String(value || "").trim();
   if (!raw || raw === "-") return "-";

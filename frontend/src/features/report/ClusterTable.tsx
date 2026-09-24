@@ -53,6 +53,7 @@ type RowRecord = {
   key: string;
   clusterName: string;
   cluster: string;
+  clusterIP: string;
   alert: string;
   entityName: string;
   entityType: string;
@@ -252,6 +253,7 @@ export function ClusterTable({
         key: `${cluster}-${alert}-${idx}`,
         clusterName: resolveClusterName(displayClusterName(raw), clusterNameMap),
         cluster,
+        clusterIP: String(raw.cluster_ip ?? raw.address ?? ""),
         alert,
         entityName,
         entityType,
@@ -408,18 +410,6 @@ export function ClusterTable({
   const nccColumns: ColumnsType<RowRecord> = [
     severityColumn,
     {
-      title: "Source",
-      dataIndex: "source",
-      key: "source",
-      width: 90,
-      filters: [
-        { text: "NCC", value: "NCC" },
-        { text: "PC", value: "PC" },
-      ],
-      onFilter: (value, row) => row.source === value,
-      render: (value: "NCC" | "PC") => <Tag color={value === "PC" ? "purple" : "blue"}>{value}</Tag>,
-    },
-    {
       title: "Cluster",
       dataIndex: "clusterName",
       key: "clusterName",
@@ -499,6 +489,9 @@ export function ClusterTable({
       sorter: (a, b) => a.clusterName.localeCompare(b.clusterName),
       render: (_, row) => {
         const url = clusterPrismURL(row.cluster, clusterNameMap);
+        const subtitle = row.clusterIP && row.clusterIP !== row.clusterName
+          ? row.clusterIP
+          : (row.cluster && row.cluster !== row.clusterName ? row.cluster : "");
         return (
           <Space orientation="vertical" size={0}>
             {url ? (
@@ -514,9 +507,11 @@ export function ClusterTable({
             ) : (
               <Typography.Text strong>{row.clusterName}</Typography.Text>
             )}
-            <Typography.Text type="secondary" style={{ fontSize: 12 }} className="mono">
-              {row.cluster}
-            </Typography.Text>
+            {subtitle ? (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }} className="mono">
+                {subtitle}
+              </Typography.Text>
+            ) : null}
             {(row.clusterVersion || row.nccVersion) && (
               <Space size={4} wrap style={{ marginTop: 2 }}>
                 {row.clusterVersion ? (

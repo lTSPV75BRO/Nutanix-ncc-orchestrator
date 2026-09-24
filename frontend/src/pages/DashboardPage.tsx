@@ -46,6 +46,7 @@ import {
   asRecord,
   buildClusterNameMap,
   displayClusterName,
+  mergePCClusterIdentityMap,
   resolveClusterName,
   toNumber,
 } from "../utils/report";
@@ -251,15 +252,22 @@ export function DashboardPage() {
 
   const clusterNameMap = useMemo(
     () =>
-      buildClusterNameMap({
-        runSummary: reportData.run_summary,
-        checksSnapshot: reportData.checks_snapshot,
-        aggRows: Array.isArray(reportData.agg_rows) ? reportData.agg_rows : [],
-        drilldownDiff: reportData.drilldown_diff,
-        flakyChecks: reportData.flaky_checks,
-        sloDashboard: reportData.slo_dashboard,
-        regressionSummary: reportData.regression_summary,
-      }),
+      mergePCClusterIdentityMap(
+        buildClusterNameMap({
+          runSummary: reportData.run_summary,
+          checksSnapshot: reportData.checks_snapshot,
+          aggRows: Array.isArray(reportData.agg_rows) ? reportData.agg_rows : [],
+          drilldownDiff: reportData.drilldown_diff,
+          flakyChecks: reportData.flaky_checks,
+          sloDashboard: reportData.slo_dashboard,
+          regressionSummary: reportData.regression_summary,
+        }),
+        (pcResolvedFilter === "No"
+          ? pcUnresolvedAlertsQuery.data?.cluster_map
+          : pcAllAlertsQuery.data?.cluster_map) as
+          | Record<string, { name?: string; address?: string; ext_id?: string }>
+          | undefined,
+      ),
     [
       reportData.run_summary,
       reportData.checks_snapshot,
@@ -268,6 +276,9 @@ export function DashboardPage() {
       reportData.flaky_checks,
       reportData.slo_dashboard,
       reportData.regression_summary,
+      pcResolvedFilter,
+      pcUnresolvedAlertsQuery.data?.cluster_map,
+      pcAllAlertsQuery.data?.cluster_map,
     ],
   );
 

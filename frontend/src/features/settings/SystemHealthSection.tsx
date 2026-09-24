@@ -53,6 +53,8 @@ function CategoryLabel({ value }: { value: string }) {
     sso: "SSO (SAML)",
     tls: "TLS",
     process: "Processes",
+    runtime: "Runtime",
+    kubernetes: "Kubernetes",
   };
   return <>{pretty[value] ?? value}</>;
 }
@@ -111,6 +113,9 @@ export function SystemHealthSection() {
     queryFn: api.health,
     staleTime: 30_000,
   });
+  const isKubernetes = Boolean(
+    (health.data as { runtime?: { kubernetes?: boolean } } | undefined)?.runtime?.kubernetes,
+  );
   const schedule = useQuery({
     queryKey: ["schedule-health"],
     queryFn: api.scheduleHealth,
@@ -192,6 +197,7 @@ export function SystemHealthSection() {
   };
 
   const readinessFixLabel = (key: string): string => {
+    if (isKubernetes && (key === "api" || key === "supervisor" || key === "runs")) return "Open details";
     if (key === "api" || key === "supervisor" || key === "runs") return "Heal now";
     if (key === "schedule") return "Open Schedule";
     if (key === "backups") return "Open Backups";
@@ -199,6 +205,10 @@ export function SystemHealthSection() {
   };
 
   const runReadinessFix = (key: string, path: string) => {
+    if (isKubernetes && (key === "api" || key === "supervisor" || key === "runs")) {
+      navigate(path);
+      return;
+    }
     if (key === "api" || key === "supervisor" || key === "runs") {
       const ids =
         key === "api"
@@ -238,9 +248,12 @@ export function SystemHealthSection() {
     const hasProcessChecks = processChecks.length > 0;
     const processFailures = processChecks.filter((c) => c.status === "fail").length;
     const processWarns = processChecks.filter((c) => c.status === "warn").length;
-    const supervisorGateOk = hasProcessChecks && processFailures === 0 && processWarns === 0;
-    const supervisorLabel =
-      !hasProcessChecks
+    const supervisorGateOk = isKubernetes
+      ? apiOk
+      : hasProcessChecks && processFailures === 0 && processWarns === 0;
+    const supervisorLabel = isKubernetes
+      ? "Kubernetes controllers manage process lifecycle"
+      : !hasProcessChecks
         ? "Supervisor/service status unavailable"
         : processFailures > 0
           ? `Supervisor/process checks failing (${processFailures})`
@@ -273,6 +286,7 @@ export function SystemHealthSection() {
     schedule.data?.installed,
     activeRun.data?.active,
     data?.checks,
+    isKubernetes,
   ]);
   const readinessPass = readinessChecks.filter((c) => c.ok).length;
   const readinessPct = Math.round((readinessPass / Math.max(1, readinessChecks.length)) * 100);
@@ -339,8 +353,9 @@ export function SystemHealthSection() {
                 System Health
               </Typography.Title>
               <Typography.Text type="secondary">
-                Self-heal checks across configuration, storage, secrets, backups, runs, directory/SSO, TLS, and
-                processes. Safe remediations can be applied with one click.
+                {isKubernetes
+                  ? "Kubernetes-aware checks across configuration, shared storage, secrets, backups, runs, directory/SSO, Ingress TLS, and replica-safe runtime. Host supervisor and in-process TLS file checks are omitted because controllers own those."
+                  : "Self-heal checks across configuration, storage, secrets, backups, runs, directory/SSO, TLS, and processes. Safe remediations can be applied with one click."}
               </Typography.Text>
               <Typography.Paragraph type="secondary" style={{ margin: "6px 0 0 0" }}>
                 {actionableCount} actionable issue{actionableCount === 1 ? "" : "s"}:{" "}
@@ -501,8 +516,8 @@ export function SystemHealthSection() {
                     ) : null}
                     <Button
                       size="small"
-                      icon={c.key === "api" || c.key === "supervisor" || c.key === "runs" ? <ThunderboltOutlined /> : undefined}
-                      loading={(c.key === "api" || c.key === "supervisor" || c.key === "runs") ? heal.isPending : false}
+                      icon={!isKubernetes && (c.key === "api" || c.key === "supervisor" || c.key === "runs") ? <ThunderboltOutlined /> : undefined}
+                      loading={!isKubernetes && (c.key === "api" || c.key === "supervisor" || c.key === "runs") ? heal.isPending : false}
                       onClick={() => runReadinessFix(c.key, c.fix)}
                     >
                       {readinessFixLabel(c.key)}

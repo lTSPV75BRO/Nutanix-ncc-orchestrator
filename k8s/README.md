@@ -86,6 +86,8 @@ Applying `k8s/` creates:
 3. **Ingress / exposure (optional)**
    - An Ingress controller and TLS Secret named `ncc-v2-ui-tls`
    - Change `k8s/ingress.yaml` hostname and TLS settings for your environment
+   - To have cert-manager issue the certificate, uncomment the
+     `cert-manager.io/cluster-issuer` annotation in `k8s/ingress.yaml`
 
 4. **Published images**
    - API image must include:
@@ -114,7 +116,7 @@ Applying `k8s/` creates:
 | `kustomization.yaml` | Single apply entrypoint (`kubectl apply -k k8s/`) |
 | `namespace.yaml` | Creates `ncc-orchestrator-v2` namespace |
 | `configmap.yaml` | Runtime `config.yaml` consumed by runner/API |
-| `secret.yaml` | `prism-password`, `api-token`, and optional `jwt-secret` (shared HS256 key for stateless session JWTs across API replicas) |
+| `secret.yaml` | `prism-password`, `api-token`, and required `jwt-secret` (shared HS256 key for stateless session JWTs across API replicas) |
 | `pvc.yaml` | Shared RWX storage for logs/artifacts/history |
 | `runner-cronjob.yaml` | Scheduled NCC runs |
 | `api-deployment.yaml` | Backend API server deployment |
@@ -148,7 +150,8 @@ Edit `k8s/configmap.yaml`:
 ### 3) Set secrets
 
 Provision the empty Secret template using the `kubectl create secret` command
-shown in `k8s/secret.yaml`, or connect it to External Secrets/CSI.
+shown in `k8s/secret.yaml`, or connect it to External Secrets/CSI. Include a
+`jwt-secret` key (`openssl rand -base64 32`) so API replicas share session JWTs.
 
 ### 4) Apply
 

@@ -133,12 +133,16 @@ func (s *apiServer) handleAlerts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *apiServer) writeAlertsResponse(w http.ResponseWriter, r *http.Request, alerts []map[string]interface{}, fetchErrors []string, fetchedAt time.Time, cacheHit bool, cacheTTL time.Duration) {
+	idx := s.pcIdentityIndex()
+	resolved := make([]map[string]interface{}, 0, len(alerts))
+	for _, alert := range alerts {
+		resolved = append(resolved, resolvePCAlertCluster(alert, idx))
+	}
 	p, _ := principalFromContext(r.Context())
 	access := s.allowedClusters(p)
-	filtered := make([]map[string]interface{}, 0, len(alerts))
-	for _, alert := range alerts {
-		cluster := strings.TrimSpace(fmt.Sprint(alert["cluster"]))
-		if !access.unrestricted && cluster != "" && !access.permits(cluster) {
+	filtered := make([]map[string]interface{}, 0, len(resolved))
+	for _, alert := range resolved {
+		if !access.unrestricted && !pcAlertPermitted(access, alert) {
 			continue
 		}
 		filtered = append(filtered, alert)
@@ -151,6 +155,7 @@ func (s *apiServer) writeAlertsResponse(w http.ResponseWriter, r *http.Request, 
 		"cache_ttl_s": int(cacheTTL / time.Second),
 		"errors":      fetchErrors,
 		"configured":  len(alerts) > 0 || len(fetchErrors) == 0,
+		"cluster_map": pcClusterMapView(idx),
 	}})
 }
 
@@ -284,7 +289,19 @@ func normalizePCAlert(raw map[string]interface{}) map[string]interface{} {
 			entityType = firstAlertString(source, "type", "entityType")
 		}
 	}
-	cluster := firstAlertString(raw, "clusterName", "clusterUUID")
+	clusterName := firstAlertString(raw, "clusterName")
+	clusterUUID := firstAlertString(raw, "clusterUUID", "clusterExtId", "cluster_uuid")
+	if clusterUUID == "" {
+		if source, ok := raw["sourceEntity"].(map[string]interface{}); ok {
+			if strings.EqualFold(firstAlertString(source, "type", "entityType"), "cluster") {
+				clusterUUID = firstAlertString(source, "extId", "uuid")
+			}
+		}
+	}
+	cluster := clusterName
+	if cluster == "" {
+		cluster = clusterUUID
+	}
 	if cluster == "" {
 		if source, ok := raw["sourceEntity"].(map[string]interface{}); ok {
 			cluster = firstAlertString(source, "name", "extId")
@@ -295,7 +312,8 @@ func normalizePCAlert(raw map[string]interface{}) map[string]interface{} {
 	return map[string]interface{}{
 		"source":        "PC",
 		"cluster":       cluster,
-		"cluster_name":  cluster,
+		"cluster_name":  clusterName,
+		"cluster_uuid":  clusterUUID,
 		"check":         title,
 		"check_name":    title,
 		"alert":         title,
@@ -315,6 +333,59 @@ func normalizePCAlert(raw map[string]interface{}) map[string]interface{} {
 		"resolved":      raw["isResolved"],
 		"kb_articles":   raw["kbArticles"],
 	}
+}
+
+func resolvePCAlertCluster(alert map[string]interface{}, idx map[string]pcCluster) map[string]interface{} {
+	if alert == nil {
+		return alert
+	}
+	lookup := func(raw interface{}) (pcCluster, bool) {
+		key := normClusterName(strings.TrimSpace(fmt.Sprint(raw)))
+		if key == "" || key == "<nil>" {
+			return pcCluster{}, false
+		}
+		c, ok := idx[key]
+		return c, ok
+	}
+	var ident pcCluster
+	var ok bool
+	for _, key := range []string{"cluster_uuid", "cluster_name", "cluster", "cluster_ip"} {
+		if ident, ok = lookup(alert[key]); ok {
+			break
+		}
+	}
+	if !ok {
+		return alert
+	}
+	name := strings.TrimSpace(ident.Name)
+	addr := strings.TrimSpace(ident.Address)
+	extID := strings.TrimSpace(ident.ExtID)
+	if name != "" {
+		alert["cluster_name"] = name
+		alert["cluster"] = name
+	} else if addr != "" {
+		alert["cluster"] = addr
+	}
+	if addr != "" {
+		alert["cluster_ip"] = addr
+	}
+	if extID != "" {
+		alert["cluster_uuid"] = extID
+	}
+	return alert
+}
+
+func pcAlertPermitted(access clusterAccess, alert map[string]interface{}) bool {
+	if access.unrestricted {
+		return true
+	}
+	for _, key := range []string{"cluster", "cluster_name", "cluster_uuid", "cluster_ip"} {
+		v := strings.TrimSpace(fmt.Sprint(alert[key]))
+		if v != "" && v != "<nil>" && access.permits(v) {
+			return true
+		}
+	}
+	return false
 }
 
 func firstAlertString(raw map[string]interface{}, keys ...string) string {

@@ -47,6 +47,24 @@ func TestNormalizePCAlert(t *testing.T) {
 	}
 }
 
+func TestNormalizePCAlertKeepsUUID(t *testing.T) {
+	row := normalizePCAlert(map[string]interface{}{
+		"clusterUUID": "aaaa-bbbb",
+		"title":       "Disk",
+		"severity":    "CRITICAL",
+	})
+	if row["cluster"] != "aaaa-bbbb" || row["cluster_uuid"] != "aaaa-bbbb" {
+		t.Fatalf("expected UUID preserved, got %#v", row)
+	}
+	idx := map[string]pcCluster{
+		normClusterName("aaaa-bbbb"): {Name: "prod-1", Address: "10.1.2.3", ExtID: "aaaa-bbbb"},
+	}
+	resolved := resolvePCAlertCluster(row, idx)
+	if resolved["cluster"] != "prod-1" || resolved["cluster_name"] != "prod-1" || resolved["cluster_ip"] != "10.1.2.3" {
+		t.Fatalf("expected UUID resolved to name/IP, got %#v", resolved)
+	}
+}
+
 func TestFetchPCAlertsPagination(t *testing.T) {
 	var requests int
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

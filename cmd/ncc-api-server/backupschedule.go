@@ -128,6 +128,13 @@ func validateBackupScheduleInput(st backupScheduleState) error {
 func (s *apiServer) runScheduledBackupOnce(ctx context.Context, st backupScheduleState) {
 	installDir := s.maintenanceInstallDir()
 	dir := s.backupsDir()
+	release, lockErr := acquireBackupLock(dir)
+	if lockErr != nil {
+		// Another replica is already taking a snapshot; skip this tick.
+		log.Printf("scheduled backup: %v", lockErr)
+		return
+	}
+	defer release()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		s.finishScheduledBackup(st, "", fmt.Errorf("create backups dir: %w", err))
 		return

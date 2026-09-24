@@ -7,7 +7,7 @@ rollouts.
 
 Prerequisites are a ConfigMap named by `configMapName`, a PVC named by
 `pvcName`, a TLS Secret, and credentials provisioned out-of-band under
-`secretName`.
+`secretName` (must include `jwt-secret` so API replicas share session JWTs).
 
 ```bash
 helm install ncc-orchestrator ./helm/ncc-orchestrator \

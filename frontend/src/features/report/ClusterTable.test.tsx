@@ -28,7 +28,7 @@ describe("ClusterTable alert sources", () => {
     expect(screen.getByText("NCC finding")).toBeInTheDocument();
     expect(screen.queryByText("PC finding")).not.toBeInTheDocument();
     expect(screen.getByText("Alert")).toBeInTheDocument();
-    expect(screen.getByText("Source")).toBeInTheDocument();
+    expect(screen.queryByText("Source")).not.toBeInTheDocument();
   });
 
   it("filters rows by the selected source", () => {

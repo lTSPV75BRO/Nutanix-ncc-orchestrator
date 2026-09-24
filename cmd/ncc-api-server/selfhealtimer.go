@@ -68,7 +68,7 @@ func (s *apiServer) startSelfHealLoop(ctx context.Context) {
 // non-zero when a check fails, which is expected — the JSON is still valid and
 // is parsed regardless of exit code.
 func (s *apiServer) runSelfHealOnce(ctx context.Context, fix bool) (*selfHealReport, error) {
-	return s.runSelfHealOnceWithOptions(ctx, selfHealRunOptions{Fix: fix})
+	return s.runSelfHealOnceWithOptions(ctx, selfHealRunOptions{Fix: fix, CheckIDs: s.doctorCheckIDs(nil)})
 }
 
 func (s *apiServer) runSelfHealOnceWithOptions(ctx context.Context, opts selfHealRunOptions) (*selfHealReport, error) {
@@ -88,7 +88,11 @@ func (s *apiServer) runSelfHealOnceWithOptions(ctx context.Context, opts selfHea
 	// supervisor/runtime alignment.
 	if cfg := strings.TrimSpace(s.configPath); cfg != "" {
 		if absCfg := strings.TrimSpace(s.absPath(cfg)); absCfg != "" {
-			args = append(args, "--install-dir", filepath.Dir(absCfg))
+			installDir := s.maintenanceInstallDir()
+			if strings.TrimSpace(installDir) == "" {
+				installDir = filepath.Dir(absCfg)
+			}
+			args = append(args, "--install-dir", installDir)
 		}
 	}
 	if opts.Fix {

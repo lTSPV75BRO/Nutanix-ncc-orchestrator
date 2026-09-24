@@ -9237,6 +9237,7 @@ func collectBackupEntries(installDir string) (entries []backupEntry, skipped []s
 		".ncc-initial-admin-password",
 		".ncc-api-schedule.json",
 		".ncc-api-notifications.json",
+		".ncc-api-backup-schedule.json",
 		v2StartStateFile, // persisted v2-start flags (CORS, listen, session TTL, …)
 	} {
 		add(filepath.Join(installDir, name))
@@ -9252,6 +9253,26 @@ func collectBackupEntries(installDir string) (entries []backupEntry, skipped []s
 		}
 	}
 
+	// Kubernetes PVC layout stores config/auth/logs under subdirectories of
+	// the shared volume root (typically /data). Include those files when the
+	// backup is taken from the volume root rather than the config/ folder.
+	for _, rel := range []string{
+		filepath.Join("config", "config.yaml"),
+		filepath.Join("auth", ".ncc-api-token"),
+		filepath.Join("auth", ".ncc-initial-admin-password"),
+		filepath.Join("logs", "ncc-audit.log"),
+		filepath.Join("logs", ".ncc-api-notifications.json"),
+		filepath.Join("config", ".ncc-api-schedule.json"),
+		filepath.Join("config", ".ncc-api-backup-schedule.json"),
+	} {
+		add(filepath.Join(installDir, rel))
+	}
+	if matches, err := filepath.Glob(filepath.Join(installDir, "config", ".ncc-api-*")); err == nil {
+		for _, m := range matches {
+			add(m)
+		}
+	}
+
 	// JSONL audit log (security/action history). In a standard v2 install the
 	// api-server writes it under <install-dir>/logs/ncc-audit.log; add() is a
 	// no-op when it is absent or rolled elsewhere.
@@ -9259,7 +9280,11 @@ func collectBackupEntries(installDir string) (entries []backupEntry, skipped []s
 
 	// Config-referenced files (clusters list / alert-exclusions / secrets) plus
 	// the latest run's report artifacts.
-	if content, err := os.ReadFile(filepath.Join(installDir, "config.yaml")); err == nil {
+	cfgPath := filepath.Join(installDir, "config.yaml")
+	if !isRegularFile(cfgPath) {
+		cfgPath = filepath.Join(installDir, "config", "config.yaml")
+	}
+	if content, err := os.ReadFile(cfgPath); err == nil {
 		cfg := string(content)
 		for _, key := range []string{"clusters-file", "exclude-alert-titles-file", "secrets-file"} {
 			raw := extractConfigRefPath(cfg, key)

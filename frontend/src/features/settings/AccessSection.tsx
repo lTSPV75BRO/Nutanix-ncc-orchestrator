@@ -2343,7 +2343,7 @@ function TokensCard() {
 // certificate + key to enable HTTPS (the stack restarts to bind TLS and session
 // cookies become Secure), or remove it to fall back to plain HTTP. The private
 // key is write-only — it is stored 0600 on the server and never returned.
-function TLSCard() {
+function TLSCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
   const qc = useQueryClient();
   const tlsQuery = useQuery({ queryKey: ["settings", "tls"], queryFn: api.getTLS });
   const [form] = Form.useForm();
@@ -2354,6 +2354,7 @@ function TLSCard() {
   // certificate has been registered through this card, so trust the live scheme
   // too when labeling the current state.
   const servingHTTPS = enabled || (typeof window !== "undefined" && window.location.protocol === "https:");
+  const ingressManaged = isKubernetes || cfg?.managed_by === "ingress";
 
   const fmt = (v?: string) => formatDateTime(v);
 
@@ -2453,10 +2454,32 @@ function TLSCard() {
         </Space>
       }
       extra={
-        <Tag color={servingHTTPS ? "green" : "default"}>{servingHTTPS ? "HTTPS enabled" : "HTTP only"}</Tag>
+        <Tag color={servingHTTPS || ingressManaged ? "green" : "default"}>
+          {servingHTTPS || ingressManaged ? "HTTPS enabled" : "HTTP only"}
+        </Tag>
       }
       loading={tlsQuery.isLoading}
     >
+      {ingressManaged ? (
+        <Space orientation="vertical" size={12} style={{ width: "100%" }}>
+          <Alert
+            type="success"
+            showIcon
+            icon={<LockOutlined />}
+            title="HTTPS is terminated at the Kubernetes Ingress"
+            description={
+              cfg?.message ||
+              "The UI is served over TLS by the cluster Ingress. Manage certificates on the Ingress TLS secret or with cert-manager. Session cookies are marked Secure."
+            }
+          />
+          <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+            TLS secret: <Typography.Text code>{cfg?.secret_name || "ncc-v2-ui-tls"}</Typography.Text>.
+            In-app certificate upload and self-signed generation are disabled on Kubernetes because the API
+            pods are not the TLS terminator.
+          </Typography.Paragraph>
+        </Space>
+      ) : (
+        <>
       <Typography.Paragraph type="secondary">
         The UI is served over HTTPS by default with a self-signed certificate, and any plain-HTTP
         request is redirected to HTTPS. Generate or renew a self-signed certificate with one click,
@@ -2564,6 +2587,8 @@ function TLSCard() {
           </Button>
         </Form.Item>
       </Form>
+        </>
+      )}
     </Card>
   );
 }
@@ -2800,7 +2825,11 @@ function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
                 type="warning"
                 showIcon
                 title="Installed components are out of sync"
-                description="The orchestrator, API server, and UI server must be updated together. Apply the available stack update to restore consistency."
+                description={
+                  isKubernetes
+                    ? "The orchestrator, API, and UI image tags differ. Roll out matching tags with Helm or Kustomize so every replica runs the same stack version."
+                    : "The orchestrator, API server, and UI server must be updated together. Apply the available stack update to restore consistency."
+                }
               />
             ) : null}
           </>
@@ -2858,7 +2887,7 @@ function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
   );
 }
 
-export function AccessSection() {
+export function AccessSection({ isKubernetes = false }: { isKubernetes?: boolean }) {
   return (
     <Space orientation="vertical" size={16} style={{ width: "100%" }}>
       <UsersCard />
@@ -2866,7 +2895,7 @@ export function AccessSection() {
       <TokensCard />
       <ClusterGroupsCard />
       <SessionCard />
-      <TLSCard />
+      <TLSCard isKubernetes={isKubernetes} />
       <ExternalAuthCard />
     </Space>
   );

@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"context"
 	crand "crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -170,6 +172,10 @@ type userDB struct {
 	resets        []passwordResetRequest
 	clusterGroups []clusterGroup
 	tokens        []personalToken
+	refreshMu     sync.Mutex
+	lastRefresh   time.Time
+	loadedHash    [32]byte
+	hasHash       bool
 }
 
 func newUserDB(path string) *userDB {
@@ -198,16 +204,27 @@ func openUserDBFromBackend(be userStoreBackend) (*userDB, error) {
 	if err := json.Unmarshal(raw, &f); err != nil {
 		return nil, fmt.Errorf("parse users db: %w", err)
 	}
+	if err := db.applyDocument(f); err != nil {
+		return nil, err
+	}
+	db.loadedHash = sha256.Sum256(raw)
+	db.hasHash = true
+	return db, nil
+}
+
+func (db *userDB) applyDocument(f usersDBFile) error {
+	accounts := map[string]*account{}
 	for i := range f.Users {
 		u := f.Users[i]
 		if err := validateAccount(u); err != nil {
-			return nil, fmt.Errorf("users db: %w", err)
+			return fmt.Errorf("users db: %w", err)
 		}
 		key := strings.ToLower(strings.TrimSpace(u.Username))
 		uu := u
-		db.accounts[key] = &uu
+		accounts[key] = &uu
 	}
-	coerceReservedAdminRole(db.accounts)
+	coerceReservedAdminRole(accounts)
+	db.accounts = accounts
 	db.saml = f.SAML
 	db.ldapCfg = f.LDAP
 	db.session = f.Session
@@ -215,7 +232,60 @@ func openUserDBFromBackend(be userStoreBackend) (*userDB, error) {
 	db.resets = f.Resets
 	db.clusterGroups = f.ClusterGroups
 	db.tokens = f.Tokens
-	return db, nil
+	return nil
+}
+
+const userDBReloadMinInterval = 2 * time.Second
+
+func (db *userDB) refreshIfStale() {
+	if db == nil || db.backend == nil {
+		return
+	}
+	db.refreshMu.Lock()
+	defer db.refreshMu.Unlock()
+	if time.Since(db.lastRefresh) < userDBReloadMinInterval {
+		return
+	}
+	raw, err := db.backend.load()
+	if err != nil || len(raw) == 0 {
+		db.lastRefresh = time.Now()
+		return
+	}
+	sum := sha256.Sum256(raw)
+	if db.hasHash && sum == db.loadedHash {
+		db.lastRefresh = time.Now()
+		return
+	}
+	var f usersDBFile
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if err := db.applyDocument(f); err != nil {
+		return
+	}
+	db.loadedHash = sum
+	db.hasHash = true
+	db.lastRefresh = time.Now()
+}
+
+func (s *apiServer) startUserDBReloadLoop(ctx context.Context) {
+	if s == nil || s.users == nil {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(userDBReloadMinInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.users.refreshIfStale()
+			}
+		}
+	}()
 }
 
 // coerceReservedAdminRole forces the built-in admin account to the admin role,
@@ -328,7 +398,12 @@ func (db *userDB) saveLocked() error {
 	if err != nil {
 		return err
 	}
-	return db.backend.save(b)
+	if err := db.backend.save(b); err != nil {
+		return err
+	}
+	db.loadedHash = sha256.Sum256(b)
+	db.hasHash = true
+	return nil
 }
 
 func (db *userDB) count() int {

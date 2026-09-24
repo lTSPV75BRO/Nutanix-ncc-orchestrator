@@ -24,10 +24,18 @@ spec:
         - name: api
           image: "{{ .Values.images.api.repository }}:{{ .Values.images.api.tag }}"
           imagePullPolicy: {{ .Values.images.api.pullPolicy }}
-          args: ["--listen", ":8081", "--repo-root", "/data", "--config-path", "/data/config/config.yaml", "--output-dir", "/data/outputfiles", "--orchestrator-bin", "/usr/local/bin/ncc-orchestrator", "--cors-origin", "$(NCC_UI_ORIGIN)", "--users-db-secret", "ncc-v2-users"]
+          args: ["--listen", ":8081", "--repo-root", "/data", "--config-path", "/data/config/config.yaml", "--output-dir", "/data/outputfiles", "--orchestrator-bin", "/usr/local/bin/ncc-orchestrator", "--cors-origin", "$(NCC_UI_ORIGIN)", "--users-db-secret", "ncc-v2-users", "--cookie-secure"]
           env:
             - name: NCC_RUNTIME_MODE
               value: kubernetes
+            - name: NCC_IMAGE_TAG
+              value: {{ .Values.images.api.tag | quote }}
+            - name: NCC_ORCHESTRATOR_IMAGE_TAG
+              value: {{ .Values.images.runner.tag | quote }}
+            - name: NCC_UI_IMAGE_TAG
+              value: {{ .Values.images.ui.tag | quote }}
+            - name: NCC_INGRESS_TLS_SECRET
+              value: {{ .Values.ingress.tlsSecret | quote }}
             - name: NCC_UI_ORIGIN
               value: {{ .Values.ui.origin | quote }}
             - name: NCC_API_TOKEN
@@ -38,7 +46,7 @@ spec:
                 secretKeyRef: { name: {{ .Values.secretName }}, key: api-token }
             - name: NCC_JWT_SECRET
               valueFrom:
-                secretKeyRef: { name: {{ .Values.secretName }}, key: jwt-secret, optional: true }
+                secretKeyRef: { name: {{ .Values.secretName }}, key: jwt-secret }
             - name: NCC_PASSWORD
               valueFrom:
                 secretKeyRef: { name: {{ .Values.secretName }}, key: password }

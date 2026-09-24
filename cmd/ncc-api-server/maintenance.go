@@ -17,6 +17,12 @@ import (
 // this also colocates the user database, API token, and scheduler/notification
 // state, so a single directory captures all recoverable state.
 func (s *apiServer) maintenanceInstallDir() string {
+	if s.capabilities.Kubernetes {
+		root := strings.TrimSpace(s.repoRoot)
+		if root != "" {
+			return s.absPath(root)
+		}
+	}
 	return filepath.Dir(s.absPath(s.configPath))
 }
 
