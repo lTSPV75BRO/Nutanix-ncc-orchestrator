@@ -171,9 +171,12 @@ Namespace: `ncc-orchestrator-v2`
 Workloads:
 
 - `CronJob` runner executes scheduled checks.
-- `Deployment` API serves control/report endpoints.
-- `Deployment` UI serves frontend and API proxy.
-- Shared PVC backs outputs/logs/token/report artifacts.
+- `Deployment` API serves control/report endpoints (default 2 replicas;
+  shared `NCC_JWT_SECRET`, Secret-backed user store reloaded every 2s).
+- `Deployment` UI serves frontend and API proxy (default 2 replicas;
+  `--login-mode on`).
+- Ingress terminates HTTPS (`ncc-v2-ui-tls`); API `--cookie-secure`.
+- Shared PVC backs config/auth/logs/backups/outputs/report artifacts.
 
 Current binary wiring model:
 
@@ -206,7 +209,8 @@ Security controls by layer:
   - controlled auth header injection
 - **Kubernetes**
   - namespace isolation
-  - secret/config separation
+  - secret/config separation (`jwt-secret` required for API replicas)
+  - Ingress TLS (not in-app certificate upload)
   - network policies and service boundaries
 
 ---

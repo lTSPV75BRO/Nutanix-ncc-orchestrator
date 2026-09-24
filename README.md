@@ -1,7 +1,7 @@
 # Nutanix NCC Orchestrator
 
 [![Version](https://img.shields.io/badge/version-2.2.0-blue)](RELEASE_NOTES_v2.2.0.md)
-[![Go](https://img.shields.io/badge/go-1.26.4-00ADD8)](go.mod)
+[![Go](https://img.shields.io/badge/go-1.27.1-00ADD8)](go.mod)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Status](https://img.shields.io/badge/release-development-yellow)](RELEASE_NOTES_v2.2.0.md)
 
@@ -328,8 +328,11 @@ viewer-readable and respects cluster-group restrictions. The `resolved`
 parameter accepts `No`, `Yes`, or `all` and defaults to `No`; the API translates
 this into the Prism Central `isResolved` filter before pagination. Set
 `pc-alerts-cache-ttl` to control caching (default `5m`; `0` disables it).
-Cluster names are displayed using the NCC cluster mapping while links target
-the mapped cluster IP on port `9440`.
+PC alerts that only include a cluster UUID are resolved through Prism Central
+discovery (`ext_id`, name, IP); `GET /api/v1/alerts` also returns `cluster_map`.
+Cluster-group filters match name, UUID, or IP. Links still target the mapped
+cluster IP on port `9440`. The dashboard NCC/PC toggle selects the table; the
+redundant Source column is omitted.
 
 Major endpoints (full surface at `GET /api/v1/meta/routes`, OpenAPI at `GET /api/v1/openapi.json`):
 
@@ -362,7 +365,7 @@ All write/mutate routes require `X-API-Token: <token>` (or `Authorization: Beare
 
 **RBAC, login & SSO:** the server enforces three roles — `viewer` (read-only), `operator` (also trigger/cancel runs), and `admin` (everything incl. `/api/v1/settings/*`). A role can be a static token (`NCC_API_TOKEN` = admin, `NCC_API_VIEWER_TOKEN` = viewer), an interactive login, or a self-service **personal access token** (`ncc_pat_…` bearer, inherits the owner's role, expiring or **never**-expiring, revocable; user menu → *Personal access tokens*). Interactive login is on by default with a first-run **admin bootstrap** (random password + forced change); accounts live in a writable store (a `0600` file or a Kubernetes Secret). Login methods: local password accounts (managed in Settings → Access, bcrypt), **SAML SSO** (`--saml-*` or runtime), and **LDAP / Active Directory** (`--ldap-*` or runtime; local-first with AD fallback, AD group→role mapping) — all configurable together. Browser logins use an httpOnly, `SameSite=Strict` session cookie (marked `Secure` whenever the UI is on HTTPS — the default) with double-submit CSRF protection; the UI shows a login screen and hides admin-only/operator-only controls per role. Admins can segregate clusters into **cluster groups** for access control: groups are **opt-in isolation** — an ungrouped viewer/operator sees all clusters, while membership confines a caller to that group's clusters. Lost passwords are recoverable offline (`ncc-orchestrator v2-reset-password`) or via a self-service request queue, and all auth state can be captured with `v2-backup` / restored with `v2-restore`. See [docs/SECURITY_AND_TRUST.md](docs/SECURITY_AND_TRUST.md). With no login configured, the single-token behavior is unchanged.
 
-**HTTPS by default:** `ncc-ui-server` serves HTTPS out of the box — `v2-start` auto-generates a self-signed cert (under `<install-dir>/tls/`) and redirects plain HTTP to HTTPS on the same port. Manage the certificate from **Settings → Access → HTTPS / TLS**: generate/renew a self-signed cert, or install your own PEM cert + key. Opt out with `--ui-insecure-http`.
+**HTTPS by default (VM/host):** `ncc-ui-server` serves HTTPS out of the box — `v2-start` auto-generates a self-signed cert (under `<install-dir>/tls/`) and redirects plain HTTP to HTTPS on the same port. Manage the certificate from **Settings → Access → HTTPS / TLS**: generate/renew a self-signed cert, or install your own PEM cert + key. Opt out with `--ui-insecure-http`. **Kubernetes** terminates TLS at Ingress (`ncc-v2-ui-tls`); the Settings form is read-only (`409` on upload) and session cookies are `Secure`.
 
 Trigger a run from the API:
 
@@ -629,12 +632,12 @@ below and the [`helm/`](helm/) chart.
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | Authentication        | Token-based (`X-API-Token`) constant-time compare (`crypto/subtle`); HMAC-signed sessions; optional local password accounts (bcrypt), SAML SSO, and LDAP / Active Directory |
 | Authorization (RBAC)  | Three roles `viewer < operator < admin`: viewers read non-settings `GET`s, operators also trigger/cancel runs, settings/rotation are admin-only |
-| Browser sessions      | Role-bearing httpOnly + `SameSite=Strict` session cookie (auto-`Secure` on HTTPS) with double-submit CSRF protection on mutations; ui-server forwards user sessions (no admin-token injection) |
+| Browser sessions      | Role-bearing httpOnly `auth_token` JWT (`SameSite=Lax`) signed with shared `NCC_JWT_SECRET`, plus legacy HMAC `ncc_session`; auto-`Secure` on HTTPS / Kubernetes Ingress; double-submit CSRF on mutations; ui-server forwards user sessions (`--login-mode on` in k8s) |
 | Personal access tokens| Self-service `ncc_pat_…` bearer tokens; SHA-256-hashed at rest, inherit owner's role (live re-resolve for local accounts), bounded or never-expiring, revocable, 25/user cap |
 | CORS                  | Strict allowlist (default `http://localhost:8080`); wildcard origins rejected at startup; `/saml/*` exempt (signed assertion + relay-state cookie) |
 | CSP                   | UI: `script-src 'self'`, no `unsafe-eval`; API: `default-src 'none'`                                                   |
 | Prism TLS             | Verified by default; `--ca-bundle` (trust internal CA) or `--pin-sha256` (cert pinning) preferred over `--insecure-skip-verify` |
-| UI transport          | **HTTPS by default** — self-signed cert auto-generated by `v2-start`, HTTP→HTTPS redirect on the same port; generate/renew or install your own cert in Settings → Access → HTTPS / TLS; `--ui-insecure-http` to opt out. Direct API HTTPS via `--tls-cert-file`/`--tls-key-file`; optional mTLS (`--tls-client-ca-file`) |
+| UI transport          | **HTTPS by default** on VM/host — self-signed cert auto-generated by `v2-start`, HTTP→HTTPS redirect on the same port; generate/renew or install your own cert in Settings → Access → HTTPS / TLS; `--ui-insecure-http` to opt out. **Kubernetes:** Ingress TLS (`ncc-v2-ui-tls` / cert-manager); in-app upload disabled. Direct API HTTPS via `--tls-cert-file`/`--tls-key-file`; optional mTLS (`--tls-client-ca-file`) |
 | Outbound notifications| Optional webhook HMAC signing (`webhook-secret` → `X-NCC-Signature`); SMTP TLS verify via `smtp-insecure-skip-verify`; dead-letter dir for failed deliveries |
 | Security headers      | `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Permissions-Policy`, HSTS on TLS   |
 | Rate limiting         | Per-client token bucket on sensitive auth/mutation routes (`--rate-limit-per-minute`, default 60)                      |
@@ -642,7 +645,7 @@ below and the [`helm/`](helm/) chart.
 | Secrets               | `secret://NAME` refs with `env` or `file` provider; plaintext-in-config triggers a startup warning                     |
 | Vulnerability scans   | `govulncheck ./...` and `npm audit --omit=dev` clean (Go 1.26.4, DOMPurify ≥ 3.4.7 enforced); enforced in CI (`.github/workflows/ci.yml`) |
 
-Release details and validation evidence: [`RELEASE_NOTES_v2.1.1.md`](RELEASE_NOTES_v2.1.1.md).
+Release details and validation evidence: [`RELEASE_NOTES_v2.2.0.md`](RELEASE_NOTES_v2.2.0.md).
 
 ---
 
@@ -653,7 +656,10 @@ Release details and validation evidence: [`RELEASE_NOTES_v2.1.1.md`](RELEASE_NOT
 kubectl apply -k k8s/
 ```
 
-Includes default-deny ingress and scoped allow policies for UI/API. See **[`k8s/README.md`](k8s/README.md)** for architecture, runbook, and rollback. Helm chart (CronJob only) at [`helm/ncc-orchestrator`](helm/ncc-orchestrator/README.md).
+Includes default-deny ingress and scoped allow policies for UI/API. API and UI
+default to **2 replicas**; provision `jwt-secret` on `ncc-v2-secrets` before
+apply. See **[`k8s/README.md`](k8s/README.md)** for architecture, TLS, backups,
+and rollback. Helm chart at [`helm/ncc-orchestrator`](helm/ncc-orchestrator/README.md).
 
 Uninstall:
 
@@ -700,7 +706,7 @@ Raw NCC summaries land under `nccfiles/`. Runner JSON logs under `logs/ncc-runne
 | [`docs/MIGRATION_v2.0.2_TO_v2.1.0.md`](docs/MIGRATION_v2.0.2_TO_v2.1.0.md)            | Upgrading from v2.0.2 (pre-RBAC/pre-backup) to v2.1.0                 |
 | [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)                                  | TLS, Prism Central, API issues                                        |
 | [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md)                                            | Wire the orchestrator into AI tools via MCP                           |
-| [`RELEASE_NOTES_v2.1.1.md`](RELEASE_NOTES_v2.1.1.md)                                  | Current release details, validation, and upgrade guidance              |
+| [`RELEASE_NOTES_v2.2.0.md`](RELEASE_NOTES_v2.2.0.md)                                  | Current (unreleased) v2.2.0 details: PC alerts, hybrid JWT auth, Kubernetes scaling |
 | [`docs/NIST_CSF_BASELINE.md`](docs/NIST_CSF_BASELINE.md)                                | NIST CSF 2.0 control baseline, evidence map, and gap plan             |
 | [`docs/NIST_CSF_EVIDENCE_MANIFEST.json`](docs/NIST_CSF_EVIDENCE_MANIFEST.json)          | Machine-readable control-to-evidence mapping for compliance bundles    |
 | [`docs/RELEASE_CHECKSUMS.md`](docs/RELEASE_CHECKSUMS.md)                              | How `--update` verifies downloads                                     |

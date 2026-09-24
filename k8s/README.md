@@ -46,7 +46,10 @@ API Service (ClusterIP) -> API Deployment (`ncc-api-server`)
       +--> triggers runner jobs / reads artifacts
 
 CronJob (`ncc-v2-runner`) ---> shared PVC (/data/*)
+                                  - /data/config
+                                  - /data/auth
                                   - /data/logs
+                                  - /data/backups
                                   - /data/nccfiles
                                   - /data/outputfiles
                                   - /data/promfiles
@@ -61,8 +64,8 @@ All components run in namespace **`ncc-orchestrator-v2`**.
 Applying `k8s/` creates:
 
 - Runner CronJob: **`ncc-v2-runner`**
-- API Deployment + Service: **`ncc-v2-api`**
-- UI Deployment + Service: **`ncc-v2-ui`**
+- API Deployment + Service: **`ncc-v2-api`** (default **2** replicas)
+- UI Deployment + Service: **`ncc-v2-ui`** (default **2** replicas)
 - ConfigMap: **`ncc-v2-config`**
 - Secret: **`ncc-v2-secrets`**
 - PVC: **`ncc-v2-data`**
@@ -105,6 +108,9 @@ Applying `k8s/` creates:
 
 5. **Credentials**
    - Provision `ncc-v2-secrets` out-of-band; do not commit credentials.
+   - Include `jwt-secret` (`openssl rand -base64 32`). The API Deployment
+     requires this key so replicas share session JWTs; pods will not start
+     without it.
    - Enable etcd encryption and use External Secrets/CSI where available.
 
 ---
@@ -119,11 +125,11 @@ Applying `k8s/` creates:
 | `secret.yaml` | `prism-password`, `api-token`, and required `jwt-secret` (shared HS256 key for stateless session JWTs across API replicas) |
 | `pvc.yaml` | Shared RWX storage for logs/artifacts/history |
 | `runner-cronjob.yaml` | Scheduled NCC runs |
-| `api-deployment.yaml` | Backend API server deployment |
+| `api-deployment.yaml` | Backend API server (2 replicas, `--cookie-secure`, required `jwt-secret`) |
 | `api-service.yaml` | Internal API service (`ClusterIP`) |
-| `ui-deployment.yaml` | UI server + frontend deployment |
+| `ui-deployment.yaml` | UI server + frontend (`--login-mode on`) |
 | `ui-service.yaml` | Internal UI service (`ClusterIP`) |
-| `ingress.yaml` | TLS-enabled external UI entrypoint |
+| `ingress.yaml` | TLS-enabled external UI entrypoint (`ncc-v2-ui-tls`; optional cert-manager) |
 | `networkpolicy-default-deny-ingress.yaml` | Baseline deny-all ingress policy |
 | `networkpolicy-ui-ingress.yaml` | Allows UI ingress on TCP 8080 |
 | `networkpolicy-api-ingress.yaml` | Allows API ingress from UI pods on TCP 8081 |
@@ -193,7 +199,8 @@ kubectl logs -n ncc-orchestrator-v2 deploy/ncc-v2-ui --tail=100
 kubectl port-forward -n ncc-orchestrator-v2 svc/ncc-v2-ui 8080:80
 ```
 
-Open: `http://localhost:8080`
+Open: `https://localhost:8080` when using Ingress TLS, or the port-forward
+URL above for a temporary HTTP check.
 
 ### Runner sanity
 
@@ -201,6 +208,35 @@ Open: `http://localhost:8080`
 kubectl create job -n ncc-orchestrator-v2 ncc-v2-manual-1 --from=cronjob/ncc-v2-runner
 kubectl get jobs -n ncc-orchestrator-v2
 kubectl logs -n ncc-orchestrator-v2 job/ncc-v2-manual-1 --all-containers=true
+```
+
+### Horizontal scaling
+
+API and UI default to two replicas. Sessions are stateless JWTs signed with
+`jwt-secret`. The user database lives in Secret `ncc-v2-users` and is reloaded
+every two seconds. Scheduled backups flock `/data/backups/.ncc-backup.lock`.
+
+Keep API, UI, and runner **image tags in lockstep**. The API reports component
+versions from `NCC_IMAGE_TAG` / `NCC_ORCHESTRATOR_IMAGE_TAG` /
+`NCC_UI_IMAGE_TAG`; it does not exec `ncc-ui-server` from the API image.
+
+### TLS certificates
+
+HTTPS is terminated at Ingress. Do not upload certs from Settings → Access;
+manage `ncc-v2-ui-tls` (or enable cert-manager on the Ingress). Session
+cookies are `Secure`.
+
+### System Health and backups
+
+Settings → System Health runs PVC-safe doctor checks plus Kubernetes runtime
+probes. Host supervisor/PID checks are not used.
+
+Scheduled and manual snapshots write to `/data/backups` on the shared PVC
+and include `config/`, `auth/`, and `logs/`. Restore still requires a
+Deployment rollout to load restored state:
+
+```bash
+kubectl -n ncc-orchestrator-v2 rollout restart deployment/ncc-v2-api deployment/ncc-v2-ui
 ```
 
 ---
@@ -238,6 +274,8 @@ Use a temporary debug pod mounting `ncc-v2-data`, or expose via API/UI artifact 
 
 - Check image path/tag in deployment/cronjob manifests
 - Confirm `ncc-orchestrator` exists in runner image at `/usr/local/bin/ncc-orchestrator`
+- Confirm `ncc-v2-secrets` includes `jwt-secret` (API logs
+  `NCC_JWT_SECRET is required in Kubernetes` if it is missing)
 - Check startup logs:
 
   ```bash
@@ -276,8 +314,21 @@ Use a temporary debug pod mounting `ncc-v2-data`, or expose via API/UI artifact 
 
 ### 5) Ingress has no address
 
-- Check the Ingress controller and TLS Secret
+- Check the Ingress controller and TLS Secret (`ncc-v2-ui-tls`)
+- Uncomment the cert-manager annotation in `k8s/ingress.yaml` if you want
+  the cluster to issue the certificate
 - For temporary access, use `kubectl port-forward svc/ncc-v2-ui 8080:80`
+
+### 6) Settings → HTTPS / TLS is disabled
+
+This is expected. Kubernetes terminates TLS at Ingress; in-app certificate
+upload returns `409`. Manage the Ingress secret instead.
+
+### 7) Installed components report “ui-server: Component not found”
+
+Upgrade the API image. Current builds report UI/orchestrator versions from
+image-tag env vars instead of execing `ncc-ui-server` from the API pod. Keep
+API, UI, and runner tags aligned.
 
 ---
 

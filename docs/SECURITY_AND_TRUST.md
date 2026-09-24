@@ -486,6 +486,9 @@ A role can be presented four ways:
    LDAP/AD. Sign with a shared `NCC_JWT_SECRET` so every API replica can verify
    the same session without a local session file. Legacy HMAC `ncc_session`
    cookies remain valid when `--session-secret` / `NCC_JWT_SECRET` is shared.
+   Kubernetes requires Secret key `jwt-secret`; the API will not start without
+   it. Host/VM installs still generate an in-memory key (with a warning) if
+   the env var is unset.
 4. **Personal access token (PAT)** — a user-minted bearer credential that
    inherits the owner's role (see below).
 
@@ -999,6 +1002,13 @@ from HTTP on one port), so there is no separate HTTP listener to leak cookies.
   issuer, validity, SANs) is recorded in the user database so the UI can show
   what is installed without re-parsing the PEM; restore preserves host-specific
   TLS paths (see backup/restore).
+
+**Kubernetes:** HTTPS is terminated at the Ingress (`ncc-v2-ui-tls` by
+default). `GET /api/v1/settings/tls` returns `managed_by=ingress`; certificate
+upload/generate/disable return `409`. API pods pass `--cookie-secure` so the
+`auth_token` cookie is stored on `https` origins. Manage the Ingress TLS
+Secret or enable cert-manager; do not expect Settings → Access to bind TLS
+inside the UI container.
 
 ---
 

@@ -12,7 +12,10 @@ The v2.2.0 dashboard can also fetch Prism Central serviceability alerts on
 demand from configured `pcs` or `prism-central-url` targets. The API/UI source
 selector keeps these live PC alerts separate from persisted NCC findings.
 Unresolved alerts are fetched first for fast initial rendering; the complete
-history is warmed in the background when the PC source is selected.
+history is warmed in the background when the PC source is selected. The
+dashboard NCC/PC toggle selects the table; the redundant Source column is
+omitted. PC alerts that only include a cluster UUID are resolved through
+Prism Central discovery (`ext_id`, name, IP) via the `cluster_map` payload.
 
 ## 2) Feature reference with examples
 
@@ -84,7 +87,11 @@ are fetched concurrently, successful responses are cached independently by
 filter, and per-target failures are returned without discarding successful
 results. The dashboard shows unresolved alerts immediately and displays a
 loading indicator while the all-status history is fetched in the background.
-PC cluster names remain display labels; mapped cluster IPs are used for links.
+PC alerts include `cluster`, `cluster_name`, `cluster_uuid`, and
+`cluster_ip`. UUIDs are resolved from Prism Central discovery (`ext_id`)
+using the same name/address dictionary returned as `cluster_map`. Cluster-
+group filters match any of those identities. Mapped cluster IPs are used
+for Prism links on port `9440`.
 
 ## 1.1 Canonical configuration
 
@@ -451,15 +458,21 @@ A caller's role can come from a static token or an interactive login:
   is stored `0600` and never returned; cert metadata (subject/issuer/validity/SANs)
   is recorded for display. HTTPS is what makes the SAML `SameSite=None` cookie
   valid, so SSO works out of the box on the default self-signed HTTPS.
-- **Backup / restore** — `v2-backup` / `v2-restore` (Settings → Access in the UI,
+  **Kubernetes is different:** Ingress terminates TLS (`ncc-v2-ui-tls`).
+  `GET /api/v1/settings/tls` reports `managed_by=ingress`; PUT/DELETE/generate
+  return `409`. Session cookies are `Secure` (`--cookie-secure`). Manage the
+  Ingress secret or enable cert-manager instead of uploading a cert in Settings.
+- **Backup / restore** — `v2-backup` / `v2-restore` (Settings → Maintenance in the UI,
   or the CLI) capture and recover all stateful auth data (accounts, roles,
   SAML/LDAP config, cluster groups, token, session policy) plus config and audit
   log. Restore **preserves host-specific networking/TLS** (CORS origins,
   advertise/backend URLs, listen addresses, `--ui-insecure-http`, UI TLS paths) so
   importing a backup from another host doesn't trigger an `origin not allowed`
-  lockout or a stale cert path. See §6.14a.
+  lockout or a stale cert path. See §6.14a. On Kubernetes, snapshots write to
+  `/data/backups` (PVC root), include `config/`/`auth/`/`logs/`, and take an
+  advisory lock so API replicas do not snapshot concurrently.
 - **In-app software updates** — admins can check for and apply a new release from
-  **Settings → Access → Software updates**. `GET /api/v1/settings/update` reports
+  **Settings → Maintenance → Software updates** on host/VM installs. `GET /api/v1/settings/update` reports
   the current/latest version and `update_available` (networked check only with
   `?check=1`; plain GET is a cheap status poll). `POST /api/v1/settings/update/apply`
   runs a background job that takes a **pre-update backup** (to
@@ -467,7 +480,10 @@ A caller's role can come from a static token or an interactive login:
   package update (orchestrator + api + ui + frontend), then **restarts the stack
   automatically** (`v2-restart`); the UI polls the phase and reconnects when the
   new version is live. Optional `target_version` / `skip_checksum_verify`. Requires
-  a built orchestrator binary (not the dev `go run` fallback).
+  a built orchestrator binary (not the `go run` fallback). **Kubernetes disables
+  in-place updates**; roll matching API/UI/runner image tags. `GET /api/v1/components`
+  reports versions from those tags (`NCC_IMAGE_TAG`, `NCC_ORCHESTRATOR_IMAGE_TAG`,
+  `NCC_UI_IMAGE_TAG`) instead of execing `ncc-ui-server` from the API image.
 
 Mutating cookie-session requests require a double-submit CSRF token
 (`X-CSRF-Token` header echoing the readable `ncc_csrf` cookie); static-token
@@ -987,7 +1003,7 @@ These are runtime flags for v2 services (`cmd/ncc-api-server`, `cmd/ncc-ui-serve
 | `ncc-api-server` | `--login-lockout-duration` | `15m` | How long a locked account stays locked after exceeding the threshold. |
 | `ncc-api-server` | `--auth-mode` | `token` | API auth mode: `token`, `session`, `hybrid`. |
 | `ncc-api-server` | `--token-file-path` | `.ncc-api-token` | Token file used by UI proxy and local tooling. |
-| `ncc-api-server` | `--cookie-secure` / `--cookie-insecure` | auto | Force the session cookie `Secure` attribute on/off. Auto-set by `v2-start` to track whether the UI is on HTTPS (the default); set `--cookie-insecure` only when serving plain HTTP. |
+| `ncc-api-server` | `--cookie-secure` / `--cookie-insecure` | auto | Force the session cookie `Secure` attribute on/off. Auto-set by `v2-start` to track whether the UI is on HTTPS (the default). Kubernetes manifests pass `--cookie-secure` because Ingress terminates TLS. Set `--cookie-insecure` only when serving plain HTTP. |
 | `ncc-api-server` | `--cors-origin` | `http://localhost:8080` | Comma-separated browser origins allowed to call the API with cookies (`Access-Control-Allow-Credentials: true`). Wildcards are rejected. Override with `NCC_CORS_ORIGIN`. |
 | `ncc-ui-server` | `--allowed-origins` | `http://localhost:8080` | Browser origin allowlist for proxied API calls. |
 | `ncc-ui-server` | `--api-auth-mode` | `token` | Backend auth forwarding mode (`token` or `session`). |
@@ -1060,6 +1076,9 @@ install dir:
   HTTP timeouts, self-heal) so a restore reuses them on restart (path-type flags
   such as `--config-path`/dirs are re-derived under the new install dir)
 - the JSONL audit log (`logs/ncc-audit.log`) when present
+- Kubernetes PVC layout when the install dir is the volume root (`/data`):
+  `config/config.yaml`, `auth/.ncc-api-token`, `logs/ncc-audit.log`, and
+  matching `.ncc-api-*` files under those subdirectories
 - the **latest run's report artifacts** — the top-level files of
   `output-dir-filtered` (`run-summary.json`, `index.html`, and the
   SLO/drilldown/flaky/checks JSON) — so a restored stack shows the most recent
@@ -1320,7 +1339,10 @@ ncc-orchestrator env-info
 |---|---|
 | `NCC_API_TOKEN` | Admin token for the api-server (full access). |
 | `NCC_API_STATIC_TOKEN` | Alias of `NCC_API_TOKEN` for the static bearer used by runners/internal clients. Must match `NCC_API_TOKEN` when both are set. |
-| `NCC_JWT_SECRET` | Shared HMAC-SHA256 secret for stateless session JWTs. Required for 2+ API replicas; if unset, a 32-byte secret is generated in memory (sessions will not survive restart or another replica). Also fills `--session-secret` when that flag is empty so legacy HMAC cookies share the same key. Set the same value on every replica: Kubernetes Secret key `jwt-secret`, systemd `Environment=`/`EnvironmentFile=`, or a Windows machine / Task Scheduler environment variable. |
+| `NCC_JWT_SECRET` | Shared HMAC-SHA256 secret for stateless session JWTs. **Required in Kubernetes** (Secret key `jwt-secret`); the API exits on startup if it is missing. On host/VM installs, if unset a 32-byte secret is generated in memory (sessions will not survive restart or another replica). Also fills `--session-secret` when that flag is empty so legacy HMAC cookies share the same key. Set the same value on every replica: Kubernetes Secret, systemd `Environment=`/`EnvironmentFile=`, or a Windows machine / Task Scheduler environment variable. |
+| `NCC_RUNTIME_MODE` | Set to `kubernetes` in cluster manifests so the API skips host supervisor checks, uses Ingress TLS, and treats the PVC root as the backup install dir. |
+| `NCC_IMAGE_TAG` / `NCC_ORCHESTRATOR_IMAGE_TAG` / `NCC_UI_IMAGE_TAG` | Image tags reported by `GET /api/v1/components` on Kubernetes (so the API pod does not need a `ncc-ui-server` binary). Keep the three tags aligned. |
+| `NCC_INGRESS_TLS_SECRET` | Ingress TLS Secret name shown by `GET /api/v1/settings/tls` (default `ncc-v2-ui-tls`). |
 | `NCC_TOKEN_EXPIRY` | Session/JWT lifetime (Go duration, default from `--session-ttl` / 6h; max 24h). Example: `24h`. |
 | `NCC_CORS_ORIGIN` | Overrides `--cors-origin` (comma-separated allowlist). Set the UI origin so the SPA can send the HttpOnly `auth_token` cookie with `credentials: include`. Wildcards are rejected. |
 | `NCC_API_VIEWER_TOKEN` | Optional read-only viewer token (RBAC). Holders may read non-settings `GET` endpoints but get `403` on `/api/v1/settings/*` and any mutating request. Must differ from `NCC_API_TOKEN`. |

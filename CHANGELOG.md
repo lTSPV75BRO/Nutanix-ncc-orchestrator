@@ -11,7 +11,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [2.2.0] - Unreleased
 
 Adds Prism Central serviceability alerts to the dashboard alongside NCC
-findings, with an NCC / PC source selector.
+findings, with an NCC / PC source selector. Kubernetes installs are
+replica-safe (shared JWT, user-store reload, backup lock) and treat Ingress
+as the TLS terminator.
 
 ### Added
 
@@ -31,8 +33,10 @@ findings, with an NCC / PC source selector.
   aliases: `POST /api/v1/users/me/pats` (plaintext shown once) and
   `DELETE /api/v1/users/me/pats/{id}`. Auth attempts are counted on `/metrics`
   as `ncc_api_auth_success_total` and `ncc_api_auth_failure_total{reason=}`.
-  If `NCC_JWT_SECRET` is unset, a 32-byte secret is generated in memory with a
-  prominent warning (replicas will not share sessions). Pinned by
+  If `NCC_JWT_SECRET` is unset on a host/VM process, a 32-byte secret is
+  generated in memory with a prominent warning (replicas will not share
+  sessions). Kubernetes requires Secret key `jwt-secret` and refuses to start
+  without it. Pinned by
   `internal/auth` tests and `TestJWTAuthTokenCookieAccepted`,
   `TestUsersMePATsCreateAndRevoke`.
 - **UI cookie credentials and self-service PAT manager.** The SPA sends
@@ -47,9 +51,47 @@ findings, with an NCC / PC source selector.
   first, warms the complete alert-history cache in the background, and shows a
   loading indicator while that background request is active. PC responses use
   a configurable five-minute cache (`pc-alerts-cache-ttl`).
-- **Source-aware PC details.** NCC and PC tables retain separate layouts. PC
-  detail panels show alert metadata and status badges, while cluster names
-  remain display labels and links resolve through the cluster IP mapping.
+- **PC cluster UUID → name/IP dictionary.** Discovery now keeps Prism
+  `ext_id` with cluster name and address. `GET /api/v1/alerts` resolves UUID
+  alerts to those identities, returns `cluster_map`, and applies cluster-group
+  filters on name, UUID, or IP. Pinned by `TestNormalizePCAlertKeepsUUID`,
+  `TestAllowedClustersPrismCentralExpansion`.
+- **Kubernetes-aware System Health.** Diagnostics run PVC-safe doctor checks
+  (config, storage, secrets, backups, runs, logs) and API probes for JWT, the
+  user Secret, Secure cookies, Ingress TLS, and a writable PVC. Host
+  supervisor/PID/SELinux/local TLS-file checks are omitted. The Health UI
+  treats Deployments/CronJob as the process owner.
+- **Ingress TLS on Kubernetes.** `GET /api/v1/settings/tls` reports
+  `managed_by=ingress` and the TLS secret; PUT/DELETE/generate return `409`.
+  API pods pass `--cookie-secure`. Optional cert-manager annotations live in
+  `k8s/ingress.yaml` and Helm `ingress.certManager`. Pinned by
+  `TestKubernetesTLSIsIngressManaged`, `TestCookieSecureKubernetesDefaultsOn`.
+- **Replica-safe scheduled backups on Kubernetes.** Snapshots write to
+  `/data/backups`, include the PVC `config/`/`auth/`/`logs/` layout, and take
+  an advisory flock so two API replicas cannot snapshot at once.
+- **Horizontal API scaling on Kubernetes.** Default API replicas are 2.
+  `NCC_JWT_SECRET` (`jwt-secret` on `ncc-v2-secrets`) is required in-cluster.
+  The user Secret reloads every 2s across replicas. UI pods use
+  `--login-mode on`. Image-tag env vars (`NCC_IMAGE_TAG`,
+  `NCC_ORCHESTRATOR_IMAGE_TAG`, `NCC_UI_IMAGE_TAG`) drive installed-component
+  versions so the API image is not expected to contain `ncc-ui-server`.
+
+### Changed
+
+- **Alerts tables omit the Source column.** NCC vs PC is selected by the
+  dashboard toggle; each source keeps its own column layout.
+- **Host/VM JWT secret still optional.** An unset `NCC_JWT_SECRET` on a
+  non-Kubernetes process still mints an in-memory key and logs a replica
+  warning. Kubernetes refuses to start without the shared secret.
+
+### Fixed
+
+- **PC alerts showed a cluster UUID instead of the cluster name.** Alerts that
+  only include `clusterUUID` now resolve through Prism Central discovery.
+- **Kubernetes “ui-server: Component not found” / out-of-sync.** Component
+  status no longer execs a missing `ncc-ui-server` binary in the API image.
+- **Kubernetes scheduled backups missed PVC state.** Install-dir for backups
+  is the volume root (`/data`) rather than only `/data/config`.
 - **VM provisioning templates.** Added cloud-init for Ubuntu/Debian and
   RHEL/Rocky plus Windows Sysprep/PowerShell templates. They download and
   verify a configurable full-stack release, install boot-starting services,
