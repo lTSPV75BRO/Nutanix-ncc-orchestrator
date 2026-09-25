@@ -47,6 +47,31 @@ func TestNormalizePCAlert(t *testing.T) {
 	}
 }
 
+func TestNormalizePCAlertKeepsKBAndRootCause(t *testing.T) {
+	row := normalizePCAlert(map[string]interface{}{
+		"title":             "Disk almost full",
+		"message":           "Capacity is high",
+		"rootCauseAnalysis": "CVM disk /home is 92% full",
+		"severity":          "CRITICAL",
+		"extId":             "abc-123",
+		"serviceName":       "Stargate",
+		"kbArticles": []interface{}{
+			"https://portal.nutanix.com/kb/1234",
+			map[string]interface{}{"url": "https://portal.nutanix.com/kb/5678"},
+		},
+	})
+	if row["detail"] != "Capacity is high" || row["root_cause"] != "CVM disk /home is 92% full" {
+		t.Fatalf("message/root cause: %#v", row)
+	}
+	if row["ext_id"] != "abc-123" || row["service_name"] != "Stargate" {
+		t.Fatalf("ids: %#v", row)
+	}
+	kbs, _ := row["kb_articles"].([]string)
+	if len(kbs) != 2 || kbs[0] != "https://portal.nutanix.com/kb/1234" || kbs[1] != "https://portal.nutanix.com/kb/5678" {
+		t.Fatalf("kb_articles: %#v", row["kb_articles"])
+	}
+}
+
 func TestNormalizePCAlertKeepsUUID(t *testing.T) {
 	row := normalizePCAlert(map[string]interface{}{
 		"clusterUUID": "aaaa-bbbb",

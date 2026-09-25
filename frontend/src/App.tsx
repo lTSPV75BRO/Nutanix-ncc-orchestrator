@@ -12,7 +12,7 @@ import {
   UserOutlined,
   WifiOutlined,
 } from "@ant-design/icons";
-import { Button, Dropdown, Layout, Spin, Tag, Tooltip } from "antd";
+import { Alert, Button, Dropdown, Layout, Spin, Tag, Tooltip } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, NavLink, Route, Routes, useLocation } from "react-router";
 import { THEME_OPTIONS, useAppTheme, type AppThemeSelection } from "./theme";
@@ -25,6 +25,7 @@ import { ChangePasswordPage, ChangePasswordModal } from "./pages/ChangePasswordP
 import { PersonalTokensModal } from "./features/tokens/PersonalTokensModal";
 import { SessionIdleGuard } from "./components/SessionIdleGuard";
 import { FirstTimeSetupModal } from "./features/onboarding/FirstTimeSetupModal";
+import { CommandJump } from "./components/CommandJump";
 import { useLocalStorageState } from "./hooks/useLocalStorageState";
 import { formatDateTime, formatTime, localDateKey, parseInstant } from "./utils/datetime";
 
@@ -53,7 +54,7 @@ function deriveHealthState(
   isError: boolean,
   data: { status?: string; auth_mode?: string } | undefined,
 ): HealthStatePayload {
-  if (isError) return { state: "err", label: "API offline" };
+  if (isError) return { state: "err", label: "API unreachable" };
   const status = data?.status;
   if (status === "ok") return { state: "ok", label: "API healthy", authMode: data?.auth_mode };
   if (status) return { state: "warn", label: `API ${status}`, authMode: data?.auth_mode };
@@ -76,15 +77,84 @@ function useDocumentTitleSync(health: HealthStatePayload, runActive: boolean) {
   }, [health.state, runActive]);
 }
 
-function HeaderHealthPill({ health }: { health: HealthStatePayload }) {
+function HeaderHealthPill({
+  health,
+  onRetry,
+}: {
+  health: HealthStatePayload;
+  onRetry?: () => void;
+}) {
+  const title =
+    health.state === "err"
+      ? "API did not answer through this UI. Click to retry."
+      : health.authMode
+        ? `API through this UI · auth: ${health.authMode}`
+        : "API through this UI. Click to refresh.";
   return (
-    <Tooltip title={health.authMode ? `Auth: ${health.authMode}` : "Hover to refresh status"}>
-      <span className={`header-health-pill ${health.state}`} role="status" aria-live="polite">
+    <Tooltip title={title}>
+      <button
+        type="button"
+        className={`header-health-pill ${health.state}`}
+        role="status"
+        aria-live="polite"
+        aria-label={`${health.label}. Retry API health.`}
+        onClick={() => onRetry?.()}
+      >
         <span className="header-health-dot" />
         <WifiOutlined className="header-health-icon" />
         <span className="header-health-label">{health.label}</span>
-      </span>
+      </button>
     </Tooltip>
+  );
+}
+
+function BootstrapSplash({
+  isError,
+  onRetry,
+  onSignIn,
+}: {
+  isError: boolean;
+  onRetry: () => void;
+  onSignIn: () => void;
+}) {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const t = window.setTimeout(() => setSlow(true), 6000);
+    return () => window.clearTimeout(t);
+  }, []);
+  const showActions = slow || isError;
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+      }}
+    >
+      <div style={{ maxWidth: 420, width: "100%", textAlign: "center" }}>
+        <Spin size="large" />
+        <div style={{ marginTop: 16, fontWeight: 600 }}>Connecting to the API through this UI…</div>
+        {showActions ? (
+          <div style={{ marginTop: 16, textAlign: "left" }}>
+            <Alert
+              type="warning"
+              showIcon
+              title="The API did not answer in time"
+              description="The UI may have restarted after a certificate change, or the API proxy is still coming up. Retry, or open sign-in."
+              style={{ marginBottom: 12 }}
+            />
+            <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+              <Button type="primary" onClick={onRetry}>
+                Retry
+              </Button>
+              <Button onClick={onSignIn}>Sign in</Button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -369,10 +439,12 @@ export default function App() {
   const { selectedTheme, setTheme } = useAppTheme();
   const themeLabel = THEME_OPTIONS.find((opt) => opt.value === selectedTheme)?.label ?? "Theme";
 
+  const [forceLogin, setForceLogin] = useState(false);
   const meQuery = useQuery({
     queryKey: ["me"],
     queryFn: api.me,
     staleTime: 30_000,
+    retry: 1,
     // Keep the session state fresh so the app maintains the logged-in view and
     // flips to the login screen promptly once the session expires. When a
     // session expiry is known, re-check shortly after it lapses (clamped so we
@@ -455,6 +527,7 @@ export default function App() {
     queryFn: api.health,
     refetchInterval: 30_000,
     staleTime: 15_000,
+    retry: 1,
   });
   const healthState = deriveHealthState(
     healthQuery.isError,
@@ -530,19 +603,15 @@ export default function App() {
 
   // Wait for /auth/me before routing. While it is in flight, login_enabled is
   // unknown (falsy), so rendering the app would mount Dashboard queries that
-  // 401 and bounce /login → / forever.
-  if (meQuery.isLoading || meQuery.isPending) {
+  // 401 and bounce /login → / forever. After 6s (or on error) offer Retry /
+  // Sign in so a hung /me after Generate cert does not spin forever.
+  if ((meQuery.isLoading || meQuery.isPending) && !forceLogin) {
     return (
-      <div
-        style={{
-          minHeight: "100vh",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <Spin size="large" />
-      </div>
+      <BootstrapSplash
+        isError={meQuery.isError}
+        onRetry={() => void meQuery.refetch()}
+        onSignIn={() => setForceLogin(true)}
+      />
     );
   }
 
@@ -550,13 +619,19 @@ export default function App() {
   // authenticated session, show the full-screen login instead of the app.
   // A failed /me is treated as signed-out (not as "login disabled") so a 401
   // cannot open the dashboard.
-  if ((loginEnabled || meQuery.isError) && !authenticated) {
+  if ((loginEnabled || meQuery.isError || forceLogin) && !authenticated) {
     return (
       <LoginPage
-        localEnabled={Boolean(me?.local_enabled)}
+        localEnabled={me?.local_enabled ?? true}
         samlEnabled={Boolean(me?.saml_enabled)}
         bootstrapPending={Boolean(me?.bootstrap_pending)}
+        apiUnreachable={meQuery.isError}
+        onRetryBootstrap={() => {
+          setForceLogin(false);
+          void meQuery.refetch();
+        }}
         onSuccess={() => {
+          setForceLogin(false);
           resetUnauthorizedRedirect();
           void queryClient.invalidateQueries();
           void meQuery.refetch();
@@ -627,8 +702,9 @@ export default function App() {
           </nav>
 
           <div className="header-actions">
+            <CommandJump />
             <HeaderTriggerRunButton />
-            <HeaderHealthPill health={healthState} />
+            <HeaderHealthPill health={healthState} onRetry={() => void healthQuery.refetch()} />
             <Dropdown
               placement="bottomRight"
               trigger={["click"]}

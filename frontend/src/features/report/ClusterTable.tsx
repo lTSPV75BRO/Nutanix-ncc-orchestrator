@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Button,
   Card,
@@ -13,14 +13,18 @@ import {
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
+  CheckOutlined,
+  ClockCircleOutlined,
+  ClusterOutlined,
   CopyOutlined,
   ExpandAltOutlined,
+  ExportOutlined,
   LinkOutlined,
-  CheckOutlined,
 } from "@ant-design/icons";
 import { asArray, asRecord, displayClusterName, resolveClusterName } from "../../utils/report";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { notify } from "../../notify";
+import { formatDateTime, relativeTime } from "../../utils/datetime";
 
 type Props = {
   checksSnapshot: unknown;
@@ -69,6 +73,15 @@ type RowRecord = {
   isUnknownSeverity: boolean;
   detail: string;
   kb: string;
+  kbLinks: string[];
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt: string;
+  autoResolved: boolean;
+  extId: string;
+  rootCause: string;
+  serviceName: string;
+  clusterUUID: string;
   clusterVersion: string;
   nccVersion: string;
   isChanged: boolean;
@@ -97,6 +110,59 @@ function parseKB(detail: string): string {
 function kbLabel(url: string): string {
   const m = url.match(/\/kb\/(\d+)/i);
   return m ? `KB ${m[1]}` : "KB";
+}
+
+function collectKBUrls(raw: Record<string, unknown>, detail: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (value: string) => {
+    const url = value.trim();
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    out.push(url);
+  };
+  add(parseKB(detail));
+  const arts = raw.kb_articles ?? raw.kbArticles;
+  if (Array.isArray(arts)) {
+    for (const item of arts) {
+      if (typeof item === "string") add(item);
+      else if (item && typeof item === "object") {
+        const rec = asRecord(item);
+        add(String(rec.url ?? rec.uri ?? rec.link ?? rec.href ?? ""));
+      }
+    }
+  } else if (typeof arts === "string") {
+    add(arts);
+  }
+  return out;
+}
+
+function formatStamp(value: string): string {
+  if (!value || value === "—") return "—";
+  const abs = formatDateTime(value);
+  const rel = relativeTime(value);
+  if (rel === "—" || rel === abs) return abs;
+  return `${abs} (${rel})`;
+}
+
+function pcCopyText(row: RowRecord): string {
+  const lines = [
+    row.alert,
+    `Severity: ${row.isUnknownSeverity ? "UNKNOWN" : row.severity}`,
+    `Cluster: ${row.clusterName}${row.clusterIP ? ` (${row.clusterIP})` : ""}`,
+    `Entity: ${row.entityName}${row.entityType && row.entityType !== "—" ? ` (${row.entityType})` : ""}`,
+    `Status: ${row.status}`,
+    `Resolved: ${row.resolved}`,
+    `Acknowledged: ${row.acknowledged}`,
+    row.lastOccurred && row.lastOccurred !== "—" ? `Last occurred: ${formatDateTime(row.lastOccurred)}` : "",
+    row.serviceName ? `Service: ${row.serviceName}` : "",
+    row.alertType && row.alertType !== "—" ? `Alert type: ${row.alertType}` : "",
+    "",
+    row.detail || "",
+    row.rootCause && row.rootCause !== row.detail ? `\nRoot cause:\n${row.rootCause}` : "",
+    row.kbLinks.length ? `\nKB:\n${row.kbLinks.join("\n")}` : "",
+  ];
+  return lines.filter((line) => line !== "").join("\n").trim();
 }
 
 function normalizeCheckTitle(check: string): string {
@@ -152,6 +218,144 @@ function previewDetail(detail: string): string {
     .slice(0, 220);
 }
 
+function PCMetric({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="pc-alert-metric">
+      <div className="pc-alert-metric-label">{label}</div>
+      <div className="pc-alert-metric-value">{children}</div>
+    </div>
+  );
+}
+
+function PCAlertInspector({
+  row,
+  clusterNameMap,
+}: {
+  row: RowRecord;
+  clusterNameMap: Record<string, string>;
+}) {
+  const prismURL = clusterPrismURL(row.cluster, clusterNameMap, row.clusterName);
+  const clusterSubtitle = row.clusterIP && row.clusterIP !== row.clusterName ? row.clusterIP : "";
+  const showRootCause = Boolean(row.rootCause) && row.rootCause !== row.detail;
+  const timeline = [
+    { label: "Created", value: row.createdAt },
+    { label: "Last occurred", value: row.lastOccurred },
+    { label: "Updated", value: row.updatedAt },
+    { label: "Resolved", value: row.resolvedAt },
+  ].filter((item) => item.value && item.value !== "—");
+
+  return (
+    <div className="pc-alert-inspector">
+      <div className="pc-alert-metric-grid">
+        <PCMetric label="Status">{row.status !== "—" ? row.status : row.resolved === "Yes" ? "Resolved" : "Open"}</PCMetric>
+        <PCMetric label="Resolved">
+          <Tag color={row.resolved === "Yes" ? "success" : "processing"} style={{ margin: 0 }}>
+            {row.autoResolved ? "Auto resolved" : row.resolved}
+          </Tag>
+        </PCMetric>
+        <PCMetric label="Acknowledged">
+          <Tag color={row.acknowledged === "Yes" ? "success" : "default"} style={{ margin: 0 }}>
+            {row.acknowledged}
+          </Tag>
+        </PCMetric>
+        <PCMetric label="Impact">{row.impactType !== "—" ? row.impactType.replace(/_/g, " ") : "—"}</PCMetric>
+      </div>
+
+      <div className="pc-alert-pair">
+        <Card size="small" className="pc-alert-entity-card" title={<Space size={6}><ClusterOutlined /> Entity</Space>}>
+          <Typography.Text strong>{row.entityName || "—"}</Typography.Text>
+          <div>
+            <Typography.Text type="secondary">{row.entityType !== "—" ? row.entityType : "Unknown type"}</Typography.Text>
+          </div>
+        </Card>
+        <Card size="small" className="pc-alert-entity-card" title={<Space size={6}><ExportOutlined /> Cluster</Space>}>
+          {prismURL ? (
+            <a href={prismURL} target="_blank" rel="noreferrer">
+              {row.clusterName}
+            </a>
+          ) : (
+            <Typography.Text strong>{row.clusterName}</Typography.Text>
+          )}
+          {clusterSubtitle ? (
+            <div>
+              <Typography.Text type="secondary" className="mono">
+                {clusterSubtitle}
+              </Typography.Text>
+            </div>
+          ) : null}
+          {row.clusterUUID ? (
+            <Typography.Paragraph type="secondary" copyable={{ text: row.clusterUUID }} style={{ margin: "6px 0 0", fontSize: 12 }}>
+              {row.clusterUUID}
+            </Typography.Paragraph>
+          ) : null}
+          {prismURL ? (
+            <div style={{ marginTop: 8 }}>
+              <a href={prismURL} target="_blank" rel="noreferrer">
+                Open Prism
+              </a>
+            </div>
+          ) : null}
+        </Card>
+      </div>
+
+      {timeline.length > 0 ? (
+        <Card size="small" title={<Space size={6}><ClockCircleOutlined /> Timeline</Space>}>
+          <div className="pc-alert-timeline">
+            {timeline.map((item) => (
+              <div key={item.label} className="pc-alert-timeline-item">
+                <div className="pc-alert-metric-label">{item.label}</div>
+                <div>{formatStamp(item.value)}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      ) : null}
+
+      <Card size="small" title="Alert message">
+        <Typography.Paragraph className="pc-alert-message" style={{ margin: 0 }}>
+          {row.detail || "(no message)"}
+        </Typography.Paragraph>
+      </Card>
+
+      {showRootCause ? (
+        <Card size="small" title="Root cause">
+          <Typography.Paragraph className="pc-alert-message" style={{ margin: 0 }}>
+            {row.rootCause}
+          </Typography.Paragraph>
+        </Card>
+      ) : null}
+
+      {row.kbLinks.length > 0 ? (
+        <Card size="small" title="Knowledge base">
+          <Space size={[8, 8]} wrap>
+            {row.kbLinks.map((url) => (
+              <a key={url} href={url} target="_blank" rel="noreferrer">
+                <Tag color="processing" icon={<LinkOutlined />} style={{ margin: 0 }}>
+                  {kbLabel(url)}
+                </Tag>
+              </a>
+            ))}
+          </Space>
+        </Card>
+      ) : null}
+
+      <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }} title="Identifiers">
+        <Descriptions.Item label="Alert type">{row.alertType !== "—" ? row.alertType : "—"}</Descriptions.Item>
+        <Descriptions.Item label="Service">{row.serviceName || "—"}</Descriptions.Item>
+        <Descriptions.Item label="Alert ID">
+          {row.extId ? (
+            <Typography.Text copyable={{ text: row.extId }} className="mono">
+              {row.extId}
+            </Typography.Text>
+          ) : (
+            "—"
+          )}
+        </Descriptions.Item>
+      </Descriptions>
+    </div>
+  );
+}
+
 function displayPCStatus(raw: Record<string, unknown>): string {
   const status = String(raw.status ?? "").toUpperCase();
   if (status === "AUTO_RESOLVED" || raw.isAutoResolved === true || raw.auto_resolved === true) {
@@ -160,6 +364,48 @@ function displayPCStatus(raw: Record<string, unknown>): string {
   }
   if (status === "OPEN") return "—";
   return String(raw.status ?? "—").replace(/_/g, " ");
+}
+
+const ALERTS_TABLE_MIN_Y = 240;
+const ALERTS_TABLE_FALLBACK_Y = 620;
+
+function useAlertsTableScrollY(enabled: boolean, density: Density) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const [tableY, setTableY] = useState(ALERTS_TABLE_FALLBACK_Y);
+
+  useLayoutEffect(() => {
+    if (!enabled) return;
+    const host = hostRef.current;
+    if (!host) return;
+
+    const measure = () => {
+      const header =
+        host.querySelector<HTMLElement>(".ant-table-header") ??
+        host.querySelector<HTMLElement>(".ant-table-thead");
+      const pagination =
+        host.querySelector<HTMLElement>(".ant-table-pagination") ??
+        host.querySelector<HTMLElement>(".ant-pagination");
+      const headerH = header?.getBoundingClientRect().height ?? (density === "compact" ? 39 : 47);
+      const pagH = pagination?.getBoundingClientRect().height ?? 64;
+      const hostH = host.clientHeight;
+      if (hostH <= 0) {
+        setTableY(ALERTS_TABLE_FALLBACK_Y);
+        return;
+      }
+      setTableY(Math.max(ALERTS_TABLE_MIN_Y, Math.floor(hostH - headerH - pagH)));
+    };
+
+    measure();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    ro?.observe(host);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [enabled, density]);
+
+  return { hostRef, tableY };
 }
 
 export function ClusterTable({
@@ -244,7 +490,8 @@ export function ClusterTable({
       const severityRaw = String(raw.severity || "UNKNOWN").toUpperCase();
       const isUnknownSeverity = !["FAIL", "WARN", "ERR", "INFO"].includes(severityRaw);
       const severity = (isUnknownSeverity ? "ERR" : severityRaw) as Severity;
-      const detail = String(raw.detail || "");
+      const detail = String(raw.detail || raw.message || "");
+      const kbLinks = collectKBUrls(raw, detail);
       const diff = pickDiff(cluster, alert);
       const isChanged = Boolean(diff.new_fail || diff.resolved_fail || diff.severity_changed);
       const isFlaky = Boolean(fkeys[rowKey(cluster, alert)]);
@@ -268,7 +515,16 @@ export function ClusterTable({
         severity,
         isUnknownSeverity,
         detail,
-        kb: parseKB(detail),
+        kb: kbLinks[0] || "",
+        kbLinks,
+        createdAt: String(raw.created_at ?? raw.creationTime ?? ""),
+        updatedAt: String(raw.updated_at ?? raw.lastUpdatedTime ?? ""),
+        resolvedAt: String(raw.resolved_at ?? raw.resolvedTime ?? ""),
+        autoResolved: raw.auto_resolved === true || raw.isAutoResolved === true,
+        extId: String(raw.ext_id ?? raw.extId ?? ""),
+        rootCause: String(raw.root_cause ?? raw.rootCauseAnalysis ?? ""),
+        serviceName: String(raw.service_name ?? raw.serviceName ?? ""),
+        clusterUUID: String(raw.cluster_uuid ?? raw.clusterUUID ?? ""),
         clusterVersion: String(raw.clusterVersion || raw.cluster_version || ""),
         nccVersion: String(raw.nccVersion || raw.ncc_version || ""),
         isChanged,
@@ -340,6 +596,8 @@ export function ClusterTable({
     pcResolvedFilter,
     compareMode,
   ]);
+
+  const { hostRef, tableY } = useAlertsTableScrollY(rows.length > 0, density);
 
   const severityCounts = useMemo(() => {
     const counts: Record<Severity, number> = { FAIL: 0, WARN: 0, ERR: 0, INFO: 0, UNKNOWN: 0 };
@@ -532,7 +790,7 @@ export function ClusterTable({
       key: "lastOccurred",
       width: 190,
       sorter: (a, b) => a.lastOccurredTime - b.lastOccurredTime,
-      render: (value: string) => value === "—" ? value : new Date(value).toLocaleString(),
+      render: (value: string) => (value === "—" ? value : formatDateTime(value)),
     },
     {
       title: "Status",
@@ -561,7 +819,7 @@ export function ClusterTable({
     try {
       await navigator.clipboard.writeText(text);
       setCopyState("copied");
-      notify.success("Detail copied to clipboard.");
+      notify.success("Alert copied to clipboard.");
       setTimeout(() => setCopyState("idle"), 1600);
     } catch {
       notify.warning("Could not access clipboard.");
@@ -590,18 +848,18 @@ export function ClusterTable({
     <Card className="alerts-card page-card">
       <div className="alerts-header">
         <div>
-          <Typography.Title level={4} className="section-title" style={{ marginBottom: 4 }}>
+          <Typography.Title level={4} className="tile-title">
             Alerts
           </Typography.Title>
-          <Typography.Text type="secondary">
+          <Typography.Text type="secondary" className="tile-subtitle">
             {totalRows.toLocaleString()} {totalRows === 1 ? "alert" : "alerts"} match current filters
           </Typography.Text>
         </div>
         <Space size={[8, 8]} wrap className="alerts-summary-pills">
-          <Tag color="error">FAIL {fail}</Tag>
-          <Tag color="warning">WARN {warn}</Tag>
-          <Tag color="volcano">ERR {err}</Tag>
-          <Tag color="processing">INFO {info}</Tag>
+          <Tag color="error" className="severity-pill">FAIL {fail}</Tag>
+          <Tag color="warning" className="severity-pill">WARN {warn}</Tag>
+          <Tag color="volcano" className="severity-pill">ERR {err}</Tag>
+          <Tag color="processing" className="severity-pill">INFO {info}</Tag>
           {unknown > 0 ? (
             <Tag className="severity-pill severity-pill-unknown" color="default">
               UNKNOWN {unknown}
@@ -631,30 +889,32 @@ export function ClusterTable({
           }
         />
       ) : (
-        <Table<RowRecord>
-          virtual
-          className="alerts-table"
-          tableLayout="fixed"
-          rowKey="key"
-          columns={columns}
-          dataSource={rows}
-          rowClassName={(_, index) => (index % 2 === 0 ? "alerts-row-even" : "alerts-row-odd")}
-          onRow={(row) => ({ onClick: () => setDrawerRow(row), style: { cursor: "pointer" } })}
-          pagination={{
-            current: page,
-            pageSize: rowsPerPage,
-            total: rows.length,
-            onChange: (nextPage, nextPageSize) => {
-              setPage(nextPage);
-              if (nextPageSize && nextPageSize !== rowsPerPage) setRowsPerPage(nextPageSize);
-            },
-            showSizeChanger: true,
-            pageSizeOptions: [50, 100, 200, 500],
-            showTotal: (total, range) => `${range[0]}–${range[1]} of ${total}`,
-          }}
-          size={density === "compact" ? "small" : "middle"}
-          scroll={{ x: 1200, y: 620 }}
-        />
+        <div className="alerts-table-host" ref={hostRef} data-scroll-y={tableY}>
+          <Table<RowRecord>
+            virtual
+            className="alerts-table"
+            tableLayout="fixed"
+            rowKey="key"
+            columns={columns}
+            dataSource={rows}
+            rowClassName={(_, index) => (index % 2 === 0 ? "alerts-row-even" : "alerts-row-odd")}
+            onRow={(row) => ({ onClick: () => setDrawerRow(row), style: { cursor: "pointer" } })}
+            pagination={{
+              current: page,
+              pageSize: rowsPerPage,
+              total: rows.length,
+              onChange: (nextPage, nextPageSize) => {
+                setPage(nextPage);
+                if (nextPageSize && nextPageSize !== rowsPerPage) setRowsPerPage(nextPageSize);
+              },
+              showSizeChanger: true,
+              pageSizeOptions: [50, 100, 200, 500],
+              showTotal: (total, range) => `${range[0]}–${range[1]} of ${total}`,
+            }}
+            size={density === "compact" ? "small" : "middle"}
+            scroll={{ x: 1200, y: tableY }}
+          />
+        </div>
       )}
 
       <Drawer
@@ -682,16 +942,27 @@ export function ClusterTable({
           ) : null
         }
         onClose={() => setDrawerRow(null)}
-        width={720}
+        width={drawerRow?.source === "PC" ? 840 : 720}
         extra={
           drawerRow ? (
-            <Space size={8}>
+            <Space size={8} wrap>
               <Button
                 icon={copyState === "copied" ? <CheckOutlined /> : <CopyOutlined />}
-                onClick={() => copyDetail(drawerRow.detail || "")}
+                onClick={() =>
+                  copyDetail(drawerRow.source === "PC" ? pcCopyText(drawerRow) : drawerRow.detail || "")
+                }
               >
-                {copyState === "copied" ? "Copied" : "Copy detail"}
+                {copyState === "copied" ? "Copied" : drawerRow.source === "PC" ? "Copy alert" : "Copy detail"}
               </Button>
+              {drawerRow.source === "PC" && clusterPrismURL(drawerRow.cluster, clusterNameMap, drawerRow.clusterName) ? (
+                <Button
+                  icon={<ExportOutlined />}
+                  href={clusterPrismURL(drawerRow.cluster, clusterNameMap, drawerRow.clusterName)}
+                  target="_blank"
+                >
+                  Open Prism
+                </Button>
+              ) : null}
               {drawerRow.kb ? (
                 <Button type="primary" icon={<LinkOutlined />} href={drawerRow.kb} target="_blank">
                   {kbLabel(drawerRow.kb)}
@@ -702,52 +973,10 @@ export function ClusterTable({
         }
       >
         {drawerRow ? (
-          <Space orientation="vertical" size={16} style={{ width: "100%" }}>
-            {drawerRow.source === "PC" ? (
-              <Space orientation="vertical" size={12} style={{ width: "100%" }}>
-                <Card
-                  size="small"
-                  title="Alert overview"
-                  style={{ borderRadius: 8, background: "var(--ant-color-fill-quaternary)" }}
-                >
-                  <Space size={[8, 8]} wrap>
-                    <Tag color={SEVERITY_TAG_COLOR[drawerRow.severity]}>
-                      Severity: {drawerRow.isUnknownSeverity ? "UNKNOWN" : drawerRow.severity}
-                    </Tag>
-                    <Tag color={drawerRow.resolved === "Yes" ? "success" : "processing"}>
-                      Resolved: {drawerRow.resolved}
-                    </Tag>
-                    <Tag color={drawerRow.acknowledged === "Yes" ? "success" : "default"}>
-                      Acknowledged: {drawerRow.acknowledged}
-                    </Tag>
-                  </Space>
-                </Card>
-                <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }} title="Alert information">
-                  <Descriptions.Item label="Alert Type">{drawerRow.alertType}</Descriptions.Item>
-                  <Descriptions.Item label="Impact Type">{drawerRow.impactType}</Descriptions.Item>
-                  <Descriptions.Item label="Entity Name">{drawerRow.entityName}</Descriptions.Item>
-                  <Descriptions.Item label="Entity Type">{drawerRow.entityType}</Descriptions.Item>
-                  <Descriptions.Item label="Cluster">
-                    {clusterPrismURL(drawerRow.cluster, clusterNameMap, drawerRow.clusterName) ? (
-                      <a
-                        href={clusterPrismURL(drawerRow.cluster, clusterNameMap, drawerRow.clusterName)}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {drawerRow.clusterName}
-                      </a>
-                    ) : (
-                      drawerRow.clusterName
-                    )}
-                  </Descriptions.Item>
-                  <Descriptions.Item label="Last Occurred">
-                    {drawerRow.lastOccurred === "—" ? "—" : new Date(drawerRow.lastOccurred).toLocaleString()}
-                  </Descriptions.Item>
-                  <Descriptions.Item label="Status">{drawerRow.status}</Descriptions.Item>
-                  <Descriptions.Item label="Resolved">{drawerRow.resolved}</Descriptions.Item>
-                </Descriptions>
-              </Space>
-            ) : (
+          drawerRow.source === "PC" ? (
+            <PCAlertInspector row={drawerRow} clusterNameMap={clusterNameMap} />
+          ) : (
+            <Space orientation="vertical" size={16} style={{ width: "100%" }}>
               <Space size={6} wrap>
                 <Typography.Text strong>Cluster:</Typography.Text>
                 <Typography.Text>{drawerRow.clusterName}</Typography.Text>
@@ -757,18 +986,18 @@ export function ClusterTable({
                 {drawerRow.isFlaky ? <Tag color="purple">flaky</Tag> : null}
                 {drawerRow.logName ? <Tooltip title={drawerRow.logPath}><Tag>{drawerRow.logName}</Tag></Tooltip> : null}
               </Space>
-            )}
-            <Card
-              size="small"
-              title="Alert detail"
-              style={{ borderRadius: 8 }}
-              styles={{ body: { background: "rgba(0, 0, 0, 0.02)" } }}
-            >
+              <Card
+                size="small"
+                title="Alert detail"
+                style={{ borderRadius: 8 }}
+                styles={{ body: { background: "rgba(0, 0, 0, 0.02)" } }}
+              >
                 <Typography.Paragraph style={{ margin: 0, whiteSpace: "pre-wrap" }}>
                   {drawerRow.detail || "(no detail)"}
                 </Typography.Paragraph>
-            </Card>
-          </Space>
+              </Card>
+            </Space>
+          )
         ) : null}
       </Drawer>
     </Card>

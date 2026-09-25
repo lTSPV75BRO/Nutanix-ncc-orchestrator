@@ -49,6 +49,7 @@ function toAntThemeConfig(theme: AppThemeKey): ThemeConfig {
         colorBorder: "#e4e4e7",
         colorBorderSecondary: "#f4f4f5",
         borderRadius: 10,
+        fontFamily: "var(--app-font-family)",
       },
       components: {
         Card: { headerBg: "#fafafa" },
@@ -74,6 +75,7 @@ function toAntThemeConfig(theme: AppThemeKey): ThemeConfig {
         colorTextPlaceholder: "#90a6c6",
         colorBorder: "#334155",
         borderRadius: 6,
+        fontFamily: "var(--app-font-family)",
       },
       components: {
         Card: { headerBg: "#1e293b" },
@@ -106,6 +108,7 @@ function toAntThemeConfig(theme: AppThemeKey): ThemeConfig {
       colorBorder: "#262626",
       colorBorderSecondary: "#1f1f1f",
       borderRadius: 10,
+      fontFamily: "var(--app-font-family)",
     },
     components: {
       Card: { headerBg: "#171717" },

@@ -79,11 +79,25 @@ Settings), the same way a Linux `v2-start` does.
   `--login-mode on`. Image-tag env vars (`NCC_IMAGE_TAG`,
   `NCC_ORCHESTRATOR_IMAGE_TAG`, `NCC_UI_IMAGE_TAG`) drive installed-component
   versions so the API image is not expected to contain `ncc-ui-server`.
+- **Settings jump palette (⌘K / Ctrl+K).** Jump to TLS, users, LDAP/SSO,
+  backups, health, and other Settings tabs. Destinations use
+  `/settings?tab=&focus=` and scroll the matching card into view.
+- **Shareable dashboard URL.** Filter state (NCC/PC source, severity, cluster,
+  search, compare mode) is the address bar; Copy link copies a URL that
+  restores the same view, the same way Insights uses KB links.
+- **Richer Prism Central alert inspector.** Expanding a PC alert shows
+  status, entity/cluster, timeline, message, root cause, KB articles, and
+  identifiers (not just a tag dump). `GET /api/v1/alerts` now keeps
+  `root_cause`, `ext_id`, `service_name`, and flattened `kb_articles`.
 
 ### Changed
 
 - **Alerts tables omit the Source column.** NCC vs PC is selected by the
   dashboard toggle; each source keeps its own column layout.
+- **Dashboard visual system.** Hero, filter toolbar, and Alerts tiles share
+  the same title, statistic, pill, and card tokens (padding, radius, tabular
+  figures). The Alerts table grows with leftover viewport height instead of a
+  fixed 620px scroll area, and still scrolls internally on short screens.
 - **Host/VM JWT secret still optional.** An unset `NCC_JWT_SECRET` on a
   non-Kubernetes process still mints an in-memory key and logs a replica
   warning. Kubernetes refuses to start without the shared secret.
@@ -116,6 +130,15 @@ Settings), the same way a Linux `v2-start` does.
 - **Persistent Kubernetes configuration edits.** The API and runner now share
   a PVC-backed config file seeded from the ConfigMap only when absent, so
   Settings changes survive API restarts and apply to future CronJob runs.
+- **Login splash no longer hangs after Generate cert.** `/auth/me` and `/health`
+  time out after 8s; the splash shows Retry / Sign in after 6s instead of an
+  infinite spinner. Header health is the API reached through this UI and is
+  clickable to retry.
+- **HTTP login warns when Secure cookies cannot stick.** Non-localhost HTTP
+  shows a link to the HTTPS URL plus fingerprint / download for the
+  self-signed UI certificate (`GET /api/v1/tls/public`, PEM only, no key).
+- **Empty dashboard points at Config.** First-run empty state links to
+  Settings → Config as well as Runs.
 
 ## [2.1.1] - 2026-08-17
 

@@ -41,6 +41,7 @@ import type {
   PersonalToken,
   CreatedToken,
   TLSPolicy,
+  PublicTLSInfo,
   TLSApplyResult,
   UpdateStatus,
   UpdateJob,
@@ -88,6 +89,7 @@ const AUTH_PUBLIC_PATHS = new Set([
   "/api/v1/auth/me",
   "/api/v1/auth/forgot-password",
   "/api/v1/health",
+  "/api/v1/tls/public",
 ]);
 
 let unauthorizedRedirecting = false;
@@ -164,47 +166,31 @@ function buildAuditPath(opts?: AuditQuery): string {
   return params.size > 0 ? `/api/v1/audit?${params.toString()}` : "/api/v1/audit";
 }
 
-async function callApi<T>(path: string, init?: RequestInit): Promise<T> {
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), 30000);
-  const response = await apiFetch(path, {
-    ...init,
-    signal: ctl.signal,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-  }).finally(() => clearTimeout(timer));
-  const contentType = (response.headers.get("content-type") || "").toLowerCase();
-  if (!contentType.includes("application/json")) {
-    const textBody = (await response.text().catch(() => "")).trim();
-    const snippet = textBody ? `\n${textBody.slice(0, 600)}` : "";
-    throw new ApiError(
-      `unexpected response content-type: ${contentType || "unknown"}${snippet}`,
-      response.status,
-      undefined,
-    );
-  }
-  const payload = (await response.json().catch(() => ({}))) as Envelope<T>;
-  if (!response.ok || !payload.success) {
-    throw new ApiError(payload.error ?? response.statusText, response.status, payload.data);
-  }
-  return (payload.data ?? ({} as T)) as T;
+function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === "AbortError";
 }
 
-// callApiEnvelope is like callApi but returns the full envelope so callers can
-// read the server-provided `message` (e.g. the admin self-reset guidance).
-async function callApiEnvelope<T>(path: string, init?: RequestInit): Promise<Envelope<T>> {
+async function requestJSON<T>(path: string, init?: RequestInit, timeoutMs = 30_000): Promise<Envelope<T>> {
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), 30000);
-  const response = await apiFetch(path, {
-    ...init,
-    signal: ctl.signal,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-  }).finally(() => clearTimeout(timer));
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  let response: Response;
+  try {
+    response = await apiFetch(path, {
+      ...init,
+      signal: ctl.signal,
+      headers: {
+        "Content-Type": "application/json",
+        ...(init?.headers ?? {}),
+      },
+    });
+  } catch (err) {
+    if (isAbortError(err)) {
+      throw new ApiError("The API did not answer through this UI in time", 408, undefined);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   const contentType = (response.headers.get("content-type") || "").toLowerCase();
   if (!contentType.includes("application/json")) {
     const textBody = (await response.text().catch(() => "")).trim();
@@ -220,6 +206,17 @@ async function callApiEnvelope<T>(path: string, init?: RequestInit): Promise<Env
     throw new ApiError(payload.error ?? response.statusText, response.status, payload.data);
   }
   return payload;
+}
+
+async function callApi<T>(path: string, init?: RequestInit, timeoutMs = 30_000): Promise<T> {
+  const payload = await requestJSON<T>(path, init, timeoutMs);
+  return (payload.data ?? ({} as T)) as T;
+}
+
+// callApiEnvelope is like callApi but returns the full envelope so callers can
+// read the server-provided `message` (e.g. the admin self-reset guidance).
+async function callApiEnvelope<T>(path: string, init?: RequestInit): Promise<Envelope<T>> {
+  return requestJSON<T>(path, init);
 }
 
 function tryParseJSON(raw: string, fallback: unknown): unknown {
@@ -263,7 +260,8 @@ async function loadReportDataFallback(): Promise<ReportData> {
 }
 
 export const api = {
-  health: () => callApi<HealthData>("/api/v1/health"),
+  health: () => callApi<HealthData>("/api/v1/health", undefined, 8_000),
+  tlsPublic: () => callApi<PublicTLSInfo>("/api/v1/tls/public", undefined, 8_000),
   alerts: (force = false, resolved: "No" | "Yes" | "all" = "No") =>
     callApi<PCAlertsData>(
       `/api/v1/alerts?resolved=${encodeURIComponent(resolved)}${force ? "&refresh=1" : ""}`,
@@ -400,7 +398,7 @@ export const api = {
     }
     return response.text();
   },
-  me: () => callApi<MeData>("/api/v1/auth/me"),
+  me: () => callApi<MeData>("/api/v1/auth/me", undefined, 8_000),
   login: (username: string, password: string) =>
     callApi<LoginData>("/api/v1/auth/login", {
       method: "POST",

@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"net"
@@ -64,7 +67,7 @@ func tlsPolicyView(p *tlsPolicy) map[string]interface{} {
 	if p == nil {
 		return map[string]interface{}{"https_enabled": false, "managed_by": "stack", "mutation_supported": true}
 	}
-	return map[string]interface{}{
+	view := map[string]interface{}{
 		"https_enabled":      p.HTTPSEnabled,
 		"subject":            p.Subject,
 		"issuer":             p.Issuer,
@@ -75,6 +78,120 @@ func tlsPolicyView(p *tlsPolicy) map[string]interface{} {
 		"managed_by":         "stack",
 		"mutation_supported": true,
 	}
+	if p.CertPath != "" {
+		if fp, selfSigned, ok := fingerprintFromCertFile(p.CertPath); ok {
+			view["fingerprint_sha256"] = fp
+			view["self_signed"] = selfSigned
+		}
+	}
+	return view
+}
+
+// handlePublicTLS is unauthenticated GET /api/v1/tls/public. It returns the
+// UI leaf certificate (PEM) plus a Chrome-style SHA-256 fingerprint so the
+// login page can offer Download / Copy without exposing the private key.
+func (s *apiServer) handlePublicTLS(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	httpsOn := s.capabilities.Kubernetes
+	if s.users != nil {
+		if p := s.users.getTLSPolicy(); p != nil && p.HTTPSEnabled {
+			httpsOn = true
+		}
+	}
+	certPath, _, ok := selfsigned.ActivePaths(s.tlsMaterialDir())
+	if !ok && s.users != nil {
+		if p := s.users.getTLSPolicy(); p != nil && strings.TrimSpace(p.CertPath) != "" {
+			if _, err := os.Stat(p.CertPath); err == nil {
+				certPath = p.CertPath
+				ok = true
+			}
+		}
+	}
+	if !ok {
+		msg := "No UI certificate file is available to download yet."
+		if httpsOn {
+			msg = "HTTPS is enabled but the certificate is not on disk yet. Reload after the UI finishes minting it."
+		}
+		writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
+			"https_enabled": httpsOn,
+			"message":       msg,
+		}})
+		return
+	}
+	pemBytes, err := os.ReadFile(certPath)
+	if err != nil {
+		writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
+			"https_enabled": httpsOn,
+			"message":       "The UI certificate could not be read.",
+		}})
+		return
+	}
+	leaf, fp, selfSigned, ok := parseLeafCertificate(pemBytes)
+	if !ok {
+		writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
+			"https_enabled": httpsOn,
+			"message":       "The UI certificate file is not a valid PEM certificate.",
+		}})
+		return
+	}
+	sans := append([]string(nil), leaf.DNSNames...)
+	for _, ip := range leaf.IPAddresses {
+		sans = append(sans, ip.String())
+	}
+	writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
+		"https_enabled":      true,
+		"fingerprint_sha256": fp,
+		"subject":            leaf.Subject.String(),
+		"issuer":             leaf.Issuer.String(),
+		"not_before":         leaf.NotBefore.UTC().Format(time.RFC3339),
+		"not_after":          leaf.NotAfter.UTC().Format(time.RFC3339),
+		"dns_names":          sans,
+		"self_signed":        selfSigned,
+		"cert_pem":           string(pemBytes),
+	}})
+}
+
+func fingerprintFromCertFile(certPath string) (fingerprint string, selfSigned bool, ok bool) {
+	pemBytes, err := os.ReadFile(certPath)
+	if err != nil {
+		return "", false, false
+	}
+	_, fp, selfSigned, ok := parseLeafCertificate(pemBytes)
+	return fp, selfSigned, ok
+}
+
+func parseLeafCertificate(pemBytes []byte) (leaf *x509.Certificate, fingerprint string, selfSigned bool, ok bool) {
+	block, _ := pem.Decode(pemBytes)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, "", false, false
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, "", false, false
+	}
+	return cert, sha256FingerprintColon(block.Bytes), bytes.Equal(cert.RawSubject, cert.RawIssuer), true
+}
+
+// sha256FingerprintColon is the SHA-256 digest of the DER certificate with
+// colon-separated uppercase hex, matching Chrome's certificate viewer.
+func sha256FingerprintColon(der []byte) string {
+	sum := sha256.Sum256(der)
+	hexed := strings.ToUpper(hex.EncodeToString(sum[:]))
+	if len(hexed) < 2 {
+		return hexed
+	}
+	var b strings.Builder
+	b.Grow(len(hexed) + len(hexed)/2 - 1)
+	for i := 0; i < len(hexed); i += 2 {
+		if i > 0 {
+			b.WriteByte(':')
+		}
+		b.WriteString(hexed[i : i+2])
+	}
+	return b.String()
 }
 
 // liveTLSPolicyView is GET /settings/tls: persisted policy, then the cert

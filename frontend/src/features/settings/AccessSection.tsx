@@ -178,6 +178,7 @@ function UsersCard() {
   return (
     <Card
       className="page-card"
+      id="settings-users"
       title="Local accounts"
       extra={
         <Space>
@@ -1058,6 +1059,7 @@ function BackupRestoreCard() {
   return (
     <Card
       className="page-card"
+      id="settings-backup"
       title={
         <Space>
           <DatabaseOutlined /> Backup &amp; restore
@@ -1789,7 +1791,7 @@ function ExternalAuthCard() {
   const [provider, setProvider] = useState<"saml" | "ldap">("saml");
 
   return (
-    <Card className="page-card" title="External authentication">
+    <Card className="page-card" id="settings-ldap" title="External authentication">
       <Space orientation="vertical" size={16} style={{ width: "100%" }}>
         <div>
           <Space align="center" wrap>
@@ -2400,9 +2402,16 @@ function TLSCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
         title: nextScheme === "http" ? "Reverted to self-signed HTTPS" : "Certificate updated",
         content:
           nextScheme === "https"
-            ? "UI servers will use the new certificate within a few seconds. If it is self-signed, accept the browser warning and reload."
-            : "HTTPS stays enabled with the stack-managed self-signed certificate. Reload if the browser still shows the previous certificate.",
+            ? "UI servers will use the new certificate within a few seconds. If it is self-signed, accept the browser warning. This page will reload."
+            : "HTTPS stays enabled with the stack-managed self-signed certificate. This page will reload.",
+        okText: "Reload now",
+        onOk: () => {
+          window.location.reload();
+        },
       });
+      window.setTimeout(() => {
+        window.location.reload();
+      }, 2500);
     } else {
       Modal.warning({
         title: result.tls.https_enabled ? "Certificate installed" : "HTTPS disabled",
@@ -2455,6 +2464,7 @@ function TLSCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
   return (
     <Card
       className="page-card"
+      id="settings-tls"
       title={
         <Space>
           <SafetyCertificateOutlined /> HTTPS / TLS
@@ -2563,6 +2573,40 @@ function TLSCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
                     <Tag key={d}>{d}</Tag>
                   ))}
                 </span>
+              ) : null}
+              {cfg?.fingerprint_sha256 ? (
+                <span>
+                  <Typography.Text type="secondary">SHA-256: </Typography.Text>
+                  <Typography.Text code copyable={{ text: cfg.fingerprint_sha256 }}>
+                    {cfg.fingerprint_sha256}
+                  </Typography.Text>
+                </span>
+              ) : null}
+              {cfg?.self_signed ? (
+                <Button
+                  size="small"
+                  icon={<DownloadOutlined />}
+                  onClick={async () => {
+                    try {
+                      const pub = await api.tlsPublic();
+                      if (!pub.cert_pem) {
+                        notify.warning("Certificate PEM is not available to download yet.");
+                        return;
+                      }
+                      const blob = new Blob([pub.cert_pem], { type: "application/x-x509-ca-cert" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = "ncc-ui.crt";
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    } catch (e) {
+                      notifyError(e, "Could not download the UI certificate");
+                    }
+                  }}
+                >
+                  Download certificate
+                </Button>
               ) : null}
             </Space>
           }

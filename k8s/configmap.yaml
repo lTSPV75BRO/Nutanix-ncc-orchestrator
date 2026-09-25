@@ -3,6 +3,9 @@ kind: ConfigMap
 metadata:
   name: ncc-v2-config
   namespace: ncc-orchestrator-v2
+# ui-origin must be the HTTPS URL browsers use (LoadBalancer IP or DNS name).
+# After the first apply: kubectl get svc ncc-v2-ui -n ncc-orchestrator-v2
+# then set this to https://<EXTERNAL-IP> and apply again (or patch the ConfigMap).
 data:
   ui-origin: "https://ncc.example.com"
   config.yaml: |

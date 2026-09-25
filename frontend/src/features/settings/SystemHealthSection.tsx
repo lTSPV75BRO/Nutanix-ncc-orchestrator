@@ -275,7 +275,7 @@ export function SystemHealthSection() {
         details: processSnapshot,
       },
       { key: "schedule", label: "Schedule configured", ok: scheduleOk, fix: "/settings?tab=schedule" },
-      { key: "backups", label: "Backups available", ok: hasBackup, fix: "/settings?tab=access" },
+      { key: "backups", label: "Backups available", ok: hasBackup, fix: "/settings?tab=maintenance&focus=backup" },
       { key: "runs", label: "No active long-running run", ok: noActiveRun, fix: "/settings?tab=runs" },
     ];
   }, [
@@ -315,14 +315,17 @@ export function SystemHealthSection() {
 
   if (diag.isLoading && !data) {
     return (
+      <div id="settings-health">
       <Card className="page-card">
         <Skeleton active paragraph={{ rows: 8 }} />
       </Card>
+      </div>
     );
   }
 
   if (diag.isError && !data) {
     return (
+      <div id="settings-health">
       <Card className="page-card">
         <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <Alert
@@ -339,10 +342,12 @@ export function SystemHealthSection() {
           </Space>
         </Space>
       </Card>
+      </div>
     );
   }
 
   return (
+    <div id="settings-health">
     <Space orientation="vertical" size={16} style={{ width: "100%" }}>
       <Card className="page-card">
         <div className="health-overview-head">
@@ -674,5 +679,6 @@ export function SystemHealthSection() {
         ))
       )}
     </Space>
+    </div>
   );
 }

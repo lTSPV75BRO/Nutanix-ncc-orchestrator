@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { ClusterTable } from "./ClusterTable";
 
@@ -49,5 +49,63 @@ describe("ClusterTable alert sources", () => {
     expect(screen.getByText("Last Occurred")).toBeInTheDocument();
     expect(screen.getByText("Status")).toBeInTheDocument();
     expect(screen.getByText("Impact Type")).toBeInTheDocument();
+  });
+
+  it("sizes the virtual alerts table from the host instead of a fixed 620px pane", () => {
+    render(
+      <ClusterTable
+        {...baseProps}
+        aggRows={[{ cluster: "ncc-a", check: "NCC finding", severity: "INFO" }]}
+        alertSource="NCC"
+      />,
+    );
+
+    const host = document.querySelector(".alerts-table-host");
+    expect(host).toBeTruthy();
+    const y = Number(host?.getAttribute("data-scroll-y"));
+    expect(Number.isFinite(y)).toBe(true);
+    expect(y).toBeGreaterThanOrEqual(240);
+  });
+
+  it("shows a richer inspector when a PC alert is expanded", () => {
+    render(
+      <ClusterTable
+        {...baseProps}
+        alertSource="PC"
+        clusterNameMap={{ "10.1.2.3": "lab-a" }}
+        pcAlerts={[
+          {
+            cluster: "lab-a",
+            cluster_ip: "10.1.2.3",
+            cluster_uuid: "aaaa-bbbb",
+            title: "Disk almost full",
+            severity: "FAIL",
+            detail: "Capacity is high",
+            root_cause: "CVM disk /home is 92% full",
+            entity_name: "node-1",
+            entity_type: "HOST",
+            impact_type: "STORAGE",
+            alert_type: "DiskUsageHigh",
+            service_name: "Stargate",
+            ext_id: "abc-123",
+            created_at: "2026-09-01T10:00:00Z",
+            last_occurred: "2026-09-01T11:00:00Z",
+            resolved: false,
+            acknowledged: false,
+            kb_articles: ["https://portal.nutanix.com/kb/1234"],
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Disk almost full"));
+    expect(screen.getByText("Alert message")).toBeInTheDocument();
+    expect(screen.getByText("Capacity is high")).toBeInTheDocument();
+    expect(screen.getByText("Root cause")).toBeInTheDocument();
+    expect(screen.getByText("CVM disk /home is 92% full")).toBeInTheDocument();
+    expect(screen.getByText("Timeline")).toBeInTheDocument();
+    expect(screen.getByText("Stargate")).toBeInTheDocument();
+    expect(screen.getAllByText("KB 1234").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Open Prism").length).toBeGreaterThan(0);
   });
 });

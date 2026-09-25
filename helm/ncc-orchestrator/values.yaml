@@ -37,12 +37,12 @@ ui:
   enabled: true
   replicas: 2
   service:
-    type: ClusterIP
+    type: LoadBalancer
     port: 80
   origin: https://ncc.example.com
 
 ingress:
-  enabled: true
+  enabled: false
   className: nginx
   host: ncc.example.com
   tlsSecret: ncc-v2-ui-tls

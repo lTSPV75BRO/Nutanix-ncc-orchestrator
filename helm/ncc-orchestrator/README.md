@@ -30,11 +30,13 @@ Keep `images.api.tag`, `images.ui.tag`, and `images.runner.tag` in lockstep.
 The API reports installed-component versions from those tags
 (`NCC_IMAGE_TAG` / `NCC_ORCHESTRATOR_IMAGE_TAG` / `NCC_UI_IMAGE_TAG`).
 
-HTTPS is terminated by the UI pods (self-signed on first start, BYO from
-Settings). Optional Ingress should passthrough or use an HTTPS backend:
+HTTPS is terminated by the UI LoadBalancer (self-signed on first start, BYO
+from Settings). Ingress is off by default (`ingress.enabled: false`). To add
+a hostname later:
 
 ```yaml
 ingress:
+  enabled: true
   className: nginx   # or kommander-traefik
   host: ncc.example.com
 ```

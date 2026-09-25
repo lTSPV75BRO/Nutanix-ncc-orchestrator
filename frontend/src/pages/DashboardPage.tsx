@@ -28,6 +28,7 @@ import {
   ClockCircleOutlined,
   ClearOutlined,
   CloseCircleOutlined,
+  CopyOutlined,
   ExclamationCircleOutlined,
   FilterOutlined,
   InfoCircleOutlined,
@@ -97,6 +98,7 @@ export function DashboardPage() {
   const [pcResolvedFilter, setPcResolvedFilter] = useState<"all" | "No" | "Yes">("No");
   const [loadFullReport, setLoadFullReport] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
+  const [filtersReady, setFiltersReady] = useState(false);
   const [tableSummary, setTableSummary] = useState<{
     total: number;
     fail: number;
@@ -107,34 +109,35 @@ export function DashboardPage() {
   } | null>(null);
 
   useEffect(() => {
-    const q = (searchParams.get("q") || "").trim();
-    const sev = (searchParams.get("sev") || "")
-      .split(",")
-      .map((s) => s.trim().toUpperCase())
-      .filter((s): s is Severity => ["FAIL", "WARN", "ERR", "INFO"].includes(s));
-    const mode = (searchParams.get("mode") || "").trim();
-    const source = (searchParams.get("source") || "").trim().toUpperCase();
-    const resolved = (searchParams.get("resolved") || "").trim();
-    const clusters = (searchParams.get("clusters") || "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (q && q !== filterText) setFilterText(q);
-    if (sev.length > 0 && sev.join(",") !== severityFilters.join(",")) setSeverityFilters(sev);
-    if (clusters.length > 0 && clusters.join(",") !== selectedClusters.join(",")) setSelectedClusters(clusters);
-    if ((mode === "all" || mode === "changed" || mode === "flaky") && mode !== compareMode) {
-      setCompareMode(mode);
+    const hasShare = ["q", "sev", "clusters", "mode", "source", "resolved"].some((k) => searchParams.has(k));
+    if (hasShare) {
+      setFilterText(searchParams.get("q") || "");
+      const sev = (searchParams.get("sev") || "")
+        .split(",")
+        .map((s) => s.trim().toUpperCase())
+        .filter((s): s is Severity => ["FAIL", "WARN", "ERR", "INFO"].includes(s));
+      setSeverityFilters(sev);
+      const clusters = (searchParams.get("clusters") || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      setSelectedClusters(clusters);
+      const mode = (searchParams.get("mode") || "").trim();
+      if (mode === "all" || mode === "changed" || mode === "flaky") setCompareMode(mode);
+      const source = (searchParams.get("source") || "").trim().toUpperCase();
+      if (source === "NCC" || source === "PC") setAlertSource(source);
+      const resolved = (searchParams.get("resolved") || "").trim();
+      if (resolved === "No" || resolved === "Yes" || resolved === "all") setPcResolvedFilter(resolved);
     }
-    if ((source === "NCC" || source === "PC") && source !== alertSource) setAlertSource(source);
-    if ((resolved === "No" || resolved === "Yes" || resolved === "all") && resolved !== pcResolvedFilter) {
-      setPcResolvedFilter(resolved);
-    }
-    // Mount/query driven sync.
+    setFiltersReady(true);
+    // URL is the source of truth for a shared/bookmarked dashboard.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+  }, []);
 
   useEffect(() => {
+    if (!filtersReady) return;
     const next = new URLSearchParams(searchParams);
+    next.set("source", alertSource.toLowerCase());
     if (filterText.trim()) next.set("q", filterText.trim());
     else next.delete("q");
     if (severityFilters.length > 0) next.set("sev", severityFilters.join(","));
@@ -143,14 +146,13 @@ export function DashboardPage() {
     else next.delete("clusters");
     if (compareMode !== "all") next.set("mode", compareMode);
     else next.delete("mode");
-    if (alertSource !== "NCC") next.set("source", alertSource.toLowerCase());
-    else next.delete("source");
     if (alertSource === "PC" && pcResolvedFilter !== "No") next.set("resolved", pcResolvedFilter);
     else next.delete("resolved");
     if (next.toString() !== searchParams.toString()) {
       setSearchParams(next, { replace: true });
     }
   }, [
+    filtersReady,
     filterText,
     severityFilters,
     selectedClusters,
@@ -160,6 +162,27 @@ export function DashboardPage() {
     searchParams,
     setSearchParams,
   ]);
+
+  const copyDashboardLink = async () => {
+    const u = new URL(window.location.href);
+    u.pathname = "/";
+    u.hash = "";
+    const next = new URLSearchParams();
+    next.set("source", alertSource.toLowerCase());
+    if (filterText.trim()) next.set("q", filterText.trim());
+    if (severityFilters.length > 0) next.set("sev", severityFilters.join(","));
+    if (selectedClusters.length > 0) next.set("clusters", selectedClusters.join(","));
+    if (compareMode !== "all") next.set("mode", compareMode);
+    if (alertSource === "PC" && pcResolvedFilter !== "No") next.set("resolved", pcResolvedFilter);
+    u.search = next.toString();
+    const link = u.toString();
+    try {
+      await navigator.clipboard.writeText(link);
+      notify.success("Dashboard link copied");
+    } catch {
+      notify.info({ message: "Copy this dashboard link", description: link, duration: 8 });
+    }
+  };
 
   const previewReport = useQuery({
     queryKey: ["report-data", "preview", PREVIEW_LIMIT],
@@ -451,7 +474,7 @@ export function DashboardPage() {
     // (lower CLS). Numbers render as "—" placeholders that swap to real values
     // in place without resizing their rows.
     return (
-      <Space orientation="vertical" size={16} style={{ width: "100%" }}>
+      <div className="dashboard-page">
         {/* HERO STRIP */}
         <Card className="page-card dashboard-hero">
           <Row gutter={[12, 12]} align="middle">
@@ -461,11 +484,11 @@ export function DashboardPage() {
                   className="health-pill"
                   style={{ background: "linear-gradient(135deg, #3f3f46, #27272ab0)" }}
                 >
-                  <div style={{ fontSize: 10, opacity: 0.9, letterSpacing: 1 }}>HEALTH</div>
-                  <div style={{ fontSize: 22, fontWeight: 700, lineHeight: 1 }}>—</div>
+                  <div className="health-pill-label">HEALTH</div>
+                  <div className="health-pill-value">—</div>
                 </div>
                 <div>
-                  <Typography.Title level={4} style={{ margin: 0 }}>
+                  <Typography.Title level={4} className="tile-title">
                     Operations Dashboard
                   </Typography.Title>
                   <Tag icon={<ClockCircleOutlined />} style={{ marginTop: 6 }}>
@@ -513,7 +536,7 @@ export function DashboardPage() {
 
         {/* FILTER TOOLBAR */}
         <Card className="page-card filter-toolbar-card">
-          <Typography.Title level={5} className="section-title" style={{ marginBottom: 8 }}>
+          <Typography.Title level={4} className="tile-title" style={{ marginBottom: 8 }}>
             Alert Filters
           </Typography.Title>
           <Skeleton.Input active block style={{ height: 32 }} />
@@ -526,15 +549,15 @@ export function DashboardPage() {
         </Card>
 
         {/* MAIN TABLE */}
-        <Card className="page-card">
+        <Card className="page-card alerts-card">
           <Skeleton active paragraph={{ rows: 8 }} />
         </Card>
-      </Space>
+      </div>
     );
   }
 
   return (
-    <Space orientation="vertical" size={16} style={{ width: "100%" }}>
+    <div className="dashboard-page">
       {/* HERO STRIP */}
       <Card className="page-card dashboard-hero">
         <Row gutter={[12, 12]} align="middle">
@@ -546,11 +569,11 @@ export function DashboardPage() {
                   background: `linear-gradient(135deg, ${healthGradeColor(weightedHealth)}, ${healthGradeColor(weightedHealth)}b0)`,
                 }}
               >
-                <div style={{ fontSize: 10, opacity: 0.9, letterSpacing: 1 }}>HEALTH</div>
-                <div style={{ fontSize: 22, fontWeight: 700, lineHeight: 1 }}>{weightedHealth.toFixed(1)}%</div>
+                <div className="health-pill-label">HEALTH</div>
+                <div className="health-pill-value">{weightedHealth.toFixed(1)}%</div>
               </div>
               <div>
-                <Typography.Title level={4} style={{ margin: 0 }}>
+                <Typography.Title level={4} className="tile-title">
                   Operations Dashboard
                 </Typography.Title>
                 <Tooltip title={runTimestamp || "no timestamp"}>
@@ -673,22 +696,22 @@ export function DashboardPage() {
       )}
 
       {/* FILTER TOOLBAR */}
-      <Card
-        className="page-card filter-toolbar-card"
-        bordered={false}
-        style={{ borderRadius: 12, boxShadow: "0 2px 8px rgba(0, 0, 0, 0.04)" }}
-        styles={{ body: { padding: "20px 24px" } }}
-      >
-        <Flex align="center" justify="space-between" style={{ marginBottom: 16 }}>
+      <Card className="page-card filter-toolbar-card">
+        <Flex align="center" justify="space-between" className="filter-toolbar-head">
           <Flex align="center" gap={8}>
-            <FilterOutlined style={{ color: "#1677ff", fontSize: 16 }} />
-            <Typography.Title level={5} style={{ margin: 0, fontWeight: 600 }}>Alert Filters</Typography.Title>
+            <FilterOutlined className="filter-toolbar-icon" />
+            <Typography.Title level={4} className="tile-title">Alert Filters</Typography.Title>
           </Flex>
-          {filtersActive ? (
-            <Button type="text" danger icon={<ClearOutlined />} onClick={clearFilters} size="small">
-              Reset filters
+          <Flex align="center" gap={8}>
+            {filtersActive ? (
+              <Button type="text" danger icon={<ClearOutlined />} onClick={clearFilters} size="small">
+                Reset filters
+              </Button>
+            ) : null}
+            <Button type="text" icon={<CopyOutlined />} onClick={() => void copyDashboardLink()} size="small">
+              Copy link
             </Button>
-          ) : null}
+          </Flex>
         </Flex>
         <Flex gap={12} wrap="wrap" align="center">
           <div style={{ flex: "1 1 280px", minWidth: 260 }}>
@@ -697,14 +720,14 @@ export function DashboardPage() {
               name="alerts-search"
               aria-label="Search alerts"
               allowClear
-              prefix={<SearchOutlined style={{ color: "#bfbfbf" }} />}
+              prefix={<SearchOutlined className="filter-control-icon" />}
               value={filterText}
               onChange={(e) => setFilterText(e.target.value)}
               placeholder="Search alerts (e.g. cluster:10.1)"
               autoComplete="off"
               suffix={
                 <Tooltip title={<div style={{ fontSize: 12 }}><strong>Supported tokens:</strong><br /><code>sev:FAIL</code> <code>cluster:10.1</code> <code>changed:true</code> <code>flaky:true</code></div>}>
-                  <InfoCircleOutlined style={{ color: "#bfbfbf", cursor: "pointer" }} />
+                  <InfoCircleOutlined className="filter-control-icon" style={{ cursor: "pointer" }} />
                 </Tooltip>
               }
             />
@@ -739,20 +762,20 @@ export function DashboardPage() {
           </div>
         </Flex>
         <Flex align="center" gap={8} wrap="wrap" style={{ marginTop: 16 }}>
-          <Typography.Text type="secondary" style={{ fontSize: 13, marginRight: 4 }}>Severity:</Typography.Text>
-          <Tag.CheckableTag checked={severityFilters.length === 0} onChange={(checked) => checked && setSeverityFilters([])} style={{ borderRadius: 4, padding: "2px 10px" }}>
+          <Typography.Text type="secondary" className="tile-subtitle" style={{ marginRight: 4 }}>Severity:</Typography.Text>
+          <Tag.CheckableTag checked={severityFilters.length === 0} onChange={(checked) => checked && setSeverityFilters([])}>
             ALL
           </Tag.CheckableTag>
           {SEVERITY_META.map((sm) => (
-            <Tag.CheckableTag key={sm.key} checked={severityFilters.includes(sm.key)} onChange={() => toggleSeverity(sm.key)} style={{ borderRadius: 4, padding: "2px 10px" }}>
+            <Tag.CheckableTag key={sm.key} checked={severityFilters.includes(sm.key)} onChange={() => toggleSeverity(sm.key)}>
               <Space size={4}>{sm.icon}<span>{sm.label}</span></Space>
             </Tag.CheckableTag>
           ))}
         </Flex>
-        <Divider style={{ margin: "16px 0" }} />
+        <Divider className="filter-toolbar-divider" />
         <Flex align="center" justify="space-between" wrap="wrap" gap={16}>
           <Flex align="center" gap={12}>
-            <Typography.Text strong style={{ fontSize: 13 }}>Alert Type:</Typography.Text>
+            <Typography.Text strong className="filter-toolbar-label">Alert Type:</Typography.Text>
             <Segmented aria-label="Alert source" size="middle" value={alertSource} onChange={(value) => setAlertSource(value as AlertSource)} options={[
               { label: "NCC", value: "NCC" },
               { label: "PC", value: "PC" },
@@ -760,7 +783,7 @@ export function DashboardPage() {
           </Flex>
           {alertSource === "PC" ? (
             <Flex align="center" gap={8}>
-              <Typography.Text type="secondary" style={{ fontSize: 13 }}>PC Alerts Filter:</Typography.Text>
+              <Typography.Text type="secondary" className="tile-subtitle">PC Alerts Filter:</Typography.Text>
               <Select aria-label="PC resolved filter" value={pcResolvedFilter} onChange={(value) => setPcResolvedFilter(value as "all" | "No" | "Yes")} style={{ width: 160 }} options={[
                 { value: "No", label: "Resolved: No" },
                 { value: "Yes", label: "Resolved: Yes" },
@@ -796,7 +819,7 @@ export function DashboardPage() {
       ((pcResolvedFilter === "No"
         ? pcUnresolvedAlertsQuery.data?.alerts?.length
         : pcAllAlertsQuery.data?.alerts?.length) ?? 0) === 0 ? (
-        <Card className="page-card">
+        <Card className="page-card alerts-card">
           {(() => {
             // Empty-state copy is contextual:
             //   1) A run is currently in progress → tell the user to wait,
@@ -879,7 +902,7 @@ export function DashboardPage() {
                           : artifactGap
                             ? `The ${sourceLabel} summary exists, but per-check artifacts are missing. This usually indicates incomplete report artifact generation or cleanup. Open Settings → Runs, inspect the latest run artifacts/logs, then re-run.`
                             : `The ${sourceLabel} completed but did not emit per-check findings. Re-run from Settings → Runs with full output enabled.`
-                        : "Trigger a run from Settings → Runs to populate this view."}
+                        : "Trigger a run from Settings → Runs to populate this view. Add clusters or Prism Central under Config first."}
                     </Typography.Text>
                     {hasPriorRun ? (
                       <Link to="/settings?tab=runs">
@@ -887,7 +910,20 @@ export function DashboardPage() {
                           Open Runs →
                         </Button>
                       </Link>
-                    ) : null}
+                    ) : (
+                      <Space>
+                        <Link to="/settings?tab=config">
+                          <Button size="small" type="primary">
+                            Open Config
+                          </Button>
+                        </Link>
+                        <Link to="/settings?tab=runs">
+                          <Button size="small">
+                            Open Runs
+                          </Button>
+                        </Link>
+                      </Space>
+                    )}
                   </Space>
                 }
               />
@@ -916,6 +952,6 @@ export function DashboardPage() {
           onSummaryChange={setTableSummary}
         />
       )}
-    </Space>
+    </div>
   );
 }

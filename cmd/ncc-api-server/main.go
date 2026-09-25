@@ -903,6 +903,9 @@ func (s *apiServer) isPublicAuthPath(r *http.Request) bool {
 	if r.Method == http.MethodOptions || r.URL.Path == "/api/v1/health" {
 		return true
 	}
+	if r.Method == http.MethodGet && r.URL.Path == "/api/v1/tls/public" {
+		return true
+	}
 	if r.Method == http.MethodGet && (r.URL.Path == "/api/v1/openapi.json" || r.URL.Path == "/api/v1/meta/routes" || r.URL.Path == "/api/v1/metrics/rate-limit") {
 		return true
 	}
@@ -1062,6 +1065,7 @@ func (s *apiServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"local_login":           s.users != nil && s.users.count() > 0,
 		"saml_enabled":          s.samlEnabled,
 		"ldap_enabled":          s.ldapIsEnabled(),
+		"cookie_secure":         s.cookieSecure(),
 		"users_store_encrypted": s.userStoreEncrypted,
 		"config_path":           s.absPath(s.configPath),
 		"output_dir":            s.absPath(s.outputDir),
@@ -3983,6 +3987,7 @@ func (s *apiServer) handleMetaRoutes(w http.ResponseWriter, r *http.Request) {
 func apiRouteCatalog() []routeMeta {
 	routes := []routeMeta{
 		{Path: "/api/v1/health", Methods: []string{http.MethodGet}, Description: "Backend health, version, and resolved paths"},
+		{Path: "/api/v1/tls/public", Methods: []string{http.MethodGet}, Description: "Public: UI certificate SHA-256 fingerprint and PEM (no private key) so the login page can offer download/trust for self-signed HTTPS"},
 		{Path: "/api/v1/components", Methods: []string{http.MethodGet}, Description: "Viewer+: report orchestrator, API server, and UI server versions"},
 		{Path: "/api/v1/alerts", Methods: []string{http.MethodGet}, Description: "Viewer+: fetch normalized Prism Central alerts with bounded caching and per-source errors"},
 		{Path: "/api/v1/audit", Methods: []string{http.MethodGet}, Description: "Read recent audit log entries (limit, action, failures filters)"},
@@ -4137,6 +4142,9 @@ func (s *apiServer) buildOpenAPISpecBase() map[string]interface{} {
 		"paths": map[string]interface{}{
 			"/api/v1/health": map[string]interface{}{
 				"get": map[string]interface{}{"summary": "Backend health, version, build_date, and resolved paths"},
+			},
+			"/api/v1/tls/public": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Public UI certificate fingerprint and PEM (no private key) for login-page trust"},
 			},
 			"/api/v1/audit": map[string]interface{}{
 				"get": map[string]interface{}{
@@ -5453,6 +5461,7 @@ func handleSubcommandArgs(args []string) {
 func (s *apiServer) buildHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/health", s.handleHealth)
+	mux.HandleFunc("/api/v1/tls/public", s.handlePublicTLS)
 	mux.HandleFunc("/api/v1/components", s.handleComponents)
 	mux.HandleFunc("/api/v1/alerts", s.handleAlerts)
 	mux.HandleFunc("/api/v1/audit", s.handleAudit)

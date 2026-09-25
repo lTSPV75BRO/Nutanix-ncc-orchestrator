@@ -308,12 +308,18 @@ func normalizePCAlert(raw map[string]interface{}) map[string]interface{} {
 		}
 	}
 	title := firstAlertString(raw, "title", "name", "alertType")
-	detail := firstAlertString(raw, "message", "rootCauseAnalysis")
+	message := firstAlertString(raw, "message")
+	rootCause := firstAlertString(raw, "rootCauseAnalysis")
+	detail := message
+	if detail == "" {
+		detail = rootCause
+	}
 	return map[string]interface{}{
 		"source":        "PC",
 		"cluster":       cluster,
 		"cluster_name":  clusterName,
 		"cluster_uuid":  clusterUUID,
+		"ext_id":        firstAlertString(raw, "extId", "id"),
 		"check":         title,
 		"check_name":    title,
 		"alert":         title,
@@ -321,6 +327,8 @@ func normalizePCAlert(raw map[string]interface{}) map[string]interface{} {
 		"entity_type":   entityType,
 		"severity":      severity,
 		"detail":        detail,
+		"root_cause":    rootCause,
+		"service_name":  firstAlertString(raw, "serviceName", "service_name"),
 		"alert_type":    firstAlertString(raw, "alertType"),
 		"status":        firstAlertString(raw, "status"),
 		"impact_type":   firstAlertString(raw, "primaryImpactType", "impactType", "impact_type"),
@@ -331,8 +339,43 @@ func normalizePCAlert(raw map[string]interface{}) map[string]interface{} {
 		"auto_resolved": raw["isAutoResolved"],
 		"acknowledged":  raw["isAcknowledged"],
 		"resolved":      raw["isResolved"],
-		"kb_articles":   raw["kbArticles"],
+		"kb_articles":   pcKBArticleURLs(raw),
 	}
+}
+
+func pcKBArticleURLs(raw map[string]interface{}) []string {
+	v, ok := raw["kbArticles"]
+	if !ok || v == nil {
+		v = raw["kb_articles"]
+	}
+	out := make([]string, 0)
+	seen := map[string]bool{}
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[s] {
+			return
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	switch items := v.(type) {
+	case []interface{}:
+		for _, item := range items {
+			switch t := item.(type) {
+			case string:
+				add(t)
+			case map[string]interface{}:
+				add(firstAlertString(t, "url", "uri", "link", "href"))
+			}
+		}
+	case []string:
+		for _, s := range items {
+			add(s)
+		}
+	case string:
+		add(items)
+	}
+	return out
 }
 
 func resolvePCAlertCluster(alert map[string]interface{}, idx map[string]pcCluster) map[string]interface{} {

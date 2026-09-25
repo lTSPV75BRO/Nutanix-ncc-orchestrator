@@ -577,6 +577,24 @@ export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
     setSearchParams(next, { replace: true });
   }, [activeTab, searchParams, setSearchParams]);
 
+  useEffect(() => {
+    const focus = (searchParams.get("focus") || "").trim();
+    if (!focus) return;
+    const tryScroll = () => {
+      const el = document.getElementById(`settings-${focus}`);
+      if (!el) return false;
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+      return true;
+    };
+    if (tryScroll()) return;
+    const t1 = window.setTimeout(tryScroll, 250);
+    const t2 = window.setTimeout(tryScroll, 800);
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
+  }, [activeTab, searchParams]);
+
   if (health.isLoading && !health.data) {
     return (
       <Space orientation="vertical" size={16} style={{ width: "100%" }}>
@@ -604,6 +622,7 @@ export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
         setTab(nextTab);
         const next = new URLSearchParams(searchParams);
         next.set("tab", nextTab);
+        next.delete("focus");
         if (nextTab !== "developer") {
           next.delete("dev");
         } else if (!next.get("dev")) {

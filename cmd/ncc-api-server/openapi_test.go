@@ -15,6 +15,7 @@ func TestBuildOpenAPISpecIncludesCorePaths(t *testing.T) {
 	}
 	required := []string{
 		"/api/v1/health",
+		"/api/v1/tls/public",
 		"/api/v1/metrics/rate-limit",
 		"/api/v1/runs/trigger",
 		"/api/v1/report/data",

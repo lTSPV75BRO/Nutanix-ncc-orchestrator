@@ -24,7 +24,6 @@ resources:
   - api-service.yaml
   - ui-deployment.yaml
   - ui-service.yaml
-  - ingress.yaml
   - pdb.yaml
   - networkpolicy-default-deny-ingress.yaml
   - networkpolicy-ui-ingress.yaml

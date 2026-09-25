@@ -1,17 +1,22 @@
 import { useState } from "react";
-import { Alert, Button, Card, Divider, Form, Input, Modal, Tooltip, Typography, Upload, message } from "antd";
+import { Alert, Button, Card, Divider, Form, Input, Modal, Space, Tooltip, Typography, Upload, message } from "antd";
 import {
   CloudUploadOutlined,
+  CopyOutlined,
+  DownloadOutlined,
   InfoCircleOutlined,
   LockOutlined,
   LoginOutlined,
   PauseCircleOutlined,
   PlayCircleOutlined,
+  SafetyCertificateOutlined,
   SafetyOutlined,
   UploadOutlined,
   UserOutlined,
 } from "@ant-design/icons";
+import { useQuery } from "@tanstack/react-query";
 import { api, ApiError } from "../api/client";
+import type { PublicTLSInfo } from "../api/types";
 import { useLocalStorageState } from "../hooks/useLocalStorageState";
 
 // Poll the backend health endpoint until the restarted stack answers, then
@@ -100,14 +105,103 @@ type LoginPageProps = {
   /** Called after a successful admin self-reset so the caller can refresh
    *  bootstrap_pending and show the retrieval hint immediately. */
   onBootstrapReset?: () => void;
+  /** /auth/me failed — offer Retry so a hung bootstrap is not a dead end. */
+  apiUnreachable?: boolean;
+  onRetryBootstrap?: () => void;
 };
+
+function isNonLocalHTTP(): boolean {
+  if (typeof window === "undefined") return false;
+  if (window.location.protocol !== "http:") return false;
+  const h = window.location.hostname;
+  return h !== "localhost" && h !== "127.0.0.1" && h !== "[::1]";
+}
+
+function httpsURL(): string {
+  if (typeof window === "undefined") return "";
+  const { hostname, port, pathname, search, hash } = window.location;
+  const p = port && port !== "80" && port !== "443" ? `:${port}` : "";
+  return `https://${hostname}${p}${pathname}${search}${hash}`;
+}
+
+function downloadCertPEM(pem: string) {
+  const blob = new Blob([pem], { type: "application/x-x509-ca-cert" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "ncc-ui.crt";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function copyText(text: string, ok: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    message.success(ok);
+  } catch {
+    message.info(text);
+  }
+}
+
+function TrustCertCard({ tls }: { tls: PublicTLSInfo | undefined }) {
+  if (!tls?.https_enabled && !tls?.cert_pem) return null;
+  const fp = tls.fingerprint_sha256;
+  const pem = tls.cert_pem;
+  return (
+    <Card style={{ width: 380, maxWidth: "100%", position: "relative", zIndex: 1, marginTop: 12 }}>
+      <Space orientation="vertical" size={8} style={{ width: "100%" }}>
+        <Typography.Text strong>
+          <SafetyCertificateOutlined /> Trust this UI certificate
+        </Typography.Text>
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
+          Chrome flags the stack-managed self-signed certificate until you download it and trust it
+          (or confirm the fingerprint below). Generate in Settings does not replace this step.
+        </Typography.Paragraph>
+        {fp ? (
+          <div>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              SHA-256 fingerprint
+            </Typography.Text>
+            <Typography.Paragraph
+              code
+              copyable={{ text: fp, tooltips: ["Copy fingerprint", "Copied"] }}
+              style={{ marginBottom: 8, fontSize: 11, wordBreak: "break-all" }}
+            >
+              {fp}
+            </Typography.Paragraph>
+            <Button size="small" icon={<CopyOutlined />} onClick={() => void copyText(fp, "Fingerprint copied")}>
+              Copy fingerprint
+            </Button>
+          </div>
+        ) : (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {tls.message || "Certificate details are not available yet. Reload after HTTPS finishes starting."}
+          </Typography.Text>
+        )}
+        {pem ? (
+          <Button icon={<DownloadOutlined />} onClick={() => downloadCertPEM(pem)}>
+            Download certificate
+          </Button>
+        ) : null}
+      </Space>
+    </Card>
+  );
+}
 
 /**
  * Full-screen login gate shown when the backend has interactive login enabled
  * and the current browser has no authenticated session. Offers local
  * username/password sign-in and/or a "Sign in with SSO" button (SAML).
  */
-export function LoginPage({ localEnabled, samlEnabled, bootstrapPending, onSuccess, onBootstrapReset }: LoginPageProps) {
+export function LoginPage({
+  localEnabled,
+  samlEnabled,
+  bootstrapPending,
+  onSuccess,
+  onBootstrapReset,
+  apiUnreachable,
+  onRetryBootstrap,
+}: LoginPageProps) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Animated background preference persists across visits (per browser).
@@ -119,6 +213,20 @@ export function LoginPage({ localEnabled, samlEnabled, bootstrapPending, onSucce
   const [restoreSubmitting, setRestoreSubmitting] = useState(false);
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
   const [restoreForm] = Form.useForm<{ username: string; password: string }>();
+  const httpInsecure = isNonLocalHTTP();
+  const tlsQuery = useQuery({
+    queryKey: ["tls-public"],
+    queryFn: api.tlsPublic,
+    staleTime: 60_000,
+    retry: 0,
+  });
+  const healthQuery = useQuery({
+    queryKey: ["health"],
+    queryFn: api.health,
+    staleTime: 15_000,
+    retry: 0,
+  });
+  const cookieSecure = Boolean(healthQuery.data?.cookie_secure);
 
   // First-login restore: authenticate with the bootstrap admin credentials (the
   // restore endpoint is the one action allowed through the forced-change gate),
@@ -223,6 +331,7 @@ export function LoginPage({ localEnabled, samlEnabled, bootstrapPending, onSucce
         position: "relative",
         minHeight: "100vh",
         display: "flex",
+        flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
         padding: 24,
@@ -262,6 +371,39 @@ export function LoginPage({ localEnabled, samlEnabled, bootstrapPending, onSucce
 
         {error ? (
           <Alert type="error" showIcon title={error} style={{ marginBottom: 16 }} closable onClose={() => setError(null)} />
+        ) : null}
+
+        {apiUnreachable ? (
+          <Alert
+            type="warning"
+            showIcon
+            title="Can't reach the API through this UI"
+            description="Retry bootstrap, or sign in if the API is already back."
+            style={{ marginBottom: 16 }}
+            action={
+              onRetryBootstrap ? (
+                <Button size="small" onClick={onRetryBootstrap}>
+                  Retry
+                </Button>
+              ) : undefined
+            }
+          />
+        ) : null}
+
+        {httpInsecure && cookieSecure ? (
+          <Alert
+            type="error"
+            showIcon
+            title="HTTP will not keep you signed in"
+            description={
+              <span>
+                Session cookies are marked Secure, so Chrome drops them on this HTTP URL. Open{" "}
+                <Typography.Link href={httpsURL()}>{httpsURL()}</Typography.Link>
+                , accept the certificate warning, or download the certificate below and trust it.
+              </span>
+            }
+            style={{ marginBottom: 16 }}
+          />
         ) : null}
 
         {localEnabled ? (
@@ -360,6 +502,8 @@ export function LoginPage({ localEnabled, samlEnabled, bootstrapPending, onSucce
           </>
         ) : null}
       </Card>
+
+      <TrustCertCard tls={tlsQuery.data} />
 
       <Modal
         title="Reset your password"

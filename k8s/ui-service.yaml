@@ -4,7 +4,7 @@ metadata:
   name: ncc-v2-ui
   namespace: ncc-orchestrator-v2
 spec:
-  type: ClusterIP
+  type: LoadBalancer
   ports:
     - name: http
       port: 80

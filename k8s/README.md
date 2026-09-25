@@ -91,13 +91,10 @@ Applying `k8s/` creates:
    - StorageClass supporting `ReadWriteMany` (default in manifests: `nfs-storage`)
    - Update `k8s/pvc.yaml` if your class differs
 
-3. **Ingress / exposure (optional)**
-   - UI pods terminate HTTPS themselves (self-signed on `/data/tls`, replaceable in Settings).
-   - Expose Service port **443** (LoadBalancer or Ingress TLS passthrough).
-   - Change `k8s/ingress.yaml` hostname and `ingressClassName` for your controller
-     (this cluster’s default example is `nginx`; some platforms use `kommander-traefik`).
-   - Set ConfigMap `ui-origin` to the HTTPS URL browsers will use
-     (`https://<load-balancer-ip>` or `https://ncc.example.com`).
+3. **Exposure**
+   - Default is a UI **LoadBalancer** on ports 80 (redirect) and 443 (HTTPS).
+   - After apply, patch ConfigMap `ui-origin` to `https://<EXTERNAL-IP>`.
+   - Ingress is optional (`k8s/ingress.yaml`) and not applied by kustomize.
 
 4. **Published images**
    - API image must include:
@@ -134,9 +131,9 @@ Applying `k8s/` creates:
 | `runner-cronjob.yaml` | Scheduled NCC runs |
 | `api-deployment.yaml` | Backend API server (2 replicas, `--cookie-secure`, required `jwt-secret`) |
 | `api-service.yaml` | Internal API service (`ClusterIP`) |
-| `ui-deployment.yaml` | UI server + frontend (`--login-mode on`) |
-| `ui-service.yaml` | Internal UI service (`ClusterIP`) |
-| `ingress.yaml` | Optional external UI entrypoint (TLS passthrough to the UI certificate) |
+| `ui-deployment.yaml` | UI server + frontend (`--login-mode on`, `--auto-tls-dir /data/tls`) |
+| `ui-service.yaml` | UI LoadBalancer (`:80` redirect, `:443` HTTPS) |
+| `ingress.yaml` | Optional hostname entrypoint (not applied by default) |
 | `networkpolicy-default-deny-ingress.yaml` | Baseline deny-all ingress policy |
 | `networkpolicy-ui-ingress.yaml` | Allows UI ingress on TCP 8080 |
 | `networkpolicy-api-ingress.yaml` | Allows API ingress from UI pods on TCP 8081 |
@@ -146,69 +143,47 @@ Applying `k8s/` creates:
 
 ## Deployment steps
 
-### 1) Configure images
-
-Edit the image tags in `k8s/kustomization.yaml`, or create an environment
-overlay with your registry, tags, pull secrets, and immutable digests.
-
-### 2) Configure runtime settings
-
-Edit `k8s/configmap.yaml`:
-
-- `clusters`
-- `username`
-- `ncc-api-version` / `nutanix-v4-api-version`
-- output/retry/notification settings
-
-### 3) Set secrets
-
-Provision the empty Secret template using the `kubectl create secret` command
-shown in `k8s/secret.yaml`, or connect it to External Secrets/CSI. Include a
-`jwt-secret` key (`openssl rand -base64 32`) so API replicas share session JWTs.
-
-### 4) Apply
+1. Set image tags in `k8s/kustomization.yaml` if they are not already `2.2.0`.
+2. Put Prism credentials and `jwt-secret` in `ncc-v2-secrets` (see `k8s/secret.yaml`).
+3. Apply:
 
 ```bash
 kubectl apply -k k8s/
+kubectl get svc ncc-v2-ui -n ncc-orchestrator-v2 -w
 ```
 
-### 5) Confirm resources
+4. When `EXTERNAL-IP` appears, point the UI origin at it (replace the IP):
 
 ```bash
-kubectl get all -n ncc-orchestrator-v2
-kubectl get pvc -n ncc-orchestrator-v2
-kubectl get cronjob -n ncc-orchestrator-v2
-kubectl get networkpolicy -n ncc-orchestrator-v2
-kubectl get ingress -n ncc-orchestrator-v2
+IP=$(kubectl get svc ncc-v2-ui -n ncc-orchestrator-v2 -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+kubectl -n ncc-orchestrator-v2 patch configmap ncc-v2-config --type merge \
+  -p "{\"data\":{\"ui-origin\":\"https://${IP}\"}}"
+kubectl -n ncc-orchestrator-v2 rollout restart deploy/ncc-v2-api deploy/ncc-v2-ui
 ```
+
+5. Open `https://<EXTERNAL-IP>` and accept the self-signed warning. Replace the
+   cert later from **Settings → Access → HTTPS / TLS**.
+
+Ingress is optional (`kubectl apply -f k8s/ingress.yaml`) and is not part of
+`kubectl apply -k k8s/`.
 
 ---
 
 ## Post-deploy verification
 
-### API health
-
 ```bash
-kubectl logs -n ncc-orchestrator-v2 deploy/ncc-v2-api --tail=100
-kubectl port-forward -n ncc-orchestrator-v2 svc/ncc-v2-api 8081:8081
-curl -sS http://localhost:8081/api/v1/health
+kubectl get deploy,svc,pods -n ncc-orchestrator-v2
+kubectl exec -n ncc-orchestrator-v2 deploy/ncc-v2-api -c api -- wget -qO- http://localhost:8081/api/v1/health
+IP=$(kubectl get svc ncc-v2-ui -n ncc-orchestrator-v2 -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+curl -skSI "https://${IP}/" | head
 ```
 
-Optional hardening tuning:
-
-- API defaults to route-level rate limiting for sensitive endpoints (`--rate-limit-per-minute=60`).
-- Set `--rate-limit-per-minute=0` only for trusted internal benchmarking.
-
-### UI health
+Port-forward if you have no LoadBalancer:
 
 ```bash
-kubectl logs -n ncc-orchestrator-v2 deploy/ncc-v2-ui --tail=100
-kubectl port-forward -n ncc-orchestrator-v2 svc/ncc-v2-ui 8080:80
+kubectl port-forward -n ncc-orchestrator-v2 svc/ncc-v2-ui 8443:443
+# then https://localhost:8443
 ```
-
-Open: `https://localhost:8080` (accept the self-signed warning) or the
-LoadBalancer/`Ingress` HTTPS URL.
-URL above for a temporary HTTP check.
 
 ### Runner sanity
 
@@ -234,12 +209,7 @@ UI pods serve HTTPS out of the box, same as Linux: they mint a self-signed
 certificate under `/data/tls` on first start. Generate/renew or paste a BYO
 PEM pair from **Settings → Access → HTTPS / TLS**; pods reload the files
 without a stack restart. Revert restores the self-signed pair (HTTPS stays
-on). Session cookies are `Secure`.
-
-Expose Service port **443**. A LoadBalancer that only publishes port 80 will
-redirect to HTTPS on 443, and browsers will not store `Secure` cookies on
-plain HTTP. Optional Ingress should passthrough (or use HTTPS backend) so
-the browser sees the UI certificate.
+on). Session cookies are `Secure`. Use `https://<LoadBalancer-IP>`.
 
 ### System Health and backups
 

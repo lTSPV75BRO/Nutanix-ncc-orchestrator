@@ -43,6 +43,8 @@ export type HealthData = {
   local_login?: boolean;
   saml_enabled?: boolean;
   ldap_enabled?: boolean;
+  /** True when session cookies carry the Secure attribute (HTTPS or --cookie-secure). */
+  cookie_secure?: boolean;
 };
 
 export type UserRole = "admin" | "operator" | "viewer" | "";
@@ -143,6 +145,22 @@ export type TLSPolicy = {
   managed_by?: "stack" | "ingress";
   secret_name?: string;
   mutation_supported?: boolean;
+  message?: string;
+  fingerprint_sha256?: string;
+  self_signed?: boolean;
+};
+
+/** Unauthenticated UI certificate metadata for login-page trust (no private key). */
+export type PublicTLSInfo = {
+  https_enabled: boolean;
+  fingerprint_sha256?: string;
+  subject?: string;
+  issuer?: string;
+  not_before?: string;
+  not_after?: string;
+  dns_names?: string[];
+  self_signed?: boolean;
+  cert_pem?: string;
   message?: string;
 };
 

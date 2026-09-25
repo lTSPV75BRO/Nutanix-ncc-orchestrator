@@ -1,3 +1,12 @@
+# Optional. Not applied by `kubectl apply -k k8s/`.
+# The default path is the UI LoadBalancer (:80 HTTP redirect, :443 HTTPS).
+# Use this only when you have an Ingress controller and want a hostname.
+#
+#   kubectl apply -f k8s/ingress.yaml
+#
+# Set spec.ingressClassName to a class that exists (`kubectl get ingressclass`).
+# nginx SSL passthrough or Traefik HTTPS backend both work; the UI is the TLS
+# terminator (self-signed or BYO from Settings).
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
