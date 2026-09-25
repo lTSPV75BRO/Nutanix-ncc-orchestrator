@@ -12,20 +12,48 @@ spec:
     metadata:
       labels: { app: ncc-orchestrator-v2, component: ui }
     spec:
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: "OnRootMismatch"
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
       containers:
         - name: ui
           image: "{{ .Values.images.ui.repository }}:{{ .Values.images.ui.tag }}"
           imagePullPolicy: {{ .Values.images.ui.pullPolicy }}
-          args: ["--listen", ":8080", "--dir", "/app/frontend/dist", "--backend-url", "http://ncc-v2-api:{{ .Values.api.service.port }}", "--allowed-origins", {{ .Values.ui.origin | quote }}, "--login-mode", "on"]
-          ports: [{ name: http, containerPort: 8080 }]
-          readinessProbe: { httpGet: { path: /, port: 8080 } }
-          livenessProbe: { httpGet: { path: /, port: 8080 }, initialDelaySeconds: 10 }
+          args:
+            - "--listen"
+            - ":8080"
+            - "--dir"
+            - "/app/frontend/dist"
+            - "--backend-url"
+            - "http://ncc-v2-api:{{ .Values.api.service.port }}"
+            - "--allowed-origins"
+            - {{ .Values.ui.origin | quote }}
+            - "--login-mode"
+            - "on"
+            - "--auto-tls-dir"
+            - "/data/tls"
+          env:
+            - name: NCC_RUNTIME_MODE
+              value: kubernetes
+            - name: NCC_UI_ORIGIN
+              value: {{ .Values.ui.origin | quote }}
+          ports: [{ name: https, containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /, port: 8080, scheme: HTTPS } }
+          livenessProbe: { httpGet: { path: /, port: 8080, scheme: HTTPS }, initialDelaySeconds: 10 }
           resources: {{ .Values.resources.ui | toYaml | nindent 12 }}
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: {{ .Values.pvcName }} }
 ---
 apiVersion: v1
 kind: Service
@@ -35,5 +63,7 @@ metadata:
 spec:
   type: {{ .Values.ui.service.type }}
   selector: { app: ncc-orchestrator-v2, component: ui }
-  ports: [{ name: http, port: {{ .Values.ui.service.port }}, targetPort: 8080 }]
+  ports:
+    - { name: http, port: {{ .Values.ui.service.port }}, targetPort: 8080 }
+    - { name: https, port: 443, targetPort: 8080 }
 {{- end }}

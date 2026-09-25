@@ -49,6 +49,8 @@ spec:
             - "token"
             - "--login-mode"
             - "on"
+            - "--auto-tls-dir"
+            - "/data/tls"
             - "--allowed-origins"
             - "$(NCC_UI_ORIGIN)"
           env:
@@ -61,11 +63,12 @@ spec:
                   key: ui-origin
           ports:
             - containerPort: 8080
-              name: http
+              name: https
           startupProbe:
             httpGet:
               path: /
               port: 8080
+              scheme: HTTPS
             periodSeconds: 5
             failureThreshold: 12
             timeoutSeconds: 2
@@ -73,6 +76,7 @@ spec:
             httpGet:
               path: /
               port: 8080
+              scheme: HTTPS
             initialDelaySeconds: 3
             periodSeconds: 10
             failureThreshold: 3
@@ -81,6 +85,7 @@ spec:
             httpGet:
               path: /
               port: 8080
+              scheme: HTTPS
             initialDelaySeconds: 10
             periodSeconds: 20
             failureThreshold: 3

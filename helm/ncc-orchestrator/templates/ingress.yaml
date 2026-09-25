@@ -5,6 +5,9 @@ metadata:
   name: ncc-v2-ui
   namespace: {{ .Values.namespace }}
   annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    nginx.ingress.kubernetes.io/proxy-ssl-verify: "off"
+    nginx.ingress.kubernetes.io/ssl-passthrough: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
     nginx.ingress.kubernetes.io/proxy-body-size: "32m"
     {{- if and .Values.ingress.certManager .Values.ingress.certManager.enabled }}
@@ -24,5 +27,5 @@ spec:
             backend:
               service:
                 name: ncc-v2-ui
-                port: { name: http }
+                port: { name: https }
 {{- end }}

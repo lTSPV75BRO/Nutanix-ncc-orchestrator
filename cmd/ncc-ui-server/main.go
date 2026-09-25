@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"goncc/internal/selfsigned"
 	"goncc/internal/v2layout"
 )
 
@@ -367,6 +368,8 @@ func main() {
 	flag.StringVar(&allowedOrigins, "allowed-origins", "http://localhost:8080", "Allowed browser origin(s), comma-separated")
 	flag.StringVar(&tlsCertFile, "tls-cert-file", "", "TLS cert for UI server")
 	flag.StringVar(&tlsKeyFile, "tls-key-file", "", "TLS key for UI server")
+	var autoTLSDir string
+	flag.StringVar(&autoTLSDir, "auto-tls-dir", "", "Directory for UI TLS material (ui.crt/ui.key, else auto-generated ui-selfsigned.crt/key). Enables HTTPS, HTTP→HTTPS redirect, and hot-reload. Used on Kubernetes.")
 	flag.StringVar(&backendCAFile, "backend-ca-file", "", "Optional custom CA for HTTPS backend")
 	flag.BoolVar(&backendInsecureSkipVerify, "backend-insecure-skip-verify", false, "Skip backend TLS verification (not recommended)")
 	flag.StringVar(&backendClientCertFile, "backend-client-cert-file", "", "Optional client cert for backend mTLS")
@@ -383,7 +386,7 @@ func main() {
 	// self-heal supervisor invokes this to detect a hung (alive-but-unresponsive)
 	// UI process, not just a crashed one.
 	if healthCheck {
-		os.Exit(uiRunHealthCheck(listen, strings.TrimSpace(tlsCertFile) != "" && strings.TrimSpace(tlsKeyFile) != ""))
+		os.Exit(uiRunHealthCheck(listen, (strings.TrimSpace(tlsCertFile) != "" && strings.TrimSpace(tlsKeyFile) != "") || strings.TrimSpace(autoTLSDir) != ""))
 	}
 
 	// Stack-aware defaults: when the ui-server is launched from
@@ -762,12 +765,21 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 	log.Printf("ncc-ui-server serving %s on %s (backend=%s, auth_mode=%s, token_file=%s, token_override=%t)", dir, listen, backendURL, authMode, filepath.Clean(tokenFile), apiToken != "")
-	if strings.TrimSpace(tlsCertFile) != "" || strings.TrimSpace(tlsKeyFile) != "" {
-		if strings.TrimSpace(tlsCertFile) == "" || strings.TrimSpace(tlsKeyFile) == "" {
+	autoTLSDir = strings.TrimSpace(autoTLSDir)
+	tlsCertFile = strings.TrimSpace(tlsCertFile)
+	tlsKeyFile = strings.TrimSpace(tlsKeyFile)
+	if autoTLSDir != "" || tlsCertFile != "" || tlsKeyFile != "" {
+		if autoTLSDir == "" && (tlsCertFile == "" || tlsKeyFile == "") {
 			log.Fatal("both tls-cert-file and tls-key-file are required together")
 		}
-		log.Printf("TLS enabled: serving HTTPS on %s", listen)
-		if err := srv.ListenAndServeTLS(tlsCertFile, tlsKeyFile); err != nil {
+		hosts := hostsFromOriginList(allowedOrigins)
+		hosts = append(hosts, hostsFromOriginList(os.Getenv("NCC_UI_ORIGIN"))...)
+		rot := &rotatingTLS{dir: autoTLSDir, extraHosts: hosts, staticCert: tlsCertFile, staticKey: tlsKeyFile}
+		if _, err := rot.get(nil); err != nil {
+			log.Fatalf("TLS certificate: %v", err)
+		}
+		log.Printf("TLS enabled: serving HTTPS on %s (HTTP is redirected; certs hot-reload)", listen)
+		if err := serveTLSWithRedirect(srv, listen, rot.get); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -836,13 +848,75 @@ func redirectToHTTPSHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "https://"+host+r.URL.RequestURI(), http.StatusPermanentRedirect)
 }
 
-// serveTLSWithRedirect serves HTTPS on addr using cert/key and 308-redirects any
-// plain-HTTP connection on the same port to https://.
-func serveTLSWithRedirect(srv *http.Server, addr, certFile, keyFile string) error {
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		return err
+func hostsFromOriginList(csv string) []string {
+	var out []string
+	for _, part := range strings.Split(csv, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if u, err := url.Parse(part); err == nil && u.Hostname() != "" {
+			out = append(out, u.Hostname())
+			continue
+		}
+		if host, _, err := net.SplitHostPort(part); err == nil && host != "" {
+			out = append(out, host)
+			continue
+		}
+		out = append(out, part)
 	}
+	return out
+}
+
+type rotatingTLS struct {
+	dir                   string
+	extraHosts            []string
+	staticCert, staticKey string
+	mu                    sync.Mutex
+	cached                tls.Certificate
+	certPath, keyPath     string
+	mod                   time.Time
+	loaded                bool
+}
+
+func (r *rotatingTLS) get(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	certPath, keyPath := r.staticCert, r.staticKey
+	if strings.TrimSpace(r.dir) != "" {
+		var err error
+		certPath, keyPath, err = selfsigned.Ensure(r.dir, r.extraHosts)
+		if err != nil {
+			return nil, err
+		}
+	}
+	st1, err1 := os.Stat(certPath)
+	st2, err2 := os.Stat(keyPath)
+	if err1 != nil || err2 != nil {
+		return nil, fmt.Errorf("stat TLS files: %v %v", err1, err2)
+	}
+	mod := st1.ModTime()
+	if st2.ModTime().After(mod) {
+		mod = st2.ModTime()
+	}
+	if r.loaded && r.certPath == certPath && r.keyPath == keyPath && mod.Equal(r.mod) {
+		c := r.cached
+		return &c, nil
+	}
+	loaded, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return nil, err
+	}
+	r.cached = loaded
+	r.certPath, r.keyPath, r.mod = certPath, keyPath, mod
+	r.loaded = true
+	c := loaded
+	return &c, nil
+}
+
+// serveTLSWithRedirect serves HTTPS on addr and 308-redirects any plain-HTTP
+// connection on the same port to https://.
+func serveTLSWithRedirect(srv *http.Server, addr string, getCert func(*tls.ClientHelloInfo) (*tls.Certificate, error)) error {
 	base, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
@@ -890,8 +964,8 @@ func serveTLSWithRedirect(srv *http.Server, addr, certFile, keyFile string) erro
 	go func() { _ = redirectSrv.Serve(redirLn) }()
 
 	srv.TLSConfig = &tls.Config{
-		MinVersion:   tls.VersionTLS12,
-		Certificates: []tls.Certificate{cert},
+		MinVersion:     tls.VersionTLS12,
+		GetCertificate: getCert,
 	}
 	return srv.ServeTLS(tlsLn, "", "")
 }

@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"net"
 	"net/http"
 	"os"
@@ -39,8 +40,8 @@ const maxTLSUploadBytes = 256 * 1024
 // loopback HTTP behind it. Enabling HTTPS also flips session cookies to Secure
 // (see cookieSecure) on the next start.
 func (s *apiServer) handleTLSSettings(w http.ResponseWriter, r *http.Request) {
-	if s.capabilities.Kubernetes {
-		s.handleKubernetesTLS(w, r)
+	if r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, envelope{Success: true, Data: s.liveTLSPolicyView()})
 		return
 	}
 	if s.users == nil || !s.users.writable() {
@@ -48,8 +49,6 @@ func (s *apiServer) handleTLSSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, http.StatusOK, envelope{Success: true, Data: tlsPolicyView(s.users.getTLSPolicy())})
 	case http.MethodPut:
 		s.handleTLSInstall(w, r)
 	case http.MethodDelete:
@@ -59,37 +58,87 @@ func (s *apiServer) handleTLSSettings(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *apiServer) handleKubernetesTLS(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
-			"https_enabled":      true,
-			"managed_by":         "ingress",
-			"secret_name":        k8sIngressTLSSecret(),
-			"mutation_supported": false,
-			"message":            "HTTPS is terminated at the Kubernetes Ingress. Manage certificates via the Ingress TLS secret (or cert-manager), not this Settings form. Session cookies are marked Secure.",
-		}})
-	case http.MethodPut, http.MethodDelete:
-		writeJSON(w, http.StatusConflict, envelope{Success: false, Error: "HTTPS/TLS is managed by the Kubernetes Ingress secret " + k8sIngressTLSSecret() + ". Update that secret or enable cert-manager; in-app certificate upload is not supported on Kubernetes."})
-	default:
-		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
-	}
-}
-
 // tlsPolicyView shapes the policy for the API response: HTTPS state plus
 // decoded certificate metadata, never the private key or raw PEM.
 func tlsPolicyView(p *tlsPolicy) map[string]interface{} {
 	if p == nil {
-		return map[string]interface{}{"https_enabled": false}
+		return map[string]interface{}{"https_enabled": false, "managed_by": "stack", "mutation_supported": true}
 	}
 	return map[string]interface{}{
-		"https_enabled": p.HTTPSEnabled,
-		"subject":       p.Subject,
-		"issuer":        p.Issuer,
-		"not_before":    p.NotBefore,
-		"not_after":     p.NotAfter,
-		"dns_names":     p.DNSNames,
-		"updated_at":    p.UpdatedAt,
+		"https_enabled":      p.HTTPSEnabled,
+		"subject":            p.Subject,
+		"issuer":             p.Issuer,
+		"not_before":         p.NotBefore,
+		"not_after":          p.NotAfter,
+		"dns_names":          p.DNSNames,
+		"updated_at":         p.UpdatedAt,
+		"managed_by":         "stack",
+		"mutation_supported": true,
+	}
+}
+
+// liveTLSPolicyView is GET /settings/tls: persisted policy, then the cert
+// files on disk (Kubernetes UI pods share /data/tls), then a Kubernetes
+// default of "HTTPS is on, self-signed will be minted by the UI".
+func (s *apiServer) liveTLSPolicyView() map[string]interface{} {
+	if s.users != nil {
+		if p := s.users.getTLSPolicy(); p != nil && p.HTTPSEnabled {
+			view := tlsPolicyView(p)
+			if s.capabilities.Kubernetes {
+				view["message"] = "The UI serves HTTPS from the shared volume (/data/tls). Generate a self-signed certificate or paste a BYO PEM pair below; UI pods reload without a stack restart."
+			}
+			return view
+		}
+	}
+	if certPath, _, ok := selfsigned.ActivePaths(s.tlsMaterialDir()); ok {
+		if p := tlsPolicyFromCertFile(certPath); p != nil {
+			view := tlsPolicyView(p)
+			if s.capabilities.Kubernetes {
+				view["message"] = "The UI serves HTTPS from the shared volume (/data/tls). Generate a self-signed certificate or paste a BYO PEM pair below; UI pods reload without a stack restart."
+			}
+			return view
+		}
+	}
+	if s.capabilities.Kubernetes {
+		return map[string]interface{}{
+			"https_enabled":      true,
+			"managed_by":         "stack",
+			"mutation_supported": true,
+			"message":            "The UI serves HTTPS with a stack-managed self-signed certificate on the shared volume (same as a Linux v2-start). Generate or upload a replacement here; UI pods reload it without a stack restart. Session cookies are marked Secure.",
+		}
+	}
+	return tlsPolicyView(nil)
+}
+
+func (s *apiServer) tlsMaterialDir() string {
+	return filepath.Join(s.maintenanceInstallDir(), tlsDirName)
+}
+
+func tlsPolicyFromCertFile(certPath string) *tlsPolicy {
+	pemBytes, err := os.ReadFile(certPath)
+	if err != nil {
+		return nil
+	}
+	block, _ := pem.Decode(pemBytes)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil
+	}
+	leaf, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil
+	}
+	sans := append([]string(nil), leaf.DNSNames...)
+	for _, ip := range leaf.IPAddresses {
+		sans = append(sans, ip.String())
+	}
+	return &tlsPolicy{
+		HTTPSEnabled: true,
+		CertPath:     certPath,
+		Subject:      leaf.Subject.String(),
+		Issuer:       leaf.Issuer.String(),
+		NotBefore:    leaf.NotBefore.UTC().Format(time.RFC3339),
+		NotAfter:     leaf.NotAfter.UTC().Format(time.RFC3339),
+		DNSNames:     sans,
 	}
 }
 
@@ -104,10 +153,6 @@ func tlsPolicyView(p *tlsPolicy) map[string]interface{} {
 func (s *apiServer) handleTLSGenerate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
-		return
-	}
-	if s.capabilities.Kubernetes {
-		writeJSON(w, http.StatusConflict, envelope{Success: false, Error: "HTTPS/TLS is managed by the Kubernetes Ingress secret " + k8sIngressTLSSecret() + ". Update that secret or enable cert-manager; in-app certificate generation is not supported on Kubernetes."})
 		return
 	}
 	if s.users == nil || !s.users.writable() {
@@ -218,10 +263,6 @@ func (s *apiServer) applyTLSMaterial(w http.ResponseWriter, r *http.Request, cer
 		return
 	}
 
-	// Persist the cert/key into the start-state so the next (re)start binds the
-	// UI server to TLS. If the state file is absent we cannot safely synthesize
-	// one, so we skip the auto-restart and ask the operator to restart.
-	patched, perr := patchV2StartStateUITLS(installDir, certPath, keyPath)
 	auditAction := "settings.tls.install"
 	noun := "Certificate installed"
 	if selfSigned {
@@ -232,6 +273,20 @@ func (s *apiServer) applyTLSMaterial(w http.ResponseWriter, r *http.Request, cer
 		"subject": pol.Subject, "not_after": pol.NotAfter, "dns_names": pol.DNSNames, "self_signed": selfSigned,
 	})
 
+	if s.capabilities.Kubernetes {
+		msg := noun + ". UI pods reload the certificate from the shared volume within a few seconds — no stack restart. If the certificate is self-signed, accept the browser warning."
+		writeJSON(w, http.StatusOK, envelope{Success: true, Message: msg, Data: map[string]interface{}{
+			"tls":              tlsPolicyView(pol),
+			"restarting":       false,
+			"restart_required": false,
+		}})
+		return
+	}
+
+	// Persist the cert/key into the start-state so the next (re)start binds the
+	// UI server to TLS. If the state file is absent we cannot safely synthesize
+	// one, so we skip the auto-restart and ask the operator to restart.
+	patched, perr := patchV2StartStateUITLS(installDir, certPath, keyPath)
 	restarting := false
 	msg := "HTTPS enabled."
 	switch {
@@ -256,12 +311,10 @@ func (s *apiServer) applyTLSMaterial(w http.ResponseWriter, r *http.Request, cer
 
 func (s *apiServer) handleTLSDisable(w http.ResponseWriter, r *http.Request) {
 	installDir := s.maintenanceInstallDir()
+	tlsDir := filepath.Join(installDir, tlsDirName)
 	prev := s.users.getTLSPolicy()
-	if err := s.users.setTLSPolicy(nil); err != nil {
-		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not clear TLS policy: " + err.Error()})
-		return
-	}
-	// Best-effort removal of the on-disk material.
+	_ = os.Remove(filepath.Join(tlsDir, selfsigned.BYOCertFile))
+	_ = os.Remove(filepath.Join(tlsDir, selfsigned.BYOKeyFile))
 	if prev != nil {
 		if prev.CertPath != "" {
 			_ = os.Remove(prev.CertPath)
@@ -269,6 +322,34 @@ func (s *apiServer) handleTLSDisable(w http.ResponseWriter, r *http.Request) {
 		if prev.KeyPath != "" {
 			_ = os.Remove(prev.KeyPath)
 		}
+	}
+
+	if s.capabilities.Kubernetes {
+		certPath, _, err := selfsigned.Ensure(tlsDir, nil)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not restore the self-signed certificate: " + err.Error()})
+			return
+		}
+		pol := tlsPolicyFromCertFile(certPath)
+		if pol == nil {
+			pol = &tlsPolicy{HTTPSEnabled: true, CertPath: certPath, UpdatedAt: time.Now().UTC().Format(time.RFC3339)}
+		}
+		if err := s.users.setTLSPolicy(pol); err != nil {
+			writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not persist TLS policy: " + err.Error()})
+			return
+		}
+		s.audit(r, "settings.tls.disable", true, map[string]interface{}{"reverted_to": "self-signed"})
+		writeJSON(w, http.StatusOK, envelope{Success: true, Message: "Reverted to the stack-managed self-signed certificate. UI pods reload it within a few seconds. HTTPS stays enabled.", Data: map[string]interface{}{
+			"tls":              tlsPolicyView(pol),
+			"restarting":       false,
+			"restart_required": false,
+		}})
+		return
+	}
+
+	if err := s.users.setTLSPolicy(nil); err != nil {
+		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not clear TLS policy: " + err.Error()})
+		return
 	}
 	patched, perr := patchV2StartStateUITLS(installDir, "", "")
 	s.audit(r, "settings.tls.disable", true, nil)

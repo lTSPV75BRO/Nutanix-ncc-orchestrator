@@ -36,8 +36,12 @@ If you are starting from a fresh machine and need full source build steps first,
 Users / Browser
       |
       v
-Ingress (TLS) -> UI Service (ClusterIP) -> UI Deployment (`ncc-ui-server`)
+LoadBalancer :443 or Ingress (TLS passthrough)
+      |
+      v
+UI Service -> UI Deployment (`ncc-ui-server`, HTTPS on :8080)
       |                               |
+      |                               +--> self-signed or BYO cert on /data/tls
       |                               +--> serves frontend static app
       |                               +--> proxies /api/v1/*
       v
@@ -48,6 +52,7 @@ API Service (ClusterIP) -> API Deployment (`ncc-api-server`)
 CronJob (`ncc-v2-runner`) ---> shared PVC (/data/*)
                                   - /data/config
                                   - /data/auth
+                                  - /data/tls
                                   - /data/logs
                                   - /data/backups
                                   - /data/nccfiles
@@ -87,10 +92,12 @@ Applying `k8s/` creates:
    - Update `k8s/pvc.yaml` if your class differs
 
 3. **Ingress / exposure (optional)**
-   - An Ingress controller and TLS Secret named `ncc-v2-ui-tls`
-   - Change `k8s/ingress.yaml` hostname and TLS settings for your environment
-   - To have cert-manager issue the certificate, uncomment the
-     `cert-manager.io/cluster-issuer` annotation in `k8s/ingress.yaml`
+   - UI pods terminate HTTPS themselves (self-signed on `/data/tls`, replaceable in Settings).
+   - Expose Service port **443** (LoadBalancer or Ingress TLS passthrough).
+   - Change `k8s/ingress.yaml` hostname and `ingressClassName` for your controller
+     (this cluster’s default example is `nginx`; some platforms use `kommander-traefik`).
+   - Set ConfigMap `ui-origin` to the HTTPS URL browsers will use
+     (`https://<load-balancer-ip>` or `https://ncc.example.com`).
 
 4. **Published images**
    - API image must include:
@@ -129,7 +136,7 @@ Applying `k8s/` creates:
 | `api-service.yaml` | Internal API service (`ClusterIP`) |
 | `ui-deployment.yaml` | UI server + frontend (`--login-mode on`) |
 | `ui-service.yaml` | Internal UI service (`ClusterIP`) |
-| `ingress.yaml` | TLS-enabled external UI entrypoint (`ncc-v2-ui-tls`; optional cert-manager) |
+| `ingress.yaml` | Optional external UI entrypoint (TLS passthrough to the UI certificate) |
 | `networkpolicy-default-deny-ingress.yaml` | Baseline deny-all ingress policy |
 | `networkpolicy-ui-ingress.yaml` | Allows UI ingress on TCP 8080 |
 | `networkpolicy-api-ingress.yaml` | Allows API ingress from UI pods on TCP 8081 |
@@ -199,7 +206,8 @@ kubectl logs -n ncc-orchestrator-v2 deploy/ncc-v2-ui --tail=100
 kubectl port-forward -n ncc-orchestrator-v2 svc/ncc-v2-ui 8080:80
 ```
 
-Open: `https://localhost:8080` when using Ingress TLS, or the port-forward
+Open: `https://localhost:8080` (accept the self-signed warning) or the
+LoadBalancer/`Ingress` HTTPS URL.
 URL above for a temporary HTTP check.
 
 ### Runner sanity
@@ -222,9 +230,16 @@ versions from `NCC_IMAGE_TAG` / `NCC_ORCHESTRATOR_IMAGE_TAG` /
 
 ### TLS certificates
 
-HTTPS is terminated at Ingress. Do not upload certs from Settings → Access;
-manage `ncc-v2-ui-tls` (or enable cert-manager on the Ingress). Session
-cookies are `Secure`.
+UI pods serve HTTPS out of the box, same as Linux: they mint a self-signed
+certificate under `/data/tls` on first start. Generate/renew or paste a BYO
+PEM pair from **Settings → Access → HTTPS / TLS**; pods reload the files
+without a stack restart. Revert restores the self-signed pair (HTTPS stays
+on). Session cookies are `Secure`.
+
+Expose Service port **443**. A LoadBalancer that only publishes port 80 will
+redirect to HTTPS on 443, and browsers will not store `Secure` cookies on
+plain HTTP. Optional Ingress should passthrough (or use HTTPS backend) so
+the browser sees the UI certificate.
 
 ### System Health and backups
 
@@ -314,15 +329,19 @@ Use a temporary debug pod mounting `ncc-v2-data`, or expose via API/UI artifact 
 
 ### 5) Ingress has no address
 
-- Check the Ingress controller and TLS Secret (`ncc-v2-ui-tls`)
-- Uncomment the cert-manager annotation in `k8s/ingress.yaml` if you want
-  the cluster to issue the certificate
-- For temporary access, use `kubectl port-forward svc/ncc-v2-ui 8080:80`
+- Confirm the Ingress class exists (`kubectl get ingressclass`). This
+  repository’s example uses `nginx`; some platforms only have
+  `kommander-traefik`.
+- For LoadBalancer access, publish Service port **443** (not only 80).
+- For temporary access, use `kubectl port-forward svc/ncc-v2-ui 8443:443`
+  and open `https://localhost:8443`
 
-### 6) Settings → HTTPS / TLS is disabled
+### 6) Settings → HTTPS / TLS
 
-This is expected. Kubernetes terminates TLS at Ingress; in-app certificate
-upload returns `409`. Manage the Ingress secret instead.
+The form is enabled. Certificates live on the shared PVC (`/data/tls`).
+After generate/upload, reload the browser (accept the self-signed warning
+once). If login loops, you are still on `http://` — use the HTTPS URL and
+publish Service port 443.
 
 ### 7) Installed components report “ui-server: Component not found”
 

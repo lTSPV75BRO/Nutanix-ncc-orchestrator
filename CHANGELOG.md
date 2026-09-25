@@ -12,8 +12,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Adds Prism Central serviceability alerts to the dashboard alongside NCC
 findings, with an NCC / PC source selector. Kubernetes installs are
-replica-safe (shared JWT, user-store reload, backup lock) and treat Ingress
-as the TLS terminator.
+replica-safe (shared JWT, user-store reload, backup lock) and serve HTTPS
+from the UI with a stack-managed self-signed certificate (replaceable in
+Settings), the same way a Linux `v2-start` does.
 
 ### Added
 
@@ -58,14 +59,17 @@ as the TLS terminator.
   `TestAllowedClustersPrismCentralExpansion`.
 - **Kubernetes-aware System Health.** Diagnostics run PVC-safe doctor checks
   (config, storage, secrets, backups, runs, logs) and API probes for JWT, the
-  user Secret, Secure cookies, Ingress TLS, and a writable PVC. Host
+  user Secret, Secure cookies, the UI TLS files on the PVC, and a writable PVC. Host
   supervisor/PID/SELinux/local TLS-file checks are omitted. The Health UI
   treats Deployments/CronJob as the process owner.
-- **Ingress TLS on Kubernetes.** `GET /api/v1/settings/tls` reports
-  `managed_by=ingress` and the TLS secret; PUT/DELETE/generate return `409`.
-  API pods pass `--cookie-secure`. Optional cert-manager annotations live in
-  `k8s/ingress.yaml` and Helm `ingress.certManager`. Pinned by
-  `TestKubernetesTLSIsIngressManaged`, `TestCookieSecureKubernetesDefaultsOn`.
+- **UI HTTPS on Kubernetes (self-signed + BYO).** UI pods pass
+  `--auto-tls-dir /data/tls` and mint a self-signed cert on first start
+  (shared PVC, flocked). `GET /api/v1/settings/tls` reports
+  `managed_by=stack` with `mutation_supported=true`; generate/upload
+  writes `/data/tls/ui.crt`+`ui.key` and UI pods hot-reload. Revert
+  restores the self-signed pair (HTTPS stays on). Ingress, when used,
+  is SSL passthrough to that UI certificate. Pinned by
+  `TestKubernetesTLSIsStackManaged`, `TestCookieSecureKubernetesDefaultsOn`.
 - **Replica-safe scheduled backups on Kubernetes.** Snapshots write to
   `/data/backups`, include the PVC `config/`/`auth/`/`logs/` layout, and take
   an advisory flock so two API replicas cannot snapshot at once.

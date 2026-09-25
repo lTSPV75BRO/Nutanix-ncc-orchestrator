@@ -210,7 +210,7 @@ Security controls by layer:
 - **Kubernetes**
   - namespace isolation
   - secret/config separation (`jwt-secret` required for API replicas)
-  - Ingress TLS (not in-app certificate upload)
+  - UI HTTPS (self-signed on `/data/tls`, BYO from Settings)
   - network policies and service boundaries
 
 ---

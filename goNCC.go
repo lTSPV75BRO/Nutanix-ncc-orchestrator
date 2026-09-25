@@ -8523,17 +8523,6 @@ func listenHostForCert(listenAddr string) string {
 // covers localhost/loopback plus the UI advertise host and any concrete listen
 // host, so https://<that-host> validates the name (self-signed trust aside).
 func ensureDefaultUISelfSignedCert(installDir string, opts v2StartOptions) (certPath, keyPath string, err error) {
-	dir := filepath.Join(installDir, "tls")
-	certPath = filepath.Join(dir, "ui-selfsigned.crt")
-	keyPath = filepath.Join(dir, "ui-selfsigned.key")
-	if st, e := os.Stat(certPath); e == nil && !st.IsDir() {
-		if st2, e2 := os.Stat(keyPath); e2 == nil && !st2.IsDir() {
-			return certPath, keyPath, nil
-		}
-	}
-	if mkErr := os.MkdirAll(dir, 0o700); mkErr != nil {
-		return "", "", mkErr
-	}
 	var hosts []string
 	if u := strings.TrimSpace(opts.UIAdvertiseURL); u != "" {
 		if parsed, perr := url.Parse(u); perr == nil && parsed.Hostname() != "" {
@@ -8543,17 +8532,7 @@ func ensureDefaultUISelfSignedCert(installDir string, opts v2StartOptions) (cert
 	if h := listenHostForCert(opts.UIListen); h != "" {
 		hosts = append(hosts, h)
 	}
-	certPEM, keyPEM, gerr := selfsigned.Generate(hosts, 0)
-	if gerr != nil {
-		return "", "", gerr
-	}
-	if wErr := os.WriteFile(certPath, certPEM, 0o600); wErr != nil {
-		return "", "", wErr
-	}
-	if wErr := os.WriteFile(keyPath, keyPEM, 0o600); wErr != nil {
-		return "", "", wErr
-	}
-	return certPath, keyPath, nil
+	return selfsigned.Ensure(filepath.Join(installDir, "tls"), hosts)
 }
 
 func mergeAllowedOriginsCSV(baseOrigin string, extraCSV string) string {

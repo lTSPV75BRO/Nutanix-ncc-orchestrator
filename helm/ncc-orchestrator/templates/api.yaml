@@ -34,8 +34,6 @@ spec:
               value: {{ .Values.images.runner.tag | quote }}
             - name: NCC_UI_IMAGE_TAG
               value: {{ .Values.images.ui.tag | quote }}
-            - name: NCC_INGRESS_TLS_SECRET
-              value: {{ .Values.ingress.tlsSecret | quote }}
             - name: NCC_UI_ORIGIN
               value: {{ .Values.ui.origin | quote }}
             - name: NCC_API_TOKEN

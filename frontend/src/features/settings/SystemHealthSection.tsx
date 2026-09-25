@@ -354,7 +354,7 @@ export function SystemHealthSection() {
               </Typography.Title>
               <Typography.Text type="secondary">
                 {isKubernetes
-                  ? "Kubernetes-aware checks across configuration, shared storage, secrets, backups, runs, directory/SSO, Ingress TLS, and replica-safe runtime. Host supervisor and in-process TLS file checks are omitted because controllers own those."
+                  ? "Kubernetes-aware checks across configuration, shared storage, secrets, backups, runs, directory/SSO, UI HTTPS, and replica-safe runtime. Host supervisor checks are omitted because controllers own those."
                   : "Self-heal checks across configuration, storage, secrets, backups, runs, directory/SSO, TLS, and processes. Safe remediations can be applied with one click."}
               </Typography.Text>
               <Typography.Paragraph type="secondary" style={{ margin: "6px 0 0 0" }}>

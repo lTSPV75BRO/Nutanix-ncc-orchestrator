@@ -458,10 +458,12 @@ A caller's role can come from a static token or an interactive login:
   is stored `0600` and never returned; cert metadata (subject/issuer/validity/SANs)
   is recorded for display. HTTPS is what makes the SAML `SameSite=None` cookie
   valid, so SSO works out of the box on the default self-signed HTTPS.
-  **Kubernetes is different:** Ingress terminates TLS (`ncc-v2-ui-tls`).
-  `GET /api/v1/settings/tls` reports `managed_by=ingress`; PUT/DELETE/generate
-  return `409`. Session cookies are `Secure` (`--cookie-secure`). Manage the
-  Ingress secret or enable cert-manager instead of uploading a cert in Settings.
+  **Kubernetes uses the same model:** UI pods pass `--auto-tls-dir /data/tls`,
+  mint a self-signed pair on the shared PVC, and hot-reload `ui.crt`/`ui.key`
+  after Settings generate/upload. `GET /api/v1/settings/tls` reports
+  `managed_by=stack` with `mutation_supported=true`. Revert restores the
+  self-signed pair (HTTPS stays on). Session cookies are `Secure`
+  (`--cookie-secure`). Optional Ingress is TLS passthrough to that UI cert.
 - **Backup / restore** — `v2-backup` / `v2-restore` (Settings → Maintenance in the UI,
   or the CLI) capture and recover all stateful auth data (accounts, roles,
   SAML/LDAP config, cluster groups, token, session policy) plus config and audit
@@ -1003,10 +1005,11 @@ These are runtime flags for v2 services (`cmd/ncc-api-server`, `cmd/ncc-ui-serve
 | `ncc-api-server` | `--login-lockout-duration` | `15m` | How long a locked account stays locked after exceeding the threshold. |
 | `ncc-api-server` | `--auth-mode` | `token` | API auth mode: `token`, `session`, `hybrid`. |
 | `ncc-api-server` | `--token-file-path` | `.ncc-api-token` | Token file used by UI proxy and local tooling. |
-| `ncc-api-server` | `--cookie-secure` / `--cookie-insecure` | auto | Force the session cookie `Secure` attribute on/off. Auto-set by `v2-start` to track whether the UI is on HTTPS (the default). Kubernetes manifests pass `--cookie-secure` because Ingress terminates TLS. Set `--cookie-insecure` only when serving plain HTTP. |
+| `ncc-api-server` | `--cookie-secure` / `--cookie-insecure` | auto | Force the session cookie `Secure` attribute on/off. Auto-set by `v2-start` to track whether the UI is on HTTPS (the default). Kubernetes manifests pass `--cookie-secure` because the UI serves HTTPS. Set `--cookie-insecure` only when serving plain HTTP. |
 | `ncc-api-server` | `--cors-origin` | `http://localhost:8080` | Comma-separated browser origins allowed to call the API with cookies (`Access-Control-Allow-Credentials: true`). Wildcards are rejected. Override with `NCC_CORS_ORIGIN`. |
 | `ncc-ui-server` | `--allowed-origins` | `http://localhost:8080` | Browser origin allowlist for proxied API calls. |
 | `ncc-ui-server` | `--api-auth-mode` | `token` | Backend auth forwarding mode (`token` or `session`). |
+| `ncc-ui-server` | `--auto-tls-dir` | empty | Directory for UI TLS material (`ui.crt`/`ui.key`, else auto-generated `ui-selfsigned.crt`/`key`). Enables HTTPS, HTTP→HTTPS redirect, and hot-reload. Kubernetes manifests set `/data/tls`. |
 | `ncc-ui-server` | `--ui-insecure-http` | `false` | Serve plain HTTP instead of the default self-signed HTTPS (use only behind a trusted proxy/loopback). |
 
 `v2-start` convenience mode flags (must-have operator controls):
@@ -1340,9 +1343,8 @@ ncc-orchestrator env-info
 | `NCC_API_TOKEN` | Admin token for the api-server (full access). |
 | `NCC_API_STATIC_TOKEN` | Alias of `NCC_API_TOKEN` for the static bearer used by runners/internal clients. Must match `NCC_API_TOKEN` when both are set. |
 | `NCC_JWT_SECRET` | Shared HMAC-SHA256 secret for stateless session JWTs. **Required in Kubernetes** (Secret key `jwt-secret`); the API exits on startup if it is missing. On host/VM installs, if unset a 32-byte secret is generated in memory (sessions will not survive restart or another replica). Also fills `--session-secret` when that flag is empty so legacy HMAC cookies share the same key. Set the same value on every replica: Kubernetes Secret, systemd `Environment=`/`EnvironmentFile=`, or a Windows machine / Task Scheduler environment variable. |
-| `NCC_RUNTIME_MODE` | Set to `kubernetes` in cluster manifests so the API skips host supervisor checks, uses Ingress TLS, and treats the PVC root as the backup install dir. |
+| `NCC_RUNTIME_MODE` | Set to `kubernetes` in cluster manifests so the API skips host supervisor checks, treats the PVC root as the backup install dir, and serves UI TLS from `/data/tls`. |
 | `NCC_IMAGE_TAG` / `NCC_ORCHESTRATOR_IMAGE_TAG` / `NCC_UI_IMAGE_TAG` | Image tags reported by `GET /api/v1/components` on Kubernetes (so the API pod does not need a `ncc-ui-server` binary). Keep the three tags aligned. |
-| `NCC_INGRESS_TLS_SECRET` | Ingress TLS Secret name shown by `GET /api/v1/settings/tls` (default `ncc-v2-ui-tls`). |
 | `NCC_TOKEN_EXPIRY` | Session/JWT lifetime (Go duration, default from `--session-ttl` / 6h; max 24h). Example: `24h`. |
 | `NCC_CORS_ORIGIN` | Overrides `--cors-origin` (comma-separated allowlist). Set the UI origin so the SPA can send the HttpOnly `auth_token` cookie with `credentials: include`. Wildcards are rejected. |
 | `NCC_API_VIEWER_TOKEN` | Optional read-only viewer token (RBAC). Holders may read non-settings `GET` endpoints but get `403` on `/api/v1/settings/*` and any mutating request. Must differ from `NCC_API_TOKEN`. |

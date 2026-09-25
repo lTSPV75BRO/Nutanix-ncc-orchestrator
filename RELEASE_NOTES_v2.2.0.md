@@ -114,15 +114,15 @@ when the browser origin is not the default.
 
 ## Kubernetes operations
 
-Kubernetes deployments terminate HTTPS at Ingress (`ncc-v2-ui-tls`). Settings
-→ Access → HTTPS / TLS reports that secret and rejects in-app
-upload/generate/disable (`409`). Session cookies are marked `Secure`.
-Optional cert-manager support is a commented annotation in `k8s/ingress.yaml`
-and `ingress.certManager` in the Helm chart.
+Kubernetes deployments serve HTTPS from the UI pods (`--auto-tls-dir
+/data/tls`), the same self-signed-by-default model as Linux. Settings →
+Access → HTTPS / TLS generate/upload writes `/data/tls/ui.crt`+`ui.key`;
+pods hot-reload. Revert restores the self-signed pair. Session cookies are
+marked `Secure`. Optional Ingress is TLS passthrough to that certificate.
 
 System Health runs PVC-safe doctor checks (config, storage, secrets, backups,
-runs, logs) plus API probes for JWT, the user Secret, Secure cookies, Ingress
-TLS, and a writable `/data` volume. Host supervisor, PID, SELinux, and
+runs, logs) plus API probes for JWT, the user Secret, Secure cookies, the UI
+TLS files on `/data/tls`, and a writable `/data` volume. Host supervisor, PID, SELinux, and
 in-process TLS-file checks are omitted because Deployments and the runner
 CronJob own process lifecycle.
 

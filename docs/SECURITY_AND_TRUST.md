@@ -1003,12 +1003,13 @@ from HTTP on one port), so there is no separate HTTP listener to leak cookies.
   what is installed without re-parsing the PEM; restore preserves host-specific
   TLS paths (see backup/restore).
 
-**Kubernetes:** HTTPS is terminated at the Ingress (`ncc-v2-ui-tls` by
-default). `GET /api/v1/settings/tls` returns `managed_by=ingress`; certificate
-upload/generate/disable return `409`. API pods pass `--cookie-secure` so the
-`auth_token` cookie is stored on `https` origins. Manage the Ingress TLS
-Secret or enable cert-manager; do not expect Settings → Access to bind TLS
-inside the UI container.
+**Kubernetes:** UI pods serve HTTPS from `/data/tls` (self-signed on first
+start, same files as Linux `v2-start`). `GET /api/v1/settings/tls` returns
+`managed_by=stack` with `mutation_supported=true`; generate/upload/revert
+write those files and UI pods hot-reload. API pods pass `--cookie-secure`
+so the `auth_token` cookie is stored on `https` origins. Optional Ingress
+should passthrough (or use an HTTPS backend) so the browser sees that UI
+certificate.
 
 ---
 

@@ -2354,7 +2354,7 @@ function TLSCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
   // certificate has been registered through this card, so trust the live scheme
   // too when labeling the current state.
   const servingHTTPS = enabled || (typeof window !== "undefined" && window.location.protocol === "https:");
-  const ingressManaged = isKubernetes || cfg?.managed_by === "ingress";
+  const ingressManaged = cfg?.managed_by === "ingress";
 
   const fmt = (v?: string) => formatDateTime(v);
 
@@ -2392,10 +2392,17 @@ function TLSCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
           window.location.href = target;
         },
       });
-      // Auto-navigate after the restart has had time to come back up.
       window.setTimeout(() => {
         window.location.href = target;
       }, 8000);
+    } else if (!result.restart_required) {
+      Modal.success({
+        title: nextScheme === "http" ? "Reverted to self-signed HTTPS" : "Certificate updated",
+        content:
+          nextScheme === "https"
+            ? "UI servers will use the new certificate within a few seconds. If it is self-signed, accept the browser warning and reload."
+            : "HTTPS stays enabled with the stack-managed self-signed certificate. Reload if the browser still shows the previous certificate.",
+      });
     } else {
       Modal.warning({
         title: result.tls.https_enabled ? "Certificate installed" : "HTTPS disabled",
@@ -2483,8 +2490,10 @@ function TLSCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
       <Typography.Paragraph type="secondary">
         The UI is served over HTTPS by default with a self-signed certificate, and any plain-HTTP
         request is redirected to HTTPS. Generate or renew a self-signed certificate with one click,
-        or upload your own PEM certificate and private key below. Applying a certificate restarts the
-        stack to bind the browser-facing server to TLS and marks session cookies as <code>Secure</code>.
+        or upload your own PEM certificate and private key below.
+        {isKubernetes
+          ? " On Kubernetes the certificate lives on the shared volume; UI pods reload it without a stack restart."
+          : " Applying a certificate restarts the stack to bind the browser-facing server to TLS and marks session cookies as Secure."}{" "}
         The private key is stored with <code>0600</code> permissions on the server and is never shown
         again.
       </Typography.Paragraph>
@@ -2494,8 +2503,12 @@ function TLSCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
           <Popconfirm
             title={enabled ? "Renew the self-signed certificate?" : "Generate a self-signed certificate?"
             }
-            description="The stack restarts to apply the new certificate. Browsers will show a one-time self-signed warning — accept it to continue."
-            okText={enabled ? "Renew & restart" : "Generate & restart"}
+            description={
+              isKubernetes
+                ? "UI pods reload the new certificate from the shared volume within a few seconds. Browsers will show a one-time self-signed warning — accept it to continue."
+                : "The stack restarts to apply the new certificate. Browsers will show a one-time self-signed warning — accept it to continue."
+            }
+            okText={enabled ? (isKubernetes ? "Renew" : "Renew & restart") : isKubernetes ? "Generate" : "Generate & restart"}
             onConfirm={() => generateMut.mutate()}
           >
             <Button type="primary" icon={<SafetyCertificateOutlined />} loading={generateMut.isPending}>
@@ -2504,14 +2517,18 @@ function TLSCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
           </Popconfirm>
           {enabled ? (
             <Popconfirm
-              title="Disable HTTPS?"
-              description="The stack restarts and falls back to plain HTTP. The stored certificate and key are removed. Note: if the stack is configured for HTTPS-by-default it will regenerate a self-signed certificate on the next start."
-              okText="Disable HTTPS"
+              title={isKubernetes ? "Revert to the self-signed certificate?" : "Disable HTTPS?"}
+              description={
+                isKubernetes
+                  ? "The uploaded certificate is removed. HTTPS stays on with the stack-managed self-signed certificate."
+                  : "The stack restarts and falls back to plain HTTP. The stored certificate and key are removed. Note: if the stack is configured for HTTPS-by-default it will regenerate a self-signed certificate on the next start."
+              }
+              okText={isKubernetes ? "Revert" : "Disable HTTPS"}
               okButtonProps={{ danger: true }}
               onConfirm={() => disableMut.mutate()}
             >
               <Button danger icon={<DeleteOutlined />} loading={disableMut.isPending}>
-                Disable HTTPS
+                {isKubernetes ? "Revert to self-signed" : "Disable HTTPS"}
               </Button>
             </Popconfirm>
           ) : null}
@@ -2583,7 +2600,7 @@ function TLSCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
             icon={<LockOutlined />}
             loading={submitting || installMut.isPending}
           >
-            {enabled ? "Replace certificate & restart" : "Enable HTTPS & restart"}
+            {enabled ? "Replace certificate" : isKubernetes ? "Install certificate" : "Enable HTTPS & restart"}
           </Button>
         </Form.Item>
       </Form>

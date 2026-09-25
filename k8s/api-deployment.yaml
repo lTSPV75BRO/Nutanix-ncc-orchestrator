@@ -98,8 +98,6 @@ spec:
               value: "2.2.0"
             - name: NCC_UI_IMAGE_TAG
               value: "2.2.0"
-            - name: NCC_INGRESS_TLS_SECRET
-              value: "ncc-v2-ui-tls"
             - name: NCC_UI_ORIGIN
               valueFrom:
                 configMapKeyRef:

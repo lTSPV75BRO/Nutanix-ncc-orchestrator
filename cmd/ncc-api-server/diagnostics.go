@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"goncc/internal/selfsigned"
 )
 
 // unifiedCheck is one row in the System Health view. It merges the
@@ -350,7 +352,7 @@ func (s *apiServer) k8sRuntimeDiagnostics() []diagResult {
 	cookie := diagResult{ID: "k8s-cookie-secure", Title: "Secure session cookies", Category: "tls"}
 	if s.cookieSecure() {
 		cookie.Status = diagOK
-		cookie.Message = "Session cookies are marked Secure for Ingress-terminated HTTPS."
+		cookie.Message = "Session cookies are marked Secure for HTTPS."
 	} else {
 		cookie.Status = diagWarn
 		cookie.Message = "Session cookies are not marked Secure."
@@ -358,16 +360,22 @@ func (s *apiServer) k8sRuntimeDiagnostics() []diagResult {
 	}
 	out = append(out, cookie)
 
-	tls := diagResult{ID: "k8s-ingress-tls", Title: "Ingress TLS termination", Category: "tls"}
-	tls.Status = diagOK
-	tls.Message = "HTTPS is terminated at the Ingress (secret " + k8sIngressTLSSecret() + "). Manage certificates on that secret or with cert-manager."
-	out = append(out, tls)
-
-	pvc := diagResult{ID: "k8s-pvc-writable", Title: "Shared PVC writable", Category: "storage"}
+	tls := diagResult{ID: "k8s-ui-tls", Title: "UI HTTPS certificate", Category: "tls"}
 	root := strings.TrimSpace(s.absPath(s.repoRoot))
 	if root == "" {
 		root = "/data"
 	}
+	if certPath, _, ok := selfsigned.ActivePaths(filepath.Join(root, "tls")); ok {
+		tls.Status = diagOK
+		tls.Message = "UI pods serve HTTPS from " + certPath + ". Replace it from Settings → Access → HTTPS / TLS."
+	} else {
+		tls.Status = diagWarn
+		tls.Message = "No UI certificate is on the shared volume yet."
+		tls.Hint = "UI pods mint a self-signed pair under /data/tls on first start. Generate or upload a replacement in Settings → Access."
+	}
+	out = append(out, tls)
+
+	pvc := diagResult{ID: "k8s-pvc-writable", Title: "Shared PVC writable", Category: "storage"}
 	if st, err := os.Stat(root); err != nil || !st.IsDir() {
 		pvc.Status = diagFail
 		pvc.Message = "Shared data root " + root + " is not available."
@@ -384,11 +392,4 @@ func (s *apiServer) k8sRuntimeDiagnostics() []diagResult {
 	}
 	out = append(out, pvc)
 	return out
-}
-
-func k8sIngressTLSSecret() string {
-	if v := strings.TrimSpace(os.Getenv("NCC_INGRESS_TLS_SECRET")); v != "" {
-		return v
-	}
-	return "ncc-v2-ui-tls"
 }
