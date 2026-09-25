@@ -1,6 +1,6 @@
 # NCC Orchestrator — v2.2.0
 
-**Release status:** Unreleased development release
+**Release status:** Ready for release (v2.2.0)
 
 > **Affiliation:** This is an independent open-source project. It is not
 > affiliated with or endorsed by Nutanix, Inc. The project is MIT licensed.
@@ -135,3 +135,29 @@ together. In-place binary updates remain disabled on Kubernetes.
 Default API replicas are **2** (`k8s/api-deployment.yaml` and Helm
 `api.replicas`). Provision `jwt-secret` before applying, then rebuild and
 roll the API/UI images.
+
+## Dashboard UX
+
+The dashboard filter state is the address bar (`q`, `sev`, `clusters`,
+`mode`, `source`, `resolved`). **Copy link** restores the same NCC/PC view
+the way Insights uses KB links. **⌘K / Ctrl+K** jumps to Settings cards
+(TLS, users, LDAP/SSO, backups, health) via `/settings?tab=&focus=`.
+
+The Alerts tile grows with leftover viewport height. Pagination sits under
+the table (not clipped) and changes which rows are shown. Expanding a PC
+alert opens an inspector with status, entity/cluster, timeline, message,
+root cause, KB articles, and identifiers.
+
+First-run empty state links to Settings → Config. After Generate cert, the
+splash times out with Retry / Sign in instead of spinning forever. Header
+health is the API reached through this UI. Non-localhost HTTP login warns
+that Secure cookies will not stick, links to the HTTPS URL, and offers the
+self-signed cert fingerprint plus PEM download (`GET /api/v1/tls/public`).
+
+## Toolchain
+
+v2.2.0 builds with **Go 1.27.1** and **Node 24** (Active LTS). Container
+images use `golang:1.27.1-alpine`, `node:24-alpine`, and `alpine:3.24`.
+Go modules and frontend npm packages are current; `govulncheck ./...` and
+`npm audit --omit=dev` are clean. CI also runs frontend tests and the
+production npm audit.

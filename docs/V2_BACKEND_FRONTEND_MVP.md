@@ -24,6 +24,8 @@ For complete machine setup/build/run instructions, use:
 Base path: `/api/v1`
 
 - `GET /health`
+- `GET /api/v1/alerts` (Prism Central serviceability alerts; `resolved=No|Yes|all`)
+- `GET /api/v1/tls/public` (UI cert fingerprint + PEM, no private key)
 - `GET /metrics/rate-limit` (rate limiter counters + active bucket cardinality)
 - `POST /auth/session` (loopback bootstrap; returns short-lived bearer token)
 - `POST /auth/rotate` (rotate API token)

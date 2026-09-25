@@ -8,7 +8,7 @@ Every tool advertises MCP **annotations** (`readOnlyHint`, `destructiveHint`, `i
 
 ## Prerequisites
 
-- **Go 1.26+** (same as the main orchestrator; see `go.mod`)
+- **Go 1.27.1+** (same as the main orchestrator; see `go.mod`)
 - **ncc-orchestrator** binary on your `PATH`, or set `NCC_ORCHESTRATOR_BIN` to its path
 
 ## Build

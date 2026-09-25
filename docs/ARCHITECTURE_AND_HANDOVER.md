@@ -174,9 +174,11 @@ Workloads:
 - `Deployment` API serves control/report endpoints (default 2 replicas;
   shared `NCC_JWT_SECRET`, Secret-backed user store reloaded every 2s).
 - `Deployment` UI serves frontend and API proxy (default 2 replicas;
-  `--login-mode on`).
-- Ingress terminates HTTPS (`ncc-v2-ui-tls`); API `--cookie-secure`.
-- Shared PVC backs config/auth/logs/backups/outputs/report artifacts.
+  `--login-mode on`, `--auto-tls-dir /data/tls`).
+- UI LoadBalancer publishes :443 HTTPS (self-signed or BYO on the PVC).
+  Optional Ingress is TLS passthrough to that certificate. API uses
+  `--cookie-secure`.
+- Shared PVC backs config/auth/tls/logs/backups/outputs/report artifacts.
 
 Current binary wiring model:
 

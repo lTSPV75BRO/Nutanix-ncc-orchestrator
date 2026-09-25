@@ -2,7 +2,7 @@
 # Expects a pre-built Linux binary in dist/, for example:
 # - dist/ncc-orchestrator-linux-amd64
 # - dist/ncc-orchestrator-linux-arm64
-FROM alpine:3.20
+FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates tzdata
 

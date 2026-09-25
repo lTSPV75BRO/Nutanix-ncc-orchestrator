@@ -67,6 +67,48 @@ describe("ClusterTable alert sources", () => {
     expect(y).toBeGreaterThanOrEqual(240);
   });
 
+  it("renders alert pagination outside the clipping table host", () => {
+    render(
+      <ClusterTable
+        {...baseProps}
+        aggRows={Array.from({ length: 120 }, (_, i) => ({
+          cluster: `ncc-${i}`,
+          check: `NCC finding ${i}`,
+          severity: "INFO",
+        }))}
+        alertSource="NCC"
+      />,
+    );
+
+    const pager = document.querySelector(".alerts-pagination");
+    expect(pager).toBeTruthy();
+    expect(pager?.closest(".alerts-table-host")).toBeNull();
+    expect(screen.getByText(/1–100 of 120/)).toBeInTheDocument();
+  });
+
+  it("shows the next slice of alerts when the page changes", () => {
+    render(
+      <ClusterTable
+        {...baseProps}
+        aggRows={Array.from({ length: 120 }, (_, i) => ({
+          cluster: `ncc-${i}`,
+          check: `NCC finding ${i}`,
+          severity: "INFO",
+        }))}
+        alertSource="NCC"
+      />,
+    );
+
+    expect(screen.getByText("NCC finding 0")).toBeInTheDocument();
+    expect(screen.queryByText("NCC finding 100")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle("2"));
+
+    expect(screen.queryByText("NCC finding 0")).not.toBeInTheDocument();
+    expect(screen.getByText("NCC finding 100")).toBeInTheDocument();
+    expect(screen.getByText(/101–120 of 120/)).toBeInTheDocument();
+  });
+
   it("shows a richer inspector when a PC alert is expanded", () => {
     render(
       <ClusterTable

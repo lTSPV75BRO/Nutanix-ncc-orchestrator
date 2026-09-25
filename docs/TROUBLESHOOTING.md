@@ -43,7 +43,17 @@ See **`outputfiles/run-summary.json`** for `exit_code` and per-cluster `clusters
 ### Login succeeds but the page bounces back to the login screen
 
 - **Cause:** Session cookies are marked `Secure` when HTTPS is active; a browser will **refuse to store a `Secure` cookie over plain HTTP** on a non-localhost host, so the session is dropped and the forced password-change screen never shows.
-- **Fix:** Use the default HTTPS URL (`https://<host>:8080`), or run the UI with `--ui-insecure-http` (which issues non-`Secure` cookies) if you intentionally serve plain HTTP. `v2-start` wires `--cookie-secure`/`--cookie-insecure` on the api-server automatically based on whether UI TLS is active.
+- **Fix:** Use the default HTTPS URL (`https://<host>:8080`), or run the UI with `--ui-insecure-http` (which issues non-`Secure` cookies) if you intentionally serve plain HTTP. `v2-start` wires `--cookie-secure`/`--cookie-insecure` on the api-server automatically based on whether UI TLS is active. On non-localhost HTTP the login page also warns, links to the HTTPS URL, and lets you copy the certificate fingerprint or download the PEM (`GET /api/v1/tls/public`, no private key).
+
+### Splash spinner never finishes after Generate cert / first load
+
+- **Cause:** After a certificate change the browser may hang on `/auth/me` or `/health` while it re-evaluates TLS.
+- **Fix:** Wait for Retry / Sign in (splash times out after ~6–8s) instead of an infinite spinner. Header health is the API reached through this UI and is clickable to retry.
+
+### Alerts pager does not change the rows
+
+- **Cause:** Older UI builds showed pagination outside the table but still passed every row to the virtual table, so page 2 looked identical to page 1.
+- **Fix:** Upgrade to v2.2.0. The table now receives only the current page slice; changing page or page size replaces the visible alerts.
 
 ### SAML SSO returns `origin not allowed` (`NCC_API_FORBIDDEN`)
 

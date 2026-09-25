@@ -21,7 +21,7 @@ Linux when the OS warns that the binary is "untrusted".
 > 3. Run `ncc-orchestrator verify` to print the embedded build metadata
 >    (version, git revision, vendor, self-hash) for the file you have
 >    on disk.
-> 4. (Optional) Verify the GPG-signed git tag (`git tag -v v2.1.1`) and
+> 4. (Optional) Verify the GPG-signed git tag (`git tag -v v2.2.0`) and
 >    release-attestation.json provenance once published.
 
 ---
@@ -233,10 +233,10 @@ the matching GitHub release tag.
 $ ncc-orchestrator verify
 ncc-orchestrator verify
 -----------------------
-version:           2.1.1
+version:           2.2.0
 stream:            Release
-build_date:        2026-05-29T20:00:00Z
-go_version:        go1.26.3
+build_date:        2026-09-25T20:00:00Z
+go_version:        go1.27.1
 os_arch:           darwin/arm64
 git_revision:      914c71d27fb1...
 git_dirty:         false
@@ -246,7 +246,7 @@ license:           MIT
 project_url:       https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator
 affiliation:       independent open-source project; not affiliated with or endorsed by Nutanix, Inc.
 verify:            compare executable_sha256 against checksums.txt at
-                   https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.1.1
+                   https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.2.0
 ```
 
 ### `go version -m <binary>`
@@ -257,7 +257,7 @@ toolchain, module path, dependency tree, and the `vcs.*` settings from
 
 ```text
 $ go version -m ncc-orchestrator-darwin-arm64
-ncc-orchestrator-darwin-arm64: go1.26.3
+ncc-orchestrator-darwin-arm64: go1.27.1
         path    goncc
         mod     goncc   (devel)
         build   -buildmode=exe
@@ -271,14 +271,14 @@ ncc-orchestrator-darwin-arm64: go1.26.3
 ### Windows file Properties dialog
 
 On Windows, right-click the `.exe` → **Properties** → **Details** tab.
-Starting in v2.1.1 the dialog shows:
+Starting in v2.2.0 the dialog shows:
 
 | Field | Value |
 | ----- | ----- |
 | File description | NCC Orchestrator (CLI + v2 lifecycle manager) |
-| File version | 2.1.1.0 |
+| File version | 2.2.0.0 |
 | Product name | NCC Orchestrator |
-| Product version | 2.1.1 |
+| Product version | 2.2.0 |
 | Company | ncc-orchestrator (open-source project) |
 | Copyright | (c) 2025-2026 Prajwal Vernekar and contributors. MIT licensed; see LICENSE. |
 | Legal trademarks | NCC and Nutanix are trademarks of their respective owners; this project is not affiliated with or endorsed by Nutanix, Inc. |
@@ -298,7 +298,7 @@ GPG-signed. After importing that key:
 
 ```bash
 git fetch --tags
-git tag -v v2.1.1
+git tag -v v2.2.0
 # expected: "Good signature from <maintainer>"
 ```
 
@@ -321,11 +321,11 @@ blobs.
 ```json
 {
   "product": "NCC Orchestrator",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "stream": "Release",
   "git_revision": "914c71d27fb10cd4...",
   "git_dirty": false,
-  "go_version": "go1.26.3",
+  "go_version": "go1.27.1",
   "project_url": "https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator",
   "license": "MIT (see LICENSE in the source repository)",
   "affiliation": "independent open-source project; not affiliated with or endorsed by Nutanix, Inc.",

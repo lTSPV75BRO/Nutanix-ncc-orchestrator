@@ -45,8 +45,8 @@ Supporting assets:
 
 Install these first:
 
-- Go (use version required by `go.mod`)
-- Node.js + npm (for frontend build/tests)
+- Go 1.27.1+ (use the version in `go.mod`)
+- Node.js 24+ (Active LTS) + npm (for frontend build/tests)
 - Git
 - `kubectl` (for Kubernetes deployment flow)
 - Optional: Docker (image build/push workflows)
@@ -65,7 +65,7 @@ Environment/access prerequisites:
 ```bash
 git clone https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator.git
 cd Nutanix-ncc-orchestrator
-git checkout v2.1.1
+git checkout v2.2.0
 ```
 
 Sanity-check important paths:
@@ -227,7 +227,7 @@ curl -sS http://localhost:8081/api/v1/health
   --allowed-origins http://localhost:8080
 ```
 
-Open `http://localhost:8080`.
+Open `http://localhost:8080`. (`v2-start` serves HTTPS by default with an auto-generated cert; this manual `ncc-ui-server` invocation is HTTP unless you pass `--auto-tls-dir` or `--tls-cert-file`/`--tls-key-file`.)
 
 ### 8.3 Trigger run through API
 
@@ -286,7 +286,7 @@ Typical release maintainer steps:
 Use:
 
 - `CHANGELOG.md`
-- `RELEASE_NOTES_v2.1.1.md`
+- `RELEASE_NOTES_v2.2.0.md`
 - `docs/RELEASE_CHECKSUMS.md`
 
 ---

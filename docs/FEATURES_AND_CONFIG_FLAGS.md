@@ -93,6 +93,27 @@ using the same name/address dictionary returned as `cluster_map`. Cluster-
 group filters match any of those identities. Mapped cluster IPs are used
 for Prism links on port `9440`.
 
+### 2.3b Dashboard filters, sharing, and pagination
+
+Dashboard filter state is the address bar so a URL can be bookmarked or
+shared:
+
+| Query param | Meaning |
+| ----------- | ------- |
+| `source` | `NCC` or `PC` |
+| `q` | Search text |
+| `sev` | Severity chips |
+| `clusters` | Cluster filter |
+| `mode` | Compare mode |
+| `resolved` | PC resolved filter (`No` / `Yes` / `all`) |
+
+**Copy link** copies that URL. **⌘K / Ctrl+K** jumps to Settings cards via
+`/settings?tab=&focus=`. The Alerts table grows with leftover viewport
+height; pagination sits under the table (not clipped) and slices the
+virtual `dataSource` so changing page actually changes rows. Expanding a
+PC alert opens the inspector (status, entity/cluster, timeline, message,
+root cause, KB articles, identifiers).
+
 ## 1.1 Canonical configuration
 
 New deployments may use the versioned nested form below. The loader normalizes

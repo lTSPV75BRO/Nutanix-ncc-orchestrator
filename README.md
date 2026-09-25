@@ -3,7 +3,7 @@
 [![Version](https://img.shields.io/badge/version-2.2.0-blue)](RELEASE_NOTES_v2.2.0.md)
 [![Go](https://img.shields.io/badge/go-1.27.1-00ADD8)](go.mod)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Status](https://img.shields.io/badge/release-development-yellow)](RELEASE_NOTES_v2.2.0.md)
+[![Status](https://img.shields.io/badge/release-2.2.0-green)](RELEASE_NOTES_v2.2.0.md)
 
 > A production-ready stack for running Nutanix Cluster Check (NCC) across many clusters in parallel, aggregating results, and serving them through a hardened API and modern web UI.
 
@@ -52,10 +52,10 @@ Every release ships a self-contained `ncc-v2-stack-*` archive on the [Releases p
 
 ```bash
 # 1. Download for your platform (linux-amd64 shown here)
-curl -LO https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/v2.1.1/ncc-v2-stack-linux-amd64.tar.gz
+curl -LO https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/v2.2.0/ncc-v2-stack-linux-amd64.tar.gz
 
 # 2. Verify checksum (recommended)
-curl -LO https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/v2.1.1/checksums.txt
+curl -LO https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/v2.2.0/checksums.txt
 shasum -a 256 -c checksums.txt --ignore-missing | grep ncc-v2-stack-linux-amd64
 
 # 3. Extract
@@ -96,7 +96,7 @@ cd ncc-v2-stack-linux-amd64/bin
 
 When binding the API to a loopback IP (e.g. `--api-listen 127.0.0.1:8081`), the orchestrator now preserves the IP for connection URLs (so `wait-ready` and the UI backend hit the right address family on macOS, where `localhost` resolves to `::1` first) and additionally adds `http://localhost:port` to the CORS allow-list so browsers can reach the UI under either name.
 
-Older releases (v2.0.0 / v2.0.1) require the explicit form below; it still works in v2.1.1:
+Older releases (v2.0.0 / v2.0.1) require the explicit form below; it still works in v2.2.0:
 
 ```bash
 ./bin/ncc-orchestrator-linux-amd64 v2-check \
@@ -108,11 +108,11 @@ Older releases (v2.0.0 / v2.0.1) require the explicit form below; it still works
   --api-listen :8081 --ui-listen :8080
 ```
 
-Open <http://localhost:8080> — the UI picks up the auto-generated `.ncc-api-token` and authenticates against the API server transparently.
+Open <https://localhost:8080> — the UI picks up the auto-generated `.ncc-api-token` and authenticates against the API server transparently. Use `--ui-insecure-http` only for a trusted loopback HTTP session.
 
 ### From source
 
-Requires **Go 1.26.4+** (matching the `go` directive in [`go.mod`](go.mod)) and **Node 20+**.
+Requires **Go 1.27.1+** (matching the `go` directive in [`go.mod`](go.mod)) and **Node 24+** (Active LTS).
 
 ```bash
 git clone https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator.git
@@ -224,14 +224,14 @@ SHA-256 of the running executable. Cross-check against `checksums.txt`
 
 ```text
 $ ncc-orchestrator verify
-version:           2.1.1
+version:           2.2.0
 git_revision:      914c71d27fb1...
 executable_sha256: 23ee3cad876c...
 license:           MIT
 project_url:       https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator
 affiliation:       independent open-source project; not affiliated with or endorsed by Nutanix, Inc.
 verify:            compare executable_sha256 against checksums.txt at
-                   https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.1.1
+                   https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.2.0
 ```
 
 On Windows, the file Properties dialog also displays the project name
@@ -302,14 +302,16 @@ Supported metrics: `new-fails`, `resolved-fails`, `fail-rate`, `clusters-failed`
 
 ## The web UI
 
-After `v2-start`, the dashboard at <http://localhost:8080> gives you:
+After `v2-start`, the dashboard at <https://localhost:8080> gives you:
 
-- **Dashboard** — last-run summary, FAIL/WARN/ERR/INFO counts, context-aware alerts table with "Run in progress" / "All clusters clean" / "No alerts yet" states.
+- **Dashboard** — last-run summary, FAIL/WARN/ERR/INFO counts, and an Alerts table that grows with leftover viewport height. Toggle **NCC** vs **PC** (Prism Central). Filter state lives in the URL (`q`, `sev`, `clusters`, `mode`, `source`, `resolved`); **Copy link** restores the same view. Pagination sits under the table and changes which rows are shown. Expanding a PC alert opens a structured inspector (status, entity, timeline, root cause, KB, identifiers).
 - **Runs** — trigger a new run, follow live output, cancel a stuck run (`DELETE /api/v1/runs/active`), browse archived runs with type/status/duration/clusters/issues columns.
 - **Insights** — trends, regressions, flaky checks, drill-down diffs.
-- **Settings** — config (Form + Monaco YAML editor), schedule, secrets migration, notifications (test send), audit log, API explorer, raw outputs.
+- **Settings** — config (Form + Monaco YAML editor), schedule, secrets, notifications, audit log, API explorer, raw outputs, Access (users, LDAP/SSO, HTTPS/TLS, software updates), System Health. **⌘K / Ctrl+K** jumps to a Settings card (`/settings?tab=&focus=`). Empty first-run dashboards link here to Config.
 
 Theme-aware (light/dark/IT-Pro), keyboard-friendly, accessible form fields (every input has `id`/`name`/`htmlFor`/`aria-label`), CSP-locked (`script-src 'self'`).
+
+Login is HTTPS by default. On non-localhost HTTP the login page warns that Secure cookies will not stick, links to the HTTPS URL, and offers the self-signed certificate fingerprint plus PEM download (`GET /api/v1/tls/public`). If `/auth/me` hangs after a cert change, the splash times out with Retry / Sign in. Header health is the API reached through this UI and is clickable to retry.
 
 ---
 
@@ -338,7 +340,7 @@ Major endpoints (full surface at `GET /api/v1/meta/routes`, OpenAPI at `GET /api
 
 | Path                                | Methods    | Notes                                                              |
 | ----------------------------------- | ---------- | ------------------------------------------------------------------ |
-| `/api/v1/health`                    | GET        | Version, build date, paths, auth mode, token source                |
+| `/api/v1/tls/public`                | GET        | Public UI cert fingerprint + PEM (no private key) for login-page trust |
 | `/api/v1/alerts`                   | GET        | PC alerts; `resolved=No`, `resolved=Yes`, or `resolved=all`; optional `refresh=1` |
 | `/api/v1/runs`                      | GET        | List runs (`?source=history\|summary\|trigger`, `?since=RFC3339`) |
 | `/api/v1/runs/{id}`                 | GET        | Single archived run + embedded artifacts                          |
@@ -363,7 +365,7 @@ Major endpoints (full surface at `GET /api/v1/meta/routes`, OpenAPI at `GET /api
 
 All write/mutate routes require `X-API-Token: <token>` (or `Authorization: Bearer …` session token). Errors return a structured envelope with `success: false`, `error`, and `error_code` (e.g. `NCC_API_UNAUTHORIZED`, `NCC_API_BAD_REQUEST`, `NCC_API_NOT_FOUND`, `NCC_API_CONFLICT`).
 
-**RBAC, login & SSO:** the server enforces three roles — `viewer` (read-only), `operator` (also trigger/cancel runs), and `admin` (everything incl. `/api/v1/settings/*`). A role can be a static token (`NCC_API_TOKEN` = admin, `NCC_API_VIEWER_TOKEN` = viewer), an interactive login, or a self-service **personal access token** (`ncc_pat_…` bearer, inherits the owner's role, expiring or **never**-expiring, revocable; user menu → *Personal access tokens*). Interactive login is on by default with a first-run **admin bootstrap** (random password + forced change); accounts live in a writable store (a `0600` file or a Kubernetes Secret). Login methods: local password accounts (managed in Settings → Access, bcrypt), **SAML SSO** (`--saml-*` or runtime), and **LDAP / Active Directory** (`--ldap-*` or runtime; local-first with AD fallback, AD group→role mapping) — all configurable together. Browser logins use an httpOnly, `SameSite=Strict` session cookie (marked `Secure` whenever the UI is on HTTPS — the default) with double-submit CSRF protection; the UI shows a login screen and hides admin-only/operator-only controls per role. Admins can segregate clusters into **cluster groups** for access control: groups are **opt-in isolation** — an ungrouped viewer/operator sees all clusters, while membership confines a caller to that group's clusters. Lost passwords are recoverable offline (`ncc-orchestrator v2-reset-password`) or via a self-service request queue, and all auth state can be captured with `v2-backup` / restored with `v2-restore`. See [docs/SECURITY_AND_TRUST.md](docs/SECURITY_AND_TRUST.md). With no login configured, the single-token behavior is unchanged.
+**RBAC, login & SSO:** the server enforces three roles — `viewer` (read-only), `operator` (also trigger/cancel runs), and `admin` (everything incl. `/api/v1/settings/*`). A role can be a static token (`NCC_API_TOKEN` = admin, `NCC_API_VIEWER_TOKEN` = viewer), an interactive login, or a self-service **personal access token** (`ncc_pat_…` bearer, inherits the owner's role, expiring or **never**-expiring, revocable; user menu → *Personal access tokens*). Interactive login is on by default with a first-run **admin bootstrap** (random password + forced change); accounts live in a writable store (a `0600` file or a Kubernetes Secret). Login methods: local password accounts (managed in Settings → Access, bcrypt), **SAML SSO** (`--saml-*` or runtime), and **LDAP / Active Directory** (`--ldap-*` or runtime; local-first with AD fallback, AD group→role mapping) — all configurable together. Browser logins set an httpOnly `auth_token` JWT cookie (`SameSite=Lax`, `Secure` on HTTPS) plus a legacy HMAC `ncc_session` cookie (`SameSite=Strict`) with double-submit CSRF protection; the UI shows a login screen and hides admin-only/operator-only controls per role. Admins can segregate clusters into **cluster groups** for access control: groups are **opt-in isolation** — an ungrouped viewer/operator sees all clusters, while membership confines a caller to that group's clusters. Lost passwords are recoverable offline (`ncc-orchestrator v2-reset-password`) or via a self-service request queue, and all auth state can be captured with `v2-backup` / restored with `v2-restore`. See [docs/SECURITY_AND_TRUST.md](docs/SECURITY_AND_TRUST.md). With no login configured, the single-token behavior is unchanged.
 
 **HTTPS by default:** `ncc-ui-server` serves HTTPS out of the box — `v2-start` auto-generates a self-signed cert (under `<install-dir>/tls/`) and redirects plain HTTP to HTTPS on the same port. Kubernetes uses the same files on the shared PVC (`--auto-tls-dir /data/tls`). Manage the certificate from **Settings → Access → HTTPS / TLS**: generate/renew a self-signed cert, or install your own PEM cert + key. On Kubernetes, UI pods reload the new files without a stack restart. Opt out on a host/VM with `--ui-insecure-http`. Session cookies are `Secure` whenever HTTPS is on.
 
@@ -383,7 +385,7 @@ curl -s -X POST http://localhost:8081/api/v1/runs/trigger \
 
 ## Operability: status, doctor, metrics, completions
 
-v2.1.1 ships an opinionated set of operator-experience subcommands that
+v2.2.0 ships an opinionated set of operator-experience subcommands that
 remove the need for ad-hoc `ps | grep` / `lsof` / `curl` invocations
 when something looks wrong.
 
@@ -426,7 +428,7 @@ install_dir:   /opt/ncc-v2
 -- 3. v2-status (running services) --
   (the table above)
 -- 4. environment summary --
-  go_version: go1.26.3
+  go_version: go1.27.1
   os/arch:    linux/amd64
   NCC_* env var names: (values REDACTED for support-ticket safety)
 -- 5. recent log tails (last 200 lines each) --
@@ -449,7 +451,7 @@ on stdout.
 The api-server now exposes a Prometheus-compatible `/metrics` endpoint:
 
 ```text
-ncc_build_info{version="2.1.1",stream="Release",go_version="go1.26.4",os="linux",arch="amd64"} 1
+ncc_build_info{version="2.2.0",stream="Release",go_version="go1.27.1",os="linux",arch="amd64"} 1
 ncc_process_uptime_seconds 3601.42
 ncc_run_active 0
 ncc_runs_triggered_total 42
@@ -603,7 +605,7 @@ echo "NCC_PASSWORD=<your-prism-password>" > .env
 
 # 3. Build and start
 docker compose up -d
-# UI on http://localhost:8080 (proxies to ncc-api-server:8081)
+# UI on https://localhost:8080 (proxies to ncc-api-server:8081)
 # API on 127.0.0.1:8081  (loopback-only by default)
 
 # 4. Verify
@@ -643,7 +645,7 @@ below and the [`helm/`](helm/) chart.
 | Rate limiting         | Per-client token bucket on sensitive auth/mutation routes (`--rate-limit-per-minute`, default 60)                      |
 | Path confinement      | All file I/O canonicalized under `--repo-root`; `..` and embedded `/` rejected on `/artifacts/{name}` and `/runs/{id}` |
 | Secrets               | `secret://NAME` refs with `env` or `file` provider; plaintext-in-config triggers a startup warning                     |
-| Vulnerability scans   | `govulncheck ./...` and `npm audit --omit=dev` clean (Go 1.26.4, DOMPurify ≥ 3.4.7 enforced); enforced in CI (`.github/workflows/ci.yml`) |
+| Vulnerability scans   | `govulncheck ./...` and `npm audit --omit=dev` clean (Go 1.27.1, DOMPurify ≥ 3.4.12 enforced); enforced in CI (`.github/workflows/ci.yml`) |
 
 Release details and validation evidence: [`RELEASE_NOTES_v2.2.0.md`](RELEASE_NOTES_v2.2.0.md).
 
@@ -706,7 +708,7 @@ Raw NCC summaries land under `nccfiles/`. Runner JSON logs under `logs/ncc-runne
 | [`docs/MIGRATION_v2.0.2_TO_v2.1.0.md`](docs/MIGRATION_v2.0.2_TO_v2.1.0.md)            | Upgrading from v2.0.2 (pre-RBAC/pre-backup) to v2.1.0                 |
 | [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)                                  | TLS, Prism Central, API issues                                        |
 | [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md)                                            | Wire the orchestrator into AI tools via MCP                           |
-| [`RELEASE_NOTES_v2.2.0.md`](RELEASE_NOTES_v2.2.0.md)                                  | Current (unreleased) v2.2.0 details: PC alerts, hybrid JWT auth, Kubernetes scaling |
+| [`RELEASE_NOTES_v2.2.0.md`](RELEASE_NOTES_v2.2.0.md)                                  | Current v2.2.0 details: PC alerts, hybrid JWT auth, Kubernetes scaling, dashboard UX |
 | [`docs/NIST_CSF_BASELINE.md`](docs/NIST_CSF_BASELINE.md)                                | NIST CSF 2.0 control baseline, evidence map, and gap plan             |
 | [`docs/NIST_CSF_EVIDENCE_MANIFEST.json`](docs/NIST_CSF_EVIDENCE_MANIFEST.json)          | Machine-readable control-to-evidence mapping for compliance bundles    |
 | [`docs/RELEASE_CHECKSUMS.md`](docs/RELEASE_CHECKSUMS.md)                              | How `--update` verifies downloads                                     |
@@ -752,10 +754,10 @@ Add the resulting binary in your MCP client (Cursor, Claude Desktop, etc.) — s
 
 ## Release status
 
-- **Current GA:** [`v2.1.1`](RELEASE_NOTES_v2.1.1.md). See [`RELEASE_NOTES_v2.0.0.md`](RELEASE_NOTES_v2.0.0.md), [`RELEASE_NOTES_v2.0.1.md`](RELEASE_NOTES_v2.0.1.md), [`RELEASE_NOTES_v2.0.2.md`](RELEASE_NOTES_v2.0.2.md), [`RELEASE_NOTES_v2.1.0.md`](RELEASE_NOTES_v2.1.0.md), [`RELEASE_NOTES_v2.1.1.md`](RELEASE_NOTES_v2.1.1.md) for the cumulative change log.
+- **Current GA:** [`v2.2.0`](RELEASE_NOTES_v2.2.0.md). See [`RELEASE_NOTES_v2.0.0.md`](RELEASE_NOTES_v2.0.0.md), [`RELEASE_NOTES_v2.0.1.md`](RELEASE_NOTES_v2.0.1.md), [`RELEASE_NOTES_v2.0.2.md`](RELEASE_NOTES_v2.0.2.md), [`RELEASE_NOTES_v2.1.0.md`](RELEASE_NOTES_v2.1.0.md), [`RELEASE_NOTES_v2.1.1.md`](RELEASE_NOTES_v2.1.1.md), [`RELEASE_NOTES_v2.2.0.md`](RELEASE_NOTES_v2.2.0.md) for the cumulative change log.
 - **Build provenance:** every binary embeds `Version`, `BuildDate`, `Stream`, `GoVersion`, and the git revision (via `-buildvcs=true`); inspect with `./ncc-orchestrator verify`. Releases additionally ship `release-attestation.json` (per-release manifest), CycloneDX SBOMs, and a SLSA build-provenance attestation produced by `.github/workflows/release.yml` (verify with `gh attestation verify`).
 - **Checksums:** `dist/checksums.txt` (or the `checksums.txt` attached to the GitHub release) — SHA-256, sorted, includes every binary, every stack archive, `example_config.yaml`, `release-attestation.json`, every `bom-*.cdx.json`, and the matching `RELEASE_NOTES_v*.md`.
-- **Docker:** `prajwalnutant/nutanix-ncc-orchestrator:2.1.1` (and `:latest`).
+- **Docker:** `prajwalnutant/nutanix-ncc-orchestrator:2.2.0` (and `:latest`).
 
 ---
 

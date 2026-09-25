@@ -14,7 +14,7 @@ Maintainers should decide release track before building artifacts:
 Suggested branch/tag convention:
 
 - `v1` maintenance branch -> tags like `v1.2.3`
-- `v2` maintenance branch -> tags like `v2.1.1`
+- `v2` maintenance branch -> tags like `v2.2.0`
 
 For each tag, update release notes and validate the matching track behavior.
 
@@ -79,7 +79,7 @@ The tool downloads the **first** such asset and uses it to verify the binary it 
 
 ## 4. Upload to the GitHub release
 
-When you create the release (e.g. v2.1.1):
+When you create the release (e.g. v2.2.0):
 
 1. Upload each **binary** (e.g. `ncc-orchestrator-linux-amd64`, …).
 2. Upload the **checksum file** (e.g. `checksums.txt`).
@@ -164,7 +164,7 @@ If `v2` assets are missing, bootstrap will fail with a "required v2 assets not f
 3. Build `ncc-api-server` and `ncc-ui-server` binaries for supported OS/arch.
 4. Build frontend distribution and package it (`.zip` or `.tar.gz`).
 5. Generate `checksums.txt` for CLI binaries (and optionally for other binaries).
-6. Create tag `v2.x.y` and publish release with all required v2 assets (the current release is `v2.1.1`).
+6. Create tag `v2.x.y` and publish release with all required v2 assets (the current release is `v2.2.0`).
 7. Validate:
    - `ncc-orchestrator update --check --allow-major-upgrade`
    - `ncc-orchestrator v2-bootstrap --check`

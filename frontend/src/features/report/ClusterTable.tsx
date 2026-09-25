@@ -5,6 +5,7 @@ import {
   Descriptions,
   Drawer,
   Empty,
+  Pagination,
   Space,
   Table,
   Tag,
@@ -382,17 +383,15 @@ function useAlertsTableScrollY(enabled: boolean, density: Density) {
       const header =
         host.querySelector<HTMLElement>(".ant-table-header") ??
         host.querySelector<HTMLElement>(".ant-table-thead");
-      const pagination =
-        host.querySelector<HTMLElement>(".ant-table-pagination") ??
-        host.querySelector<HTMLElement>(".ant-pagination");
       const headerH = header?.getBoundingClientRect().height ?? (density === "compact" ? 39 : 47);
-      const pagH = pagination?.getBoundingClientRect().height ?? 64;
       const hostH = host.clientHeight;
       if (hostH <= 0) {
         setTableY(ALERTS_TABLE_FALLBACK_Y);
         return;
       }
-      setTableY(Math.max(ALERTS_TABLE_MIN_Y, Math.floor(hostH - headerH - pagH)));
+      // Pagination lives outside this host so it cannot be clipped. scroll.y
+      // is only the table body; do not subtract a pager that is not in here.
+      setTableY(Math.max(ALERTS_TABLE_MIN_Y, Math.floor(hostH - headerH)));
     };
 
     measure();
@@ -598,6 +597,35 @@ export function ClusterTable({
   ]);
 
   const { hostRef, tableY } = useAlertsTableScrollY(rows.length > 0, density);
+
+  const filterResetKey = [
+    alertSource,
+    pcResolvedFilter,
+    compareMode,
+    filterText,
+    selectedClusters.join("\0"),
+    severityFilters.join("\0"),
+  ].join("|");
+  useEffect(() => {
+    setPage(1);
+  }, [filterResetKey]);
+
+  const pageSize = Math.max(1, rowsPerPage);
+  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize) || 1);
+  const currentPage = Math.min(page, pageCount);
+  const pagedRows = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return rows.slice(start, start + pageSize);
+  }, [rows, currentPage, pageSize]);
+
+  useEffect(() => {
+    if (page > pageCount) setPage(pageCount);
+  }, [page, pageCount]);
+
+  useEffect(() => {
+    const body = hostRef.current?.querySelector(".ant-table-body");
+    if (body) body.scrollTop = 0;
+  }, [currentPage, pageSize, hostRef]);
 
   const severityCounts = useMemo(() => {
     const counts: Record<Severity, number> = { FAIL: 0, WARN: 0, ERR: 0, INFO: 0, UNKNOWN: 0 };
@@ -889,32 +917,36 @@ export function ClusterTable({
           }
         />
       ) : (
-        <div className="alerts-table-host" ref={hostRef} data-scroll-y={tableY}>
-          <Table<RowRecord>
-            virtual
-            className="alerts-table"
-            tableLayout="fixed"
-            rowKey="key"
-            columns={columns}
-            dataSource={rows}
-            rowClassName={(_, index) => (index % 2 === 0 ? "alerts-row-even" : "alerts-row-odd")}
-            onRow={(row) => ({ onClick: () => setDrawerRow(row), style: { cursor: "pointer" } })}
-            pagination={{
-              current: page,
-              pageSize: rowsPerPage,
-              total: rows.length,
-              onChange: (nextPage, nextPageSize) => {
-                setPage(nextPage);
-                if (nextPageSize && nextPageSize !== rowsPerPage) setRowsPerPage(nextPageSize);
-              },
-              showSizeChanger: true,
-              pageSizeOptions: [50, 100, 200, 500],
-              showTotal: (total, range) => `${range[0]}–${range[1]} of ${total}`,
+        <>
+          <div className="alerts-table-host" ref={hostRef} data-scroll-y={tableY}>
+            <Table<RowRecord>
+              virtual
+              className="alerts-table"
+              tableLayout="fixed"
+              rowKey="key"
+              columns={columns}
+              dataSource={pagedRows}
+              rowClassName={(_, index) => (index % 2 === 0 ? "alerts-row-even" : "alerts-row-odd")}
+              onRow={(row) => ({ onClick: () => setDrawerRow(row), style: { cursor: "pointer" } })}
+              pagination={false}
+              size={density === "compact" ? "small" : "middle"}
+              scroll={{ x: 1200, y: tableY }}
+            />
+          </div>
+          <Pagination
+            className="alerts-pagination"
+            current={currentPage}
+            pageSize={pageSize}
+            total={rows.length}
+            showSizeChanger
+            pageSizeOptions={[50, 100, 200, 500]}
+            showTotal={(total, range) => `${range[0]}–${range[1]} of ${total}`}
+            onChange={(nextPage, nextPageSize) => {
+              setPage(nextPage);
+              if (nextPageSize && nextPageSize !== rowsPerPage) setRowsPerPage(nextPageSize);
             }}
-            size={density === "compact" ? "small" : "middle"}
-            scroll={{ x: 1200, y: tableY }}
           />
-        </div>
+        </>
       )}
 
       <Drawer

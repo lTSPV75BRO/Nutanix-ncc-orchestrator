@@ -58,4 +58,4 @@ configMapName: ncc-orchestrator-config
 pvcName: ncc-orchestrator-output
 secretName: ncc-orchestrator-credentials
 
-initImage: busybox:1.36
+initImage: busybox:1.37

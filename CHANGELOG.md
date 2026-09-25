@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [2.2.0] - Unreleased
+## [2.2.0] - 2026-09-25
 
 Adds Prism Central serviceability alerts to the dashboard alongside NCC
 findings, with an NCC / PC source selector. Kubernetes installs are
@@ -139,6 +139,22 @@ Settings), the same way a Linux `v2-start` does.
   self-signed UI certificate (`GET /api/v1/tls/public`, PEM only, no key).
 - **Empty dashboard points at Config.** First-run empty state links to
   Settings → Config as well as Runs.
+- **Alerts table pager now changes rows.** Pagination lives outside the
+  overflow-hidden table host (so it stays visible) and the virtual table is
+  given only the current page slice. Changing page or page size replaces the
+  visible alerts and scrolls back to the top.
+
+### Security
+
+- **Toolchain and dependency refresh.** Go directive `1.26.5 → 1.27.1`,
+  `golang.org/x/crypto` `0.55.0 → 0.57.0`, MCP Go SDK `1.7.0 → 1.8.0`, and
+  other module patch/minor updates. Frontend packages moved to current
+  Ant Design 6.6, React 19.3, Vite 8.3, and monaco-editor 0.57. Docker
+  images use `golang:1.27.1-alpine`, `node:24-alpine` (Active LTS),
+  `alpine:3.24` (3.20 is EOL), and `busybox:1.37` for Kubernetes init
+  containers. CI scans `govulncheck ./...` and
+  `npm audit --omit=dev`; frontend tests and production audit now run in
+  `.github/workflows/ci.yml`.
 
 ## [2.1.1] - 2026-08-17
 

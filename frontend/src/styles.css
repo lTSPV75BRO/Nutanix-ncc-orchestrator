@@ -1640,6 +1640,16 @@ a {
   height: 100%;
 }
 
+.alerts-pagination {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+}
+
 .pc-alert-inspector {
   display: flex;
   flex-direction: column;

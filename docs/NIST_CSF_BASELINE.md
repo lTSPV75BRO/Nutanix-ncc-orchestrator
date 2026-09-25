@@ -1,4 +1,4 @@
-# NIST CSF Baseline (v2.1.1)
+# NIST CSF Baseline (v2.2.0)
 
 This document is the repository's first structured NIST Cybersecurity Framework
 (CSF 2.0) baseline. It maps currently implemented capabilities to CSF functions,
@@ -30,9 +30,10 @@ Non-goals:
 | --- | --- | --- | --- |
 | PR | Role-based access control | Implemented | `cmd/ncc-api-server/auth.go`, `cmd/ncc-api-server/users*.go`, `docs/SECURITY_AND_TRUST.md` |
 | PR | Authentication modes (token/session/local/SAML/LDAP) | Implemented | `cmd/ncc-api-server/auth.go`, `saml.go`, `ldap.go`, `frontend/src/pages/LoginPage.tsx` |
-| PR | Session/PAT security controls | Implemented | `cmd/ncc-api-server/tokens*.go`, `docs/SECURITY_AND_TRUST.md` |
+| PR | Session/PAT security controls | Implemented | `internal/auth`, `cmd/ncc-api-server/tokens.go`, `docs/SECURITY_AND_TRUST.md` |
+| PR | Shared JWT secret for API replicas | Implemented | `NCC_JWT_SECRET` / Kubernetes `jwt-secret`; required in-cluster |
 | PR | Data-at-rest protection for backups | Implemented | `backupcrypt.go`, `cmd/ncc-api-server/backups*.go`, `docs/SECURITY_AND_TRUST.md` |
-| PR | TLS cert management and secure defaults | Implemented | `cmd/ncc-api-server/tls.go`, `cmd/ncc-ui-server/main.go`, `docs/TROUBLESHOOTING.md` |
+| PR | TLS cert management and secure defaults | Implemented | `cmd/ncc-api-server/tls.go`, `cmd/ncc-ui-server/main.go`, `GET /api/v1/tls/public`, `docs/TROUBLESHOOTING.md` |
 | DE | Audit logging and filtering | Implemented | `cmd/ncc-api-server/main.go` (audit routes), `frontend/src/features/settings/AuditLogSection.tsx` |
 | DE | SIEM/syslog forwarding | Implemented | `cmd/ncc-api-server/auditforward.go` |
 | DE | Continuous health diagnostics/self-heal checks | Implemented | `cmd/ncc-api-server/diagnostics.go`, `selfheal.go`, `frontend/src/features/settings/SystemHealthSection.tsx` |

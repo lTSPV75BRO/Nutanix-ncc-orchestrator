@@ -63,7 +63,7 @@ If your change affects behavior, flags, APIs, setup, operations, or security:
   - `docs/MIGRATION_v1_TO_v2.md`
   - `Prometheus.md` (if metrics/monitoring changed)
 - For v2 release-line changes, update:
-  - `RELEASE_NOTES_v2.1.1.md`
+  - `RELEASE_NOTES_v2.2.0.md`
   - `CHANGELOG.md`
 
 ## Testing expectations by area

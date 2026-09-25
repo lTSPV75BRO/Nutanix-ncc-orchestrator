@@ -20,8 +20,9 @@
 #     `docker compose down` won't wipe history. Use `docker compose
 #     down -v` for a clean reset.
 #   - For a production deployment, replace the ALLOWED_ORIGINS /
-#     CORS_ORIGIN values with your real public hostnames and put the
-#     UI behind an HTTPS reverse proxy (nginx, Caddy, traefik).
+#     CORS_ORIGIN values with your real public hostnames. The UI image
+#     serves HTTPS by default (self-signed); use --ui-insecure-http only
+#     for a trusted loopback.
 
 services:
   ncc-api-server:
