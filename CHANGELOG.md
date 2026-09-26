@@ -110,6 +110,8 @@ Settings), the same way a Linux `v2-start` does.
   revision, build date, and Go version. API and UI container builds read
   `VERSION` and stamp the same Stream. `--docker` / `--push` are optional
   and package the Linux binaries with `docker` or `podman` (`--engine`).
+  `--images-only` builds just those images. Tags are `name:VERSION` and,
+  for a Release stream, `name:latest`.
   A Podman machine is given the host trust store so base-image pulls work
   through TLS inspection; that CA is not left in the image.
 

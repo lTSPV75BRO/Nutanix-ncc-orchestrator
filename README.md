@@ -164,7 +164,7 @@ serves **HTTPS by default** with an auto-generated self-signed cert):
 # Add --ui-insecure-http to serve plain HTTP for a trusted loopback instead.
 ```
 
-Reproducible release build for Linux, macOS, and Windows (from a Linux or Windows host): [`binaryGO.txt`](binaryGO.txt) (`bash binaryGO.txt` or `binaryGO.cmd` on Windows). Optional image packaging is `--docker` (uses the `docker` binary, or `podman` when Docker is not installed; `--engine` selects one). See also [`docs/BUILD_FROM_SCRATCH.md`](docs/BUILD_FROM_SCRATCH.md).
+Reproducible release build for Linux, macOS, and Windows (from a Linux or Windows host): [`binaryGO.txt`](binaryGO.txt) (`bash binaryGO.txt` or `binaryGO.cmd` on Windows). Optional image packaging is `--docker` or `--images-only` (tags are `name:VERSION`, not `name:VERSION-arch`). The engine is `docker`, or `podman` when Docker is not installed; `--engine` selects one. See also [`docs/BUILD_FROM_SCRATCH.md`](docs/BUILD_FROM_SCRATCH.md).
 
 ---
 
