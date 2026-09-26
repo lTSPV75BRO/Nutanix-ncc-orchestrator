@@ -101,6 +101,15 @@ Settings), the same way a Linux `v2-start` does.
 - **Host/VM JWT secret still optional.** An unset `NCC_JWT_SECRET` on a
   non-Kubernetes process still mints an in-memory key and logs a replica
   warning. Kubernetes refuses to start without the shared secret.
+- **Release builds.** `binaryGO.txt` compiles Linux, macOS, and Windows
+  binaries in parallel (a Linux or Windows host can cross-compile the other
+  two) and checks each file is ELF, Mach-O, or PE. `binaryGO.cmd` runs the
+  same script from Windows. It also checks that VERSION / Helm / k8s /
+  frontend stamps match, and can refresh Go and npm dependencies. Every
+  binary is linked with `main.Stream` (default `Release`) plus version,
+  revision, build date, and Go version. API and UI container builds read
+  `VERSION` and stamp the same Stream. `--docker` / `--push` are optional
+  and package the Linux binaries after they exist.
 
 ### Fixed
 

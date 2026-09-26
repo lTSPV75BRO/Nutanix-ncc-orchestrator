@@ -2,7 +2,19 @@
 # Expects a pre-built Linux binary in dist/, for example:
 # - dist/ncc-orchestrator-linux-amd64
 # - dist/ncc-orchestrator-linux-arm64
+# Those binaries must already carry -X main.Stream / Version / GitRevision
+# (binaryGO.txt stamps them). This image only packages the binary.
 FROM alpine:3.24
+
+ARG STREAM=Release
+ARG GIT_REVISION=unknown
+ARG BUILD_DATE=unknown
+ARG VERSION=dev
+LABEL org.opencontainers.image.title="ncc-orchestrator" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${GIT_REVISION}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      com.ncc-orchestrator.stream="${STREAM}"
 
 RUN apk add --no-cache ca-certificates tzdata
 

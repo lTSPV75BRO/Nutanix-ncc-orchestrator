@@ -29,6 +29,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
+      args:
+        STREAM: ${NCC_STREAM:-Release}
+        GIT_REVISION: ${GIT_REVISION:-unknown}
+        BUILD_DATE: ${BUILD_DATE:-}
     image: ncc-orchestrator/api-server:local
     restart: unless-stopped
     networks: [ncc]
@@ -76,6 +80,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.ui
+      args:
+        STREAM: ${NCC_STREAM:-Release}
+        GIT_REVISION: ${GIT_REVISION:-unknown}
+        BUILD_DATE: ${BUILD_DATE:-}
     image: ncc-orchestrator/ui-server:local
     restart: unless-stopped
     networks: [ncc]
