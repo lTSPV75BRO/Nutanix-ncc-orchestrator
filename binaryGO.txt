@@ -68,6 +68,7 @@ STREAM_ARG=""
 OS_LIST="linux,darwin,windows"
 ARCH_LIST="amd64,arm64"
 DOCKER_ARCH=""
+ENGINE_ARG=""
 JOBS=""
 REGISTRY="${NCC_DOCKER_REGISTRY:-docker.io}"
 IMAGE_PREFIX="${NCC_IMAGE_PREFIX:-prajwalnutant}"
@@ -107,15 +108,18 @@ What to build
   --dry-run              Print the plan and exit without writing dist/
 
 Images (packages the linux binaries this script built)
-  --docker               Build runner, API, and UI images
-  --push                 docker push (implies --docker)
+  --docker               Build runner, API, and UI images with docker or podman
+  --engine NAME          docker or podman (default: docker if that binary
+                         is on PATH, otherwise podman). A shell alias is ignored.
+  --push                 Push images (implies --docker)
   --docker-arch LIST     linux arches to image (default: amd64 if built)
   --registry HOST        default: $NCC_DOCKER_REGISTRY or docker.io
   --image-prefix NAME    default: $NCC_IMAGE_PREFIX or prajwalnutant
   --no-latest            Do not tag :latest (latest is on for Stream=Release)
 
 Env: VERSION, STREAM, BUILD_DATE, GIT_REVISION, NCC_RELEASE_PUBKEY,
-     NCC_RELEASE_SIGN_KEY, NCC_MACOS_*, NCC_WINDOWS_*, NCC_LINUX_GPG_KEY_ID
+     NCC_RELEASE_SIGN_KEY, NCC_MACOS_*, NCC_WINDOWS_*, NCC_LINUX_GPG_KEY_ID,
+     NCC_CONTAINER_ENGINE (docker or podman), NCC_CONTAINER_CA (extra PEM)
 EOF
 }
 
@@ -303,6 +307,8 @@ while [ "$#" -gt 0 ]; do
     --bins-only) BINS_ONLY=1; NO_STACKS=1 ;;
     --docker) DO_DOCKER=1 ;;
     --push) DO_DOCKER=1; DO_PUSH=1 ;;
+    --engine) need_arg "$@"; ENGINE_ARG="$2"; shift ;;
+    --engine=*) ENGINE_ARG="${1#*=}" ;;
     --no-latest) DO_LATEST=0 ;;
     --update-deps) UPDATE_DEPS=1 ;;
     --govulncheck) DO_GOVULN=1 ;;
@@ -510,8 +516,33 @@ if [ -z "$DOCKER_ARCH" ]; then
   fi
 fi
 
+resolve_container_engine() {
+  local want="${ENGINE_ARG:-${NCC_CONTAINER_ENGINE:-}}"
+  if [ -n "$want" ]; then
+    case "$want" in
+      docker|podman) ;;
+      *) die "--engine must be docker or podman" ;;
+    esac
+    command -v "$want" >/dev/null 2>&1 || die "$want was not found on PATH"
+    ENGINE="$want"
+    return
+  fi
+  if command -v docker >/dev/null 2>&1; then
+    ENGINE=docker
+  elif command -v podman >/dev/null 2>&1; then
+    ENGINE=podman
+  else
+    die "docker or podman is required for --docker. A shell alias such as alias docker=podman is not visible to this script; pass --engine podman"
+  fi
+}
+
+ENGINE=""
+if [ "$DO_DOCKER" = 1 ]; then
+  resolve_container_engine
+fi
+
 echo "plan host=${HOST_KERNEL} version=${VERSION}${GIT_DIRTY} stream=${STREAM} go=${GO_VER}"
-echo "plan os=${OS_LIST} arch=${ARCH_LIST} jobs=${JOBS} stacks=$([ "$NO_STACKS" = 1 ] && echo no || echo yes) docker=$([ "$DO_DOCKER" = 1 ] && echo yes || echo no) push=$([ "$DO_PUSH" = 1 ] && echo yes || echo no)"
+echo "plan os=${OS_LIST} arch=${ARCH_LIST} jobs=${JOBS} stacks=$([ "$NO_STACKS" = 1 ] && echo no || echo yes) docker=$([ "$DO_DOCKER" = 1 ] && echo yes || echo no) engine=${ENGINE:-none} push=$([ "$DO_PUSH" = 1 ] && echo yes || echo no)"
 echo "plan ldflags=${LDFLAGS}"
 
 if [ "$DRY_RUN" = 1 ]; then
@@ -901,10 +932,18 @@ fi
 
 build_images() {
   local arch stage primary name file tag_arch tag_version tag_latest
-  command -v docker >/dev/null 2>&1 || die "docker is required for --docker"
+  if [ -z "$ENGINE" ]; then
+    resolve_container_engine
+  fi
   if [ ! -d dist/frontend-dist ]; then
     die "dist/frontend-dist is missing; do not combine --skip-frontend with --docker unless that directory already exists"
   fi
+  # Podman prompts for short names such as alpine:3.24 when more than one
+  # registry is configured. Point those names at docker.io and do not ask.
+  if [ "$ENGINE" = "podman" ]; then
+    export CONTAINERS_SHORT_NAME_MODE=permissive
+  fi
+  sync_podman_trust
   stage=dist/.image-context
   rm -rf "$stage"
   mkdir -p "$stage"
@@ -918,14 +957,21 @@ build_images() {
     done
   done
   cp -R dist/frontend-dist "$stage/frontend-dist"
+  collect_host_cas "$stage/ncc-host-cas.pem"
   for arch in $(echo "$DOCKER_ARCH" | tr ',' ' '); do
     for spec in "deploy/docker/Dockerfile.runner|nutanix-ncc-orchestrator" "deploy/docker/Dockerfile.api|ncc-api-server" "deploy/docker/Dockerfile.ui|ncc-ui-server"; do
       file="${spec%%|*}"
       name="${spec##*|}"
       tag_arch="${REGISTRY}/${IMAGE_PREFIX}/${name}:${VERSION}-${arch}"
       tag_version="${REGISTRY}/${IMAGE_PREFIX}/${name}:${VERSION}"
-      echo "docker build ${name} linux/${arch}"
-      docker build \
+      echo "${ENGINE} build ${name} linux/${arch}"
+      fmt=""
+      if [ "$ENGINE" = "podman" ]; then
+        # OCI images drop HEALTHCHECK. Docker format keeps it, matching docker build.
+        fmt="--format docker"
+      fi
+      # shellcheck disable=SC2086
+      "$ENGINE" build $fmt \
         --platform "linux/${arch}" \
         --build-arg "TARGETARCH=${arch}" \
         --build-arg "VERSION=${VERSION}" \
@@ -936,24 +982,81 @@ build_images() {
         -t "$tag_arch" \
         "$stage"
       if [ "$arch" = "$primary" ]; then
-        docker tag "$tag_arch" "$tag_version"
+        "$ENGINE" tag "$tag_arch" "$tag_version"
         if [ "$DO_LATEST" = 1 ] && [ "$STREAM" = "Release" ]; then
           tag_latest="${REGISTRY}/${IMAGE_PREFIX}/${name}:latest"
-          docker tag "$tag_arch" "$tag_latest"
+          "$ENGINE" tag "$tag_arch" "$tag_latest"
         fi
       fi
       if [ "$DO_PUSH" = 1 ]; then
-        docker push "$tag_arch"
+        "$ENGINE" push "$tag_arch"
         if [ "$arch" = "$primary" ]; then
-          docker push "$tag_version"
+          "$ENGINE" push "$tag_version"
           if [ "$DO_LATEST" = 1 ] && [ "$STREAM" = "Release" ]; then
-            docker push "${REGISTRY}/${IMAGE_PREFIX}/${name}:latest"
+            "$ENGINE" push "${REGISTRY}/${IMAGE_PREFIX}/${name}:latest"
           fi
         fi
       fi
     done
   done
-  echo "DOCKER_OK registry=${REGISTRY} prefix=${IMAGE_PREFIX} version=${VERSION} stream=${STREAM}"
+  echo "DOCKER_OK engine=${ENGINE} registry=${REGISTRY} prefix=${IMAGE_PREFIX} version=${VERSION} stream=${STREAM}"
+}
+
+# Public certificates from the host trust store. Used so a Podman machine can
+# pull base images through TLS inspection, and so apk can reach its mirror
+# during the image build. Private keys are never exported.
+collect_host_cas() {
+  local dest="$1"
+  : > "$dest"
+  if [ -n "${NCC_CONTAINER_CA:-}" ] && [ -f "$NCC_CONTAINER_CA" ]; then
+    cat "$NCC_CONTAINER_CA" >> "$dest"
+  fi
+  if [ "$HOST_KERNEL" = "darwin" ] && command -v security >/dev/null 2>&1; then
+    security find-certificate -a -p /Library/Keychains/System.keychain >> "$dest" 2>/dev/null || true
+    if [ -f "${HOME}/Library/Keychains/login.keychain-db" ]; then
+      security find-certificate -a -p "${HOME}/Library/Keychains/login.keychain-db" >> "$dest" 2>/dev/null || true
+    fi
+  elif [ "$HOST_KERNEL" = "linux" ]; then
+    if [ -d /usr/local/share/ca-certificates ]; then
+      cat /usr/local/share/ca-certificates/*.crt >> "$dest" 2>/dev/null || true
+    fi
+    if [ -d /etc/pki/ca-trust/source/anchors ]; then
+      cat /etc/pki/ca-trust/source/anchors/*.crt /etc/pki/ca-trust/source/anchors/*.pem >> "$dest" 2>/dev/null || true
+    fi
+  fi
+}
+
+sync_podman_trust() {
+  local pem remote sum current
+  [ "$ENGINE" = "podman" ] || return 0
+  remote=$("$ENGINE" info --format '{{.Host.ServiceIsRemote}}' 2>/dev/null || echo false)
+  [ "$remote" = "true" ] || return 0
+  pem=$(mktemp)
+  collect_host_cas "$pem"
+  if ! grep -q 'BEGIN CERTIFICATE' "$pem"; then
+    rm -f "$pem"
+    return 0
+  fi
+  if ! "$ENGINE" machine ssh -- true >/dev/null 2>&1; then
+    echo "podman: machine ssh is unavailable; registry pulls use the machine trust store as it is" >&2
+    rm -f "$pem"
+    return 0
+  fi
+  sum=$(sha256_file "$pem")
+  current=$("$ENGINE" machine ssh -- cat /etc/pki/ca-trust/source/anchors/ncc-host-cas.sha 2>/dev/null || true)
+  current=$(printf '%s' "$current" | tr -d '[:space:]')
+  if [ "$current" = "$sum" ]; then
+    rm -f "$pem"
+    echo "podman: host CA trust already installed in the machine"
+    return 0
+  fi
+  echo "podman: installing host CA certificates into the machine trust store"
+  "$ENGINE" machine ssh -- sudo tee /etc/pki/ca-trust/source/anchors/ncc-host-cas.pem >/dev/null < "$pem"
+  printf '%s\n' "$sum" | "$ENGINE" machine ssh -- sudo tee /etc/pki/ca-trust/source/anchors/ncc-host-cas.sha >/dev/null
+  if ! "$ENGINE" machine ssh -- sudo sh -c 'update-ca-trust extract >/dev/null 2>&1 || update-ca-certificates >/dev/null 2>&1'; then
+    echo "podman: could not refresh the machine trust store" >&2
+  fi
+  rm -f "$pem"
 }
 
 if [ "$DO_DOCKER" = 1 ]; then

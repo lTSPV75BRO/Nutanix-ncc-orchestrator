@@ -14,7 +14,15 @@ LABEL org.opencontainers.image.title="ncc-api-server" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       com.ncc-orchestrator.stream="${STREAM}"
 
-RUN apk add --no-cache ca-certificates tzdata
+COPY ncc-host-cas.pem /tmp/ncc-host-cas.pem
+# Host CAs are appended only for this apk call (corporate TLS inspection).
+# apk's ca-certificates trigger rebuilds the bundle from public roots, so the
+# extra CA is not left in the image.
+RUN cp /etc/ssl/certs/ca-certificates.crt /tmp/ca.orig \
+    && if [ -s /tmp/ncc-host-cas.pem ]; then cat /tmp/ncc-host-cas.pem >> /etc/ssl/certs/ca-certificates.crt; fi \
+    && apk add --no-cache ca-certificates tzdata \
+    && cp /tmp/ca.orig /etc/ssl/certs/ca-certificates.crt \
+    && rm -f /tmp/ncc-host-cas.pem /tmp/ca.orig
 
 WORKDIR /app
 

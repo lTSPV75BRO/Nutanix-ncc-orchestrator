@@ -109,7 +109,9 @@ Settings), the same way a Linux `v2-start` does.
   binary is linked with `main.Stream` (default `Release`) plus version,
   revision, build date, and Go version. API and UI container builds read
   `VERSION` and stamp the same Stream. `--docker` / `--push` are optional
-  and package the Linux binaries after they exist.
+  and package the Linux binaries with `docker` or `podman` (`--engine`).
+  A Podman machine is given the host trust store so base-image pulls work
+  through TLS inspection; that CA is not left in the image.
 
 ### Fixed
 
