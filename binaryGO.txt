@@ -472,9 +472,14 @@ check_versions() {
   echo "version stamps match $VERSION"
 }
 
+# ./... also descends into frontend/node_modules. That tree is not a Go
+# package, and npm ci removes it while preflight runs, so a scope directory
+# such as @oxc-project disappears mid-walk.
+GO_PKGS=". ./cmd/... ./internal/... ./tools/..."
+
 update_deps() {
   echo "updating Go modules..."
-  go get -u ./...
+  go get -u $GO_PKGS
   go mod tidy
   echo "updating frontend npm packages..."
   (cd frontend && run_npm update && run_npm audit --omit=dev)
@@ -482,7 +487,7 @@ update_deps() {
     go install golang.org/x/vuln/cmd/govulncheck@latest
     export PATH="$(go env GOPATH)/bin:${PATH}"
   fi
-  govulncheck ./...
+  govulncheck $GO_PKGS
   echo "dependency update finished; review git diff before committing"
 }
 
@@ -610,12 +615,12 @@ fi
 if [ "$SKIP_PREFLIGHT" != 1 ]; then
   go mod download
   go mod verify
-  go vet ./...
+  go vet $GO_PKGS
   if [ "$SKIP_TESTS" = 1 ]; then
     echo "[SKIP] go test"
   else
     testlog=dist/go-test.log
-    if ! go test ./... -count=1 -short >"$testlog" 2>&1; then
+    if ! go test $GO_PKGS -count=1 -short >"$testlog" 2>&1; then
       tail -200 "$testlog" >&2
       exit 1
     fi
@@ -630,7 +635,7 @@ if [ "$DO_GOVULN" = 1 ]; then
     go install golang.org/x/vuln/cmd/govulncheck@latest
     export PATH="$(go env GOPATH)/bin:${PATH}"
   fi
-  govulncheck ./...
+  govulncheck $GO_PKGS
 fi
 echo "PREFLIGHT_OK"
 
