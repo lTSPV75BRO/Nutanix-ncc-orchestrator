@@ -10,22 +10,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [2.2.0] - 2026-09-25
 
-Adds Prism Central serviceability alerts to the dashboard alongside NCC
-findings, with an NCC / PC source selector. Kubernetes installs are
-replica-safe (shared JWT, user-store reload, backup lock) and serve HTTPS
-from the UI with a stack-managed self-signed certificate (replaceable in
-Settings), the same way a Linux `v2-start` does.
+Adds Prism Central serviceability alerts (PC · Beta) alongside NCC
+findings, NCC acknowledge/resolve marks, and administrator feature
+switches. Kubernetes installs are replica-safe (shared JWT, user-store
+reload, backup lock) and serve HTTPS from the UI with a stack-managed
+self-signed certificate (replaceable in Settings), the same way a Linux
+`v2-start` does.
 
 ### Added
 
 - **NCC alert acknowledge and resolve.** The expanded NCC alert (not Prism
-  Central) has Acknowledge and Resolved actions. The signed-in user is stored
+  Central) has Acknowledge, Resolve, and Reopen. The signed-in user is stored
   with the mark in `outputfiles/ncc-alert-dispositions.json` and written to
-  the audit log as `alerts.ncc.acknowledge`, `alerts.ncc.resolve`, or
-  `alerts.ncc.reopen`. Insights shows how many FAIL/ERR findings still need
-  attention, how many are acknowledged or resolved, and who holds the most
-  open marks. The Alerts table **Needs attention** control hides rows an
-  operator has already handled.
+  the audit log as `alerts.ncc.acknowledge`, `alerts.ncc.resolve`,
+  `alerts.ncc.reopen`, or `alerts.ncc.auto-reopen`.
+  `GET /api/v1/alerts/ncc-dispositions` is viewer-readable; `POST` is
+  operator+ (`acknowledge`, `resolve`, `reopen`; optional `note` and
+  `run_at`; bulk `items` up to 200). A later run that still reports a
+  resolved check clears that mark and moves the row to **Returned**.
+  Insights and the dashboard handling chips show Needs attention,
+  Acknowledged, Resolved, and Returned. The alert list can fill the page
+  under the header.
+- **Optional views.** `GET /api/v1/features` (viewer+) and `PUT` (admin)
+  persist `outputfiles/feature-flags.json`. Keys: `insights`, `pc_alerts`,
+  `pc_discovery`, `run_comparison`, `flaky_checks`, `slo`, `ncc_log_index`.
+  Missing keys stay on. Settings → Features saves immediately. A disabled
+  page shows a note; administrators can turn it back on from that page.
+  Health checks keep running.
 - **Prism Central alert retrieval and filtering.** `GET /api/v1/alerts` reads
   configured `pcs` / `prism-central-url` targets using the configured
   `nutanix-v4-api-version`, fetches targets concurrently, applies
@@ -100,8 +111,11 @@ Settings), the same way a Linux `v2-start` does.
 
 ### Changed
 
-- **Alerts tables omit the Source column.** NCC vs PC is selected by the
-  dashboard toggle; each source keeps its own column layout.
+- **Alerts tables omit the Source column.** NCC vs **PC · Beta** is selected
+  by the dashboard toggle; each source keeps its own column layout.
+- **Operator wording.** Settings Advanced (API, saved reports, run files)
+  replaces the former Developer labels. Feature, Insights, and empty-state
+  copy describe what the operator sees, not how files are scanned.
 - **Dashboard visual system.** Hero, filter toolbar, and Alerts tiles share
   the same title, statistic, pill, and card tokens (padding, radius, tabular
   figures). The Alerts table grows with leftover viewport height instead of a
@@ -176,7 +190,9 @@ Settings), the same way a Linux `v2-start` does.
 - **Alerts table pager now changes rows.** Pagination lives outside the
   overflow-hidden table host (so it stays visible) and the virtual table is
   given only the current page slice. Changing page or page size replaces the
-  visible alerts and scrolls back to the top.
+  visible alerts and scrolls back to the top. Full-page mode shows every
+  matching alert under the header; the filter bar stays in document flow so
+  it does not cover the table.
 
 ### Security
 

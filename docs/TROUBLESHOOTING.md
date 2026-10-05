@@ -74,13 +74,41 @@ See **`outputfiles/run-summary.json`** for `exit_code` and per-cluster `clusters
 
 ### Prism Central alerts are unavailable
 
-- **Symptom:** The dashboard shows NCC findings, but the PC source is empty or
-  reports that Prism Central alerts are unavailable.
-- **Fix:** Confirm that `pcs` or `prism-central-url` is configured, the active
-  username/password can view alerts, and the Prism Central endpoint is
-  reachable. For internal certificates, configure `ca-bundle` or use the
-  existing TLS policy. The API caches successful PC responses briefly; use
-  Refresh after correcting configuration.
+- **Symptom:** The dashboard shows NCC findings, but the PC · Beta source is
+  empty or reports that Prism Central alerts are unavailable.
+- **Fix:** Confirm Settings → Features has **Prism Central alerts** on
+  (`GET /api/v1/features`, `pc_alerts`). Then confirm `pcs` or
+  `prism-central-url` is configured, the active username/password can view
+  alerts, and the Prism Central endpoint is reachable. For internal
+  certificates, configure `ca-bundle` or use the existing TLS policy. The
+  API caches successful PC responses briefly; use Refresh after correcting
+  configuration.
+
+### Insights or PC · Beta shows “turned off”
+
+- **Cause:** An administrator turned that view off in Settings → Features.
+- **Fix:** An administrator can enable it from that page or from the note
+  on the page itself (`PUT /api/v1/features`). Health checks keep running
+  while the view is off.
+
+### A resolved NCC alert came back
+
+- **Expected:** A later run that still reports the same cluster and check
+  clears the resolve mark and moves the row to **Returned**
+  (`GET /api/v1/alerts/ncc-dispositions`). Acknowledge is not cleared
+  automatically.
+- **If the mark never returns:** Confirm the later run finished after the
+  resolve (`run_at` / report timestamp) and that the check title still
+  matches. Marks live in `outputfiles/ncc-alert-dispositions.json`.
+
+### New API routes are missing from Settings → Advanced → API
+
+- **Cause:** An older API catalog or UI bundle is still running, so
+  `/api/v1/features` and `/api/v1/alerts/ncc-dispositions` are not listed
+  on the backend page (`GET /api/v1/meta/routes`) or in the UI explorer.
+- **Fix:** Deploy the current v2.2.0 API and UI together, then refresh
+  the route list. The live mux, OpenAPI, and explorer presets all include
+  those paths.
 
 ### PC alerts take a long time to appear
 

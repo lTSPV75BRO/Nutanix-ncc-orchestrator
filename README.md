@@ -308,8 +308,8 @@ After `v2-start`, the dashboard at <https://localhost:8080> gives you:
 
 - **Dashboard** — last-run summary, FAIL/WARN/ERR/INFO counts, and an Alerts table that grows with leftover viewport height. Toggle **NCC** vs **PC** (Prism Central). Filter state lives in the URL (`q`, `sev`, `clusters`, `mode`, `source`, `resolved`); **Copy link** restores the same view. Pagination sits under the table and changes which rows are shown. Expanding a PC alert opens a structured inspector (status, entity, timeline, root cause, KB, identifiers).
 - **Runs** — trigger a new run, follow live output, cancel a stuck run (`DELETE /api/v1/runs/active`), browse archived runs with type/status/duration/clusters/issues columns.
-- **Insights** — trends, regressions, flaky checks, drill-down diffs.
-- **Settings** — config (Form + Monaco YAML editor), schedule, secrets, notifications, audit log, API explorer, raw outputs, Access (users, LDAP/SSO, HTTPS/TLS, software updates), System Health. **⌘K / Ctrl+K** jumps to a Settings card (`/settings?tab=&focus=`). Empty first-run dashboards link here to Config.
+- **Insights** — trends, regressions, flaky checks, drill-down diffs, and the NCC handling queue (Needs attention, Acknowledged, Resolved, Returned).
+- **Settings** — config (Form + Monaco YAML editor), schedule, secrets, notifications, Features (admin), audit log, Advanced (API, saved reports, run files), Access (users, LDAP/SSO, HTTPS/TLS, software updates), System Health. **⌘K / Ctrl+K** jumps to a Settings card (`/settings?tab=&focus=`). Empty first-run dashboards link here to Config.
 
 Theme-aware (light/dark/IT-Pro), keyboard-friendly, accessible form fields (every input has `id`/`name`/`htmlFor`/`aria-label`), CSP-locked (`script-src 'self'`).
 
@@ -321,10 +321,12 @@ Login is HTTPS by default. On non-localhost HTTP the login page warns that Secur
 
 The v2.2.0 dashboard can combine persisted NCC findings with live Prism
 Central serviceability alerts. Configure `pcs` or `prism-central-url` in the
-existing config, then use the dashboard's **NCC** and **PC** source selector.
-PC alerts are fetched on demand and cached briefly by the API. Unresolved
-alerts load first; the complete alert history is fetched in the background
-for the resolved/all-status views.
+existing config, then use the dashboard's **NCC** and **PC · Beta** source
+selector. PC alerts are fetched on demand and cached briefly by the API.
+Unresolved alerts load first; the complete alert history is fetched in the
+background for the resolved/all-status views. An administrator can turn
+Prism Central alerts off in Settings → Features (`PUT /api/v1/features`)
+without changing `config.yaml`.
 
 `GET /api/v1/alerts` returns normalized PC alert rows with `source: "PC"`,
 severity, cluster, status, timestamps, detail, and KB metadata. It is
@@ -335,15 +337,28 @@ this into the Prism Central `isResolved` filter before pagination. Set
 PC alerts that only include a cluster UUID are resolved through Prism Central
 discovery (`ext_id`, name, IP); `GET /api/v1/alerts` also returns `cluster_map`.
 Cluster-group filters match name, UUID, or IP. Links still target the mapped
-cluster IP on port `9440`. The dashboard NCC/PC toggle selects the table; the
-redundant Source column is omitted.
+cluster IP on port `9440`. The dashboard NCC / PC · Beta toggle selects the
+table; the redundant Source column is omitted.
+
+NCC findings can be acknowledged, resolved, or reopened from the alert
+details panel. Marks are stored in `outputfiles/ncc-alert-dispositions.json`
+and read or written through `GET` / `POST /api/v1/alerts/ncc-dispositions`.
+A later run that still reports a resolved check clears that mark and moves
+the row to **Returned**. Prism Central alerts keep their own Prism status.
+
+Optional views (Insights, Prism Central alerts, Prism Central discovery,
+run comparison, flaky checks, SLO, NCC log index) are listed by
+`GET /api/v1/features`. A missing `outputfiles/feature-flags.json` leaves
+every view on.
 
 Major endpoints (full surface at `GET /api/v1/meta/routes`, OpenAPI at `GET /api/v1/openapi.json`):
 
 | Path                                | Methods    | Notes                                                              |
 | ----------------------------------- | ---------- | ------------------------------------------------------------------ |
 | `/api/v1/tls/public`                | GET        | Public UI cert fingerprint + PEM (no private key) for login-page trust |
-| `/api/v1/alerts`                   | GET        | PC alerts; `resolved=No`, `resolved=Yes`, or `resolved=all`; optional `refresh=1` |
+| `/api/v1/alerts`                    | GET        | PC alerts; `resolved=No`, `resolved=Yes`, or `resolved=all`; optional `refresh=1` |
+| `/api/v1/alerts/ncc-dispositions`   | GET, POST  | NCC acknowledge / resolve / reopen; GET viewer+, POST operator+ |
+| `/api/v1/features`                  | GET, PUT   | Optional views; GET viewer+, PUT admin-only |
 | `/api/v1/runs`                      | GET        | List runs (`?source=history\|summary\|trigger`, `?since=RFC3339`) |
 | `/api/v1/runs/{id}`                 | GET        | Single archived run + embedded artifacts                          |
 | `/api/v1/runs/active`               | GET, DELETE| Active run snapshot; DELETE cancels a stuck run                   |
@@ -692,6 +707,8 @@ Artifacts emitted under `outputfiles/`:
 - `checks-snapshot.json`, `drilldown-diff.json`, `flaky-checks.json`
 - `regression-summary.json`, `slo-dashboard.json`
 - `policy-gates.txt` — written only when one or more policy rules are violated
+- `ncc-alert-dispositions.json` — NCC acknowledge/resolve marks
+- `feature-flags.json` — optional views that an administrator turned off
 - `<cluster>.html` / `.csv` / `.json` / `.md` / `.sarif` — per-cluster outputs
 
 Raw NCC summaries land under `nccfiles/`. Runner JSON logs under `logs/ncc-runner.log` (rotated).
@@ -710,7 +727,7 @@ Raw NCC summaries land under `nccfiles/`. Runner JSON logs under `logs/ncc-runne
 | [`docs/MIGRATION_v2.0.2_TO_v2.1.0.md`](docs/MIGRATION_v2.0.2_TO_v2.1.0.md)            | Upgrading from v2.0.2 (pre-RBAC/pre-backup) to v2.1.0                 |
 | [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)                                  | TLS, Prism Central, API issues                                        |
 | [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md)                                            | Wire the orchestrator into AI tools via MCP                           |
-| [`RELEASE_NOTES_v2.2.0.md`](RELEASE_NOTES_v2.2.0.md)                                  | Current v2.2.0 details: PC alerts, hybrid JWT auth, Kubernetes scaling, dashboard UX |
+| [`RELEASE_NOTES_v2.2.0.md`](RELEASE_NOTES_v2.2.0.md)                                  | Current v2.2.0 details: NCC handling, feature flags, PC · Beta, Node 26, Kubernetes |
 | [`docs/NIST_CSF_BASELINE.md`](docs/NIST_CSF_BASELINE.md)                                | NIST CSF 2.0 control baseline, evidence map, and gap plan             |
 | [`docs/NIST_CSF_EVIDENCE_MANIFEST.json`](docs/NIST_CSF_EVIDENCE_MANIFEST.json)          | Machine-readable control-to-evidence mapping for compliance bundles    |
 | [`docs/RELEASE_CHECKSUMS.md`](docs/RELEASE_CHECKSUMS.md)                              | How `--update` verifies downloads                                     |

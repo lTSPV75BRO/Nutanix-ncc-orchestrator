@@ -5,6 +5,43 @@
 > **Affiliation:** This is an independent open-source project. It is not
 > affiliated with or endorsed by Nutanix, Inc. The project is MIT licensed.
 
+## NCC acknowledge and resolve
+
+NCC alerts (not Prism Central) can be acknowledged, resolved, or reopened
+from the details panel. The signed-in user is stored with the mark in
+`outputfiles/ncc-alert-dispositions.json` and written to the audit log as
+`alerts.ncc.acknowledge`, `alerts.ncc.resolve`, `alerts.ncc.reopen`, or
+`alerts.ncc.auto-reopen`.
+
+`GET /api/v1/alerts/ncc-dispositions` is viewer-readable. `POST` is
+operator+ and accepts one alert or a list (`cluster`, `check`,
+`action`, optional `note`, optional `run_at`). A later run that still
+reports a resolved check clears that mark and moves the row to
+**Returned**. Acknowledge stays until someone resolves or reopens it.
+
+The dashboard handling chips are **All**, **Needs attention**,
+**Acknowledged**, **Resolved**, and **Returned**. The alert list can fill
+the page under the header. Insights shows the same queue.
+
+## Optional views
+
+Administrators turn optional views on or off from Settings → Features.
+`GET /api/v1/features` is viewer-readable. `PUT` is admin-only and merges
+a partial body. A missing `outputfiles/feature-flags.json` leaves every
+view on. Known keys:
+
+| Key | When off |
+| --- | -------- |
+| `insights` | Insights page shows a note; trend scans are skipped |
+| `pc_alerts` | Dashboard PC · Beta switch stays; live Prism Central alerts are not fetched |
+| `pc_discovery` | Cluster-group Prism Central lookup is refused |
+| `run_comparison` | Run-over-run comparison is omitted |
+| `flaky_checks` | Flaky-check data is omitted |
+| `slo` | Service-level health is omitted |
+| `ncc_log_index` | The report log list is omitted; Settings can still open one log |
+
+Health checks keep running. These switches do not rewrite `config.yaml`.
+
 ## Prism Central alerts
 
 v2.2.0 adds Prism Central serviceability alerts to the dashboard. The API reads
@@ -20,7 +57,7 @@ server-side cache. The dashboard displays unresolved alerts first and loads
 the complete alert history in the background. Partial target failures are
 reported without hiding NCC findings.
 
-The new viewer-accessible `GET /api/v1/alerts` endpoint returns normalized PC
+The viewer-accessible `GET /api/v1/alerts` endpoint returns normalized PC
 alert rows with severity, cluster, status, timestamps, detail, and KB
 metadata. Cluster-group restrictions are applied when a PC alert identifies a
 configured cluster by name, UUID, or IP.
@@ -35,7 +72,7 @@ Access checks match any of those identities.
 The Alerts table now supports:
 
 - **NCC** — findings from the latest NCC report
-- **PC** — live Prism Central alerts
+- **PC · Beta** — live Prism Central alerts (not a finished feature; can be turned off in Settings → Features)
 
 The selection is URL-persisted and preserves existing severity, search,
 cluster, changed, flaky, and resolved-status filters. The redundant Source
@@ -158,6 +195,14 @@ self-signed cert fingerprint plus PEM download (`GET /api/v1/tls/public`).
 
 v2.2.0 builds with **Go 1.27.1** and **Node 26**. Container
 images use `golang:1.27.1-alpine`, `node:26-alpine`, and `alpine:3.24`.
-Go modules and frontend npm packages are current; `govulncheck ./...` and
-`npm audit --omit=dev` are clean. CI also runs frontend tests and the
-production npm audit.
+The UI image sets `NODE_COMPILE_CACHE`. Frontend `package.json` requires
+Node `>=26`. Go modules and frontend npm packages are current;
+`govulncheck ./...` and `npm audit --omit=dev` are clean. CI also runs
+frontend tests and the production npm audit.
+
+## Sample configuration
+
+`example_config.yaml` lists every runner option with its CLI flag and
+`NCC_` variable. Unedited sample values (`REPLACE_WITH_CLUSTER_IP`,
+`xx.xx`, `changeme`) fail closed before any cluster is contacted. Sample
+mail, webhook, and Slack hosts are rejected only when that channel is on.

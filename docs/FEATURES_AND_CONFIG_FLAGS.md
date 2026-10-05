@@ -10,12 +10,17 @@ Comprehensive reference for NCC Orchestrator features, configuration keys, and C
 
 The v2.2.0 dashboard can also fetch Prism Central serviceability alerts on
 demand from configured `pcs` or `prism-central-url` targets. The API/UI source
-selector keeps these live PC alerts separate from persisted NCC findings.
+selector keeps these live PC · Beta alerts separate from persisted NCC findings.
 Unresolved alerts are fetched first for fast initial rendering; the complete
 history is warmed in the background when the PC source is selected. The
-dashboard NCC/PC toggle selects the table; the redundant Source column is
-omitted. PC alerts that only include a cluster UUID are resolved through
-Prism Central discovery (`ext_id`, name, IP) via the `cluster_map` payload.
+dashboard NCC / PC · Beta toggle selects the table; the redundant Source
+column is omitted. PC alerts that only include a cluster UUID are resolved
+through Prism Central discovery (`ext_id`, name, IP) via the `cluster_map`
+payload. An administrator can turn Prism Central alerts, Insights, and
+related views off in Settings → Features (`GET` / `PUT /api/v1/features`).
+NCC rows can be acknowledged or resolved (`GET` / `POST
+/api/v1/alerts/ncc-dispositions`); a later run that still finds a resolved
+check clears that mark.
 
 ## 2) Feature reference with examples
 
@@ -91,9 +96,40 @@ PC alerts include `cluster`, `cluster_name`, `cluster_uuid`, and
 `cluster_ip`. UUIDs are resolved from Prism Central discovery (`ext_id`)
 using the same name/address dictionary returned as `cluster_map`. Cluster-
 group filters match any of those identities. Mapped cluster IPs are used
-for Prism links on port `9440`.
+for Prism links on port `9440`. When `pc_alerts` is off, this endpoint
+returns `{disabled:true, alerts:[]}` and does not contact Prism Central.
 
-### 2.3b Dashboard filters, sharing, and pagination
+### 2.3b NCC handling
+
+`GET /api/v1/alerts/ncc-dispositions` returns `{items:[…]}` for NCC
+acknowledge and resolve marks (viewer+). `POST` is operator+ and accepts
+one target or `items` (max 200):
+
+```json
+{
+  "cluster": "prod-a",
+  "check": "CVM memory",
+  "action": "acknowledge",
+  "note": "Watching this run",
+  "run_at": "2026-10-05T15:00:00Z"
+}
+```
+
+`action` is `acknowledge`, `resolve`, or `reopen`. Marks live in
+`outputfiles/ncc-alert-dispositions.json`. GET also clears a resolve mark
+when a later run still reports the same cluster and check
+(`alerts.ncc.auto-reopen`). Prism Central alerts are not stored here.
+
+### 2.3c Optional views
+
+`GET /api/v1/features` (viewer+) and `PUT` (admin) persist
+`outputfiles/feature-flags.json`. Missing keys stay on. Known keys:
+`insights`, `pc_alerts`, `pc_discovery`, `run_comparison`, `flaky_checks`,
+`slo`, `ncc_log_index`. A disabled Insights page, PC · Beta table, or
+related panel shows a note instead of loading extra files or calling
+Prism Central. Health checks keep running.
+
+### 2.3d Dashboard filters, sharing, and pagination
 
 Dashboard filter state is the address bar so a URL can be bookmarked or
 shared:
@@ -1216,7 +1252,15 @@ ncc-orchestrator v2-start \
   --wait-ready --ready-timeout 45s
 ```
 
-When `--api-only` is enabled, open `http://localhost:8081/` for backend status and API docs links (`openapi.json`, `meta/routes`).
+When `--api-only` is enabled, open `http://localhost:8081/` for backend status and API docs links (`openapi.json`, `meta/routes`). Those pages list every catalog route, including the v2.2.0 additions below.
+
+Optional views and NCC handling:
+
+- `GET /api/v1/features` (viewer+) — which optional views are on
+- `PUT /api/v1/features` (admin) — turn Insights, Prism Central alerts, discovery, comparison, flaky checks, SLO, or the log index on or off
+- `GET /api/v1/alerts/ncc-dispositions` (viewer+) — NCC acknowledge/resolve marks
+- `POST /api/v1/alerts/ncc-dispositions` (operator+) — acknowledge, resolve, or reopen
+- `GET /api/v1/alerts?resolved=No|Yes|all` (viewer+) — live Prism Central alerts
 
 Rate limiter operational metrics endpoint:
 

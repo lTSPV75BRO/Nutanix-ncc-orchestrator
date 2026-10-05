@@ -398,6 +398,16 @@ func routeMinRoleFor(p string, isRead bool) Role {
 		return RoleOperator
 	case p == "/api/v1/alerts":
 		return RoleViewer
+	case p == "/api/v1/alerts/ncc-dispositions":
+		if isRead {
+			return RoleViewer
+		}
+		return RoleOperator
+	case p == "/api/v1/features":
+		if isRead {
+			return RoleViewer
+		}
+		return RoleAdmin
 	case p == "/api/v1/components":
 		return RoleViewer
 	case p == "/api/v1/runs/config-preference":

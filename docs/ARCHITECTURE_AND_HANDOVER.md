@@ -84,10 +84,15 @@ Primary responsibilities:
   - run trigger
   - schedule apply
 - Serves report/artifact/trend/run state from filesystem artifacts
+- Serves Prism Central alerts (`GET /api/v1/alerts`) and NCC handling
+  (`GET` / `POST /api/v1/alerts/ncc-dispositions`)
+- Serves optional-view flags (`GET` / `PUT /api/v1/features`)
 - Persists settings metadata:
   - schedule state
   - notification state
   - API token file
+  - `outputfiles/ncc-alert-dispositions.json`
+  - `outputfiles/feature-flags.json`
 
 ### 3.3 `ncc-ui-server`
 
@@ -104,10 +109,12 @@ Primary responsibilities:
 
 - Operator UX for:
   - dashboard trends and summaries
+  - NCC handling (acknowledge / resolve / reopen) and PC · Beta alerts
+  - Insights triage and optional-view notes
   - active/previous runs
   - config editing and validation
-  - notifications and schedule settings
-  - API explorer and raw outputs
+  - Features (admin), notifications, and schedule settings
+  - API explorer, saved reports, and run files
 - Treats API as source of truth; no cluster-side direct calls
 
 ---

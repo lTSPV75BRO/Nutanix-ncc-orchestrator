@@ -46,7 +46,7 @@ Supporting assets:
 Install these first:
 
 - Go 1.27.1+ (use the version in `go.mod`)
-- Node.js 24+ (Active LTS) + npm (for frontend build/tests)
+- Node.js 26+ + npm (for frontend build/tests; `frontend/package.json` engines)
 - Git
 - `kubectl` (for Kubernetes deployment flow)
 - Optional: Docker (image build/push workflows)
