@@ -12,6 +12,30 @@ import (
 	"time"
 )
 
+func TestOperatorCanAcknowledgeNCCDisposition(t *testing.T) {
+	dir := t.TempDir()
+	s := &apiServer{repoRoot: dir}
+	body := []byte(`{"cluster":"prod-a","check":"CVM memory","action":"acknowledge"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/alerts/ncc-dispositions", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = withPrincipal(req, principal{subject: "ops1", role: RoleOperator})
+	rec := httptest.NewRecorder()
+	if need := routeMinRole(req); need != RoleOperator {
+		t.Fatalf("routeMinRole = %v, want operator", need)
+	}
+	s.handleNCCDispositions(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+	}
+	items, err := s.loadNCCDispositions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].By != "ops1" || items[0].Status != "acknowledged" {
+		t.Fatalf("items = %#v", items)
+	}
+}
+
 func TestNCCDispositionRecordsActor(t *testing.T) {
 	dir := t.TempDir()
 	s := &apiServer{repoRoot: dir}

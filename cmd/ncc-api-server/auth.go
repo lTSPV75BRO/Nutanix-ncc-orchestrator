@@ -371,6 +371,7 @@ func routeMinRole(r *http.Request) Role {
 // (meta/routes + OpenAPI) can advertise the minimum role for each path/method
 // without synthesizing an *http.Request.
 func routeMinRoleFor(p string, isRead bool) Role {
+	p = strings.TrimSuffix(strings.TrimSpace(p), "/")
 
 	// Operator-accessible operational endpoints. These either expose no secrets
 	// (cluster topology is just names) or are operating actions adjacent to

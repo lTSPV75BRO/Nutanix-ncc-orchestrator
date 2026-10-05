@@ -41,6 +41,11 @@ func TestRouteMinRole(t *testing.T) {
 		{http.MethodPost, "/api/v1/users/me/pats", RoleViewer},
 		{http.MethodDelete, "/api/v1/users/me/pats/abc", RoleViewer},
 		{http.MethodGet, "/api/v1/auth/tokens", RoleViewer},
+		{http.MethodGet, "/api/v1/alerts/ncc-dispositions", RoleViewer},
+		{http.MethodPost, "/api/v1/alerts/ncc-dispositions", RoleOperator},
+		{http.MethodPost, "/api/v1/alerts/ncc-dispositions/", RoleOperator},
+		{http.MethodGet, "/api/v1/features", RoleViewer},
+		{http.MethodPut, "/api/v1/features", RoleAdmin},
 	}
 	for _, c := range cases {
 		r := httptest.NewRequest(c.method, c.path, nil)
