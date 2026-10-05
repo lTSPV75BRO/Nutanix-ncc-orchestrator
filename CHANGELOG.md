@@ -18,6 +18,14 @@ Settings), the same way a Linux `v2-start` does.
 
 ### Added
 
+- **NCC alert acknowledge and resolve.** The expanded NCC alert (not Prism
+  Central) has Acknowledge and Resolved actions. The signed-in user is stored
+  with the mark in `outputfiles/ncc-alert-dispositions.json` and written to
+  the audit log as `alerts.ncc.acknowledge`, `alerts.ncc.resolve`, or
+  `alerts.ncc.reopen`. Insights shows how many FAIL/ERR findings still need
+  attention, how many are acknowledged or resolved, and who holds the most
+  open marks. The Alerts table **Needs attention** control hides rows an
+  operator has already handled.
 - **Prism Central alert retrieval and filtering.** `GET /api/v1/alerts` reads
   configured `pcs` / `prism-central-url` targets using the configured
   `nutanix-v4-api-version`, fetches targets concurrently, applies
@@ -117,6 +125,19 @@ Settings), the same way a Linux `v2-start` does.
 
 ### Fixed
 
+- **Some clusters stayed as a UUID.** Cluster matching now treats a URL, a
+  host with a port, `urn:uuid:`, and a braced UUID as the same cluster. The
+  Alerts table prefers a name, then an IP or URL, when the only other value
+  is a UUID.
+- **An unedited sample config no longer looks like a connection error.**
+  Generated and example configs use `REPLACE_WITH_CLUSTER_IP`. Running one
+  stops before any cluster is contacted and names the field to replace.
+  Sample mail, webhook, and Slack hosts are rejected only when that channel
+  is turned on. `example_config.yaml` lists every runner option with its
+  CLI flag and `NCC_` variable. `env-info` prints those variables and
+  masks secrets. HTTP pool, email templates, webhook template, and the
+  Prism Central alert cache now have flags as well as env vars.
+  `webhook-secret` stays env/config only.
 - **PC alerts showed a cluster UUID instead of the cluster name.** Alerts that
   only include `clusterUUID` now resolve through Prism Central discovery.
 - **Kubernetes “ui-server: Component not found” / out-of-sync.** Component
@@ -163,7 +184,7 @@ Settings), the same way a Linux `v2-start` does.
   `golang.org/x/crypto` `0.55.0 → 0.57.0`, MCP Go SDK `1.7.0 → 1.8.0`, and
   other module patch/minor updates. Frontend packages moved to current
   Ant Design 6.6, React 19.3, Vite 8.3, and monaco-editor 0.57. Docker
-  images use `golang:1.27.1-alpine`, `node:24-alpine` (Active LTS),
+  images use `golang:1.27.1-alpine`, `node:26-alpine`,
   `alpine:3.24` (3.20 is EOL), and `busybox:1.37` for Kubernetes init
   containers. CI scans `govulncheck ./...` and
   `npm audit --omit=dev`; frontend tests and production audit now run in

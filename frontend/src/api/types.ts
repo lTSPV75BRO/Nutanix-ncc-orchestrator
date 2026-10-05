@@ -806,6 +806,46 @@ export type ComponentsData = {
   };
 };
 
+export type NCCDispositionEvent = {
+  status: string;
+  by: string;
+  at: string;
+  run_at?: string;
+  note?: string;
+  reason?: string;
+};
+
+export type NCCDisposition = {
+  cluster: string;
+  check: string;
+  status: "acknowledged" | "resolved" | "reopened" | "";
+  by: string;
+  at: string;
+  note?: string;
+  run_at?: string;
+  reason?: string;
+  history?: NCCDispositionEvent[];
+};
+
+export type FeatureFlags = {
+  insights: boolean;
+  pc_alerts: boolean;
+  run_comparison: boolean;
+  flaky_checks: boolean;
+  slo: boolean;
+  ncc_log_index: boolean;
+  pc_discovery: boolean;
+};
+
+export type NCCDispositionInput = {
+  action: "acknowledge" | "resolve" | "reopen";
+  note?: string;
+  run_at?: string;
+  cluster?: string;
+  check?: string;
+  items?: Array<{ cluster: string; check: string }>;
+};
+
 export type PCAlertsData = {
   alerts: Array<Record<string, unknown>>;
   source: "PC";

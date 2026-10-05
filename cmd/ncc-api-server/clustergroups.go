@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -16,6 +19,35 @@ import (
 // config, and report artifacts.
 func normClusterName(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
+}
+
+// canonicalClusterKey folds the ways a cluster is written (URL, host:port,
+// urn:uuid, braced UUID, plain IP or name) into one lookup key. Access checks
+// still use normClusterName so a saved group name is not rewritten.
+func canonicalClusterKey(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "<nil>" {
+		return ""
+	}
+	lower := strings.ToLower(s)
+	lower = strings.TrimPrefix(lower, "urn:uuid:")
+	lower = strings.Trim(lower, "{}")
+	lower = strings.TrimSpace(lower)
+	if strings.Contains(lower, "://") {
+		if u, err := url.Parse(lower); err == nil {
+			if h := strings.TrimSpace(u.Hostname()); h != "" {
+				lower = h
+			}
+		}
+	}
+	if host, _, err := net.SplitHostPort(lower); err == nil && host != "" {
+		lower = strings.Trim(host, "[]")
+	} else if i := strings.LastIndex(lower, ":"); i > 0 && strings.Count(lower, ":") == 1 {
+		if _, err := strconv.Atoi(lower[i+1:]); err == nil {
+			lower = lower[:i]
+		}
+	}
+	return strings.Trim(strings.TrimSpace(lower), "[]")
 }
 
 // clusterAccess is a principal's resolved cluster visibility. When restricted,

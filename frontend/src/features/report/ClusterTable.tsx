@@ -1,10 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  Alert,
   Button,
   Card,
   Descriptions,
   Drawer,
   Empty,
+  Input,
   Pagination,
   Space,
   Table,
@@ -20,9 +22,12 @@ import {
   CopyOutlined,
   ExpandAltOutlined,
   ExportOutlined,
+  FullscreenExitOutlined,
+  FullscreenOutlined,
   LinkOutlined,
 } from "@ant-design/icons";
-import { asArray, asRecord, displayClusterName, resolveClusterName } from "../../utils/report";
+import type { NCCDisposition } from "../../api/types";
+import { asArray, asRecord, displayClusterName, nccDispositionKey, resolveClusterName } from "../../utils/report";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { notify } from "../../notify";
 import { formatDateTime, relativeTime } from "../../utils/datetime";
@@ -41,6 +46,17 @@ type Props = {
   alertSource: "NCC" | "PC";
   pcResolvedFilter: "all" | "No" | "Yes";
   compareMode: "all" | "changed" | "flaky";
+  dispositions?: NCCDisposition[];
+  onDisposition?: (input: {
+    action: "acknowledge" | "resolve" | "reopen";
+    note?: string;
+    run_at?: string;
+    cluster?: string;
+    check?: string;
+    items?: Array<{ cluster: string; check: string }>;
+  }) => void;
+  dispositionPending?: boolean;
+  runAt?: string;
   onSummaryChange?: (summary: {
     total: number;
     fail: number;
@@ -53,6 +69,20 @@ type Props = {
 
 type Severity = "FAIL" | "WARN" | "ERR" | "INFO" | "UNKNOWN";
 type Density = "compact" | "comfortable";
+type HandlingFilter = "all" | "open" | "acknowledged" | "resolved" | "returned";
+
+const HANDLING_FILTERS: Array<{
+  value: HandlingFilter;
+  label: string;
+  hint: string;
+  tone: string;
+}> = [
+  { value: "all", label: "All", hint: "Every alert that matches the current filters.", tone: "all" },
+  { value: "open", label: "Needs attention", hint: "Open alerts that still need a decision.", tone: "open" },
+  { value: "acknowledged", label: "Acknowledged", hint: "Noted, and still open.", tone: "acked" },
+  { value: "resolved", label: "Resolved", hint: "Marked done. If a later run finds the same alert, it moves to Returned.", tone: "resolved" },
+  { value: "returned", label: "Returned", hint: "Resolved earlier, then found again on a later run.", tone: "returned" },
+];
 
 type RowRecord = {
   key: string;
@@ -370,7 +400,7 @@ function displayPCStatus(raw: Record<string, unknown>): string {
 const ALERTS_TABLE_MIN_Y = 240;
 const ALERTS_TABLE_FALLBACK_Y = 620;
 
-function useAlertsTableScrollY(enabled: boolean, density: Density) {
+function useAlertsTableScrollY(enabled: boolean, density: Density, expanded: boolean) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [tableY, setTableY] = useState(ALERTS_TABLE_FALLBACK_Y);
 
@@ -386,7 +416,7 @@ function useAlertsTableScrollY(enabled: boolean, density: Density) {
       const headerH = header?.getBoundingClientRect().height ?? (density === "compact" ? 39 : 47);
       const hostH = host.clientHeight;
       if (hostH <= 0) {
-        setTableY(ALERTS_TABLE_FALLBACK_Y);
+        setTableY(expanded ? Math.max(ALERTS_TABLE_MIN_Y, Math.floor(window.innerHeight - 280)) : ALERTS_TABLE_FALLBACK_Y);
         return;
       }
       // Pagination lives outside this host so it cannot be clipped. scroll.y
@@ -395,16 +425,161 @@ function useAlertsTableScrollY(enabled: boolean, density: Density) {
     };
 
     measure();
+    const frame = window.requestAnimationFrame(measure);
     const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
     ro?.observe(host);
     window.addEventListener("resize", measure);
     return () => {
+      window.cancelAnimationFrame(frame);
       ro?.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [enabled, density]);
+  }, [enabled, density, expanded]);
 
   return { hostRef, tableY };
+}
+
+function handlingLabel(status: string): { text: string; color: string } {
+  if (status === "acknowledged") return { text: "Acknowledged", color: "gold" };
+  if (status === "resolved") return { text: "Resolved", color: "green" };
+  if (status === "reopened") return { text: "Returned", color: "magenta" };
+  return { text: "Open", color: "default" };
+}
+
+function NCCAlertInspector({
+  row,
+  mark,
+  note,
+  onNote,
+  pending,
+  onAction,
+}: {
+  row: RowRecord;
+  mark?: NCCDisposition;
+  note: string;
+  onNote: (value: string) => void;
+  pending?: boolean;
+  onAction: (action: "acknowledge" | "resolve" | "reopen") => void;
+}) {
+  const current = handlingLabel(mark?.status || "");
+  const history = [...(mark?.history || [])].reverse();
+  const hasMark = mark?.status === "acknowledged" || mark?.status === "resolved" || mark?.status === "reopened";
+  return (
+    <div className="ncc-alert-inspector">
+      {mark?.status === "reopened" ? (
+        <Alert
+          type="warning"
+          showIcon
+          title="This alert came back"
+          description={mark.reason || "It was resolved, then found again on a later run."}
+        />
+      ) : null}
+
+      <Card size="small" className="ncc-handling-card" title="Handling" extra={<Tag color={current.color}>{current.text}</Tag>}>
+        {mark?.by && mark.status ? (
+          <Typography.Paragraph className="ncc-handling-who">
+            {current.text} by <Typography.Text strong>{mark.by}</Typography.Text>
+            {mark.at ? ` · ${formatDateTime(mark.at)}` : ""}
+            {mark.run_at ? ` · run ${formatDateTime(mark.run_at)}` : ""}
+          </Typography.Paragraph>
+        ) : (
+          <Typography.Paragraph type="secondary" className="ncc-handling-who">
+            Nobody has acknowledged or resolved this alert yet.
+          </Typography.Paragraph>
+        )}
+        {mark?.note ? <Typography.Paragraph className="ncc-handling-note">{mark.note}</Typography.Paragraph> : null}
+        <Input.TextArea
+          value={note}
+          onChange={(event) => onNote(event.target.value)}
+          maxLength={500}
+          rows={2}
+          placeholder="Optional note"
+        />
+        <Space wrap className="ncc-handling-actions">
+          <Button disabled={pending} onClick={() => onAction("acknowledge")}>
+            Acknowledge
+          </Button>
+          <Button type="primary" disabled={pending} onClick={() => onAction("resolve")}>
+            Resolve
+          </Button>
+          {hasMark ? (
+            <Button disabled={pending} onClick={() => onAction("reopen")}>
+              Reopen
+            </Button>
+          ) : null}
+        </Space>
+        <Typography.Paragraph type="secondary" className="ncc-handling-hint">
+          Acknowledge notes that you have seen it. Resolve marks it done until a later run finds the same alert.
+        </Typography.Paragraph>
+      </Card>
+
+      <div className="pc-alert-metric-grid">
+        <div className="pc-alert-metric">
+          <div className="pc-alert-metric-label">Cluster</div>
+          <div className="pc-alert-metric-value">{row.clusterName}</div>
+          {row.cluster && row.cluster !== row.clusterName ? (
+            <Typography.Text type="secondary" className="mono">{row.cluster}</Typography.Text>
+          ) : null}
+        </div>
+        <div className="pc-alert-metric">
+          <div className="pc-alert-metric-label">Versions</div>
+          <div className="pc-alert-metric-value">{row.clusterVersion || "AOS not reported"}</div>
+          <Typography.Text type="secondary">{row.nccVersion ? `NCC ${row.nccVersion}` : "NCC not reported"}</Typography.Text>
+        </div>
+        <div className="pc-alert-metric">
+          <div className="pc-alert-metric-label">Status</div>
+          <Space size={4} wrap>
+            {row.isChanged ? <Tag color="gold">Changed</Tag> : null}
+            {row.isFlaky ? <Tag color="purple">Flaky</Tag> : null}
+            {!row.isChanged && !row.isFlaky ? <Typography.Text type="secondary">None</Typography.Text> : null}
+          </Space>
+        </div>
+        <div className="pc-alert-metric">
+          <div className="pc-alert-metric-label">Log</div>
+          <div className="pc-alert-metric-value">{row.logName || "—"}</div>
+        </div>
+      </div>
+
+      {row.kbLinks.length > 0 ? (
+        <Card size="small" title="Knowledge base">
+          <Space size={[8, 8]} wrap>
+            {row.kbLinks.map((url) => (
+              <a key={url} href={url} target="_blank" rel="noreferrer">
+                <Tag color="processing" icon={<LinkOutlined />} style={{ margin: 0 }}>{kbLabel(url)}</Tag>
+              </a>
+            ))}
+          </Space>
+        </Card>
+      ) : null}
+
+      <Card size="small" title="Alert detail">
+        <Typography.Paragraph className="pc-alert-message" style={{ margin: 0 }}>
+          {row.detail || "No additional detail."}
+        </Typography.Paragraph>
+      </Card>
+
+      {history.length > 0 ? (
+        <Card size="small" title="History">
+          <ol className="ncc-handling-history">
+            {history.map((event, index) => {
+              const label = handlingLabel(event.status).text;
+              return (
+                <li key={`${event.at}-${event.status}-${index}`}>
+                  <Typography.Text strong>{label}</Typography.Text>
+                  <Typography.Text type="secondary">
+                    {" "}by {event.by || "unknown"}
+                    {event.at ? ` · ${formatDateTime(event.at)}` : ""}
+                  </Typography.Text>
+                  {event.note ? <div>{event.note}</div> : null}
+                  {event.reason ? <div>{event.reason}</div> : null}
+                </li>
+              );
+            })}
+          </ol>
+        </Card>
+      ) : null}
+    </div>
+  );
 }
 
 export function ClusterTable({
@@ -421,12 +596,21 @@ export function ClusterTable({
   alertSource,
   pcResolvedFilter,
   compareMode,
+  dispositions,
+  onDisposition,
+  dispositionPending,
+  runAt,
   onSummaryChange,
 }: Props) {
   const [page, setPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useLocalStorageState("dashboard.alerts.rowsPerPage", 100);
   const [density, setDensity] = useLocalStorageState<Density>("dashboard.alerts.density", "comfortable");
+  const [expanded, setExpanded] = useLocalStorageState("dashboard.alerts.expanded", false);
+  const [handling, setHandling] = useLocalStorageState<HandlingFilter>("dashboard.alerts.handling", "all");
+  const [legacyNeeds, setLegacyNeeds] = useLocalStorageState("dashboard.alerts.needsAttention", false);
   const [drawerRow, setDrawerRow] = useState<RowRecord | null>(null);
+  const [handlingNote, setHandlingNote] = useState("");
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
 
   const rows = useMemo<RowRecord[]>(() => {
@@ -596,7 +780,48 @@ export function ClusterTable({
     compareMode,
   ]);
 
-  const { hostRef, tableY } = useAlertsTableScrollY(rows.length > 0, density);
+  const dispositionByKey = useMemo(() => {
+    const map = new Map<string, NCCDisposition>();
+    for (const item of dispositions || []) {
+      map.set(nccDispositionKey(item.cluster, item.check), item);
+    }
+    return map;
+  }, [dispositions]);
+  const markFor = (row: RowRecord) =>
+    dispositionByKey.get(nccDispositionKey(row.cluster, row.alert)) ||
+    dispositionByKey.get(nccDispositionKey(row.clusterName, row.alert));
+  const handlingStatus = (row: RowRecord) =>
+    dispositionByKey.get(nccDispositionKey(row.cluster, row.alert))?.status ||
+    dispositionByKey.get(nccDispositionKey(row.clusterName, row.alert))?.status ||
+    "";
+  const handlingCounts = useMemo(() => {
+    const counts = { all: rows.length, open: 0, acknowledged: 0, resolved: 0, returned: 0 };
+    for (const row of rows) {
+      const status =
+        dispositionByKey.get(nccDispositionKey(row.cluster, row.alert))?.status ||
+        dispositionByKey.get(nccDispositionKey(row.clusterName, row.alert))?.status ||
+        "";
+      if (status === "acknowledged") counts.acknowledged += 1;
+      else if (status === "resolved") counts.resolved += 1;
+      else {
+        counts.open += 1;
+        if (status === "reopened") counts.returned += 1;
+      }
+    }
+    return counts;
+  }, [rows, dispositionByKey]);
+  const shownRows = useMemo(() => {
+    if (alertSource === "PC" || handling === "all") return rows;
+    return rows.filter((r) => {
+      const status = handlingStatus(r);
+      if (handling === "open") return status !== "acknowledged" && status !== "resolved";
+      if (handling === "acknowledged") return status === "acknowledged";
+      if (handling === "resolved") return status === "resolved";
+      return status === "reopened";
+    });
+  }, [rows, handling, alertSource, dispositionByKey]);
+
+  const { hostRef, tableY } = useAlertsTableScrollY(shownRows.length > 0, density, expanded);
 
   const filterResetKey = [
     alertSource,
@@ -605,18 +830,45 @@ export function ClusterTable({
     filterText,
     selectedClusters.join("\0"),
     severityFilters.join("\0"),
+    handling,
   ].join("|");
   useEffect(() => {
     setPage(1);
+    setSelectedKeys([]);
   }, [filterResetKey]);
 
+  useEffect(() => {
+    if (!legacyNeeds) return;
+    setHandling("open");
+    setLegacyNeeds(false);
+  }, [legacyNeeds, setHandling, setLegacyNeeds]);
+
+  useEffect(() => {
+    setHandlingNote("");
+  }, [drawerRow?.key]);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("alerts-expanded", expanded);
+    return () => document.documentElement.classList.remove("alerts-expanded");
+  }, [expanded]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || drawerRow) return;
+      setExpanded(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [expanded, drawerRow, setExpanded]);
+
   const pageSize = Math.max(1, rowsPerPage);
-  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize) || 1);
+  const pageCount = Math.max(1, Math.ceil(shownRows.length / pageSize) || 1);
   const currentPage = Math.min(page, pageCount);
   const pagedRows = useMemo(() => {
     const start = (currentPage - 1) * pageSize;
-    return rows.slice(start, start + pageSize);
-  }, [rows, currentPage, pageSize]);
+    return shownRows.slice(start, start + pageSize);
+  }, [shownRows, currentPage, pageSize]);
 
   useEffect(() => {
     if (page > pageCount) setPage(pageCount);
@@ -741,6 +993,28 @@ export function ClusterTable({
           {previewDetail(value)}
         </Typography.Paragraph>
       ),
+    },
+    {
+      title: "Handling",
+      key: "handling",
+      width: 168,
+      render: (_, row) => {
+        const mark = markFor(row);
+        if (mark?.status === "acknowledged") {
+          return <Tag color="gold">Acknowledged</Tag>;
+        }
+        if (mark?.status === "resolved") {
+          return <Tag color="green">Resolved</Tag>;
+        }
+        if (mark?.status === "reopened") {
+          return (
+            <Tooltip title={mark.reason || "This alert was resolved, then found again on a later run."}>
+              <Tag color="magenta">Returned</Tag>
+            </Tooltip>
+          );
+        }
+        return <Typography.Text type="secondary">Open</Typography.Text>;
+      },
     },
     actionColumn,
   ];
@@ -873,14 +1147,15 @@ export function ClusterTable({
   }, [onSummaryChange, totalRows, fail, err, warn, info, unknown]);
 
   return (
-    <Card className="alerts-card page-card">
+    <Card className={`alerts-card page-card${expanded ? " alerts-card-expanded" : ""}`}>
       <div className="alerts-header">
         <div>
           <Typography.Title level={4} className="tile-title">
             Alerts
           </Typography.Title>
           <Typography.Text type="secondary" className="tile-subtitle">
-            {totalRows.toLocaleString()} {totalRows === 1 ? "alert" : "alerts"} match current filters
+            {shownRows.length.toLocaleString()} {shownRows.length === 1 ? "alert" : "alerts"} shown
+            {shownRows.length !== totalRows ? ` · ${totalRows.toLocaleString()} match the dashboard filters` : ""}
           </Typography.Text>
         </div>
         <Space size={[8, 8]} wrap className="alerts-summary-pills">
@@ -901,17 +1176,101 @@ export function ClusterTable({
               {density === "compact" ? "Compact" : "Comfortable"}
             </Button>
           </Tooltip>
+          <Tooltip title={expanded ? "Leave full page (Esc)" : "Show the alert list across the page. Filters and details stay available."}>
+            <Button
+              size="small"
+              aria-label={expanded ? "Exit full page" : "Expand alerts"}
+              icon={expanded ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
+              onClick={() => setExpanded(!expanded)}
+            >
+              {expanded ? "Exit full page" : "Full page"}
+            </Button>
+          </Tooltip>
         </Space>
       </div>
+      {alertSource !== "PC" ? (
+        <div className="alerts-handling-bar">
+          <div className="alerts-handling-filters" role="radiogroup" aria-label="NCC handling filter">
+            {HANDLING_FILTERS.map((item) => {
+              const count = handlingCounts[item.value];
+              const selected = handling === item.value;
+              return (
+                <Tooltip key={item.value} title={item.hint}>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    aria-label={`${item.label}, ${count} ${count === 1 ? "alert" : "alerts"}`}
+                    className={`alerts-handling-chip alerts-handling-chip-${item.tone}${selected ? " is-selected" : ""}${count === 0 && item.value !== "all" ? " is-empty" : ""}`}
+                    onClick={() => setHandling(item.value)}
+                  >
+                    <span className="alerts-handling-chip-label">{item.label}</span>
+                    <span className="alerts-handling-chip-count">{count}</span>
+                  </button>
+                </Tooltip>
+              );
+            })}
+          </div>
+          <Typography.Text type="secondary" className="alerts-handling-hint">
+            {handlingCounts.returned > 0
+              ? `${handlingCounts.returned} resolved ${handlingCounts.returned === 1 ? "alert was" : "alerts were"} found again`
+              : "Resolved alerts return here if a later run finds them again"}
+          </Typography.Text>
+        </div>
+      ) : null}
+      {alertSource !== "PC" && selectedKeys.length > 0 ? (
+        <div className="alerts-bulk-bar">
+          <Typography.Text strong>{selectedKeys.length} selected</Typography.Text>
+          <Button
+            size="small"
+            disabled={dispositionPending}
+            onClick={() => {
+              const items = shownRows.filter((row) => selectedKeys.includes(row.key)).map((row) => ({ cluster: row.cluster, check: row.alert }));
+              onDisposition?.({ action: "acknowledge", run_at: runAt, items });
+              setSelectedKeys([]);
+            }}
+          >
+            Acknowledge
+          </Button>
+          <Button
+            size="small"
+            type="primary"
+            disabled={dispositionPending}
+            onClick={() => {
+              const items = shownRows.filter((row) => selectedKeys.includes(row.key)).map((row) => ({ cluster: row.cluster, check: row.alert }));
+              onDisposition?.({ action: "resolve", run_at: runAt, items });
+              setSelectedKeys([]);
+            }}
+          >
+            Resolve
+          </Button>
+          <Button
+            size="small"
+            disabled={dispositionPending}
+            onClick={() => {
+              const items = shownRows.filter((row) => selectedKeys.includes(row.key)).map((row) => ({ cluster: row.cluster, check: row.alert }));
+              onDisposition?.({ action: "reopen", run_at: runAt, items });
+              setSelectedKeys([]);
+            }}
+          >
+            Reopen
+          </Button>
+          <Button size="small" type="text" onClick={() => setSelectedKeys([])}>
+            Clear
+          </Button>
+        </div>
+      ) : null}
 
-      {totalRows === 0 ? (
+      {shownRows.length === 0 ? (
         <Empty
           style={{ padding: "32px 0" }}
           description={
             <Space orientation="vertical" size={2} align="center">
-              <Typography.Text strong>No alerts match the current filters</Typography.Text>
+              <Typography.Text strong>
+                {totalRows > 0 ? "No alerts in this handling view" : "No alerts match the current filters"}
+              </Typography.Text>
               <Typography.Text type="secondary">
-                Try clearing severity chips or the cluster filter.
+                {totalRows > 0 ? "Choose All to see acknowledged and resolved rows again." : "Try clearing severity chips or the cluster filter."}
               </Typography.Text>
             </Space>
           }
@@ -925,27 +1284,50 @@ export function ClusterTable({
               tableLayout="fixed"
               rowKey="key"
               columns={columns}
-              dataSource={pagedRows}
+              dataSource={expanded ? shownRows : pagedRows}
               rowClassName={(_, index) => (index % 2 === 0 ? "alerts-row-even" : "alerts-row-odd")}
-              onRow={(row) => ({ onClick: () => setDrawerRow(row), style: { cursor: "pointer" } })}
+              onRow={(row) => ({
+                onClick: (event) => {
+                  const target = event.target as HTMLElement | null;
+                  if (target?.closest("a, button, .ant-checkbox, .ant-table-selection-column")) return;
+                  setDrawerRow(row);
+                },
+                style: { cursor: "pointer" },
+              })}
+              rowSelection={
+                alertSource === "PC"
+                  ? undefined
+                  : {
+                      selectedRowKeys: selectedKeys,
+                      preserveSelectedRowKeys: true,
+                      columnWidth: 42,
+                      onChange: (keys) => setSelectedKeys(keys.map(String)),
+                    }
+              }
               pagination={false}
               size={density === "compact" ? "small" : "middle"}
               scroll={{ x: 1200, y: tableY }}
             />
           </div>
-          <Pagination
-            className="alerts-pagination"
-            current={currentPage}
-            pageSize={pageSize}
-            total={rows.length}
-            showSizeChanger
-            pageSizeOptions={[50, 100, 200, 500]}
-            showTotal={(total, range) => `${range[0]}–${range[1]} of ${total}`}
-            onChange={(nextPage, nextPageSize) => {
-              setPage(nextPage);
-              if (nextPageSize && nextPageSize !== rowsPerPage) setRowsPerPage(nextPageSize);
-            }}
-          />
+          {expanded ? (
+            <Typography.Text type="secondary" className="alerts-expanded-count">
+              Showing all {shownRows.length.toLocaleString()} {shownRows.length === 1 ? "alert" : "alerts"}
+            </Typography.Text>
+          ) : (
+            <Pagination
+              className="alerts-pagination"
+              current={currentPage}
+              pageSize={pageSize}
+              total={shownRows.length}
+              showSizeChanger
+              pageSizeOptions={[50, 100, 200, 500]}
+              showTotal={(total, range) => `${range[0]}–${range[1]} of ${total}`}
+              onChange={(nextPage, nextPageSize) => {
+                setPage(nextPage);
+                if (nextPageSize && nextPageSize !== rowsPerPage) setRowsPerPage(nextPageSize);
+              }}
+            />
+          )}
         </>
       )}
 
@@ -995,7 +1377,7 @@ export function ClusterTable({
                   Open Prism
                 </Button>
               ) : null}
-              {drawerRow.kb ? (
+              {drawerRow.source === "PC" && drawerRow.kb ? (
                 <Button type="primary" icon={<LinkOutlined />} href={drawerRow.kb} target="_blank">
                   {kbLabel(drawerRow.kb)}
                 </Button>
@@ -1008,27 +1390,22 @@ export function ClusterTable({
           drawerRow.source === "PC" ? (
             <PCAlertInspector row={drawerRow} clusterNameMap={clusterNameMap} />
           ) : (
-            <Space orientation="vertical" size={16} style={{ width: "100%" }}>
-              <Space size={6} wrap>
-                <Typography.Text strong>Cluster:</Typography.Text>
-                <Typography.Text>{drawerRow.clusterName}</Typography.Text>
-                {drawerRow.clusterVersion ? <Tag>{drawerRow.clusterVersion}</Tag> : null}
-                {drawerRow.nccVersion ? <Tag>NCC {drawerRow.nccVersion}</Tag> : null}
-                {drawerRow.isChanged ? <Tag color="gold">changed</Tag> : null}
-                {drawerRow.isFlaky ? <Tag color="purple">flaky</Tag> : null}
-                {drawerRow.logName ? <Tooltip title={drawerRow.logPath}><Tag>{drawerRow.logName}</Tag></Tooltip> : null}
-              </Space>
-              <Card
-                size="small"
-                title="Alert detail"
-                style={{ borderRadius: 8 }}
-                styles={{ body: { background: "rgba(0, 0, 0, 0.02)" } }}
-              >
-                <Typography.Paragraph style={{ margin: 0, whiteSpace: "pre-wrap" }}>
-                  {drawerRow.detail || "(no detail)"}
-                </Typography.Paragraph>
-              </Card>
-            </Space>
+            <NCCAlertInspector
+              row={drawerRow}
+              mark={markFor(drawerRow)}
+              note={handlingNote}
+              onNote={setHandlingNote}
+              pending={dispositionPending}
+              onAction={(action) =>
+                onDisposition?.({
+                  cluster: drawerRow.cluster,
+                  check: drawerRow.alert,
+                  action,
+                  note: handlingNote.trim(),
+                  run_at: runAt,
+                })
+              }
+            />
           )
         ) : null}
       </Drawer>

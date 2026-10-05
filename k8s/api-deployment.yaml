@@ -4,7 +4,7 @@ metadata:
   name: ncc-v2-api
   namespace: ncc-orchestrator-v2
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: ncc-orchestrator-v2

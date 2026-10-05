@@ -3732,11 +3732,22 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 		runSummary = m
 	}
 	runSummary = deepFilterClusters(runSummary, access)
+	flags := s.loadFeatureFlags()
 	checksSnapshot := deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "checks-snapshot.json"), []interface{}{}), access)
-	drilldownDiff := deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "drilldown-diff.json"), map[string]interface{}{}), access)
-	flakyChecks := deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "flaky-checks.json"), map[string]interface{}{}), access)
-	regressionSummary := deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "regression-summary.json"), map[string]interface{}{}), access)
-	sloDashboard := deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "slo-dashboard.json"), map[string]interface{}{}), access)
+	var drilldownDiff interface{} = map[string]interface{}{}
+	var regressionSummary interface{} = map[string]interface{}{}
+	if flags.RunComparison {
+		drilldownDiff = deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "drilldown-diff.json"), map[string]interface{}{}), access)
+		regressionSummary = deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "regression-summary.json"), map[string]interface{}{}), access)
+	}
+	var flakyChecks interface{} = map[string]interface{}{}
+	if flags.FlakyChecks {
+		flakyChecks = deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "flaky-checks.json"), map[string]interface{}{}), access)
+	}
+	var sloDashboard interface{} = map[string]interface{}{}
+	if flags.SLO {
+		sloDashboard = deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "slo-dashboard.json"), map[string]interface{}{}), access)
+	}
 	policyViolations := []string{}
 	if b, err := os.ReadFile(filepath.Join(outDir, "policy-gates.txt")); err == nil {
 		for _, ln := range strings.Split(string(b), "\n") {
@@ -3773,10 +3784,10 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 		"cluster_links":       deepFilterClusters(readInlineJSONVar(filepath.Join(outDir, "index.html"), "CLUSTER_LINKS", []interface{}{}), access),
 		"artifact_links":      readInlineJSONVar(filepath.Join(outDir, "index.html"), "ARTIFACT_LINKS", map[string]interface{}{}),
 		"report_meta":         loadReportMeta(outDir),
-		"ncc_logs":            listNCCLogs(s.absPath(s.logDir)),
-		"ncc_summary_counts":  parseNCCSummaryCounts(s.absPath(s.logDir)),
-		"ncc_cluster_summary": deepFilterClusters(parseNCCClusterSummary(s.absPath(s.logDir)), access),
-		"trends":              collectTrendPoints(outDir, 30),
+		"ncc_logs":            nccLogsForReport(s, flags),
+		"ncc_summary_counts":  nccSummaryForReport(s, flags),
+		"ncc_cluster_summary": nccClusterSummaryForReport(s, flags, access),
+		"trends":              trendsForReport(flags, outDir),
 		"report_source_dir":   outDir,
 		"pagination":          pagination,
 	}})
@@ -3957,6 +3968,14 @@ func (s *apiServer) handleReportTrends(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
+	if !s.loadFeatureFlags().Insights {
+		writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
+			"points":   []interface{}{},
+			"count":    0,
+			"disabled": true,
+		}})
+		return
+	}
 	outDir := s.selectBestReportOutDir()
 	limit := parseTrendLimit(r.URL.Query().Get("limit"))
 	points := collectTrendPoints(outDir, limit)
@@ -3990,6 +4009,7 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/tls/public", Methods: []string{http.MethodGet}, Description: "Public: UI certificate SHA-256 fingerprint and PEM (no private key) so the login page can offer download/trust for self-signed HTTPS"},
 		{Path: "/api/v1/components", Methods: []string{http.MethodGet}, Description: "Viewer+: report orchestrator, API server, and UI server versions"},
 		{Path: "/api/v1/alerts", Methods: []string{http.MethodGet}, Description: "Viewer+: fetch normalized Prism Central alerts with bounded caching and per-source errors"},
+		{Path: "/api/v1/features", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET viewer+: which optional features are on. PUT admin-only: turn features on or off. Off skips Prism Central calls, trend scans, and extra report-file reads.", SampleBody: "{\n  \"insights\": false,\n  \"pc_alerts\": false\n}"},
 		{Path: "/api/v1/audit", Methods: []string{http.MethodGet}, Description: "Read recent audit log entries (limit, action, failures filters)"},
 		{Path: "/api/v1/metrics/rate-limit", Methods: []string{http.MethodGet}, Description: "Rate limiter configuration and counters"},
 		{Path: "/metrics", Methods: []string{http.MethodGet}, Description: "Prometheus exposition (run/auth/update counters, build info, self-heal, backup inventory gauges, update-availability, audit-forward drops)"},
@@ -5464,6 +5484,8 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/api/v1/tls/public", s.handlePublicTLS)
 	mux.HandleFunc("/api/v1/components", s.handleComponents)
 	mux.HandleFunc("/api/v1/alerts", s.handleAlerts)
+	mux.HandleFunc("/api/v1/features", s.handleFeatureFlags)
+	mux.HandleFunc("/api/v1/alerts/ncc-dispositions", s.handleNCCDispositions)
 	mux.HandleFunc("/api/v1/audit", s.handleAudit)
 	mux.HandleFunc("/api/v1/metrics/rate-limit", s.handleRateLimitMetrics)
 	mux.HandleFunc("/metrics", s.handlePrometheusMetrics)

@@ -112,7 +112,7 @@ Open <https://localhost:8080> — the UI picks up the auto-generated `.ncc-api-t
 
 ### From source
 
-Requires **Go 1.27.1+** (matching the `go` directive in [`go.mod`](go.mod)) and **Node 24+** (Active LTS).
+Requires **Go 1.27.1+** (matching the `go` directive in [`go.mod`](go.mod)) and **Node 26+**.
 
 ```bash
 git clone https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator.git
@@ -257,6 +257,8 @@ detached signatures, troubleshooting AV quarantines), see
 3. Environment variables with the **`NCC_`** prefix
 4. Platform/deployment overlay
 5. Explicit CLI flags
+
+[`example_config.yaml`](example_config.yaml) comments name the flag and `NCC_` variable for every runner option. The cluster list is the placeholder `REPLACE_WITH_CLUSTER_IP`. Running that file stops with a short explanation and does not contact a cluster. `ncc-orchestrator env-info` prints the runner variables (secrets masked) and whether API/UI variables are set.
 
 ### Secret handling
 

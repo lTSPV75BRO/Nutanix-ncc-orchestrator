@@ -381,19 +381,19 @@ export function ApiExplorerSection({ onError }: Props) {
       title={
         <Space size={10} align="center">
           <ApiOutlined className="section-header-icon" />
-          <Typography.Text strong>REST API Explorer</Typography.Text>
+          <Typography.Text strong>API</Typography.Text>
         </Space>
       }
       extra={
         <Space size={6}>
-          <Tooltip title="Discovered routes">
+          <Tooltip title="Available endpoints">
             <Badge count={routes.length} size="small" offset={[-4, 4]}>
               <Button icon={<ExperimentOutlined />} onClick={() => setRoutesOpen(true)}>
                 Routes
               </Button>
             </Badge>
           </Tooltip>
-          <Tooltip title="Refresh route list">
+          <Tooltip title="Refresh">
             <Button icon={<ReloadOutlined />} onClick={() => void loadRoutes()} />
           </Tooltip>
         </Space>

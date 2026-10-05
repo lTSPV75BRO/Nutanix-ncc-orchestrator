@@ -19,22 +19,22 @@ type Props = {
 };
 
 const SLICES: { key: keyof ReportData; label: string; description: string }[] = [
-  { key: "run_summary", label: "Run Summary", description: "Aggregate metrics for the latest run." },
-  { key: "checks_snapshot", label: "Checks Snapshot", description: "Per-check results across clusters." },
-  { key: "drilldown_diff", label: "Drilldown Diff", description: "Run-over-run check differences." },
-  { key: "flaky_checks", label: "Flaky Checks", description: "Checks that toggle between PASS/FAIL across runs." },
-  { key: "regression_summary", label: "Regression Summary", description: "Net regressions vs previous run." },
-  { key: "slo_dashboard", label: "SLO Dashboard", description: "Per-cluster fail-rate and health summary." },
+  { key: "run_summary", label: "Run summary", description: "Totals for the latest run." },
+  { key: "checks_snapshot", label: "Check results", description: "Check results across clusters." },
+  { key: "drilldown_diff", label: "Run comparison", description: "How this run differs from the previous one." },
+  { key: "flaky_checks", label: "Flaky checks", description: "Checks that pass and fail across recent runs." },
+  { key: "regression_summary", label: "Change summary", description: "What got better or worse since the previous run." },
+  { key: "slo_dashboard", label: "Service health", description: "Health and failure rate for each cluster." },
 ];
 
 function describe(value: unknown): string {
-  if (value === null || value === undefined) return "no data";
-  if (Array.isArray(value)) return `array · ${value.length} items`;
+  if (value === null || value === undefined) return "No data";
+  if (Array.isArray(value)) return `${value.length} ${value.length === 1 ? "item" : "items"}`;
   if (typeof value === "object") {
     const keys = Object.keys(value as Record<string, unknown>);
-    return `object · ${keys.length} keys`;
+    return `${keys.length} ${keys.length === 1 ? "field" : "fields"}`;
   }
-  return typeof value;
+  return "Value";
 }
 
 function approximateBytes(text: string): number {
@@ -118,7 +118,7 @@ export function JsonOutputsSection({ onError }: Props) {
       title={
         <Space size={10} align="center">
           <CodeOutlined className="section-header-icon" />
-          <Typography.Text strong>JSON Artifacts</Typography.Text>
+          <Typography.Text strong>Saved reports</Typography.Text>
         </Space>
       }
       extra={
@@ -179,7 +179,7 @@ export function JsonOutputsSection({ onError }: Props) {
       </Space>
 
       {fullJson === "{}" && !loading ? (
-        <Empty description="No data yet. Trigger a run to populate this artifact." />
+        <Empty description="No data yet. Start a run to see results here." />
       ) : (
         <CodeEditor value={displayJson} language="json" readOnly height={460} />
       )}

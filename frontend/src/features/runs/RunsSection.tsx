@@ -409,7 +409,7 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
 
   const artifactColumns: ColumnsType<ArtifactInfo> = [
     {
-      title: "Artifact",
+      title: "File",
       dataIndex: "name",
       key: "name",
       render: (v: string) => (
@@ -759,7 +759,7 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
           Artifacts
         </Typography.Title>
         {artifacts.length === 0 ? (
-          <Empty description="No artifacts available" />
+          <Empty description="No files for this run" />
         ) : (
           <Table size="small" rowKey="name" columns={artifactColumns} dataSource={artifacts} pagination={{ pageSize: 10, showSizeChanger: false }} />
         )}

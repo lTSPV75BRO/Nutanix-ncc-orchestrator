@@ -1623,6 +1623,232 @@ a {
   margin-top: 4px;
 }
 
+.alerts-handling-bar,
+.alerts-bulk-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+
+.alerts-handling-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.alerts-handling-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--control-border);
+  background: color-mix(in srgb, var(--control-bg) 88%, transparent);
+  color: var(--app-text);
+  border-radius: 999px;
+  padding: 4px 10px 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  transition:
+    background var(--anim-fast) var(--anim-ease),
+    border-color var(--anim-fast) var(--anim-ease),
+    color var(--anim-fast) var(--anim-ease);
+}
+
+.alerts-handling-chip:hover,
+.alerts-handling-chip:focus-visible {
+  border-color: var(--card-hover-border);
+}
+
+.alerts-handling-chip-count {
+  min-width: 1.4em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--app-text) 10%, transparent);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+
+.alerts-handling-chip.is-empty:not(.is-selected) {
+  opacity: 0.72;
+}
+
+.alerts-handling-chip-open.is-selected {
+  border-color: color-mix(in srgb, #f43f5e 55%, var(--control-border));
+  background: color-mix(in srgb, #f43f5e 16%, var(--control-bg));
+}
+
+.alerts-handling-chip-acked.is-selected {
+  border-color: color-mix(in srgb, #f59e0b 55%, var(--control-border));
+  background: color-mix(in srgb, #f59e0b 16%, var(--control-bg));
+}
+
+.alerts-handling-chip-resolved.is-selected {
+  border-color: color-mix(in srgb, #22c55e 55%, var(--control-border));
+  background: color-mix(in srgb, #22c55e 16%, var(--control-bg));
+}
+
+.alerts-handling-chip-returned.is-selected,
+.alerts-handling-chip-returned:not(.is-empty) {
+  border-color: color-mix(in srgb, #d946ef 50%, var(--control-border));
+}
+
+.alerts-handling-chip-returned.is-selected {
+  background: color-mix(in srgb, #d946ef 16%, var(--control-bg));
+}
+
+.alerts-handling-chip-all.is-selected {
+  border-color: var(--menu-selected-border);
+  background: color-mix(in srgb, var(--menu-selected-border) 16%, var(--control-bg));
+}
+
+.alerts-handling-hint {
+  font-size: 12px;
+  max-width: 360px;
+}
+
+.alerts-bulk-bar {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--control-border);
+  background: color-mix(in srgb, var(--control-bg) 88%, transparent);
+}
+
+html.alerts-expanded,
+html.alerts-expanded body {
+  overflow: hidden;
+  height: 100dvh;
+}
+
+html.alerts-expanded .app-shell.ant-layout {
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+}
+
+html.alerts-expanded .app-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: calc(100dvh - var(--app-header-height));
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+html.alerts-expanded .app-content-inner {
+  max-width: none;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+html.alerts-expanded .dashboard-page {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  gap: 10px;
+}
+
+html.alerts-expanded .dashboard-page > .dashboard-hero,
+html.alerts-expanded .dashboard-page > .ant-alert {
+  display: none;
+}
+
+html.alerts-expanded .dashboard-page > .filter-toolbar-card {
+  position: static;
+  top: auto;
+  z-index: 1;
+  flex: 0 0 auto;
+  backdrop-filter: none;
+}
+
+html.alerts-expanded .dashboard-page > .filter-toolbar-card > .ant-card-body {
+  padding: 12px 16px !important;
+}
+
+html.alerts-expanded .filter-toolbar-head {
+  margin-bottom: 8px;
+}
+
+html.alerts-expanded .filter-toolbar-divider.ant-divider {
+  margin: 8px 0;
+}
+
+html.alerts-expanded .dashboard-page > .alerts-card.ant-card,
+html.alerts-expanded .dashboard-page > .alerts-card-expanded.ant-card {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+html.alerts-expanded .alerts-table-host {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+html.alerts-expanded .alerts-expanded-count {
+  flex-shrink: 0;
+  margin-top: 8px;
+}
+
+.ncc-alert-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ncc-handling-who,
+.ncc-handling-note,
+.ncc-handling-hint {
+  margin-bottom: 10px !important;
+}
+
+.ncc-handling-note {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--control-bg) 80%, transparent);
+}
+
+.ncc-handling-actions {
+  margin-top: 10px;
+}
+
+.ncc-handling-history {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.feature-flag-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.feature-flag-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.feature-flag-row .ant-switch {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
 .alerts-summary-pills .ant-tag {
   margin-inline-end: 0;
   font-weight: 600;

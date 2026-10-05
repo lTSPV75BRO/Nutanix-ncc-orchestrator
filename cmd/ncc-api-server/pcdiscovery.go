@@ -151,6 +151,10 @@ func (s *apiServer) handlePCDiscover(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
+	if !s.loadFeatureFlags().PCDiscovery {
+		writeJSON(w, http.StatusConflict, envelope{Success: false, Error: "Prism Central cluster discovery is turned off. An administrator can enable it under Settings → Features."})
+		return
+	}
 	pc := strings.TrimSpace(r.URL.Query().Get("pc"))
 	if pc == "" {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "pc query parameter is required"})
@@ -271,7 +275,12 @@ func (s *apiServer) pcIdentityIndex() map[string]pcCluster {
 		}
 		for _, c := range e.clusters {
 			for _, k := range c.identityKeys() {
-				idx[normClusterName(k)] = c
+				if n := normClusterName(k); n != "" {
+					idx[n] = c
+				}
+				if ck := canonicalClusterKey(k); ck != "" {
+					idx[ck] = c
+				}
 			}
 		}
 	}
@@ -308,6 +317,9 @@ func pcClusterMapView(idx map[string]pcCluster) map[string]map[string]string {
 		}
 		for _, k := range c.identityKeys() {
 			out[k] = entry
+			if ck := canonicalClusterKey(k); ck != "" && ck != k {
+				out[ck] = entry
+			}
 		}
 	}
 	return out

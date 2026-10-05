@@ -50,6 +50,9 @@ import type {
   BackupScheduleState,
   NotificationState,
   PCAlertsData,
+  NCCDisposition,
+  NCCDispositionInput,
+  FeatureFlags,
   ComponentsData,
 } from "./types";
 
@@ -591,4 +594,16 @@ export const api = {
     }
     return { blob: await response.blob(), filename: name };
   },
+  featureFlags: () => callApi<FeatureFlags>("/api/v1/features"),
+  updateFeatureFlags: (patch: Partial<FeatureFlags>) =>
+    callApi<FeatureFlags>("/api/v1/features", {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
+  nccDispositions: () => callApi<{ items: NCCDisposition[] }>("/api/v1/alerts/ncc-dispositions"),
+  setNCCDisposition: (input: NCCDispositionInput) =>
+    callApiEnvelope<NCCDisposition | { items: NCCDisposition[]; count: number } | null>("/api/v1/alerts/ncc-dispositions", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
 };

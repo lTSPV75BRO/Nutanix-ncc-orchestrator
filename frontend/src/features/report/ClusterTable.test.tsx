@@ -13,7 +13,15 @@ const baseProps = {
 };
 
 describe("ClusterTable alert sources", () => {
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+    try {
+      window.localStorage?.clear();
+    } catch {
+      // jsdom in this environment does not always provide localStorage
+    }
+    document.documentElement.classList.remove("alerts-expanded");
+  });
 
   it("renders the restored NCC table layout", () => {
     render(
@@ -149,5 +157,69 @@ describe("ClusterTable alert sources", () => {
     expect(screen.getByText("Stargate")).toBeInTheDocument();
     expect(screen.getAllByText("KB 1234").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Open Prism").length).toBeGreaterThan(0);
+  });
+
+  it("fills the page under the header and keeps the alerts toolbar", () => {
+    render(
+      <ClusterTable
+        {...baseProps}
+        aggRows={[{ cluster: "ncc-a", check: "NCC finding", severity: "FAIL" }]}
+        alertSource="NCC"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand alerts" }));
+    expect(document.documentElement.classList.contains("alerts-expanded")).toBe(true);
+    expect(screen.getByText("Alerts")).toBeInTheDocument();
+    expect(screen.getByText("Needs attention")).toBeInTheDocument();
+    expect(screen.getByText("NCC finding")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Exit full page" }));
+    expect(document.documentElement.classList.contains("alerts-expanded")).toBe(false);
+  });
+
+  it("shows every matching alert in full page instead of a paged slice", () => {
+    render(
+      <ClusterTable
+        {...baseProps}
+        aggRows={Array.from({ length: 120 }, (_, i) => ({
+          cluster: `ncc-${i}`,
+          check: `NCC finding ${i}`,
+          severity: "INFO",
+        }))}
+        alertSource="NCC"
+      />,
+    );
+
+    expect(screen.queryByText("NCC finding 100")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Expand alerts" }));
+    expect(screen.getByText(/Showing all 120 alerts/)).toBeInTheDocument();
+    expect(document.querySelector(".alerts-pagination")).toBeNull();
+  });
+
+  it("filters NCC rows by handling and opens a tidy details panel", () => {
+    render(
+      <ClusterTable
+        {...baseProps}
+        alertSource="NCC"
+        dispositions={[
+          { cluster: "ncc-a", check: "Handled check", status: "resolved", by: "alice", at: "2026-10-05T10:00:00Z" },
+        ]}
+        aggRows={[
+          { cluster: "ncc-a", check: "Handled check", severity: "FAIL", detail: "disk detail" },
+          { cluster: "ncc-b", check: "Open check", severity: "ERR" },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("radio", { name: /Resolved/ }));
+    expect(screen.getByText("Handled check")).toBeInTheDocument();
+    expect(screen.queryByText("Open check")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Handled check"));
+    expect(screen.getByPlaceholderText("Optional note")).toBeInTheDocument();
+    expect(screen.getAllByText("disk detail").length).toBeGreaterThan(1);
+    expect(screen.getByRole("button", { name: "Resolve" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Resolved" })).not.toBeInTheDocument();
   });
 });

@@ -19,16 +19,14 @@ export function toNumber(v: unknown, fallback = 0): number {
 }
 
 export function displayClusterName(row: AnyRecord): string {
-  const candidates = [row.clusterName, row.cluster_name, row.cluster, row.cluster_ip, row.ip, row.address];
-  for (const c of candidates) {
-    if (typeof c === "string" && c.trim() && c.trim() !== "-") return c.trim();
-  }
-  return "unknown-cluster";
+  const candidates = [row.clusterName, row.cluster_name, row.cluster, row.cluster_ip, row.ip, row.address, row.cluster_uuid, row.clusterUUID];
+  return pickPreferredClusterName(candidates) || "unknown-cluster";
 }
 
 function normalizeClusterKey(value: unknown): string {
   let raw = String(value || "").trim().toLowerCase();
-  if (!raw || raw === "-") return "";
+  if (!raw || raw === "-" || raw === "<nil>") return "";
+  raw = raw.replace(/^urn:uuid:/, "").replace(/^\{|\}$/g, "");
   raw = raw.replace(/^https?:\/\//, "");
   raw = raw.replace(/:\d+$/, "");
   raw = raw.replace(/\/+$/, "");
@@ -39,11 +37,18 @@ function isIPv4Like(value: string): boolean {
   return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(value);
 }
 
+function isUUIDLike(value: string): boolean {
+  const raw = value.trim().replace(/^urn:uuid:/i, "").replace(/[{}]/g, "");
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw) || /^[0-9a-f]{32}$/i.test(raw);
+}
+
 function pickPreferredClusterName(values: unknown[]): string {
-  const options = values.map((v) => String(v || "").trim()).filter((v) => v && v !== "-");
+  const options = values.map((v) => String(v || "").trim()).filter((v) => v && v !== "-" && v !== "<nil>");
   if (options.length === 0) return "";
-  const preferred = options.find((v) => !isIPv4Like(normalizeClusterKey(v)));
-  return preferred || options[0];
+  const named = options.find((v) => !isUUIDLike(v) && !isIPv4Like(normalizeClusterKey(v)));
+  if (named) return named;
+  const host = options.find((v) => !isUUIDLike(v));
+  return host || options[0];
 }
 
 function addClusterPair(map: Map<string, string>, values: unknown[]) {
@@ -53,7 +58,9 @@ function addClusterPair(map: Map<string, string>, values: unknown[]) {
     const key = normalizeClusterKey(v);
     if (!key) return;
     const existing = map.get(key);
-    if (!existing || isIPv4Like(normalizeClusterKey(existing))) {
+    const existingWeak = !existing || isIPv4Like(normalizeClusterKey(existing)) || isUUIDLike(existing);
+    const nextBetter = existingWeak && !isUUIDLike(preferred);
+    if (!existing || nextBetter || (!isUUIDLike(preferred) && isUUIDLike(existing))) {
       map.set(key, preferred);
     }
   });
@@ -72,7 +79,18 @@ type ClusterMapInput = {
 export function buildClusterNameMap(input: ClusterMapInput): Record<string, string> {
   const map = new Map<string, string>();
   const addFromRow = (row: AnyRecord) =>
-    addClusterPair(map, [row.clusterName, row.cluster_name, row.name, row.cluster, row.cluster_ip, row.ip, row.address, displayClusterName(row)]);
+    addClusterPair(map, [
+      row.clusterName,
+      row.cluster_name,
+      row.name,
+      row.cluster,
+      row.cluster_ip,
+      row.ip,
+      row.address,
+      row.cluster_uuid,
+      row.clusterUUID,
+      displayClusterName(row),
+    ]);
 
   asArray(asRecord(input.runSummary).clusters)
     .map((c) => asRecord(c))
@@ -118,7 +136,9 @@ export function mergePCClusterIdentityMap(
   if (!clusterMap) return base;
   const out = { ...base };
   for (const ident of Object.values(clusterMap)) {
-    const name = String(ident.name || ident.address || "").trim();
+    const named = String(ident.name || "").trim();
+    const address = String(ident.address || "").trim();
+    const name = (named && !isUUIDLike(named) ? named : "") || (address && !isUUIDLike(address) ? address : "") || named || address;
     if (!name) continue;
     for (const key of [ident.ext_id, ident.address, ident.name]) {
       const normalized = normalizeClusterKey(key);
@@ -128,11 +148,17 @@ export function mergePCClusterIdentityMap(
   return out;
 }
 
+export function nccDispositionKey(cluster: string, check: string): string {
+  return `${cluster.trim().toLowerCase()}|${check.trim().toLowerCase()}`;
+}
+
 export function resolveClusterName(value: unknown, clusterNameMap: Record<string, string>): string {
   const raw = String(value || "").trim();
   if (!raw || raw === "-") return "-";
   const direct = clusterNameMap[normalizeClusterKey(raw)];
-  if (direct) return direct;
+  if (direct && !isUUIDLike(direct)) return direct;
+  if (direct && isUUIDLike(raw)) return direct;
+  if (isUUIDLike(raw)) return raw;
   if (!isIPv4Like(normalizeClusterKey(raw))) return raw;
   return raw;
 }

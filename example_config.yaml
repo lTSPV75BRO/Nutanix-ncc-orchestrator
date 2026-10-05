@@ -1,9 +1,14 @@
 # NCC Orchestrator canonical configuration, schema version 1.
 #
-# This file is deployment-neutral and is consumed by the runner. Existing
-# flat keys remain supported for compatibility, but new configurations should
-# use this structure. Secrets must use secret:// references or environment
-# variables; never commit plaintext credentials.
+# Copy this file, then replace REPLACE_WITH_CLUSTER_IP before a run.
+# Until that placeholder is gone, the run stops with a plain explanation
+# and does not contact a cluster. Mail, webhook, and Slack sample hosts
+# are rejected only when that channel is enabled.
+#
+# Precedence, highest first: explicit CLI flag, NCC_<KEY> environment
+# variable (uppercase, hyphens become underscores), this file, built-in default.
+# List runner variables with: ncc-orchestrator env-info
+# Secrets in that listing are masked. webhook-secret has no CLI flag.
 #
 # Validate:
 #   ncc-orchestrator validate-config --config example_config.yaml
@@ -13,113 +18,120 @@ schema-version: 1
 
 runner:
   targets:
-    mode: clusters                  # clusters | clusters-file | pcs | pcs-file
-    clusters: ["10.2.XX.XX"]        # PE IPs/FQDNs
-    clusters-file: ""
-    pcs: []                          # Prism Central IPs/FQDNs
-    pcs-file: ""
-    prism-central-url: ""
-    discover-api-version: v4
+    mode: clusters                  # --cluster-source-mode / NCC_CLUSTER_SOURCE_MODE  clusters | pc
+    clusters: ["REPLACE_WITH_CLUSTER_IP"]  # --clusters / NCC_CLUSTERS
+    clusters-file: ""               # --clusters-file / NCC_CLUSTERS_FILE
+    pcs: []                         # --pcs / NCC_PCS   used when mode is pc
+    pcs-file: ""                    # --pcs-file / NCC_PCS_FILE
+    prism-central-url: ""           # --prism-central-url / NCC_PRISM_CENTRAL_URL
+    discover-api-version: v4        # --discover-api-version / NCC_DISCOVER_API_VERSION  v4 | v3
   credentials:
-    username: admin
-    password: secret://NCC_PASSWORD
+    username: admin                 # --username / NCC_USERNAME
+    password: secret://NCC_PASSWORD # --password / NCC_PASSWORD  (prefer secret:// or the env var)
   connection:
-    insecure-skip-verify: false
-    ca-bundle: ""
-    pin-sha256: []
-    ncc-api-version: v4
-    nutanix-v4-api-version: v4.2
+    insecure-skip-verify: false     # --insecure-skip-verify / NCC_INSECURE_SKIP_VERIFY
+    ca-bundle: ""                   # --ca-bundle / NCC_CA_BUNDLE
+    pin-sha256: []                  # --pin-sha256 / NCC_PIN_SHA256
+    ncc-api-version: v4             # --ncc-api-version / NCC_NCC_API_VERSION  v4 | Legacy
+    nutanix-v4-api-version: v4.2    # --nutanix-v4-api-version / NCC_NUTANIX_V4_API_VERSION
   execution:
-    timeout: 15m
-    request-timeout: 20s
-    poll-interval: 15s
-    poll-jitter: 2s
-    max-parallel: 4
-    adaptive-parallelism: true
-    dry-run: false
+    timeout: 15m                    # --timeout / NCC_TIMEOUT
+    request-timeout: 20s            # --request-timeout / NCC_REQUEST_TIMEOUT
+    poll-interval: 15s              # --poll-interval / NCC_POLL_INTERVAL
+    poll-jitter: 2s                 # --poll-jitter / NCC_POLL_JITTER
+    max-parallel: 4                 # --max-parallel / NCC_MAX_PARALLEL
+    adaptive-parallelism: true      # --adaptive-parallelism / NCC_ADAPTIVE_PARALLELISM
+    dry-run: false                  # --dry-run / NCC_DRY_RUN
+    skip-preflight-check: false     # --skip-preflight-check / NCC_SKIP_PREFLIGHT_CHECK
+    replay: false                   # --replay / NCC_REPLAY
   outputs:
-    formats: [html, csv]
-    single-report: false
+    formats: [html, csv]            # --outputs / NCC_OUTPUTS  html,csv,json,markdown,sarif
+    single-report: false            # --single-report / NCC_SINGLE_REPORT
+    gen-test-agg: 0                 # --gen-test-agg / NCC_GEN_TEST_AGG  leave 0; not a cluster scan
   filtering:
-    severity: []
-    exclude-alert-titles: []
-    exclude-alert-titles-file: ""
-    exclude-alert-match-mode: exact
+    severity: []                    # --severity-filter / NCC_SEVERITY_FILTER  FAIL,WARN,ERR,INFO
+    exclude-alert-titles: []        # --exclude-alert-titles / NCC_EXCLUDE_ALERT_TITLES
+    exclude-alert-titles-file: ""   # --exclude-alert-titles-file / NCC_EXCLUDE_ALERT_TITLES_FILE
+    exclude-alert-match-mode: exact # --exclude-alert-match-mode / NCC_EXCLUDE_ALERT_MATCH_MODE  exact|contains|regex
   history:
-    enabled: true
-    retain-last: 500
-    retain-days: 30
-    artifact-retain-days: 0
-    artifact-retain-max-files: 0
+    enabled: true                   # --run-history / NCC_RUN_HISTORY
+    retain-last: 500                # --retain-last / NCC_RETAIN_LAST  0 = unlimited
+    retain-days: 30                 # --retain-days / NCC_RETAIN_DAYS  0 = unlimited
+    artifact-retain-days: 0         # --artifact-retain-days / NCC_ARTIFACT_RETAIN_DAYS
+    artifact-retain-max-files: 0    # --artifact-retain-max-files / NCC_ARTIFACT_RETAIN_MAX_FILES
   policy:
-    gates: ""
-    notify-on-regression: false
-    flaky-lookback-runs: 6
-    flaky-min-transitions: 2
+    gates: ""                       # --policy-gates / NCC_POLICY_GATES
+    notify-on-regression: false     # --notify-on-regression / NCC_NOTIFY_ON_REGRESSION
+    flaky-lookback-runs: 6          # --flaky-lookback-runs / NCC_FLAKY_LOOKBACK_RUNS
+    flaky-min-transitions: 2        # --flaky-min-transitions / NCC_FLAKY_MIN_TRANSITIONS
   retry:
-    max-attempts: 6
-    base-delay: 400ms
-    max-delay: 8s
-    circuit-breaker: 3
+    max-attempts: 6                 # --retry-max-attempts / NCC_RETRY_MAX_ATTEMPTS
+    base-delay: 400ms               # --retry-base-delay / NCC_RETRY_BASE_DELAY
+    max-delay: 8s                   # --retry-max-delay / NCC_RETRY_MAX_DELAY
+    circuit-breaker: 3              # --retry-circuit-breaker / NCC_RETRY_CIRCUIT_BREAKER
   http-pool:
-    max-idle-conns: 0
-    max-idle-conns-per-host: 0
-    max-conns-per-host: 0
-    idle-conn-timeout: 90s
+    max-idle-conns: 0               # --max-idle-conns / NCC_MAX_IDLE_CONNS  0 = built-in default
+    max-idle-conns-per-host: 0      # --max-idle-conns-per-host / NCC_MAX_IDLE_CONNS_PER_HOST
+    max-conns-per-host: 0           # --max-conns-per-host / NCC_MAX_CONNS_PER_HOST  0 = unlimited
+    idle-conn-timeout: 90s          # --idle-conn-timeout / NCC_IDLE_CONN_TIMEOUT
 
 storage:
-  output-dir: outputfiles
-  logs-dir: nccfiles
-  run-history-dir: outputfiles/runs
-  prom-dir: outputfiles/prom
-  notification-deadletter-dir: ""
+  output-dir: outputfiles           # --output-dir-filtered / NCC_OUTPUT_DIR_FILTERED
+  logs-dir: nccfiles                # --output-dir-logs / NCC_OUTPUT_DIR_LOGS
+  run-history-dir: outputfiles/runs # --run-history-dir / NCC_RUN_HISTORY_DIR
+  prom-dir: outputfiles/prom        # --prom-dir / NCC_PROM_DIR
+  notification-deadletter-dir: ""   # --notification-deadletter-dir / NCC_NOTIFICATION_DEADLETTER_DIR
 
 logging:
-  file: logs/ncc-runner.log
-  level: "2"
-  http: false
+  file: logs/ncc-runner.log         # --log-file / NCC_LOG_FILE
+  level: "2"                        # --log-level / NCC_LOG_LEVEL  trace|debug|info|warn|error or 0..5
+  http: false                       # --log-http / NCC_LOG_HTTP
 
 prometheus:
-  enabled: false
+  enabled: false                    # --prom-enabled / NCC_PROM_ENABLED
 
 notifications:
-  quiet-hours: ""
-  maintenance-windows: []
+  quiet-hours: ""                   # --quiet-hours / NCC_QUIET_HOURS  local HH:MM-HH:MM
+  maintenance-windows: []           # --maintenance-windows / NCC_MAINTENANCE_WINDOWS
   email:
-    enabled: false
-    attach-html: false
-    digest: false
-    smtp-server: smtp.example.com
-    smtp-port: 587
-    smtp-user: ncc@example.com
-    smtp-password: secret://SMTP_PASSWORD
-    from: ncc@example.com
-    to: [ops@example.com]
-    use-tls: true
-    insecure-skip-verify: false
-    subject-template: ""
-    body-template: ""
+    enabled: false                  # --email-enabled / NCC_EMAIL_ENABLED
+    attach-html: false              # --email-attach-html / NCC_EMAIL_ATTACH_HTML
+    digest: false                   # --notify-digest / NCC_NOTIFY_DIGEST
+    smtp-server: smtp.example.com   # --smtp-server / NCC_SMTP_SERVER  checked only if email is enabled
+    smtp-port: 587                  # --smtp-port / NCC_SMTP_PORT
+    smtp-user: ncc@example.com      # --smtp-user / NCC_SMTP_USER
+    smtp-password: secret://SMTP_PASSWORD  # --smtp-password / NCC_SMTP_PASSWORD
+    from: ncc@example.com           # --email-from / NCC_EMAIL_FROM
+    to: [ops@example.com]           # --email-to / NCC_EMAIL_TO
+    use-tls: true                   # --email-use-tls / NCC_EMAIL_USE_TLS
+    insecure-skip-verify: false     # --smtp-insecure-skip-verify / NCC_SMTP_INSECURE_SKIP_VERIFY
+    subject-template: ""            # --email-subject-template / NCC_EMAIL_SUBJECT_TEMPLATE
+    body-template: ""               # --email-body-template / NCC_EMAIL_BODY_TEMPLATE
   webhook:
-    enabled: false
-    include-html: false
-    url: https://hooks.example.com/ncc
-    headers: {}
-    template: ""
-    secret: secret://WEBHOOK_HMAC
+    enabled: false                  # --webhook-enabled / NCC_WEBHOOK_ENABLED
+    include-html: false             # --webhook-include-html / NCC_WEBHOOK_INCLUDE_HTML
+    url: https://hooks.example.com/ncc  # --webhook-url / NCC_WEBHOOK_URL  checked only if webhook is enabled
+    headers: {}                     # --webhook-headers / NCC_WEBHOOK_HEADERS
+    template: ""                    # --webhook-template / NCC_WEBHOOK_TEMPLATE
+    secret: secret://WEBHOOK_HMAC   # NCC_WEBHOOK_SECRET only (no CLI flag)
   slack:
-    enabled: false
-    webhook-url: secret://SLACK_WEBHOOK_URL
-    channel: ""
+    enabled: false                  # --slack-enabled / NCC_SLACK_ENABLED
+    webhook-url: secret://SLACK_WEBHOOK_URL  # --slack-webhook-url / NCC_SLACK_WEBHOOK_URL
+    channel: ""                     # --slack-channel / NCC_SLACK_CHANNEL
 
+# The api, ui, and deployment sections below are stack notes.
+# The runner reads only api.cache.pc-alerts-cache-ttl from them.
+# Listen addresses, auth, TLS, and the UI origin are process flags
+# on ncc-api-server and ncc-ui-server (see docs/FEATURES_AND_CONFIG_FLAGS.md).
 api:
-  listen: ":8081"
-  auth-mode: hybrid
+  listen: ":8081"                   # ncc-api-server --listen
+  auth-mode: hybrid                 # ncc-api-server --auth-mode  token | session | hybrid
   cache:
-    pc-alerts-cache-ttl: 5m
+    pc-alerts-cache-ttl: 5m         # --pc-alerts-cache-ttl / NCC_PC_ALERTS_CACHE_TTL  0 disables
   session:
-    ttl: 6h
+    ttl: 6h                         # ncc-api-server --session-ttl / NCC_TOKEN_EXPIRY
   concurrency:
-    max-runs: 1
+    max-runs: 1                     # one NCC run at a time
   tls:
     enabled: false
     cert-file: ""
@@ -130,16 +142,16 @@ api:
     auto-fix: false
 
 ui:
-  listen: ":8080"
-  backend-url: http://localhost:8081
-  origin: http://localhost:8080
-  insecure-http: false
+  listen: ":8080"                   # ncc-ui-server --listen
+  backend-url: http://127.0.0.1:8081
+  origin: http://127.0.0.1:8080     # also NCC_UI_ORIGIN / NCC_CORS_ORIGIN for the API
+  insecure-http: false              # ncc-ui-server plain HTTP; leave false
 
 deployment:
-  platform: host                 # host | kubernetes
+  platform: host                    # host | kubernetes
   self-heal: true
-  schedule-authority: native     # native | kubernetes
+  schedule-authority: native        # native | kubernetes
 
 secrets:
-  provider: env                  # env | file
-  file: ""
+  provider: env                     # --secrets-provider / NCC_SECRETS_PROVIDER  env | file
+  file: ""                          # --secrets-file / NCC_SECRETS_FILE

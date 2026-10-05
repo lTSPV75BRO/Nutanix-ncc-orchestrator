@@ -118,13 +118,13 @@ export function RawOutputsSection({ onError }: Props) {
       title={
         <Space size={10} align="center">
           <FileTextOutlined className="section-header-icon" />
-          <Typography.Text strong>Artifacts</Typography.Text>
+          <Typography.Text strong>Run files</Typography.Text>
           <Tag color="default">{artifacts.length} files</Tag>
           <Tag color="default">{formatBytes(totalSize)}</Tag>
         </Space>
       }
       extra={
-        <Tooltip title="Refresh artifact list">
+        <Tooltip title="Refresh">
           <Button icon={<ReloadOutlined />} onClick={loadArtifacts}>
             Refresh
           </Button>
@@ -136,11 +136,11 @@ export function RawOutputsSection({ onError }: Props) {
           <Input
             id="raw-outputs-filter"
             name="raw-filter"
-            aria-label="Search raw output artifacts"
+            aria-label="Search run files"
             allowClear
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            placeholder="Search artifacts…"
+            placeholder="Search files…"
             prefix={<SearchOutlined />}
             style={{ marginBottom: 10 }}
             autoComplete="off"
@@ -149,11 +149,11 @@ export function RawOutputsSection({ onError }: Props) {
             <Alert
               type="info"
               showIcon
-              title="Artifacts endpoint unavailable"
-              description="This environment does not expose /api/v1/artifacts yet. Raw artifact browsing is disabled."
+              title="Run files are unavailable"
+              description="This server is not set up to list run files."
             />
           ) : filtered.length === 0 ? (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No artifacts" />
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No files" />
           ) : (
             <List
               size="small"
@@ -215,7 +215,7 @@ export function RawOutputsSection({ onError }: Props) {
               <CodeEditor value={raw} language={inferEditorLanguage(selected)} readOnly height={460} />
             </>
           ) : (
-            <Empty description="Select an artifact to view its contents" />
+            <Empty description="Select a file to view it" />
           )}
         </Col>
       </Row>

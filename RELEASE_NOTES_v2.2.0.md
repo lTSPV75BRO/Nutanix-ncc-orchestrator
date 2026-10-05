@@ -156,8 +156,8 @@ self-signed cert fingerprint plus PEM download (`GET /api/v1/tls/public`).
 
 ## Toolchain
 
-v2.2.0 builds with **Go 1.27.1** and **Node 24** (Active LTS). Container
-images use `golang:1.27.1-alpine`, `node:24-alpine`, and `alpine:3.24`.
+v2.2.0 builds with **Go 1.27.1** and **Node 26**. Container
+images use `golang:1.27.1-alpine`, `node:26-alpine`, and `alpine:3.24`.
 Go modules and frontend npm packages are current; `govulncheck ./...` and
 `npm audit --omit=dev` are clean. CI also runs frontend tests and the
 production npm audit.

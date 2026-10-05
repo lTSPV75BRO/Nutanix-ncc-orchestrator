@@ -3363,6 +3363,31 @@ func TestExtractClusterAddressV4(t *testing.T) {
 	}
 }
 
+func TestRejectSampleConfig(t *testing.T) {
+	err := rejectSampleConfig(Config{Clusters: []string{"REPLACE_WITH_CLUSTER_IP"}})
+	if err == nil || !strings.Contains(err.Error(), "no cluster was contacted") {
+		t.Fatalf("sample cluster: %v", err)
+	}
+	if err := rejectSampleConfig(Config{Clusters: []string{"10.0.0.1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rejectSampleConfig(Config{
+		Clusters:     []string{"10.0.0.1"},
+		EmailEnabled: false,
+		SMTPServer:   "smtp.example.com",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err = rejectSampleConfig(Config{
+		Clusters:     []string{"10.0.0.1"},
+		EmailEnabled: true,
+		SMTPServer:   "smtp.example.com",
+	})
+	if err == nil || !strings.Contains(err.Error(), "smtp-server") {
+		t.Fatalf("enabled sample smtp: %v", err)
+	}
+}
+
 func TestClusterEntityMatchesUserRef(t *testing.T) {
 	pcJSON := `{
   "extId": "pc-uuid",
@@ -3389,6 +3414,15 @@ func TestClusterEntityMatchesUserRef(t *testing.T) {
 	}
 	if !clusterEntityMatchesUserRef("pc-uuid", pc) {
 		t.Error("expected match on extId")
+	}
+	if !clusterEntityMatchesUserRef("https://10.48.52.75:9440", pc) {
+		t.Error("expected match on PC URL against the CVM IP")
+	}
+	if !clusterEntityMatchesUserRef("urn:uuid:pc-uuid", pc) {
+		t.Error("expected match on urn:uuid extId")
+	}
+	if !clusterEntityMatchesUserRef("{pc-uuid}", pc) {
+		t.Error("expected match on braced extId")
 	}
 
 	aosJSON := `{

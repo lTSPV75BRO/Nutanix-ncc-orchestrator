@@ -21,6 +21,7 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   CodeOutlined,
+  ControlOutlined,
   FileTextOutlined,
   HeartOutlined,
   KeyOutlined,
@@ -38,6 +39,9 @@ import { ErrorStateCard, LoadingStateCard } from "../components/UxStates";
 import { notify, notifyError } from "../notify";
 import { localDateKey as localDayKey, relativeTime } from "../utils/datetime";
 
+const FeaturesSection = lazy(() =>
+  import("../features/settings/FeaturesSection").then(({ FeaturesSection: Component }) => ({ default: Component })),
+);
 const ConfigSection = lazy(() =>
   import("../features/settings/ConfigSection").then(({ ConfigSection: Component }) => ({ default: Component })),
 );
@@ -366,26 +370,26 @@ function ConnectionTab({
           Resolved Paths
         </Typography.Title>
         <Typography.Text type="secondary" className="section-subtitle">
-          The absolute paths the API server is configured to use. Click any value to copy it.
+          The paths this server is using. Select a value to copy it.
         </Typography.Text>
         <div className="resolved-paths-grid">
           <PathRow
             icon={<FileTextOutlined />}
             label="Config file"
             value={backendConfigPath}
-            hint="Active YAML config consumed by the orchestrator."
+            hint="The configuration file in use."
           />
           <PathRow
             icon={<ApartmentOutlined />}
             label="Output directory"
             value={outputDir}
-            hint="Where run artifacts (run-summary.json, NCC logs, …) are written."
+            hint="Where run results and logs are saved."
           />
           <PathRow
             icon={<FileTextOutlined />}
             label="Log directory"
             value={logDir}
-            hint="Per-run NCC plugin summary logs land here."
+            hint="NCC logs for each run."
           />
           <PathRow
             icon={<KeyOutlined />}
@@ -422,10 +426,10 @@ function DeveloperTab({ onError }: { onError: (e: unknown) => void }) {
   return (
     <Card className="page-card">
       <Typography.Title level={4} className="section-title">
-        Developer Tools
+        Advanced
       </Typography.Title>
       <Typography.Text type="secondary" className="section-subtitle">
-        Low-level utilities for debugging API endpoints and inspecting raw artifacts.
+        Inspect the API, saved reports, and run files.
       </Typography.Text>
       <Tabs
         style={{ marginTop: 12 }}
@@ -438,8 +442,8 @@ function DeveloperTab({ onError }: { onError: (e: unknown) => void }) {
         }}
         items={[
           { key: "api", label: "API Explorer", children: lazySection(<ApiExplorerSection onError={onError} />) },
-          { key: "json", label: "JSON Artifacts", children: lazySection(<JsonOutputsSection onError={onError} />) },
-          { key: "raw", label: "Raw Files", children: lazySection(<RawOutputsSection onError={onError} />) },
+          { key: "json", label: "Saved reports", children: lazySection(<JsonOutputsSection onError={onError} />) },
+          { key: "raw", label: "Run files", children: lazySection(<RawOutputsSection onError={onError} />) },
         ]}
       />
     </Card>
@@ -523,13 +527,18 @@ export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
           children: lazySection(<SystemHealthSection />),
         },
         {
+          key: "features",
+          label: tabLabel(<ControlOutlined />, "Features"),
+          children: lazySection(<FeaturesSection />),
+        },
+        {
           key: "maintenance",
           label: tabLabel(<ToolOutlined />, "Maintenance"),
           children: lazySection(<MaintenanceSection isKubernetes={isKubernetes} />),
         },
         {
           key: "developer",
-          label: tabLabel(<LinkOutlined />, "Developer"),
+          label: tabLabel(<LinkOutlined />, "Advanced"),
           children: lazySection(<DeveloperTab onError={notifyError} />),
         },
   ];

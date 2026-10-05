@@ -124,7 +124,7 @@ schema-version: 1
 runner:
   targets:
     mode: clusters
-    clusters: ["10.2.0.20"]
+    clusters: ["REPLACE_WITH_CLUSTER_IP"]
   credentials:
     username: admin
     password: secret://NCC_PASSWORD
@@ -633,7 +633,7 @@ Highest to lowest precedence:
 | Key | Type | Default | Example |
 |---|---|---|---|
 | `cluster-source-mode` | string | `clusters` | `"pc"` |
-| `clusters` | string | — | `"10.38.66.37,10.38.66.7"` |
+| `clusters` | string | — | `"REPLACE_WITH_CLUSTER_IP"` |
 | `clusters-file` | string | — | `"clusters.txt"` |
 | `pcs` | string | — | `"10.10.10.10,10.10.10.11"` |
 | `pcs-file` | string | — | `"pcs.txt"` |
@@ -663,7 +663,7 @@ Highest to lowest precedence:
 | `retry-base-delay` | duration | `400ms` | `"500ms"` |
 | `retry-max-delay` | duration | `8s` | `"12s"` |
 | `retry-circuit-breaker` | int | `3` | `2` |
-| `prom-enabled` | bool | `true` | `false` |
+| `prom-enabled` | bool | `false` | `true` |
 | `prom-dir` | string | `promfiles` | `"metrics"` |
 | `run-history` | bool | `false` | `true` |
 | `run-history-dir` | string | `<output-dir-filtered>/runs` | `"outputfiles/runs"` |
@@ -684,8 +684,10 @@ Highest to lowest precedence:
 | `exclude-alert-match-mode` | string | `exact` | `"contains"` |
 | `dry-run` | bool | `false` | `true` |
 | `replay` | bool | `false` | `true` |
-| `max-idle-conns` | int | `100` | `200` |
-| `max-idle-conns-per-host` | int | `10` | `20` |
+| `skip-preflight-check` | bool | `false` | `true` |
+| `gen-test-agg` | int | `0` | `0` |
+| `max-idle-conns` | int | `0` | `200` |
+| `max-idle-conns-per-host` | int | `0` | `20` |
 | `max-conns-per-host` | int | `0` | `50` |
 | `idle-conn-timeout` | duration | `90s` | `"120s"` |
 | `email-enabled` | bool | `false` | `true` |
@@ -735,6 +737,8 @@ ncc-orchestrator [flags]
 | `--email-from` | string | Valid email address | none | Sender address used in email notifications; should align with SMTP relay policy/domain requirements. |
 | `--email-to` | string | Comma-separated email addresses | none | Recipient list for email notifications. Supports one or more addresses separated by commas. |
 | `--email-use-tls` | bool | `true`, `false` | `true` | Enables STARTTLS for SMTP sessions. Keep enabled for production unless your SMTP endpoint explicitly requires plain mode in trusted networks. |
+| `--email-subject-template` | string | Go text/template | empty | Email subject. Empty uses the built-in subject. Fields include `.Cluster`, `.FailCount`, `.WarnCount`, `.ErrCount`, `.InfoCount`, `.TotalChecks`, `.Overview`. |
+| `--email-body-template` | string | Go text/template | empty | Email body. Empty uses the built-in body. |
 | `--smtp-insecure-skip-verify` | bool | `true`, `false` | `false` | Skips SMTP STARTTLS certificate verification, independent of `--insecure-skip-verify` (which only affects Prism). Use only for a trusted self-signed mail relay. |
 | `--notification-deadletter-dir` | string | Writable directory path | none | When set, notification payloads that fail to deliver after retries (email/webhook/Slack) are written here as JSON (channel, cluster, error, payload) so a transient outage does not silently drop the alert. |
 | `--flaky-lookback-runs` | int | Integer `>= 1` | `6` | Number of historical snapshots used for flaky-check detection. Higher values improve long-range sensitivity but may increase noise in unstable labs. |
@@ -747,6 +751,10 @@ ncc-orchestrator [flags]
 | `--log-level` | string | `trace`, `debug`, `info`, `warn`, `error`, or numeric `0..5` | `info` | Controls verbosity. Use `debug`/`trace` for troubleshooting and `info` for steady-state operations. |
 | `--maintenance-windows` | string | RFC3339 windows: `start/end[,start/end...]` | none | Suppresses notifications in explicit maintenance intervals. Best for planned change windows and patch operations. |
 | `--max-parallel` | int | Integer `1..100` | `4` | Maximum concurrent clusters. Tune down for rate-limited APIs or constrained environments; tune up for faster completion in stable networks. |
+| `--max-idle-conns` | int | Integer `>= 0` | `0` | Max idle HTTP connections in the client pool. `0` keeps the built-in default. |
+| `--max-idle-conns-per-host` | int | Integer `>= 0` | `0` | Max idle HTTP connections per Prism host. `0` keeps the built-in default. |
+| `--max-conns-per-host` | int | Integer `>= 0` | `0` | Max HTTP connections per host. `0` means unlimited. |
+| `--idle-conn-timeout` | duration string | Go duration (`30s`, `90s`) | `90s` | How long an idle pooled connection is kept. |
 | `--ncc-api-version` | string | `v4`, `Legacy`, `v1` (`v1` alias for Legacy) | `v4` | Selects NCC start-check API strategy. Use `v4` by default; use legacy mode for environments requiring Prism Gateway v1 start endpoints. |
 | `--notify-digest` | bool | `true`, `false` | `false` | Sends one consolidated notification per run (email/webhook/slack) instead of per-cluster messages. Recommended for large estates. |
 | `--notify-on-regression` | bool | `true`, `false` | `false` | Emits notifications only when FAIL count regresses compared to prior summary, reducing steady-state noise. |
@@ -761,8 +769,9 @@ ncc-orchestrator [flags]
 | `--pcs` | string | CSV of Prism Central IP/FQDN/URL values | none | PC target list used in `pc` mode. Each PC is queried and all discovered clusters are added to the run target set (deduplicated). |
 | `--pcs-file` | string | Path to text file | none | Alternate PC target source for `pc` mode (one PC per line; `#` comments allowed). |
 | `--prism-central-url` | string | URL/IP/FQDN | none | Single-PC fallback target for `pc` mode when `--pcs`/`--pcs-file` are not set. |
+| `--pc-alerts-cache-ttl` | duration string | Go duration, or `0` | `5m` | How long Prism Central alert responses are reused. `0` fetches on every request. |
 | `--discover-api-version` | string | `v4`, `v3` | `v4` | API used for PC cluster discovery in `pc` mode. `v4` uses clustermgmt API and auto-falls back to `v3` on 404. |
-| `--prom-enabled` | bool | `true`, `false` | `false` | Enables/disables writing Prometheus textfile metrics. |
+| `--prom-enabled` | bool | `true`, `false` | `false` | Writes Prometheus textfile metrics when true. Off unless this flag, `NCC_PROM_ENABLED`, or the config file turns it on. |
 | `--prom-dir` | string | Writable directory path | `promfiles` | Directory for Prometheus `.prom` metric files (used only when `--prom-enabled=true`). |
 | `--quiet-hours` | string | `HH:MM-HH:MM` local-time range | none | Recurring daily notification suppression window. Ideal for predictable off-hours operations. |
 | `--replay` | bool | `true`, `false` | `false` | Rebuilds reports/artifacts from existing logs without invoking NCC APIs. Useful for debugging and template iterations. |
@@ -781,8 +790,7 @@ ncc-orchestrator [flags]
 | `--secrets-file` | string | Path to YAML/JSON key-value map | none | Secret map source when `--secrets-provider=file` is selected. |
 | `--secrets-provider` | string | `env`, `file` | none | Enables `secret://` value resolution from process environment or file-backed key map. |
 | `--severity-filter` | string | CSV subset of `FAIL,WARN,ERR,INFO` | empty (all) | Limits output rows/artifacts to selected severities. Useful for alert-focused reports but can hide context. |
-| `--skip-preflight-check` | bool | `true`, `false` | `false` | Skips default preflight execution in run path. Keep `false` for production safety. |
-| `--auto` | bool | `true`, `false` | `false` | Enables guided automation in run path: prints remediation runbooks and applies safe self-healing fixes before failing. |
+| `--auto` | bool | `true`, `false` | `false` | Enables guided automation in the run path: prints remediation runbooks and applies safe self-healing fixes before failing. |
 | `--automation-level` | string | `advisory`, `safe-fix`, `full-auto` | `safe-fix` | Automation policy for run/quickstart. `advisory` suggests fixes only; `safe-fix` applies low-risk repairs; `full-auto` additionally tunes runtime knobs (`max-parallel`, timeout/retry settings) for stability. |
 | `--exclude-alert-titles` | string | CSV list of alert titles | empty | Excludes matching alert titles from generated outputs/notifications. |
 | `--exclude-alert-titles-file` | string | Path to line-delimited title file | empty | Loads exclusion titles from file (`#` comments and blank lines are ignored). |
@@ -801,6 +809,7 @@ ncc-orchestrator [flags]
 | `--webhook-headers` | map | `key=value` pairs (comma-separated) | empty map | Adds custom headers to webhook HTTP requests (tokens, tenant IDs, routing hints). |
 | `--webhook-include-html` | bool | `true`, `false` | `false` | Embeds HTML report content as base64 in webhook payloads. Increases payload size. |
 | `--webhook-url` | string | HTTP/HTTPS URL or `secret://name` | none | Destination webhook endpoint URL for outbound notifications. |
+| `--webhook-template` | string | Go text/template | empty | Webhook body. The rendered text must be JSON. Empty uses the built-in JSON payload. There is no `--webhook-secret` flag; set `NCC_WEBHOOK_SECRET` or `secret://` so the HMAC key stays out of the process list. |
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints command usage and flag help. |
 
 ## 6) Subcommand flags
@@ -1250,92 +1259,16 @@ For complete v2 deployment examples, see:
 
 ## 7) Full config example
 
-```yaml
-clusters: "10.38.66.37,10.38.66.7"
-# clusters-file: "clusters.txt"
-username: "admin"
-password: "secret://NCC_PRISM_PASSWORD"
-ncc-api-version: "v4"
-nutanix-v4-api-version: "v4.2"
-insecure-skip-verify: false
-# ca-bundle: "/etc/ncc/prism-ca.pem"   # trust an internal CA (safer than insecure-skip-verify)
-# pin-sha256: ""                        # CSV of allowed server cert SHA-256 fingerprints (pinning)
+The committed template is [`example_config.yaml`](../example_config.yaml). It lists every runner option with its CLI flag and `NCC_` variable in a comment.
 
-timeout: "15m"
-request-timeout: "20s"
-poll-interval: "15s"
-poll-jitter: "2s"
-max-parallel: 4
-adaptive-parallelism: true
+Safe sample values:
 
-outputs: "html,csv"
-output-dir-logs: "nccfiles"
-output-dir-filtered: "outputfiles"
-single-report: false
+- `clusters` is `REPLACE_WITH_CLUSTER_IP`. A run stops before any cluster is contacted and names the field to edit.
+- Email, webhook, and Slack stay disabled. Their `example.com` hosts are rejected only if that channel is turned on.
+- `gen-test-agg` is `0`. A number above 0 fabricates rows and is not a scan.
+- `webhook.secret` is `secret://WEBHOOK_HMAC`. Set `NCC_WEBHOOK_SECRET` (there is no `--webhook-secret` flag).
 
-log-file: "logs/ncc-runner.log"
-log-level: "info"
-log-http: false
-
-retry-max-attempts: 6
-retry-base-delay: "400ms"
-retry-max-delay: "8s"
-
-max-idle-conns: 100
-max-idle-conns-per-host: 10
-max-conns-per-host: 0
-idle-conn-timeout: "90s"
-
-prom-dir: "promfiles"
-prom-enabled: true
-
-run-history: false
-run-history-dir: "outputfiles/runs"
-retain-last: 0
-retain-days: 0
-notify-on-regression: false
-
-policy-gates: "new-fails>0,fail-rate>2,min-health-score<90"
-quiet-hours: ""
-maintenance-windows: ""
-flaky-lookback-runs: 6
-flaky-min-transitions: 2
-severity-filter: ""
-
-dry-run: false
-replay: false
-
-email-enabled: false
-email-attach-html: false
-notify-digest: false
-smtp-server: "smtp.example.com"
-smtp-port: 587
-smtp-user: "ncc@example.com"
-smtp-password: "secret://SMTP_PASSWORD"
-email-from: "ncc@example.com"
-email-to: "ops@example.com,sre@example.com"
-email-use-tls: true
-# smtp-insecure-skip-verify: false      # skip SMTP STARTTLS verify (independent of insecure-skip-verify)
-# email-subject-template: ""            # Go text/template; empty = built-in default
-# email-body-template: ""
-
-# notification-deadletter-dir: "/var/lib/ncc/deadletter"  # persist failed notification payloads
-
-webhook-enabled: false
-webhook-include-html: false
-webhook-url: "https://hooks.example.com/ncc"
-# webhook-template: ""                  # Go text/template for the body; empty = default JSON
-# webhook-secret: "secret://WEBHOOK_HMAC"  # sign body: header X-NCC-Signature: sha256=<hmac>
-webhook-headers:
-  X-Auth-Token: "secret://WEBHOOK_TOKEN"
-
-slack-enabled: false
-slack-webhook-url: "secret://SLACK_WEBHOOK_URL"
-slack-channel: "#ncc-alerts"
-
-secrets-provider: "env"
-secrets-file: ""
-```
+Do not copy the old flat sample that used real-looking cluster IPs. Use the nested file above.
 
 ## 8) Environment variable mapping
 
@@ -1348,10 +1281,13 @@ Examples:
 - `username` -> `NCC_USERNAME`
 - `clusters-file` -> `NCC_CLUSTERS_FILE`
 - `request-timeout` -> `NCC_REQUEST_TIMEOUT`
-- `webhook-include-html` -> `NCC_WEBHOOK_INCLUDE_HTML`
-- `webhook-secret` -> `NCC_WEBHOOK_SECRET` (config/env only; no CLI flag, to keep the secret out of the process list)
+- `pc-alerts-cache-ttl` -> `NCC_PC_ALERTS_CACHE_TTL`
+- `max-idle-conns` -> `NCC_MAX_IDLE_CONNS` (`0` keeps the built-in pool)
+- `email-subject-template` -> `NCC_EMAIL_SUBJECT_TEMPLATE`
+- `webhook-template` -> `NCC_WEBHOOK_TEMPLATE`
+- `webhook-secret` -> `NCC_WEBHOOK_SECRET` (config/env only; no CLI flag, so the HMAC key is not in the process list)
 
-Print current values:
+`ncc-orchestrator env-info` prints every runner variable, including `NCC_CA_BUNDLE`, `NCC_PIN_SHA256`, `NCC_PROM_ENABLED`, `NCC_POLICY_GATES`, `NCC_QUIET_HOURS`, `NCC_SMTP_INSECURE_SKIP_VERIFY`, `NCC_SECRETS_PROVIDER`, and `NCC_GEN_TEST_AGG`. Passwords, webhook URL, webhook headers, webhook secret, and Slack webhook are masked. API and UI variables are listed as `(set)` or `(not set)` only.
 
 ```bash
 ncc-orchestrator env-info
@@ -1375,7 +1311,11 @@ ncc-orchestrator env-info
 | `NCC_MASTER_KEY` | 32-byte master key (base64 std/raw/url or hex) to envelope-encrypt the file-backed user store at rest with AES-256-GCM. Takes precedence over `--users-db-key-file`/`NCC_MASTER_KEY_FILE`. Unset → plaintext (default). |
 | `NCC_MASTER_KEY_FILE` | Path to a file holding the 32-byte master key (base64/hex, or 32 raw bytes). Equivalent to `--users-db-key-file`. Keep it off the protected disk/backup. |
 | `NCC_USERS_FILE` | Path to an optional read-only YAML seed of local accounts, imported once into the database when empty. Equivalent to `--users-file`. |
-| `NCC_PASSWORD` | Read by `ncc-api-server --hash-password` as the password to hash (otherwise prompts on stdin). |
+| `NCC_DISABLE_LOCAL_ACCOUNTS` | Set to `1` or `true` to keep token-only automation and skip local-account login. |
+| `NCC_UI_ORIGIN` | Extra UI origin hostnames accepted by the UI server. |
+| `NCC_BACKUP_PASSPHRASE` | Passphrase for encrypted `v2-backup` / `v2-restore` archives (scrypt). |
+| `NCC_BACKUP_KEY` / `NCC_BACKUP_KEY_FILE` | Raw 32-byte backup key, inline or in a file (base64 or hex). |
+| `NCC_PASSWORD` | Prism password for the runner, and the password read by `ncc-api-server --hash-password` when stdin is not a prompt. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Enables OpenTelemetry tracing (per-cluster spans) over OTLP/HTTP. |
 | `NCC_OTEL_ENABLED` | Set to `1`/`true` to enable OTel tracing using the standard `OTEL_*` exporter env vars. |
 

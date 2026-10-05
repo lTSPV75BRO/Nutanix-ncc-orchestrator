@@ -71,8 +71,8 @@ export function OnboardingSection() {
       },
       {
         id: "run",
-        title: "Trigger and validate first run",
-        description: "Execute one run and confirm summary/check artifacts are produced.",
+        title: "Run the first health check",
+        description: "Start one run and confirm the results appear.",
         done: Boolean(doneMap.run || hasSuccessfulRun),
         link: "/settings?tab=runs",
       },

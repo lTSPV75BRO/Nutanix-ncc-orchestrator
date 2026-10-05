@@ -30,8 +30,10 @@ import {
   MinusOutlined,
   SafetyCertificateOutlined,
 } from "@ant-design/icons";
-import { asArray, asRecord, buildClusterNameMap, resolveClusterName, toNumber } from "../utils/report";
+import { asArray, asRecord, buildClusterNameMap, nccDispositionKey, resolveClusterName, toNumber } from "../utils/report";
 import { api } from "../api/client";
+import { FeatureDisabled } from "../features/features/FeatureDisabled";
+import { useFeatureFlags } from "../features/features/useFeatureFlags";
 import { DrilldownDiffPanel } from "../features/report/DrilldownDiffPanel";
 import { FlakyChecksPanel } from "../features/report/FlakyChecksPanel";
 import { SloPanel } from "../features/report/SloPanel";
@@ -140,8 +142,11 @@ const EMPTY_REPORT_DATA = Object.freeze({
 }) as Record<string, unknown>;
 
 export function InsightsPage() {
-  const report = useQuery({ queryKey: ["report-data"], queryFn: api.reportData });
-  const trends = useQuery({ queryKey: ["report-trends"], queryFn: () => api.reportTrends(24) });
+  const features = useFeatureFlags();
+  const insightsOff = features.data?.insights === false;
+  const report = useQuery({ queryKey: ["report-data"], queryFn: api.reportData, enabled: features.isFetched && !insightsOff });
+  const trends = useQuery({ queryKey: ["report-trends"], queryFn: () => api.reportTrends(24), enabled: features.isFetched && !insightsOff });
+  const nccMarks = useQuery({ queryKey: ["ncc-dispositions"], queryFn: api.nccDispositions, staleTime: 15_000, enabled: features.isFetched && !insightsOff });
   const [drillCheck, setDrillCheck] = useState<DrillRow | null>(null);
 
   useEffect(() => {
@@ -252,6 +257,83 @@ export function InsightsPage() {
     return items.filter((x) => x.severity === "FAIL" || x.severity === "ERR").sort((a, b) => b.score - a.score).slice(0, 5);
   }, [aggRows]);
 
+  const triage = useMemo(() => {
+    const marks = new Map<string, { status: string; by: string }>();
+    for (const item of nccMarks.data?.items ?? []) {
+      if (!item.cluster || !item.check) continue;
+      marks.set(nccDispositionKey(item.cluster, item.check), item);
+    }
+    let needsAttention = 0;
+    let acknowledged = 0;
+    let resolved = 0;
+    let returned = 0;
+    let missingKb = 0;
+    const owners = new Map<string, number>();
+    const byCluster = new Map<string, { name: string; needs: number; acknowledged: number; resolved: number }>();
+    const nccVersions = new Map<string, Set<string>>();
+    const aosVersions = new Map<string, Set<string>>();
+    const nccSeen = new Set<string>();
+    const aosSeen = new Set<string>();
+    for (const r of aggRows) {
+      const sev = String(r.severity || "").toUpperCase();
+      const cluster = String(r.cluster || "");
+      const named = resolveClusterName(cluster, clusterNameMap);
+      const label = named && named !== "-" ? named : cluster || "Unknown";
+      const ncc = String(r.nccVersion || r.ncc_version || "").trim();
+      const aos = String(r.clusterVersion || r.cluster_version || "").trim();
+      if (ncc && !nccSeen.has(label)) {
+        nccSeen.add(label);
+        const set = nccVersions.get(ncc) || new Set<string>();
+        set.add(label);
+        nccVersions.set(ncc, set);
+      }
+      if (aos && !aosSeen.has(label)) {
+        aosSeen.add(label);
+        const set = aosVersions.get(aos) || new Set<string>();
+        set.add(label);
+        aosVersions.set(aos, set);
+      }
+      if (sev !== "FAIL" && sev !== "ERR") continue;
+      if (!kbUrl(r)) missingKb += 1;
+      const rawCheck = String(r.check || r.check_name || "");
+      const check = normalizeCheckTitle(rawCheck);
+      const mark =
+        marks.get(nccDispositionKey(cluster, check)) ||
+        marks.get(nccDispositionKey(cluster, rawCheck)) ||
+        marks.get(nccDispositionKey(named, check)) ||
+        marks.get(nccDispositionKey(named, rawCheck));
+      const slot = byCluster.get(label) || { name: label, needs: 0, acknowledged: 0, resolved: 0 };
+      if (mark?.status === "resolved") {
+        resolved += 1;
+        slot.resolved += 1;
+      } else if (mark?.status === "acknowledged") {
+        acknowledged += 1;
+        slot.acknowledged += 1;
+        const who = mark.by.trim();
+        if (who && who !== "unknown") owners.set(who, (owners.get(who) || 0) + 1);
+      } else {
+        if (mark?.status === "reopened") returned += 1;
+        needsAttention += 1;
+        slot.needs += 1;
+      }
+      byCluster.set(label, slot);
+    }
+    const top = [...owners.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0];
+    const clusters = [...byCluster.values()].sort((a, b) => b.needs - a.needs || b.acknowledged - a.acknowledged || a.name.localeCompare(b.name));
+    return {
+      needsAttention,
+      acknowledged,
+      resolved,
+      returned,
+      missingKb,
+      topOwner: top?.[0] ?? "",
+      topCount: top?.[1] ?? 0,
+      clusters,
+      nccVersions: [...nccVersions.entries()].map(([version, clusters]) => ({ version, clusters: [...clusters] })).sort((a, b) => b.clusters.length - a.clusters.length),
+      aosVersions: [...aosVersions.entries()].map(([version, clusters]) => ({ version, clusters: [...clusters] })).sort((a, b) => b.clusters.length - a.clusters.length),
+    };
+  }, [aggRows, clusterNameMap, nccMarks.data]);
+
   // KB Index — unique KBs across findings
   const kbIndex = useMemo(() => {
     const map = new Map<string, { id: string; url: string; titles: Set<string>; clusters: Set<string>; count: number }>();
@@ -335,7 +417,11 @@ export function InsightsPage() {
 
   // ---------- render skeleton ----------
 
-  if (report.isLoading && !report.data) {
+  if (insightsOff) {
+    return <FeatureDisabled feature="insights" />;
+  }
+
+  if ((features.isLoading && !features.data) || (report.isLoading && !report.data)) {
     return (
       <Card className="page-card">
         <Skeleton active paragraph={{ rows: 6 }} />
@@ -348,6 +434,80 @@ export function InsightsPage() {
   const deltaFail = toNumber(regression.delta_fail_total);
   const hasRegression = Boolean(regression.has_regression);
   const previousTs = String(regression.previous_timestamp || "");
+  const diff = asRecord(data.drilldown_diff);
+  const newFailCount = toNumber(diff.new_fail_count);
+  const resolvedFailCount = toNumber(diff.resolved_fail_count);
+  const clustersFailed = toNumber(runSummary.clusters_failed);
+  const clustersOk = toNumber(runSummary.clusters_ok);
+  const sharedChecks = checkAgg
+    .filter((row) => row.clusterList.length >= 2 && (row.severity === "FAIL" || row.severity === "ERR"))
+    .slice()
+    .sort((a, b) => b.clusterList.length - a.clusterList.length || b.count - a.count);
+  const lastTrend = recentTrends.length > 0 ? recentTrends[recentTrends.length - 1] : null;
+  const prevTrend = recentTrends.length > 1 ? recentTrends[recentTrends.length - 2] : null;
+  const trendFailDelta = lastTrend && prevTrend ? toNumber(lastTrend.fail_total) - toNumber(prevTrend.fail_total) : null;
+  const trendHealthDelta = lastTrend && prevTrend ? toNumber(lastTrend.avg_health_score) - toNumber(prevTrend.avg_health_score) : null;
+
+  const briefing: Array<{ tone: "error" | "warning" | "info" | "success"; text: string }> = [];
+  if (clustersFailed > 0) {
+    const classes = failureClassEntries.map((e) => `${e.count} ${e.name.replace(/_/g, " ")}`).join(", ");
+    briefing.push({
+      tone: "error",
+      text: `${clustersFailed} of ${clustersOk + clustersFailed} clusters did not complete this run.${classes ? ` Reasons: ${classes}.` : ""}`,
+    });
+  }
+  if (fresh.label === "Stale" || fresh.label === "Aging") {
+    briefing.push({
+      tone: fresh.label === "Stale" ? "error" : "warning",
+      text: `These results are ${fresh.label.toLowerCase()} (${relativeTime(runTimestamp)}). They describe that run.`,
+    });
+  }
+  if (newFailCount > 0 || resolvedFailCount > 0) {
+    briefing.push({
+      tone: newFailCount > resolvedFailCount ? "warning" : "success",
+      text: `${newFailCount} FAIL ${newFailCount === 1 ? "finding is" : "findings are"} new since the previous run, and ${resolvedFailCount} ${resolvedFailCount === 1 ? "was" : "were"} resolved.`,
+    });
+  }
+  if (triage.returned > 0) {
+    briefing.push({
+      tone: "warning",
+      text: `${triage.returned} resolved ${triage.returned === 1 ? "alert was" : "alerts were"} found again on this run.`,
+    });
+  }
+  if (triage.needsAttention > 0) {
+    const hottest = triage.clusters.find((c) => c.needs > 0);
+    briefing.push({
+      tone: "warning",
+      text: `${triage.needsAttention} critical ${triage.needsAttention === 1 ? "alert has" : "alerts have"} not been acknowledged or resolved.${hottest ? ` ${hottest.name} still has ${hottest.needs}.` : ""}`,
+    });
+  }
+  if (sharedChecks.length > 0) {
+    const top = sharedChecks[0];
+    briefing.push({
+      tone: "info",
+      text: `${sharedChecks.length} FAIL/ERR ${sharedChecks.length === 1 ? "check appears" : "checks appear"} on more than one cluster. “${top.name}” is on ${top.clusterList.length}.`,
+    });
+  }
+  if (triage.missingKb > 0) {
+    briefing.push({
+      tone: "info",
+      text: `${triage.missingKb} critical ${triage.missingKb === 1 ? "alert has" : "alerts have"} no knowledge-base article.`,
+    });
+  }
+  if (triage.nccVersions.length > 1) {
+    briefing.push({
+      tone: "warning",
+      text: `NCC versions differ across clusters: ${triage.nccVersions.map((v) => `${v.version} (${v.clusters.length})`).join(", ")}.`,
+    });
+  }
+  if (briefing.length === 0 && totalPlugins > 0) {
+    briefing.push({
+      tone: "success",
+      text: previousTs
+        ? "Every cluster completed, there are no new failures since the previous run, and no critical alerts are waiting."
+        : "Every cluster completed, and no critical alerts are waiting. There is no earlier run to compare.",
+    });
+  }
 
   const severityRows = [
     { label: "PASS", count: passCount, color: "#22c55e" },
@@ -416,29 +576,38 @@ export function InsightsPage() {
         <Row gutter={[16, 16]} align="middle">
           <Col xs={24} md={8}>
             <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-              <Progress
-                type="dashboard"
-                percent={Number(weightedHealth.toFixed(1))}
-                strokeColor={healthGradeColor(weightedHealth)}
-                size={140}
-                format={(percent) => (
-                  <div style={{ textAlign: "center" }}>
-                    <div style={{ fontSize: 24, fontWeight: 700 }}>{percent}%</div>
-                    <div style={{ fontSize: 12, color: healthGradeColor(weightedHealth), fontWeight: 600 }}>
-                      {healthGrade(weightedHealth)}
+              <Tooltip
+                title={`Pass rate ${rawPassRate.toFixed(1)}% (${passCount.toLocaleString()} of ${totalPlugins.toLocaleString()} checks). Health also weighs warnings and errors.`}
+              >
+                <Progress
+                  type="dashboard"
+                  percent={Number(weightedHealth.toFixed(1))}
+                  strokeColor={healthGradeColor(weightedHealth)}
+                  size={140}
+                  format={(percent) => (
+                    <div style={{ textAlign: "center" }}>
+                      <div style={{ fontSize: 24, fontWeight: 700 }}>{percent}%</div>
+                      <div style={{ fontSize: 12, color: healthGradeColor(weightedHealth), fontWeight: 600 }}>
+                        {healthGrade(weightedHealth)}
+                      </div>
                     </div>
-                  </div>
-                )}
-              />
+                  )}
+                />
+              </Tooltip>
               <div>
                 <Typography.Text type="secondary" style={{ fontSize: 12, letterSpacing: 1, textTransform: "uppercase" }}>
                   Weighted Health
                 </Typography.Text>
+                <div>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    Pass rate {totalPlugins > 0 ? `${rawPassRate.toFixed(1)}%` : "—"}
+                  </Typography.Text>
+                </div>
                 <Typography.Title level={4} style={{ margin: "4px 0 6px" }}>
                   Cluster Insights
                 </Typography.Title>
                 <Space size={6} wrap>
-                  <Tooltip title={runTimestamp || "no timestamp"}>
+                  <Tooltip title={runTimestamp || "Run time unavailable"}>
                     <Tag icon={<ClockCircleOutlined />} color={fresh.color}>
                       {fresh.label} · {relativeTime(runTimestamp)}
                     </Tag>
@@ -463,7 +632,7 @@ export function InsightsPage() {
           <Col xs={24} md={16}>
             <Row gutter={[12, 12]}>
               <Col xs={12} md={6}>
-                <Statistic title="Total Plugins" value={totalPlugins} />
+                <Statistic title="Checks" value={totalPlugins} />
               </Col>
               <Col xs={12} md={6}>
                 <Statistic title="Clusters" value={clusterSummary.length} />
@@ -527,11 +696,129 @@ export function InsightsPage() {
             type="warning"
             showIcon
             style={{ marginTop: 16 }}
-            title="Summary count mismatch"
-            description="The sum of PASS/FAIL/WARN/ERR/INFO/UNKNOWN does not equal total plugins. Re-run NCC if the numbers look off."
+            title="Check totals do not match"
+            description="The severity counts do not add up to the total number of checks. Start the run again if this looks wrong."
           />
         ) : null}
       </Card>
+
+      {briefing.length > 0 ? (
+        <Card className="page-card">
+          <Typography.Title level={4} className="section-title">
+            What this run is saying
+          </Typography.Title>
+          <Typography.Text type="secondary" className="section-subtitle">
+            Highlights from this run and the one before it.
+          </Typography.Text>
+          <Space orientation="vertical" size={8} style={{ width: "100%", marginTop: 12 }}>
+            {briefing.map((item) => (
+              <Alert key={item.text} type={item.tone} showIcon title={item.text} />
+            ))}
+          </Space>
+        </Card>
+      ) : null}
+
+      <Card className="page-card">
+        <Typography.Title level={4} className="section-title">
+          NCC triage queue
+        </Typography.Title>
+        <Typography.Text type="secondary" className="section-subtitle">
+          Critical alerts and how they have been handled. Resolved alerts return to Needs attention if a later run finds them again.
+        </Typography.Text>
+        <Row gutter={[12, 12]} style={{ marginTop: 16 }}>
+          <Col xs={12} md={6}>
+            <Statistic title="Needs attention" value={triage.needsAttention} valueStyle={{ color: triage.needsAttention > 0 ? "#f43f5e" : "#22c55e" }} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title="Acknowledged, still open" value={triage.acknowledged} />
+          </Col>
+          <Col xs={12} md={6}>
+            <Statistic title="Resolved" value={triage.resolved} />
+          </Col>
+          <Col xs={24} md={6}>
+            <Statistic
+              title="Most acknowledgements"
+              value={triage.topOwner || "—"}
+              suffix={triage.topCount > 0 ? `(${triage.topCount})` : ""}
+            />
+          </Col>
+        </Row>
+        {triage.returned > 0 ? (
+          <Typography.Paragraph type="secondary" style={{ margin: "12px 0 0" }}>
+            {triage.returned} resolved {triage.returned === 1 ? "alert was" : "alerts were"} found again on this run.
+          </Typography.Paragraph>
+        ) : null}
+        {triage.clusters.some((c) => c.needs > 0) ? (
+          <Table
+            style={{ marginTop: 16 }}
+            size="small"
+            pagination={false}
+            rowKey="name"
+            dataSource={triage.clusters.filter((c) => c.needs > 0).slice(0, 8)}
+            columns={[
+              { title: "Cluster", dataIndex: "name", key: "name" },
+              { title: "Needs attention", dataIndex: "needs", key: "needs", width: 160, align: "right" },
+              { title: "Acknowledged", dataIndex: "acknowledged", key: "acknowledged", width: 140, align: "right" },
+              { title: "Resolved", dataIndex: "resolved", key: "resolved", width: 120, align: "right" },
+            ]}
+          />
+        ) : null}
+        {triage.missingKb > 0 ? (
+          <Typography.Text type="secondary" style={{ display: "block", marginTop: 8 }}>
+            {triage.missingKb} of these alerts have no knowledge-base article.
+          </Typography.Text>
+        ) : null}
+      </Card>
+
+      {sharedChecks.length > 0 ? (
+        <Card className="page-card">
+          <Typography.Title level={4} className="section-title">
+            Same check, several clusters
+          </Typography.Title>
+          <Typography.Text type="secondary" className="section-subtitle">
+            The same critical check on more than one cluster.
+          </Typography.Text>
+          <Table
+            style={{ marginTop: 12 }}
+            size="small"
+            pagination={false}
+            rowKey={(row) => `${row.name}|${row.severity}`}
+            dataSource={sharedChecks.slice(0, 8)}
+            onRow={(record) => ({
+              onClick: () =>
+                setDrillCheck({
+                  key: `${record.name}|${record.severity}`,
+                  name: record.name,
+                  severity: record.severity,
+                  count: record.count,
+                  clusterList: record.clusterList,
+                  kb: record.kb,
+                  kbId: record.kbId,
+                  sample: record.sample,
+                }),
+              style: { cursor: "pointer" },
+            })}
+            columns={[
+              { title: "Check", dataIndex: "name", key: "name" },
+              {
+                title: "Severity",
+                dataIndex: "severity",
+                key: "severity",
+                width: 110,
+                render: (v: string) => <Tag color={v === "FAIL" ? "error" : "volcano"}>{v}</Tag>,
+              },
+              { title: "Clusters", key: "clusters", width: 110, align: "right", render: (_, row) => row.clusterList.length },
+              { title: "Rows", dataIndex: "count", key: "count", width: 90, align: "right" },
+              {
+                title: "KB",
+                key: "kb",
+                width: 110,
+                render: (_, row) => (row.kbId ? <a href={row.kb} target="_blank" rel="noreferrer">KB {row.kbId}</a> : "—"),
+              },
+            ]}
+          />
+        </Card>
+      ) : null}
 
       {/* SEVERITY DISTRIBUTION */}
       <Card className="page-card">
@@ -542,7 +829,7 @@ export function InsightsPage() {
           How {totalPlugins.toLocaleString()} plugin checks are distributed across severities for the current run.
         </Typography.Text>
         {totalPlugins === 0 ? (
-          <Empty description="No NCC summary counts available." />
+          <Empty description="No check totals for this run." />
         ) : (
           <>
             <div
@@ -592,7 +879,7 @@ export function InsightsPage() {
               Top Failing Checks
             </Typography.Title>
             <Typography.Text type="secondary" className="section-subtitle">
-              Aggregated FAIL/ERR/WARN occurrences ranked by severity then frequency.
+              Most frequent failed checks.
             </Typography.Text>
             {checkAgg.length === 0 ? (
               <Empty description="No FAIL/ERR/WARN findings." />
@@ -620,7 +907,7 @@ export function InsightsPage() {
               />
             )}
             <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginTop: 8 }}>
-              Tip: click any row to see clusters where it failed and the original NCC plugin output.
+              Select a row to see the clusters and the original check output.
             </Typography.Text>
           </Card>
         </Col>
@@ -630,10 +917,10 @@ export function InsightsPage() {
               Top Actionable Findings
             </Typography.Title>
             <Typography.Text type="secondary" className="section-subtitle">
-              Highest-priority FAIL/ERR items with context and KB pointers.
+              Critical findings to review first.
             </Typography.Text>
             {actionableFindings.length === 0 ? (
-              <Empty description="No FAIL/ERR findings in the current snapshot." />
+              <Empty description="No critical findings in this run." />
             ) : (
               <Space orientation="vertical" size={10} style={{ width: "100%" }}>
                 {actionableFindings.map((item, idx) => {
@@ -686,6 +973,10 @@ export function InsightsPage() {
                     <Space size={8} style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
                       <Space size={6}>
                         <Typography.Text strong>{c.name}</Typography.Text>
+                        {(() => {
+                          const open = triage.clusters.find((item) => item.name === c.name);
+                          return open && open.needs > 0 ? <Tag color="gold">{open.needs} unmarked</Tag> : null;
+                        })()}
                         {c.fail > 0 ? <Tag color="error">FAIL {c.fail}</Tag> : null}
                         {c.err > 0 ? <Tag color="volcano">ERR {c.err}</Tag> : null}
                         {c.warn > 0 ? <Tag color="warning">WARN {c.warn}</Tag> : null}
@@ -713,10 +1004,12 @@ export function InsightsPage() {
               Severity Trend
             </Typography.Title>
             <Typography.Text type="secondary" className="section-subtitle">
-              FAIL+ERR rate over the last {recentTrends.length || 0} runs.
+              Failed checks across the last {recentTrends.length || 0} runs.
+              {trendFailDelta !== null ? ` Failures versus the previous run: ${trendFailDelta > 0 ? "+" : ""}${trendFailDelta}.` : ""}
+              {trendHealthDelta !== null ? ` Average health ${trendHealthDelta > 0 ? "+" : ""}${trendHealthDelta.toFixed(0)}.` : ""}
             </Typography.Text>
             {recentTrends.length === 0 ? (
-              <Empty description="No trend points available yet." />
+              <Empty description="Not enough runs to show a trend." />
             ) : (
               <Space orientation="vertical" size={6} style={{ width: "100%", marginTop: 8 }}>
                 {recentTrends.map((p, idx) => {
@@ -754,10 +1047,10 @@ export function InsightsPage() {
               Knowledge Base References
             </Typography.Title>
             <Typography.Text type="secondary" className="section-subtitle">
-              KB articles cited by failing checks in this run. Click to open.
+              Articles referenced by failed checks. Select one to open it.
             </Typography.Text>
             {kbIndex.length === 0 ? (
-              <Empty description="No KB references in current findings." />
+              <Empty description="No knowledge-base articles in this run." />
             ) : (
               <Space size={[8, 8]} wrap style={{ marginTop: 8 }}>
                 {kbIndex.map((kb) => (
@@ -790,10 +1083,10 @@ export function InsightsPage() {
               Run Reliability
             </Typography.Title>
             <Typography.Text type="secondary" className="section-subtitle">
-              Failure classes encountered during cluster polling.
+              Clusters that could not be reached.
             </Typography.Text>
             {failureClassEntries.length === 0 ? (
-              <Alert type="success" showIcon style={{ marginTop: 8 }} title="All clusters polled cleanly. No transport, auth, or rate-limit errors." />
+              <Alert type="success" showIcon style={{ marginTop: 8 }} title="Every cluster completed this run." />
             ) : (
               <Space orientation="vertical" size={8} style={{ width: "100%", marginTop: 8 }}>
                 {failureClassEntries.map((e) => (
@@ -804,15 +1097,34 @@ export function InsightsPage() {
                 ))}
               </Space>
             )}
+            {triage.nccVersions.length > 0 || triage.aosVersions.length > 0 ? (
+              <div style={{ marginTop: 16 }}>
+                <Typography.Text strong>Versions in this run</Typography.Text>
+                <div style={{ marginTop: 8 }}>
+                  <Space size={[6, 6]} wrap>
+                    {triage.nccVersions.map((v) => (
+                      <Tooltip key={`ncc-${v.version}`} title={v.clusters.slice(0, 6).join(", ")}>
+                        <Tag>NCC {v.version} · {v.clusters.length}</Tag>
+                      </Tooltip>
+                    ))}
+                    {triage.aosVersions.map((v) => (
+                      <Tooltip key={`aos-${v.version}`} title={v.clusters.slice(0, 6).join(", ")}>
+                        <Tag>{v.version} · {v.clusters.length}</Tag>
+                      </Tooltip>
+                    ))}
+                  </Space>
+                </div>
+              </div>
+            ) : null}
             <div style={{ marginTop: 16 }}>
               <Descriptions size="small" column={1} bordered>
-                <Descriptions.Item label="Clusters OK">{toNumber(runSummary.clusters_ok)}</Descriptions.Item>
-                <Descriptions.Item label="Clusters Failed">
+                <Descriptions.Item label="Clusters completed">{toNumber(runSummary.clusters_ok)}</Descriptions.Item>
+                <Descriptions.Item label="Clusters not completed">
                   <Typography.Text type={toNumber(runSummary.clusters_failed) > 0 ? "danger" : undefined}>
                     {toNumber(runSummary.clusters_failed)}
                   </Typography.Text>
                 </Descriptions.Item>
-                <Descriptions.Item label="Exit Code">{toNumber(runSummary.exit_code)}</Descriptions.Item>
+                <Descriptions.Item label="Run result">{toNumber(runSummary.exit_code) === 0 ? "Completed" : `Failed (${toNumber(runSummary.exit_code)})`}</Descriptions.Item>
               </Descriptions>
             </div>
           </Card>
@@ -838,7 +1150,7 @@ export function InsightsPage() {
           </Col>
           <Col xs={12} md={6}>
             <Statistic
-              title="Delta"
+              title="Change"
               value={deltaFail}
               prefix={deltaFail > 0 ? <ArrowUpOutlined /> : deltaFail < 0 ? <ArrowDownOutlined /> : <MinusOutlined />}
               valueStyle={{ color: deltaFail > 0 ? "#f43f5e" : deltaFail < 0 ? "#22c55e" : undefined }}
@@ -921,7 +1233,7 @@ export function InsightsPage() {
               Clusters where this check fired
             </Typography.Title>
             {drillCheck.clusterList.length === 0 ? (
-              <Empty description="No clusters resolved." />
+              <Empty description="No clusters listed." />
             ) : (
               <Space size={[6, 6]} wrap>
                 {drillCheck.clusterList.map((c) => (
@@ -933,10 +1245,10 @@ export function InsightsPage() {
 
           <div>
             <Typography.Title level={5} style={{ marginBottom: 8 }}>
-              Sample plugin output
+              Check output
             </Typography.Title>
             {drillOccurrences.length === 0 ? (
-              <Empty description="No per-row detail available." />
+              <Empty description="No details for this check." />
             ) : (
               <List
                 size="small"

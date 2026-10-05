@@ -62,3 +62,4 @@ ncc-v2-stack-*.zip
 # frontend dist copy, and the deploy tarball produced when shipping to a host)
 /build/
 /bin/
+/node_modules/

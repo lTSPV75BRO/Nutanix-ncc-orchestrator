@@ -1,6 +1,8 @@
-FROM node:24-alpine AS frontend-builder
+FROM node:26-alpine AS frontend-builder
 
 WORKDIR /frontend
+# Node 22.8+ code cache, kept by 24 and 26. tsc and Vite share compiled modules in this stage.
+ENV NODE_COMPILE_CACHE=/tmp/node-compile-cache
 
 COPY frontend/package*.json ./
 RUN npm ci

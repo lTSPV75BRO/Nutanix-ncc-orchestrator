@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
   Badge,
@@ -41,6 +41,8 @@ import {
 import type { AlertSource, RunActiveData, MeData } from "../api/types";
 import { api } from "../api/client";
 import { notify, notifyError } from "../notify";
+import { FeatureDisabled } from "../features/features/FeatureDisabled";
+import { useFeatureFlags } from "../features/features/useFeatureFlags";
 import { ClusterTable } from "../features/report/ClusterTable";
 import {
   asArray,
@@ -197,17 +199,42 @@ export function DashboardPage() {
     staleTime: 30_000,
   });
 
+  const nccDispositionsQuery = useQuery({
+    queryKey: ["ncc-dispositions"],
+    queryFn: api.nccDispositions,
+    staleTime: 15_000,
+  });
+  const setNCCDisposition = useMutation({
+    mutationFn: api.setNCCDisposition,
+    onSuccess: async (_data, variables) => {
+      await queryClient.invalidateQueries({ queryKey: ["ncc-dispositions"] });
+      const count = variables.items?.length ?? 1;
+      const noun = count === 1 ? "alert" : `${count} alerts`;
+      if (variables.action === "resolve") {
+        notify.success(`Resolved ${noun}. A later run that generates the same check clears the mark.`);
+      } else if (variables.action === "acknowledge") {
+        notify.success(`Acknowledged ${noun}. It stays open until you resolve it.`);
+      } else {
+        notify.success(`Reopened ${noun}.`);
+      }
+    },
+    onError: (err) => notifyError(err, "Could not update the NCC alert"),
+  });
+
+  const features = useFeatureFlags();
+  const pcAlertsOn = !features.isSuccess || features.data.pc_alerts !== false;
+  const pcBlocked = alertSource === "PC" && features.data?.pc_alerts === false;
   const pcUnresolvedAlertsQuery = useQuery({
     queryKey: ["pc-alerts", "No"],
     queryFn: () => api.alerts(false, "No"),
-    enabled: alertSource === "PC",
+    enabled: alertSource === "PC" && features.isFetched && pcAlertsOn,
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
   const pcAllAlertsQuery = useQuery({
     queryKey: ["pc-alerts", "all"],
     queryFn: () => api.alerts(false, "all"),
-    enabled: alertSource === "PC",
+    enabled: alertSource === "PC" && features.isFetched && pcAlertsOn,
     staleTime: 5 * 60_000,
     refetchInterval: false,
   });
@@ -428,6 +455,7 @@ export function DashboardPage() {
     await Promise.all([
       previewReport.refetch(),
       loadFullReport ? fullReport.refetch() : Promise.resolve(),
+      queryClient.invalidateQueries({ queryKey: ["ncc-dispositions"] }),
       alertSource === "PC"
         ? Promise.all([
             api.alerts(true, "No").then((data) => {
@@ -499,7 +527,7 @@ export function DashboardPage() {
             </Col>
             <Col xs={24} md={12}>
               <Row gutter={[8, 8]}>
-                {["Clusters OK", "Failed", "Total Plugins", "Pass"].map((t) => (
+                {["Completed", "Failed", "Checks", "Pass"].map((t) => (
                   <Col xs={12} md={6} key={t}>
                     <Statistic title={t} value="—" />
                   </Col>
@@ -588,7 +616,7 @@ export function DashboardPage() {
             <Row gutter={[8, 8]}>
               <Col xs={12} md={6}>
                 <Statistic
-                  title="Clusters OK"
+                  title="Completed"
                   value={clustersOk}
                   prefix={<CheckCircleOutlined style={{ color: "#22c55e" }} />}
                 />
@@ -601,7 +629,7 @@ export function DashboardPage() {
                 />
               </Col>
               <Col xs={12} md={6}>
-                <Statistic title="Total Plugins" value={totalPlugins} />
+                <Statistic title="Checks" value={totalPlugins} />
               </Col>
               <Col xs={12} md={6}>
                 <Statistic title="Pass" value={passCount} valueStyle={{ color: "#22c55e" }} />
@@ -690,8 +718,8 @@ export function DashboardPage() {
         <Alert
           type="info"
           showIcon
-          title="Loading complete dataset in background"
-          description="A fast preview is shown first. Full report rows are being fetched."
+          title="Loading the rest of this run"
+          description="A preview is shown while the full results load."
         />
       )}
 
@@ -776,12 +804,14 @@ export function DashboardPage() {
         <Flex align="center" justify="space-between" wrap="wrap" gap={16}>
           <Flex align="center" gap={12}>
             <Typography.Text strong className="filter-toolbar-label">Alert Type:</Typography.Text>
-            <Segmented aria-label="Alert source" size="middle" value={alertSource} onChange={(value) => setAlertSource(value as AlertSource)} options={[
-              { label: "NCC", value: "NCC" },
-              { label: "PC", value: "PC" },
-            ]} />
+            <Tooltip title="Beta. Prism Central alerts can be turned off in Settings → Features.">
+              <Segmented aria-label="Alert source" size="middle" value={alertSource} onChange={(value) => setAlertSource(value as AlertSource)} options={[
+                { label: "NCC", value: "NCC" },
+                { label: "PC · Beta", value: "PC" },
+              ]} />
+            </Tooltip>
           </Flex>
-          {alertSource === "PC" ? (
+          {alertSource === "PC" && !pcBlocked ? (
             <Flex align="center" gap={8}>
               <Typography.Text type="secondary" className="tile-subtitle">PC Alerts Filter:</Typography.Text>
               <Select aria-label="PC resolved filter" value={pcResolvedFilter} onChange={(value) => setPcResolvedFilter(value as "all" | "No" | "Yes")} style={{ width: 160 }} options={[
@@ -794,17 +824,17 @@ export function DashboardPage() {
         </Flex>
       </Card>
 
-      {alertSource === "PC" && pcAllAlertsQuery.isFetching ? (
+      {alertSource === "PC" && !pcBlocked && pcAllAlertsQuery.isFetching ? (
         <Alert
           type="info"
           showIcon
           icon={<LoadingOutlined spin />}
-          message="Loading complete Prism Central alert history…"
+          message="Loading Prism Central alerts…"
           description="Unresolved alerts are available now. Resolved and all-status results are loading in the background."
         />
       ) : null}
 
-      {pcUnresolvedAlertsQuery.error || pcAllAlertsQuery.error ? (
+      {alertSource === "PC" && !pcBlocked && (pcUnresolvedAlertsQuery.error || pcAllAlertsQuery.error) ? (
         <Alert
           type="warning"
           showIcon
@@ -814,7 +844,9 @@ export function DashboardPage() {
       ) : null}
 
       {/* MAIN ALERTS TABLE */}
-      {aggRows.length === 0 &&
+      {pcBlocked ? (
+        <FeatureDisabled feature="pc_alerts" />
+      ) : aggRows.length === 0 &&
       !hasChecksSnapshotData &&
       ((pcResolvedFilter === "No"
         ? pcUnresolvedAlertsQuery.data?.alerts?.length
@@ -898,11 +930,11 @@ export function DashboardPage() {
                     <Typography.Text type="secondary">
                       {hasPriorRun
                         ? likelyEarlyFailure
-                          ? `${sourceLabel[0].toUpperCase()}${sourceLabel.slice(1)} appears to have finished before per-check findings were generated. ${summaryHint}${errorHint} Re-run from Settings → Runs and check live output for the first failing stage.`
+                          ? `The ${sourceLabel} finished before any check results were saved. ${summaryHint}${errorHint} Start it again from Settings → Runs and review the live output.`
                           : artifactGap
-                            ? `The ${sourceLabel} summary exists, but per-check artifacts are missing. This usually indicates incomplete report artifact generation or cleanup. Open Settings → Runs, inspect the latest run artifacts/logs, then re-run.`
-                            : `The ${sourceLabel} completed but did not emit per-check findings. Re-run from Settings → Runs with full output enabled.`
-                        : "Trigger a run from Settings → Runs to populate this view. Add clusters or Prism Central under Config first."}
+                            ? `The ${sourceLabel} summary is available, but the check results are missing. Open Settings → Runs, review the latest run, then start it again.`
+                            : `The ${sourceLabel} completed without check results. Start it again from Settings → Runs.`
+                        : "Start a run from Settings → Runs. Add clusters or Prism Central under Config first."}
                     </Typography.Text>
                     {hasPriorRun ? (
                       <Link to="/settings?tab=runs">
@@ -950,6 +982,10 @@ export function DashboardPage() {
           pcResolvedFilter={pcResolvedFilter}
           compareMode={compareMode}
           onSummaryChange={setTableSummary}
+          dispositions={nccDispositionsQuery.data?.items}
+          dispositionPending={setNCCDisposition.isPending}
+          runAt={runTimestamp}
+          onDisposition={(input) => setNCCDisposition.mutate(input)}
         />
       )}
     </div>

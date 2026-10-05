@@ -906,6 +906,55 @@ func validateClusters(clusters []string) error {
 	return nil
 }
 
+// rejectSampleConfig stops a generated or example config from being executed
+// until the operator replaces the sample targets. The error names the field
+// and what to type instead of a low-level parse failure.
+func rejectSampleConfig(cfg Config) error {
+	var lines []string
+	checkTarget := func(kind, value string) {
+		v := strings.TrimSpace(value)
+		if v == "" || !sampleClusterValue(v) {
+			return
+		}
+		lines = append(lines, fmt.Sprintf("%s %q is still a sample. Replace it with a real Prism IP or DNS name, such as 10.20.30.40 or pe-prod.corp.example.", kind, v))
+	}
+	for _, c := range cfg.Clusters {
+		checkTarget("Cluster", c)
+	}
+	for _, pc := range cfg.PCs {
+		checkTarget("Prism Central", pc)
+	}
+	if sampleClusterValue(cfg.PrismCentralURL) {
+		checkTarget("prism-central-url", cfg.PrismCentralURL)
+	}
+	if cfg.EmailEnabled && sampleEndpoint(cfg.SMTPServer) {
+		lines = append(lines, "Email is turned on, but smtp-server is still the sample host. Set your mail server, or set email-enabled to false.")
+	}
+	if cfg.WebhookEnabled && sampleEndpoint(cfg.WebhookURL) {
+		lines = append(lines, "The webhook is turned on, but webhook-url is still the sample address. Set a real URL, or set webhook-enabled to false.")
+	}
+	if cfg.SlackEnabled && sampleEndpoint(cfg.SlackWebhookURL) {
+		lines = append(lines, "Slack is turned on, but slack-webhook-url is still empty or a sample. Paste the incoming-webhook URL, or set slack-enabled to false.")
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	return fmt.Errorf("this config still has sample values, so no cluster was contacted:\n- %s\nEdit the config file, then run the command again", strings.Join(lines, "\n- "))
+}
+
+func sampleClusterValue(v string) bool {
+	s := strings.ToLower(strings.TrimSpace(v))
+	if s == "" {
+		return false
+	}
+	return strings.Contains(s, "xx.xx") || strings.Contains(s, "replace_with_") || strings.Contains(s, "changeme")
+}
+
+func sampleEndpoint(v string) bool {
+	s := strings.ToLower(strings.TrimSpace(v))
+	return s == "" || strings.Contains(s, "example.com") || strings.Contains(s, "changeme") || strings.Contains(s, "replace_with_")
+}
+
 // validateURL validates webhook/Slack URLs
 func validateURL(urlStr string) error {
 	if urlStr == "" {
@@ -1019,6 +1068,9 @@ func normalizeExcludeAlertMatchMode(s string) (string, error) {
 
 // validateConfig performs comprehensive configuration validation
 func validateConfig(cfg Config) error {
+	if err := rejectSampleConfig(cfg); err != nil {
+		return err
+	}
 	sourceMode, err := normalizeClusterSourceMode(cfg.ClusterSourceMode)
 	if err != nil {
 		return err
@@ -1256,12 +1308,37 @@ func writeDummyConfig(path string) error {
 		dummy = `# NCC Runner configuration (dummy values)
 
 # Required
-clusters: "10.2.XX.XX,10.0.XX.XX"      	  # Comma-separated list of Prism Element cluster IPs/cluster FQDNs
+clusters: "REPLACE_WITH_CLUSTER_IP"        # Real Prism Element IP or DNS name. Leave this sample and the run stops with an explanation.
 # clusters-file: ""                        # Optional: cluster or cluster,username[,password] per line; overrides clusters when set
 username: "admin"                         # Prism element username
 password: ""                              # Prefer env NCC_PASSWORD in CLI; leave empty here if using env
 ncc-api-version: v4                       # v4 (default) or Legacy (Prism Gateway v1 start-checks only; v1 accepted as alias)
 nutanix-v4-api-version: v4.2              # v4 path revision (v4.2 default; e.g. v4.1, v4.0.a1)
+cluster-source-mode: clusters             # clusters (manual list) or pc (discover from Prism Central)
+pcs: ""                                   # Comma-separated Prism Central IPs/FQDNs/URLs when mode is pc
+pcs-file: ""                              # Optional file, one Prism Central per line
+prism-central-url: ""                     # Optional explicit PC base URL
+discover-api-version: v4                  # v4 (default) or v3 for PC cluster discovery
+pc-alerts-cache-ttl: "5m"                 # Prism Central alert cache. 0 disables it
+ca-bundle: ""                             # PEM file of extra trusted CAs
+pin-sha256: ""                            # Comma-separated server-cert SHA-256 pins
+dry-run: false                            # Validate only; do not start NCC checks
+replay: false                             # Read saved reports instead of contacting clusters
+gen-test-agg: 0                           # Leave 0. Above 0 fabricates aggregate rows and is not a scan
+skip-preflight-check: false
+severity-filter: ""                       # Empty = all. Otherwise FAIL,WARN,ERR,INFO
+prom-enabled: false
+prom-dir: "outputfiles/prom"
+max-idle-conns: 0                         # 0 = built-in HTTP pool default
+max-idle-conns-per-host: 0
+max-conns-per-host: 0                     # 0 = unlimited
+idle-conn-timeout: "90s"
+notification-deadletter-dir: ""           # Where undelivered notifications are kept
+email-subject-template: ""                # Optional Go text/template
+email-body-template: ""
+smtp-insecure-skip-verify: false
+webhook-template: ""                      # Optional Go text/template; must render JSON
+webhook-secret: ""                        # HMAC secret; sent as X-NCC-Signature
 
 # TLS and timeouts
 insecure-skip-verify: false               # Set true only for lab/self-signed
@@ -1335,12 +1412,37 @@ secrets-file: ""                          # YAML/JSON key-value map when secrets
 `
 	case ".json":
 		dummy = `{
-  "clusters": "10.0.0.1,10.0.0.2",
+  "clusters": "REPLACE_WITH_CLUSTER_IP",
   "clusters-file": "",
   "username": "admin",
   "password": "",
   "ncc-api-version": "v4",
   "nutanix-v4-api-version": "v4.2",
+  "cluster-source-mode": "clusters",
+  "pcs": "",
+  "pcs-file": "",
+  "prism-central-url": "",
+  "discover-api-version": "v4",
+  "pc-alerts-cache-ttl": "5m",
+  "ca-bundle": "",
+  "pin-sha256": "",
+  "dry-run": false,
+  "replay": false,
+  "gen-test-agg": 0,
+  "skip-preflight-check": false,
+  "severity-filter": "",
+  "prom-enabled": false,
+  "prom-dir": "outputfiles/prom",
+  "max-idle-conns": 0,
+  "max-idle-conns-per-host": 0,
+  "max-conns-per-host": 0,
+  "idle-conn-timeout": "90s",
+  "notification-deadletter-dir": "",
+  "email-subject-template": "",
+  "email-body-template": "",
+  "smtp-insecure-skip-verify": false,
+  "webhook-template": "",
+  "webhook-secret": "",
   "insecure-skip-verify": false,
   "timeout": "15m",
   "request-timeout": "30s",
@@ -1401,12 +1503,37 @@ secrets-file: ""                          # YAML/JSON key-value map when secrets
 		dummy = `# NCC Runner configuration (dummy values)
 
 # Required
-clusters: "10.2.XX.XX,10.0.XX.XX"      	  # Comma-separated list of Prism Element cluster IPs/cluster FQDNs
+clusters: "REPLACE_WITH_CLUSTER_IP"        # Real Prism Element IP or DNS name. Leave this sample and the run stops with an explanation.
 # clusters-file: ""                        # Optional: cluster or cluster,username[,password] per line; overrides clusters when set
 username: "admin"                         # Prism element username
 password: ""                              # Prefer env NCC_PASSWORD in CLI; leave empty here if using env
 ncc-api-version: v4                       # v4 (default) or Legacy (Prism Gateway v1 start-checks only; v1 accepted as alias)
 nutanix-v4-api-version: v4.2              # v4 path revision (v4.2 default; e.g. v4.1, v4.0.a1)
+cluster-source-mode: clusters             # clusters (manual list) or pc (discover from Prism Central)
+pcs: ""                                   # Comma-separated Prism Central IPs/FQDNs/URLs when mode is pc
+pcs-file: ""                              # Optional file, one Prism Central per line
+prism-central-url: ""                     # Optional explicit PC base URL
+discover-api-version: v4                  # v4 (default) or v3 for PC cluster discovery
+pc-alerts-cache-ttl: "5m"                 # Prism Central alert cache. 0 disables it
+ca-bundle: ""                             # PEM file of extra trusted CAs
+pin-sha256: ""                            # Comma-separated server-cert SHA-256 pins
+dry-run: false                            # Validate only; do not start NCC checks
+replay: false                             # Read saved reports instead of contacting clusters
+gen-test-agg: 0                           # Leave 0. Above 0 fabricates aggregate rows and is not a scan
+skip-preflight-check: false
+severity-filter: ""                       # Empty = all. Otherwise FAIL,WARN,ERR,INFO
+prom-enabled: false
+prom-dir: "outputfiles/prom"
+max-idle-conns: 0                         # 0 = built-in HTTP pool default
+max-idle-conns-per-host: 0
+max-conns-per-host: 0                     # 0 = unlimited
+idle-conn-timeout: "90s"
+notification-deadletter-dir: ""           # Where undelivered notifications are kept
+email-subject-template: ""                # Optional Go text/template
+email-body-template: ""
+smtp-insecure-skip-verify: false
+webhook-template: ""                      # Optional Go text/template; must render JSON
+webhook-secret: ""                        # HMAC secret; sent as X-NCC-Signature
 
 # TLS and timeouts
 insecure-skip-verify: false               # Set true only for lab/self-signed
@@ -1773,6 +1900,8 @@ func normalizeCanonicalConfig() {
 		"runner.execution.poll-jitter":               "poll-jitter",
 		"runner.execution.adaptive-parallelism":      "adaptive-parallelism",
 		"runner.execution.dry-run":                   "dry-run",
+		"runner.execution.skip-preflight-check":      "skip-preflight-check",
+		"runner.execution.replay":                    "replay",
 		"runner.retry.max-attempts":                  "retry-max-attempts",
 		"runner.retry.base-delay":                    "retry-base-delay",
 		"runner.retry.max-delay":                     "retry-max-delay",
@@ -1784,8 +1913,11 @@ func normalizeCanonicalConfig() {
 		"runner.filtering.flaky-min-transitions":     "flaky-min-transitions",
 		"runner.filtering.exclude-alert-titles-file": "exclude-alert-titles-file",
 		"runner.filtering.exclude-alert-match-mode":  "exclude-alert-match-mode",
+		"runner.policy.flaky-lookback-runs":          "flaky-lookback-runs",
+		"runner.policy.flaky-min-transitions":        "flaky-min-transitions",
 		"runner.outputs.formats":                     "outputs",
 		"runner.outputs.single-report":               "single-report",
+		"runner.outputs.gen-test-agg":                "gen-test-agg",
 		"runner.history.enabled":                     "run-history",
 		"runner.history.retain-last":                 "retain-last",
 		"runner.history.retain-days":                 "retain-days",
@@ -1816,6 +1948,8 @@ func normalizeCanonicalConfig() {
 		"notifications.email.attach-html":            "email-attach-html",
 		"notifications.email.digest":                 "notify-digest",
 		"notifications.email.smtp-user":              "smtp-user",
+		"notifications.email.smtp-server":            "smtp-server",
+		"notifications.email.smtp-port":              "smtp-port",
 		"notifications.email.smtp-password":          "smtp-password",
 		"notifications.email.from":                   "email-from",
 		"notifications.email.to":                     "email-to",
@@ -1824,6 +1958,7 @@ func normalizeCanonicalConfig() {
 		"notifications.email.subject-template":       "email-subject-template",
 		"notifications.email.body-template":          "email-body-template",
 		"notifications.webhook.enabled":              "webhook-enabled",
+		"notifications.webhook.url":                  "webhook-url",
 		"notifications.webhook.include-html":         "webhook-include-html",
 		"notifications.webhook.headers":              "webhook-headers",
 		"notifications.webhook.template":             "webhook-template",
@@ -13640,6 +13775,10 @@ func runCreateSchedule(cmd *cobra.Command, args []string) error {
 func configJSONSchema() map[string]interface{} {
 	props := map[string]interface{}{
 		"cluster-source-mode":       map[string]interface{}{"type": "string", "enum": []string{"clusters", "pc"}},
+		"pc-alerts-cache-ttl":       map[string]interface{}{"type": "string", "description": "Duration. 0 disables the Prism Central alert cache"},
+		"email-subject-template":    map[string]interface{}{"type": "string"},
+		"email-body-template":       map[string]interface{}{"type": "string"},
+		"webhook-template":          map[string]interface{}{"type": "string"},
 		"skip-preflight-check":      map[string]interface{}{"type": "boolean"},
 		"clusters":                  map[string]interface{}{"type": "string", "description": "Comma-separated cluster IPs/FQDNs"},
 		"clusters-file":             map[string]interface{}{"type": "string"},
@@ -15005,25 +15144,63 @@ func dedupeStringsKeepOrder(in []string) []string {
 // registered cluster (name, extId, external address, or any CVM IP). Used so Prism Central
 // does not always use data[0] (wrong cluster when multiple are registered).
 func clusterEntityMatchesUserRef(ref string, entity map[string]interface{}) bool {
-	ref = strings.TrimSpace(ref)
-	if ref == "" {
+	want := canonicalClusterRef(ref)
+	if want == "" || entity == nil {
 		return false
 	}
-	if name, _ := entity["name"].(string); strings.TrimSpace(name) != "" && strings.EqualFold(strings.TrimSpace(name), ref) {
-		return true
+	candidates := []string{}
+	if name, _ := entity["name"].(string); strings.TrimSpace(name) != "" {
+		candidates = append(candidates, name)
 	}
-	if extID, _ := entity["extId"].(string); strings.TrimSpace(extID) != "" && strings.EqualFold(strings.TrimSpace(extID), ref) {
-		return true
+	if extID, _ := entity["extId"].(string); strings.TrimSpace(extID) != "" {
+		candidates = append(candidates, extID)
 	}
-	if a := extractClusterAddressV4(entity); a != "" && strings.EqualFold(a, ref) {
-		return true
+	if uuid, _ := entity["uuid"].(string); strings.TrimSpace(uuid) != "" {
+		candidates = append(candidates, uuid)
 	}
-	for _, ip := range extractCVMIPv4sFromClusterEntity(entity) {
-		if strings.EqualFold(ip, ref) {
+	if netw, _ := entity["network"].(map[string]interface{}); netw != nil {
+		if fqdn, _ := netw["fqdn"].(string); strings.TrimSpace(fqdn) != "" {
+			candidates = append(candidates, fqdn)
+		}
+	}
+	if a := extractClusterAddressV4(entity); a != "" {
+		candidates = append(candidates, a)
+	}
+	candidates = append(candidates, extractCVMIPv4sFromClusterEntity(entity)...)
+	for _, c := range candidates {
+		if canonicalClusterRef(c) == want {
 			return true
 		}
 	}
 	return false
+}
+
+// canonicalClusterRef folds a URL, host:port, urn:uuid, or braced UUID into the
+// host or id operators actually type. Some Prism clusters are addressed as
+// https://name:9440 while the API record only has the IP, name, or extId.
+func canonicalClusterRef(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	lower := strings.ToLower(s)
+	lower = strings.TrimPrefix(lower, "urn:uuid:")
+	lower = strings.Trim(lower, "{}")
+	if strings.Contains(lower, "://") {
+		if u, err := url.Parse(lower); err == nil {
+			if h := strings.TrimSpace(u.Hostname()); h != "" {
+				lower = h
+			}
+		}
+	}
+	if host, _, err := net.SplitHostPort(lower); err == nil && host != "" {
+		lower = strings.Trim(host, "[]")
+	} else if i := strings.LastIndex(lower, ":"); i > 0 && strings.Count(lower, ":") == 1 {
+		if _, err := strconv.Atoi(lower[i+1:]); err == nil {
+			lower = lower[:i]
+		}
+	}
+	return strings.Trim(strings.TrimSpace(lower), "[]")
 }
 
 // extractClusterAddressV3 extracts external IP or name from a Prism Central cluster entity (v3).
@@ -15306,86 +15483,160 @@ func strDefault(s, dflt string) string {
 	return s
 }
 
+// runnerEnvKeys are the NCC_ suffixes for runner config. Hyphens in the
+// config key become underscores. webhook-secret is env/config only.
+var runnerEnvKeys = []string{
+	"CONFIG",
+	"SCHEMA_VERSION",
+	"SKIP_PREFLIGHT_CHECK",
+	"AUTO",
+	"AUTOMATION_LEVEL",
+	"CLUSTER_SOURCE_MODE",
+	"CLUSTERS",
+	"CLUSTERS_FILE",
+	"PCS",
+	"PCS_FILE",
+	"PRISM_CENTRAL_URL",
+	"DISCOVER_API_VERSION",
+	"USERNAME",
+	"PASSWORD",
+	"NCC_API_VERSION",
+	"NUTANIX_V4_API_VERSION",
+	"PC_ALERTS_CACHE_TTL",
+	"INSECURE_SKIP_VERIFY",
+	"CA_BUNDLE",
+	"PIN_SHA256",
+	"TIMEOUT",
+	"REQUEST_TIMEOUT",
+	"POLL_INTERVAL",
+	"POLL_JITTER",
+	"MAX_PARALLEL",
+	"OUTPUTS",
+	"OUTPUT_DIR_LOGS",
+	"OUTPUT_DIR_FILTERED",
+	"SINGLE_REPORT",
+	"LOG_FILE",
+	"LOG_LEVEL",
+	"LOG_HTTP",
+	"RETRY_MAX_ATTEMPTS",
+	"RETRY_BASE_DELAY",
+	"RETRY_MAX_DELAY",
+	"RETRY_CIRCUIT_BREAKER",
+	"GEN_TEST_AGG",
+	"PROM_ENABLED",
+	"PROM_DIR",
+	"RUN_HISTORY",
+	"RUN_HISTORY_DIR",
+	"RETAIN_LAST",
+	"RETAIN_DAYS",
+	"ARTIFACT_RETAIN_DAYS",
+	"ARTIFACT_RETAIN_MAX_FILES",
+	"NOTIFY_ON_REGRESSION",
+	"ADAPTIVE_PARALLELISM",
+	"POLICY_GATES",
+	"QUIET_HOURS",
+	"MAINTENANCE_WINDOWS",
+	"FLAKY_LOOKBACK_RUNS",
+	"FLAKY_MIN_TRANSITIONS",
+	"SEVERITY_FILTER",
+	"EXCLUDE_ALERT_TITLES",
+	"EXCLUDE_ALERT_TITLES_FILE",
+	"EXCLUDE_ALERT_MATCH_MODE",
+	"DRY_RUN",
+	"REPLAY",
+	"MAX_IDLE_CONNS",
+	"MAX_IDLE_CONNS_PER_HOST",
+	"MAX_CONNS_PER_HOST",
+	"IDLE_CONN_TIMEOUT",
+	"EMAIL_ENABLED",
+	"EMAIL_ATTACH_HTML",
+	"NOTIFY_DIGEST",
+	"SMTP_SERVER",
+	"SMTP_PORT",
+	"SMTP_USER",
+	"SMTP_PASSWORD",
+	"EMAIL_FROM",
+	"EMAIL_TO",
+	"EMAIL_USE_TLS",
+	"SMTP_INSECURE_SKIP_VERIFY",
+	"EMAIL_SUBJECT_TEMPLATE",
+	"EMAIL_BODY_TEMPLATE",
+	"WEBHOOK_ENABLED",
+	"WEBHOOK_INCLUDE_HTML",
+	"WEBHOOK_URL",
+	"WEBHOOK_HEADERS",
+	"WEBHOOK_TEMPLATE",
+	"WEBHOOK_SECRET",
+	"NOTIFICATION_DEADLETTER_DIR",
+	"SLACK_ENABLED",
+	"SLACK_WEBHOOK_URL",
+	"SLACK_CHANNEL",
+	"SECRETS_PROVIDER",
+	"SECRETS_FILE",
+}
+
+// serverEnvKeys are process settings for the API and UI. env-info reports
+// only whether each one is set, never the value.
+var serverEnvKeys = []string{
+	"API_TOKEN",
+	"API_STATIC_TOKEN",
+	"API_VIEWER_TOKEN",
+	"JWT_SECRET",
+	"TOKEN_EXPIRY",
+	"CORS_ORIGIN",
+	"UI_ORIGIN",
+	"USERS_DB",
+	"USERS_DB_SECRET",
+	"USERS_DB_SECRET_NAMESPACE",
+	"USERS_FILE",
+	"MASTER_KEY",
+	"MASTER_KEY_FILE",
+	"DISABLE_LOCAL_ACCOUNTS",
+	"RUNTIME_MODE",
+	"IMAGE_TAG",
+	"ORCHESTRATOR_IMAGE_TAG",
+	"UI_IMAGE_TAG",
+	"OTEL_ENABLED",
+	"BACKUP_PASSPHRASE",
+	"BACKUP_KEY",
+	"BACKUP_KEY_FILE",
+}
+
+var sensitiveEnvKeys = map[string]bool{
+	"PASSWORD":          true,
+	"SMTP_PASSWORD":     true,
+	"WEBHOOK_URL":       true,
+	"WEBHOOK_HEADERS":   true,
+	"WEBHOOK_SECRET":    true,
+	"SLACK_WEBHOOK_URL": true,
+}
+
 func printEnvInfo() {
-	fmt.Println("Possible Environment Variables (prefix: NCC_) and Current Values:")
-	envKeys := []string{
-		"CONFIG",
-		"SKIP_PREFLIGHT_CHECK",
-		"CLUSTER_SOURCE_MODE",
-		"CLUSTERS",
-		"CLUSTERS_FILE",
-		"PCS",
-		"PCS_FILE",
-		"PRISM_CENTRAL_URL",
-		"DISCOVER_API_VERSION",
-		"USERNAME",
-		"PASSWORD",
-		"INSECURE_SKIP_VERIFY",
-		"TIMEOUT",
-		"REQUEST_TIMEOUT",
-		"POLL_INTERVAL",
-		"POLL_JITTER",
-		"MAX_PARALLEL",
-		"OUTPUTS",
-		"OUTPUT_DIR_LOGS",
-		"OUTPUT_DIR_FILTERED",
-		"LOG_FILE",
-		"LOG_LEVEL",
-		"LOG_HTTP",
-		"RETRY_MAX_ATTEMPTS",
-		"RETRY_BASE_DELAY",
-		"RETRY_MAX_DELAY",
-		"RETRY_CIRCUIT_BREAKER",
-		"PROM_DIR",
-		"RUN_HISTORY",
-		"RUN_HISTORY_DIR",
-		"RETAIN_LAST",
-		"RETAIN_DAYS",
-		"ARTIFACT_RETAIN_DAYS",
-		"ARTIFACT_RETAIN_MAX_FILES",
-		"SINGLE_REPORT",
-		"NOTIFY_ON_REGRESSION",
-		"ADAPTIVE_PARALLELISM",
-		"SEVERITY_FILTER",
-		"EXCLUDE_ALERT_TITLES",
-		"EXCLUDE_ALERT_TITLES_FILE",
-		"EXCLUDE_ALERT_MATCH_MODE",
-		"DRY_RUN",
-		"REPLAY",
-		"MAX_IDLE_CONNS",
-		"MAX_IDLE_CONNS_PER_HOST",
-		"MAX_CONNS_PER_HOST",
-		"IDLE_CONN_TIMEOUT",
-		"EMAIL_ENABLED",
-		"EMAIL_ATTACH_HTML",
-		"NOTIFY_DIGEST",
-		"SMTP_SERVER",
-		"SMTP_PORT",
-		"SMTP_USER",
-		"SMTP_PASSWORD",
-		"EMAIL_FROM",
-		"EMAIL_TO",
-		"EMAIL_USE_TLS",
-		"WEBHOOK_ENABLED",
-		"WEBHOOK_INCLUDE_HTML",
-		"WEBHOOK_URL",
-		"WEBHOOK_HEADERS",
-		"SLACK_ENABLED",
-		"SLACK_WEBHOOK_URL",
-		"SLACK_CHANNEL",
-	}
-	for _, key := range envKeys {
+	fmt.Println("Runner environment variables (prefix NCC_). Secrets are masked.")
+	fmt.Println("Unset a variable to use the config file or the built-in default.")
+	fmt.Println("NCC_WEBHOOK_SECRET has no CLI flag.")
+	for _, key := range runnerEnvKeys {
 		envVar := "NCC_" + key
 		val := os.Getenv(envVar)
-		if val != "" {
-			if key == "PASSWORD" || key == "SMTP_PASSWORD" {
-				fmt.Printf("%s = %s\n", envVar, maskPassword(val))
-			} else {
-				fmt.Printf("%s = %s\n", envVar, val)
-			}
-		} else {
+		if val == "" {
 			fmt.Printf("%s = (not set)\n", envVar)
+			continue
 		}
+		if sensitiveEnvKeys[key] {
+			fmt.Printf("%s = %s\n", envVar, maskPassword(val))
+			continue
+		}
+		fmt.Printf("%s = %s\n", envVar, val)
+	}
+	fmt.Println()
+	fmt.Println("API and UI environment variables (values are not printed):")
+	for _, key := range serverEnvKeys {
+		envVar := "NCC_" + key
+		if os.Getenv(envVar) == "" {
+			fmt.Printf("%s = (not set)\n", envVar)
+			continue
+		}
+		fmt.Printf("%s = (set)\n", envVar)
 	}
 }
 
@@ -16453,7 +16704,15 @@ Run 'ncc-orchestrator --help' for a full list of options.
 	cmd.Flags().Int("gen-test-agg", 0, "Generate a test index.html with N clusters for scalability testing (no API calls)")
 	_ = cmd.Flags().MarkDeprecated("gen-test-agg", "use `ncc-orchestrator gen-test-agg --clusters <N>`")
 	_ = cmd.Flags().MarkHidden("gen-test-agg")
-	cmd.Flags().Bool("prom-enabled", true, "Enable writing Prometheus textfile metrics")
+	cmd.Flags().Bool("prom-enabled", false, "Write Prometheus textfile metrics")
+	cmd.Flags().Int("max-idle-conns", 0, "Max idle HTTP connections (0 = built-in default)")
+	cmd.Flags().Int("max-idle-conns-per-host", 0, "Max idle HTTP connections per host (0 = built-in default)")
+	cmd.Flags().Int("max-conns-per-host", 0, "Max HTTP connections per host (0 = unlimited)")
+	cmd.Flags().String("idle-conn-timeout", "90s", "How long an idle HTTP connection stays in the pool")
+	cmd.Flags().String("email-subject-template", "", "Go text/template for the email subject (empty = built-in)")
+	cmd.Flags().String("email-body-template", "", "Go text/template for the email body (empty = built-in)")
+	cmd.Flags().String("webhook-template", "", "Go text/template for the webhook body; must render JSON (empty = built-in JSON)")
+	cmd.Flags().String("pc-alerts-cache-ttl", "5m", "Prism Central alert cache duration (0 disables the cache)")
 	cmd.Flags().String("prom-dir", "promfiles", "Directory for Prometheus metrics (used when prom-enabled=true)")
 	cmd.Flags().Bool("run-history", false, "Store each run snapshot in run-history-dir")
 	cmd.Flags().String("run-history-dir", "", "Run history directory (default: <output-dir-filtered>/runs)")
@@ -16524,6 +16783,15 @@ Run 'ncc-orchestrator --help' for a full list of options.
 	_ = viper.BindPFlag("retry-circuit-breaker", cmd.Flags().Lookup("retry-circuit-breaker"))
 	_ = viper.BindPFlag("replay", cmd.Flags().Lookup("replay"))
 	_ = viper.BindPFlag("prom-enabled", cmd.Flags().Lookup("prom-enabled"))
+	_ = viper.BindPFlag("max-idle-conns", cmd.Flags().Lookup("max-idle-conns"))
+	_ = viper.BindPFlag("max-idle-conns-per-host", cmd.Flags().Lookup("max-idle-conns-per-host"))
+	_ = viper.BindPFlag("max-conns-per-host", cmd.Flags().Lookup("max-conns-per-host"))
+	_ = viper.BindPFlag("idle-conn-timeout", cmd.Flags().Lookup("idle-conn-timeout"))
+	_ = viper.BindPFlag("email-subject-template", cmd.Flags().Lookup("email-subject-template"))
+	_ = viper.BindPFlag("email-body-template", cmd.Flags().Lookup("email-body-template"))
+	_ = viper.BindPFlag("webhook-template", cmd.Flags().Lookup("webhook-template"))
+	_ = viper.BindPFlag("pc-alerts-cache-ttl", cmd.Flags().Lookup("pc-alerts-cache-ttl"))
+	_ = viper.BindPFlag("gen-test-agg", cmd.Flags().Lookup("gen-test-agg"))
 	_ = viper.BindPFlag("prom-dir", cmd.Flags().Lookup("prom-dir"))
 	_ = viper.BindPFlag("run-history", cmd.Flags().Lookup("run-history"))
 	_ = viper.BindPFlag("run-history-dir", cmd.Flags().Lookup("run-history-dir"))

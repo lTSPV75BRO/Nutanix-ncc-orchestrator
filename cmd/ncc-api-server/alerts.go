@@ -38,6 +38,16 @@ func (s *apiServer) handleAlerts(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
+	if !s.loadFeatureFlags().PCAlerts {
+		writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
+			"alerts":     []map[string]interface{}{},
+			"source":     "PC",
+			"disabled":   true,
+			"configured": false,
+			"errors":     []string{"Prism Central alerts are turned off. An administrator can enable them under Settings → Features."},
+		}})
+		return
+	}
 
 	cfg, err := s.loadRawConfigMap()
 	cacheTTL := s.pcAlertsCacheTTL
@@ -383,12 +393,19 @@ func resolvePCAlertCluster(alert map[string]interface{}, idx map[string]pcCluste
 		return alert
 	}
 	lookup := func(raw interface{}) (pcCluster, bool) {
-		key := normClusterName(strings.TrimSpace(fmt.Sprint(raw)))
-		if key == "" || key == "<nil>" {
+		text := strings.TrimSpace(fmt.Sprint(raw))
+		if text == "" || text == "<nil>" {
 			return pcCluster{}, false
 		}
-		c, ok := idx[key]
-		return c, ok
+		for _, key := range []string{canonicalClusterKey(text), normClusterName(text)} {
+			if key == "" {
+				continue
+			}
+			if c, ok := idx[key]; ok {
+				return c, true
+			}
+		}
+		return pcCluster{}, false
 	}
 	var ident pcCluster
 	var ok bool
