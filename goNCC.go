@@ -17346,6 +17346,32 @@ requires root/Administrator.`,
 	v2InstallServiceCmd.Flags().Bool("print-only", false, "Preview the unit/task and the commands without applying them")
 	cmd.AddCommand(v2InstallServiceCmd)
 
+	v2InstallUpdateWatcherCmd := &cobra.Command{
+		Use:   "v2-install-update-watcher",
+		Short: "Install a systemd path unit that restarts the stack after binaries change",
+		Long: `Registers a systemd .path watcher on the stack binaries so an in-app update
+still restarts the service when the running API is too old to restart itself
+(the 2.1.x then; restart script). The units live in /etc/systemd/system and
+survive a binary downgrade. Linux/systemd only.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			installDir, _ := cmd.Flags().GetString("install-dir")
+			serviceName, _ := cmd.Flags().GetString("service-name")
+			orchestratorBin, _ := cmd.Flags().GetString("orchestrator-bin")
+			printOnly, _ := cmd.Flags().GetBool("print-only")
+			return installApplyUpdateWatcher(installServiceOptions{
+				InstallDir:      installDir,
+				ServiceName:     serviceName,
+				OrchestratorBin: orchestratorBin,
+				PrintOnly:       printOnly,
+			})
+		},
+	}
+	v2InstallUpdateWatcherCmd.Flags().String("install-dir", "", "Installation directory (default: auto-detect)")
+	v2InstallUpdateWatcherCmd.Flags().String("service-name", "ncc-orchestrator", "Supervisor service the watcher restarts")
+	v2InstallUpdateWatcherCmd.Flags().String("orchestrator-bin", "", "Path to ncc-orchestrator (default: this executable)")
+	v2InstallUpdateWatcherCmd.Flags().Bool("print-only", false, "Preview the units without applying them")
+	cmd.AddCommand(v2InstallUpdateWatcherCmd)
+
 	v2UninstallServiceCmd := &cobra.Command{
 		Use:   "v2-uninstall-service",
 		Short: "Remove the boot-persistent supervisor service installed by v2-install-service",

@@ -60,6 +60,16 @@ See **`outputfiles/run-summary.json`** for `exit_code` and per-cluster `clusters
 - **Cause:** The IdP POSTs its assertion to `/saml/acs` as a cross-site request whose `Origin` isn't in the CORS allowlist.
 - **Fix:** Upgrade to the current build — `/saml/*` is exempt from the CORS origin allowlist (the signed assertion + relay-state cookie are the security boundary), `ncc-ui-server` proxies `/saml/*` to the api-server, and the SP cookie is `SameSite=None`. Ensure the **SAML root URL is the browser-facing UI origin** (e.g. `https://ncc.example.com`) and the UI is on **HTTPS** (required for the `SameSite=None; Secure` cookie).
 
+### Operator Settings toasts “this action requires the admin role” without a click
+
+- **Cause:** Older UIs loaded Schedule’s config picker from admin-only `GET /api/v1/settings/configs`, and Settings kept hidden tabs mounted so that call ran on Connection/Runs/Logs/Audit as well.
+- **Fix:** Upgrade to the current v2.2.0 build. Schedule uses `GET /api/v1/runs/configs` (operator+). Hidden Settings tabs unmount.
+
+### In-app update from 2.1.0 copies files but the old version keeps serving
+
+- **Cause:** 2.1.0’s detached restart script joined `if`/`then` with `; `, producing invalid `then;` so `systemctl restart` never ran. The new binaries sat on disk under the still-running old API.
+- **Fix:** Current v2.2.0 joins that script with newlines and installs `ncc-orchestrator-apply-update.path` (`v2-install-update-watcher`) so a binary replace restarts the supervisor even when the running API cannot. After the first upgrade to this build (one manual `systemctl restart` if the watcher was not already present), later in-app updates restart on their own. Rollback last update restores binaries only when the pre-update snapshot was taken with `--include-stack`.
+
 ### A viewer/operator can't see any alerts
 
 - **Cause:** The account is a member of a **cluster group** that currently resolves to no (or the wrong) clusters. Cluster groups are **opt-in isolation** — membership *restricts* visibility to that group's clusters.

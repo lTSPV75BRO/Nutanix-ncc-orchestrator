@@ -40,6 +40,8 @@ Base path: `/api/v1`
 - `POST /settings/notifications/test`
 - `GET /schedule`
 - `PUT /schedule`
+- `GET /schedule/health`
+- `GET /runs/configs` (operator+; same file list as `/settings/configs`, which stays admin)
 - `GET /runs/summary`
 - `GET /runs`
 - `GET /runs/active`

@@ -133,3 +133,33 @@ func TestSystemdSupervisorUnit(t *testing.T) {
 		}
 	}
 }
+
+func TestSystemdApplyUpdateWatcherUnits(t *testing.T) {
+	o := installServiceOptions{
+		InstallDir:      "/root/test",
+		ServiceName:     "ncc-orchestrator",
+		OrchestratorBin: "/root/test/bin/ncc-orchestrator",
+	}
+	pathUnit := systemdApplyUpdatePathUnit(o)
+	for _, want := range []string{
+		"PathChanged=/root/test/bin/ncc-orchestrator",
+		"PathChanged=/root/test/bin/ncc-api-server",
+		"PathChanged=/root/test/bin/ncc-ui-server",
+		"Unit=ncc-orchestrator-apply-update.service",
+		"WantedBy=multi-user.target",
+	} {
+		if !strings.Contains(pathUnit, want) {
+			t.Fatalf("path unit missing %q:\n%s", want, pathUnit)
+		}
+	}
+	oneshot := systemdApplyUpdateOneshotUnit(o)
+	if strings.Contains(oneshot, "then;") {
+		t.Fatalf("oneshot has invalid then;:\n%s", oneshot)
+	}
+	if !strings.Contains(oneshot, "systemctl restart ncc-orchestrator.service") {
+		t.Fatalf("oneshot missing restart:\n%s", oneshot)
+	}
+	if !strings.Contains(oneshot, "then chcon") {
+		t.Fatalf("oneshot should keep then and chcon on one line:\n%s", oneshot)
+	}
+}

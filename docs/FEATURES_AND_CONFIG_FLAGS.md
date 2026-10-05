@@ -355,12 +355,13 @@ The api-server enforces three ordered roles `viewer < operator < admin`:
 
 - **viewer** — read non-settings `GET` endpoints only (plus reading the run schedule).
 - **operator** — viewer plus the day-to-day *operation* of NCC: trigger/cancel/preflight
-  runs, create/update/apply the run **schedule** (`PUT /api/v1/schedule`), send
-  **test notifications** (`POST /api/v1/settings/notifications/test`; delivery
-  errors are URL-redacted so secrets can't leak), and read **cluster topology**
+  runs, create/update/apply the run **schedule** (`PUT /api/v1/schedule`), list
+  **run config files** (`GET /api/v1/runs/configs`; `/api/v1/settings/configs`
+  stays admin), send **test notifications** (`POST /api/v1/settings/notifications/test`;
+  delivery errors are URL-redacted so secrets can't leak), and read **cluster topology**
   (`GET /api/v1/settings/clusters`, `GET /api/v1/settings/cluster-groups`).
   Operators reach a reduced Settings view in the UI (Connection, Schedule, Runs,
-  Logs, Audit).
+  Logs, Audit). Those tabs do not call admin-only settings endpoints on load.
 - **admin** — everything, including secret-bearing `/api/v1/settings/*` (config,
   users, SSO/LDAP, backups, cluster-group writes) and token rotation.
 
@@ -534,12 +535,18 @@ A caller's role can come from a static token or an interactive login:
   **Settings → Maintenance → Software updates** on host/VM installs. `GET /api/v1/settings/update` reports
   the current/latest version and `update_available` (networked check only with
   `?check=1`; plain GET is a cheap status poll). `POST /api/v1/settings/update/apply`
-  runs a background job that takes a **pre-update backup** (to
-  `<install-dir>/backups/`, aborting if it fails), applies the checksum-verified
+  runs a background job that takes a **pre-update backup** with
+  `v2-backup --include-stack` (config plus orchestrator/API/UI binaries and
+  `frontend-dist`, aborting if it fails), applies the checksum-verified
   package update (orchestrator + api + ui + frontend), then **restarts the stack
   automatically** (`v2-restart`); the UI polls the phase and reconnects when the
-  new version is live. Optional `target_version` / `skip_checksum_verify`. Requires
-  a built orchestrator binary (not the `go run` fallback). **Kubernetes disables
+  new version is live. **Rollback last update** restores the newest
+  `pre-update-*` snapshot, including the previous software version when that
+  snapshot has a stack. Optional `target_version` / `skip_checksum_verify`. Requires
+  a built orchestrator binary (not the `go run` fallback). Host/VM
+  `v2-install-service` also installs `ncc-orchestrator-apply-update.path`
+  (`v2-install-update-watcher`) so a binary replace still restarts the
+  supervisor when the running API is too old to restart itself. **Kubernetes disables
   in-place updates**; roll matching API/UI/runner image tags. `GET /api/v1/components`
   reports versions from those tags (`NCC_IMAGE_TAG`, `NCC_ORCHESTRATOR_IMAGE_TAG`,
   `NCC_UI_IMAGE_TAG`) instead of execing `ncc-ui-server` from the API image.
@@ -1281,12 +1288,18 @@ Machine-readable API errors:
 
 Scheduler health endpoint:
 
-- `GET /api/v1/schedule/health`
+- `GET /api/v1/schedule/health` (viewer+)
 - Returns scheduler configuration and operational hints:
   - `last_run`
   - `last_success`
   - `last_error`
   - `log_path`, `lock_path`, `with_lock`
+
+Run config catalog (operator+):
+
+- `GET /api/v1/runs/configs` — same discovered file list as
+  `GET /api/v1/settings/configs` (admin). Schedule and Runs use this path
+  so operators can pick a config without reading secret-bearing settings.
 
 - All non-success API responses include a stable `error_code` field for automation/UI handling.
 - Examples:

@@ -126,13 +126,142 @@ func runV2UninstallService(o installServiceOptions) error {
 
 // ---- Linux / systemd ----
 
+func systemdQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
+}
+
+func applyUpdateWatcherName(serviceName string) string {
+	if strings.TrimSpace(serviceName) == "" {
+		serviceName = "ncc-orchestrator"
+	}
+	return serviceName + "-apply-update"
+}
+
+func applyUpdateWatcherPathPath(o installServiceOptions) string {
+	return filepath.Join(systemdUnitDir, applyUpdateWatcherName(o.ServiceName)+".path")
+}
+
+func applyUpdateWatcherServicePath(o installServiceOptions) string {
+	return filepath.Join(systemdUnitDir, applyUpdateWatcherName(o.ServiceName)+".service")
+}
+
+func applyUpdateWatcherBinaries(o installServiceOptions) []string {
+	binDir := filepath.Dir(o.OrchestratorBin)
+	if binDir == "." || binDir == "" {
+		binDir = filepath.Join(o.InstallDir, "bin")
+	}
+	return []string{
+		filepath.Join(binDir, "ncc-orchestrator"),
+		filepath.Join(binDir, "ncc-api-server"),
+		filepath.Join(binDir, "ncc-ui-server"),
+	}
+}
+
+// systemdApplyUpdatePathUnit watches the stack binaries. When an in-app update
+// (including one started by an older API that cannot restart itself) replaces
+// them, systemd starts the companion oneshot. The unit lives in /etc, so it
+// survives a downgrade and still fires on the next upgrade.
+func systemdApplyUpdatePathUnit(o installServiceOptions) string {
+	name := applyUpdateWatcherName(o.ServiceName)
+	lines := []string{
+		"[Unit]",
+		"Description=Watch NCC stack binaries and restart after an in-app update",
+		"Documentation=https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator",
+		"",
+		"[Path]",
+	}
+	for _, bin := range applyUpdateWatcherBinaries(o) {
+		lines = append(lines, "PathChanged="+bin)
+	}
+	lines = append(lines,
+		"Unit="+name+".service",
+		"TriggerLimitIntervalSec=60",
+		"TriggerLimitBurst=3",
+		"",
+		"[Install]",
+		"WantedBy=multi-user.target",
+		"",
+	)
+	return strings.Join(lines, "\n")
+}
+
+// systemdApplyUpdateOneshotUnit restarts the supervisor after a short delay so
+// all three binaries finish copying. The ExecStart if/then stays on one line
+// (`then chcon`, never `then;`) so /bin/sh -c accepts it.
+func systemdApplyUpdateOneshotUnit(o installServiceOptions) string {
+	bins := applyUpdateWatcherBinaries(o)
+	quoted := make([]string, 0, len(bins))
+	for _, bin := range bins {
+		quoted = append(quoted, systemdQuote(bin))
+	}
+	script := "sleep 5; if command -v chcon >/dev/null 2>&1; then chcon -t bin_t " + strings.Join(quoted, " ") + " >/dev/null 2>&1 || true; fi; systemctl restart " + o.ServiceName + ".service"
+	return strings.Join([]string{
+		"[Unit]",
+		"Description=Restart NCC stack after binaries change",
+		"Documentation=https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator",
+		"",
+		"[Service]",
+		"Type=oneshot",
+		"ExecStart=/bin/sh -c " + systemdQuote(script),
+		"",
+	}, "\n")
+}
+
+func installApplyUpdateWatcher(o installServiceOptions) error {
+	if err := o.resolve(); err != nil {
+		return err
+	}
+	if o.PrintOnly {
+		fmt.Printf("Would write %s:\n\n%s\n", applyUpdateWatcherPathPath(o), systemdApplyUpdatePathUnit(o))
+		fmt.Printf("Would write %s:\n\n%s\n", applyUpdateWatcherServicePath(o), systemdApplyUpdateOneshotUnit(o))
+		return nil
+	}
+	if !systemctlAvailable() {
+		return fmt.Errorf("systemd is not available (systemctl not found or systemd is not the init system)")
+	}
+	if err := os.WriteFile(applyUpdateWatcherServicePath(o), []byte(systemdApplyUpdateOneshotUnit(o)), 0o644); err != nil {
+		return fmt.Errorf("write apply-update oneshot: %w", err)
+	}
+	if err := os.WriteFile(applyUpdateWatcherPathPath(o), []byte(systemdApplyUpdatePathUnit(o)), 0o644); err != nil {
+		return fmt.Errorf("write apply-update path unit: %w", err)
+	}
+	if out, err := exec.Command("systemctl", "daemon-reload").CombinedOutput(); err != nil {
+		return fmt.Errorf("systemctl daemon-reload: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	name := applyUpdateWatcherName(o.ServiceName) + ".path"
+	if out, err := exec.Command("systemctl", "enable", "--now", name).CombinedOutput(); err != nil {
+		return fmt.Errorf("systemctl enable --now %s: %v (%s)", name, err, strings.TrimSpace(string(out)))
+	}
+	fmt.Printf("Installed update watcher %s (restarts %s.service when stack binaries change)\n", name, o.ServiceName)
+	return nil
+}
+
+func uninstallApplyUpdateWatcher(o installServiceOptions) error {
+	if err := o.resolve(); err != nil {
+		return err
+	}
+	name := applyUpdateWatcherName(o.ServiceName)
+	if systemctlAvailable() {
+		_, _ = exec.Command("systemctl", "disable", "--now", name+".path").CombinedOutput()
+		_, _ = exec.Command("systemctl", "stop", name+".service").CombinedOutput()
+	}
+	for _, p := range []string{applyUpdateWatcherPathPath(o), applyUpdateWatcherServicePath(o)} {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
 func installSupervisorSystemd(o installServiceOptions) error {
 	unit := systemdSupervisorUnit(o)
 	unitPath := filepath.Join(systemdUnitDir, o.ServiceName+".service")
 	if o.PrintOnly {
 		fmt.Printf("Would write %s:\n\n%s\n", unitPath, unit)
-		fmt.Printf("Then run:\n  systemctl daemon-reload\n  systemctl enable%s %s.service\n",
-			ifThen(o.Now, " --now", ""), o.ServiceName)
+		fmt.Printf("Would write %s:\n\n%s\n", applyUpdateWatcherPathPath(o), systemdApplyUpdatePathUnit(o))
+		fmt.Printf("Would write %s:\n\n%s\n", applyUpdateWatcherServicePath(o), systemdApplyUpdateOneshotUnit(o))
+		fmt.Printf("Then run:\n  systemctl daemon-reload\n  systemctl enable%s %s.service\n  systemctl enable --now %s.path\n",
+			ifThen(o.Now, " --now", ""), o.ServiceName, applyUpdateWatcherName(o.ServiceName))
 		return nil
 	}
 	if !systemctlAvailable() {
@@ -179,6 +308,9 @@ func installSupervisorSystemd(o installServiceOptions) error {
 	if out, err := exec.Command("systemctl", enableArgs...).CombinedOutput(); err != nil {
 		return fmt.Errorf("systemctl %s: %v (%s)", strings.Join(enableArgs, " "), err, strings.TrimSpace(string(out)))
 	}
+	if err := installApplyUpdateWatcher(o); err != nil {
+		return err
+	}
 	fmt.Printf("Installed systemd service %s.service (ExecStart=%s v2-supervise --install-dir %s)\n", o.ServiceName, o.OrchestratorBin, o.InstallDir)
 	fmt.Printf("Enabled at boot%s. Manage with: systemctl status|restart|stop %s\n", ifThen(o.Now, " and started now", ""), o.ServiceName)
 	return nil
@@ -188,8 +320,10 @@ func uninstallSupervisorSystemd(o installServiceOptions) error {
 	unitPath := filepath.Join(systemdUnitDir, o.ServiceName+".service")
 	if o.PrintOnly {
 		fmt.Printf("Would run:\n  systemctl disable --now %s.service\n  rm -f %s\n  systemctl daemon-reload\n", o.ServiceName, unitPath)
+		fmt.Printf("  systemctl disable --now %s.path\n  rm -f %s %s\n", applyUpdateWatcherName(o.ServiceName), applyUpdateWatcherPathPath(o), applyUpdateWatcherServicePath(o))
 		return nil
 	}
+	_ = uninstallApplyUpdateWatcher(o)
 	if systemctlAvailable() {
 		_, _ = exec.Command("systemctl", "disable", "--now", o.ServiceName+".service").CombinedOutput()
 	}

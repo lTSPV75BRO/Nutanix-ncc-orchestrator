@@ -88,6 +88,33 @@ frontend uses the unresolved response immediately and requests `all` as a
 background cache warm-up for the resolved/all-status views. The cache TTL is
 configurable with `pc-alerts-cache-ttl` (default `5m`; `0` disables caching).
 
+## Operator Settings
+
+Operators keep the reduced Settings tabs (Connection, Schedule, Runs, Logs,
+Audit). Those pages only call viewer/operator endpoints. Schedule lists
+config files from `GET /api/v1/runs/configs` (operator+), not
+`GET /api/v1/settings/configs` (admin). Hidden tabs unmount so a
+background Schedule load cannot toast “this action requires the admin
+role” while you are on Connection. Dashboard, Insights, Logs, and Audit
+were already on allowed GETs.
+
+## In-app updates and rollback
+
+On host/VM installs, **Settings → Maintenance → Software updates** takes a
+pre-update snapshot with `v2-backup --include-stack` (binaries +
+`frontend-dist` + config). **Rollback last update** restores that snapshot
+so the previous software version comes back, not only config. After the
+package is written, the stack restarts through a newline-joined systemd
+script (2.1.0 joined `if`/`then` with `; ` and produced invalid `then;`).
+
+`v2-install-service` also installs `ncc-orchestrator-apply-update.path`,
+which watches the three stack binaries and restarts the supervisor after
+they change (5s debounce, `chcon -t bin_t` on SELinux). The API registers
+the same watcher at startup (`v2-install-update-watcher`). That unit lives
+in `/etc/systemd/system`, so it survives a downgrade and still finishes a
+later 2.1.0→2.2.0 in-app update. Kubernetes still rolls matching image
+tags; in-place binary updates stay disabled there.
+
 ## Compatibility
 
 No existing NCC report or configuration keys are removed. Prism Central alert

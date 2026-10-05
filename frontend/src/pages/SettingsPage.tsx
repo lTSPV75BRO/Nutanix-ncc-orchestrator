@@ -626,6 +626,7 @@ export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
 
   return (
     <Tabs
+      destroyOnHidden
       activeKey={activeTab}
       onChange={(nextTab) => {
         setTab(nextTab);

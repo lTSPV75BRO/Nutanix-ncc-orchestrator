@@ -163,7 +163,9 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
 
   const loadConfigOptions = async (silent = true) => {
     try {
-      const resp = await api.listConfigs();
+      // /api/v1/settings/configs is admin-only; the runs catalog is the same
+      // file list and is allowed for operators who can edit the schedule.
+      const resp = await api.runConfigs();
       const items = resp.items ?? [];
       setConfigOptions(items);
       const current = config.trim();

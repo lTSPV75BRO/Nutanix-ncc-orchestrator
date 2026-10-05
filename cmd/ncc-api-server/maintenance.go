@@ -595,3 +595,22 @@ func (s *apiServer) spawnDetachedRestart(installDir string) bool {
 	}()
 	return true
 }
+
+// ensureApplyUpdateWatcher installs the systemd path unit that restarts the
+// stack when binaries change. That watcher outlives a downgrade, so a later
+// in-app update from an older API (whose own restart script is broken) still
+// loads the new version. Best-effort: a failure here must not block serving.
+func (s *apiServer) ensureApplyUpdateWatcher() {
+	if s.capabilities.Kubernetes || s.capabilities.ImmutableUpdates {
+		return
+	}
+	if !hasSystemdStackService() {
+		return
+	}
+	go func() {
+		_, _ = s.runOrchestrator([]string{
+			"v2-install-update-watcher",
+			"--install-dir", s.maintenanceInstallDir(),
+		}, 45*time.Second)
+	}()
+}

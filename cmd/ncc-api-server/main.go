@@ -822,6 +822,7 @@ func main() {
 	s.startedAt = time.Now().UTC()
 	s.auditForwarder = s.startAuditForwarder(context.Background())
 	s.startSelfHealLoop(context.Background())
+	s.ensureApplyUpdateWatcher()
 	s.startBackupScheduleLoop(context.Background())
 	s.startNotificationDigestLoop(context.Background())
 	s.startUserDBReloadLoop(context.Background())

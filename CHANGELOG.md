@@ -193,6 +193,21 @@ self-signed certificate (replaceable in Settings), the same way a Linux
   visible alerts and scrolls back to the top. Full-page mode shows every
   matching alert under the header; the filter bar stays in document flow so
   it does not cover the table.
+- **Operator Settings no longer toast “only admin is allowed” on load.**
+  Schedule listed config files from admin-only `GET /api/v1/settings/configs`.
+  It now uses `GET /api/v1/runs/configs` (operator+), the same catalog Runs
+  already used. Hidden Settings tabs unmount, so opening Connection does not
+  fire Schedule/Runs/Logs/Audit requests in the background.
+- **In-app update restart and version rollback.** The detached systemd
+  restart script no longer joins `if`/`then` with `; ` (which produced
+  invalid `then;` on 2.1.0 and skipped `systemctl restart`). Pre-update
+  snapshots use `v2-backup --include-stack` so **Rollback last update**
+  restores the previous orchestrator/API/UI binaries and `frontend-dist`,
+  not only config. Host/VM installs also register a systemd path unit
+  (`ncc-orchestrator-apply-update.path`, CLI `v2-install-update-watcher`)
+  that restarts the supervisor when those binaries change, so an upgrade
+  started by an older API still loads the new version. Kubernetes is
+  unchanged (image rolls).
 
 ### Security
 

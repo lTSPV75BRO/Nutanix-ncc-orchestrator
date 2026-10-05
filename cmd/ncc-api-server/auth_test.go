@@ -31,6 +31,9 @@ func TestRouteMinRole(t *testing.T) {
 		// Operator-accessible operational endpoints (expanded scope).
 		{http.MethodGet, "/api/v1/schedule", RoleViewer},
 		{http.MethodPut, "/api/v1/schedule", RoleOperator},
+		{http.MethodGet, "/api/v1/schedule/health", RoleViewer},
+		{http.MethodGet, "/api/v1/runs/configs", RoleOperator},
+		{http.MethodGet, "/api/v1/settings/configs", RoleAdmin},
 		{http.MethodGet, "/api/v1/settings/clusters", RoleOperator},
 		{http.MethodGet, "/api/v1/settings/cluster-groups", RoleOperator},
 		{http.MethodPut, "/api/v1/settings/cluster-groups", RoleAdmin},
