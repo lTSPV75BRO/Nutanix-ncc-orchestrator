@@ -137,7 +137,7 @@ jobs:
           # body-path is the dist-bundled release notes that
           # binaryGO.txt copies in step 5. Falls back to the auto-
           # generated release body if the file isn't present.
-          body_path: dist/RELEASE_NOTES_v${{ github.ref_name }}.md
+          body_path: dist/RELEASE_NOTES_${{ github.ref_name }}.md
           generate_release_notes: true
           files: |
             dist/ncc-orchestrator-*
