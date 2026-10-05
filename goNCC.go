@@ -9020,6 +9020,9 @@ type backupManifest struct {
 	InstallDir string       `json:"install_dir"`
 	Files      []string     `json:"files"`
 	Auth       *authSummary `json:"auth,omitempty"` // which auth providers/secrets the archive carries
+	// IncludesStack is true when the archive also holds stack binaries and/or
+	// frontend-dist, so restore can roll the software version back.
+	IncludesStack bool `json:"includes_stack,omitempty"`
 }
 
 // authSummary records which authentication providers a backed-up user database
@@ -9062,6 +9065,10 @@ type v2BackupOptions struct {
 	Encrypt    bool
 	KeyFile    string
 	Passphrase string
+	// IncludeStack also archives the install's stack binaries (bin/ncc-*) and
+	// frontend-dist so a restore can roll the software version back, not just
+	// config and accounts. Used by the in-app updater's pre-update snapshot.
+	IncludeStack bool
 }
 
 type v2RestoreOptions struct {
@@ -9319,12 +9326,77 @@ func extractConfigRefPath(content, key string) string {
 	return v
 }
 
+func stackBinaryRel(rel string) bool {
+	rel = filepath.ToSlash(rel)
+	if strings.HasPrefix(rel, "frontend-dist/") || rel == "frontend-dist" {
+		return false
+	}
+	return backupRelIsStack(rel)
+}
+
+func backupRelIsStack(rel string) bool {
+	rel = filepath.ToSlash(rel)
+	if rel == "frontend-dist" || strings.HasPrefix(rel, "frontend-dist/") {
+		return true
+	}
+	base := filepath.Base(rel)
+	switch base {
+	case "ncc-orchestrator", "ncc-orchestrator.exe", "ncc-api-server", "ncc-api-server.exe", "ncc-ui-server", "ncc-ui-server.exe":
+		dir := filepath.ToSlash(filepath.Dir(rel))
+		return dir == "." || dir == "bin"
+	}
+	return false
+}
+
+var stackBinaryNames = []string{
+	"ncc-orchestrator", "ncc-orchestrator.exe",
+	"ncc-api-server", "ncc-api-server.exe",
+	"ncc-ui-server", "ncc-ui-server.exe",
+}
+
+// collectStackBackupEntries captures the running software version: the three
+// stack binaries and the frontend bundle. Manual/scheduled backups omit these
+// (they are regenerable); pre-update rollback points include them.
+func collectStackBackupEntries(installDir string) (entries []backupEntry, skipped []string) {
+	seen := map[string]bool{}
+	add := func(abs string) {
+		abs = filepath.Clean(abs)
+		if !isRegularFile(abs) {
+			return
+		}
+		rel, err := filepath.Rel(installDir, abs)
+		if err != nil || rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+			skipped = append(skipped, abs)
+			return
+		}
+		if seen[rel] {
+			return
+		}
+		seen[rel] = true
+		entries = append(entries, backupEntry{Rel: filepath.ToSlash(rel), Abs: abs})
+	}
+	for _, name := range stackBinaryNames {
+		add(filepath.Join(installDir, "bin", name))
+		add(filepath.Join(installDir, name))
+	}
+	front := filepath.Join(installDir, "frontend-dist")
+	_ = filepath.Walk(front, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() {
+			return nil
+		}
+		add(path)
+		return nil
+	})
+	return entries, skipped
+}
+
 // collectBackupEntries returns the config/auth/state files to capture from an
 // install dir. Files that resolve outside the install dir (e.g. a
 // config-referenced file placed elsewhere) are reported via skipped so the
 // caller can warn; the archive is always confined to the install dir so restore
-// can never write outside it.
-func collectBackupEntries(installDir string) (entries []backupEntry, skipped []string) {
+// can never write outside it. includeStack also captures bin/ncc-* and
+// frontend-dist for versioned rollback.
+func collectBackupEntries(installDir string, includeStack bool) (entries []backupEntry, skipped []string) {
 	seen := map[string]bool{}
 	add := func(abs string) {
 		abs = filepath.Clean(abs)
@@ -9431,6 +9503,11 @@ func collectBackupEntries(installDir string) (entries []backupEntry, skipped []s
 				add(m) // add() ignores directories (e.g. the runs/ history) and non-regular files
 			}
 		}
+	}
+	if includeStack {
+		more, moreSkip := collectStackBackupEntries(installDir)
+		entries = append(entries, more...)
+		skipped = append(skipped, moreSkip...)
 	}
 	return entries, skipped
 }
@@ -9551,8 +9628,16 @@ func writeBackupArchive(out string, manifest backupManifest, entries []backupEnt
 			return fmt.Errorf("read %s: %w", e.Abs, err)
 		}
 		mode := int64(0o644)
+		if info, err := os.Stat(e.Abs); err == nil {
+			if perm := info.Mode().Perm(); perm != 0 {
+				mode = int64(perm)
+			}
+		}
 		if sensitiveBackupName(e.Rel) {
 			mode = 0o600
+		}
+		if stackBinaryRel(e.Rel) {
+			mode |= 0o111
 		}
 		if err := tarWriteBytes(tw, "data/"+e.Rel, data, mode); err != nil {
 			return err
@@ -9575,7 +9660,7 @@ func runV2Backup(opts v2BackupOptions) error {
 	if st, err := os.Stat(installDir); err != nil || !st.IsDir() {
 		return fmt.Errorf("install dir not found: %s", installDir)
 	}
-	entries, skipped := collectBackupEntries(installDir)
+	entries, skipped := collectBackupEntries(installDir, opts.IncludeStack)
 	if len(entries) == 0 {
 		return fmt.Errorf("nothing to back up under %s (no config.yaml, user database, or state files found)", installDir)
 	}
@@ -9611,16 +9696,24 @@ func runV2Backup(opts v2BackupOptions) error {
 		rels = append(rels, e.Rel)
 	}
 	auth := summarizeAuthProviders(filepath.Join(installDir, ".ncc-api-users.json"))
+	includesStack := false
+	for _, e := range entries {
+		if backupRelIsStack(e.Rel) {
+			includesStack = true
+			break
+		}
+	}
 	manifest := backupManifest{
-		Tool:       "ncc-orchestrator",
-		Version:    Version,
-		Stream:     Stream,
-		BuildDate:  BuildDate,
-		GoVersion:  GoVersion,
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-		InstallDir: installDir,
-		Files:      rels,
-		Auth:       auth,
+		Tool:          "ncc-orchestrator",
+		Version:       Version,
+		Stream:        Stream,
+		BuildDate:     BuildDate,
+		GoVersion:     GoVersion,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+		InstallDir:    installDir,
+		Files:         rels,
+		Auth:          auth,
+		IncludesStack: includesStack,
 	}
 	if err := writeBackupArchive(out, manifest, entries); err != nil {
 		return err
@@ -9841,6 +9934,21 @@ func runV2Restore(opts v2RestoreOptions) error {
 		return err
 	}
 
+	includesStack := manifest.IncludesStack
+	for _, p := range files {
+		if backupRelIsStack(p.rel) {
+			includesStack = true
+			break
+		}
+	}
+	// A versioned snapshot must replace the live frontend, not merge with it —
+	// leftover chunks from a newer UI would mix with the restored index.
+	if includesStack {
+		if err := os.RemoveAll(filepath.Join(installDir, "frontend-dist")); err != nil {
+			return fmt.Errorf("replace frontend-dist: %w", err)
+		}
+	}
+
 	// Pass 2: stream each data/ file body straight to disk, enforcing a
 	// per-file and a cumulative size cap.
 	modeByRel := make(map[string]int64, len(files))
@@ -9890,6 +9998,9 @@ func runV2Restore(opts v2RestoreOptions) error {
 			if sensitiveBackupName(clean) {
 				mode = 0o600
 			}
+			if stackBinaryRel(clean) {
+				mode |= 0o111
+			}
 			out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 			if err != nil {
 				return fmt.Errorf("write %s: %w", dst, err)
@@ -9903,6 +10014,11 @@ func runV2Restore(opts v2RestoreOptions) error {
 			}
 			if closeErr != nil {
 				return fmt.Errorf("write %s: %w", dst, closeErr)
+			}
+			// OpenFile on an existing path keeps the old mode; chmod so
+			// restored binaries stay executable.
+			if err := os.Chmod(dst, mode); err != nil {
+				return fmt.Errorf("chmod %s: %w", dst, err)
 			}
 			if n > maxBackupFileBytes {
 				_ = os.Remove(dst)
@@ -9922,6 +10038,11 @@ func runV2Restore(opts v2RestoreOptions) error {
 	fmt.Printf("Restored %d file(s) into %s\n", len(files), installDir)
 	for _, p := range files {
 		fmt.Printf("  - %s\n", p.rel)
+	}
+	if includesStack {
+		fmt.Printf("stack restored: yes (ncc-orchestrator %s)\n", defaultStr(manifest.Version, "?"))
+	} else {
+		fmt.Printf("stack restored: no\n")
 	}
 	fmt.Printf("\nSource backup: tool=%s version=%s stream=%s built=%s created_at=%s install_dir=%s\n",
 		manifest.Tool, manifest.Version, defaultStr(manifest.Stream, "?"), defaultStr(manifest.BuildDate, "?"),
@@ -17365,9 +17486,11 @@ tar.gz so an install can be moved or recovered:
 The manifest records the exact ncc-orchestrator version (and stream /
 build date) that created the backup, which 'v2-restore' reports and
 checks. Regenerable artifacts (binaries, frontend bundle, run/ pid
-files, output/ncc files) are excluded. The archive contains secrets, so
-it is written with 0600 permissions — store it securely. Restore it with
-'v2-restore'.`,
+files, output/ncc files) are excluded unless --include-stack is set.
+--include-stack adds bin/ncc-* and frontend-dist so a restore can roll
+the software version back (used by in-app pre-update snapshots). The
+archive contains secrets, so it is written with 0600 permissions —
+store it securely. Restore it with 'v2-restore'.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			installDir, _ := cmd.Flags().GetString("install-dir")
 			outputFile, _ := cmd.Flags().GetString("output-file")
@@ -17376,18 +17499,20 @@ it is written with 0600 permissions — store it securely. Restore it with
 			encrypt, _ := cmd.Flags().GetBool("encrypt")
 			keyFile, _ := cmd.Flags().GetString("key-file")
 			passphrase, _ := cmd.Flags().GetString("passphrase")
+			includeStack, _ := cmd.Flags().GetBool("include-stack")
 			// A supplied passphrase or key-file implies intent to encrypt.
 			if strings.TrimSpace(keyFile) != "" || strings.TrimSpace(passphrase) != "" {
 				encrypt = true
 			}
 			return runV2Backup(v2BackupOptions{
-				InstallDir: installDir,
-				OutputFile: outputFile,
-				OutputDir:  outputDir,
-				Retain:     retain,
-				Encrypt:    encrypt,
-				KeyFile:    keyFile,
-				Passphrase: passphrase,
+				InstallDir:   installDir,
+				OutputFile:   outputFile,
+				OutputDir:    outputDir,
+				Retain:       retain,
+				Encrypt:      encrypt,
+				KeyFile:      keyFile,
+				Passphrase:   passphrase,
+				IncludeStack: includeStack,
 			})
 		},
 	}
@@ -17398,6 +17523,7 @@ it is written with 0600 permissions — store it securely. Restore it with
 	v2BackupCmd.Flags().Bool("encrypt", false, "Encrypt the archive at rest with AES-256-GCM (key from --passphrase/NCC_BACKUP_PASSPHRASE or --key-file/NCC_BACKUP_KEY_FILE/NCC_BACKUP_KEY)")
 	v2BackupCmd.Flags().String("passphrase", "", "Passphrase to derive the encryption key (scrypt); prefer NCC_BACKUP_PASSPHRASE to keep it out of the process list")
 	v2BackupCmd.Flags().String("key-file", "", "File holding a 32-byte encryption key (base64/hex); alternative to --passphrase")
+	v2BackupCmd.Flags().Bool("include-stack", false, "Also archive bin/ stack binaries and frontend-dist so restore can roll back the software version")
 	cmd.AddCommand(v2BackupCmd)
 
 	// restore subcommand: extract a v2-backup archive back into an install

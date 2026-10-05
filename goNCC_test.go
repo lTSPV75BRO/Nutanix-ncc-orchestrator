@@ -4672,7 +4672,20 @@ func TestCollectBackupEntriesIncludesAuditLogAndState(t *testing.T) {
 	mustWrite("outputfiles/slo-dashboard.json", "{}")
 	mustWrite("outputfiles/runs/2026-06-05/run-summary.json", `{"old":true}`)
 
-	entries, _ := collectBackupEntries(dir)
+	if err := os.MkdirAll(filepath.Join(dir, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bin", "ncc-orchestrator"), []byte("bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "frontend-dist"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "frontend-dist", "index.html"), []byte("<html></html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, _ := collectBackupEntries(dir, false)
 	got := map[string]bool{}
 	for _, e := range entries {
 		got[e.Rel] = true
@@ -4695,6 +4708,82 @@ func TestCollectBackupEntriesIncludesAuditLogAndState(t *testing.T) {
 	// The potentially large run-history snapshots must NOT be swept in.
 	if got["outputfiles/runs/2026-06-05/run-summary.json"] {
 		t.Error("run-history snapshots should be excluded from the backup")
+	}
+	if got["bin/ncc-orchestrator"] || got["frontend-dist/index.html"] {
+		t.Error("default backups must omit stack binaries and frontend")
+	}
+}
+
+func TestPreUpdateBackupRestoresSoftwareVersion(t *testing.T) {
+	src := t.TempDir()
+	mustWrite := func(rel, content string, mode os.FileMode) {
+		p := filepath.Join(src, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite("config.yaml", "clusters: 10.0.0.1\n", 0o600)
+	mustWrite(".ncc-api-users.json", `{"users":[]}`, 0o600)
+	mustWrite(".ncc-api-token", "tok", 0o600)
+	mustWrite("bin/ncc-orchestrator", "OLD-ORCH", 0o755)
+	mustWrite("bin/ncc-api-server", "OLD-API", 0o755)
+	mustWrite("bin/ncc-ui-server", "OLD-UI", 0o755)
+	mustWrite("frontend-dist/index.html", "old-index", 0o644)
+	mustWrite("frontend-dist/assets/old.js", "old-js", 0o644)
+
+	out := filepath.Join(t.TempDir(), "pre-update.tar.gz")
+	if err := runV2Backup(v2BackupOptions{InstallDir: src, OutputFile: out, IncludeStack: true}); err != nil {
+		t.Fatalf("v2-backup --include-stack: %v", err)
+	}
+
+	dst := t.TempDir()
+	mustDst := func(rel, content string) {
+		p := filepath.Join(dst, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustDst("config.yaml", "clusters: 10.9.9.9\n")
+	mustDst("bin/ncc-orchestrator", "NEW-ORCH")
+	mustDst("bin/ncc-api-server", "NEW-API")
+	mustDst("bin/ncc-ui-server", "NEW-UI")
+	mustDst("frontend-dist/index.html", "new-index")
+	mustDst("frontend-dist/assets/new-chunk.js", "leftover-from-newer-ui")
+
+	if err := runV2Restore(v2RestoreOptions{InstallDir: dst, InputFile: out, Force: true}); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	assertFile := func(rel, want string) {
+		got, err := os.ReadFile(filepath.Join(dst, rel))
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		if string(got) != want {
+			t.Fatalf("%s = %q, want %q", rel, got, want)
+		}
+	}
+	assertFile("config.yaml", "clusters: 10.0.0.1\n")
+	assertFile("bin/ncc-orchestrator", "OLD-ORCH")
+	assertFile("bin/ncc-api-server", "OLD-API")
+	assertFile("bin/ncc-ui-server", "OLD-UI")
+	assertFile("frontend-dist/index.html", "old-index")
+	assertFile("frontend-dist/assets/old.js", "old-js")
+	if _, err := os.Stat(filepath.Join(dst, "frontend-dist", "assets", "new-chunk.js")); err == nil {
+		t.Fatal("newer frontend chunk should be removed when rolling back the UI")
+	}
+	if runtime.GOOS != "windows" {
+		if info, err := os.Stat(filepath.Join(dst, "bin", "ncc-orchestrator")); err != nil {
+			t.Fatal(err)
+		} else if info.Mode().Perm()&0o111 == 0 {
+			t.Fatalf("restored orchestrator is not executable: %s", info.Mode())
+		}
 	}
 }
 
@@ -4733,7 +4822,7 @@ func TestV2StartStateRoundTrip(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("prismCentral: pc\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	entries, _ := collectBackupEntries(dir)
+	entries, _ := collectBackupEntries(dir, false)
 	foundState := false
 	for _, e := range entries {
 		if e.Rel == v2StartStateFile {

@@ -522,6 +522,25 @@ func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }
 
+// detachedSystemdRestartScript is the /bin/sh -c body used after an in-app
+// update/restore. It must stay valid when passed as one -c argument: join with
+// newlines, not "; ", because `then;` is a syntax error and would skip the
+// systemctl restart.
+func detachedSystemdRestartScript(installDir string) string {
+	installQ := shellSingleQuote(installDir)
+	orchBin := filepath.Join(installDir, "bin", "ncc-orchestrator")
+	orchBinQ := shellSingleQuote(orchBin)
+	return strings.Join([]string{
+		"set -e",
+		"if command -v chcon >/dev/null 2>&1; then",
+		"  chcon -t bin_t " + shellSingleQuote(filepath.Join(installDir, "bin", "ncc-orchestrator")) + " " + shellSingleQuote(filepath.Join(installDir, "bin", "ncc-api-server")) + " " + shellSingleQuote(filepath.Join(installDir, "bin", "ncc-ui-server")) + " >/dev/null 2>&1 || true",
+		"fi",
+		"systemctl stop ncc-orchestrator.service >/dev/null 2>&1 || true",
+		"if [ -x " + orchBinQ + " ]; then " + orchBinQ + " v2-stop --install-dir " + installQ + " >/dev/null 2>&1 || true; fi",
+		"systemctl restart ncc-orchestrator.service",
+	}, "\n")
+}
+
 // spawnDetachedRestart launches a detached restart that preserves the current
 // runtime mode after restore:
 //   - if the stack is installed as a systemd service, restart that service
@@ -552,18 +571,7 @@ func (s *apiServer) spawnDetachedRestart(installDir string) bool {
 			//  1) relabel binaries for SELinux (fixes status=203/EXEC),
 			//  2) stop detached leftovers that can hold :8080/:8081 and cause
 			//     supervisor child bind failures during restart.
-			installQ := shellSingleQuote(installDir)
-			orchBin := filepath.Join(installDir, "bin", "ncc-orchestrator")
-			orchBinQ := shellSingleQuote(orchBin)
-			script := strings.Join([]string{
-				"set -e",
-				"if command -v chcon >/dev/null 2>&1; then",
-				"  chcon -t bin_t " + shellSingleQuote(filepath.Join(installDir, "bin", "ncc-orchestrator")) + " " + shellSingleQuote(filepath.Join(installDir, "bin", "ncc-api-server")) + " " + shellSingleQuote(filepath.Join(installDir, "bin", "ncc-ui-server")) + " >/dev/null 2>&1 || true",
-				"fi",
-				"systemctl stop ncc-orchestrator.service >/dev/null 2>&1 || true",
-				"if [ -x " + orchBinQ + " ]; then " + orchBinQ + " v2-stop --install-dir " + installQ + " >/dev/null 2>&1 || true; fi",
-				"systemctl restart ncc-orchestrator.service",
-			}, "; ")
+			script := detachedSystemdRestartScript(installDir)
 			cmd = exec.Command("/bin/sh", "-c", script)
 		} else {
 			args := append(append([]string{}, base[1:]...), "v2-restart", "--install-dir", installDir)

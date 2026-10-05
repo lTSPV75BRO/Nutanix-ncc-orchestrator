@@ -350,12 +350,12 @@ func (s *apiServer) runUpdateJob(req updateApplyRequest) {
 		backupName = "pre-update-" + stamp + backupEncSuffix
 	}
 	backupPath := filepath.Join(backupDir, backupName)
-	updateJob.set(updPhaseBackingUp, "Taking a pre-update backup…")
-	backupArgs := []string{"v2-backup", "--install-dir", installDir, "--output-file", backupPath}
+	updateJob.set(updPhaseBackingUp, "Taking a pre-update backup of configuration and the current software version…")
+	backupArgs := []string{"v2-backup", "--install-dir", installDir, "--output-file", backupPath, "--include-stack"}
 	if encrypt {
 		backupArgs = append(backupArgs, "--encrypt")
 	}
-	if out, err := s.runOrchestrator(backupArgs, 3*time.Minute); err != nil {
+	if out, err := s.runOrchestrator(backupArgs, 5*time.Minute); err != nil {
 		s.updateFailedTotal.Add(1)
 		s.notifyOperationalFailure("backup_failure", "NCC pre-update backup failed — update aborted", map[string]interface{}{
 			"error":   firstNonEmptyLine(out, err.Error()),

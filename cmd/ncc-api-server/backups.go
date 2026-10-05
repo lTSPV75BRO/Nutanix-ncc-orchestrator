@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -39,12 +41,40 @@ type backupEntry struct {
 	ModTime           string `json:"mod_time"`
 	RollbackCandidate bool   `json:"rollback_candidate,omitempty"`
 	Encrypted         bool   `json:"encrypted,omitempty"`
+	IncludesStack     bool   `json:"includes_stack,omitempty"`
 }
 
 // isBackupArchiveName reports whether name is a backup archive we manage
 // (plaintext .tar.gz or encrypted .tar.gz.enc).
 func isBackupArchiveName(name string) bool {
 	return strings.HasSuffix(name, backupFileSuffix) || strings.HasSuffix(name, backupEncSuffix)
+}
+
+// backupArchiveIncludesStack reports whether a plaintext backup also holds
+// stack binaries or frontend-dist (so rollback can restore the software
+// version). Encrypted archives are skipped — they are not a readable gzip.
+func backupArchiveIncludesStack(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return false
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err != nil {
+			return false
+		}
+		name := hdr.Name
+		if strings.HasPrefix(name, "data/bin/") || strings.HasPrefix(name, "data/frontend-dist/") {
+			return true
+		}
+	}
 }
 
 // backupKeyConfigured reports whether a non-interactive backup encryption key is
@@ -168,13 +198,17 @@ func (s *apiServer) listBackupEntries() ([]backupEntry, error) {
 		if err != nil {
 			continue
 		}
-		out = append(out, backupEntry{
+		ent := backupEntry{
 			Name:      e.Name(),
 			Kind:      backupKind(e.Name()),
 			Size:      info.Size(),
 			ModTime:   info.ModTime().UTC().Format(time.RFC3339),
 			Encrypted: strings.HasSuffix(e.Name(), backupEncSuffix),
-		})
+		}
+		if !ent.Encrypted {
+			ent.IncludesStack = backupArchiveIncludesStack(filepath.Join(dir, e.Name()))
+		}
+		out = append(out, ent)
 	}
 	// Newest first.
 	sort.Slice(out, func(i, j int) bool { return out[i].ModTime > out[j].ModTime })
@@ -335,8 +369,14 @@ func (s *apiServer) handleBackupRestoreNamed(w http.ResponseWriter, r *http.Requ
 
 	restarting := s.spawnDetachedRestart(installDir)
 	msg := "Backup restored. The stack is restarting now to load the restored config, accounts, and token — this page will reconnect in a few seconds."
+	if strings.Contains(out, "stack restored: yes") {
+		msg = "Previous software version and configuration restored. The stack is restarting now — this page will reconnect in a few seconds."
+	}
 	if !restarting {
 		msg = "Backup restored. Restart the stack (v2-stop then v2-start) for the restored config, accounts, and token to take effect."
+		if strings.Contains(out, "stack restored: yes") {
+			msg = "Previous software version and configuration restored. Restart the stack (v2-stop then v2-start) to load them."
+		}
 	}
 	writeJSON(w, http.StatusOK, envelope{
 		Success: true,

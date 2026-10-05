@@ -213,6 +213,7 @@ export type BackupEntry = {
   mod_time: string;
   rollback_candidate?: boolean;
   encrypted?: boolean;
+  includes_stack?: boolean;
 };
 
 export type BackupScheduleState = {

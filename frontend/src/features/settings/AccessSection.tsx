@@ -915,19 +915,34 @@ function BackupRestoreCard() {
     }
   };
 
-  const restoreBody = (name: string, isRollback: boolean) => (
-    <div>
-      <Typography.Paragraph>
-        This overwrites the install directory with the contents of <b>{name}</b> — configuration and
-        referenced files, local accounts and roles, the API token, and scheduler/notification state.
-      </Typography.Paragraph>
-      <Typography.Paragraph style={{ marginBottom: 0 }}>
-        {isRollback ? "The stack rolls back and " : "The stack "}
-        <b>restarts automatically</b> afterward to load the restored data — this page reconnects on
-        its own, and you may be asked to sign in again if the API token or your account changed.
-      </Typography.Paragraph>
-    </div>
-  );
+  const restoreBody = (entry: Pick<BackupEntry, "name"> & Partial<BackupEntry>) => {
+    const isRollback = Boolean(entry.rollback_candidate);
+    const hasStack = Boolean(entry.includes_stack);
+    return (
+      <div>
+        <Typography.Paragraph>
+          This overwrites the install directory with the contents of <b>{entry.name}</b> —
+          configuration and referenced files, local accounts and roles, the API token, and
+          scheduler/notification state
+          {hasStack
+            ? ", plus the previous software version (orchestrator, API, UI, and frontend)."
+            : "."}
+        </Typography.Paragraph>
+        {isRollback && !hasStack ? (
+          <Typography.Paragraph>
+            This snapshot was taken before versioned rollback existed, so the running software
+            version stays as it is. Only configuration and accounts are restored.
+          </Typography.Paragraph>
+        ) : null}
+        <Typography.Paragraph style={{ marginBottom: 0 }}>
+          {isRollback ? "The stack rolls back and " : "The stack "}
+          <b>restarts automatically</b> afterward to load the restored data — this page reconnects
+          on its own, and you may be asked to sign in again if the API token or your account
+          changed.
+        </Typography.Paragraph>
+      </div>
+    );
+  };
 
   // Opens the restore confirmation. Encrypted snapshots need a passphrase, so we
   // use a stateful modal (rendered below) rather than the static Modal.confirm.
@@ -1068,7 +1083,7 @@ function BackupRestoreCard() {
       extra={
         <Space>
           {rollback ? (
-            <Tooltip title={`Roll back to the most recent pre-update snapshot (${rollback.name})`}>
+            <Tooltip title={`Roll back software version and configuration to ${rollback.name}`}>
               <Button
                 icon={<RollbackOutlined />}
                 danger
@@ -1139,8 +1154,9 @@ function BackupRestoreCard() {
       </Typography.Title>
       <Typography.Paragraph type="secondary" style={{ marginTop: -4 }}>
         Snapshots saved on the server, including automatic <b>pre-update</b> backups taken before
-        each in-app update. Restore any of them without re-uploading, or roll back the most recent
-        update with one click.
+        each in-app update (configuration plus the software version that was running). Restore any
+        of them without re-uploading, or roll back the most recent update — including binaries and
+        frontend — with one click.
       </Typography.Paragraph>
       <Table
         rowKey="name"
@@ -1216,7 +1232,7 @@ function BackupRestoreCard() {
         width={540}
         destroyOnHidden
       >
-        {restoreFile ? restoreBody(restoreFile.name, false) : null}
+        {restoreFile ? restoreBody({ name: restoreFile.name }) : null}
         <Typography.Paragraph type="secondary" style={{ marginTop: 4, marginBottom: 6 }}>
           If this archive was encrypted (<Typography.Text code>v2-backup --encrypt</Typography.Text>{" "}
           or a passphrase-protected download), enter its passphrase. Leave blank for an unencrypted
@@ -1288,7 +1304,7 @@ function BackupRestoreCard() {
       <Modal
         title={
           restoreNamedEntry?.rollback_candidate
-            ? "Roll back to pre-update backup?"
+            ? "Roll back the last update?"
             : "Restore this backup?"
         }
         open={restoreNamedEntry !== null}
@@ -1310,7 +1326,7 @@ function BackupRestoreCard() {
         destroyOnHidden
       >
         {restoreNamedEntry
-          ? restoreBody(restoreNamedEntry.name, Boolean(restoreNamedEntry.rollback_candidate))
+          ? restoreBody(restoreNamedEntry)
           : null}
         {restoreNamedEntry?.encrypted ? (
           <>
@@ -2798,8 +2814,9 @@ function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
           </Typography.Paragraph>
           <ol style={{ marginTop: 0, paddingLeft: 20 }}>
             <li>
-              create a <b>pre-update backup</b> (saved under{" "}
-              <Typography.Text code>backups/</Typography.Text> in the installation directory),
+              create a <b>pre-update backup</b> of configuration and the current software version
+              (saved under <Typography.Text code>backups/</Typography.Text> in the installation
+              directory), so you can roll the update back later,
             </li>
             <li>
               install the new orchestrator, API, UI, and frontend components (checksum-verified),

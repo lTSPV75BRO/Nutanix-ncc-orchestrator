@@ -1227,7 +1227,7 @@ func checkBackupStaleness(hc *healContext) healResult {
 // prunes to the newest 7. It writes nothing to stdout (the doctor controls
 // output) and removes any archive that fails verification.
 func selfHealCreateBackup(installDir string) (string, error) {
-	entries, _ := collectBackupEntries(installDir)
+	entries, _ := collectBackupEntries(installDir, false)
 	if len(entries) == 0 {
 		return "", fmt.Errorf("nothing to back up under %s", installDir)
 	}
