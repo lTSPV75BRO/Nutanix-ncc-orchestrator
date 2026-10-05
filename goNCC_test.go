@@ -2015,12 +2015,12 @@ func TestBindConfigEmailSettings(t *testing.T) {
 	viper.AutomaticEnv()
 
 	viper.Set("email-enabled", true)
-	viper.Set("smtp-server", "smtp.example.com")
+	viper.Set("smtp-server", "smtp.corp.test")
 	viper.Set("smtp-port", "587")
-	viper.Set("smtp-user", "user@example.com")
+	viper.Set("smtp-user", "user@corp.test")
 	viper.Set("smtp-password", "password123")
-	viper.Set("email-from", "ncc@example.com")
-	viper.Set("email-to", "admin@example.com,ops@example.com")
+	viper.Set("email-from", "ncc@corp.test")
+	viper.Set("email-to", "admin@corp.test,ops@corp.test")
 	viper.Set("email-use-tls", true)
 	setMinimalValidConfig()
 
@@ -2032,20 +2032,20 @@ func TestBindConfigEmailSettings(t *testing.T) {
 	if !cfg.EmailEnabled {
 		t.Error("Expected EmailEnabled to be true")
 	}
-	if cfg.SMTPServer != "smtp.example.com" {
-		t.Errorf("Expected SMTPServer 'smtp.example.com', got %s", cfg.SMTPServer)
+	if cfg.SMTPServer != "smtp.corp.test" {
+		t.Errorf("Expected SMTPServer 'smtp.corp.test', got %s", cfg.SMTPServer)
 	}
 	if cfg.SMTPPort != 587 {
 		t.Errorf("Expected SMTPPort 587, got %d", cfg.SMTPPort)
 	}
-	if cfg.SMTPUser != "user@example.com" {
-		t.Errorf("Expected SMTPUser 'user@example.com', got %s", cfg.SMTPUser)
+	if cfg.SMTPUser != "user@corp.test" {
+		t.Errorf("Expected SMTPUser 'user@corp.test', got %s", cfg.SMTPUser)
 	}
 	if cfg.SMTPPassword != "password123" {
 		t.Errorf("Expected SMTPPassword 'password123', got %s", cfg.SMTPPassword)
 	}
-	if cfg.EmailFrom != "ncc@example.com" {
-		t.Errorf("Expected EmailFrom 'ncc@example.com', got %s", cfg.EmailFrom)
+	if cfg.EmailFrom != "ncc@corp.test" {
+		t.Errorf("Expected EmailFrom 'ncc@corp.test', got %s", cfg.EmailFrom)
 	}
 	if len(cfg.EmailTo) != 2 {
 		t.Errorf("Expected 2 email recipients, got %d", len(cfg.EmailTo))
@@ -2062,7 +2062,7 @@ func TestBindConfigWebhookSettings(t *testing.T) {
 	viper.AutomaticEnv()
 
 	viper.Set("webhook-enabled", true)
-	viper.Set("webhook-url", "https://hooks.example.com/ncc")
+	viper.Set("webhook-url", "https://hooks.corp.test/ncc")
 	viper.Set("webhook-headers", map[string]string{
 		"X-Auth-Token": "token123",
 		"X-Custom":     "value",
@@ -2077,8 +2077,8 @@ func TestBindConfigWebhookSettings(t *testing.T) {
 	if !cfg.WebhookEnabled {
 		t.Error("Expected WebhookEnabled to be true")
 	}
-	if cfg.WebhookURL != "https://hooks.example.com/ncc" {
-		t.Errorf("Expected WebhookURL 'https://hooks.example.com/ncc', got %s", cfg.WebhookURL)
+	if cfg.WebhookURL != "https://hooks.corp.test/ncc" {
+		t.Errorf("Expected WebhookURL 'https://hooks.corp.test/ncc', got %s", cfg.WebhookURL)
 	}
 	if len(cfg.WebhookHeaders) != 2 {
 		t.Errorf("Expected 2 webhook headers, got %d", len(cfg.WebhookHeaders))
