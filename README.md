@@ -2,785 +2,411 @@
 
 [![Version](https://img.shields.io/badge/version-2.2.1-blue)](RELEASE_NOTES_v2.2.1.md)
 [![Go](https://img.shields.io/badge/go-1.27.3-00ADD8)](go.mod)
+[![Node](https://img.shields.io/badge/node-26.12.1%2B-5FA04E)](frontend/package.json)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Status](https://img.shields.io/badge/GA-green)](RELEASE_NOTES_v2.2.1.md)
 
-> A production-ready stack for running Nutanix Cluster Check (NCC) across many clusters in parallel, aggregating results, and serving them through a hardened API and modern web UI.
+Run **Nutanix Cluster Check (NCC)** across many clusters in parallel, collect the results in one place, and work through them in a web dashboard — with history, alert handling, scheduling, RBAC/SSO, and an API for ServiceNow, Prometheus, and other tools.
+
+> Independent open-source project. Not affiliated with or endorsed by Nutanix, Inc.
 
 ---
 
-## Table of contents
+## Contents
 
-- [What's in this stack](#whats-in-this-stack)
+- [Highlights](#highlights)
+- [How it fits together](#how-it-fits-together)
 - [Quick start](#quick-start)
-  - [From a binary release](#from-a-binary-release-recommended)
-  - [From the full v2 stack](#from-the-full-v2-stack-cli--api--ui)
-  - [From source](#from-source)
-- [Run on macOS / Windows / Linux (trust & verification)](#run-on-macos--windows--linux-trust--verification)
 - [Configuration](#configuration)
-- [The web UI](#the-web-ui)
+- [Web dashboard](#web-dashboard)
+- [Alerts and integrations](#alerts-and-integrations)
 - [HTTP API](#http-api)
-- [Operability: status, doctor, metrics, completions](#operability-status-doctor-metrics-completions)
-- [Running individual components (API only / UI only)](#running-individual-components-api-only--ui-only)
-- [Run with Docker Compose](#run-with-docker-compose)
-- [Security posture](#security-posture)
-- [Kubernetes](#kubernetes)
-- [Exit codes and artifacts](#exit-codes-and-artifacts)
-- [Documentation map](#documentation-map)
+- [Security](#security)
+- [Operating the stack](#operating-the-stack)
+- [Verifying release binaries](#verifying-release-binaries)
+- [Exit codes and output files](#exit-codes-and-output-files)
+- [Upgrading to v2.2.1](#upgrading-to-v221)
+- [Documentation](#documentation)
 - [Development](#development)
 
 ---
 
-## What's in this stack
+## Highlights
 
-| Component                       | Path                       | Purpose                                                                 |
-| ------------------------------- | -------------------------- | ----------------------------------------------------------------------- |
-| **`ncc-orchestrator`** (CLI)    | `goNCC.go`                 | Parallel NCC execution, retry/backoff, report generation, scheduling   |
-| **`ncc-api-server`**            | `cmd/ncc-api-server`       | HTTP API: run control, audit, schedule, artifacts; token auth + CSP    |
-| **`ncc-ui-server`** + `frontend`| `cmd/ncc-ui-server`, `frontend/` | Static SPA + reverse proxy to API; serves the dashboard          |
-| **`ncc-mcp-server`**            | `cmd/ncc-mcp-server`       | Model Context Protocol bridge so AI tools can drive NCC                |
+- **Parallel NCC runs** over Prism Element clusters (listed directly or discovered from Prism Central), with retries, adaptive back-off on HTTP 429, and per-cluster reports in HTML, CSV, JSON, Markdown, and SARIF.
+- **Web dashboard** with FAIL/WARN/ERR/INFO triage, Prism Central alerts, run history, trends, regressions, and flaky-check detection.
+- **Alert lifecycle**: acknowledge, resolve, and reopen NCC findings; every alert instance gets a UUID and an append-only history, and the dashboard shows how long it has been open and whether it keeps coming back.
+- **Integrations**: REST API with an OpenAPI 3 spec, personal access tokens, an incremental event feed for ticketing tools, Prometheus `/metrics`, email/webhook/Slack notifications, and an MCP server for AI assistants.
+- **Secure by default**: HTTPS UI, role-based access (viewer / operator / admin), local accounts, LDAP/AD, SAML SSO, encrypted backups, rate limiting, and strict security headers.
+- **Runs anywhere**: single binaries for Linux, macOS, and Windows; a self-healing supervisor; Docker Compose; Kubernetes (kustomize or Helm).
+- **CI-friendly**: policy gates turn run results into exit codes.
 
-Each binary is independently runnable. Pick the CLI alone for batch automation, or run the full stack for an interactive dashboard.
+## How it fits together
+
+```mermaid
+flowchart LR
+    subgraph Nutanix
+        PE[Prism Element clusters]
+        PC[Prism Central]
+    end
+    CLI["ncc-orchestrator<br/>(runner, scheduler, stack manager)"]
+    API["ncc-api-server<br/>REST API · auth · alert store"]
+    UI["ncc-ui-server<br/>web dashboard + API proxy"]
+    MCP["ncc-mcp-server<br/>(optional, AI tools)"]
+    Tools["ServiceNow · Prometheus · scripts"]
+
+    CLI -- "NCC checks" --> PE
+    CLI -- "discovery" --> PC
+    API -- "starts runs" --> CLI
+    API -- "PC alerts" --> PC
+    UI --> API
+    Tools --> API
+    MCP --> API
+```
+
+| Binary | Source | Role |
+| --- | --- | --- |
+| `ncc-orchestrator` | [`goNCC.go`](goNCC.go) | Runs NCC on many clusters, writes reports, schedules runs, and manages the API + UI stack (`v2-start`, `v2-status`, …) |
+| `ncc-api-server` | [`cmd/ncc-api-server`](cmd/ncc-api-server) | REST API: runs, reports, alert lifecycle, settings, users, audit log, metrics |
+| `ncc-ui-server` | [`cmd/ncc-ui-server`](cmd/ncc-ui-server), [`frontend/`](frontend) | Serves the React dashboard and proxies `/api` to the API server |
+| `ncc-mcp-server` | [`cmd/ncc-mcp-server`](cmd/ncc-mcp-server) | Optional [Model Context Protocol](docs/MCP_SERVER.md) bridge for AI assistants |
+
+Each binary runs on its own. Use the CLI alone for batch or cron jobs, or the full stack for the dashboard.
 
 ---
 
 ## Quick start
 
-### From a binary release (recommended)
+| I want to… | Use |
+| --- | --- |
+| Run a scan from the command line | [Release archive → one-shot scan](#1-download-a-release) |
+| Run the dashboard on a VM or laptop | [Full stack with `v2-start`](#2-start-the-full-stack) |
+| Run the dashboard in containers | [Docker Compose](#docker-compose) |
+| Deploy to a cluster | [Kubernetes](#kubernetes) |
+| Hack on the code | [Build from source](#build-from-source) |
 
-Every release ships a self-contained `ncc-v2-stack-*` archive on the [Releases page](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases). The archive contains all three server binaries, the SPA bundle, and `example_config.yaml`.
+### 1. Download a release
+
+Each [release](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases) has a stack archive per platform (`ncc-v2-stack-<os>-<arch>.tar.gz`, `.zip` on Windows). It contains `bin/` (`ncc-orchestrator`, `ncc-api-server`, `ncc-ui-server`), `frontend-dist/`, and `example_config.yaml` **at the top level**, so extract it into its own folder:
 
 ```bash
-# 1. Download for your platform (linux-amd64 shown here)
-curl -LO https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/v2.2.1/ncc-v2-stack-linux-amd64.tar.gz
+VERSION=v2.2.1
+BASE=https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/$VERSION
+curl -LO $BASE/ncc-v2-stack-linux-amd64.tar.gz
+curl -LO $BASE/checksums.txt
+sha256sum -c checksums.txt --ignore-missing     # macOS: shasum -a 256 -c …
 
-# 2. Verify checksum (recommended)
-curl -LO https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/v2.2.1/checksums.txt
-shasum -a 256 -c checksums.txt --ignore-missing | grep ncc-v2-stack-linux-amd64
+mkdir ncc && tar -xzf ncc-v2-stack-linux-amd64.tar.gz -C ncc && cd ncc
+```
 
-# 3. Extract
-tar -xzf ncc-v2-stack-linux-amd64.tar.gz && cd ncc-v2-stack-linux-amd64 2>/dev/null || true
+Edit `example_config.yaml`: replace the sample cluster `REPLACE_WITH_CLUSTER_IP` and set the username. The template refers to four secrets — `NCC_PASSWORD` (Prism), `SMTP_PASSWORD`, `WEBHOOK_HMAC`, and `SLACK_WEBHOOK_URL`. Export the ones you use and delete the notification blocks you don't, otherwise the run stops with `secret "…" not found`.
 
-# 4. Export the Prism password matching the secret:// ref in the template
+```bash
 export NCC_PASSWORD='your-prism-password'
+./bin/ncc-orchestrator validate-config --config example_config.yaml
+./bin/ncc-orchestrator preflight-check --config example_config.yaml   # config + secrets + paths
 
-# 5. Edit clusters/username in example_config.yaml, then validate
-./bin/ncc-orchestrator-linux-amd64 validate-config --config example_config.yaml
-
-# 6. Run a one-shot scan
-./bin/ncc-orchestrator-linux-amd64 --config example_config.yaml run
+# One-shot scan (there is no "run" subcommand; the root command runs the scan)
+./bin/ncc-orchestrator --config example_config.yaml
 ```
 
-Reports land under `outputfiles/`. Open `outputfiles/index.html` for the aggregated view.
+Reports are written to `outputfiles/`; open `outputfiles/index.html` for the combined view. Prefer guided setup? Try `./bin/ncc-orchestrator quickstart`.
 
-### From the full v2 stack (CLI + API + UI)
+### 2. Start the full stack
 
-After extracting the archive, the recommended flow (v2.0.2+) is to `cd` into the `bin/` directory and run with no path flags — `v2-check`, `v2-start`, `v2-stop`, and `uninstall` auto-detect the stack root, so config / output / log / token paths default to the archive root automatically:
+From the extracted folder, the stack finds its own config, output, log, and token paths:
 
 ```bash
-# extract once, then:
-cd ncc-v2-stack-linux-amd64/bin
+./bin/ncc-orchestrator v2-check  --api-listen 127.0.0.1:8081 --ui-listen :8080   # paths, ports, binaries
+./bin/ncc-orchestrator v2-start  --api-listen 127.0.0.1:8081 --ui-listen :8080   # foreground
 
-# sanity check (auto-detects install-dir from current binary location;
-# falls back to <install-dir>/example_config.yaml when config.yaml is absent)
-./ncc-orchestrator v2-check --api-listen :8081 --ui-listen :8080
-
-# start API + UI together (managed lifecycle, foreground)
-./ncc-orchestrator v2-start --api-listen :8081 --ui-listen :8080
-
-# or background with restart supervision (PID/log files under
-# <install-dir>/run and <install-dir>/logs)
-./ncc-orchestrator v2-start --detach --self-heal \
-  --api-listen :8081 --ui-listen :8080
+# or in the background, restarted automatically if a process dies or hangs
+./bin/ncc-orchestrator v2-start --detach --self-heal --api-listen 127.0.0.1:8081 --ui-listen :8080
+./bin/ncc-orchestrator v2-status
+./bin/ncc-orchestrator v2-stop
 ```
 
-When binding the API to a loopback IP (e.g. `--api-listen 127.0.0.1:8081`), the orchestrator now preserves the IP for connection URLs (so `wait-ready` and the UI backend hit the right address family on macOS, where `localhost` resolves to `::1` first) and additionally adds `http://localhost:port` to the CORS allow-list so browsers can reach the UI under either name.
+Open **<https://localhost:8080>**. The UI uses HTTPS by default with a generated self-signed certificate (stored under `tls/`); `--ui-insecure-http` serves plain HTTP for a trusted loopback setup.
 
-Older releases (v2.0.0 / v2.0.1) require the explicit form below; it still works in v2.2.1:
+**First login:** the first start creates an `admin` account with a random password, printed once in the API log (search for `FIRST-RUN ADMIN`) and saved to `.ncc-initial-admin-password` in the install folder. You must change it at first login; the file is then deleted. To install the stack as a boot-time service, see `v2-install-service`.
 
-```bash
-./bin/ncc-orchestrator-linux-amd64 v2-check \
-  --install-dir . \
-  --orchestrator-bin ./bin/ncc-orchestrator-linux-amd64 \
-  --config-path ./example_config.yaml \
-  --output-dir ./outputfiles \
-  --log-dir ./nccfiles \
-  --api-listen :8081 --ui-listen :8080
-```
-
-Open <https://localhost:8080> — the UI picks up the auto-generated `.ncc-api-token` and authenticates against the API server transparently. Use `--ui-insecure-http` only for a trusted loopback HTTP session.
-
-### From source
-
-Requires **Go 1.27.3+** (matching the `go` directive in [`go.mod`](go.mod)) and **Node 26+**.
+### Docker Compose
 
 ```bash
 git clone https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator.git
 cd Nutanix-ncc-orchestrator
+
+mkdir -p config && cp example_config.yaml config/config.yaml   # then edit it
+echo "NCC_PASSWORD=<your-prism-password>" > .env                 # forwarded to runs
+
+docker compose up -d --build
+docker compose ps        # both services should become "healthy"
 ```
 
-**1. Build the four Go binaries.** `go build ./...` only *compile-checks* the
-module — when several `main` packages match, the resulting executables are
-discarded. Use explicit `-o` targets to actually produce the binaries:
+- UI: **<http://localhost:8080>** (plain HTTP in this compose setup; put a TLS proxy in front for anything but local use)
+- API: `127.0.0.1:8081` (loopback only)
+- State (reports, logs, audit, schedule, token) lives in named volumes. `docker compose down` keeps them; `down -v` deletes them.
+
+The UI starts only after the API passes its health check and has written the shared token file.
+
+### Kubernetes
 
 ```bash
-go build ./...                                      # fast compile check of everything
-
-go build -o ncc-orchestrator .                      # CLI runner + scheduler + v2 stack manager
-go build -o ncc-api-server  ./cmd/ncc-api-server    # REST/JSON API + auth/RBAC backend
-go build -o ncc-ui-server   ./cmd/ncc-ui-server     # SPA host + API reverse proxy
-go build -o ncc-mcp-server  ./cmd/ncc-mcp-server    # Model Context Protocol server (optional)
+kubectl apply -k k8s/          # runner CronJob + API + UI + NetworkPolicies
 ```
 
-**2. Build the SPA** (served by `ncc-ui-server`):
+Create `ncc-v2-secrets` first with the Prism password, API token, and a `jwt-secret` (`openssl rand -base64 32`); add `backup-key` and `master-key` if you want encrypted backups and an encrypted user store. The kustomize manifests run 1 API and 2 UI replicas; the [Helm chart](helm/ncc-orchestrator/README.md) runs 2 of each. See [`k8s/README.md`](k8s/README.md) for TLS, backups, and rollback.
+
+Published images (Docker Hub): `prajwalnutant/nutanix-ncc-orchestrator`, `prajwalnutant/ncc-api-server`, and `prajwalnutant/ncc-ui-server`, tagged with the version (for example `:2.2.1`).
+
+### Build from source
+
+Requires **Go 1.27.3+** (the `go` directive in [`go.mod`](go.mod)) and **Node.js 26.12.1+** (the first 26.x with the CVE-2026-111497 fix).
 
 ```bash
-(cd frontend && npm ci && npm run build)
+git clone https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator.git
+cd Nutanix-ncc-orchestrator
+
+go build -o ncc-orchestrator .
+go build -o ncc-api-server  ./cmd/ncc-api-server
+go build -o ncc-ui-server   ./cmd/ncc-ui-server
+go build -o ncc-mcp-server  ./cmd/ncc-mcp-server     # optional
+
+(cd frontend && npm ci && npm run build)              # dashboard → frontend/dist
+
+./ncc-orchestrator v2-start --config-path example_config.yaml --api-listen 127.0.0.1:8081 --ui-listen :8080
 ```
 
-**3. (Optional) verify your tree** before running:
-
-```bash
-go vet ./...
-go test ./...        # add -race for the concurrency-sensitive auth/run suites
-```
-
-**4a. Run a one-shot scan** (CLI only, no UI):
-
-```bash
-export NCC_PASSWORD='your-prism-password'
-./ncc-orchestrator validate-config --config example_config.yaml   # lint config before running
-./ncc-orchestrator --config example_config.yaml run
-```
-
-**4b. Or launch the full web stack** (API + UI + first-run admin bootstrap;
-serves **HTTPS by default** with an auto-generated self-signed cert):
-
-```bash
-./ncc-orchestrator v2-start --config-path example_config.yaml \
-  --api-listen :8081 --ui-listen :8080
-# Open https://localhost:8080 — grab the first-run admin password from the API
-# server log (search for "FIRST-RUN ADMIN") and change it on first login.
-# Add --ui-insecure-http to serve plain HTTP for a trusted loopback instead.
-```
-
-Reproducible release build for Linux, macOS, and Windows (from a Linux or Windows host): [`binaryGO.txt`](binaryGO.txt) (`bash binaryGO.txt` or `binaryGO.cmd` on Windows). Optional image packaging is `--docker` or `--images-only` (tags are `name:VERSION`, not `name:VERSION-arch`). The engine is `docker`, or `podman` when Docker is not installed; `--engine` selects one. See also [`docs/BUILD_FROM_SCRATCH.md`](docs/BUILD_FROM_SCRATCH.md).
-
----
-
-## Run on macOS / Windows / Linux (trust & verification)
-
-The release binaries are not (yet) signed with an Apple Developer ID or
-Authenticode certificate, so on first launch your OS may flag them as
-"untrusted". This is a one-time speed-bump per file — you do **not** need
-to disable Gatekeeper / SmartScreen / AV system-wide.
-
-### Step 1 — verify the SHA-256 first
-
-Every release publishes `checksums.txt` (and `release-attestation.json`,
-which contains the same hashes plus full provenance metadata). **Always
-verify before running an unsigned binary.**
-
-```bash
-# macOS / Linux
-shasum -a 256 -c <(grep ncc-orchestrator-darwin-arm64 checksums.txt)
-# OK
-```
-
-```powershell
-# Windows
-Get-FileHash .\ncc-orchestrator-windows-amd64.exe -Algorithm SHA256
-# Compare against checksums.txt
-```
-
-If hashes do not match, **stop**. Re-download or report the discrepancy.
-
-### Step 2 — clear the OS warning
-
-| OS      | What you'll see | One-time fix |
-| ------- | --------------- | ------------ |
-| **macOS** | "cannot be opened because the developer cannot be verified" | `chmod +x ncc-orchestrator-darwin-arm64 && xattr -d com.apple.quarantine ncc-orchestrator-darwin-arm64` (or right-click in Finder → Open → Open) |
-| **Windows** | "Windows protected your PC" SmartScreen dialog | Right-click the `.exe` → Properties → tick **Unblock** → Apply. Or: `Unblock-File .\ncc-orchestrator-windows-amd64.exe` in PowerShell. Or click **More info → Run anyway** in the SmartScreen dialog. |
-| **Linux** | `Permission denied` | `chmod +x ncc-orchestrator-linux-amd64` |
-
-For an extracted full stack, recurse over the `bin/` directory:
-
-```bash
-# macOS
-xattr -dr com.apple.quarantine ncc-v2-stack-darwin-arm64/
-
-# Windows
-Get-ChildItem -Recurse .\ncc-v2-stack-windows-amd64 | Unblock-File
-
-# Linux
-chmod +x ncc-v2-stack-linux-amd64/bin/*
-```
-
-### Step 3 — confirm provenance with `verify`
-
-`ncc-orchestrator verify` prints the embedded build metadata plus the
-SHA-256 of the running executable. Cross-check against `checksums.txt`
-(and the matching tag URL printed at the bottom of the output):
-
-```text
-$ ncc-orchestrator verify
-version:           2.2.1
-git_revision:      914c71d27fb1...
-executable_sha256: 23ee3cad876c...
-license:           MIT
-project_url:       https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator
-affiliation:       independent open-source project; not affiliated with or endorsed by Nutanix, Inc.
-verify:            compare executable_sha256 against checksums.txt at
-                   https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.2.1
-```
-
-On Windows, the file Properties dialog also displays the project name
-("NCC Orchestrator"), the open-source maintainer copyright, and the
-embedded version — written into every `.exe` via VERSIONINFO at build
-time so administrators can identify the binary's origin (this project,
-MIT licensed) even before any code-signing certificate is involved. The
-embedded `LegalTrademarks` field explicitly states the project is not
-affiliated with or endorsed by Nutanix, Inc.
-
-For the full deep-dive (notarization caveats, EV vs OV signing, GPG
-detached signatures, troubleshooting AV quarantines), see
-[`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md).
+`go build ./...` only compile-checks; use `-o` as above to get the binaries. Release builds for every platform come from [`binaryGO.txt`](binaryGO.txt) (`bash binaryGO.txt`, or `binaryGO.cmd` on Windows); see [`docs/BUILD_FROM_SCRATCH.md`](docs/BUILD_FROM_SCRATCH.md).
 
 ---
 
 ## Configuration
 
-**[`example_config.yaml`](example_config.yaml)** is the canonical, validator-clean template. Every release archive bundles a copy. Configuration precedence is:
+[`example_config.yaml`](example_config.yaml) is the reference template; every option has a comment naming its CLI flag and `NCC_` environment variable. Settings are applied in this order (later wins):
 
 1. Built-in defaults
-2. Canonical YAML (nested schema version 1; legacy flat keys remain supported)
-3. Environment variables with the **`NCC_`** prefix
+2. YAML config (nested schema v1; legacy flat keys still work)
+3. `NCC_*` environment variables
 4. Platform/deployment overlay
-5. Explicit CLI flags
+5. CLI flags
 
-[`example_config.yaml`](example_config.yaml) comments name the flag and `NCC_` variable for every runner option. The cluster list is the placeholder `REPLACE_WITH_CLUSTER_IP`. Running that file stops with a short explanation and does not contact a cluster. `ncc-orchestrator env-info` prints the runner variables (secrets masked) and whether API/UI variables are set.
+`ncc-orchestrator env-info` lists the supported variables (secrets masked); `ncc-orchestrator config-schema` prints the JSON schema. Every key, variable, and flag is documented in [`docs/FEATURES_AND_CONFIG_FLAGS.md`](docs/FEATURES_AND_CONFIG_FLAGS.md).
 
-### Secret handling
+### Secrets
 
-Plaintext credentials in config files are explicitly rejected by `validate-secrets`. Use one of:
+Plaintext credentials in config files are rejected by `validate-secrets`. Reference secrets instead:
 
 ```yaml
-# Option A — env-backed (recommended for CLI/CI)
 secrets:
-  provider: env
-runner:
-  credentials:
-    password: "secret://NCC_PASSWORD" # then: export NCC_PASSWORD=...
-
-# Option B — file-backed (recommended for hardened deployments)
-secrets:
-  provider: file
-  file: /run/secrets/ncc.yaml
+  provider: env            # or: file, with  file: /run/secrets/ncc.yaml
 runner:
   credentials:
     password: "secret://NCC_PASSWORD"
 ```
 
-Validate before you run:
-
-```bash
-./ncc-orchestrator validate-config  --config example_config.yaml
-./ncc-orchestrator validate-secrets --config example_config.yaml
-```
-
-**Full key-by-key reference (every config option, every env var, every CLI flag) is in [`docs/FEATURES_AND_CONFIG_FLAGS.md`](docs/FEATURES_AND_CONFIG_FLAGS.md).**
-
 ### Policy gates
 
-Turn run metrics into pass/fail rules for CI/CD:
+Fail a run (non-zero exit) when results cross a threshold — useful in CI/CD:
 
 ```yaml
 policy-gates: "new-fails>0,fail-rate>2,min-health-score<90,flaky-checks>5"
 ```
 
-Supported metrics: `new-fails`, `resolved-fails`, `fail-rate`, `clusters-failed`, `regressions`, `flaky-checks`, `min-health-score`, `avg-health-score`. Operators: `>`, `>=`, `<`, `<=`, `==`, `!=`. Violations are written to `outputfiles/policy-gates.txt` and the run exits non-zero.
+Metrics: `new-fails`, `resolved-fails`, `fail-rate`, `clusters-failed`, `regressions`, `flaky-checks`, `min-health-score`, `avg-health-score`. Operators: `>`, `>=`, `<`, `<=`, `==`, `!=`. Violations are written to `outputfiles/policy-gates.txt`.
 
 ---
 
-## The web UI
+## Web dashboard
 
-After `v2-start`, the dashboard at <https://localhost:8080> gives you:
+- **Dashboard** — latest run at a glance, an alerts table for **NCC** findings or **PC · Beta** (live Prism Central alerts), filters kept in the URL (**Copy link** shares the exact view). Clicking an NCC alert opens a panel to acknowledge, resolve, or reopen it, with its **Lifecycle**: how long it has been open, when a run last reported it, how many times it came back after being resolved (and who resolved it last), and severity changes.
+- **Runs** — start a run, follow its output, cancel a stuck run, and browse past runs with status, duration, and cluster counts.
+- **Insights** — trends, regressions, flaky checks, run-to-run diffs, the NCC triage queue, and **Alert aging and recurrence**: open alerts by age per cluster, median time to acknowledge and resolve, findings that keep coming back, and open alerts that runs no longer report (resolvable in place).
+- **Settings** — config (form or YAML editor), schedule, notifications, users and access (local, LDAP/AD, SAML), HTTPS certificate, software updates, backups, audit log, feature switches, and system health. Operators see only Connection, Schedule, Runs, Logs, and Audit. **Ctrl+K / ⌘K** jumps to any setting.
 
-- **Dashboard** — last-run summary, FAIL/WARN/ERR/INFO counts, and an Alerts table that grows with leftover viewport height. Toggle **NCC** vs **PC** (Prism Central). Filter state lives in the URL (`q`, `sev`, `clusters`, `mode`, `source`, `resolved`); **Copy link** restores the same view. Pagination sits under the table and changes which rows are shown. Expanding a PC alert opens a structured inspector (status, entity, timeline, root cause, KB, identifiers).
-- **Runs** — trigger a new run, follow live output, cancel a stuck run (`DELETE /api/v1/runs/active`), browse archived runs with type/status/duration/clusters/issues columns.
-- **Insights** — trends, regressions, flaky checks, drill-down diffs, and the NCC handling queue (Needs attention, Acknowledged, Resolved, Returned).
-- **Settings** — config (Form + Monaco YAML editor), schedule, secrets, notifications, Features (admin), audit log, Advanced (API, saved reports, run files), Access (users, LDAP/SSO, HTTPS/TLS, software updates), System Health. Operators see Connection, Schedule, Runs, Logs, and Audit only. **⌘K / Ctrl+K** jumps to a Settings card (`/settings?tab=&focus=`). Empty first-run dashboards link here to Config.
+Light, Dark, IT Professional, or follow the system theme; keyboard friendly; strict Content Security Policy (`script-src 'self'`). Optional views (Insights, Prism Central alerts, run comparison, flaky checks, SLO, NCC log index) can be turned off by an admin in **Settings → Features**.
 
-Theme-aware (light/dark/IT-Pro), keyboard-friendly, accessible form fields (every input has `id`/`name`/`htmlFor`/`aria-label`), CSP-locked (`script-src 'self'`).
+---
 
-Login is HTTPS by default. On non-localhost HTTP the login page warns that Secure cookies will not stick, links to the HTTPS URL, and offers the self-signed certificate fingerprint plus PEM download (`GET /api/v1/tls/public`). If `/auth/me` hangs after a cert change, the splash times out with Retry / Sign in. Header health is the API reached through this UI and is clickable to retry.
+## Alerts and integrations
+
+**NCC alert lifecycle.** Each NCC finding becomes an alert instance with a server-generated UUIDv4. Acknowledge, resolve, and reopen actions, plus run-driven events (detected, no longer reported, severity changed, came back), are kept in an append-only history. If a resolved finding is detected again, the old instance is closed and a new one opens, linked to it. The store is `.ncc-api-alert-lifecycle.json` in the install folder — outside `outputfiles/`, so report retention never deletes it — and is included in `v2-backup`. `outputfiles/ncc-alert-dispositions.json` is kept only as a mirror for rolling back to v2.2.0.
+
+**Prism Central alerts.** Configure `pcs` or `prism-central-url` and pick **PC · Beta** on the dashboard. Alerts are fetched on demand, cached briefly (`pc-alerts-cache-ttl`, default `5m`), and keep their own status in Prism Central.
+
+**Third-party tools.** ServiceNow, SIEMs, and scripts can poll `GET /api/v1/alerts/ncc` and the incremental `GET /api/v1/alerts/ncc/events` feed with a viewer [personal access token](#http-api), and write back with `POST /api/v1/alerts/ncc/{id}/resolve`. The OpenAPI spec includes typed schemas for these endpoints. Step-by-step guide, field mappings, and examples: [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/third-party-alert-integrations.md). Prometheus setup: [`Prometheus.md`](Prometheus.md).
 
 ---
 
 ## HTTP API
 
-The v2.2.0 dashboard can combine persisted NCC findings with live Prism
-Central serviceability alerts. Configure `pcs` or `prism-central-url` in the
-existing config, then use the dashboard's **NCC** and **PC · Beta** source
-selector. PC alerts are fetched on demand and cached briefly by the API.
-Unresolved alerts load first; the complete alert history is fetched in the
-background for the resolved/all-status views. An administrator can turn
-Prism Central alerts off in Settings → Features (`PUT /api/v1/features`)
-without changing `config.yaml`.
+The full route list is at `GET /api/v1/meta/routes`, the OpenAPI 3 spec at `GET /api/v1/openapi.json`, and an interactive explorer at `/docs/ui` on the API server.
 
-`GET /api/v1/alerts` returns normalized PC alert rows with `source: "PC"`,
-severity, cluster, status, timestamps, detail, and KB metadata. It is
-viewer-readable and respects cluster-group restrictions. The `resolved`
-parameter accepts `No`, `Yes`, or `all` and defaults to `No`; the API translates
-this into the Prism Central `isResolved` filter before pagination. Set
-`pc-alerts-cache-ttl` to control caching (default `5m`; `0` disables it).
-PC alerts that only include a cluster UUID are resolved through Prism Central
-discovery (`ext_id`, name, IP); `GET /api/v1/alerts` also returns `cluster_map`.
-Cluster-group filters match name, UUID, or IP. Links still target the mapped
-cluster IP on port `9440`. The dashboard NCC / PC · Beta toggle selects the
-table; the redundant Source column is omitted.
+| Path | Methods | Purpose |
+| --- | --- | --- |
+| `/api/v1/health` | GET | Liveness; admins see paths and detail, anonymous callers only status |
+| `/api/v1/runs/trigger` | POST | Start a run (one at a time; `409` if one is running) |
+| `/api/v1/runs`, `/runs/{id}`, `/runs/summary` | GET | Run history, one run with artifacts, latest summary |
+| `/api/v1/runs/active` | GET, DELETE | Current run; `DELETE` cancels it |
+| `/api/v1/runs/preflight` | POST | Preflight check with machine-readable remediation codes |
+| `/api/v1/report/data`, `/report/trends` | GET | Report data (paged with `limit`/`offset`) and trends |
+| `/api/v1/alerts/ncc` | GET | NCC alert instances; filter by `state`, `detection`, `cluster`, `check`, `updated_since`; cursor paging |
+| `/api/v1/alerts/ncc/events` | GET | Append-only lifecycle events; pass `next_cursor` back to get only new ones |
+| `/api/v1/alerts/ncc/{id}` | GET | One alert with its full history and related instances |
+| `/api/v1/alerts/ncc/{id}/{action}` | POST | `acknowledge`, `resolve`, or `reopen` (operator+) |
+| `/api/v1/alerts/ncc-dispositions` | GET, POST | v2.2.0-compatible view of NCC marks (used by the dashboard) |
+| `/api/v1/alerts` | GET | Prism Central alerts (`resolved=No\|Yes\|all`) |
+| `/api/v1/schedule`, `/schedule/health` | GET, PUT | Run schedule and its last result |
+| `/api/v1/artifacts`, `/artifacts/{name}` | GET | Generated report files |
+| `/api/v1/audit` | GET | Audit log |
+| `/api/v1/features` | GET, PUT | Optional views (PUT is admin-only) |
+| `/api/v1/auth/login`, `/logout`, `/me` | POST, GET | Sessions and current identity |
+| `/api/v1/users/me/pats` | GET, POST | Personal access tokens |
+| `/api/v1/settings/*` | various | Configuration, users, TLS, backups, notifications (admin) |
+| `/metrics` | GET | Prometheus metrics |
 
-NCC findings can be acknowledged, resolved, or reopened from the alert
-details panel. Marks are stored in `outputfiles/ncc-alert-dispositions.json`
-and read or written through `GET` / `POST /api/v1/alerts/ncc-dispositions`.
-A later run that still reports a resolved check clears that mark and moves
-the row to **Returned**. Prism Central alerts keep their own Prism status.
+**Authentication.** Send `X-API-Token: <token>` or `Authorization: Bearer <token>`. Tokens can be the static admin/viewer tokens (`NCC_API_TOKEN`, `NCC_API_VIEWER_TOKEN`), a browser session, or a **personal access token** (`ncc_pat_…`, created from the user menu; inherits the owner's role, optionally expiring, revocable). Errors use one envelope: `{"success": false, "error": "…", "error_code": "NCC_API_…"}`.
 
-Optional views (Insights, Prism Central alerts, Prism Central discovery,
-run comparison, flaky checks, SLO, NCC log index) are listed by
-`GET /api/v1/features`. A missing `outputfiles/feature-flags.json` leaves
-every view on.
-
-Major endpoints (full surface at `GET /api/v1/meta/routes`, OpenAPI at `GET /api/v1/openapi.json`):
-
-| Path                                | Methods    | Notes                                                              |
-| ----------------------------------- | ---------- | ------------------------------------------------------------------ |
-| `/api/v1/tls/public`                | GET        | Public UI cert fingerprint + PEM (no private key) for login-page trust |
-| `/api/v1/alerts`                    | GET        | PC alerts; `resolved=No`, `resolved=Yes`, or `resolved=all`; optional `refresh=1` |
-| `/api/v1/alerts/ncc-dispositions`   | GET, POST  | NCC acknowledge / resolve / reopen; GET viewer+, POST operator+ |
-| `/api/v1/features`                  | GET, PUT   | Optional views; GET viewer+, PUT admin-only |
-| `/api/v1/runs`                      | GET        | List runs (`?source=history\|summary\|trigger`, `?since=RFC3339`) |
-| `/api/v1/runs/{id}`                 | GET        | Single archived run + embedded artifacts                          |
-| `/api/v1/runs/active`               | GET, DELETE| Active run snapshot; DELETE cancels a stuck run                   |
-| `/api/v1/runs/trigger`              | POST       | Start a run (single-flight: 409 on second concurrent trigger)     |
-| `/api/v1/runs/preflight`            | POST       | Machine-readable preflight with `remediation_code`                |
-| `/api/v1/runs/configs`              | GET        | Config file list for scheduled/manual runs (operator+); `/api/v1/settings/configs` stays admin |
-| `/api/v1/runs/summary`              | GET        | Latest run summary                                                |
-| `/api/v1/settings/config`           | GET, PUT   | Read/write runtime config (redacted on read)                      |
-| `/api/v1/settings/notifications`    | GET, PUT   | Notifications state                                               |
-| `/api/v1/schedule`                  | GET, PUT   | Cron/every schedule; PUT requires `cron` or `every`               |
-| `/api/v1/schedule/health`           | GET        | `last_run`, `last_success`, `last_error`, lock/log paths          |
-| `/api/v1/audit`                     | GET        | Audit log (`?limit=N`, `?action=…`, `?failures=true`)             |
-| `/api/v1/artifacts`, `/{name}`      | GET        | List/read generated artifacts (size-capped inline, `?download=1`) |
-| `/api/v1/report/data`, `/trends`    | GET        | Aggregated report data and trend points                           |
-| `/api/v1/logs/runner`               | GET        | Tail of `ncc-runner.log`                                          |
-| `/api/v1/metrics/rate-limit`        | GET        | Per-route rate-limiter counters                                   |
-| `/api/v1/auth/session`, `/rotate`   | POST       | Issue session token / rotate the API token                        |
-| `/api/v1/auth/login`, `/logout`     | POST       | Username/password login (local or LDAP/AD) / clear session        |
-| `/api/v1/auth/me`                   | GET        | Current caller identity, role, and available login methods        |
-| `/api/v1/auth/forgot-password`      | POST       | Self-service password-reset request (queued for an admin)         |
-| `/saml/metadata`, `/login`, `/acs`  | GET/POST   | SAML SP endpoints (when SAML is configured)                       |
-
-All write/mutate routes require `X-API-Token: <token>` (or `Authorization: Bearer …` session token). Errors return a structured envelope with `success: false`, `error`, and `error_code` (e.g. `NCC_API_UNAUTHORIZED`, `NCC_API_BAD_REQUEST`, `NCC_API_NOT_FOUND`, `NCC_API_CONFLICT`).
-
-**RBAC, login & SSO:** the server enforces three roles — `viewer` (read-only), `operator` (also trigger/cancel runs, apply the schedule, and list run configs via `/api/v1/runs/configs`), and `admin` (everything incl. `/api/v1/settings/*`). Operators see Settings → Connection, Schedule, Runs, Logs, and Audit; Config, Access, Notifications, Health, Features, Maintenance, and Advanced stay admin-only. A role can be a static token (`NCC_API_TOKEN` = admin, `NCC_API_VIEWER_TOKEN` = viewer), an interactive login, or a self-service **personal access token** (`ncc_pat_…` bearer, inherits the owner's role, expiring or **never**-expiring, revocable; user menu → *Personal access tokens*). Interactive login is on by default with a first-run **admin bootstrap** (random password + forced change); accounts live in a writable store (a `0600` file or a Kubernetes Secret). Login methods: local password accounts (managed in Settings → Access, bcrypt), **SAML SSO** (`--saml-*` or runtime), and **LDAP / Active Directory** (`--ldap-*` or runtime; local-first with AD fallback, AD group→role mapping) — all configurable together. Browser logins set an httpOnly `auth_token` JWT cookie (`SameSite=Lax`, `Secure` on HTTPS) plus a legacy HMAC `ncc_session` cookie (`SameSite=Strict`) with double-submit CSRF protection; the UI shows a login screen and hides admin-only/operator-only controls per role. Admins can segregate clusters into **cluster groups** for access control: groups are **opt-in isolation** — an ungrouped viewer/operator sees all clusters, while membership confines a caller to that group's clusters. Lost passwords are recoverable offline (`ncc-orchestrator v2-reset-password`) or via a self-service request queue, and all auth state can be captured with `v2-backup` / restored with `v2-restore`. See [docs/SECURITY_AND_TRUST.md](docs/SECURITY_AND_TRUST.md). With no login configured, the single-token behavior is unchanged.
-
-**HTTPS by default:** `ncc-ui-server` serves HTTPS out of the box — `v2-start` auto-generates a self-signed cert (under `<install-dir>/tls/`) and redirects plain HTTP to HTTPS on the same port. Kubernetes uses the same files on the shared PVC (`--auto-tls-dir /data/tls`). Manage the certificate from **Settings → Access → HTTPS / TLS**: generate/renew a self-signed cert, or install your own PEM cert + key. On Kubernetes, UI pods reload the new files without a stack restart. Opt out on a host/VM with `--ui-insecure-http`. Session cookies are `Secure` whenever HTTPS is on.
-
-Trigger a run from the API:
+**Roles.** `viewer` reads; `operator` also starts/cancels runs, manages the schedule, and handles alerts; `admin` can do everything, including `/api/v1/settings/*`. Admins can confine users to **cluster groups**; an ungrouped user sees all clusters.
 
 ```bash
 TOKEN=$(cat .ncc-api-token)
-curl -s -X POST http://localhost:8081/api/v1/runs/trigger \
-  -H "X-API-Token: $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"config":"example_config.yaml","extra_args":["--output-dir","outputfiles"]}'
+curl -s -X POST http://127.0.0.1:8081/api/v1/runs/trigger \
+  -H "X-API-Token: $TOKEN" -H "Content-Type: application/json" \
+  -d '{"config":"example_config.yaml"}'
 ```
 
-`extra_args` is allowlisted server-side; only safe flags pass through.
+Extra run arguments (`extra_args`) are checked against a server-side allow-list.
 
 ---
 
-## Operability: status, doctor, metrics, completions
+## Security
 
-v2.2.0 ships an opinionated set of operator-experience subcommands that
-remove the need for ad-hoc `ps | grep` / `lsof` / `curl` invocations
-when something looks wrong.
+| Area | Default behavior |
+| --- | --- |
+| Sign-in | Local accounts (bcrypt), LDAP / Active Directory, and SAML SSO; first-run admin with a forced password change; offline recovery with `v2-reset-password` |
+| Sessions | httpOnly session cookies, `Secure` when served over HTTPS, CSRF protection on changes; `NCC_JWT_SECRET` shares sessions across API replicas |
+| Login protection | Rate limits per account, per source, and per account+source; progressive lockout; `X-Forwarded-For` honored only from `--trusted-proxy-cidrs` |
+| Transport | UI is HTTPS by default (self-signed or your own certificate, managed in **Settings → Access → HTTPS / TLS**); optional API TLS and mTLS |
+| Prism TLS | Verified by default; trust an internal CA with `--ca-bundle` or pin with `--pin-sha256` instead of `--insecure-skip-verify` |
+| Backups | Encrypted (AES-256-GCM) by default; a backup key or passphrase is required unless `NCC_BACKUP_ENCRYPTION=optional` |
+| User store | Optional envelope encryption with a master key (`--require-encrypted-user-store` to enforce it) |
+| Hardening | Rate limiting on sensitive routes, request size and header limits, path confinement for file access, CORS allow-list (no wildcards), CSP, `X-Frame-Options: DENY`, HSTS on TLS |
+| Audit | Every change is audited; rotated logs are kept (`--audit-log-keep`, default 10) and can be forwarded |
+| Supply chain | `govulncheck`, `npm audit --omit=dev`, golangci-lint, CodeQL, and Trivy in CI; SHA-256 checksums, CycloneDX SBOMs, and SLSA provenance attestations for releases |
 
-### `ncc-orchestrator v2-status` — what's running, are they healthy
-
-```text
-$ ncc-orchestrator v2-status
-ncc-orchestrator v2 stack status
---------------------------------
-install-dir: /opt/ncc-v2
-
-SERVICE            PID     STATE           LISTEN                 HEALTH       LOG
-api-supervisor     1234    alive           -                      n/a          /opt/ncc-v2/logs/v2-api-supervisor.log
-ncc-api-server     1235    alive           127.0.0.1:8081         ok (1ms)     /opt/ncc-v2/logs/v2-api.log
-ui-supervisor      1236    alive           -                      n/a          /opt/ncc-v2/logs/v2-ui-supervisor.log
-ncc-ui-server      1237    alive           0.0.0.0:8080           ok (2ms)     /opt/ncc-v2/logs/v2-ui.log
-```
-
-`--json` switches to a JSON object suitable for `jq` and monitoring
-scripts. Tolerant of missing PID files (reports `missing-pid` rather
-than failing) so it works on any partial state.
-
-### `ncc-orchestrator doctor` — single-command "give me everything"
-
-When you need to file a support ticket, run this. It produces a full
-diagnostic report on stdout AND writes a redacted tarball:
-
-```text
-$ ncc-orchestrator doctor
-========================================
-ncc-orchestrator doctor
-========================================
-generated_at:  2026-05-29T16:30:59Z
-install_dir:   /opt/ncc-v2
-
--- 1. verify (build provenance) --
-  (full version + git revision + executable SHA-256)
--- 2. v2-check (install-dir layout) --
-  (config readable? binaries executable? ports bindable?)
--- 3. v2-status (running services) --
-  (the table above)
--- 4. environment summary --
-  go_version: go1.27.1
-  os/arch:    linux/amd64
-  NCC_* env var names: (values REDACTED for support-ticket safety)
--- 5. recent log tails (last 200 lines each) --
-  (v2-api.log, v2-ui.log, v2-*-supervisor.log)
-
-support bundle: ./ncc-support-20260529T163059Z.tar.gz
-  attach this file to your support ticket; secrets and tokens have been redacted.
-```
-
-The bundle contains `report.txt`, `logs/v2-*.log` (last 1000 lines
-each), and `config.redacted.yaml` (all values for keys matching
-`password / secret / token / credential / api-key / client-id` are
-replaced with `***REDACTED***`).
-
-Pass `--no-bundle` to skip the tarball when you just want the report
-on stdout.
-
-### `/metrics` — Prometheus exposition
-
-The api-server now exposes a Prometheus-compatible `/metrics` endpoint:
-
-```text
-ncc_build_info{version="2.2.1",stream="Release",go_version="go1.27.1",os="linux",arch="amd64"} 1
-ncc_process_uptime_seconds 3601.42
-ncc_run_active 0
-ncc_runs_triggered_total 42
-ncc_runs_completed_total 41
-ncc_runs_failed_total 3
-ncc_go_goroutines 18
-ncc_go_memstats_alloc_bytes 6291456
-ncc_ratelimit_allowed_total 1842
-ncc_ratelimit_blocked_total 0
-# NCC run metrics (v2.1.0) — read from the latest run-summary.json:
-ncc_cluster_up{cluster="10.0.0.1"} 1
-ncc_cluster_checks_total{cluster="10.0.0.1",severity="FAIL"} 0
-ncc_cluster_health_score{cluster="10.0.0.1"} 95
-ncc_last_run_clusters_failed 1
-ncc_last_run_exit_code 2
-```
-
-**New in v2.1.0:** `/metrics` now also serves the last run's per-cluster
-severity/health and run-level gauges, so Prometheus can scrape the api-server
-directly instead of running a node_exporter textfile collector over the
-`<cluster>.prom` files (those still work for CLI-only hosts). See
-[`Prometheus.md`](Prometheus.md).
-
-Auth-gated by default (same `X-API-Token` as the rest of the API).
-Pass `--metrics-public` on the api-server to allow unauthenticated
-scraping — useful on private networks behind a service mesh, where
-vanilla Prometheus scrapers can't easily set custom headers.
-
-### `ncc-api-server --health-check` — Docker / K8s probe mode
-
-```bash
-ncc-api-server --health-check --listen 127.0.0.1:8081
-# exits 0 when /api/v1/health returns ok, 1 otherwise
-```
-
-Designed for `HEALTHCHECK` in Dockerfiles and `livenessProbe.exec.command`
-in Kubernetes manifests — no need to ship `curl` or `wget` in your
-runtime image. Reads the on-disk token automatically; works with
-stack-aware default resolution if invoked from `<stack>/bin/`.
-
-### Shell completions
-
-```bash
-# Bash (Linux)
-ncc-orchestrator completion bash | sudo tee /etc/bash_completion.d/ncc-orchestrator
-
-# Zsh (with compinit)
-ncc-orchestrator completion zsh > "${fpath[1]}/_ncc-orchestrator"
-
-# Fish
-ncc-orchestrator completion fish > ~/.config/fish/completions/ncc-orchestrator.fish
-
-# PowerShell
-ncc-orchestrator completion powershell > $PROFILE.ncc-orchestrator.ps1
-```
-
-Generated on demand from cobra's command tree, so they stay in lockstep
-with the actual subcommand / flag set automatically.
+Details: [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md) and the [October 2026 security assessment](docs/security/security-assessment-2026-10.md).
 
 ---
 
-## Running individual components (API only / UI only)
+## Operating the stack
 
-The orchestrator (`ncc-orchestrator v2-start`) is the recommended
-launcher because it manages both servers' lifecycles together. But each
-binary in the stack is independently runnable for advanced scenarios —
-running the API headless behind your own reverse proxy, hosting the SPA
-on a CDN, embedding only the API into Kubernetes, etc.
+| Task | Command |
+| --- | --- |
+| Status of every process (PID, listen address, health, log) | `ncc-orchestrator v2-status` (`--json` for scripts) |
+| Collect diagnostics into a redacted support bundle | `ncc-orchestrator doctor` |
+| Restart the stack | `ncc-orchestrator v2-restart` |
+| Start at boot (systemd, Windows Task Scheduler, or launchd) | `ncc-orchestrator v2-install-service` (`--print-only` to preview) |
+| Back up / restore config, users, tokens, and state | `ncc-orchestrator v2-backup` / `v2-restore` |
+| Update to the latest release | `ncc-orchestrator update --check`, then `update` (or **Settings → Access → Updates**) |
+| Recover a lost password | `ncc-orchestrator v2-reset-password --user admin` |
+| Shell completion | `ncc-orchestrator completion bash\|zsh\|fish\|powershell` |
 
-Starting in v2.0.2, both `ncc-api-server` and `ncc-ui-server` detect
-when they're running from `<stack-root>/bin/<self>` and auto-resolve
-their path flags to the same install-dir the orchestrator would have
-picked. So the **simplest possible standalone launch** from inside an
-extracted stack is just:
+**Self-healing.** `v2-start --detach --self-heal` (or the boot-time service) restarts a crashed or hung API/UI process using each server's built-in `--health-check` probe, with exponential back-off and a restart budget per window (`--self-heal-max-restarts`, `--self-heal-window`, `--self-heal-probe-interval`, `--self-heal-unhealthy-threshold`).
 
-```bash
-cd ncc-v2-stack-linux-amd64/bin
+**Metrics.** The API server exposes Prometheus metrics at `/metrics` (build info, run counters, per-cluster health and severity counts from the latest run, rate-limit and alert-store gauges). It needs the API token unless you start the API with `--metrics-public`. See [`Prometheus.md`](Prometheus.md) and the Grafana dashboard in [`deploy/grafana/`](deploy/grafana/).
 
-# API only
-./ncc-api-server --listen 127.0.0.1:8081 &
-# [stack-aware] detected v2 stack at <root>; auto-resolved
-#   repo-root, config-path, output-dir, log-dir, token-file-path,
-#   orchestrator-bin
-
-# UI only (point at the API you started above)
-./ncc-ui-server --listen 0.0.0.0:8080 --backend-url http://127.0.0.1:8081
-# [stack-aware] detected v2 stack at <root>; auto-resolved dir, api-token-file
-```
-
-Each server prints a `[stack-aware]` banner listing exactly which
-flags were auto-resolved, so you can override any of them explicitly
-without surprise (`--config-path /etc/ncc/config.yaml`, for example,
-keeps your override and still auto-resolves the rest).
-
-Outside a stack layout (Docker images that just `COPY` the binary
-into `/usr/local/bin/`, dev checkouts, manual installs not under a
-`bin/` directory), neither server activates stack-aware mode and the
-original CWD-relative defaults stand — so existing deployments that
-already pass explicit flags are unaffected.
-
-**Subcommand mistakes are caught early.** Because users sometimes
-confuse the binaries (e.g. `./ncc-api-server update --check`
-expecting an updater), each sub-binary now refuses unknown
-positional args with a clear redirect to the orchestrator:
-
-```text
-$ ./ncc-api-server update --check
-ncc-api-server: unrecognized subcommand "update".
-This binary is a sub-component of the Nutanix NCC Orchestrator stack and only accepts --flags.
-For lifecycle commands like "update", run the orchestrator instead:
-  /opt/ncc-v2-stack/bin/ncc-orchestrator update --check
-```
-
-Both sub-binaries accept `version` (prints buildinfo and exits 0) and
-`--help` for ergonomics. Everything else exits 2 with the redirect.
-
-### Use cases
-
-| Scenario | Command |
-| -------- | ------- |
-| API-only, headless behind your own ingress | `./ncc-api-server --listen :8081 --cors-origin https://your-ui.example.com` |
-| UI-only, pointing at a remote API | `./ncc-ui-server --listen :8080 --backend-url https://api.example.com --api-token-file /etc/ncc/token` |
-| Build your own SPA against the API | `./ncc-api-server --listen :8081 --cors-origin http://localhost:5173` (then run your dev server) |
-| Run only the orchestrator CLI for cron-driven runs | `ncc-orchestrator --config /etc/ncc/config.yaml run` |
-
-For the full flag reference, run any of the binaries with `-h`. For
-production deployment patterns (Kubernetes, behind an ingress, with
-mTLS), see [`docs/V2_BACKEND_FRONTEND_MVP.md`](docs/V2_BACKEND_FRONTEND_MVP.md).
+**Running one component.** `ncc-api-server` and `ncc-ui-server` also run on their own (for example the API behind your own ingress with `--cors-origin`, or the UI against a remote API with `--backend-url`). Started from a stack's `bin/` folder, they find the stack's paths automatically and print a `[stack-aware]` line listing what they resolved. Run any binary with `-h` for its flags.
 
 ---
 
-## Run with Docker Compose
+## Verifying release binaries
 
-The repo ships a `docker-compose.yml` that builds and runs the full v2
-stack on a private Docker bridge network. Lifecycle is managed by
-Compose's `service_healthy` gate, which uses the new
-`ncc-api-server --health-check` probe — so the UI starts only after
-the API has written its token file and is accepting requests.
+Release binaries are not yet code-signed, so macOS and Windows may warn on first launch.
 
-```bash
-git clone <this-repo>
-cd <this-repo>
+1. **Check the hash** against `checksums.txt` from the same release; stop if it does not match.
+   ```bash
+   sha256sum -c checksums.txt --ignore-missing          # Linux
+   shasum -a 256 -c checksums.txt --ignore-missing      # macOS
+   ```
+   ```powershell
+   Get-FileHash .\bin\ncc-orchestrator.exe -Algorithm SHA256   # Windows: compare with checksums.txt
+   ```
+2. **Clear the OS warning** for that file only:
+   macOS `xattr -dr com.apple.quarantine <folder>` · Windows `Get-ChildItem -Recurse <folder> | Unblock-File` · Linux `chmod +x bin/*`
+3. **Confirm provenance:** `ncc-orchestrator verify` prints the version, git revision, and the SHA-256 of the running executable. With the GitHub CLI, `gh attestation verify <file> --owner lTSPV75BRO` checks the SLSA build-provenance attestation.
 
-# 1. Provide a config (cluster credentials, secret references, etc.)
-mkdir -p config
-cp example_config.yaml config/config.yaml
-$EDITOR config/config.yaml
-
-# 2. (Optional) Set the password env var the API server forwards into runs:
-echo "NCC_PASSWORD=<your-prism-password>" > .env
-
-# 3. Build and start
-docker compose up -d
-# UI on https://localhost:8080 (proxies to ncc-api-server:8081)
-# API on 127.0.0.1:8081  (loopback-only by default)
-
-# 4. Verify
-docker compose ps
-docker compose logs -f ncc-api-server
-docker compose exec ncc-api-server ncc-api-server --health-check --listen 127.0.0.1:8081
-
-# 5. Tear down
-docker compose down            # keeps volumes (history, token)
-docker compose down -v         # nukes everything
-```
-
-Persistent state (output reports, runner logs, audit logs, schedule
-state) lives in named volumes so a `docker compose down` won't wipe
-history. The token file is shared between containers via a named
-volume — never via env vars.
-
-For Kubernetes deployment, see the [`Kubernetes`](#kubernetes) section
-below and the [`helm/`](helm/) chart.
+More (GPG, Windows file properties, antivirus quarantine): [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md).
 
 ---
 
-## Security posture
+## Exit codes and output files
 
-| Area                  | Default                                                                                                                |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Authentication        | Token-based (`X-API-Token`) constant-time compare (`crypto/subtle`); HMAC-signed sessions; optional local password accounts (bcrypt), SAML SSO, and LDAP / Active Directory |
-| Authorization (RBAC)  | Three roles `viewer < operator < admin`: viewers read non-settings `GET`s; operators also trigger/cancel runs, apply the schedule, and list run configs; secret-bearing `/settings/*` and rotation stay admin-only |
-| Browser sessions      | Role-bearing httpOnly `auth_token` JWT (`SameSite=Lax`) signed with shared `NCC_JWT_SECRET`, plus legacy HMAC `ncc_session`; auto-`Secure` on HTTPS / Kubernetes Ingress; double-submit CSRF on mutations; ui-server forwards user sessions (`--login-mode on` in k8s) |
-| Personal access tokens| Self-service `ncc_pat_…` bearer tokens; SHA-256-hashed at rest, inherit owner's role (live re-resolve for local accounts), bounded or never-expiring, revocable, 25/user cap |
-| CORS                  | Strict allowlist (default `http://localhost:8080`); wildcard origins rejected at startup; `/saml/*` exempt (signed assertion + relay-state cookie) |
-| CSP                   | UI: `script-src 'self'`, no `unsafe-eval`; API: `default-src 'none'`                                                   |
-| Prism TLS             | Verified by default; `--ca-bundle` (trust internal CA) or `--pin-sha256` (cert pinning) preferred over `--insecure-skip-verify` |
-| UI transport          | **HTTPS by default** — self-signed cert auto-generated by `v2-start` or by UI pods (`--auto-tls-dir /data/tls`); HTTP→HTTPS redirect on the same port; generate/renew or install your own cert in Settings → Access → HTTPS / TLS; `--ui-insecure-http` to opt out on host/VM. Direct API HTTPS via `--tls-cert-file`/`--tls-key-file`; optional mTLS (`--tls-client-ca-file`) |
-| Outbound notifications| Optional webhook HMAC signing (`webhook-secret` → `X-NCC-Signature`); SMTP TLS verify via `smtp-insecure-skip-verify`; dead-letter dir for failed deliveries |
-| Security headers      | `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Permissions-Policy`, HSTS on TLS   |
-| Rate limiting         | Per-client token bucket on sensitive auth/mutation routes (`--rate-limit-per-minute`, default 60)                      |
-| Path confinement      | All file I/O canonicalized under `--repo-root`; `..` and embedded `/` rejected on `/artifacts/{name}` and `/runs/{id}` |
-| Secrets               | `secret://NAME` refs with `env` or `file` provider; plaintext-in-config triggers a startup warning                     |
-| Vulnerability scans   | `govulncheck ./...` and `npm audit --omit=dev` clean (Go 1.27.1, DOMPurify ≥ 3.4.12 enforced); enforced in CI (`.github/workflows/ci.yml`) |
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Every cluster completed |
+| `1` | Fatal error |
+| `2` | Invalid configuration (same as a `validate-config` failure) |
+| `3` | Partial success — some clusters succeeded, some failed |
 
-Release details and validation evidence: [`RELEASE_NOTES_v2.2.1.md`](RELEASE_NOTES_v2.2.1.md) (previous: [`RELEASE_NOTES_v2.2.0.md`](RELEASE_NOTES_v2.2.0.md)).
+A violated policy gate also makes the run exit non-zero.
 
----
+Written to `outputfiles/`:
 
-## Kubernetes
+- `index.html` — combined report
+- `run-summary.json`, `ncc-run-record.json` — machine-readable results (`status`, `exit_code`, per-cluster outcome)
+- `checks-snapshot.json`, `drilldown-diff.json`, `regression-summary.json`, `flaky-checks.json`, `slo-dashboard.json`
+- `policy-gates.txt` — only when a gate is violated
+- `<cluster>.html` / `.csv` / `.json` / `.md` / `.sarif` — per-cluster reports
+- `feature-flags.json` — views an admin turned off
 
-```bash
-# Full stack (CronJob runner + API + UI + NetworkPolicies)
-kubectl apply -k k8s/
-```
-
-Includes default-deny ingress and scoped allow policies for UI/API. API and UI
-default to **2 replicas**; provision `jwt-secret` on `ncc-v2-secrets` before
-apply. See **[`k8s/README.md`](k8s/README.md)** for architecture, TLS, backups,
-and rollback. Helm chart at [`helm/ncc-orchestrator`](helm/ncc-orchestrator/README.md).
-
-Uninstall:
-
-```bash
-./scripts/uninstall-v2-clean.sh --dry-run   # preview
-./scripts/uninstall-v2-clean.sh --force     # apply
-```
+Raw NCC output goes to `nccfiles/`, runner logs to `logs/ncc-runner.log`, and the NCC alert history to `.ncc-api-alert-lifecycle.json` in the install folder.
 
 ---
 
-## Exit codes and artifacts
+## Upgrading to v2.2.1
 
-The `ncc-orchestrator` CLI exits with:
-
-| Code | Meaning                                                                                  |
-| ---- | ---------------------------------------------------------------------------------------- |
-| `0`  | Success — every cluster completed                                                        |
-| `1`  | Fatal runner error                                                                       |
-| `2`  | Configuration invalid (same as `validate-config` failure)                                |
-| `3`  | Partial success — at least one cluster succeeded and at least one failed                |
-
-Artifacts emitted under `outputfiles/`:
-
-- `index.html` — aggregated dashboard report
-- `run-summary.json` / `ncc-run-record.json` — machine-readable run result + metadata
-- `checks-snapshot.json`, `drilldown-diff.json`, `flaky-checks.json`
-- `regression-summary.json`, `slo-dashboard.json`
-- `policy-gates.txt` — written only when one or more policy rules are violated
-- `ncc-alert-dispositions.json` — NCC acknowledge/resolve marks
-- `feature-flags.json` — optional views that an administrator turned off
-- `<cluster>.html` / `.csv` / `.json` / `.md` / `.sarif` — per-cluster outputs
-
-Raw NCC summaries land under `nccfiles/`. Runner JSON logs under `logs/ncc-runner.log` (rotated).
+Before upgrading, configure a backup key: backups are now **encrypted by default**, and the in-app updater refuses to run without a server-side key (it takes an encrypted backup first). Set `NCC_BACKUP_KEY_FILE` (recommended), `NCC_BACKUP_KEY`, or `NCC_BACKUP_PASSPHRASE` on the API server — in Kubernetes, add `backup-key` to `ncc-v2-secrets` — or set `NCC_BACKUP_ENCRYPTION=optional` to keep plaintext backups. Existing acknowledge/resolve marks are imported automatically. Other changes and rollback notes: [`RELEASE_NOTES_v2.2.1.md`](RELEASE_NOTES_v2.2.1.md).
 
 ---
 
-## Documentation map
+## Documentation
 
-| Doc                                                                                  | When to read it                                                       |
-| ------------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
-| **[`example_config.yaml`](example_config.yaml)**                                     | Copy → edit → run                                                     |
-| [`docs/FEATURES_AND_CONFIG_FLAGS.md`](docs/FEATURES_AND_CONFIG_FLAGS.md)              | Every config key, env var, and CLI flag with examples                 |
-| [`docs/BUILD_FROM_SCRATCH.md`](docs/BUILD_FROM_SCRATCH.md)                            | Build the whole stack on a clean machine                              |
-| [`docs/ARCHITECTURE_AND_HANDOVER.md`](docs/ARCHITECTURE_AND_HANDOVER.md)              | Engineering handover, component boundaries                            |
-| [`docs/MIGRATION_v1_TO_v2.md`](docs/MIGRATION_v1_TO_v2.md)                            | Moving from a v1 deployment                                           |
-| [`docs/MIGRATION_v2.0.2_TO_v2.1.0.md`](docs/MIGRATION_v2.0.2_TO_v2.1.0.md)            | Upgrading from v2.0.2 (pre-RBAC/pre-backup) to v2.1.0                 |
-| [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)                                  | TLS, Prism Central, API issues                                        |
-| [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md)                                            | Wire the orchestrator into AI tools via MCP                           |
-| [`RELEASE_NOTES_v2.2.1.md`](RELEASE_NOTES_v2.2.1.md)                                  | Current v2.2.1 details: alert history, Windows upgrade, run status, security hardening |
-| [`RELEASE_NOTES_v2.2.0.md`](RELEASE_NOTES_v2.2.0.md)                                  | v2.2.0 details: NCC handling, feature flags, PC · Beta, Node 26, Kubernetes |
-| [`docs/NIST_CSF_BASELINE.md`](docs/NIST_CSF_BASELINE.md)                                | NIST CSF 2.0 control baseline, evidence map, and gap plan             |
-| [`docs/NIST_CSF_EVIDENCE_MANIFEST.json`](docs/NIST_CSF_EVIDENCE_MANIFEST.json)          | Machine-readable control-to-evidence mapping for compliance bundles    |
-| [`docs/RELEASE_CHECKSUMS.md`](docs/RELEASE_CHECKSUMS.md)                              | How `--update` verifies downloads                                     |
-| [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md)                            | Verify SHA-256, run unsigned binaries on macOS/Windows/Linux, GPG     |
-| [`deploy/README.md`](deploy/README.md)                                                | Provision Linux and Windows VMs with cloud-init or Sysprep            |
-| [`k8s/README.md`](k8s/README.md)                                                     | Kubernetes deployment guide                                           |
-| [`Prometheus.md`](Prometheus.md)                                                     | Prometheus setup: `.prom` textfile collector + scraping run metrics from the api-server `/metrics` |
-| [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/third-party-alert-integrations.md) | ServiceNow, Prometheus, and other integrations: auth, PATs, alert lifecycle/history API, sync, errors |
-| [`docs/security/security-assessment-2026-10.md`](docs/security/security-assessment-2026-10.md) | October 2026 security assessment: findings, fixes, and the named incidents |
-| [`CHANGELOG.md`](CHANGELOG.md)                                                       | Full version history                                                  |
-| [`RELEASE_NOTES_v2.0.0.md`](RELEASE_NOTES_v2.0.0.md)                                  | What changed since v1.1.0                                             |
+| Topic | Document |
+| --- | --- |
+| Every config key, environment variable, and flag | [`docs/FEATURES_AND_CONFIG_FLAGS.md`](docs/FEATURES_AND_CONFIG_FLAGS.md) |
+| Build everything on a clean machine | [`docs/BUILD_FROM_SCRATCH.md`](docs/BUILD_FROM_SCRATCH.md) |
+| Architecture and engineering handover | [`docs/ARCHITECTURE_AND_HANDOVER.md`](docs/ARCHITECTURE_AND_HANDOVER.md) |
+| Troubleshooting (TLS, Prism Central, API) | [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) |
+| ServiceNow, Prometheus, and other integrations | [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/third-party-alert-integrations.md) |
+| Prometheus | [`Prometheus.md`](Prometheus.md) |
+| Security, trust, and binary verification | [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md), [`docs/RELEASE_CHECKSUMS.md`](docs/RELEASE_CHECKSUMS.md) |
+| Security assessment (October 2026) | [`docs/security/security-assessment-2026-10.md`](docs/security/security-assessment-2026-10.md) |
+| NIST CSF 2.0 baseline and evidence | [`docs/NIST_CSF_BASELINE.md`](docs/NIST_CSF_BASELINE.md), [`docs/NIST_CSF_EVIDENCE_MANIFEST.json`](docs/NIST_CSF_EVIDENCE_MANIFEST.json) |
+| Kubernetes and Helm | [`k8s/README.md`](k8s/README.md), [`helm/ncc-orchestrator/README.md`](helm/ncc-orchestrator/README.md) |
+| VM provisioning (cloud-init, Windows Sysprep) | [`deploy/README.md`](deploy/README.md) |
+| MCP server for AI assistants | [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md) |
+| Migrating from v1 / from v2.0.2 | [`docs/MIGRATION_v1_TO_v2.md`](docs/MIGRATION_v1_TO_v2.md), [`docs/MIGRATION_v2.0.2_TO_v2.1.0.md`](docs/MIGRATION_v2.0.2_TO_v2.1.0.md) |
+| Release notes and history | [`RELEASE_NOTES_v2.2.1.md`](RELEASE_NOTES_v2.2.1.md), [`CHANGELOG.md`](CHANGELOG.md) |
 
 ---
 
 ## Development
 
 ```bash
-git clone https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator.git
-cd Nutanix-ncc-orchestrator
-
-# Backend
-go build ./...
-go test  -count=1 -race -timeout=180s ./...
-go vet   ./...
-gofmt -l .
+# Go
+go vet ./...
+go test -race -count=1 ./...
+gofmt -l $(git ls-files '*.go')
 
 # Frontend
 cd frontend
 npm ci
-npm run build
-npx tsc --noEmit
+npm test            # Vitest
+npm run build       # type-check (tsc -b) + production build
 ```
 
-Contribution guidelines: [`CONTRIBUTING.md`](CONTRIBUTING.md).
-
-### MCP server (AI assistants)
-
-```bash
-go build -o ncc-mcp-server ./cmd/ncc-mcp-server
-```
-
-Add the resulting binary in your MCP client (Cursor, Claude Desktop, etc.) — see [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md).
-
----
-
-## Release status
-
-- **Current GA:** [`v2.2.1`](RELEASE_NOTES_v2.2.1.md). See [`RELEASE_NOTES_v2.0.0.md`](RELEASE_NOTES_v2.0.0.md), [`RELEASE_NOTES_v2.0.1.md`](RELEASE_NOTES_v2.0.1.md), [`RELEASE_NOTES_v2.0.2.md`](RELEASE_NOTES_v2.0.2.md), [`RELEASE_NOTES_v2.1.0.md`](RELEASE_NOTES_v2.1.0.md), [`RELEASE_NOTES_v2.1.1.md`](RELEASE_NOTES_v2.1.1.md), [`RELEASE_NOTES_v2.2.0.md`](RELEASE_NOTES_v2.2.0.md), [`RELEASE_NOTES_v2.2.1.md`](RELEASE_NOTES_v2.2.1.md) for the cumulative change log.
-- **Build provenance:** every binary embeds `Version`, `BuildDate`, `Stream`, `GoVersion`, and the git revision (via `-buildvcs=true`); inspect with `./ncc-orchestrator verify`. Releases additionally ship `release-attestation.json` (per-release manifest), CycloneDX SBOMs, and a SLSA build-provenance attestation produced by `.github/workflows/release.yml` (verify with `gh attestation verify`).
-- **Checksums:** `dist/checksums.txt` (or the `checksums.txt` attached to the GitHub release) — SHA-256, sorted, includes every binary, every stack archive, `example_config.yaml`, `release-attestation.json`, every `bom-*.cdx.json`, and the matching `RELEASE_NOTES_v*.md`.
-- **Docker:** `prajwalnutant/nutanix-ncc-orchestrator:2.2.1` (and `:latest`).
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the same checks plus golangci-lint, govulncheck, `npm audit --omit=dev`, and a Trivy scan. Contribution guidelines: [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ---
 
@@ -790,4 +416,4 @@ Prajwal Vernekar — [prajwal.vernekar@nutanix.com](mailto:prajwal.vernekar@nuta
 
 ## License
 
-[MIT](LICENSE). Use at your own risk; this tool interacts with Nutanix APIs — ensure you have proper permissions.
+[MIT](LICENSE). This tool calls Nutanix APIs; make sure you have permission to run NCC on the clusters you target.
