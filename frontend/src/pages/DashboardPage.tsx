@@ -41,6 +41,7 @@ import {
 } from "@ant-design/icons";
 import type { AlertSource, MeData } from "../api/types";
 import { api } from "../api/client";
+import { NCC_ALERTS_QUERY_KEY } from "../utils/alertLifecycle";
 import { notify, notifyError } from "../notify";
 import { FeatureDisabled } from "../features/features/FeatureDisabled";
 import { useFeatureFlags } from "../features/features/useFeatureFlags";
@@ -208,7 +209,10 @@ export function DashboardPage() {
   const setNCCDisposition = useMutation({
     mutationFn: api.setNCCDisposition,
     onSuccess: async (_data, variables) => {
-      await queryClient.invalidateQueries({ queryKey: ["ncc-dispositions"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["ncc-dispositions"] }),
+        queryClient.invalidateQueries({ queryKey: [NCC_ALERTS_QUERY_KEY] }),
+      ]);
       const count = variables.items?.length ?? 1;
       const noun = count === 1 ? "alert" : `${count} alerts`;
       if (variables.action === "resolve") {
@@ -452,6 +456,7 @@ export function DashboardPage() {
       previewReport.refetch(),
       loadFullReport ? fullReport.refetch() : Promise.resolve(),
       queryClient.invalidateQueries({ queryKey: ["ncc-dispositions"] }),
+      queryClient.invalidateQueries({ queryKey: [NCC_ALERTS_QUERY_KEY] }),
       alertSource === "PC"
         ? Promise.all([
             api.alerts(true, "No").then((data) => {

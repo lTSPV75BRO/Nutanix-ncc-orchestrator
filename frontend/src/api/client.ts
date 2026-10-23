@@ -50,7 +50,10 @@ import type {
   BackupScheduleState,
   NotificationState,
   PCAlertsData,
-  NCCAlertEvent,
+  NCCAlert,
+  NCCAlertDetail,
+  NCCAlertList,
+  NCCAlertListQuery,
   NCCDisposition,
   NCCDispositionInput,
   FeatureFlags,
@@ -619,8 +622,32 @@ export const api = {
       body: JSON.stringify(input),
     }),
   /** Full lifecycle history of one NCC alert instance (v2.2.1+). */
-  nccAlertHistory: (id: string) =>
-    callApi<{ alert: Record<string, unknown>; events: NCCAlertEvent[]; instances: Array<Record<string, string>> }>(
-      `/api/v1/alerts/ncc/${encodeURIComponent(id)}`,
-    ),
+  nccAlertHistory: (id: string) => callApi<NCCAlertDetail>(`/api/v1/alerts/ncc/${encodeURIComponent(id)}`),
+  /** Acknowledge, resolve or reopen one NCC alert instance by id (operator+). */
+  nccAlertAction: (id: string, action: "acknowledge" | "resolve" | "reopen", note = "") =>
+    callApi<unknown>(`/api/v1/alerts/ncc/${encodeURIComponent(id)}/${action}`, {
+      method: "POST",
+      body: JSON.stringify(note ? { note } : {}),
+    }),
+  /** One page of NCC alert instances from the lifecycle store (v2.2.1+). */
+  nccAlerts: (query: NCCAlertListQuery = {}) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined && value !== "" && value !== false) params.set(key, String(value));
+    }
+    const qs = params.toString();
+    return callApi<NCCAlertList>(`/api/v1/alerts/ncc${qs ? `?${qs}` : ""}`);
+  },
+  /** Every NCC alert instance matching query, following next_cursor (capped at maxPages). */
+  nccAlertsAll: async (query: Omit<NCCAlertListQuery, "cursor" | "limit"> = {}, maxPages = 20): Promise<NCCAlert[]> => {
+    const out: NCCAlert[] = [];
+    let cursor = "";
+    for (let page = 0; page < maxPages; page += 1) {
+      const res = await api.nccAlerts({ ...query, limit: 1000, cursor: cursor || undefined });
+      out.push(...res.items);
+      cursor = res.next_cursor;
+      if (!cursor) break;
+    }
+    return out;
+  },
 };

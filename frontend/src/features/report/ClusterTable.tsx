@@ -31,6 +31,7 @@ import { asArray, asRecord, displayClusterName, nccDispositionKey, resolveCluste
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { notify } from "../../notify";
 import { formatDateTime, relativeTime } from "../../utils/datetime";
+import { NCCLifecyclePanel } from "./NCCLifecyclePanel";
 
 type Props = {
   checksSnapshot: unknown;
@@ -488,11 +489,6 @@ function NCCAlertInspector({
           </Typography.Paragraph>
         )}
         {mark?.note ? <Typography.Paragraph className="ncc-handling-note">{mark.note}</Typography.Paragraph> : null}
-        {mark?.detection === "not_detected" ? (
-          <Typography.Paragraph type="secondary" className="ncc-handling-detection">
-            The latest run no longer reports this check. It stays {current.text.toLowerCase()} until someone changes it.
-          </Typography.Paragraph>
-        ) : null}
         {mark?.id ? (
           <Typography.Paragraph type="secondary" className="ncc-handling-id">
             Alert ID <Typography.Text code copyable>{mark.id}</Typography.Text>
@@ -522,6 +518,8 @@ function NCCAlertInspector({
           Acknowledge notes that you have seen it. Resolve marks it done until a later run finds the same alert.
         </Typography.Paragraph>
       </Card>
+
+      <NCCLifecyclePanel cluster={row.cluster} check={row.alert} pending={pending} onResolve={() => onAction("resolve")} />
 
       <div className="pc-alert-metric-grid">
         <div className="pc-alert-metric">
