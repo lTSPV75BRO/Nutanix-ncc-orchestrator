@@ -856,7 +856,7 @@ func (s *apiServer) handleForgotPassword(w http.ResponseWriter, r *http.Request)
 			if pw, err := s.users.adminResetPassword(reservedAdminUsername); err == nil {
 				hint := s.users.setInitialPassword(reservedAdminUsername, pw)
 				s.loginGuard.reset(reservedAdminUsername) // recovery also clears any lockout
-				logAdminPasswordReset("self-service via forgot-password", pw, hint)
+				logAdminPasswordReset("self-service via forgot-password", hint)
 				adminReset = true
 			} else {
 				log.Printf("forgot-password: admin self-reset failed: %v", err)
@@ -899,18 +899,22 @@ func (s *apiServer) allowAdminSelfReset(ip string, now time.Time) bool {
 	return ok
 }
 
-// logAdminPasswordReset prints the first-run-style banner announcing a freshly
-// generated admin password and where to retrieve it. The plaintext is only ever
-// written to the server logs and the sibling .ncc-initial-admin-password file —
-// it is never returned over the network for the anonymous recovery path.
-func logAdminPasswordReset(reason, password, hint string) {
+// logAdminPasswordReset prints the first-run-style banner announcing that the
+// admin password was regenerated and where to retrieve it. The plaintext is
+// written only to the 0600 .ncc-initial-admin-password file (or the K8s
+// Secret) that hint points at — never to the logs, which may be forwarded to
+// shared aggregators, and never over the network for the anonymous recovery
+// path.
+func logAdminPasswordReset(reason, hint string) {
 	log.Printf("==================================================================")
 	log.Printf(" ADMIN PASSWORD RESET (%s)", reason)
 	log.Printf("   username: %s", reservedAdminUsername)
-	log.Printf("   password: %s", password)
 	log.Printf("   You MUST change this password on next login.")
 	if hint != "" {
-		log.Printf("   retrieve it later from: %s", hint)
+		log.Printf("   retrieve the new password from: %s", hint)
+	} else {
+		log.Printf("   the new password could not be saved for retrieval; run")
+		log.Printf("   `ncc-orchestrator v2-reset-password --user admin` on this host.")
 	}
 	log.Printf("==================================================================")
 }

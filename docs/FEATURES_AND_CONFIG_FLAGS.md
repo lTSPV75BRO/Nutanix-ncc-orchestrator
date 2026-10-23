@@ -472,9 +472,9 @@ A caller's role can come from a static token or an interactive login:
   self-recovery:** if the forgot-password username is the built-in `admin`, the
   server skips the queue and self-resets it exactly like first-run setup — a
   fresh random password is generated, a change is forced at next login, existing
-  admin sessions are invalidated, and the new password is surfaced only through
-  the server logs and the `.ncc-initial-admin-password` file (never returned over
-  the network), so a locked-out operator can recover even when no other admin
+  admin sessions are invalidated, and the new password is written only to the
+  `.ncc-initial-admin-password` file (the server log names that file but never
+  contains the password, and it is never returned over the network), so a locked-out operator can recover even when no other admin
   exists. This matches the offline `v2-reset-password --user admin` outcome but
   is reachable from the login screen. A short per-IP cooldown (60s, returning
   `429 NCC_API_RATE_LIMITED`) blunts repeated force-rotation. The authenticated

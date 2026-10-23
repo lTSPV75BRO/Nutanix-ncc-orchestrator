@@ -833,9 +833,11 @@ forgot-password username is the built-in `admin`, queuing a request is useless
 (there may be no other admin to action it), so the server instead self-resets
 the admin exactly like first-run setup: it generates a **new random password**,
 forces a change at next login, and **invalidates all existing admin sessions**
-(token-generation bump). The new password is surfaced only through the
-**server logs** and the sibling **`.ncc-initial-admin-password`** file — it is
-**never returned over the network** (the HTTP response only confirms a reset was
+(token-generation bump). The new password is written only to the sibling
+**`.ncc-initial-admin-password`** file (or the Kubernetes Secret's
+`initial-admin-password` key); the server log records that a reset happened and
+where to read the password, but never the password itself, since logs are often
+forwarded to shared aggregators. It is **never returned over the network** (the HTTP response only confirms a reset was
 generated and tells the operator where to look). Recovery therefore still
 requires host/log access, the same trust boundary as the first-run bootstrap
 password and the offline `v2-reset-password --user admin` command. The trade-off

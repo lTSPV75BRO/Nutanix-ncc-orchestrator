@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -141,9 +142,11 @@ func fileExists(p string) bool {
 
 // uiRunHealthCheck probes the running UI server at listen and returns a process
 // exit code: 0 when it answers with any HTTP status (the server is up and
-// serving), 1 when the connection fails or times out (crashed or hung). TLS
-// verification is skipped because the stack default is a self-signed cert.
-func uiRunHealthCheck(listen string, https bool) int {
+// serving), 1 when the connection fails or times out (crashed or hung). Over
+// HTTPS the probe trusts exactly the certificate the server is configured to
+// serve (certFile), so it works with the stack's self-signed default without
+// disabling verification.
+func uiRunHealthCheck(listen string, https bool, certFile string) int {
 	host := strings.TrimSpace(listen)
 	if host == "" {
 		host = ":8080"
@@ -157,17 +160,27 @@ func uiRunHealthCheck(listen string, https bool) int {
 		host = net.JoinHostPort(h, p)
 	}
 	scheme := "http"
+	transport := &http.Transport{}
 	if https {
 		scheme = "https"
+		tlsCfg, err := healthCheckTLSConfig(certFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ui health-check: %v\n", err)
+			return 1
+		}
+		transport.TLSClientConfig = tlsCfg
 	}
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
+	client := &http.Client{Timeout: 5 * time.Second, Transport: transport}
 	resp, err := client.Get(fmt.Sprintf("%s://%s/", scheme, host))
 	if err != nil {
+		// A verification failure means the server completed a TLS handshake, so
+		// the process is alive and serving; an expired or swapped cert is an
+		// operator problem a restart cannot fix, so don't report it as hung.
+		var verr *tls.CertificateVerificationError
+		if errors.As(err, &verr) {
+			fmt.Fprintf(os.Stderr, "ui health-check: server is up but its certificate did not verify: %v\n", err)
+			return 0
+		}
 		fmt.Fprintf(os.Stderr, "ui health-check failed: %v\n", err)
 		return 1
 	}
@@ -178,6 +191,50 @@ func uiRunHealthCheck(listen string, https bool) int {
 		return 1
 	}
 	return 0
+}
+
+// healthCheckTLSConfig trusts only the leaf certificate in certFile and names
+// one of its own SANs as the server name, so a loopback probe verifies the
+// server it is checking even when that cert is self-signed.
+func healthCheckTLSConfig(certFile string) (*tls.Config, error) {
+	if certFile == "" {
+		return nil, errors.New("no TLS certificate file to verify the server against")
+	}
+	data, err := os.ReadFile(certFile)
+	if err != nil {
+		return nil, fmt.Errorf("read TLS certificate: %w", err)
+	}
+	block, _ := pem.Decode(data)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, fmt.Errorf("no PEM certificate in %s", certFile)
+	}
+	leaf, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse TLS certificate: %w", err)
+	}
+	serverName := ""
+	for _, n := range leaf.DNSNames {
+		if n == "localhost" {
+			serverName = n
+		}
+	}
+	for _, ip := range leaf.IPAddresses {
+		if serverName == "" && ip.IsLoopback() {
+			serverName = ip.String()
+		}
+	}
+	if serverName == "" && len(leaf.DNSNames) > 0 {
+		serverName = leaf.DNSNames[0]
+	}
+	if serverName == "" && len(leaf.IPAddresses) > 0 {
+		serverName = leaf.IPAddresses[0].String()
+	}
+	if serverName == "" {
+		return nil, fmt.Errorf("TLS certificate %s has no DNS or IP subject alternative names", certFile)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(leaf)
+	return &tls.Config{RootCAs: pool, ServerName: serverName, MinVersion: tls.VersionTLS12}, nil
 }
 
 // detectBackendLogin asks the backend's health endpoint whether interactive
@@ -386,7 +443,14 @@ func main() {
 	// self-heal supervisor invokes this to detect a hung (alive-but-unresponsive)
 	// UI process, not just a crashed one.
 	if healthCheck {
-		os.Exit(uiRunHealthCheck(listen, (strings.TrimSpace(tlsCertFile) != "" && strings.TrimSpace(tlsKeyFile) != "") || strings.TrimSpace(autoTLSDir) != ""))
+		certFile := strings.TrimSpace(tlsCertFile)
+		if d := strings.TrimSpace(autoTLSDir); d != "" {
+			certFile = ""
+			if c, _, ok := selfsigned.ActivePaths(d); ok {
+				certFile = c
+			}
+		}
+		os.Exit(uiRunHealthCheck(listen, (strings.TrimSpace(tlsCertFile) != "" && strings.TrimSpace(tlsKeyFile) != "") || strings.TrimSpace(autoTLSDir) != "", certFile))
 	}
 
 	// Stack-aware defaults: when the ui-server is launched from

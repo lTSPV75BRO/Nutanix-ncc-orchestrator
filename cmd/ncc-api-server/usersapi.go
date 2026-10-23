@@ -142,7 +142,7 @@ func (s *apiServer) handleUserByName(w http.ResponseWriter, r *http.Request) {
 			respData := map[string]interface{}{"temporary_password": pw, "must_change_password": true}
 			if isReservedAdmin(username) {
 				hint := s.users.setInitialPassword(username, pw)
-				logAdminPasswordReset("admin reset via Settings → Access", pw, hint)
+				logAdminPasswordReset("admin reset via Settings → Access", hint)
 				if hint != "" {
 					respData["bootstrap_file"] = hint
 				}
