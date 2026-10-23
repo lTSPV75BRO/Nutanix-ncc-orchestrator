@@ -38,6 +38,14 @@ and [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/th
 - `/api/v1/runs/active` was polled by five independent timers; a single poller
   now serves all views (idle every 30 s, active every 3 s, paused in hidden
   tabs, backoff on errors).
+- **`docker compose build` failed.** `Dockerfile.api`/`Dockerfile.ui` used
+  `golang:1.27.1-alpine` while `go.mod` requires 1.27.3 (`GOTOOLCHAIN=local`),
+  and `Dockerfile.ui` did not copy `example_config.yaml` (broken since v2.1.0).
+  Guarded by `release_dockerfiles_test.go`.
+- `ci.yml` was rejected by GitHub (`runner.temp` in a job-level `env`), so CI
+  had not been running.
+- README instructions that did not work (`run` subcommand, archive layout,
+  required secrets, Compose over HTTPS) were corrected.
 
 ### Added
 
@@ -47,6 +55,11 @@ and [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/th
   append-only events, cursor paging, cluster-group scoping,
   `--alert-history-retain-days` (default 365).
 - Prometheus gauges `ncc_alerts_active{state,detection,severity}` and friends.
+- Typed OpenAPI schemas for `/api/v1/alerts/ncc`, `/events`, and `/{id}`.
+- Dashboard **Lifecycle** card in the NCC alert panel (age, last reported,
+  recurrences with the last resolution, severity changes) and an Insights
+  **Alert aging and recurrence** card (age buckets per cluster, median time to
+  acknowledge/resolve, recurring findings, open alerts no longer reported).
 - gzip compression of API JSON responses.
 - `--audit-log-keep` (default 10 rotated generations; previously 1).
 
@@ -65,7 +78,25 @@ and [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/th
   wiring in Kubernetes manifests and Helm.
 - More endpoints rate limited; `ReadHeaderTimeout`/`MaxHeaderBytes` set.
 - Build toolchain pinned to Node.js 26.12.1 (CVE-2026-111497); images upgrade
-  `ca-certificates` at build (eMudhra CA distrust).
+  `ca-certificates` at build (eMudhra CA distrust). The published
+  `deploy/docker` images no longer restore a pre-upgrade CA bundle afterwards.
+- Email notifications parse sender/recipient addresses, encode the subject,
+  and base64-encode the body (header injection). **Behavior change:** invalid
+  addresses now fail the send.
+- Admin password resets no longer write the new password to the server log
+  (read it from `.ncc-initial-admin-password` or the Kubernetes Secret).
+- `ncc-ui-server --health-check` verifies the server's own certificate over
+  HTTPS instead of skipping verification.
+- `dompurify` override raised to `^3.4.17` (GHSA-cg2g-xh64-v4q7,
+  GHSA-mrv2-3pqr-j5jr, GHSA-c6gr-qvv4-5v3f).
+
+### Changed
+
+- GitHub Actions on the Node 24 runtime (checkout/setup-go/setup-node v7,
+  CodeQL v4, attest v4); third-party actions pinned by SHA; no dependency
+  caches or persisted credentials in publishing workflows.
+- golangci-lint v2.15.0 with `.golangci.yml`; existing lint findings fixed
+  (unused code removed, dead assignments, unchecked errors).
 
 ---
 
