@@ -482,18 +482,6 @@ func (db *userDB) clearResetRequest(username string) {
 	_ = db.saveLocked()
 }
 
-func (db *userDB) adminCount() int {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-	n := 0
-	for _, a := range db.accounts {
-		if r, _ := parseRole(a.Role); r == RoleAdmin {
-			n++
-		}
-	}
-	return n
-}
-
 // verify checks a username/password and returns the role and must-change flag.
 // A dummy bcrypt comparison runs for unknown users to blunt timing-based
 // username enumeration.

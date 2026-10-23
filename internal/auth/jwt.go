@@ -127,7 +127,7 @@ func ValidateJWT(tokenStr string, secret []byte) (*CustomClaims, error) {
 	}
 	// Allow a small clock skew on iat so replicas with a few seconds of drift
 	// still accept a freshly minted token. Expiry itself is fail-closed (no leeway).
-	if claims.IssuedAt != nil && claims.IssuedAt.Time.After(time.Now().UTC().Add(30*time.Second)) {
+	if claims.IssuedAt != nil && claims.IssuedAt.After(time.Now().UTC().Add(30*time.Second)) {
 		return nil, ErrInvalid
 	}
 	return claims, nil

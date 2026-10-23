@@ -60,10 +60,6 @@ const (
 	alertSyncInterval     = time.Minute
 )
 
-func nccDispositionKey(cluster, check string) string {
-	return strings.ToLower(strings.TrimSpace(cluster)) + "|" + strings.ToLower(strings.TrimSpace(check))
-}
-
 func normalizeNCCCheckTitle(check string) string {
 	s := strings.TrimSpace(nccDetailPrefix.ReplaceAllString(check, ""))
 	s = strings.TrimRight(s, ":")
@@ -205,16 +201,6 @@ func (s *apiServer) currentNCCRunSnapshot() nccRunSnapshot {
 		})
 	}
 	return snap
-}
-
-// currentNCCRunFindings is kept for callers that only need the run timestamp.
-func (s *apiServer) currentNCCRunFindings() (string, map[string]struct{}) {
-	snap := s.currentNCCRunSnapshot()
-	present := map[string]struct{}{}
-	for _, f := range snap.Findings {
-		present[nccDispositionKey(f.Cluster, normalizeNCCCheckTitle(f.Check))] = struct{}{}
-	}
-	return snap.RunAt, present
 }
 
 // syncNCCAlertLifecycle ingests the latest completed run into the lifecycle
@@ -488,14 +474,14 @@ func redactPaths(msg string) string {
 //	POST /api/v1/alerts/ncc/{id}/{acknowledge|resolve|reopen}
 func (s *apiServer) handleNCCAlerts(w http.ResponseWriter, r *http.Request) {
 	tail := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/alerts/ncc"), "/")
-	switch {
-	case tail == "":
+	switch tail {
+	case "":
 		if r.Method != http.MethodGet {
 			writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 			return
 		}
 		s.handleListNCCAlerts(w, r)
-	case tail == "events":
+	case "events":
 		if r.Method != http.MethodGet {
 			writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 			return

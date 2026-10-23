@@ -102,7 +102,7 @@ func (s *apiServer) notificationSuppressed(st *notificationState, event string, 
 	}
 	// 2) Quiet hours mute non-failures (and failures unless AllowFailures).
 	if inQuietHours(st.Quiet, now) {
-		if !(isFailureEvent(event) && st.Quiet.AllowFailures) {
+		if !isFailureEvent(event) || !st.Quiet.AllowFailures {
 			return true, "quiet hours"
 		}
 	}

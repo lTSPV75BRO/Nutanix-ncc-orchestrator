@@ -114,7 +114,7 @@ func TestEndToEndFirstRunAdminFlow(t *testing.T) {
 	}
 
 	// 3. /me now reflects the authenticated admin still owing a password change.
-	code, env = do(http.MethodGet, "/api/v1/auth/me", "")
+	_, env = do(http.MethodGet, "/api/v1/auth/me", "")
 	if d := data(env); d["authenticated"] != true || d["role"] != "admin" || d["must_change_password"] != true {
 		t.Fatalf("authed me data: %+v", d)
 	}
@@ -138,7 +138,7 @@ func TestEndToEndFirstRunAdminFlow(t *testing.T) {
 	}
 
 	// 7. must-change cleared; previously-blocked endpoints are reachable.
-	code, env = do(http.MethodGet, "/api/v1/auth/me", "")
+	_, env = do(http.MethodGet, "/api/v1/auth/me", "")
 	if data(env)["must_change_password"] != false {
 		t.Fatalf("must_change should be cleared: %+v", data(env))
 	}
@@ -192,7 +192,7 @@ func TestEndToEndFirstRunAdminFlow(t *testing.T) {
 	}
 
 	// 12. GET SSO exposes the SP metadata URL but never the private key.
-	code, env = do(http.MethodGet, "/api/v1/settings/sso", "")
+	_, env = do(http.MethodGet, "/api/v1/settings/sso", "")
 	d := data(env)
 	if d["enabled"] != true {
 		t.Fatalf("sso should be enabled: %+v", d)
@@ -209,7 +209,7 @@ func TestEndToEndFirstRunAdminFlow(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("logout: %d", code)
 	}
-	code, env = do(http.MethodGet, "/api/v1/auth/me", "")
+	_, env = do(http.MethodGet, "/api/v1/auth/me", "")
 	if data(env)["authenticated"] != false {
 		t.Fatalf("after logout, expected unauthenticated: %+v", data(env))
 	}
@@ -322,7 +322,7 @@ func TestEndToEndAdminForgotPasswordSelfReset(t *testing.T) {
 	if code == http.StatusOK {
 		t.Fatal("old admin password should be invalid after self-reset")
 	}
-	code, env = do(http.MethodGet, "/api/v1/auth/me", "")
+	_, env = do(http.MethodGet, "/api/v1/auth/me", "")
 	if data(env)["bootstrap_pending"] != true {
 		t.Fatalf("bootstrap_pending should be re-advertised: %+v", data(env))
 	}

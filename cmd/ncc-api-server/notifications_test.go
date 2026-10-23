@@ -57,7 +57,7 @@ func TestRequestedChannels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("requestedChannels(all): %v", err)
 	}
-	if !(all["slack"] && all["webhook"] && all["email"]) {
+	if !all["slack"] || !all["webhook"] || !all["email"] {
 		t.Fatal("expected all channels")
 	}
 	one, err := requestedChannels("slack")

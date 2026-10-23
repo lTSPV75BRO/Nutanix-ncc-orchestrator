@@ -47,7 +47,7 @@ func TestLoginGuardLockAndExpiry(t *testing.T) {
 	}
 
 	// A disabled guard (threshold 0) is nil and never locks.
-	var disabled *loginGuard = newLoginGuard(0, time.Minute, time.Minute)
+	disabled := newLoginGuard(0, time.Minute, time.Minute)
 	if disabled != nil {
 		t.Fatal("threshold 0 must disable the guard (nil)")
 	}

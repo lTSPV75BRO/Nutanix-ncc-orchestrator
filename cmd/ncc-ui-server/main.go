@@ -689,8 +689,13 @@ func main() {
 		}
 		return nil
 	}
-	origDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
+	// Director is deprecated in favor of Rewrite, which handles forwarding
+	// headers differently (it drops inbound X-Forwarded-* and does not add
+	// X-Forwarded-For unless asked). This hook strips client credentials and
+	// injects the backend token, so migrate it with dedicated proxy tests
+	// rather than as a lint fix.
+	origDirector := proxy.Director             //nolint:staticcheck // SA1019: see above
+	proxy.Director = func(req *http.Request) { //nolint:staticcheck // SA1019: see above
 		origDirector(req)
 		req.Header.Del("Authorization")
 		req.Header.Del("X-API-Token")

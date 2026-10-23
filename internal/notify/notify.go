@@ -361,7 +361,7 @@ func SendWebhook(ctx context.Context, client model.HTTPClient, cfg model.Config,
 				return fmt.Errorf("webhook request failed: %w", err)
 			}
 		} else {
-			io.Copy(io.Discard, resp.Body)
+			_, _ = io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				return nil
@@ -482,7 +482,7 @@ func SendSlack(ctx context.Context, client model.HTTPClient, cfg model.Config, s
 				return fmt.Errorf("slack request failed: %w", err)
 			}
 		} else {
-			io.Copy(io.Discard, resp.Body)
+			_, _ = io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				return nil

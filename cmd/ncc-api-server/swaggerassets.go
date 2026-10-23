@@ -15,8 +15,7 @@ import (
 //go:embed swaggerassets/swagger-ui.css swaggerassets/swagger-ui-bundle.js
 var swaggerFS embed.FS
 
-// swaggerUIVersion records the vendored swagger-ui-dist version for provenance.
-const swaggerUIVersion = "5.32.6"
+// Vendored swagger-ui-dist version (provenance): 5.32.6.
 
 // swaggerAssetNames lists the embedded asset suffixes (exposed for tests).
 var swaggerAssetNames = []string{"swagger-ui.css", "swagger-ui-bundle.js"}

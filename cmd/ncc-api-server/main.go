@@ -260,7 +260,6 @@ type apiServer struct {
 	lastEnv   map[string]string
 	lastPID   int
 	cancelRun context.CancelFunc
-	cancelled bool
 	liveOut   *tailBuffer
 
 	// Concurrent run engine. Multiple cluster-group runs can execute at once,
@@ -2941,10 +2940,7 @@ func (s *apiServer) handleScheduleHealth(w http.ResponseWriter, r *http.Request)
 		}})
 		return
 	}
-	saved := false
-	if strings.TrimSpace(st.UpdatedAt) != "" {
-		saved = true
-	}
+	saved := strings.TrimSpace(st.UpdatedAt) != ""
 	taskName := strings.TrimSpace(st.TaskName)
 	if taskName == "" {
 		taskName = "ncc-orchestrator"

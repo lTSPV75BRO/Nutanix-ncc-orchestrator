@@ -1224,7 +1224,7 @@ func TestOSFS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
-	file.Write([]byte("created"))
+	_, _ = file.Write([]byte("created"))
 	file.Close()
 
 	// Test ReadDir
@@ -1387,10 +1387,8 @@ func TestSendWebhookDisabled(t *testing.T) {
 func TestConfigDefaults(t *testing.T) {
 	cfg := Config{}
 
-	// Test that zero values are reasonable
-	if cfg.MaxParallel <= 0 {
-		// This is fine, will be set by bindConfig
-	}
+	// Zero values are fine here: bindConfig fills MaxParallel in later.
+	_ = cfg.MaxParallel
 
 	// Test that empty slices are nil or empty
 	if len(cfg.Clusters) != 0 {

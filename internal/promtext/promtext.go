@@ -94,32 +94,32 @@ func RenderClusterChecks(cluster string, blocks []model.ParsedBlock) string {
 		detailBytesTotal += len(pb.DetailRaw)
 
 		// one sample per check
-		b.WriteString(fmt.Sprintf(
+		fmt.Fprintf(&b,
 			`nutanix_ncc_check_result{cluster="%s",check="%s",severity="%s"} 1`+"\n",
 			SanitizeLabel(cluster),
 			SanitizeLabel(pb.CheckName),
 			SanitizeLabel(sev),
-		))
+		)
 	}
 
 	// Summary per severity.
 	for _, sev := range []string{"FAIL", "WARN", "ERR", "INFO", "PASS"} {
 		c := counts[sev]
-		b.WriteString(fmt.Sprintf(
+		fmt.Fprintf(&b,
 			`nutanix_ncc_check_summary_total{cluster="%s",severity="%s"} %d`+"\n",
 			SanitizeLabel(cluster),
 			SanitizeLabel(sev),
 			c,
-		))
+		)
 	}
 
 	// Total checks.
 	totalChecks := len(blocks)
-	b.WriteString(fmt.Sprintf(
+	fmt.Fprintf(&b,
 		`nutanix_ncc_check_total{cluster="%s"} %d`+"\n",
 		SanitizeLabel(cluster),
 		totalChecks,
-	))
+	)
 	problemTotal := counts["FAIL"] + counts["WARN"] + counts["ERR"]
 	problemRatio := 0.0
 	if totalChecks > 0 {

@@ -292,7 +292,7 @@ func runChildOnce(ctx context.Context, cfg *superviseConfig, c *superviseChild, 
 	if len(c.healthArgs) == 0 {
 		select {
 		case <-ctx.Done():
-			stopChild(cmd, waitCh, cfg.stopGrace)
+			_ = stopChild(cmd, waitCh, cfg.stopGrace)
 			return childShutdown
 		case err := <-waitCh:
 			logf("%s exited pid=%d (%s)", c.name, pid, exitDesc(err))
@@ -308,7 +308,7 @@ func runChildOnce(ctx context.Context, cfg *superviseConfig, c *superviseChild, 
 	for {
 		select {
 		case <-ctx.Done():
-			stopChild(cmd, waitCh, cfg.stopGrace)
+			_ = stopChild(cmd, waitCh, cfg.stopGrace)
 			return childShutdown
 		case err := <-waitCh:
 			logf("%s exited pid=%d (%s)", c.name, pid, exitDesc(err))
@@ -322,7 +322,7 @@ func runChildOnce(ctx context.Context, cfg *superviseConfig, c *superviseChild, 
 			logf("%s health probe failed (%d/%d) pid=%d", c.name, unhealthy, cfg.unhealthyThreshold, pid)
 			if unhealthy >= cfg.unhealthyThreshold {
 				logf("%s unhealthy threshold reached; restarting pid=%d", c.name, pid)
-				stopChild(cmd, waitCh, cfg.stopGrace)
+				_ = stopChild(cmd, waitCh, cfg.stopGrace)
 				return childUnhealthy
 			}
 		}
@@ -330,17 +330,18 @@ func runChildOnce(ctx context.Context, cfg *superviseConfig, c *superviseChild, 
 }
 
 // stopChild sends SIGTERM, waits up to grace for a clean exit, then SIGKILLs.
-func stopChild(cmd *exec.Cmd, waitCh <-chan error, grace time.Duration) {
+// It returns the child's exit error (nil for a clean exit).
+func stopChild(cmd *exec.Cmd, waitCh <-chan error, grace time.Duration) error {
 	if cmd == nil || cmd.Process == nil {
-		return
+		return nil
 	}
 	signalProcessStop(cmd)
 	select {
-	case <-waitCh:
-		return
+	case err := <-waitCh:
+		return err
 	case <-time.After(grace):
 		_ = cmd.Process.Kill()
-		<-waitCh
+		return <-waitCh
 	}
 }
 

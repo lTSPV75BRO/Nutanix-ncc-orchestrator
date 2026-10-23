@@ -245,15 +245,6 @@ func normalizeClusterSourceMode(s string) (string, error) {
 	}
 }
 
-func splitCSVTrimLower(s string) []string {
-	in := splitCSV(s)
-	out := make([]string, 0, len(in))
-	for _, v := range in {
-		out = append(out, strings.ToLower(strings.TrimSpace(v)))
-	}
-	return out
-}
-
 func levenshteinDistance(a, b string) int {
 	if a == b {
 		return 0
@@ -3186,18 +3177,6 @@ func writeExcludedAlertsAuditJSON(fs FS, outDir string, matchMode string, titles
 // leaf model package); existing call sites in this package are unchanged.
 var clusterHealthScore = model.ClusterHealthScore
 
-func buildChecksSnapshot(results []ClusterResult) ChecksSnapshotJSON {
-	snap := ChecksSnapshotJSON{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		Clusters:  make([]ClusterChecksSnapshot, 0, len(results)),
-	}
-	for _, r := range results {
-		snap.Clusters = append(snap.Clusters, buildClusterChecksSnapshotFromResult(r))
-	}
-	sort.Slice(snap.Clusters, func(i, j int) bool { return snap.Clusters[i].Address < snap.Clusters[j].Address })
-	return snap
-}
-
 // clusterRunFailedCheckName is the synthetic check title used to surface a
 // cluster's connection/run failure as a real, visible alert row instead of
 // leaving the cluster's entry with no checks at all. Without this, a cluster
@@ -3848,32 +3827,6 @@ func buildRunClusterSummary(r ClusterResult) RunClusterSummary {
 	s.ChecksTotal = len(r.Blocks)
 	s.HealthScore = clusterHealthScore(s.FailCount, s.WarnCount, s.ErrCount, s.ChecksTotal)
 	return s
-}
-
-func failureClassCounts(results []ClusterResult) map[string]int {
-	counts := map[string]int{
-		"timeout":    0,
-		"auth":       0,
-		"network":    0,
-		"api":        0,
-		"parser":     0,
-		"rate_limit": 0,
-		"unknown":    0,
-	}
-	for _, r := range results {
-		if r.Err == nil {
-			continue
-		}
-		class := strings.TrimSpace(r.ErrorClass)
-		if class == "" {
-			class = classifyClusterError(r.Err)
-		}
-		if _, ok := counts[class]; !ok {
-			class = "unknown"
-		}
-		counts[class]++
-	}
-	return counts
 }
 
 func newFailureClassCounts() map[string]int {
@@ -6271,15 +6224,7 @@ function initTooltips() {
 
 	aggRows := make([]tmplRow, 0, len(rows))
 	for _, r := range rows {
-		aggRows = append(aggRows, tmplRow{
-			Cluster:        r.Cluster,
-			Severity:       r.Severity,
-			Check:          r.Check,
-			Detail:         r.Detail,
-			ClusterName:    r.ClusterName,
-			ClusterVersion: r.ClusterVersion,
-			NCCVersion:     r.NCCVersion,
-		})
+		aggRows = append(aggRows, tmplRow(r))
 	}
 
 	const maxEmbeddedAggRows = 20000
@@ -6602,7 +6547,6 @@ func doWithRetry(ctx context.Context, client HTTPClient, req *http.Request, cfg 
 
 		status := resp.StatusCode
 		if status >= 200 && status < 300 {
-			consecutiveRetryableFailures = 0
 			noteHTTPStatusForAdaptiveParallelism(status, cfg)
 			log.Debug().Str("op", op).Int("status", status).Msg("request succeeded")
 			return resp, body, nil
@@ -6687,54 +6631,6 @@ func generateRequestID() (string, error) {
 	b[6] = (b[6] & 0x0f) | 0x40
 	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%12x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
-}
-
-// getClusterUUID fetches the cluster UUID from Prism (v1 cluster endpoint or v4 clustermgmt list).
-func (c *NCCClient) getClusterUUID(ctx context.Context) (string, error) {
-	if c.apiVersion == "v4" {
-		uuid, err := c.getClusterUUIDV4(ctx)
-		if err != nil && strings.Contains(err.Error(), "404") {
-			log.Info().Str("cluster", c.cluster).Msg("v4 cluster list not available (404), using v1 cluster for uuid")
-			return c.getClusterUUIDV1(ctx)
-		}
-		return uuid, err
-	}
-	return c.getClusterUUIDV1(ctx)
-}
-
-func (c *NCCClient) getClusterUUIDV1(ctx context.Context) (string, error) {
-	url := c.baseURL + "/v1/cluster"
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.SetBasicAuth(c.user, c.pass)
-	resp, body, err := doWithRetry(ctx, c.http, req, c.cfg, "get cluster uuid")
-	if err != nil {
-		log.Error().Err(err).Str("url", url).Msg("get cluster uuid failed")
-		return "", fmt.Errorf("get cluster uuid: %w", err)
-	}
-	_ = resp
-	var data map[string]interface{}
-	if err := json.Unmarshal(body, &data); err != nil {
-		return "", fmt.Errorf("parse cluster response: %w", err)
-	}
-	uuid, _ := data["uuid"].(string)
-	if uuid == "" {
-		if id, ok := data["id"].(string); ok && id != "" {
-			uuid = id
-		}
-	}
-	if uuid == "" {
-		return "", errors.New("cluster response missing uuid")
-	}
-	return uuid, nil
-}
-
-func (c *NCCClient) getClusterUUIDV4(ctx context.Context) (string, error) {
-	extID, _, err := c.resolveClusterV4ForNCC(ctx)
-	return extID, err
 }
 
 // resolveClusterV4ForNCC finds the clustermgmt entity matching c.cluster (IP, name, extId, or CVM IP),
@@ -12290,7 +12186,7 @@ func extractTarGzArchive(archive []byte, destDir string) error {
 			if err := os.MkdirAll(target, 0755); err != nil {
 				return err
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg, '\x00': // '\x00' = legacy regular file (formerly tar.TypeRegA)
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
 			}
@@ -12989,7 +12885,7 @@ func fetchPCClustersV3(pcURL, username, password string, insecure bool) ([]strin
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Prism Central returned %d: %s", resp.StatusCode, string(bytes.TrimSpace(data)))
+		return nil, fmt.Errorf("unexpected HTTP %d from Prism Central: %s", resp.StatusCode, string(bytes.TrimSpace(data)))
 	}
 
 	var list pcListClustersResponse
@@ -13046,7 +12942,7 @@ func fetchPCClustersV4(pcURL, username, password string, insecure bool, v4APIVer
 			return nil, errDiscoverV4Unavailable{status: resp.StatusCode, body: string(data)}
 		}
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("Prism Central returned %d: %s", resp.StatusCode, string(bytes.TrimSpace(data)))
+			return nil, fmt.Errorf("unexpected HTTP %d from Prism Central: %s", resp.StatusCode, string(bytes.TrimSpace(data)))
 		}
 
 		var payload struct {
@@ -13171,7 +13067,7 @@ func fetchDiscoverClusterRowsV4(pcURL, username, password string, insecure bool,
 			return nil, errDiscoverV4Unavailable{status: resp.StatusCode, body: string(data)}
 		}
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("Prism Central returned %d: %s", resp.StatusCode, string(bytes.TrimSpace(data)))
+			return nil, fmt.Errorf("unexpected HTTP %d from Prism Central: %s", resp.StatusCode, string(bytes.TrimSpace(data)))
 		}
 
 		var payload struct {
@@ -13228,7 +13124,7 @@ func fetchDiscoverClusterRowsV3(pcURL, username, password string, insecure bool)
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Prism Central returned %d: %s", resp.StatusCode, string(bytes.TrimSpace(data)))
+		return nil, fmt.Errorf("unexpected HTTP %d from Prism Central: %s", resp.StatusCode, string(bytes.TrimSpace(data)))
 	}
 
 	var list pcListClustersResponse
@@ -14266,9 +14162,10 @@ func buildPreflightReport(cfgPath string) preflightReport {
 		add(preflightCheck{ID: "validate-config", Status: "pass", Title: "validate-config", Message: "config is valid"})
 		schemaCheck := checkConfigSchema(&healContext{ConfigPath: cfgPath})
 		schemaStatus := "pass"
-		if schemaCheck.Status == healWarn {
+		switch schemaCheck.Status {
+		case healWarn:
 			schemaStatus = "warn"
-		} else if schemaCheck.Status == healFail {
+		case healFail:
 			schemaStatus = "fail"
 		}
 		add(preflightCheck{

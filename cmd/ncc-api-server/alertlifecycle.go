@@ -726,7 +726,7 @@ func (st *alertLifecycleStore) applyAction(targets []alertActionTarget, action, 
 				changed = true
 			}
 			a := &doc.Alerts[idx]
-			if a.State == toState && a.Note == note && !(toState == alertStateOpen && a.Reopened) {
+			if a.State == toState && a.Note == note && (toState != alertStateOpen || !a.Reopened) {
 				out = append(out, *a)
 				continue
 			}

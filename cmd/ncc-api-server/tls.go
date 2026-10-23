@@ -405,7 +405,7 @@ func (s *apiServer) applyTLSMaterial(w http.ResponseWriter, r *http.Request, cer
 	// one, so we skip the auto-restart and ask the operator to restart.
 	patched, perr := patchV2StartStateUITLS(installDir, certPath, keyPath)
 	restarting := false
-	msg := "HTTPS enabled."
+	var msg string
 	switch {
 	case perr != nil:
 		msg = noun + ", but the start-state could not be updated (" + perr.Error() + "). Restart the stack manually with --ui-tls-cert-file/--ui-tls-key-file to serve HTTPS."
@@ -472,7 +472,7 @@ func (s *apiServer) handleTLSDisable(w http.ResponseWriter, r *http.Request) {
 	s.audit(r, "settings.tls.disable", true, nil)
 
 	restarting := false
-	msg := "HTTPS disabled."
+	var msg string
 	switch {
 	case perr != nil:
 		msg = "HTTPS disabled, but the start-state could not be updated (" + perr.Error() + "). Restart the stack manually to fall back to HTTP."
