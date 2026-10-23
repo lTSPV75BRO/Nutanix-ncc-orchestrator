@@ -1,9 +1,9 @@
 # Nutanix NCC Orchestrator
 
 [![Version](https://img.shields.io/badge/version-2.2.1-blue)](RELEASE_NOTES_v2.2.1.md)
-[![Go](https://img.shields.io/badge/go-1.27.1-00ADD8)](go.mod)
+[![Go](https://img.shields.io/badge/go-1.27.3-00ADD8)](go.mod)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Status](https://img.shields.io/badge/release-2.2.1-green)](RELEASE_NOTES_v2.2.1.md)
+[![Status](https://img.shields.io/badge/GA-green)](RELEASE_NOTES_v2.2.1.md)
 
 > A production-ready stack for running Nutanix Cluster Check (NCC) across many clusters in parallel, aggregating results, and serving them through a hardened API and modern web UI.
 
