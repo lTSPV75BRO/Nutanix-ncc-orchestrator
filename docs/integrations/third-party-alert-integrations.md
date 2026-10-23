@@ -187,6 +187,15 @@ All responses use one envelope:
 
 Timestamps are RFC 3339 UTC (alert fields use nanosecond precision).
 
+`GET /api/v1/openapi.json` publishes typed response schemas for the three read
+endpoints below (operation ids `listNCCAlerts`, `listNCCAlertEvents`,
+`getNCCAlert`; component schemas `NCCAlert`, `NCCAlertEvent`,
+`NCCAlertInstanceLink`, `NCCAlertList`, `NCCAlertEventPage`, `NCCAlertDetail`,
+`Error`), so client generators, Postman and ServiceNow spoke builders can
+import them directly. Fields not listed under `required` are omitted when
+empty. The API server's tests check these schemas against the live
+responses, so they stay in step with the code.
+
 ### 5.1 `GET /api/v1/alerts/ncc` — alert instances (viewer)
 
 | Query parameter | Meaning |

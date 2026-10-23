@@ -4312,6 +4312,7 @@ func (s *apiServer) buildOpenAPISpec() map[string]interface{} {
 		paths = map[string]interface{}{}
 		spec["paths"] = paths
 	}
+	addNCCAlertOpenAPI(spec, paths)
 	for _, rt := range apiRouteCatalog() {
 		item, exists := paths[rt.Path].(map[string]interface{})
 		if !exists {
