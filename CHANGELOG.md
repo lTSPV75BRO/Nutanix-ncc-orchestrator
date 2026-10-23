@@ -8,10 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [2.2.1] - Unreleased (date set when the v2.2.1 tag is published)
+## [2.2.1] - 2026-10-24
 
-Bug fixes, alert history, security hardening, and integration docs. Release
-notes: [`RELEASE_NOTES_v2.2.1.md`](RELEASE_NOTES_v2.2.1.md). See
+Quick security release for the eMudhra certificate compromise (CA bundle
+kept current in images) and Node.js CVE-2026-111497 (build toolchain pinned to
+26.12.1), plus bug fixes, alert history, security hardening, and integration
+docs. Release notes: [`RELEASE_NOTES_v2.2.1.md`](RELEASE_NOTES_v2.2.1.md). See
 [`docs/security/security-assessment-2026-10.md`](docs/security/security-assessment-2026-10.md)
 and [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/third-party-alert-integrations.md).
 
