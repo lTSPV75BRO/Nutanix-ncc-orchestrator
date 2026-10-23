@@ -13,13 +13,15 @@
     { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "9.0.0" },
     { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" },
     { "type": "panel", "id": "timeseries", "name": "Time series", "version": "" },
-    { "type": "panel", "id": "stat", "name": "Stat", "version": "" }
+    { "type": "panel", "id": "stat", "name": "Stat", "version": "" },
+    { "type": "panel", "id": "table", "name": "Table", "version": "" },
+    { "type": "panel", "id": "gauge", "name": "Gauge", "version": "" }
   ],
   "annotations": { "list": [] },
   "editable": true,
   "graphTooltip": 1,
   "schemaVersion": 39,
-  "tags": ["ncc", "nutanix", "orchestrator"],
+  "tags": ["ncc", "nutanix", "orchestrator", "clusters"],
   "templating": {
     "list": [
       {
@@ -40,14 +42,25 @@
         "includeAll": true,
         "multi": true,
         "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "cluster",
+        "label": "Cluster IP",
+        "type": "query",
+        "datasource": "${datasource}",
+        "query": "label_values(ncc_cluster_up, cluster)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
       }
     ]
   },
   "time": { "from": "now-6h", "to": "now" },
   "timezone": "",
-  "title": "NCC Orchestrator",
+  "title": "NCC Orchestrator & Cluster Health",
   "uid": "ncc-orchestrator",
-  "version": 1,
+  "version": 2,
   "panels": [
     {
       "type": "row",
@@ -60,7 +73,7 @@
       "type": "stat",
       "title": "Version",
       "datasource": "${datasource}",
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^version$/" }, "colorMode": "none", "textMode": "name" },
       "targets": [
         { "expr": "ncc_build_info{instance=~\"$instance\"}", "instant": true, "legendFormat": "{{version}}", "refId": "A", "datasource": "${datasource}" }
@@ -68,9 +81,20 @@
     },
     {
       "type": "stat",
+      "title": "Clusters OK / Failed",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 4, "w": 5, "x": 4, "y": 1 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
+      "targets": [
+        { "expr": "sum(ncc_last_run_clusters_ok{instance=~\"$instance\"})", "legendFormat": "OK", "refId": "A", "datasource": "${datasource}" },
+        { "expr": "sum(ncc_last_run_clusters_failed{instance=~\"$instance\"})", "legendFormat": "Failed", "refId": "B", "datasource": "${datasource}" }
+      ]
+    },
+    {
+      "type": "stat",
       "title": "Runs running",
       "datasource": "${datasource}",
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+      "gridPos": { "h": 4, "w": 5, "x": 9, "y": 1 },
       "fieldConfig": { "defaults": { "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "blue", "value": 1 } ] } } },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
       "targets": [ { "expr": "sum(ncc_runs_running{instance=~\"$instance\"})", "refId": "A", "datasource": "${datasource}" } ]
@@ -79,24 +103,132 @@
       "type": "stat",
       "title": "Runs queued",
       "datasource": "${datasource}",
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "gridPos": { "h": 4, "w": 5, "x": 14, "y": 1 },
       "fieldConfig": { "defaults": { "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 1 } ] } } },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
       "targets": [ { "expr": "sum(ncc_runs_queued{instance=~\"$instance\"})", "refId": "A", "datasource": "${datasource}" } ]
     },
     {
       "type": "stat",
-      "title": "Account lockouts (last 1h)",
+      "title": "Account Lockouts (1h)",
       "datasource": "${datasource}",
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "gridPos": { "h": 4, "w": 5, "x": 19, "y": 1 },
       "fieldConfig": { "defaults": { "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } } },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
       "targets": [ { "expr": "sum(increase(ncc_auth_lockouts_total{instance=~\"$instance\"}[1h]))", "refId": "A", "datasource": "${datasource}" } ]
     },
     {
       "type": "row",
-      "title": "Runs",
+      "title": "Cluster Health & Metrics",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "table",
+      "title": "Cluster Status Summary",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 14, "x": 0, "y": 6 },
+      "options": {
+        "frameIndex": 0,
+        "showHeader": true
+      },
+      "targets": [
+        { "expr": "ncc_cluster_health_score{cluster=~\"$cluster\"}", "legendFormat": "Health Score", "instant": true, "refId": "A", "datasource": "${datasource}" },
+        { "expr": "ncc_cluster_up{cluster=~\"$cluster\"}", "legendFormat": "Cluster Up", "instant": true, "refId": "B", "datasource": "${datasource}" },
+        { "expr": "ncc_cluster_checks_count{cluster=~\"$cluster\"}", "legendFormat": "Total Checks", "instant": true, "refId": "C", "datasource": "${datasource}" }
+      ]
+    },
+    {
+      "type": "gauge",
+      "title": "Cluster Health Score",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 10, "x": 14, "y": 6 },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 70 },
+              { "color": "yellow", "value": 85 },
+              { "color": "green", "value": 90 }
+            ]
+          }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "ncc_cluster_health_score{cluster=~\"$cluster\"}", "legendFormat": "{{cluster}}", "refId": "A", "datasource": "${datasource}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Checks Severity Breakdown per Cluster",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 15 } } },
+      "targets": [
+        { "expr": "sum(ncc_cluster_checks_total{cluster=~\"$cluster\", severity=\"FAIL\"}) by (cluster)", "legendFormat": "FAIL - {{cluster}}", "refId": "A", "datasource": "${datasource}" },
+        { "expr": "sum(ncc_cluster_checks_total{cluster=~\"$cluster\", severity=\"WARN\"}) by (cluster)", "legendFormat": "WARN - {{cluster}}", "refId": "B", "datasource": "${datasource}" },
+        { "expr": "sum(ncc_cluster_checks_total{cluster=~\"$cluster\", severity=\"INFO\"}) by (cluster)", "legendFormat": "INFO - {{cluster}}", "refId": "C", "datasource": "${datasource}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Cluster Health Scores History",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "fieldConfig": { "defaults": { "unit": "none", "custom": { "drawStyle": "line", "fillOpacity": 10 } } },
+      "targets": [
+        { "expr": "ncc_cluster_health_score{cluster=~\"$cluster\"}", "legendFormat": "{{cluster}}", "refId": "A", "datasource": "${datasource}" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Self-Heal & Backups",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Self-Heal Status (OK / WARN / FAIL)",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 23 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "field" },
+      "targets": [
+        { "expr": "ncc_selfheal_checks{instance=~\"$instance\"}", "legendFormat": "{{status}}", "refId": "A", "datasource": "${datasource}" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Self-Heal Runs & Fixes Applied",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 23 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
+      "targets": [
+        { "expr": "ncc_selfheal_runs_total{instance=~\"$instance\"}", "legendFormat": "Total Runs", "refId": "A", "datasource": "${datasource}" },
+        { "expr": "ncc_selfheal_fixes_total{instance=~\"$instance\"}", "legendFormat": "Remediations Applied", "refId": "B", "datasource": "${datasource}" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Backups (Total & Encrypted)",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 23 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value" },
+      "targets": [
+        { "expr": "sum(ncc_backups{instance=~\"$instance\"})", "legendFormat": "Total Snapshots", "refId": "A", "datasource": "${datasource}" },
+        { "expr": "ncc_backups_encrypted{instance=~\"$instance\"}", "legendFormat": "Encrypted Snapshots", "refId": "B", "datasource": "${datasource}" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Runs",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 29 },
       "collapsed": false,
       "panels": []
     },
@@ -104,7 +236,7 @@
       "type": "timeseries",
       "title": "Run throughput (per 5m)",
       "datasource": "${datasource}",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 30 },
       "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } } },
       "targets": [
         { "expr": "sum(rate(ncc_runs_triggered_total{instance=~\"$instance\"}[5m]))", "legendFormat": "triggered", "refId": "A", "datasource": "${datasource}" },
@@ -117,7 +249,7 @@
       "title": "Run duration",
       "datasource": "${datasource}",
       "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 10 } } },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 30 },
       "targets": [
         { "expr": "sum(rate(ncc_run_duration_seconds_sum{instance=~\"$instance\"}[15m])) / clamp_min(sum(rate(ncc_run_duration_seconds_count{instance=~\"$instance\"}[15m])), 0.0001)", "legendFormat": "avg (15m)", "refId": "A", "datasource": "${datasource}" },
         { "expr": "max(ncc_run_last_duration_seconds{instance=~\"$instance\"})", "legendFormat": "last", "refId": "B", "datasource": "${datasource}" }
@@ -126,7 +258,7 @@
     {
       "type": "row",
       "title": "Authentication",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 38 },
       "collapsed": false,
       "panels": []
     },
@@ -135,7 +267,7 @@
       "title": "Logins (per 5m)",
       "datasource": "${datasource}",
       "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } } },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 39 },
       "targets": [
         { "expr": "sum(rate(ncc_auth_logins_total{instance=~\"$instance\"}[5m]))", "legendFormat": "success", "refId": "A", "datasource": "${datasource}" },
         { "expr": "sum(rate(ncc_auth_login_failures_total{instance=~\"$instance\"}[5m]))", "legendFormat": "failure", "refId": "B", "datasource": "${datasource}" },
@@ -147,7 +279,7 @@
       "title": "Rate limiter (per 5m)",
       "datasource": "${datasource}",
       "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } } },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 39 },
       "targets": [
         { "expr": "sum(rate(ncc_ratelimit_allowed_total{instance=~\"$instance\"}[5m]))", "legendFormat": "allowed", "refId": "A", "datasource": "${datasource}" },
         { "expr": "sum(rate(ncc_ratelimit_blocked_total{instance=~\"$instance\"}[5m]))", "legendFormat": "blocked", "refId": "B", "datasource": "${datasource}" }
@@ -155,8 +287,8 @@
     },
     {
       "type": "row",
-      "title": "Updates & process",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+      "title": "Updates & Process",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 47 },
       "collapsed": false,
       "panels": []
     },
@@ -165,7 +297,7 @@
       "title": "In-app updates (per 1h)",
       "datasource": "${datasource}",
       "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 60 } } },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 48 },
       "targets": [
         { "expr": "sum(increase(ncc_update_applied_total{instance=~\"$instance\"}[1h]))", "legendFormat": "applied", "refId": "A", "datasource": "${datasource}" },
         { "expr": "sum(increase(ncc_update_failed_total{instance=~\"$instance\"}[1h]))", "legendFormat": "failed", "refId": "B", "datasource": "${datasource}" }
@@ -176,7 +308,7 @@
       "title": "Process memory & goroutines",
       "datasource": "${datasource}",
       "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } } },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 48 },
       "targets": [
         { "expr": "max(ncc_go_memstats_heap_inuse_bytes{instance=~\"$instance\"})", "legendFormat": "heap in-use (bytes)", "refId": "A", "datasource": "${datasource}" },
         { "expr": "max(ncc_go_goroutines{instance=~\"$instance\"})", "legendFormat": "goroutines", "refId": "B", "datasource": "${datasource}" }
