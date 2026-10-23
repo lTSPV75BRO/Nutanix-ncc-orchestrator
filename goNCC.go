@@ -11037,7 +11037,7 @@ func buildAPIHealthProbeCmd(apiBin, listen, tokenFile, repoRoot string) string {
 // built-in `--health-check` self-probe (GET / over loopback, exit 0 healthy / 1
 // unhealthy) so the supervisor can detect a hung UI process, not just a crashed
 // one. tls toggles the https scheme. Returns "" if the binary path is empty.
-func buildUIHealthProbeCmd(uiBin, listen string, tls bool) string {
+func buildUIHealthProbeCmd(uiBin, listen, tlsCertFile, tlsKeyFile string) string {
 	if strings.TrimSpace(uiBin) == "" {
 		return ""
 	}
@@ -11045,11 +11045,12 @@ func buildUIHealthProbeCmd(uiBin, listen string, tls bool) string {
 	if strings.TrimSpace(listen) != "" {
 		parts = append(parts, "--listen", shellQuote(listen))
 	}
-	if tls {
-		// Presence of the cert/key flags switches the probe to https; pass
-		// placeholder paths so the ui-server picks the https scheme. The probe
-		// skips TLS verification, so the values only need to be non-empty.
-		parts = append(parts, "--tls-cert-file", shellQuote("tls.crt"), "--tls-key-file", shellQuote("tls.key"))
+	if strings.TrimSpace(tlsCertFile) != "" && strings.TrimSpace(tlsKeyFile) != "" {
+		// The cert/key flags switch the probe to https, and the probe verifies
+		// the server against that certificate, so pass the real paths the UI
+		// serves. A placeholder fails every probe and the supervisor would
+		// keep restarting a healthy UI.
+		parts = append(parts, "--tls-cert-file", shellQuote(tlsCertFile), "--tls-key-file", shellQuote(tlsKeyFile))
 	}
 	return strings.Join(parts, " ")
 }
@@ -11882,7 +11883,7 @@ func runV2Start(opts v2StartOptions) error {
 				listen:     opts.UIListen,
 				pidPath:    uiPIDPath,
 				logPath:    uiLogPath,
-				healthArgs: buildUIHealthProbeArgs(uiBin, opts.UIListen, uiTLSActive),
+				healthArgs: buildUIHealthProbeArgs(uiBin, opts.UIListen, opts.UITLSCertFile, opts.UITLSKeyFile),
 				// Gate the UI's first launch on the API having written the
 				// shared token file (same ordering as the detached path).
 				waitToken: opts.TokenFile,
@@ -12108,7 +12109,7 @@ func runV2Start(opts v2StartOptions) error {
 				// The UI server's built-in --health-check probe lets the
 				// supervisor catch a hung (alive-but-unresponsive) UI process,
 				// not just a crashed one.
-				uiHealthCmd := buildUIHealthProbeCmd(uiBin, opts.UIListen, strings.TrimSpace(opts.UITLSCertFile) != "")
+				uiHealthCmd := buildUIHealthProbeCmd(uiBin, opts.UIListen, opts.UITLSCertFile, opts.UITLSKeyFile)
 				pid, err := startSelfHealSupervisor("ui", uiBin, uiArgs, uiPIDPath, uiLogPath, opts.SelfHealMaxRestarts, opts.SelfHealWindow, uiHealthCmd, opts.SelfHealProbeInterval, opts.SelfHealUnhealthyThreshold)
 				if err != nil {
 					return fmt.Errorf("start ui self-heal supervisor: %w", err)

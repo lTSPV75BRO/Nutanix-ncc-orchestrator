@@ -403,10 +403,12 @@ func buildAPIHealthProbeArgs(apiBin, listen, tokenFile, repoRoot string) []strin
 }
 
 // buildUIHealthProbeArgs returns the argv (no shell) for the ui-server's
-// built-in `--health-check` self-probe. Mirrors buildUIHealthProbeCmd. The
-// placeholder cert/key flags only switch the probe to the https scheme (it
-// skips verification), matching the sh supervisor. Returns nil if uiBin empty.
-func buildUIHealthProbeArgs(uiBin, listen string, tls bool) []string {
+// built-in `--health-check` self-probe. Mirrors buildUIHealthProbeCmd. When the
+// UI serves TLS, the probe gets the same cert/key paths the UI was started
+// with: it switches to https and verifies the server against that exact
+// certificate, so a placeholder path would fail every probe and make the
+// supervisor restart a healthy UI. Returns nil if uiBin is empty.
+func buildUIHealthProbeArgs(uiBin, listen, tlsCertFile, tlsKeyFile string) []string {
 	if strings.TrimSpace(uiBin) == "" {
 		return nil
 	}
@@ -414,8 +416,8 @@ func buildUIHealthProbeArgs(uiBin, listen string, tls bool) []string {
 	if strings.TrimSpace(listen) != "" {
 		args = append(args, "--listen", listen)
 	}
-	if tls {
-		args = append(args, "--tls-cert-file", "tls.crt", "--tls-key-file", "tls.key")
+	if strings.TrimSpace(tlsCertFile) != "" && strings.TrimSpace(tlsKeyFile) != "" {
+		args = append(args, "--tls-cert-file", tlsCertFile, "--tls-key-file", tlsKeyFile)
 	}
 	return append([]string{uiBin}, args...)
 }
