@@ -21,8 +21,8 @@ jobs:
     name: build, vet & race tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: 'go.mod'
           cache: true
@@ -43,8 +43,8 @@ jobs:
     name: golangci-lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: 'go.mod'
           cache: true
@@ -54,7 +54,7 @@ jobs:
         # toolchain (golangci-lint doesn't support forward Go versions). v9
         # pinned to a current v2.x release actually supports the toolchain
         # this project targets.
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.13.2
           args: --timeout=5m
@@ -62,33 +62,38 @@ jobs:
   frontend:
     name: frontend tests, audit & build
     runs-on: ubuntu-latest
-    env:
-      NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
+    # NODE_COMPILE_CACHE lives on the steps, not here: the `runner` context is
+    # not available in jobs.<id>.env, and referencing it there makes GitHub
+    # reject the whole workflow (every push showed a 0-job "ci.yml" failure).
     defaults:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: "26"
+          node-version: "26.12.1" # >= 26.12.1: Oct 21 2026 Node security release; runner toolcache may lag
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: npm ci
+        env:
+          NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
         run: npm ci
       - name: npm audit (production)
         run: npm audit --omit=dev
       - name: npm test
         run: npm test
       - name: npm run build
+        env:
+          NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
         run: npm run build
 
   govulncheck:
     name: govulncheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: 'go.mod'
           cache: true
@@ -101,7 +106,7 @@ jobs:
     name: trivy filesystem scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Trivy vulnerability + config scan
         # Pinned to the v0.35.0 commit SHA rather than a floating tag: in
         # March 2026 an attacker force-pushed malicious code onto 75 of 76
