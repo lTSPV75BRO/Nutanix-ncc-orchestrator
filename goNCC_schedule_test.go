@@ -104,7 +104,7 @@ func TestRemoveScheduleLine(t *testing.T) {
 		t.Fatalf("expected unrelated entry to remain:\n%s", got)
 	}
 
-	got, removed = removeScheduleLine(content, "does-not-exist")
+	_, removed = removeScheduleLine(content, "does-not-exist")
 	if removed {
 		t.Fatal("expected removed=false for missing marker")
 	}

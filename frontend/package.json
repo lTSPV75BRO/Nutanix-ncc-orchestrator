@@ -1,7 +1,7 @@
 {
   "name": "ncc-v2-frontend",
   "private": true,
-  "version": "2.2.0",
+  "version": "2.2.1",
   "type": "module",
   "engines": {
     "node": ">=26"
@@ -39,6 +39,6 @@
     "vitest": "^4.1.10"
   },
   "overrides": {
-    "dompurify": "^3.4.12"
+    "dompurify": "^3.4.17"
   }
 }

@@ -345,6 +345,11 @@ func (s *apiServer) runUpdateJob(req updateApplyRequest) {
 	// key from the inherited NCC_BACKUP_* environment; rollback (v2-restore) picks
 	// up the same key the same way, so the auto-restore stays transparent.
 	encrypt := backupKeyConfigured()
+	if !encrypt && backupEncryptionRequired() {
+		s.updateFailedTotal.Add(1)
+		updateJob.fail("pre-update backup must be encrypted but no server-side backup key is configured (set NCC_BACKUP_KEY_FILE, NCC_BACKUP_KEY, or NCC_BACKUP_PASSPHRASE on the API server; rollback uses the same key). The update was not applied.")
+		return
+	}
 	backupName := "pre-update-" + stamp + backupFileSuffix
 	if encrypt {
 		backupName = "pre-update-" + stamp + backupEncSuffix
@@ -378,7 +383,7 @@ func (s *apiServer) runUpdateJob(req updateApplyRequest) {
 	out, err := s.runOrchestrator(args, 12*time.Minute)
 	if err != nil {
 		s.updateFailedTotal.Add(1)
-		updateJob.fail("update failed (a pre-update backup was saved at " + backupPath + "): " + firstNonEmptyLine(out, err.Error()))
+		updateJob.fail("update failed and was not applied (a pre-update backup was saved as " + filepath.Base(backupPath) + "): " + redactPaths(firstNonEmptyLine(lastErrorLine(out), err.Error())))
 		return
 	}
 	// "Already on the latest version" is a success with nothing to restart.
@@ -409,4 +414,24 @@ func (s *apiServer) runUpdateJob(req updateApplyRequest) {
 		return
 	}
 	// Leave inProgress true: the restart will replace this process shortly.
+}
+
+// lastErrorLine returns the most relevant line of orchestrator output for an
+// error message: the last line mentioning an error, else the last non-empty
+// line. (The first line is usually a progress message such as "Downloading…".)
+func lastErrorLine(out string) string {
+	lines := strings.Split(out, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		l := strings.TrimSpace(lines[i])
+		low := strings.ToLower(l)
+		if l != "" && (strings.Contains(low, "error") || strings.Contains(low, "failed") || strings.Contains(low, "denied") || strings.Contains(low, "refus")) {
+			return l
+		}
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		if l := strings.TrimSpace(lines[i]); l != "" {
+			return l
+		}
+	}
+	return ""
 }

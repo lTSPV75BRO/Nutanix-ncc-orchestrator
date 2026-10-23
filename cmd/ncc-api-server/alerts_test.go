@@ -101,10 +101,10 @@ func TestFetchPCAlertsPagination(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Query().Get("$page") == "0" {
-			w.Write([]byte(`{"metadata":{"totalAvailableResults":2},"data":[{"clusterName":"lab-a","title":"a","severity":"CRITICAL"}]}`))
+			_, _ = w.Write([]byte(`{"metadata":{"totalAvailableResults":2},"data":[{"clusterName":"lab-a","title":"a","severity":"CRITICAL"}]}`))
 			return
 		}
-		w.Write([]byte(`{"metadata":{"totalAvailableResults":2},"data":[{"clusterName":"lab-b","title":"b","severity":"INFO"}]}`))
+		_, _ = w.Write([]byte(`{"metadata":{"totalAvailableResults":2},"data":[{"clusterName":"lab-b","title":"b","severity":"INFO"}]}`))
 	}))
 	defer server.Close()
 

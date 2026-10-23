@@ -34,7 +34,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: stage-orchestrator-binary
-          image: docker.io/prajwalnutant/nutanix-ncc-orchestrator:2.2.0
+          image: docker.io/prajwalnutant/nutanix-ncc-orchestrator:2.2.1
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "cp /usr/local/bin/ncc-orchestrator /tools/ncc-orchestrator && chmod 0755 /tools/ncc-orchestrator"]
           securityContext:
@@ -57,7 +57,7 @@ spec:
 
       containers:
         - name: api
-          image: docker.io/prajwalnutant/ncc-api-server:2.2.0
+          image: docker.io/prajwalnutant/ncc-api-server:2.2.1
           imagePullPolicy: IfNotPresent
           args:
             - "--listen"
@@ -93,11 +93,11 @@ spec:
             - name: NCC_RUNTIME_MODE
               value: "kubernetes"
             - name: NCC_IMAGE_TAG
-              value: "2.2.0"
+              value: "2.2.1"
             - name: NCC_ORCHESTRATOR_IMAGE_TAG
-              value: "2.2.0"
+              value: "2.2.1"
             - name: NCC_UI_IMAGE_TAG
-              value: "2.2.0"
+              value: "2.2.1"
             - name: NCC_UI_ORIGIN
               valueFrom:
                 configMapKeyRef:
@@ -123,6 +123,28 @@ spec:
                 secretKeyRef:
                   name: ncc-v2-secrets
                   key: jwt-secret
+            # Server-side key that seals API-created backups (AES-256-GCM).
+            # Backups are encrypted by default (NCC_BACKUP_ENCRYPTION=required);
+            # without this key, snapshots need a per-request passphrase.
+            # Create with: --from-literal=backup-key="$(openssl rand -base64 32)"
+            - name: NCC_BACKUP_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ncc-v2-secrets
+                  key: backup-key
+                  optional: true
+            # Optional application-level envelope encryption of the user store
+            # (in addition to etcd encryption of the ncc-v2-users Secret).
+            - name: NCC_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ncc-v2-secrets
+                  key: master-key
+                  optional: true
+            # Trust X-Forwarded-For only from these peers (the UI pods / ingress).
+            # Narrow this to your pod CIDR for accurate per-client rate limits.
+            - name: NCC_TRUSTED_PROXY_CIDRS
+              value: "private,loopback"
           ports:
             - containerPort: 8081
               name: http

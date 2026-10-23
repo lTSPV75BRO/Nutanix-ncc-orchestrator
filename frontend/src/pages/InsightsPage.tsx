@@ -36,6 +36,7 @@ import { FeatureDisabled } from "../features/features/FeatureDisabled";
 import { useFeatureFlags } from "../features/features/useFeatureFlags";
 import { DrilldownDiffPanel } from "../features/report/DrilldownDiffPanel";
 import { FlakyChecksPanel } from "../features/report/FlakyChecksPanel";
+import { LifecycleInsightsCard } from "../features/report/LifecycleInsightsCard";
 import { SloPanel } from "../features/report/SloPanel";
 import { notifyError } from "../notify";
 import { ageMs, relativeTime } from "../utils/datetime";
@@ -769,6 +770,8 @@ export function InsightsPage() {
           </Typography.Text>
         ) : null}
       </Card>
+
+      <LifecycleInsightsCard enabled={features.isFetched && !insightsOff} />
 
       {sharedChecks.length > 0 ? (
         <Card className="page-card">

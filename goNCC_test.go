@@ -1224,7 +1224,7 @@ func TestOSFS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
-	file.Write([]byte("created"))
+	_, _ = file.Write([]byte("created"))
 	file.Close()
 
 	// Test ReadDir
@@ -1387,10 +1387,8 @@ func TestSendWebhookDisabled(t *testing.T) {
 func TestConfigDefaults(t *testing.T) {
 	cfg := Config{}
 
-	// Test that zero values are reasonable
-	if cfg.MaxParallel <= 0 {
-		// This is fine, will be set by bindConfig
-	}
+	// Zero values are fine here: bindConfig fills MaxParallel in later.
+	_ = cfg.MaxParallel
 
 	// Test that empty slices are nil or empty
 	if len(cfg.Clusters) != 0 {
@@ -5366,4 +5364,33 @@ func TestEncryptedBackupRoundTrip(t *testing.T) {
 // base64StdKey32 returns a base64-encoded 32-byte key for tests.
 func base64StdKey32() string {
 	return base64.StdEncoding.EncodeToString(make([]byte, 32))
+}
+
+// Regression: artifact retention ran after every report and deleted any
+// non-protected file in the output directory — including the api-server's NCC
+// acknowledge/resolve marks, so marks vanished whenever a new report arrived.
+func TestArtifactRetentionKeepsServerStateAndSidecar(t *testing.T) {
+	tmpDir := t.TempDir()
+	old := time.Now().Add(-30 * 24 * time.Hour)
+	keep := []string{"ncc-alert-dispositions.json", "feature-flags.json", "aggregated-data.json"}
+	for _, name := range append(keep, "stale-cluster.log.html") {
+		p := filepath.Join(tmpDir, name)
+		if err := os.WriteFile(p, []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := applyArtifactRetentionPolicies(tmpDir, 1, 1, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range keep {
+		if _, err := os.Stat(filepath.Join(tmpDir, name)); err != nil {
+			t.Fatalf("%s must survive artifact retention: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, "stale-cluster.log.html")); err == nil {
+		t.Fatal("ordinary stale artifacts should still be pruned")
+	}
 }

@@ -292,7 +292,7 @@ func runChildOnce(ctx context.Context, cfg *superviseConfig, c *superviseChild, 
 	if len(c.healthArgs) == 0 {
 		select {
 		case <-ctx.Done():
-			stopChild(cmd, waitCh, cfg.stopGrace)
+			_ = stopChild(cmd, waitCh, cfg.stopGrace)
 			return childShutdown
 		case err := <-waitCh:
 			logf("%s exited pid=%d (%s)", c.name, pid, exitDesc(err))
@@ -308,7 +308,7 @@ func runChildOnce(ctx context.Context, cfg *superviseConfig, c *superviseChild, 
 	for {
 		select {
 		case <-ctx.Done():
-			stopChild(cmd, waitCh, cfg.stopGrace)
+			_ = stopChild(cmd, waitCh, cfg.stopGrace)
 			return childShutdown
 		case err := <-waitCh:
 			logf("%s exited pid=%d (%s)", c.name, pid, exitDesc(err))
@@ -322,7 +322,7 @@ func runChildOnce(ctx context.Context, cfg *superviseConfig, c *superviseChild, 
 			logf("%s health probe failed (%d/%d) pid=%d", c.name, unhealthy, cfg.unhealthyThreshold, pid)
 			if unhealthy >= cfg.unhealthyThreshold {
 				logf("%s unhealthy threshold reached; restarting pid=%d", c.name, pid)
-				stopChild(cmd, waitCh, cfg.stopGrace)
+				_ = stopChild(cmd, waitCh, cfg.stopGrace)
 				return childUnhealthy
 			}
 		}
@@ -330,17 +330,18 @@ func runChildOnce(ctx context.Context, cfg *superviseConfig, c *superviseChild, 
 }
 
 // stopChild sends SIGTERM, waits up to grace for a clean exit, then SIGKILLs.
-func stopChild(cmd *exec.Cmd, waitCh <-chan error, grace time.Duration) {
+// It returns the child's exit error (nil for a clean exit).
+func stopChild(cmd *exec.Cmd, waitCh <-chan error, grace time.Duration) error {
 	if cmd == nil || cmd.Process == nil {
-		return
+		return nil
 	}
 	signalProcessStop(cmd)
 	select {
-	case <-waitCh:
-		return
+	case err := <-waitCh:
+		return err
 	case <-time.After(grace):
 		_ = cmd.Process.Kill()
-		<-waitCh
+		return <-waitCh
 	}
 }
 
@@ -403,10 +404,12 @@ func buildAPIHealthProbeArgs(apiBin, listen, tokenFile, repoRoot string) []strin
 }
 
 // buildUIHealthProbeArgs returns the argv (no shell) for the ui-server's
-// built-in `--health-check` self-probe. Mirrors buildUIHealthProbeCmd. The
-// placeholder cert/key flags only switch the probe to the https scheme (it
-// skips verification), matching the sh supervisor. Returns nil if uiBin empty.
-func buildUIHealthProbeArgs(uiBin, listen string, tls bool) []string {
+// built-in `--health-check` self-probe. Mirrors buildUIHealthProbeCmd. When the
+// UI serves TLS, the probe gets the same cert/key paths the UI was started
+// with: it switches to https and verifies the server against that exact
+// certificate, so a placeholder path would fail every probe and make the
+// supervisor restart a healthy UI. Returns nil if uiBin is empty.
+func buildUIHealthProbeArgs(uiBin, listen, tlsCertFile, tlsKeyFile string) []string {
 	if strings.TrimSpace(uiBin) == "" {
 		return nil
 	}
@@ -414,8 +417,8 @@ func buildUIHealthProbeArgs(uiBin, listen string, tls bool) []string {
 	if strings.TrimSpace(listen) != "" {
 		args = append(args, "--listen", listen)
 	}
-	if tls {
-		args = append(args, "--tls-cert-file", "tls.crt", "--tls-key-file", "tls.key")
+	if strings.TrimSpace(tlsCertFile) != "" && strings.TrimSpace(tlsKeyFile) != "" {
+		args = append(args, "--tls-cert-file", tlsCertFile, "--tls-key-file", tlsKeyFile)
 	}
 	return append([]string{uiBin}, args...)
 }

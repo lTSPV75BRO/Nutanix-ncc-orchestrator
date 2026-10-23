@@ -4,7 +4,99 @@ All notable changes to the Nutanix NCC Orchestrator are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-**Release checklist (for maintainers):** Ensure [`VERSION`](VERSION) matches the intended tag; default `main.Version` in code is `2.2.0` when not set via ldflags. Run `go vet ./...`, `go test -race ./...`, and `go build ./...` (and `go build ./cmd/ncc-mcp-server`). Confirm `k8s/` and `helm/` image tags match `VERSION`. Tag `v2.2.0` and create a GitHub release using the matching `RELEASE_NOTES_v*.md`; attach `ncc-orchestrator-*` standalone binaries, `ncc-v2-stack-*` archives, and `checksums.txt` only — **do not** attach standalone `ncc-api-server-*` / `ncc-ui-server-*` binaries (the v1.x self-updater would silently mis-select them; see [2.0.0] known-issue note below and the v2.0.1 selector fix).
+**Release checklist (for maintainers):** Ensure [`VERSION`](VERSION) matches the intended tag; default `main.Version` in code is `2.2.1` when not set via ldflags. Run `go vet ./...`, `go test -race ./...`, and `go build ./...` (and `go build ./cmd/ncc-mcp-server`). Confirm `k8s/` and `helm/` image tags match `VERSION`. Tag `v2.2.1` and create a GitHub release using the matching `RELEASE_NOTES_v*.md`; attach `ncc-orchestrator-*` standalone binaries, `ncc-v2-stack-*` archives, and `checksums.txt` only — **do not** attach standalone `ncc-api-server-*` / `ncc-ui-server-*` binaries (the v1.x self-updater would silently mis-select them; see [2.0.0] known-issue note below and the v2.0.1 selector fix).
+
+---
+
+## [2.2.1] - Unreleased (date set when the v2.2.1 tag is published)
+
+Bug fixes, alert history, security hardening, and integration docs. Release
+notes: [`RELEASE_NOTES_v2.2.1.md`](RELEASE_NOTES_v2.2.1.md). See
+[`docs/security/security-assessment-2026-10.md`](docs/security/security-assessment-2026-10.md)
+and [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/third-party-alert-integrations.md).
+
+### Fixed
+
+- **Acknowledged/resolved NCC alerts were cleared after a new report.** Root
+  causes: the marks file lived in `outputfiles/`, which the runner's artifact
+  retention prunes after every run; API replicas on a shared volume (Helm
+  default: 2) raced on read-modify-write (the GET after a new run rewrote the
+  file) and shared one temp file name; "reopen" deleted the record. Marks now
+  live in a persistent lifecycle store (`<repo-root>/.ncc-api-alert-lifecycle.json`)
+  updated under a cross-process lock; the old file is imported once and kept as
+  a compatibility mirror; retention protects it, `feature-flags.json`, and the
+  `aggregated-data.json` sidecar.
+- **Successful runs showed "—" as status.** The runner omitted `exit_code`
+  when it was 0. It now always writes `exit_code` and `status`; the API returns
+  an explicit `status` (`success`/`partial`/`failed`/`triggered`/`trigger_failed`/`unknown`)
+  and recognizes summaries from older runners.
+- **In-app upgrade failed on Windows.** Running `.exe` files cannot be
+  overwritten on Windows; the installer now moves running binaries aside,
+  activates the new ones, and rolls everything back on failure. Updates that
+  could not be activated no longer report success. The restarter detaches from
+  the parent console/job.
+- `/api/v1/runs/active` was polled by five independent timers; a single poller
+  now serves all views (idle every 30 s, active every 3 s, paused in hidden
+  tabs, backoff on errors).
+- **`docker compose build` failed.** `Dockerfile.api`/`Dockerfile.ui` used
+  `golang:1.27.1-alpine` while `go.mod` requires 1.27.3 (`GOTOOLCHAIN=local`),
+  and `Dockerfile.ui` did not copy `example_config.yaml` (broken since v2.1.0).
+  Guarded by `release_dockerfiles_test.go`.
+- `ci.yml` was rejected by GitHub (`runner.temp` in a job-level `env`), so CI
+  had not been running.
+- README instructions that did not work (`run` subcommand, archive layout,
+  required secrets, Compose over HTTPS) were corrected.
+
+### Added
+
+- **NCC alert history API:** `GET /api/v1/alerts/ncc`, `/api/v1/alerts/ncc/events`,
+  `/api/v1/alerts/ncc/{id}`, `POST /api/v1/alerts/ncc/{id}/{acknowledge|resolve|reopen}`.
+  UUIDv4 instance ids, stable `finding_id`, detection vs. operator state,
+  append-only events, cursor paging, cluster-group scoping,
+  `--alert-history-retain-days` (default 365).
+- Prometheus gauges `ncc_alerts_active{state,detection,severity}` and friends.
+- Typed OpenAPI schemas for `/api/v1/alerts/ncc`, `/events`, and `/{id}`.
+- Dashboard **Lifecycle** card in the NCC alert panel (age, last reported,
+  recurrences with the last resolution, severity changes) and an Insights
+  **Alert aging and recurrence** card (age buckets per cluster, median time to
+  acknowledge/resolve, recurring findings, open alerts no longer reported).
+- gzip compression of API JSON responses.
+- `--audit-log-keep` (default 10 rotated generations; previously 1).
+
+### Security
+
+- Backups are encrypted by default (`NCC_BACKUP_ENCRYPTION=required`); a
+  plaintext backup is refused with `412 NCC_BACKUP_ENCRYPTION_REQUIRED`.
+  **Behavior change:** configure `NCC_BACKUP_KEY_FILE`/`NCC_BACKUP_KEY` (or a
+  passphrase per backup), or set `NCC_BACKUP_ENCRYPTION=optional`.
+- `/api/v1/health` no longer exposes paths, token locations, or storage
+  details to anonymous callers; other viewer endpoints return relative paths.
+- Login throttling per account+source, account, and source, with progressive
+  lockout and shared state across replicas; `X-Forwarded-For` only from
+  `--trusted-proxy-cidrs`, parsed right-to-left.
+- `--require-encrypted-user-store`; optional `master-key`/`backup-key` secret
+  wiring in Kubernetes manifests and Helm.
+- More endpoints rate limited; `ReadHeaderTimeout`/`MaxHeaderBytes` set.
+- Build toolchain pinned to Node.js 26.12.1 (CVE-2026-111497); images upgrade
+  `ca-certificates` at build (eMudhra CA distrust). The published
+  `deploy/docker` images no longer restore a pre-upgrade CA bundle afterwards.
+- Email notifications parse sender/recipient addresses, encode the subject,
+  and base64-encode the body (header injection). **Behavior change:** invalid
+  addresses now fail the send.
+- Admin password resets no longer write the new password to the server log
+  (read it from `.ncc-initial-admin-password` or the Kubernetes Secret).
+- `ncc-ui-server --health-check` verifies the server's own certificate over
+  HTTPS instead of skipping verification.
+- `dompurify` override raised to `^3.4.17` (GHSA-cg2g-xh64-v4q7,
+  GHSA-mrv2-3pqr-j5jr, GHSA-c6gr-qvv4-5v3f).
+
+### Changed
+
+- GitHub Actions on the Node 24 runtime (checkout/setup-go/setup-node v7,
+  CodeQL v4, attest v4); third-party actions pinned by SHA; no dependency
+  caches or persisted credentials in publishing workflows.
+- golangci-lint v2.15.0 with `.golangci.yml`; existing lint findings fixed
+  (unused code removed, dead assignments, unchecked errors).
 
 ---
 

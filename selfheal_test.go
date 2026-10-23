@@ -302,16 +302,18 @@ func TestEvaluateRuntimeDrift(t *testing.T) {
 }
 
 func TestBuildUIHealthProbeCmd(t *testing.T) {
-	if got := buildUIHealthProbeCmd("", ":8080", false); got != "" {
+	if got := buildUIHealthProbeCmd("", ":8080", "", ""); got != "" {
 		t.Errorf("empty bin must yield empty cmd, got %q", got)
 	}
-	httpCmd := buildUIHealthProbeCmd("/opt/ncc/ncc-ui-server", ":8080", false)
+	httpCmd := buildUIHealthProbeCmd("/opt/ncc/ncc-ui-server", ":8080", "", "")
 	if !strings.Contains(httpCmd, "--health-check") || !strings.Contains(httpCmd, "--listen") || strings.Contains(httpCmd, "--tls-cert-file") {
 		t.Errorf("unexpected http ui probe cmd: %q", httpCmd)
 	}
-	httpsCmd := buildUIHealthProbeCmd("/opt/ncc/ncc-ui-server", ":8443", true)
-	if !strings.Contains(httpsCmd, "--tls-cert-file") || !strings.Contains(httpsCmd, "--tls-key-file") {
-		t.Errorf("https ui probe cmd should carry tls flags for scheme selection: %q", httpsCmd)
+	// The probe verifies the server against the given certificate, so it must
+	// get the real paths the UI serves, never placeholders.
+	httpsCmd := buildUIHealthProbeCmd("/opt/ncc/ncc-ui-server", ":8443", "/opt/ncc/tls/ui.crt", "/opt/ncc/tls/ui.key")
+	if !strings.Contains(httpsCmd, "--tls-cert-file '/opt/ncc/tls/ui.crt'") || !strings.Contains(httpsCmd, "--tls-key-file '/opt/ncc/tls/ui.key'") {
+		t.Errorf("https ui probe cmd should carry the served cert/key paths: %q", httpsCmd)
 	}
 }
 

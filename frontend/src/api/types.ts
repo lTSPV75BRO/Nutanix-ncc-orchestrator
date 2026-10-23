@@ -636,6 +636,10 @@ export type RunInfo = {
   info_total?: number;
   exit_code?: number;
   success?: boolean;
+  /** Explicit outcome from the API (v2.2.1+). */
+  status?: "success" | "partial" | "failed" | "running" | "queued" | "pending" | "cancelled" | "triggered" | "trigger_failed" | "unknown";
+  /** How `status` was derived: exit_code, legacy_summary, audit, or none. */
+  status_source?: string;
   run_source?: string;
   client?: string;
   user_agent?: string;
@@ -816,6 +820,84 @@ export type NCCDispositionEvent = {
   reason?: string;
 };
 
+export type NCCAlertEvent = {
+  id: string;
+  alert_id: string;
+  correlation_key: string;
+  type: string;
+  at: string;
+  actor: string;
+  run_at?: string;
+  from_state?: string;
+  to_state?: string;
+  from_severity?: string;
+  to_severity?: string;
+  note?: string;
+  reason?: string;
+  seq: number;
+};
+
+/** One NCC alert instance from the lifecycle store (GET /api/v1/alerts/ncc). */
+export type NCCAlert = {
+  id: string;
+  finding_id: string;
+  correlation_key: string;
+  source: string;
+  type: string;
+  cluster: string;
+  cluster_name?: string;
+  check: string;
+  severity?: string;
+  state: "open" | "acknowledged" | "resolved";
+  detection: "detected" | "not_detected" | "unknown";
+  closed: boolean;
+  closed_at?: string;
+  close_reason?: "resolved_not_detected" | "recurred";
+  first_seen_at?: string;
+  first_seen_run?: string;
+  last_seen_at?: string;
+  last_seen_run?: string;
+  not_detected_since_run?: string;
+  acknowledged_at?: string;
+  acknowledged_by?: string;
+  resolved_at?: string;
+  resolved_by?: string;
+  resolved_run?: string;
+  note?: string;
+  reopened?: boolean;
+  reopen_reason?: string;
+  previous_id?: string;
+  next_id?: string;
+  created_at: string;
+  updated_at: string;
+  revision: number;
+  legacy_migrated?: boolean;
+  last_actor?: string;
+  last_state_change_at?: string;
+};
+
+export type NCCAlertList = {
+  items: NCCAlert[];
+  count: number;
+  next_cursor: string;
+  last_run: string;
+};
+
+export type NCCAlertListQuery = {
+  cluster?: string;
+  check?: string;
+  finding_id?: string;
+  include_closed?: boolean;
+  limit?: number;
+  cursor?: string;
+};
+
+export type NCCAlertDetail = {
+  alert: NCCAlert;
+  events: NCCAlertEvent[];
+  instances: Array<{ id: string; state: string; created_at: string; closed_at: string; close_reason: string }>;
+};
+
 export type NCCDisposition = {
   cluster: string;
   check: string;
@@ -826,6 +908,15 @@ export type NCCDisposition = {
   run_at?: string;
   reason?: string;
   history?: NCCDispositionEvent[];
+  /** Server-generated UUIDv4 of this alert instance (v2.2.1+). */
+  id?: string;
+  /** Stable identity of the underlying finding across runs and instances. */
+  finding_id?: string;
+  /** Whether the latest run that covered this cluster still reported the check. */
+  detection?: "detected" | "not_detected" | "unknown";
+  severity?: string;
+  first_seen_at?: string;
+  last_seen_at?: string;
 };
 
 export type FeatureFlags = {
@@ -844,7 +935,7 @@ export type NCCDispositionInput = {
   run_at?: string;
   cluster?: string;
   check?: string;
-  items?: Array<{ cluster: string; check: string }>;
+  items?: Array<{ cluster: string; check: string; id?: string }>;
 };
 
 export type PCAlertsData = {

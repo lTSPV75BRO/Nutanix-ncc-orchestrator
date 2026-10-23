@@ -67,8 +67,21 @@ func TestValidateBackupScheduleInput(t *testing.T) {
 	if err := validateBackupScheduleInput(backupScheduleState{Enabled: true, Every: "24h", Retain: -1}); err == nil {
 		t.Fatal("negative retain should be rejected")
 	}
+	for _, k := range []string{"NCC_BACKUP_KEY_FILE", "NCC_BACKUP_KEY", "NCC_BACKUP_PASSPHRASE"} {
+		t.Setenv(k, "")
+	}
+	// Default policy: scheduled snapshots must be encrypted with a server key.
+	if err := validateBackupScheduleInput(backupScheduleState{Enabled: true, Every: "24h", Retain: 7}); err == nil {
+		t.Fatal("a plaintext schedule must be rejected under the default required-encryption policy")
+	}
+	t.Setenv("NCC_BACKUP_KEY", "c2VjcmV0LXNlY3JldC1zZWNyZXQtc2VjcmV0LTMyYg==")
 	if err := validateBackupScheduleInput(backupScheduleState{Enabled: true, Every: "24h", Retain: 7}); err != nil {
-		t.Fatalf("valid schedule should pass, got %v", err)
+		t.Fatalf("valid schedule with a server key should pass, got %v", err)
+	}
+	t.Setenv("NCC_BACKUP_KEY", "")
+	t.Setenv(backupEncryptionEnv, "optional")
+	if err := validateBackupScheduleInput(backupScheduleState{Enabled: true, Every: "24h", Retain: 7}); err != nil {
+		t.Fatalf("explicit optional policy should allow plaintext schedules, got %v", err)
 	}
 }
 

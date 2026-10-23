@@ -164,7 +164,7 @@ If `v2` assets are missing, bootstrap will fail with a "required v2 assets not f
 3. Build `ncc-api-server` and `ncc-ui-server` binaries for supported OS/arch.
 4. Build frontend distribution and package it (`.zip` or `.tar.gz`).
 5. Generate `checksums.txt` for CLI binaries (and optionally for other binaries).
-6. Create tag `v2.x.y` and publish release with all required v2 assets (the current release is `v2.2.0`).
+6. Create tag `v2.x.y` and publish release with all required v2 assets (the current release is `v2.2.1`).
 7. Validate:
    - `ncc-orchestrator update --check --allow-major-upgrade`
    - `ncc-orchestrator v2-bootstrap --check`

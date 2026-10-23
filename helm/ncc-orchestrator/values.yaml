@@ -3,20 +3,20 @@ namespace: ncc-orchestrator-v2
 images:
   runner:
     repository: docker.io/prajwalnutant/nutanix-ncc-orchestrator
-    tag: "2.2.0"
+    tag: "2.2.1"
     pullPolicy: IfNotPresent
   api:
     repository: docker.io/prajwalnutant/ncc-api-server
-    tag: "2.2.0"
+    tag: "2.2.1"
     pullPolicy: IfNotPresent
   ui:
     repository: docker.io/prajwalnutant/ncc-ui-server
-    tag: "2.2.0"
+    tag: "2.2.1"
     pullPolicy: IfNotPresent
 
 image:
   repository: docker.io/prajwalnutant/nutanix-ncc-orchestrator
-  tag: "2.2.0"
+  tag: "2.2.1"
   pullPolicy: IfNotPresent
 
 cronjob:
@@ -32,6 +32,11 @@ api:
   replicas: 2
   service:
     port: 8081
+  # Peers whose X-Forwarded-For is honored for client-IP rate limiting and
+  # login throttling. "private,loopback" keeps the pre-2.2.1 behavior; set it to
+  # your pod/ingress CIDRs (e.g. "10.244.0.0/16") so other in-cluster clients
+  # cannot spoof their source address.
+  trustedProxyCIDRs: "private,loopback"
 
 ui:
   enabled: true

@@ -245,15 +245,6 @@ func normalizeClusterSourceMode(s string) (string, error) {
 	}
 }
 
-func splitCSVTrimLower(s string) []string {
-	in := splitCSV(s)
-	out := make([]string, 0, len(in))
-	for _, v := range in {
-		out = append(out, strings.ToLower(strings.TrimSpace(v)))
-	}
-	return out
-}
-
 func levenshteinDistance(a, b string) int {
 	if a == b {
 		return 0
@@ -2820,16 +2811,34 @@ type RunSummaryJSON struct {
 	ClustersFailed int                 `json:"clusters_failed"`
 	FailedClusters []string            `json:"failed_clusters,omitempty"`
 	Clusters       []RunClusterSummary `json:"clusters,omitempty"`
-	ExitCode       int                 `json:"exit_code,omitempty"`
-	IndexHTML      string              `json:"index_html"`
-	TotalChecks    int                 `json:"total_checks,omitempty"`
-	AvgHealthScore int                 `json:"avg_health_score,omitempty"`
-	MinHealthScore int                 `json:"min_health_score,omitempty"`
-	FailureClasses map[string]int      `json:"failure_classes,omitempty"`
+	// ExitCode is always written (no omitempty): with omitempty a successful
+	// run (exit code 0) omitted the field and the UI could not tell success
+	// from "unknown".
+	ExitCode int `json:"exit_code"`
+	// Status is the explicit outcome: "success", "partial" (some clusters
+	// failed, exit 3) or "failed".
+	Status         string         `json:"status,omitempty"`
+	IndexHTML      string         `json:"index_html"`
+	TotalChecks    int            `json:"total_checks,omitempty"`
+	AvgHealthScore int            `json:"avg_health_score,omitempty"`
+	MinHealthScore int            `json:"min_health_score,omitempty"`
+	FailureClasses map[string]int `json:"failure_classes,omitempty"`
 	// Source records how the run was launched ("scheduled", "manual", ""),
 	// taken from NCC_RUN_SOURCE, so the dashboard can distinguish a systemd-
 	// timer/cron scheduled run from an interactive/API-triggered one.
 	Source string `json:"source,omitempty"`
+}
+
+// runSummaryStatus maps the run exit code onto the run-summary status field.
+func runSummaryStatus(exitCode, clustersOK int) string {
+	switch {
+	case exitCode == 0:
+		return "success"
+	case exitCode == 3 && clustersOK > 0:
+		return "partial"
+	default:
+		return "failed"
+	}
 }
 
 // RunClusterSummary is per-cluster stats for automation (run-summary.json).
@@ -3167,18 +3176,6 @@ func writeExcludedAlertsAuditJSON(fs FS, outDir string, matchMode string, titles
 // clusterHealthScore is an alias for model.ClusterHealthScore (moved to the
 // leaf model package); existing call sites in this package are unchanged.
 var clusterHealthScore = model.ClusterHealthScore
-
-func buildChecksSnapshot(results []ClusterResult) ChecksSnapshotJSON {
-	snap := ChecksSnapshotJSON{
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
-		Clusters:  make([]ClusterChecksSnapshot, 0, len(results)),
-	}
-	for _, r := range results {
-		snap.Clusters = append(snap.Clusters, buildClusterChecksSnapshotFromResult(r))
-	}
-	sort.Slice(snap.Clusters, func(i, j int) bool { return snap.Clusters[i].Address < snap.Clusters[j].Address })
-	return snap
-}
 
 // clusterRunFailedCheckName is the synthetic check title used to surface a
 // cluster's connection/run failure as a real, visible alert row instead of
@@ -3619,6 +3616,14 @@ func applyArtifactRetentionPolicies(outputDir string, retainDays, retainMaxFiles
 		"slo-dashboard.json":      true,
 		"policy-gates.txt":        true,
 		"excluded-alerts.json":    true,
+		// Large runs move the aggregated rows out of index.html into this
+		// sidecar; index.html is useless without it.
+		"aggregated-data.json": true,
+		// Server-side state the api-server keeps in the output directory.
+		// Pruning these deleted operator acknowledge/resolve marks and
+		// feature-flag overrides after every run.
+		"ncc-alert-dispositions.json": true,
+		"feature-flags.json":          true,
 	}
 	type item struct {
 		name string
@@ -3822,32 +3827,6 @@ func buildRunClusterSummary(r ClusterResult) RunClusterSummary {
 	s.ChecksTotal = len(r.Blocks)
 	s.HealthScore = clusterHealthScore(s.FailCount, s.WarnCount, s.ErrCount, s.ChecksTotal)
 	return s
-}
-
-func failureClassCounts(results []ClusterResult) map[string]int {
-	counts := map[string]int{
-		"timeout":    0,
-		"auth":       0,
-		"network":    0,
-		"api":        0,
-		"parser":     0,
-		"rate_limit": 0,
-		"unknown":    0,
-	}
-	for _, r := range results {
-		if r.Err == nil {
-			continue
-		}
-		class := strings.TrimSpace(r.ErrorClass)
-		if class == "" {
-			class = classifyClusterError(r.Err)
-		}
-		if _, ok := counts[class]; !ok {
-			class = "unknown"
-		}
-		counts[class]++
-	}
-	return counts
 }
 
 func newFailureClassCounts() map[string]int {
@@ -6245,15 +6224,7 @@ function initTooltips() {
 
 	aggRows := make([]tmplRow, 0, len(rows))
 	for _, r := range rows {
-		aggRows = append(aggRows, tmplRow{
-			Cluster:        r.Cluster,
-			Severity:       r.Severity,
-			Check:          r.Check,
-			Detail:         r.Detail,
-			ClusterName:    r.ClusterName,
-			ClusterVersion: r.ClusterVersion,
-			NCCVersion:     r.NCCVersion,
-		})
+		aggRows = append(aggRows, tmplRow(r))
 	}
 
 	const maxEmbeddedAggRows = 20000
@@ -6576,7 +6547,6 @@ func doWithRetry(ctx context.Context, client HTTPClient, req *http.Request, cfg 
 
 		status := resp.StatusCode
 		if status >= 200 && status < 300 {
-			consecutiveRetryableFailures = 0
 			noteHTTPStatusForAdaptiveParallelism(status, cfg)
 			log.Debug().Str("op", op).Int("status", status).Msg("request succeeded")
 			return resp, body, nil
@@ -6661,54 +6631,6 @@ func generateRequestID() (string, error) {
 	b[6] = (b[6] & 0x0f) | 0x40
 	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%12x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
-}
-
-// getClusterUUID fetches the cluster UUID from Prism (v1 cluster endpoint or v4 clustermgmt list).
-func (c *NCCClient) getClusterUUID(ctx context.Context) (string, error) {
-	if c.apiVersion == "v4" {
-		uuid, err := c.getClusterUUIDV4(ctx)
-		if err != nil && strings.Contains(err.Error(), "404") {
-			log.Info().Str("cluster", c.cluster).Msg("v4 cluster list not available (404), using v1 cluster for uuid")
-			return c.getClusterUUIDV1(ctx)
-		}
-		return uuid, err
-	}
-	return c.getClusterUUIDV1(ctx)
-}
-
-func (c *NCCClient) getClusterUUIDV1(ctx context.Context) (string, error) {
-	url := c.baseURL + "/v1/cluster"
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.SetBasicAuth(c.user, c.pass)
-	resp, body, err := doWithRetry(ctx, c.http, req, c.cfg, "get cluster uuid")
-	if err != nil {
-		log.Error().Err(err).Str("url", url).Msg("get cluster uuid failed")
-		return "", fmt.Errorf("get cluster uuid: %w", err)
-	}
-	_ = resp
-	var data map[string]interface{}
-	if err := json.Unmarshal(body, &data); err != nil {
-		return "", fmt.Errorf("parse cluster response: %w", err)
-	}
-	uuid, _ := data["uuid"].(string)
-	if uuid == "" {
-		if id, ok := data["id"].(string); ok && id != "" {
-			uuid = id
-		}
-	}
-	if uuid == "" {
-		return "", errors.New("cluster response missing uuid")
-	}
-	return uuid, nil
-}
-
-func (c *NCCClient) getClusterUUIDV4(ctx context.Context) (string, error) {
-	extID, _, err := c.resolveClusterV4ForNCC(ctx)
-	return extID, err
 }
 
 // resolveClusterV4ForNCC finds the clustermgmt entity matching c.cluster (IP, name, extId, or CVM IP),
@@ -7480,7 +7402,7 @@ var (
 func init() {
 	// Defaults
 	if Version == "" {
-		Version = "2.2.0"
+		Version = "2.2.1"
 	}
 	if BuildDate == "" {
 		BuildDate = "unknown"
@@ -7845,40 +7767,33 @@ func installDownloadedBinary(body []byte, targetVer string) error {
 	if err != nil {
 		return fmt.Errorf("get executable path: %w", err)
 	}
-	dir := filepath.Dir(selfPath)
-	if runtime.GOOS == "windows" {
-		newPath := selfPath + ".new.exe"
-		if err := os.WriteFile(newPath, body, 0755); err != nil {
-			return fmt.Errorf("write %s: %w", newPath, err)
-		}
-		// Windows cannot overwrite a running .exe in place. Generate a small
-		// helper .cmd that waits for this process to release the lock, swaps
-		// in the new binary, and self-deletes — turning the old manual
-		// copy-the-file dance into a single command.
-		if helperPath, herr := writeWindowsUpdateSwapHelper(selfPath, newPath); herr == nil {
-			fmt.Fprintf(os.Stderr, "Update downloaded to %s\n", newPath)
-			fmt.Fprintf(os.Stderr, "To finish: exit this program, then run:\n  %s\n", helperPath)
-			fmt.Fprintln(os.Stderr, "(it waits for the running binary to close, replaces it, then removes itself)")
-		} else {
-			fmt.Fprintf(os.Stderr, "Update saved as %s. Exit this program, then replace %s with it and run again.\n", newPath, selfPath)
-		}
+	if resolved, rerr := filepath.EvalSymlinks(selfPath); rerr == nil {
+		selfPath = resolved
+	}
+	// Move the running image aside and activate the new one (works on
+	// Windows, where a running .exe cannot be overwritten but can be renamed).
+	if err := replaceRunningExecutable(selfPath, body); err == nil {
+		fmt.Fprintln(os.Stderr, "Update complete. Run the binary again to use the new version.")
 		return nil
-	}
-	tmpPath := filepath.Join(dir, ".ncc-orchestrator-update."+strconv.Itoa(os.Getpid()))
-	if err := os.WriteFile(tmpPath, body, 0755); err != nil {
-		return fmt.Errorf("write temp file: %w", err)
-	}
-	if err := os.Rename(tmpPath, selfPath); err != nil {
-		_ = os.Remove(tmpPath)
+	} else if runtime.GOOS != "windows" {
 		fallback := filepath.Join(".", "ncc-orchestrator-"+strings.TrimPrefix(strings.TrimSpace(targetVer), "v"))
 		if wErr := os.WriteFile(fallback, body, 0755); wErr != nil {
 			return fmt.Errorf("replace binary failed (%v); write to %s failed: %w", err, fallback, wErr)
 		}
-		fmt.Fprintf(os.Stderr, "Could not replace running binary. New binary saved as %s — move it to replace the current one.\n", fallback)
-		return nil
+		return fmt.Errorf("%w: could not replace %s (%v); the new binary was saved as %s — move it into place and run again", errManualSwapRequired, selfPath, err, fallback)
+	} else {
+		newPath := selfPath + ".new.exe"
+		if wErr := os.WriteFile(newPath, body, 0755); wErr != nil {
+			return fmt.Errorf("replace binary failed (%v); write %s failed: %w", err, newPath, wErr)
+		}
+		// Last resort: a helper that waits for this process to exit and then
+		// swaps the file. Report it as an error so no caller (in particular
+		// the in-app update job) mistakes it for a completed update.
+		if helperPath, herr := writeWindowsUpdateSwapHelper(selfPath, newPath); herr == nil {
+			return fmt.Errorf("%w: could not replace %s (%v); exit this program, then run %s to finish", errManualSwapRequired, selfPath, err, helperPath)
+		}
+		return fmt.Errorf("%w: could not replace %s (%v); exit this program, then replace it with %s", errManualSwapRequired, selfPath, err, newPath)
 	}
-	fmt.Fprintln(os.Stderr, "Update complete. Run the binary again to use the new version.")
-	return nil
 }
 
 // writeWindowsUpdateSwapHelper writes an apply-ncc-update.cmd next to the
@@ -8064,10 +7979,25 @@ func verifyAssetAgainstReleaseChecksum(rel *githubRelease, assetName string, bod
 
 // installStackComponents copies bin/*, frontend-dist/, and example_config.yaml
 // from the extracted stack root (`src`) to the target install directory
-// (`dst`). Existing files are replaced atomically where possible.
+// (`dst`) as one transaction: every file is staged next to its destination,
+// existing files (including running executables on Windows) are moved aside
+// rather than overwritten, and any failure restores the previous files so the
+// install is never left half-updated. See update_install.go.
 func installStackComponents(src, dst string) error {
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dst, err)
+	}
+	cleanupStaleUpdateArtifacts(dst)
+	txn := newInstallTxn()
+	var staged []string
+	fail := func(err error) error {
+		for _, p := range staged {
+			_ = os.RemoveAll(p)
+		}
+		if notRestored := txn.rollback(); len(notRestored) > 0 {
+			return fmt.Errorf("%w; rollback could not restore: %s", err, strings.Join(notRestored, ", "))
+		}
+		return fmt.Errorf("%w (previous files restored)", err)
 	}
 	srcBin := filepath.Join(src, "bin")
 	dstBin := filepath.Join(dst, "bin")
@@ -8079,34 +8009,53 @@ func installStackComponents(src, dst string) error {
 		if err != nil {
 			return fmt.Errorf("read %s: %w", srcBin, err)
 		}
+		// Stage everything first so a disk-full or permission problem is
+		// detected before anything in the live install changes.
+		type pending struct{ staged, to string }
+		var plan []pending
 		for _, ent := range entries {
 			if ent.IsDir() {
 				continue
 			}
-			from := filepath.Join(srcBin, ent.Name())
 			to := filepath.Join(dstBin, ent.Name())
-			if err := copyFileAtomic(from, to, 0o755); err != nil {
-				return fmt.Errorf("install binary %s: %w", ent.Name(), err)
+			sp, err := stageFileCopy(filepath.Join(srcBin, ent.Name()), to, 0o755)
+			if err != nil {
+				return fail(fmt.Errorf("stage binary %s: %w", ent.Name(), err))
+			}
+			staged = append(staged, sp)
+			plan = append(plan, pending{sp, to})
+		}
+		for _, p := range plan {
+			if err := txn.replace(p.staged, p.to); err != nil {
+				return fail(fmt.Errorf("install binary %s: %w", filepath.Base(p.to), err))
 			}
 		}
 	}
 	srcFront := filepath.Join(src, "frontend-dist")
 	dstFront := filepath.Join(dst, "frontend-dist")
 	if existingDir(srcFront) {
-		if err := os.RemoveAll(dstFront); err != nil {
-			return fmt.Errorf("remove old frontend-dist: %w", err)
+		stagedFront := filepath.Join(dst, ".ncc-stage-frontend-"+txn.stamp)
+		staged = append(staged, stagedFront)
+		if err := copyDir(srcFront, stagedFront); err != nil {
+			return fail(fmt.Errorf("stage frontend-dist: %w", err))
 		}
-		if err := copyDir(srcFront, dstFront); err != nil {
-			return fmt.Errorf("install frontend-dist: %w", err)
+		if err := txn.replace(stagedFront, dstFront); err != nil {
+			return fail(fmt.Errorf("install frontend-dist: %w", err))
 		}
 	}
 	srcCfg := filepath.Join(src, "example_config.yaml")
 	dstCfg := filepath.Join(dst, "example_config.yaml")
 	if existingFile(srcCfg) {
-		if err := copyFileAtomic(srcCfg, dstCfg, 0o644); err != nil {
-			return fmt.Errorf("install example_config.yaml: %w", err)
+		sp, err := stageFileCopy(srcCfg, dstCfg, 0o644)
+		if err != nil {
+			return fail(fmt.Errorf("stage example_config.yaml: %w", err))
+		}
+		staged = append(staged, sp)
+		if err := txn.replace(sp, dstCfg); err != nil {
+			return fail(fmt.Errorf("install example_config.yaml: %w", err))
 		}
 	}
+	txn.commit()
 	return nil
 }
 
@@ -10984,7 +10933,7 @@ func buildAPIHealthProbeCmd(apiBin, listen, tokenFile, repoRoot string) string {
 // built-in `--health-check` self-probe (GET / over loopback, exit 0 healthy / 1
 // unhealthy) so the supervisor can detect a hung UI process, not just a crashed
 // one. tls toggles the https scheme. Returns "" if the binary path is empty.
-func buildUIHealthProbeCmd(uiBin, listen string, tls bool) string {
+func buildUIHealthProbeCmd(uiBin, listen, tlsCertFile, tlsKeyFile string) string {
 	if strings.TrimSpace(uiBin) == "" {
 		return ""
 	}
@@ -10992,11 +10941,12 @@ func buildUIHealthProbeCmd(uiBin, listen string, tls bool) string {
 	if strings.TrimSpace(listen) != "" {
 		parts = append(parts, "--listen", shellQuote(listen))
 	}
-	if tls {
-		// Presence of the cert/key flags switches the probe to https; pass
-		// placeholder paths so the ui-server picks the https scheme. The probe
-		// skips TLS verification, so the values only need to be non-empty.
-		parts = append(parts, "--tls-cert-file", shellQuote("tls.crt"), "--tls-key-file", shellQuote("tls.key"))
+	if strings.TrimSpace(tlsCertFile) != "" && strings.TrimSpace(tlsKeyFile) != "" {
+		// The cert/key flags switch the probe to https, and the probe verifies
+		// the server against that certificate, so pass the real paths the UI
+		// serves. A placeholder fails every probe and the supervisor would
+		// keep restarting a healthy UI.
+		parts = append(parts, "--tls-cert-file", shellQuote(tlsCertFile), "--tls-key-file", shellQuote(tlsKeyFile))
 	}
 	return strings.Join(parts, " ")
 }
@@ -11829,7 +11779,7 @@ func runV2Start(opts v2StartOptions) error {
 				listen:     opts.UIListen,
 				pidPath:    uiPIDPath,
 				logPath:    uiLogPath,
-				healthArgs: buildUIHealthProbeArgs(uiBin, opts.UIListen, uiTLSActive),
+				healthArgs: buildUIHealthProbeArgs(uiBin, opts.UIListen, opts.UITLSCertFile, opts.UITLSKeyFile),
 				// Gate the UI's first launch on the API having written the
 				// shared token file (same ordering as the detached path).
 				waitToken: opts.TokenFile,
@@ -12055,7 +12005,7 @@ func runV2Start(opts v2StartOptions) error {
 				// The UI server's built-in --health-check probe lets the
 				// supervisor catch a hung (alive-but-unresponsive) UI process,
 				// not just a crashed one.
-				uiHealthCmd := buildUIHealthProbeCmd(uiBin, opts.UIListen, strings.TrimSpace(opts.UITLSCertFile) != "")
+				uiHealthCmd := buildUIHealthProbeCmd(uiBin, opts.UIListen, opts.UITLSCertFile, opts.UITLSKeyFile)
 				pid, err := startSelfHealSupervisor("ui", uiBin, uiArgs, uiPIDPath, uiLogPath, opts.SelfHealMaxRestarts, opts.SelfHealWindow, uiHealthCmd, opts.SelfHealProbeInterval, opts.SelfHealUnhealthyThreshold)
 				if err != nil {
 					return fmt.Errorf("start ui self-heal supervisor: %w", err)
@@ -12236,7 +12186,7 @@ func extractTarGzArchive(archive []byte, destDir string) error {
 			if err := os.MkdirAll(target, 0755); err != nil {
 				return err
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg, '\x00': // '\x00' = legacy regular file (formerly tar.TypeRegA)
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
 			}
@@ -12742,12 +12692,12 @@ func runUpdate(opts updateOptions) error {
 	// Legacy single-binary update path (v1.x releases without a stack archive).
 	downloadURL, chosenAssetName := pickAssetForCurrentPlatform(*targetRelease)
 	if downloadURL == "" {
-		fmt.Fprintf(os.Stderr, "No binary found for %s/%s. Download manually: %s\n", runtime.GOOS, runtime.GOARCH, targetRelease.HTMLURL)
-		return nil
+		// Returning nil here used to make the in-app update report success
+		// (and restart the stack) although nothing was installed.
+		return fmt.Errorf("no update package or binary for %s/%s in release %s; download it manually from %s", runtime.GOOS, runtime.GOARCH, targetRelease.TagName, targetRelease.HTMLURL)
 	}
 	if isArchiveAssetURL(downloadURL) {
-		fmt.Fprintf(os.Stderr, "Binary for %s/%s is only available as archive. Download and extract: %s\n", runtime.GOOS, runtime.GOARCH, downloadURL)
-		return nil
+		return fmt.Errorf("release %s only ships an archive for %s/%s; download and extract it manually: %s", targetRelease.TagName, runtime.GOOS, runtime.GOARCH, downloadURL)
 	}
 
 	fmt.Fprintf(os.Stderr, "Downloading %s ...\n", downloadURL)
@@ -12935,7 +12885,7 @@ func fetchPCClustersV3(pcURL, username, password string, insecure bool) ([]strin
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Prism Central returned %d: %s", resp.StatusCode, string(bytes.TrimSpace(data)))
+		return nil, fmt.Errorf("unexpected HTTP %d from Prism Central: %s", resp.StatusCode, string(bytes.TrimSpace(data)))
 	}
 
 	var list pcListClustersResponse
@@ -12992,7 +12942,7 @@ func fetchPCClustersV4(pcURL, username, password string, insecure bool, v4APIVer
 			return nil, errDiscoverV4Unavailable{status: resp.StatusCode, body: string(data)}
 		}
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("Prism Central returned %d: %s", resp.StatusCode, string(bytes.TrimSpace(data)))
+			return nil, fmt.Errorf("unexpected HTTP %d from Prism Central: %s", resp.StatusCode, string(bytes.TrimSpace(data)))
 		}
 
 		var payload struct {
@@ -13117,7 +13067,7 @@ func fetchDiscoverClusterRowsV4(pcURL, username, password string, insecure bool,
 			return nil, errDiscoverV4Unavailable{status: resp.StatusCode, body: string(data)}
 		}
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("Prism Central returned %d: %s", resp.StatusCode, string(bytes.TrimSpace(data)))
+			return nil, fmt.Errorf("unexpected HTTP %d from Prism Central: %s", resp.StatusCode, string(bytes.TrimSpace(data)))
 		}
 
 		var payload struct {
@@ -13174,7 +13124,7 @@ func fetchDiscoverClusterRowsV3(pcURL, username, password string, insecure bool)
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Prism Central returned %d: %s", resp.StatusCode, string(bytes.TrimSpace(data)))
+		return nil, fmt.Errorf("unexpected HTTP %d from Prism Central: %s", resp.StatusCode, string(bytes.TrimSpace(data)))
 	}
 
 	var list pcListClustersResponse
@@ -14212,9 +14162,10 @@ func buildPreflightReport(cfgPath string) preflightReport {
 		add(preflightCheck{ID: "validate-config", Status: "pass", Title: "validate-config", Message: "config is valid"})
 		schemaCheck := checkConfigSchema(&healContext{ConfigPath: cfgPath})
 		schemaStatus := "pass"
-		if schemaCheck.Status == healWarn {
+		switch schemaCheck.Status {
+		case healWarn:
 			schemaStatus = "warn"
-		} else if schemaCheck.Status == healFail {
+		case healFail:
 			schemaStatus = "fail"
 		}
 		add(preflightCheck{
@@ -16545,6 +16496,7 @@ Run 'ncc-orchestrator --help' for a full list of options.
 				FailedClusters: failed,
 				Clusters:       perCluster,
 				ExitCode:       exitCode,
+				Status:         runSummaryStatus(exitCode, len(clusterFiles)),
 				IndexHTML:      indexPath,
 				TotalChecks:    len(agg),
 				AvgHealthScore: avgHealth,

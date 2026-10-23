@@ -56,7 +56,7 @@ var (
 
 func init() {
 	if Version == "" {
-		Version = "2.2.0"
+		Version = "2.2.1"
 	}
 	if BuildDate == "" {
 		BuildDate = "unknown"
@@ -95,6 +95,7 @@ type apiServer struct {
 	notificationStatePath   string
 	auditLogPath            string
 	auditLogMaxBytes        int64
+	auditLogKeep            int
 	auditMu                 sync.Mutex
 	// SIEM/syslog audit forwarding (flag-configured; nil when disabled).
 	auditForwardHTTPURL    string
@@ -107,8 +108,13 @@ type apiServer struct {
 	loginLockWindow        time.Duration // window to accumulate failures
 	loginLockDuration      time.Duration // how long a locked account stays locked
 	loginGuard             *loginGuard
-	orchestratorBin        string
-	authToken              string
+	// Additional brute-force controls (0 = 4x the per-account threshold).
+	loginLockAccountThreshold int
+	loginLockSourceThreshold  int
+	loginGuardStateFile       string
+	trustedProxyCIDRs         string
+	orchestratorBin           string
+	authToken                 string
 	// viewerToken, when set, grants a read-only role: holders can reach
 	// safe GET endpoints but are denied settings/* and all mutating
 	// requests (those require the full authToken / a session). When empty,
@@ -135,6 +141,8 @@ type apiServer struct {
 	// with envelope encryption (a master key was configured). Surfaced on
 	// /api/v1/health so operators can confirm secrets-at-rest is active.
 	userStoreEncrypted bool
+	// requireEncryptedUserStore makes a missing master key fatal at startup.
+	requireEncryptedUserStore bool
 	// disableLocalAccounts opts out of the default-on user database. By
 	// default (no flag, env, secret, or stack path) the server falls back to a
 	// writable JSON file in the repo root so a bare run still bootstraps a
@@ -252,7 +260,6 @@ type apiServer struct {
 	lastEnv   map[string]string
 	lastPID   int
 	cancelRun context.CancelFunc
-	cancelled bool
 	liveOut   *tailBuffer
 
 	// Concurrent run engine. Multiple cluster-group runs can execute at once,
@@ -275,6 +282,11 @@ type apiServer struct {
 	wildcardRunID     string
 	runSeq            int64
 	mergeMu           sync.Mutex // serializes merge-into-canonical of per-run artifacts
+
+	// NCC alert lifecycle (persistent acknowledge/resolve state + history).
+	alertStoreMu          sync.Mutex
+	alertStore            *alertLifecycleStore
+	alertHistoryRetainDay int
 }
 
 type envelope struct {
@@ -439,6 +451,15 @@ type runInfo struct {
 	InfoTotal      int     `json:"info_total,omitempty"`
 	ExitCode       *int    `json:"exit_code,omitempty"`
 	Success        *bool   `json:"success,omitempty"`
+	// Status is the explicit run outcome: "success", "failed", "partial"
+	// (some clusters failed), "triggered", "trigger_failed", or "unknown"
+	// when the outcome genuinely cannot be determined. Clients should prefer
+	// it over interpreting Success/ExitCode themselves.
+	Status string `json:"status"`
+	// StatusSource explains how Status was derived: "exit_code" (recorded by
+	// the runner), "legacy_summary" (older runners omitted exit_code when it
+	// was 0), "audit" (trigger rows), or "none".
+	StatusSource string `json:"status_source,omitempty"`
 
 	// Optional provenance for "trigger"-only rows.
 	Client    string `json:"client,omitempty"`
@@ -498,12 +519,18 @@ func main() {
 	flag.StringVar(&s.notificationStatePath, "notifications-state-path", ".ncc-api-notifications.json", "Legacy notifications metadata path (delivery history/API-only fields)")
 	flag.StringVar(&s.auditLogPath, "audit-log-path", "logs/ncc-audit.log", "JSONL audit log file path")
 	flag.Int64Var(&s.auditLogMaxBytes, "audit-log-max-bytes", 5*1024*1024, "Audit log size before rotation (bytes); 0 disables rotation")
+	flag.IntVar(&s.auditLogKeep, "audit-log-keep", 10, "Number of rotated audit log generations to keep (<path>.1 … <path>.N)")
 	flag.StringVar(&s.auditForwardHTTPURL, "audit-forward-http-url", "", "Forward each audit event (JSON) to this HTTP collector endpoint (Splunk HEC, Elastic, Loki, generic webhook). Empty disables.")
 	flag.StringVar(&s.auditForwardHTTPAuth, "audit-forward-http-auth", "", "Authorization header value for the audit HTTP collector (e.g. 'Bearer <token>' or 'Splunk <hec-token>')")
 	flag.BoolVar(&s.auditForwardHTTPSplunk, "audit-forward-http-splunk", false, "Wrap each forwarded audit event as a Splunk HEC payload {\"event\": ...}")
 	flag.StringVar(&s.auditForwardSyslog, "audit-forward-syslog", "", "Forward each audit event as an RFC5424 syslog message to host:port (e.g. siem.example.com:514). Empty disables.")
 	flag.StringVar(&s.auditForwardSyslogNet, "audit-forward-syslog-network", "udp", "Transport for --audit-forward-syslog: udp or tcp")
+	flag.IntVar(&s.alertHistoryRetainDay, "alert-history-retain-days", alertDefaultHistoryRetainDy, "Days to keep closed NCC alert instances and their lifecycle events (active alerts are never pruned; 0 keeps forever)")
 	flag.IntVar(&s.loginLockThreshold, "login-lockout-threshold", 5, "Failed logins per account before a temporary lockout (0 disables)")
+	flag.IntVar(&s.loginLockAccountThreshold, "login-lockout-account-threshold", 0, "Failed logins for one account from any source before an account-wide lockout (0 = 4x --login-lockout-threshold)")
+	flag.IntVar(&s.loginLockSourceThreshold, "login-lockout-source-threshold", 0, "Failed logins from one client IP across all accounts before that source is locked (0 = 4x --login-lockout-threshold)")
+	flag.StringVar(&s.loginGuardStateFile, "login-guard-state-file", os.Getenv("NCC_LOGIN_GUARD_STATE_FILE"), "Shared JSON file for login failure counters so limits hold across API replicas (default in Kubernetes: <repo-root>/.ncc-login-guard.json; empty elsewhere = in-memory)")
+	flag.StringVar(&s.trustedProxyCIDRs, "trusted-proxy-cidrs", defaultIfEmpty(os.Getenv("NCC_TRUSTED_PROXY_CIDRS"), "private,loopback"), "Comma-separated peers whose X-Forwarded-For is honored for client-IP rate limiting: CIDRs, 'loopback', 'private', or 'none'. Narrow to your reverse proxy / ingress / UI pod CIDRs to prevent IP spoofing")
 	flag.DurationVar(&s.loginLockWindow, "login-lockout-window", 15*time.Minute, "Rolling window for accumulating failed logins toward a lockout")
 	flag.DurationVar(&s.loginLockDuration, "login-lockout-duration", 15*time.Minute, "How long an account stays locked after exceeding the failure threshold")
 	flag.StringVar(&s.orchestratorBin, "orchestrator-bin", "./ncc-orchestrator", "Path to ncc-orchestrator binary")
@@ -533,6 +560,7 @@ func main() {
 	flag.StringVar(&s.usersDBSecret, "users-db-secret", "", "Kubernetes Secret name to store the user database in (encrypted at rest by etcd); mutually exclusive with --users-db. Requires in-cluster execution + RBAC to get/create/patch the Secret")
 	flag.StringVar(&s.usersDBSecretKey, "users-db-secret-key", "users.json", "Data key inside the Kubernetes Secret that holds the user-database JSON")
 	flag.StringVar(&s.usersDBSecretNS, "users-db-secret-namespace", "", "Namespace of the Kubernetes Secret (defaults to the pod's own namespace)")
+	flag.BoolVar(&s.requireEncryptedUserStore, "require-encrypted-user-store", envBool("NCC_REQUIRE_ENCRYPTED_USER_STORE"), "Refuse to start unless the user store (password/PAT hashes, SAML SP key, LDAP bind password) is envelope-encrypted with a master key (NCC_MASTER_KEY / --users-db-key-file). Also via NCC_REQUIRE_ENCRYPTED_USER_STORE=true")
 	flag.StringVar(&s.usersDBKeyFile, "users-db-key-file", "", "Path to a file holding a 32-byte master key (base64 or hex) to envelope-encrypt the user store at rest with AES-256-GCM. NCC_MASTER_KEY env takes precedence. Unset => plaintext (default). Keep this key off the protected disk/backup.")
 	flag.BoolVar(&s.disableLocalAccounts, "disable-local-accounts", false, "Opt out of the default-on user database (no first-run admin bootstrap, login disabled). Use for pure token-only automation")
 	flag.BoolVar(&s.cookieInsecure, "cookie-insecure", false, "Force the Secure attribute OFF on session cookies even when HTTPS is enabled (only behind a TLS-terminating proxy that talks plain http to the stack). Insecure is already the default.")
@@ -686,6 +714,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
+	if err := s.checkUserStoreEncryptionPolicy(storeBackend != nil); err != nil {
+		log.Fatal(err)
+	}
 
 	// When a backend is configured (explicitly, via env, or by the stack-aware
 	// default when launched from a v2 stack), the server manages local
@@ -818,6 +849,23 @@ func main() {
 		s.rateLimiter = newFixedWindowRateLimiter(s.rateLimitPerMinute, time.Minute)
 	}
 	s.loginGuard = newLoginGuard(s.loginLockThreshold, s.loginLockWindow, s.loginLockDuration)
+	if s.loginGuard != nil {
+		if s.loginLockAccountThreshold > 0 {
+			s.loginGuard.accountThreshold = s.loginLockAccountThreshold
+		}
+		if s.loginLockSourceThreshold > 0 {
+			s.loginGuard.sourceThreshold = s.loginLockSourceThreshold
+		}
+		statePath := strings.TrimSpace(s.loginGuardStateFile)
+		if statePath == "" && s.capabilities.Kubernetes {
+			// Replicas share the PVC: enforce limits cluster-wide.
+			statePath = filepath.Join(s.stateRoot(), ".ncc-login-guard.json")
+		}
+		s.loginGuard.configureSharedState(statePath)
+	}
+	if err := configureTrustedProxies(s.trustedProxyCIDRs); err != nil {
+		log.Fatalf("trusted-proxy-cidrs: %v", err)
+	}
 	s.ensureRunManager()
 	s.startedAt = time.Now().UTC()
 	s.auditForwarder = s.startAuditForwarder(context.Background())
@@ -826,14 +874,17 @@ func main() {
 	s.startBackupScheduleLoop(context.Background())
 	s.startNotificationDigestLoop(context.Background())
 	s.startUserDBReloadLoop(context.Background())
+	s.startAlertLifecycleSyncLoop(context.Background())
 
 	handler := s.buildHandler()
 	srv := &http.Server{
-		Addr:         listen,
-		Handler:      handler,
-		ReadTimeout:  s.readTimeout,
-		WriteTimeout: s.writeTimeout,
-		IdleTimeout:  s.idleTimeout,
+		Addr:              listen,
+		Handler:           handler,
+		ReadTimeout:       s.readTimeout,
+		ReadHeaderTimeout: 10 * time.Second, // slowloris guard
+		WriteTimeout:      s.writeTimeout,
+		IdleTimeout:       s.idleTimeout,
+		MaxHeaderBytes:    64 << 10,
 	}
 	log.Printf("ncc-api-server listening on %s (auth_mode=%s, tls=%t)", listen, s.authMode, strings.TrimSpace(s.tlsCertFile) != "" && strings.TrimSpace(s.tlsKeyFile) != "")
 	if strings.TrimSpace(s.tlsCertFile) != "" || strings.TrimSpace(s.tlsKeyFile) != "" {
@@ -1056,41 +1107,127 @@ func (s *apiServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
-	data := map[string]interface{}{
-		"status":                "ok",
-		"time":                  time.Now().UTC().Format(time.RFC3339),
-		"auth_mode":             s.authMode,
-		"token_source":          tokenSource(s.authToken, os.Getenv("NCC_API_TOKEN")),
-		"rbac_enabled":          s.viewerToken != "" || s.loginEnabled(),
-		"login_enabled":         s.loginEnabled(),
-		"local_login":           s.users != nil && s.users.count() > 0,
-		"saml_enabled":          s.samlEnabled,
-		"ldap_enabled":          s.ldapIsEnabled(),
-		"cookie_secure":         s.cookieSecure(),
-		"users_store_encrypted": s.userStoreEncrypted,
-		"config_path":           s.absPath(s.configPath),
-		"output_dir":            s.absPath(s.outputDir),
-		"log_dir":               s.absPath(s.logDir),
-		"token_file":            s.absPath(s.tokenFilePath),
-		"orchestrator_bin":      s.absPath(s.orchestratorBin),
-		"version":               Version,
-		"git_revision":          GitRevision,
-		"build_date":            BuildDate,
-		"stream":                Stream,
-		"go_version":            GoVersion,
-		"os":                    runtime.GOOS,
-		"arch":                  runtime.GOARCH,
-		"runtime":               s.capabilities,
+	writeJSON(w, http.StatusOK, envelope{
+		Success: true,
+		Data:    s.healthPayload(s.optionalPrincipal(r)),
+	})
+}
+
+// optionalPrincipal resolves the caller on a public endpoint without failing
+// the request (and without counting a missing credential as an auth failure).
+// It returns nil for anonymous callers.
+func (s *apiServer) optionalPrincipal(r *http.Request) *principal {
+	if p, err := s.resolveLegacyPrincipal(r); err == nil {
+		return &p
 	}
+	if tok, _ := auth.ExtractToken(r); tok == "" {
+		return nil
+	}
+	ident, err := auth.Authenticate(r, s.jwtSecret, s, s.staticTokenForMode())
+	if err != nil || ident == nil {
+		return nil
+	}
+	if p, ok := s.principalFromIdentity(ident); ok {
+		return &p
+	}
+	return nil
+}
+
+// healthPayload builds /api/v1/health in three tiers so the endpoint stays
+// usable for unauthenticated liveness probes and the login page without
+// disclosing internals:
+//
+//   - anonymous: liveness, version, and the login options the sign-in page needs;
+//   - any authenticated role: build/runtime details and the config path
+//     relative to the stack root (what the Schedule/Runs pages display);
+//   - admin: absolute filesystem locations (config, outputs, logs, token file,
+//     orchestrator binary) and storage-protection status.
+//
+// Absolute paths such as /data/auth/.ncc-api-token were previously returned
+// to anonymous callers.
+func (s *apiServer) healthPayload(p *principal) map[string]interface{} {
+	data := map[string]interface{}{
+		"status":        "ok",
+		"time":          time.Now().UTC().Format(time.RFC3339),
+		"version":       Version,
+		"auth_mode":     s.authMode,
+		"login_enabled": s.loginEnabled(),
+		"local_login":   s.users != nil && s.users.count() > 0,
+		"saml_enabled":  s.samlEnabled,
+		"ldap_enabled":  s.ldapIsEnabled(),
+		"cookie_secure": s.cookieSecure(),
+		"detail_level":  "public",
+	}
+	if p == nil || p.mustChange {
+		return data
+	}
+	data["detail_level"] = "authenticated"
+	data["rbac_enabled"] = s.viewerToken != "" || s.loginEnabled()
+	data["build_date"] = BuildDate
+	data["stream"] = Stream
+	data["go_version"] = GoVersion
+	data["os"] = runtime.GOOS
+	data["arch"] = runtime.GOARCH
+	data["runtime"] = s.capabilities
+	data["config_path"] = s.displayRelPath(s.configPath)
+	data["output_dir"] = s.displayRelPath(s.outputDir)
+	if p.role < RoleAdmin {
+		return data
+	}
+	data["detail_level"] = "admin"
+	data["git_revision"] = GitRevision
+	data["token_source"] = tokenSource(s.authToken, os.Getenv("NCC_API_TOKEN"))
+	data["users_store_encrypted"] = s.userStoreEncrypted
+	data["users_store_protection"] = s.userStoreProtection()
+	data["backup_encryption_required"] = backupEncryptionRequired()
+	data["backup_server_key_configured"] = backupKeyConfigured()
+	data["config_path"] = s.absPath(s.configPath)
+	data["output_dir"] = s.absPath(s.outputDir)
+	data["log_dir"] = s.absPath(s.logDir)
+	data["token_file"] = s.absPath(s.tokenFilePath)
+	data["orchestrator_bin"] = s.absPath(s.orchestratorBin)
 	if s.debugExpose {
 		data["repo_root"] = s.absPath(s.repoRoot)
 		data["schedule_state"] = s.absPath(s.scheduleStatePath)
 		data["orchestrator_cmd"] = strings.Join(s.orchestratorBaseCommand(), " ")
 	}
-	writeJSON(w, http.StatusOK, envelope{
-		Success: true,
-		Data:    data,
-	})
+	return data
+}
+
+// scrubSummaryPaths reduces absolute filesystem paths recorded by the runner in
+// run artifacts (index_html, output/log locations) to their base names before
+// they are returned to API clients.
+func scrubSummaryPaths(m map[string]interface{}) {
+	for _, k := range []string{"index_html", "output_dir", "log_file", "config", "config_path", "run_dir", "output_dir_filtered", "output_dir_logs"} {
+		if v, ok := m[k].(string); ok && v != "" && (filepath.IsAbs(v) || strings.Contains(v, "\\") || strings.HasPrefix(v, "/")) {
+			m[k] = filepath.Base(strings.ReplaceAll(v, "\\", "/"))
+		}
+	}
+}
+
+// pathForCaller returns an absolute server path for admins and a path relative
+// to the stack root for everyone else (viewers/operators poll endpoints such as
+// /runs/active that previously returned /data/logs/ncc-runner.log etc.).
+func (s *apiServer) pathForCaller(r *http.Request, p string) string {
+	if strings.TrimSpace(p) == "" {
+		return ""
+	}
+	if pr, ok := principalFromContext(r.Context()); ok && pr.role >= RoleAdmin {
+		return s.absPath(p)
+	}
+	return s.displayRelPath(p)
+}
+
+// displayRelPath renders a server path relative to the stack root (repo root)
+// for non-admin callers, so the UI can still show and submit it without the
+// response revealing the absolute filesystem layout.
+func (s *apiServer) displayRelPath(p string) string {
+	abs := s.absPath(p)
+	root := s.absPath(s.repoRoot)
+	if rel, err := filepath.Rel(root, abs); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel) {
+		return filepath.ToSlash(rel)
+	}
+	return filepath.Base(abs)
 }
 
 // handleAudit returns recent audit log entries (newest first) read from the
@@ -1509,6 +1646,9 @@ func (s *apiServer) handlePrometheusMetrics(w http.ResponseWriter, r *http.Reque
 	if v, ok := s.latestRunSummaryView(); ok {
 		fmt.Fprint(w, promtext.RenderRunSummaryMetrics(v))
 	}
+
+	// NCC alert lifecycle gauges (persistent store; see alertlifecycle.go).
+	s.writeAlertLifecycleMetrics(w)
 }
 
 // latestRunSummaryView loads the most recent run-summary.json into the view
@@ -2800,10 +2940,7 @@ func (s *apiServer) handleScheduleHealth(w http.ResponseWriter, r *http.Request)
 		}})
 		return
 	}
-	saved := false
-	if strings.TrimSpace(st.UpdatedAt) != "" {
-		saved = true
-	}
+	saved := strings.TrimSpace(st.UpdatedAt) != ""
 	taskName := strings.TrimSpace(st.TaskName)
 	if taskName == "" {
 		taskName = "ncc-orchestrator"
@@ -3088,7 +3225,7 @@ func (s *apiServer) handleRuns(w http.ResponseWriter, r *http.Request) {
 			runPath := filepath.Join(runsDir, e.Name())
 			ri := runInfo{
 				ID:      e.Name(),
-				Path:    runPath,
+				Path:    "runs/" + e.Name(),
 				ModTime: info.ModTime().UTC().Format(time.RFC3339),
 				Source:  "history",
 			}
@@ -3106,7 +3243,7 @@ func (s *apiServer) handleRuns(w http.ResponseWriter, r *http.Request) {
 		latestID := info.ModTime().UTC().Format("20060102T150405Z")
 		latest := runInfo{
 			ID:      latestID,
-			Path:    outDir,
+			Path:    ".",
 			ModTime: info.ModTime().UTC().Format(time.RFC3339),
 			Source:  "summary",
 		}
@@ -3139,6 +3276,11 @@ func (s *apiServer) handleRuns(w http.ResponseWriter, r *http.Request) {
 			}
 			if ok, present := e["success"].(bool); present {
 				ri.Success = &ok
+			}
+			ri.StatusSource = "audit"
+			ri.Status = "triggered"
+			if ri.Success != nil && !*ri.Success {
+				ri.Status = "trigger_failed"
 			}
 			if v, _ := e["client"].(string); v != "" {
 				ri.Client = v
@@ -3262,7 +3404,7 @@ func (s *apiServer) handleRunByID(w http.ResponseWriter, r *http.Request, id str
 	}
 	ri := runInfo{
 		ID:      id,
-		Path:    runPath,
+		Path:    "runs/" + id,
 		ModTime: info.ModTime().UTC().Format(time.RFC3339),
 		Source:  "history",
 	}
@@ -3278,6 +3420,9 @@ func (s *apiServer) handleRunByID(w http.ResponseWriter, r *http.Request, id str
 		if b, rerr := os.ReadFile(filepath.Join(runPath, name)); rerr == nil {
 			var v interface{}
 			if json.Unmarshal(b, &v) == nil {
+				if m, ok := v.(map[string]interface{}); ok {
+					scrubSummaryPaths(m)
+				}
 				artifacts[name] = v
 			} else {
 				artifacts[name] = string(b)
@@ -3291,8 +3436,19 @@ func (s *apiServer) handleRunByID(w http.ResponseWriter, r *http.Request, id str
 }
 
 // enrichRunInfoFromSummary fills the metric fields on ri by parsing a
-// run-summary.json file. Missing/invalid files are silently ignored.
+// run-summary.json file and derives an explicit run Status.
+//
+// Root cause of the "—" shown for successful runs: the runner serialized
+// exit_code with `omitempty`, so a successful run (exit code 0) wrote no
+// exit_code at all and Success stayed nil. The runner now always writes
+// exit_code and status; for summaries written by older runners, the presence
+// of index_html (written by the same completion step that computes the exit
+// code) without exit_code means the runner completed with exit code 0. A
+// summary that has neither is reported as "unknown" — missing data is never
+// treated as success.
 func enrichRunInfoFromSummary(ri *runInfo, summaryPath string) {
+	ri.Status = "unknown"
+	ri.StatusSource = "none"
 	b, err := os.ReadFile(summaryPath)
 	if err != nil {
 		return
@@ -3301,6 +3457,8 @@ func enrichRunInfoFromSummary(ri *runInfo, summaryPath string) {
 	if err := json.Unmarshal(b, &s); err != nil {
 		return
 	}
+	var present map[string]json.RawMessage
+	_ = json.Unmarshal(b, &present)
 	if strings.TrimSpace(s.Timestamp) != "" {
 		ri.Timestamp = s.Timestamp
 		if ri.ModTime == "" {
@@ -3320,11 +3478,48 @@ func enrichRunInfoFromSummary(ri *runInfo, summaryPath string) {
 		ri.ErrTotal += c.ErrCount
 		ri.InfoTotal += c.InfoCount
 	}
+	code, source := runExitCodeFromSummary(s, present)
+	if source == "" {
+		return
+	}
+	ri.ExitCode = &code
+	success := code == 0
+	ri.Success = &success
+	ri.StatusSource = source
+	ri.Status = runStatusFromExitCode(code, s.ClustersOK)
+}
+
+// runExitCodeFromSummary returns the run's exit code and how it was obtained,
+// or source "" when it cannot be determined.
+func runExitCodeFromSummary(s trendRunSummary, present map[string]json.RawMessage) (int, string) {
 	if s.ExitCode != nil {
-		v := *s.ExitCode
-		ri.ExitCode = &v
-		success := v == 0
-		ri.Success = &success
+		return *s.ExitCode, "exit_code"
+	}
+	if raw, ok := present["status"]; ok {
+		var st string
+		if json.Unmarshal(raw, &st) == nil {
+			switch strings.ToLower(strings.TrimSpace(st)) {
+			case "success":
+				return 0, "exit_code"
+			}
+		}
+	}
+	if _, ok := present["index_html"]; ok {
+		return 0, "legacy_summary"
+	}
+	return 0, ""
+}
+
+// runStatusFromExitCode maps the runner's exit codes (0 success, 3 partial:
+// some clusters failed, anything else failed) onto API status values.
+func runStatusFromExitCode(code, clustersOK int) string {
+	switch {
+	case code == 0:
+		return "success"
+	case code == 3 && clustersOK > 0:
+		return "partial"
+	default:
+		return "failed"
 	}
 }
 
@@ -3348,6 +3543,7 @@ func (s *apiServer) handleRunSummary(w http.ResponseWriter, r *http.Request) {
 	// /api/v1/report/data so /runs/summary stays consistent.
 	if m, ok := raw.(map[string]interface{}); ok {
 		reclassifyRunSummaryInPlace(m)
+		scrubSummaryPaths(m)
 		raw = m
 	}
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: raw})
@@ -3411,9 +3607,9 @@ func (s *apiServer) handleRunActive(w http.ResponseWriter, r *http.Request) {
 		"last_error":        s.lastErr,
 		"last_output":       s.lastOut,
 		"live_output":       s.currentLiveOutput(),
-		"runner_log":        s.absPath(s.runnerLogPath),
-		"output_dir":        s.absPath(s.outputDir),
-		"config_path":       defaultIfEmpty(s.lastCfg, s.absPath(s.configPath)),
+		"runner_log":        s.pathForCaller(r, s.runnerLogPath),
+		"output_dir":        s.pathForCaller(r, s.outputDir),
+		"config_path":       s.pathForCaller(r, defaultIfEmpty(s.lastCfg, s.configPath)),
 		// Concurrent-run fields.
 		"runs":                 runs,
 		"running_count":        runningCount,
@@ -3730,6 +3926,7 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 	// without forcing the user to re-trigger.
 	if m, ok := runSummary.(map[string]interface{}); ok {
 		reclassifyRunSummaryInPlace(m)
+		scrubSummaryPaths(m)
 		runSummary = m
 	}
 	runSummary = deepFilterClusters(runSummary, access)
@@ -3789,7 +3986,7 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 		"ncc_summary_counts":  nccSummaryForReport(s, flags),
 		"ncc_cluster_summary": nccClusterSummaryForReport(s, flags, access),
 		"trends":              trendsForReport(flags, outDir),
-		"report_source_dir":   outDir,
+		"report_source_dir":   s.pathForCaller(r, outDir),
 		"pagination":          pagination,
 	}})
 }
@@ -4010,7 +4207,11 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/tls/public", Methods: []string{http.MethodGet}, Description: "Public: UI certificate SHA-256 fingerprint and PEM (no private key) so the login page can offer download/trust for self-signed HTTPS"},
 		{Path: "/api/v1/components", Methods: []string{http.MethodGet}, Description: "Viewer+: report orchestrator, API server, and UI server versions"},
 		{Path: "/api/v1/alerts", Methods: []string{http.MethodGet}, Description: "Viewer+: fetch normalized Prism Central alerts with bounded caching and per-source errors"},
-		{Path: "/api/v1/alerts/ncc-dispositions", Methods: []string{http.MethodGet, http.MethodPost}, Description: "GET viewer+: NCC acknowledge/resolve marks. POST operator+: acknowledge, resolve, or reopen one alert or a list. A later run that still finds a resolved check clears that mark.", SampleBody: "{\n  \"cluster\": \"prod-a\",\n  \"check\": \"CVM memory\",\n  \"action\": \"acknowledge\",\n  \"note\": \"Watching this run\"\n}"},
+		{Path: "/api/v1/alerts/ncc-dispositions", Methods: []string{http.MethodGet, http.MethodPost}, Description: "GET viewer+: NCC acknowledge/resolve marks (v2.2.0-compatible view of the persistent alert lifecycle; items include id, finding_id, detection). POST operator+: acknowledge, resolve, or reopen one alert or a list (by cluster+check or id). A newer run that still finds a resolved check opens a new linked instance (status reopened).", SampleBody: "{\n  \"cluster\": \"prod-a\",\n  \"check\": \"CVM memory\",\n  \"action\": \"acknowledge\",\n  \"note\": \"Watching this run\"\n}"},
+		{Path: "/api/v1/alerts/ncc", Methods: []string{http.MethodGet}, Description: "Viewer+: NCC alert instances with persistent lifecycle state (open/acknowledged/resolved), detection (detected/not_detected), unique UUIDv4 ids, stable finding_id, first/last seen and actor timestamps. Filters: state, detection, cluster, check, finding_id, updated_since, include_closed; cursor paging via limit + cursor (next_cursor). Cluster-group scoped."},
+		{Path: "/api/v1/alerts/ncc/events", Methods: []string{http.MethodGet}, Description: "Viewer+: append-only NCC alert lifecycle events (detected, redetected, not_detected, severity_changed, acknowledged, resolved, reopened, recurred, closed) ordered by seq. Incremental sync: pass next_cursor back as cursor. Optional alert_id filter. Cluster-group scoped."},
+		{Path: "/api/v1/alerts/ncc/{id}", Methods: []string{http.MethodGet}, Description: "Viewer+: one NCC alert instance with its full event history and the other instances (earlier/later episodes) of the same finding"},
+		{Path: "/api/v1/alerts/ncc/{id}/{action}", Methods: []string{http.MethodPost}, Description: "Operator+: action is acknowledge, resolve, or reopen. Optional JSON body {\"note\": \"...\"} (max 500 chars). Idempotent: repeating the current state with the same note records nothing new.", SampleBody: "{\n  \"note\": \"Vendor case 12345 opened\"\n}"},
 		{Path: "/api/v1/features", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET viewer+: which optional views are on. PUT admin-only: turn Insights, Prism Central alerts, discovery, comparison, flaky checks, SLO, or the log index on or off.", SampleBody: "{\n  \"insights\": false,\n  \"pc_alerts\": false\n}"},
 		{Path: "/api/v1/audit", Methods: []string{http.MethodGet}, Description: "Read recent audit log entries (limit, action, failures filters)"},
 		{Path: "/api/v1/metrics/rate-limit", Methods: []string{http.MethodGet}, Description: "Rate limiter configuration and counters"},
@@ -4107,6 +4308,7 @@ func (s *apiServer) buildOpenAPISpec() map[string]interface{} {
 		paths = map[string]interface{}{}
 		spec["paths"] = paths
 	}
+	addNCCAlertOpenAPI(spec, paths)
 	for _, rt := range apiRouteCatalog() {
 		item, exists := paths[rt.Path].(map[string]interface{})
 		if !exists {
@@ -4155,7 +4357,7 @@ func (s *apiServer) buildOpenAPISpecBase() map[string]interface{} {
 		"openapi": "3.0.3",
 		"info": map[string]interface{}{
 			"title":       "NCC Orchestrator API",
-			"version":     "2.2.0",
+			"version":     "2.2.1",
 			"description": "REST API for NCC orchestrator run control, artifacts, settings, and analytics.",
 		},
 		"servers": []map[string]interface{}{
@@ -5488,6 +5690,8 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/api/v1/alerts", s.handleAlerts)
 	mux.HandleFunc("/api/v1/features", s.handleFeatureFlags)
 	mux.HandleFunc("/api/v1/alerts/ncc-dispositions", s.handleNCCDispositions)
+	mux.HandleFunc("/api/v1/alerts/ncc", s.handleNCCAlerts)
+	mux.HandleFunc("/api/v1/alerts/ncc/", s.handleNCCAlerts)
 	mux.HandleFunc("/api/v1/audit", s.handleAudit)
 	mux.HandleFunc("/api/v1/metrics/rate-limit", s.handleRateLimitMetrics)
 	mux.HandleFunc("/metrics", s.handlePrometheusMetrics)
@@ -5574,7 +5778,7 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/docs/assets/", s.handleSwaggerAsset)
 	mux.HandleFunc("/", s.handleAPIDocsHome)
 
-	return s.withCORS(s.withRateLimit(s.withAuth(mux)))
+	return s.withCompression(s.withCORS(s.withRateLimit(s.withAuth(mux))))
 }
 
 // initJWTSecret loads NCC_JWT_SECRET (or reuses --session-secret) for HS256

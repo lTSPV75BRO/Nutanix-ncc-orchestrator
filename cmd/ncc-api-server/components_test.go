@@ -12,9 +12,10 @@ func TestComponentVersionCoreStripsPrefixAndDirty(t *testing.T) {
 }
 
 func TestK8sComponentStatusUsesImageTags(t *testing.T) {
-	t.Setenv("NCC_IMAGE_TAG", "2.2.0")
-	t.Setenv("NCC_ORCHESTRATOR_IMAGE_TAG", "2.2.0")
-	t.Setenv("NCC_UI_IMAGE_TAG", "2.2.0")
+	// Track the binary's own version so this test does not drift per release.
+	t.Setenv("NCC_IMAGE_TAG", Version)
+	t.Setenv("NCC_ORCHESTRATOR_IMAGE_TAG", Version)
+	t.Setenv("NCC_UI_IMAGE_TAG", Version)
 	s := &apiServer{}
 	s.capabilities.Kubernetes = true
 	comps := s.k8sComponentStatus()

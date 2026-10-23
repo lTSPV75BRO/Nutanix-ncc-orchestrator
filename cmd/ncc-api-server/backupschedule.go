@@ -115,8 +115,8 @@ func validateBackupScheduleInput(st backupScheduleState) error {
 	if st.Retain < 0 {
 		return errors.New("retain must be >= 0")
 	}
-	if st.Encrypt && !backupKeyConfigured() {
-		return errors.New("encryption requested but no backup key is configured (set NCC_BACKUP_KEY_FILE, NCC_BACKUP_KEY, or NCC_BACKUP_PASSPHRASE on the API server)")
+	if (st.Encrypt || backupEncryptionRequired()) && !backupKeyConfigured() {
+		return errors.New("scheduled backups must be encrypted but no backup key is configured (set NCC_BACKUP_KEY_FILE, NCC_BACKUP_KEY, or NCC_BACKUP_PASSPHRASE on the API server, or " + backupEncryptionEnv + "=optional to allow plaintext)")
 	}
 	return nil
 }
@@ -140,7 +140,12 @@ func (s *apiServer) runScheduledBackupOnce(ctx context.Context, st backupSchedul
 		return
 	}
 	args := []string{"v2-backup", "--install-dir", installDir, "--output-dir", dir}
-	if st.Encrypt {
+	encrypt := st.Encrypt || backupEncryptionRequired()
+	if encrypt && !backupKeyConfigured() {
+		s.finishScheduledBackup(st, "", errBackupEncryptionRequired)
+		return
+	}
+	if encrypt {
 		args = append(args, "--encrypt")
 	}
 	out, err := s.runOrchestratorEnv(args, 5*time.Minute, nil)
@@ -154,7 +159,7 @@ func (s *apiServer) runScheduledBackupOnce(ctx context.Context, st backupSchedul
 		pruneBackupsByPrefix(dir, "ncc-backup-", st.Retain)
 	}
 	s.finishScheduledBackup(st, scheduledBackupFileFromOutput(out), nil)
-	s.auditEvent("schedule.backup.run", true, map[string]interface{}{"encrypted": st.Encrypt})
+	s.auditEvent("schedule.backup.run", true, map[string]interface{}{"encrypted": encrypt})
 }
 
 // scheduledBackupFileFromOutput extracts the written archive path from

@@ -50,6 +50,10 @@ import type {
   BackupScheduleState,
   NotificationState,
   PCAlertsData,
+  NCCAlert,
+  NCCAlertDetail,
+  NCCAlertList,
+  NCCAlertListQuery,
   NCCDisposition,
   NCCDispositionInput,
   FeatureFlags,
@@ -176,6 +180,13 @@ function isAbortError(err: unknown): boolean {
 async function requestJSON<T>(path: string, init?: RequestInit, timeoutMs = 30_000): Promise<Envelope<T>> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  // Honor a caller-supplied signal (e.g. React Query cancelling a superseded
+  // poll) in addition to the timeout.
+  const external = init?.signal;
+  if (external) {
+    if (external.aborted) ctl.abort();
+    else external.addEventListener("abort", () => ctl.abort(), { once: true });
+  }
   let response: Response;
   try {
     response = await apiFetch(path, {
@@ -188,6 +199,7 @@ async function requestJSON<T>(path: string, init?: RequestInit, timeoutMs = 30_0
     });
   } catch (err) {
     if (isAbortError(err)) {
+      if (external?.aborted) throw err; // cancelled by the caller, not a timeout
       throw new ApiError("The API did not answer through this UI in time", 408, undefined);
     }
     throw err;
@@ -326,7 +338,7 @@ export const api = {
   },
   runById: (id: string) => callApi<RunByIdData>(`/api/v1/runs/${encodeURIComponent(id)}`),
   runSummary: () => callApi<unknown>("/api/v1/runs/summary"),
-  runActive: () => callApi<RunActiveData>("/api/v1/runs/active"),
+  runActive: (signal?: AbortSignal) => callApi<RunActiveData>("/api/v1/runs/active", signal ? { signal } : undefined),
   getRunConfigPreference: () => callApi<{ path?: string }>("/api/v1/runs/config-preference"),
   updateRunConfigPreference: (path?: string) =>
     callApi<{ path?: string }>("/api/v1/runs/config-preference", {
@@ -532,7 +544,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload ?? {}),
     }),
-  listBackups: () => callApi<{ backups: BackupEntry[] }>("/api/v1/settings/backups"),
+  listBackups: () =>
+    callApi<{ backups: BackupEntry[]; encryption_policy?: { required: boolean; server_key_configured: boolean } }>(
+      "/api/v1/settings/backups",
+    ),
   createBackup: (passphrase?: string) => {
     const pass = (passphrase ?? "").trim();
     return callApiEnvelope<{ backup: BackupEntry }>("/api/v1/settings/backups", {
@@ -606,4 +621,33 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
+  /** Full lifecycle history of one NCC alert instance (v2.2.1+). */
+  nccAlertHistory: (id: string) => callApi<NCCAlertDetail>(`/api/v1/alerts/ncc/${encodeURIComponent(id)}`),
+  /** Acknowledge, resolve or reopen one NCC alert instance by id (operator+). */
+  nccAlertAction: (id: string, action: "acknowledge" | "resolve" | "reopen", note = "") =>
+    callApi<unknown>(`/api/v1/alerts/ncc/${encodeURIComponent(id)}/${action}`, {
+      method: "POST",
+      body: JSON.stringify(note ? { note } : {}),
+    }),
+  /** One page of NCC alert instances from the lifecycle store (v2.2.1+). */
+  nccAlerts: (query: NCCAlertListQuery = {}) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined && value !== "" && value !== false) params.set(key, String(value));
+    }
+    const qs = params.toString();
+    return callApi<NCCAlertList>(`/api/v1/alerts/ncc${qs ? `?${qs}` : ""}`);
+  },
+  /** Every NCC alert instance matching query, following next_cursor (capped at maxPages). */
+  nccAlertsAll: async (query: Omit<NCCAlertListQuery, "cursor" | "limit"> = {}, maxPages = 20): Promise<NCCAlert[]> => {
+    const out: NCCAlert[] = [];
+    let cursor = "";
+    for (let page = 0; page < maxPages; page += 1) {
+      const res = await api.nccAlerts({ ...query, limit: 1000, cursor: cursor || undefined });
+      out.push(...res.items);
+      cursor = res.next_cursor;
+      if (!cursor) break;
+    }
+    return out;
+  },
 };

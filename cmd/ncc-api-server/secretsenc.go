@@ -180,3 +180,40 @@ func (b *encryptingBackend) clearInitialPassword() { b.inner.clearInitialPasswor
 func (b *encryptingBackend) location() string {
 	return b.inner.location() + " (encrypted at rest, AES-256-GCM)"
 }
+
+// envBool reads a boolean environment variable ("1", "true", "yes", "on").
+func envBool(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// userStoreProtection describes how the user store is protected at rest, for
+// the admin-only health view. It never claims encryption that the server
+// cannot verify: a Kubernetes Secret is only encrypted at rest if the cluster's
+// API server has an EncryptionConfiguration (or KMS) for Secrets, which the
+// application cannot observe.
+func (s *apiServer) userStoreProtection() string {
+	switch {
+	case s.users == nil:
+		return "none_configured"
+	case s.userStoreEncrypted:
+		return "aes256gcm_envelope"
+	case strings.TrimSpace(s.usersDBSecret) != "":
+		return "kubernetes_secret_etcd_encryption_unverified"
+	default:
+		return "file_0600_plaintext"
+	}
+}
+
+// checkUserStoreEncryptionPolicy enforces --require-encrypted-user-store.
+// Password hashing (bcrypt) protects passwords regardless; this policy covers
+// the reversible secrets in the store (SAML SP private key, LDAP bind password).
+func (s *apiServer) checkUserStoreEncryptionPolicy(haveStore bool) error {
+	if !s.requireEncryptedUserStore || !haveStore || s.userStoreEncrypted {
+		return nil
+	}
+	return fmt.Errorf("--require-encrypted-user-store is set but no master key is configured: set %s (32-byte base64/hex, e.g. from a Kubernetes Secret or KMS) or --users-db-key-file / %s", masterKeyEnv, masterKeyFileEnv)
+}

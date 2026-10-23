@@ -2,11 +2,99 @@
 
 A project-wide list of improvements and new features for the NCC Orchestrator: application, scripts, Kubernetes, CI/CD, and documentation. Use as a backlog; prioritize by impact and effort.
 
-For the latest completed release summary, see [RELEASE_NOTES_v2.2.0.md](RELEASE_NOTES_v2.2.0.md) and [CHANGELOG.md](CHANGELOG.md).
+For the latest completed release summary, see [RELEASE_NOTES_v2.2.1.md](RELEASE_NOTES_v2.2.1.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Top of backlog (next)
+## 2.2.x polish pack (next implementation)
+
+Operator mount-time admin `/api/v1/settings/*` calls are already gone (Schedule uses `/runs/configs`; Settings `destroyOnHidden`). The leftover work is honest rollback, JWT expiry, click-through 403s, and a few security/QOL gaps. Items below are the mixed pack unless marked *later*.
+
+### Fixes
+
+| Item | Description | Files | Size |
+|------|-------------|-------|------|
+| **Encrypted rollback tells the truth** | `backupArchiveIncludesStack` skips `.tar.gz.enc`, so the UI says software will stay as-is even when a 2.2.0 pre-update snapshot has a stack. Peek after decrypt, or treat updater `pre-update-*.enc` as stack-bearing. Failed apply already has `backupPath` — add **Roll back now**. | `cmd/ncc-api-server/backups.go`, `frontend/src/features/settings/AccessSection.tsx` | M |
+| **JWT sessions report expiry** | HMAC sets `expiresAt`; JWT `principalFromIdentity` does not. `/auth/me` omits `expires_in_sec` on the 2.2.0 cookie path. Idle guard is hardcoded to 60 minutes. | `cmd/ncc-api-server/auth.go`, `internal/auth`, `frontend/src/components/SessionIdleGuard.tsx` | S–M |
+| **systemd exit 3 is success** | Partial success (exit 3) fails the timer. Add `SuccessExitStatus=0 3`. | `schedule_systemd.go` | S |
+| **Forgot-password rate limit** | Docs say the global limiter applies; `withRateLimit` misses `/api/v1/auth/forgot-password`. | `cmd/ncc-api-server/hardening.go` | S |
+
+### QOL / operator dead-ends
+
+| Item | Description | Files | Size |
+|------|-------------|-------|------|
+| **Role-aware ⌘K** | Filter destinations by role; add Connection/Logs/Audit; do not steal Ctrl+K from Monaco. | `frontend/src/components/CommandJump.tsx` | S |
+| **First-time setup** | Skip on already-configured installs. Operators: Connection → Schedule → First run. Use `navigate`, not full reload. | `FirstTimeSetupModal.tsx`, `App.tsx` | M |
+| **Session remaining** | User menu shows `expires_in_sec` once JWT expiry is fixed. | `frontend/src/App.tsx` | S |
+| **Admin-tab remapping** | Banner “This area is admin-only” instead of silent remap; operator Settings banner. | `SettingsPage.tsx` | S |
+| **Dashboard empty state** | Operators do not get **Open Config**. | `DashboardPage.tsx` | S |
+| **Restricted Runs** | Disable Trigger/Preflight when no groups; hide extra flags that 403; artifacts copy says admin-only. | `RunsSection.tsx` | S |
+| **Feature / Audit copy** | “Ask an administrator to turn this on”; empty audit talks runs/schedule, not config saves. Hide or relabel Connection token-file for non-admins. | `FeatureDisabled.tsx`, `AuditLogSection.tsx`, `SettingsPage.tsx` | S |
+| **Login lockout + toast titles** | 429 / `NCC_API_ACCOUNT_LOCKED` countdown; `notifyError` title from `error_code`. | `LoginPage.tsx`, `notify.tsx` | S |
+
+### New feature in this pack
+
+| Item | Description | Files | Size |
+|------|-------------|-------|------|
+| **Muted-notification banner** | Secret-free `GET /health` field `notifications: { delivery_paused, reason }`. Header banner for everyone; Notifications link only if admin. | `cmd/ncc-api-server/main.go`, `notifications_controls.go`, `App.tsx` | S–M |
+
+### Later (not this pack)
+
+| Item | Why later |
+|------|-----------|
+| CSRF cookie on split UI/API origins (`ncc_csrf` SameSite=Strict vs `auth_token` Lax) | Cookie Domain / SameSite change; easy to get wrong |
+| Optional “include software” on manual snapshots | Copy + backup flag; not required for updater path |
+| GitHub 429 copy on the update card | Admin-only Maintenance |
+| Auth-gate OpenAPI / meta/routes when login is on | Breaks unauthenticated `/docs` |
+| Insights fleet-wide vs scoped Dashboard numbers | Needs API filters on trends / summary / logs |
+| Operator notification-test card | Needs a redacted GET (secrets stay admin) |
+| Unrestricted operator cluster picker | `GET /settings/clusters` already allowed |
+
+---
+
+## New features (research)
+
+Ideas beyond the polish pack. Several older rows in §6 are already shipped (PC alerts, web UI, host scheduler, audit log).
+
+| Feature | Description | Effort |
+|---------|-------------|--------|
+| **Live run log stream** | SSE or chunked GET for runner logs so Settings → Runs does not poll every 3s. Reuse `handleRunnerLogs` tail. | M |
+| **Saved dashboard views** | Named filter sets (severity, clusters, source, handling) in `localStorage` or per-user prefs; share via URL (already has query params). | S |
+| **Alert snooze** | Disposition `snooze_until` so ACK expires back to Needs attention. Extends `ncc-alert-dispositions.json`. | M |
+| **Redacted notification status for operators** | GET without SMTP/webhook secrets: channels on/off, last delivery, **Send test** (POST already operator+). | M |
+| **Scoped Insights** | Apply cluster-group filter to trends, policy lines, NCC logs, and hero counts so Insights matches the Dashboard banner. | M |
+| **What’s New drawer** | Client-only bullets keyed by `health.version`; open once after upgrade. | S |
+| **gzip / `Accept-Encoding` on large GETs** | Compress `/report/data`, `/alerts`, `/audit` when the client asks. Big win on VPN. | S |
+| **Check allow/deny lists** | Config to skip or keep NCC checks by name/regex (still listed in §6). | M |
+| **Interactive Slack/Teams** | “View dashboard” button with ingress URL (still listed in §6). | M |
+| **Profiles / multi-team outputs** | Separate config+output roots per team (still listed in §6). | L |
+
+---
+
+## Performance (research)
+
+v2.2.0 already shipped PC alert cache TTL, the alert pager, and dashboard preview `limit`/`offset`. Remaining cost is leftover work *around* those.
+
+| Item | Problem | User-visible | Effort |
+|------|---------|--------------|--------|
+| **`/report/data` builds full then slices** | `limit`/`offset` trim `checks_snapshot` / `agg_rows` after every artifact and `index.html` scrape. | First dashboard paint still waits on a large JSON body. | M |
+| **Preview + full follow-up** | After `has_more`, Dashboard fetches unpaginated `/report/data`. Insights/Settings use other query keys and do not reuse preview. | Table appears, then the page stalls. | S–M |
+| **PC alerts: one cache slot, no singleflight** | Cache keyed only by `resolvedFilter`; Dashboard fires `No` and `all`. Concurrent misses all hit Prism. No server pager. | PC · Beta / Refresh waits on Prism; toggling Resolved feels cold. | M |
+| **Trends re-walk every `run-summary.json`** | `collectTrendPoints` lists `runs/*` (capped 365). `/report/data` embeds 30 points; Insights walks again. | Insights/dashboard slow as history grows. | S–M |
+| **Insights loads the fat report** | Unpaginated `reportData` + `reportTrends(24)` then aggregates every `agg_row` on the main thread. | Slowest page after a large run. | M |
+| **Settings Connection fetches full report** | Sparkline needs `/runs?limit=200`; Connection also pulls `/report/data`. Access/Maintenance fan out 8–12 GETs. | Settings feels heavy on open. | S–M |
+| **ClusterTable maps every row before paging** | Builds `RowRecord`s for the full set, then slices. Rebuilds on each filter keystroke. | Search/severity jank on large reports. | M |
+| **HTML/CSV still embed full check detail** | Combined `index.html` inlines AGG until 20k rows; `MarshalIndent` on snapshots. | Longer runs; multi-MB `index.html`; API scrape stays large. | L |
+| **Backup list opens every archive** | Walks tar members for `includes_stack`. System Health lists backups on open. Update always `--include-stack`. | Maintenance/Health hang; Apply update sits on backup. | M |
+| **Audit `ReadFile`s the whole JSONL under a lock** | Newest-first unmarshal; `/runs` pulls 500 trigger lines the same way. | Audit tab and sparkline slow on long-lived installs. | M |
+| **`/runs` walks history for a 7-day sparkline** | Stats every `runs/<id>/`, reads summaries, merges audit. Filter after the walk. | Connection waits on run history. | S |
+| **`interface{}` JSON + no gzip** | Decode to maps → `deepFilterClusters` → encode. Sidecar `checks-snapshot.json` ignored in favor of HTML scrape. | Same data, more wait/memory over VPN. | M |
+
+**Suggested performance order:** report build+slice + stop the full follow-up (dashboard TTFB) → Insights slim payload → PC singleflight + multi-slot cache → gzip → audit tail / sparkline cheap path. Do not redo preview pagination, the alert pager, or the 5-minute PC TTL.
+
+---
+
+## Top of backlog (structural)
 
 **Extract `goNCC.go` into `internal/` packages (first wave done, v2.1.0).**
 `goNCC.go` is ~15.5k lines. The first wave of six leaf packages landed in
@@ -346,4 +434,4 @@ These rows in the sections below are now **done** and kept only for history:
 
 ---
 
-*Last updated: 2026-09 (v2.2.0 release). The first wave of the `goNCC.go` package extraction is complete (six `internal/` packages); the next wave (report renderers → `internal/report`) is the headline structural item — see "Top of backlog". Revisit as the project evolves.*
+*Last updated: 2026-10-07. 2.2.x polish pack, new-feature research, and performance research added at the top. The `goNCC.go` report-renderer extraction remains the headline structural item — see "Top of backlog (structural)".*

@@ -2,11 +2,14 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"mime"
 	"net/http"
+	"net/mail"
 	"net/smtp"
 	"net/url"
 	"os"
@@ -973,24 +976,58 @@ func sendSMTPMail(cfg emailNotificationConfig, subject, body string) error {
 	if strings.TrimSpace(cfg.Username) != "" {
 		auth = smtp.PlainAuth("", strings.TrimSpace(cfg.Username), cfg.Password, host)
 	}
-	msg := strings.Join([]string{
-		fmt.Sprintf("From: %s", strings.TrimSpace(cfg.From)),
-		fmt.Sprintf("To: %s", strings.TrimSpace(cfg.To)),
-		fmt.Sprintf("Subject: %s", subject),
-		"MIME-Version: 1.0",
-		"Content-Type: text/plain; charset=UTF-8",
-		"",
-		body,
-	}, "\r\n")
+	// Every header value is parsed or encoded rather than interpolated, so a CR/LF
+	// smuggled into an address, the subject (which carries run/cluster data) or
+	// the body cannot inject headers or extra MIME parts.
+	from, err := mail.ParseAddress(strings.TrimSpace(cfg.From))
+	if err != nil {
+		return fmt.Errorf("invalid email sender %q: %w", cfg.From, err)
+	}
 	recipients := []string{}
+	toHeader := []string{}
 	for _, v := range strings.Split(cfg.To, ",") {
 		v = strings.TrimSpace(v)
-		if v != "" {
-			recipients = append(recipients, v)
+		if v == "" {
+			continue
 		}
+		to, err := mail.ParseAddress(v)
+		if err != nil {
+			return fmt.Errorf("invalid email recipient %q: %w", v, err)
+		}
+		recipients = append(recipients, to.Address)
+		toHeader = append(toHeader, to.String())
 	}
 	if len(recipients) == 0 {
 		return errors.New("no email recipients configured")
 	}
-	return smtp.SendMail(addr, auth, strings.TrimSpace(cfg.From), recipients, []byte(msg))
+	msg := strings.Join([]string{
+		"From: " + from.String(),
+		"To: " + strings.Join(toHeader, ", "),
+		"Subject: " + mime.QEncoding.Encode("utf-8", stripCRLF(subject)),
+		"MIME-Version: 1.0",
+		"Content-Type: text/plain; charset=UTF-8",
+		"Content-Transfer-Encoding: base64",
+		"",
+		base64MIMEBody(body),
+	}, "\r\n")
+	return smtp.SendMail(addr, auth, from.Address, recipients, []byte(msg))
+}
+
+// stripCRLF flattens line breaks so a value can sit on a single header line.
+func stripCRLF(s string) string {
+	return strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ").Replace(s)
+}
+
+// base64MIMEBody encodes body as base64 wrapped at 76 columns (RFC 2045), so no
+// byte of the untrusted body reaches the SMTP DATA stream unencoded.
+func base64MIMEBody(body string) string {
+	enc := base64.StdEncoding.EncodeToString([]byte(body))
+	var b strings.Builder
+	for len(enc) > 76 {
+		b.WriteString(enc[:76])
+		b.WriteString("\r\n")
+		enc = enc[76:]
+	}
+	b.WriteString(enc)
+	return b.String()
 }

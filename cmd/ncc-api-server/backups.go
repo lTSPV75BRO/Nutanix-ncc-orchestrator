@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -91,6 +92,77 @@ func backupKeyConfigured() bool {
 	}
 	return false
 }
+
+// Backup encryption policy.
+//
+// Every archive the api-server produces (manual snapshots, browser downloads,
+// scheduled snapshots, and pre-update rollback points) contains secrets: the
+// API token, password and PAT hashes, the SAML SP private key, the LDAP bind
+// password, and usually a config.yaml with the Prism password. Before v2.2.1
+// they were written in plaintext unless the operator typed a passphrase, which
+// is why audit entries showed "encrypted": false.
+//
+// NCC_BACKUP_ENCRYPTION selects the policy:
+//
+//	required (default) — refuse to create a backup that would be plaintext.
+//	                      A per-request passphrase or a server-side key
+//	                      (NCC_BACKUP_KEY_FILE / NCC_BACKUP_KEY /
+//	                      NCC_BACKUP_PASSPHRASE) must be available.
+//	optional           — legacy behavior: encrypt only when a passphrase or
+//	                      server key is available. Every plaintext backup is
+//	                      audited with encrypted=false.
+//
+// Encryption is AES-256-GCM (backupcrypt.go) with the key kept outside the
+// archive. Existing plaintext archives are NOT re-encrypted by this change;
+// see docs/security/security-assessment-2026-10.md for the migration procedure.
+const backupEncryptionEnv = "NCC_BACKUP_ENCRYPTION"
+
+func backupEncryptionRequired() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(backupEncryptionEnv))) {
+	case "optional", "off", "disabled", "false", "0":
+		return false
+	}
+	return true
+}
+
+// errBackupEncryptionRequired explains how to satisfy the policy.
+var errBackupEncryptionRequired = errors.New("backups must be encrypted (" + backupEncryptionEnv + "=required): provide a passphrase, or configure a server-side backup key with NCC_BACKUP_KEY_FILE (recommended: a mounted secret outside the install directory), NCC_BACKUP_KEY, or NCC_BACKUP_PASSPHRASE on the API server; set " + backupEncryptionEnv + "=optional only if plaintext backups are acceptable")
+
+// backupEncryptionPlan decides how a backup will be encrypted. passphrase is
+// the optional per-request passphrase. It returns whether to pass --encrypt,
+// the extra child environment (never argv), and the key source for auditing.
+func backupEncryptionPlan(passphrase string) (encrypt bool, extraEnv []string, keySource string, err error) {
+	if p := strings.TrimSpace(passphrase); p != "" {
+		return true, []string{"NCC_BACKUP_PASSPHRASE=" + p}, "request_passphrase", nil
+	}
+	if backupKeyConfigured() {
+		return true, nil, "server_key", nil
+	}
+	if backupEncryptionRequired() {
+		return false, nil, "none", errBackupEncryptionRequired
+	}
+	return false, nil, "none", nil
+}
+
+// backupFileEncrypted reports whether the archive on disk actually carries the
+// AES-GCM envelope, so audit records reflect the real outcome rather than the
+// request.
+func backupFileEncrypted(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	head := make([]byte, len(backupEncMagicAPI))
+	if _, err := io.ReadFull(f, head); err != nil {
+		return false
+	}
+	return string(head) == backupEncMagicAPI
+}
+
+// backupEncMagicAPI mirrors backupcrypt.go's envelope magic (the orchestrator
+// writes the envelope; the api-server only needs to recognize it).
+const backupEncMagicAPI = "NCCBKP1\n"
 
 // backupsRetainLimit reads the optional NCC_BACKUPS_RETAIN cap (number of manual
 // snapshots to keep). 0/unset/invalid means "keep all".
@@ -241,7 +313,13 @@ func (s *apiServer) handleBackupsList(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "list backups: " + err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{"backups": entries}})
+	writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
+		"backups": entries,
+		"encryption_policy": map[string]interface{}{
+			"required":              backupEncryptionRequired(),
+			"server_key_configured": backupKeyConfigured(),
+		},
+	}})
 }
 
 // handleBackupCreate writes a persistent snapshot into <install>/backups so it
@@ -263,7 +341,12 @@ func (s *apiServer) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "passphrase too long"})
 		return
 	}
-	encrypt := passphrase != ""
+	encrypt, extraEnv, keySource, planErr := backupEncryptionPlan(passphrase)
+	if planErr != nil {
+		s.audit(r, "settings.backup.create", false, map[string]interface{}{"encrypted": false, "error": "encryption_required"})
+		writeJSON(w, http.StatusPreconditionFailed, envelope{Success: false, Error: planErr.Error(), ErrorCode: "NCC_BACKUP_ENCRYPTION_REQUIRED"})
+		return
+	}
 
 	installDir := s.maintenanceInstallDir()
 	dir := s.backupsDir()
@@ -274,7 +357,7 @@ func (s *apiServer) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "create backups dir: " + err.Error()})
+		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "create backups dir: " + sanitizeErr(err)})
 		return
 	}
 	stamp := time.Now().UTC().Format("20060102T150405Z")
@@ -284,21 +367,27 @@ func (s *apiServer) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	outPath := filepath.Join(dir, name)
 	args := []string{"v2-backup", "--install-dir", installDir, "--output-file", outPath}
-	var extraEnv []string
 	if encrypt {
 		args = append(args, "--encrypt")
-		extraEnv = []string{"NCC_BACKUP_PASSPHRASE=" + passphrase}
 	}
 	if out, err := s.runOrchestratorEnv(args, 2*time.Minute, extraEnv); err != nil {
-		s.audit(r, "settings.backup.create", false, map[string]interface{}{"install_dir": installDir, "encrypted": encrypt})
+		s.audit(r, "settings.backup.create", false, map[string]interface{}{"encrypted": false, "key_source": keySource})
 		s.notifyOperationalFailure("backup_failure", "NCC backup snapshot failed", map[string]interface{}{
-			"install_dir": installDir,
-			"encrypted":   encrypt,
-			"error":       firstNonEmptyLine(out, "snapshot failed"),
+			"encrypted": encrypt,
+			"error":     redactPaths(firstNonEmptyLine(out, "snapshot failed")),
 		})
-		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "snapshot failed: " + strings.TrimSpace(out)})
+		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "snapshot failed: " + redactPaths(strings.TrimSpace(out))})
 		return
 	}
+	actuallyEncrypted := backupFileEncrypted(outPath)
+	if encrypt && !actuallyEncrypted {
+		// Fail securely: never keep a plaintext archive under an encrypted name.
+		_ = os.Remove(outPath)
+		s.audit(r, "settings.backup.create", false, map[string]interface{}{"encrypted": false, "key_source": keySource, "error": "encryption_not_applied"})
+		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "snapshot was not encrypted as required; the archive was removed"})
+		return
+	}
+	encrypt = actuallyEncrypted
 	entry := backupEntry{Name: name, Kind: "manual", Encrypted: encrypt}
 	if info, err := os.Stat(outPath); err == nil {
 		entry.Size = info.Size()
@@ -309,7 +398,7 @@ func (s *apiServer) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
 	if pruned := pruneManualBackups(dir, backupsRetainLimit()); len(pruned) > 0 {
 		s.audit(r, "settings.backup.prune", true, map[string]interface{}{"pruned": pruned, "retain": backupsRetainLimit()})
 	}
-	s.audit(r, "settings.backup.create", true, map[string]interface{}{"install_dir": installDir, "name": name, "bytes": entry.Size, "encrypted": encrypt})
+	s.audit(r, "settings.backup.create", true, map[string]interface{}{"name": name, "bytes": entry.Size, "encrypted": encrypt, "key_source": keySource})
 	msg := "Snapshot created."
 	if encrypt {
 		msg = "Encrypted snapshot created."

@@ -45,7 +45,7 @@ Supporting assets:
 
 Install these first:
 
-- Go 1.27.1+ (use the version in `go.mod`)
+- Go 1.27.3+ (use the version in `go.mod`)
 - Node.js 26+ + npm (for frontend build/tests; `frontend/package.json` engines)
 - Git
 - `kubectl` (for Kubernetes deployment flow)
@@ -65,7 +65,7 @@ Environment/access prerequisites:
 ```bash
 git clone https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator.git
 cd Nutanix-ncc-orchestrator
-git checkout v2.2.0
+git checkout v2.2.1
 ```
 
 Sanity-check important paths:
@@ -287,6 +287,7 @@ Use:
 
 - `CHANGELOG.md`
 - `RELEASE_NOTES_v2.2.0.md`
+- `RELEASE_NOTES_v2.2.1.md`
 - `docs/RELEASE_CHECKSUMS.md`
 
 ---

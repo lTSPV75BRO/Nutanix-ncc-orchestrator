@@ -21,7 +21,7 @@ Linux when the OS warns that the binary is "untrusted".
 > 3. Run `ncc-orchestrator verify` to print the embedded build metadata
 >    (version, git revision, vendor, self-hash) for the file you have
 >    on disk.
-> 4. (Optional) Verify the GPG-signed git tag (`git tag -v v2.2.0`) and
+> 4. (Optional) Verify the GPG-signed git tag (`git tag -v v2.2.1`) and
 >    release-attestation.json provenance once published.
 
 ---
@@ -233,7 +233,7 @@ the matching GitHub release tag.
 $ ncc-orchestrator verify
 ncc-orchestrator verify
 -----------------------
-version:           2.2.0
+version:           2.2.1
 stream:            Release
 build_date:        2026-09-25T20:00:00Z
 go_version:        go1.27.1
@@ -246,7 +246,7 @@ license:           MIT
 project_url:       https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator
 affiliation:       independent open-source project; not affiliated with or endorsed by Nutanix, Inc.
 verify:            compare executable_sha256 against checksums.txt at
-                   https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.2.0
+                   https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.2.1
 ```
 
 ### `go version -m <binary>`
@@ -276,9 +276,9 @@ Starting in v2.2.0 the dialog shows:
 | Field | Value |
 | ----- | ----- |
 | File description | NCC Orchestrator (CLI + v2 lifecycle manager) |
-| File version | 2.2.0.0 |
+| File version | 2.2.1.0 |
 | Product name | NCC Orchestrator |
-| Product version | 2.2.0 |
+| Product version | 2.2.1 |
 | Company | ncc-orchestrator (open-source project) |
 | Copyright | (c) 2025-2026 Prajwal Vernekar and contributors. MIT licensed; see LICENSE. |
 | Legal trademarks | NCC and Nutanix are trademarks of their respective owners; this project is not affiliated with or endorsed by Nutanix, Inc. |
@@ -298,7 +298,7 @@ GPG-signed. After importing that key:
 
 ```bash
 git fetch --tags
-git tag -v v2.2.0
+git tag -v v2.2.1
 # expected: "Good signature from <maintainer>"
 ```
 
@@ -321,7 +321,7 @@ blobs.
 ```json
 {
   "product": "NCC Orchestrator",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "stream": "Release",
   "git_revision": "914c71d27fb10cd4...",
   "git_dirty": false,
@@ -833,9 +833,11 @@ forgot-password username is the built-in `admin`, queuing a request is useless
 (there may be no other admin to action it), so the server instead self-resets
 the admin exactly like first-run setup: it generates a **new random password**,
 forces a change at next login, and **invalidates all existing admin sessions**
-(token-generation bump). The new password is surfaced only through the
-**server logs** and the sibling **`.ncc-initial-admin-password`** file — it is
-**never returned over the network** (the HTTP response only confirms a reset was
+(token-generation bump). The new password is written only to the sibling
+**`.ncc-initial-admin-password`** file (or the Kubernetes Secret's
+`initial-admin-password` key); the server log records that a reset happened and
+where to read the password, but never the password itself, since logs are often
+forwarded to shared aggregators. It is **never returned over the network** (the HTTP response only confirms a reset was
 generated and tells the operator where to look). Recovery therefore still
 requires host/log access, the same trust boundary as the first-run bootstrap
 password and the offline `v2-reset-password --user admin` command. The trade-off
