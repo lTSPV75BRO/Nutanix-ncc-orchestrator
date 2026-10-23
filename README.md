@@ -112,7 +112,7 @@ Open <https://localhost:8080> — the UI picks up the auto-generated `.ncc-api-t
 
 ### From source
 
-Requires **Go 1.27.1+** (matching the `go` directive in [`go.mod`](go.mod)) and **Node 26+**.
+Requires **Go 1.27.3+** (matching the `go` directive in [`go.mod`](go.mod)) and **Node 26+**.
 
 ```bash
 git clone https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator.git

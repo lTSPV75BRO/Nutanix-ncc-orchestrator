@@ -16,13 +16,14 @@ LABEL org.opencontainers.image.title="ncc-orchestrator" \
 
 COPY ncc-host-cas.pem /tmp/ncc-host-cas.pem
 # Host CAs are appended only for this apk call (corporate TLS inspection).
-# apk's ca-certificates trigger rebuilds the bundle from public roots, so the
-# extra CA is not left in the image.
-RUN cp /etc/ssl/certs/ca-certificates.crt /tmp/ca.orig \
-    && if [ -s /tmp/ncc-host-cas.pem ]; then cat /tmp/ncc-host-cas.pem >> /etc/ssl/certs/ca-certificates.crt; fi \
+# Afterwards `apk fix ca-certificates-bundle` reinstalls the bundle from the
+# just-upgraded package: that drops the extra CA and keeps the upgrade.
+# Do not restore a copy taken before `apk add --upgrade` -- that would put
+# back the base image's stale roots (e.g. the distrusted eMudhra CAs).
+RUN if [ -s /tmp/ncc-host-cas.pem ]; then cat /tmp/ncc-host-cas.pem >> /etc/ssl/certs/ca-certificates.crt; fi \
     && apk add --no-cache --upgrade ca-certificates tzdata \
-    && cp /tmp/ca.orig /etc/ssl/certs/ca-certificates.crt \
-    && rm -f /tmp/ncc-host-cas.pem /tmp/ca.orig
+    && apk fix --no-cache ca-certificates-bundle \
+    && rm -f /tmp/ncc-host-cas.pem
 
 COPY ncc-orchestrator-linux-${TARGETARCH} /usr/local/bin/ncc-orchestrator
 RUN chmod 0755 /usr/local/bin/ncc-orchestrator
