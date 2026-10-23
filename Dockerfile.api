@@ -34,7 +34,7 @@ LABEL org.opencontainers.image.title="ncc-api-server" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       com.ncc-orchestrator.stream="${STREAM}"
 
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache --upgrade ca-certificates tzdata
 
 WORKDIR /app
 

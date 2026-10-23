@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/crypto/scrypt"
@@ -201,7 +202,37 @@ func encryptBackupFile(path string, key []byte, mode byte, salt []byte) error {
 	out = append(out, header...)
 	out = append(out, nonce...)
 	out = append(out, ct...)
-	return os.WriteFile(path, out, 0o600)
+	// Replace the plaintext archive atomically: a crash mid-write must leave
+	// either the verified plaintext (which the caller removes on error) or the
+	// complete envelope — never a truncated file posing as an encrypted backup.
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".ncc-backup-seal-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(out); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o600); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 // decryptBackupArchive decrypts an encrypted backup at in into a fresh 0600

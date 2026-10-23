@@ -233,20 +233,97 @@ func parseRemoteIP(remoteAddr string) net.IP {
 	return nil
 }
 
+// trustedProxyNets is the set of peers whose X-Forwarded-For header is
+// honored. nil means the default (loopback + RFC 1918/4193 private ranges),
+// which preserves pre-2.2.1 behavior; operators should narrow it with
+// --trusted-proxy-cidrs to the reverse proxy / ingress / UI pod addresses.
+var (
+	trustedProxyNets    []*net.IPNet
+	trustedProxyLoop    = true
+	trustedProxyPrivate = true
+)
+
+// configureTrustedProxies parses a comma-separated list of CIDRs and the
+// keywords "loopback", "private", and "none".
+func configureTrustedProxies(spec string) error {
+	var nets []*net.IPNet
+	loop, priv := false, false
+	for _, raw := range strings.Split(spec, ",") {
+		tok := strings.ToLower(strings.TrimSpace(raw))
+		switch tok {
+		case "":
+			continue
+		case "none":
+			nets, loop, priv = nil, false, false
+			continue
+		case "loopback":
+			loop = true
+			continue
+		case "private":
+			priv = true
+			continue
+		}
+		if !strings.Contains(tok, "/") {
+			if ip := net.ParseIP(tok); ip != nil {
+				bits := 32
+				if ip.To4() == nil {
+					bits = 128
+				}
+				tok = fmt.Sprintf("%s/%d", ip.String(), bits)
+			}
+		}
+		_, n, err := net.ParseCIDR(tok)
+		if err != nil {
+			return fmt.Errorf("invalid trusted proxy %q (use a CIDR, an IP, loopback, private, or none)", raw)
+		}
+		nets = append(nets, n)
+	}
+	trustedProxyNets, trustedProxyLoop, trustedProxyPrivate = nets, loop, priv
+	return nil
+}
+
 func trustForwardedHeaders(remoteIP net.IP) bool {
 	if remoteIP == nil {
 		return false
 	}
-	return remoteIP.IsLoopback() || remoteIP.IsPrivate()
+	if trustedProxyLoop && remoteIP.IsLoopback() {
+		return true
+	}
+	if trustedProxyPrivate && remoteIP.IsPrivate() {
+		return true
+	}
+	for _, n := range trustedProxyNets {
+		if n.Contains(remoteIP) {
+			return true
+		}
+	}
+	return false
 }
 
+// cleanClientIP returns the client address used for rate limiting and login
+// throttling. X-Forwarded-For is only consulted when the direct peer is a
+// trusted proxy, and it is walked from the right (the hop appended by our own
+// proxy) skipping trusted proxies; the first untrusted address is the client.
+// Taking the left-most entry — as before v2.2.1 — let any client choose its
+// own rate-limit identity by sending a forged X-Forwarded-For header.
 func cleanClientIP(r *http.Request) string {
 	remoteIP := parseRemoteIP(r.RemoteAddr)
 	if trustForwardedHeaders(remoteIP) {
-		xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For"))
-		if xff != "" {
-			first := strings.TrimSpace(strings.Split(xff, ",")[0])
-			if ip := net.ParseIP(first); ip != nil {
+		var hops []string
+		for _, v := range r.Header.Values("X-Forwarded-For") {
+			for _, h := range strings.Split(v, ",") {
+				if h = strings.TrimSpace(h); h != "" {
+					hops = append(hops, h)
+				}
+			}
+		}
+		for i := len(hops) - 1; i >= 0; i-- {
+			ip := net.ParseIP(hops[i])
+			if ip == nil {
+				// A malformed hop ends the trustworthy part of the chain.
+				break
+			}
+			if !trustForwardedHeaders(ip) || i == 0 {
 				return ip.String()
 			}
 		}
@@ -583,17 +660,46 @@ func (s *apiServer) withRateLimit(next http.Handler) http.Handler {
 		"/api/v1/auth/session":                true,
 		"/api/v1/auth/login":                  true,
 		"/api/v1/auth/rotate":                 true,
+		"/api/v1/auth/change-password":        true,
+		"/api/v1/auth/forgot-password":        true,
 		"/api/v1/runs/trigger":                true,
 		"/api/v1/settings/config":             true,
 		"/api/v1/settings/config-file":        true,
 		"/api/v1/settings/notifications/test": true,
+		// Resource-intensive or sensitive operations (each shells out to the
+		// orchestrator and/or handles secrets).
+		"/api/v1/settings/backup":                   true,
+		"/api/v1/settings/backups":                  true,
+		"/api/v1/settings/backups/restore":          true,
+		"/api/v1/settings/backups/verify":           true,
+		"/api/v1/settings/backups/download":         true,
+		"/api/v1/settings/restore":                  true,
+		"/api/v1/settings/update/apply":             true,
+		"/api/v1/health/diagnostics/support-bundle": true,
 	}
+	// Mutations of alert state are rate limited per client too (bulk calls
+	// carry up to 200 alerts, so the per-request cost is bounded separately).
+	mutatingPrefixes := []string{"/api/v1/alerts/ncc"}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.rateLimiter == nil || r.Method == http.MethodOptions || r.URL.Path == "/api/v1/health" {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !limitedPaths[r.URL.Path] {
+		bucket := r.URL.Path
+		limited := limitedPaths[r.URL.Path]
+		if r.Method == http.MethodGet && (r.URL.Path == "/api/v1/settings/backups") {
+			// Listing is cheap; only creating a snapshot is limited.
+			limited = false
+		}
+		if !limited && isMutating(r) {
+			for _, p := range mutatingPrefixes {
+				if strings.HasPrefix(r.URL.Path, p) {
+					limited = true
+					bucket = p
+				}
+			}
+		}
+		if !limited {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -601,7 +707,7 @@ func (s *apiServer) withRateLimit(next http.Handler) http.Handler {
 		if clientIP == "" {
 			clientIP = "unknown"
 		}
-		key := r.URL.Path + "|" + clientIP
+		key := bucket + "|" + clientIP
 		ok, retryAfter := s.rateLimiter.allow(key, time.Now().UTC())
 		if ok {
 			next.ServeHTTP(w, r)
@@ -698,11 +804,7 @@ func (s *apiServer) appendAuditLine(line []byte) {
 	}
 	if s.auditLogMaxBytes > 0 {
 		if st, err := os.Stat(abs); err == nil && st.Size() >= s.auditLogMaxBytes {
-			rotated := abs + ".1"
-			_ = os.Remove(rotated)
-			if err := os.Rename(abs, rotated); err != nil {
-				log.Printf("audit log: rotate: %v", err)
-			}
+			rotateAuditGenerations(abs, s.auditLogKeep)
 		}
 	}
 	f, err := os.OpenFile(abs, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
@@ -713,6 +815,27 @@ func (s *apiServer) appendAuditLine(line []byte) {
 	defer f.Close()
 	if _, err := f.Write(append(line, '\n')); err != nil {
 		log.Printf("audit log: write: %v", err)
+	}
+}
+
+// rotateAuditGenerations shifts <path>.1..<path>.(keep-1) up by one and moves
+// the live file to <path>.1. Before v2.2.1 only a single generation was kept,
+// so every rotation (5 MiB by default) destroyed the previous audit history.
+func rotateAuditGenerations(abs string, keep int) {
+	if keep < 1 {
+		keep = 1
+	}
+	_ = os.Remove(fmt.Sprintf("%s.%d", abs, keep))
+	for i := keep - 1; i >= 1; i-- {
+		from := fmt.Sprintf("%s.%d", abs, i)
+		if _, err := os.Stat(from); err == nil {
+			if err := os.Rename(from, fmt.Sprintf("%s.%d", abs, i+1)); err != nil {
+				log.Printf("audit log: rotate %d: %v", i, err)
+			}
+		}
+	}
+	if err := os.Rename(abs, abs+".1"); err != nil {
+		log.Printf("audit log: rotate: %v", err)
 	}
 }
 

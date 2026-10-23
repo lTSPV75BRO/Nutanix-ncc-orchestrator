@@ -60,6 +60,17 @@ Prometheus's counter semantics):
 | `ncc_update_applied_total` / `ncc_update_failed_total` | counter | In-app software-update outcomes |
 | `ncc_ratelimit_allowed_total` / `ncc_ratelimit_blocked_total` | counter | Rate-limiter decisions (when enabled) |
 
+#### NCC alert lifecycle metrics (v2.2.1+)
+
+| Metric | Type | Description |
+| --- | --- | --- |
+| `ncc_alerts_active{state,detection,severity}` | gauge | Active NCC alert instances by operator state (`open`/`acknowledged`/`resolved`), detection (`detected`/`not_detected`/`unknown`) and severity |
+| `ncc_alerts_store_up` | gauge | `1` when the alert lifecycle store is readable |
+| `ncc_alerts_last_ingested_run_timestamp_seconds` | gauge | Run timestamp last applied to the lifecycle |
+| `ncc_alerts_events_total` | gauge | Lifecycle events retained in history |
+
+See [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/third-party-alert-integrations.md#11-prometheus) for scrape authentication with a viewer PAT and example alerting rules.
+
 A starter Grafana dashboard wiring these up (run throughput, run duration,
 login success/failure/lockouts, rate-limiter, update outcomes, process health)
 ships at [`deploy/grafana/ncc-orchestrator-dashboard.json`](deploy/grafana/ncc-orchestrator-dashboard.json) —

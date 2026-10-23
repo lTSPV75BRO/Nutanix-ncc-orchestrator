@@ -1,9 +1,9 @@
 # Nutanix NCC Orchestrator
 
-[![Version](https://img.shields.io/badge/version-2.2.0-blue)](RELEASE_NOTES_v2.2.0.md)
+[![Version](https://img.shields.io/badge/version-2.2.1-blue)](RELEASE_NOTES_v2.2.1.md)
 [![Go](https://img.shields.io/badge/go-1.27.1-00ADD8)](go.mod)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Status](https://img.shields.io/badge/release-2.2.0-green)](RELEASE_NOTES_v2.2.0.md)
+[![Status](https://img.shields.io/badge/release-2.2.1-green)](RELEASE_NOTES_v2.2.1.md)
 
 > A production-ready stack for running Nutanix Cluster Check (NCC) across many clusters in parallel, aggregating results, and serving them through a hardened API and modern web UI.
 
@@ -52,10 +52,10 @@ Every release ships a self-contained `ncc-v2-stack-*` archive on the [Releases p
 
 ```bash
 # 1. Download for your platform (linux-amd64 shown here)
-curl -LO https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/v2.2.0/ncc-v2-stack-linux-amd64.tar.gz
+curl -LO https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/v2.2.1/ncc-v2-stack-linux-amd64.tar.gz
 
 # 2. Verify checksum (recommended)
-curl -LO https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/v2.2.0/checksums.txt
+curl -LO https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/v2.2.1/checksums.txt
 shasum -a 256 -c checksums.txt --ignore-missing | grep ncc-v2-stack-linux-amd64
 
 # 3. Extract
@@ -96,7 +96,7 @@ cd ncc-v2-stack-linux-amd64/bin
 
 When binding the API to a loopback IP (e.g. `--api-listen 127.0.0.1:8081`), the orchestrator now preserves the IP for connection URLs (so `wait-ready` and the UI backend hit the right address family on macOS, where `localhost` resolves to `::1` first) and additionally adds `http://localhost:port` to the CORS allow-list so browsers can reach the UI under either name.
 
-Older releases (v2.0.0 / v2.0.1) require the explicit form below; it still works in v2.2.0:
+Older releases (v2.0.0 / v2.0.1) require the explicit form below; it still works in v2.2.1:
 
 ```bash
 ./bin/ncc-orchestrator-linux-amd64 v2-check \
@@ -224,14 +224,14 @@ SHA-256 of the running executable. Cross-check against `checksums.txt`
 
 ```text
 $ ncc-orchestrator verify
-version:           2.2.0
+version:           2.2.1
 git_revision:      914c71d27fb1...
 executable_sha256: 23ee3cad876c...
 license:           MIT
 project_url:       https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator
 affiliation:       independent open-source project; not affiliated with or endorsed by Nutanix, Inc.
 verify:            compare executable_sha256 against checksums.txt at
-                   https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.2.0
+                   https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.2.1
 ```
 
 On Windows, the file Properties dialog also displays the project name
@@ -469,7 +469,7 @@ on stdout.
 The api-server now exposes a Prometheus-compatible `/metrics` endpoint:
 
 ```text
-ncc_build_info{version="2.2.0",stream="Release",go_version="go1.27.1",os="linux",arch="amd64"} 1
+ncc_build_info{version="2.2.1",stream="Release",go_version="go1.27.1",os="linux",arch="amd64"} 1
 ncc_process_uptime_seconds 3601.42
 ncc_run_active 0
 ncc_runs_triggered_total 42
@@ -665,7 +665,7 @@ below and the [`helm/`](helm/) chart.
 | Secrets               | `secret://NAME` refs with `env` or `file` provider; plaintext-in-config triggers a startup warning                     |
 | Vulnerability scans   | `govulncheck ./...` and `npm audit --omit=dev` clean (Go 1.27.1, DOMPurify ≥ 3.4.12 enforced); enforced in CI (`.github/workflows/ci.yml`) |
 
-Release details and validation evidence: [`RELEASE_NOTES_v2.2.0.md`](RELEASE_NOTES_v2.2.0.md).
+Release details and validation evidence: [`RELEASE_NOTES_v2.2.1.md`](RELEASE_NOTES_v2.2.1.md) (previous: [`RELEASE_NOTES_v2.2.0.md`](RELEASE_NOTES_v2.2.0.md)).
 
 ---
 
@@ -728,7 +728,8 @@ Raw NCC summaries land under `nccfiles/`. Runner JSON logs under `logs/ncc-runne
 | [`docs/MIGRATION_v2.0.2_TO_v2.1.0.md`](docs/MIGRATION_v2.0.2_TO_v2.1.0.md)            | Upgrading from v2.0.2 (pre-RBAC/pre-backup) to v2.1.0                 |
 | [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)                                  | TLS, Prism Central, API issues                                        |
 | [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md)                                            | Wire the orchestrator into AI tools via MCP                           |
-| [`RELEASE_NOTES_v2.2.0.md`](RELEASE_NOTES_v2.2.0.md)                                  | Current v2.2.0 details: NCC handling, feature flags, PC · Beta, Node 26, Kubernetes |
+| [`RELEASE_NOTES_v2.2.1.md`](RELEASE_NOTES_v2.2.1.md)                                  | Current v2.2.1 details: alert history, Windows upgrade, run status, security hardening |
+| [`RELEASE_NOTES_v2.2.0.md`](RELEASE_NOTES_v2.2.0.md)                                  | v2.2.0 details: NCC handling, feature flags, PC · Beta, Node 26, Kubernetes |
 | [`docs/NIST_CSF_BASELINE.md`](docs/NIST_CSF_BASELINE.md)                                | NIST CSF 2.0 control baseline, evidence map, and gap plan             |
 | [`docs/NIST_CSF_EVIDENCE_MANIFEST.json`](docs/NIST_CSF_EVIDENCE_MANIFEST.json)          | Machine-readable control-to-evidence mapping for compliance bundles    |
 | [`docs/RELEASE_CHECKSUMS.md`](docs/RELEASE_CHECKSUMS.md)                              | How `--update` verifies downloads                                     |
@@ -736,6 +737,8 @@ Raw NCC summaries land under `nccfiles/`. Runner JSON logs under `logs/ncc-runne
 | [`deploy/README.md`](deploy/README.md)                                                | Provision Linux and Windows VMs with cloud-init or Sysprep            |
 | [`k8s/README.md`](k8s/README.md)                                                     | Kubernetes deployment guide                                           |
 | [`Prometheus.md`](Prometheus.md)                                                     | Prometheus setup: `.prom` textfile collector + scraping run metrics from the api-server `/metrics` |
+| [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/third-party-alert-integrations.md) | ServiceNow, Prometheus, and other integrations: auth, PATs, alert lifecycle/history API, sync, errors |
+| [`docs/security/security-assessment-2026-10.md`](docs/security/security-assessment-2026-10.md) | October 2026 security assessment: findings, fixes, and the named incidents |
 | [`CHANGELOG.md`](CHANGELOG.md)                                                       | Full version history                                                  |
 | [`RELEASE_NOTES_v2.0.0.md`](RELEASE_NOTES_v2.0.0.md)                                  | What changed since v1.1.0                                             |
 
@@ -774,10 +777,10 @@ Add the resulting binary in your MCP client (Cursor, Claude Desktop, etc.) — s
 
 ## Release status
 
-- **Current GA:** [`v2.2.0`](RELEASE_NOTES_v2.2.0.md). See [`RELEASE_NOTES_v2.0.0.md`](RELEASE_NOTES_v2.0.0.md), [`RELEASE_NOTES_v2.0.1.md`](RELEASE_NOTES_v2.0.1.md), [`RELEASE_NOTES_v2.0.2.md`](RELEASE_NOTES_v2.0.2.md), [`RELEASE_NOTES_v2.1.0.md`](RELEASE_NOTES_v2.1.0.md), [`RELEASE_NOTES_v2.1.1.md`](RELEASE_NOTES_v2.1.1.md), [`RELEASE_NOTES_v2.2.0.md`](RELEASE_NOTES_v2.2.0.md) for the cumulative change log.
+- **Current GA:** [`v2.2.1`](RELEASE_NOTES_v2.2.1.md). See [`RELEASE_NOTES_v2.0.0.md`](RELEASE_NOTES_v2.0.0.md), [`RELEASE_NOTES_v2.0.1.md`](RELEASE_NOTES_v2.0.1.md), [`RELEASE_NOTES_v2.0.2.md`](RELEASE_NOTES_v2.0.2.md), [`RELEASE_NOTES_v2.1.0.md`](RELEASE_NOTES_v2.1.0.md), [`RELEASE_NOTES_v2.1.1.md`](RELEASE_NOTES_v2.1.1.md), [`RELEASE_NOTES_v2.2.0.md`](RELEASE_NOTES_v2.2.0.md), [`RELEASE_NOTES_v2.2.1.md`](RELEASE_NOTES_v2.2.1.md) for the cumulative change log.
 - **Build provenance:** every binary embeds `Version`, `BuildDate`, `Stream`, `GoVersion`, and the git revision (via `-buildvcs=true`); inspect with `./ncc-orchestrator verify`. Releases additionally ship `release-attestation.json` (per-release manifest), CycloneDX SBOMs, and a SLSA build-provenance attestation produced by `.github/workflows/release.yml` (verify with `gh attestation verify`).
 - **Checksums:** `dist/checksums.txt` (or the `checksums.txt` attached to the GitHub release) — SHA-256, sorted, includes every binary, every stack archive, `example_config.yaml`, `release-attestation.json`, every `bom-*.cdx.json`, and the matching `RELEASE_NOTES_v*.md`.
-- **Docker:** `prajwalnutant/nutanix-ncc-orchestrator:2.2.0` (and `:latest`).
+- **Docker:** `prajwalnutant/nutanix-ncc-orchestrator:2.2.1` (and `:latest`).
 
 ---
 

@@ -2820,16 +2820,34 @@ type RunSummaryJSON struct {
 	ClustersFailed int                 `json:"clusters_failed"`
 	FailedClusters []string            `json:"failed_clusters,omitempty"`
 	Clusters       []RunClusterSummary `json:"clusters,omitempty"`
-	ExitCode       int                 `json:"exit_code,omitempty"`
-	IndexHTML      string              `json:"index_html"`
-	TotalChecks    int                 `json:"total_checks,omitempty"`
-	AvgHealthScore int                 `json:"avg_health_score,omitempty"`
-	MinHealthScore int                 `json:"min_health_score,omitempty"`
-	FailureClasses map[string]int      `json:"failure_classes,omitempty"`
+	// ExitCode is always written (no omitempty): with omitempty a successful
+	// run (exit code 0) omitted the field and the UI could not tell success
+	// from "unknown".
+	ExitCode int `json:"exit_code"`
+	// Status is the explicit outcome: "success", "partial" (some clusters
+	// failed, exit 3) or "failed".
+	Status         string         `json:"status,omitempty"`
+	IndexHTML      string         `json:"index_html"`
+	TotalChecks    int            `json:"total_checks,omitempty"`
+	AvgHealthScore int            `json:"avg_health_score,omitempty"`
+	MinHealthScore int            `json:"min_health_score,omitempty"`
+	FailureClasses map[string]int `json:"failure_classes,omitempty"`
 	// Source records how the run was launched ("scheduled", "manual", ""),
 	// taken from NCC_RUN_SOURCE, so the dashboard can distinguish a systemd-
 	// timer/cron scheduled run from an interactive/API-triggered one.
 	Source string `json:"source,omitempty"`
+}
+
+// runSummaryStatus maps the run exit code onto the run-summary status field.
+func runSummaryStatus(exitCode, clustersOK int) string {
+	switch {
+	case exitCode == 0:
+		return "success"
+	case exitCode == 3 && clustersOK > 0:
+		return "partial"
+	default:
+		return "failed"
+	}
 }
 
 // RunClusterSummary is per-cluster stats for automation (run-summary.json).
@@ -3619,6 +3637,14 @@ func applyArtifactRetentionPolicies(outputDir string, retainDays, retainMaxFiles
 		"slo-dashboard.json":      true,
 		"policy-gates.txt":        true,
 		"excluded-alerts.json":    true,
+		// Large runs move the aggregated rows out of index.html into this
+		// sidecar; index.html is useless without it.
+		"aggregated-data.json": true,
+		// Server-side state the api-server keeps in the output directory.
+		// Pruning these deleted operator acknowledge/resolve marks and
+		// feature-flag overrides after every run.
+		"ncc-alert-dispositions.json": true,
+		"feature-flags.json":          true,
 	}
 	type item struct {
 		name string
@@ -7480,7 +7506,7 @@ var (
 func init() {
 	// Defaults
 	if Version == "" {
-		Version = "2.2.0"
+		Version = "2.2.1"
 	}
 	if BuildDate == "" {
 		BuildDate = "unknown"
@@ -7845,40 +7871,33 @@ func installDownloadedBinary(body []byte, targetVer string) error {
 	if err != nil {
 		return fmt.Errorf("get executable path: %w", err)
 	}
-	dir := filepath.Dir(selfPath)
-	if runtime.GOOS == "windows" {
-		newPath := selfPath + ".new.exe"
-		if err := os.WriteFile(newPath, body, 0755); err != nil {
-			return fmt.Errorf("write %s: %w", newPath, err)
-		}
-		// Windows cannot overwrite a running .exe in place. Generate a small
-		// helper .cmd that waits for this process to release the lock, swaps
-		// in the new binary, and self-deletes — turning the old manual
-		// copy-the-file dance into a single command.
-		if helperPath, herr := writeWindowsUpdateSwapHelper(selfPath, newPath); herr == nil {
-			fmt.Fprintf(os.Stderr, "Update downloaded to %s\n", newPath)
-			fmt.Fprintf(os.Stderr, "To finish: exit this program, then run:\n  %s\n", helperPath)
-			fmt.Fprintln(os.Stderr, "(it waits for the running binary to close, replaces it, then removes itself)")
-		} else {
-			fmt.Fprintf(os.Stderr, "Update saved as %s. Exit this program, then replace %s with it and run again.\n", newPath, selfPath)
-		}
+	if resolved, rerr := filepath.EvalSymlinks(selfPath); rerr == nil {
+		selfPath = resolved
+	}
+	// Move the running image aside and activate the new one (works on
+	// Windows, where a running .exe cannot be overwritten but can be renamed).
+	if err := replaceRunningExecutable(selfPath, body); err == nil {
+		fmt.Fprintln(os.Stderr, "Update complete. Run the binary again to use the new version.")
 		return nil
-	}
-	tmpPath := filepath.Join(dir, ".ncc-orchestrator-update."+strconv.Itoa(os.Getpid()))
-	if err := os.WriteFile(tmpPath, body, 0755); err != nil {
-		return fmt.Errorf("write temp file: %w", err)
-	}
-	if err := os.Rename(tmpPath, selfPath); err != nil {
-		_ = os.Remove(tmpPath)
+	} else if runtime.GOOS != "windows" {
 		fallback := filepath.Join(".", "ncc-orchestrator-"+strings.TrimPrefix(strings.TrimSpace(targetVer), "v"))
 		if wErr := os.WriteFile(fallback, body, 0755); wErr != nil {
 			return fmt.Errorf("replace binary failed (%v); write to %s failed: %w", err, fallback, wErr)
 		}
-		fmt.Fprintf(os.Stderr, "Could not replace running binary. New binary saved as %s — move it to replace the current one.\n", fallback)
-		return nil
+		return fmt.Errorf("%w: could not replace %s (%v); the new binary was saved as %s — move it into place and run again", errManualSwapRequired, selfPath, err, fallback)
+	} else {
+		newPath := selfPath + ".new.exe"
+		if wErr := os.WriteFile(newPath, body, 0755); wErr != nil {
+			return fmt.Errorf("replace binary failed (%v); write %s failed: %w", err, newPath, wErr)
+		}
+		// Last resort: a helper that waits for this process to exit and then
+		// swaps the file. Report it as an error so no caller (in particular
+		// the in-app update job) mistakes it for a completed update.
+		if helperPath, herr := writeWindowsUpdateSwapHelper(selfPath, newPath); herr == nil {
+			return fmt.Errorf("%w: could not replace %s (%v); exit this program, then run %s to finish", errManualSwapRequired, selfPath, err, helperPath)
+		}
+		return fmt.Errorf("%w: could not replace %s (%v); exit this program, then replace it with %s", errManualSwapRequired, selfPath, err, newPath)
 	}
-	fmt.Fprintln(os.Stderr, "Update complete. Run the binary again to use the new version.")
-	return nil
 }
 
 // writeWindowsUpdateSwapHelper writes an apply-ncc-update.cmd next to the
@@ -8064,10 +8083,25 @@ func verifyAssetAgainstReleaseChecksum(rel *githubRelease, assetName string, bod
 
 // installStackComponents copies bin/*, frontend-dist/, and example_config.yaml
 // from the extracted stack root (`src`) to the target install directory
-// (`dst`). Existing files are replaced atomically where possible.
+// (`dst`) as one transaction: every file is staged next to its destination,
+// existing files (including running executables on Windows) are moved aside
+// rather than overwritten, and any failure restores the previous files so the
+// install is never left half-updated. See update_install.go.
 func installStackComponents(src, dst string) error {
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dst, err)
+	}
+	cleanupStaleUpdateArtifacts(dst)
+	txn := newInstallTxn()
+	var staged []string
+	fail := func(err error) error {
+		for _, p := range staged {
+			_ = os.RemoveAll(p)
+		}
+		if notRestored := txn.rollback(); len(notRestored) > 0 {
+			return fmt.Errorf("%w; rollback could not restore: %s", err, strings.Join(notRestored, ", "))
+		}
+		return fmt.Errorf("%w (previous files restored)", err)
 	}
 	srcBin := filepath.Join(src, "bin")
 	dstBin := filepath.Join(dst, "bin")
@@ -8079,34 +8113,53 @@ func installStackComponents(src, dst string) error {
 		if err != nil {
 			return fmt.Errorf("read %s: %w", srcBin, err)
 		}
+		// Stage everything first so a disk-full or permission problem is
+		// detected before anything in the live install changes.
+		type pending struct{ staged, to string }
+		var plan []pending
 		for _, ent := range entries {
 			if ent.IsDir() {
 				continue
 			}
-			from := filepath.Join(srcBin, ent.Name())
 			to := filepath.Join(dstBin, ent.Name())
-			if err := copyFileAtomic(from, to, 0o755); err != nil {
-				return fmt.Errorf("install binary %s: %w", ent.Name(), err)
+			sp, err := stageFileCopy(filepath.Join(srcBin, ent.Name()), to, 0o755)
+			if err != nil {
+				return fail(fmt.Errorf("stage binary %s: %w", ent.Name(), err))
+			}
+			staged = append(staged, sp)
+			plan = append(plan, pending{sp, to})
+		}
+		for _, p := range plan {
+			if err := txn.replace(p.staged, p.to); err != nil {
+				return fail(fmt.Errorf("install binary %s: %w", filepath.Base(p.to), err))
 			}
 		}
 	}
 	srcFront := filepath.Join(src, "frontend-dist")
 	dstFront := filepath.Join(dst, "frontend-dist")
 	if existingDir(srcFront) {
-		if err := os.RemoveAll(dstFront); err != nil {
-			return fmt.Errorf("remove old frontend-dist: %w", err)
+		stagedFront := filepath.Join(dst, ".ncc-stage-frontend-"+txn.stamp)
+		staged = append(staged, stagedFront)
+		if err := copyDir(srcFront, stagedFront); err != nil {
+			return fail(fmt.Errorf("stage frontend-dist: %w", err))
 		}
-		if err := copyDir(srcFront, dstFront); err != nil {
-			return fmt.Errorf("install frontend-dist: %w", err)
+		if err := txn.replace(stagedFront, dstFront); err != nil {
+			return fail(fmt.Errorf("install frontend-dist: %w", err))
 		}
 	}
 	srcCfg := filepath.Join(src, "example_config.yaml")
 	dstCfg := filepath.Join(dst, "example_config.yaml")
 	if existingFile(srcCfg) {
-		if err := copyFileAtomic(srcCfg, dstCfg, 0o644); err != nil {
-			return fmt.Errorf("install example_config.yaml: %w", err)
+		sp, err := stageFileCopy(srcCfg, dstCfg, 0o644)
+		if err != nil {
+			return fail(fmt.Errorf("stage example_config.yaml: %w", err))
+		}
+		staged = append(staged, sp)
+		if err := txn.replace(sp, dstCfg); err != nil {
+			return fail(fmt.Errorf("install example_config.yaml: %w", err))
 		}
 	}
+	txn.commit()
 	return nil
 }
 
@@ -12742,12 +12795,12 @@ func runUpdate(opts updateOptions) error {
 	// Legacy single-binary update path (v1.x releases without a stack archive).
 	downloadURL, chosenAssetName := pickAssetForCurrentPlatform(*targetRelease)
 	if downloadURL == "" {
-		fmt.Fprintf(os.Stderr, "No binary found for %s/%s. Download manually: %s\n", runtime.GOOS, runtime.GOARCH, targetRelease.HTMLURL)
-		return nil
+		// Returning nil here used to make the in-app update report success
+		// (and restart the stack) although nothing was installed.
+		return fmt.Errorf("no update package or binary for %s/%s in release %s; download it manually from %s", runtime.GOOS, runtime.GOARCH, targetRelease.TagName, targetRelease.HTMLURL)
 	}
 	if isArchiveAssetURL(downloadURL) {
-		fmt.Fprintf(os.Stderr, "Binary for %s/%s is only available as archive. Download and extract: %s\n", runtime.GOOS, runtime.GOARCH, downloadURL)
-		return nil
+		return fmt.Errorf("release %s only ships an archive for %s/%s; download and extract it manually: %s", targetRelease.TagName, runtime.GOOS, runtime.GOARCH, downloadURL)
 	}
 
 	fmt.Fprintf(os.Stderr, "Downloading %s ...\n", downloadURL)
@@ -16545,6 +16598,7 @@ Run 'ncc-orchestrator --help' for a full list of options.
 				FailedClusters: failed,
 				Clusters:       perCluster,
 				ExitCode:       exitCode,
+				Status:         runSummaryStatus(exitCode, len(clusterFiles)),
 				IndexHTML:      indexPath,
 				TotalChecks:    len(agg),
 				AvgHealthScore: avgHealth,

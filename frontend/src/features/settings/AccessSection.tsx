@@ -760,12 +760,13 @@ const SAFETY_TIER_TEXT = {
   irreversible: "This action is irreversible.",
 };
 
-// passphraseIssue validates an (optional) encryption passphrase against its
-// confirmation. Returns a human message when the backup should be blocked, or
-// null when it's fine (including the empty/no-encryption case).
-function passphraseIssue(pass: string, confirm: string): string | null {
+// passphraseIssue validates an encryption passphrase against its confirmation.
+// Returns a human message when the backup should be blocked, or null when it's
+// fine. When `required` is set (server policy NCC_BACKUP_ENCRYPTION=required and
+// no server-side key covers this backup) an empty passphrase is blocked too.
+function passphraseIssue(pass: string, confirm: string, required = false): string | null {
   const p = pass.trim();
-  if (!p) return null; // no passphrase => unencrypted, allowed
+  if (!p) return required ? "Encryption is required for backups on this server. Enter a passphrase." : null;
   if (p.length < MIN_BACKUP_PASSPHRASE_LEN) {
     return `Use at least ${MIN_BACKUP_PASSPHRASE_LEN} characters (a lost passphrase cannot be recovered).`;
   }
@@ -794,6 +795,11 @@ function BackupRestoreCard() {
   const [verifyName, setVerifyName] = useState<string | null>(null);
 
   const backups = (backupsQuery.data?.backups ?? []) as BackupEntry[];
+  const encPolicy = backupsQuery.data?.encryption_policy;
+  // Downloads leave the server, so only a passphrase can protect them.
+  const downloadPassRequired = Boolean(encPolicy?.required);
+  // Server-side snapshots can be sealed with the server key instead.
+  const createPassRequired = Boolean(encPolicy?.required && !encPolicy?.server_key_configured);
   const rollback = backups.find((b) => b.rollback_candidate);
   const refresh = () => qc.invalidateQueries({ queryKey: ["settings", "backups"] });
 
@@ -1181,7 +1187,7 @@ function BackupRestoreCard() {
         okButtonProps={{
           loading: downloading,
           icon: <DownloadOutlined />,
-          disabled: passphraseIssue(downloadPass, downloadPassConfirm) !== null,
+          disabled: passphraseIssue(downloadPass, downloadPassConfirm, downloadPassRequired) !== null,
         }}
         cancelText="Cancel"
         destroyOnHidden
@@ -1195,7 +1201,7 @@ function BackupRestoreCard() {
         <Space orientation="vertical" size={8} style={{ width: "100%" }}>
           <Input.Password
             autoFocus
-            placeholder="Encryption passphrase (optional)"
+            placeholder={downloadPassRequired ? "Encryption passphrase (required)" : "Encryption passphrase (optional)"}
             value={downloadPass}
             onChange={(e) => setDownloadPass(e.target.value)}
             allowClear
@@ -1208,9 +1214,9 @@ function BackupRestoreCard() {
               allowClear
             />
           ) : null}
-          {passphraseIssue(downloadPass, downloadPassConfirm) ? (
+          {passphraseIssue(downloadPass, downloadPassConfirm, downloadPassRequired) ? (
             <Typography.Text type="danger" style={{ fontSize: 12 }}>
-              {passphraseIssue(downloadPass, downloadPassConfirm)}
+              {passphraseIssue(downloadPass, downloadPassConfirm, downloadPassRequired)}
             </Typography.Text>
           ) : null}
         </Space>
@@ -1266,7 +1272,7 @@ function BackupRestoreCard() {
         okButtonProps={{
           loading: createMut.isPending,
           icon: <PlusOutlined />,
-          disabled: passphraseIssue(createPass, createPassConfirm) !== null,
+          disabled: passphraseIssue(createPass, createPassConfirm, createPassRequired) !== null,
         }}
         cancelText="Cancel"
         destroyOnHidden
@@ -1280,7 +1286,13 @@ function BackupRestoreCard() {
         <Space orientation="vertical" size={8} style={{ width: "100%" }}>
           <Input.Password
             autoFocus
-            placeholder="Encryption passphrase (optional)"
+            placeholder={
+              createPassRequired
+                ? "Encryption passphrase (required)"
+                : encPolicy?.server_key_configured
+                  ? "Passphrase (optional — the server backup key is used otherwise)"
+                  : "Encryption passphrase (optional)"
+            }
             value={createPass}
             onChange={(e) => setCreatePass(e.target.value)}
             allowClear
@@ -1293,9 +1305,9 @@ function BackupRestoreCard() {
               allowClear
             />
           ) : null}
-          {passphraseIssue(createPass, createPassConfirm) ? (
+          {passphraseIssue(createPass, createPassConfirm, createPassRequired) ? (
             <Typography.Text type="danger" style={{ fontSize: 12 }}>
-              {passphraseIssue(createPass, createPassConfirm)}
+              {passphraseIssue(createPass, createPassConfirm, createPassRequired)}
             </Typography.Text>
           ) : null}
         </Space>

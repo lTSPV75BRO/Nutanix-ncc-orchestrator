@@ -48,6 +48,14 @@ spec:
             - name: NCC_PASSWORD
               valueFrom:
                 secretKeyRef: { name: {{ .Values.secretName }}, key: password }
+            - name: NCC_BACKUP_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secretName }}, key: backup-key, optional: true }
+            - name: NCC_MASTER_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secretName }}, key: master-key, optional: true }
+            - name: NCC_TRUSTED_PROXY_CIDRS
+              value: {{ .Values.api.trustedProxyCIDRs | default "private,loopback" | quote }}
           ports: [{ name: http, containerPort: 8081 }]
           readinessProbe: { httpGet: { path: /api/v1/health, port: 8081 } }
           livenessProbe: { httpGet: { path: /api/v1/health, port: 8081 }, initialDelaySeconds: 10 }

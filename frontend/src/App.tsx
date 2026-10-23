@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useRunsActive, useRunsActivePoller } from "./hooks/useRunsActive";
 import {
   BgColorsOutlined,
   BarChartOutlined,
@@ -221,16 +222,8 @@ function formatElapsedShort(ms: number): string {
 function HeaderTriggerRunButton() {
   const queryClient = useQueryClient();
   const { canOperate } = useAuth();
-  const active = useQuery({
-    queryKey: ["runs-active"],
-    queryFn: api.runActive,
-    refetchInterval: (q) => {
-      const data = q.state.data as RunActiveData | undefined;
-      // Poll faster while a run is active, slower when idle.
-      return data?.active ? 3000 : 15000;
-    },
-    staleTime: 1500,
-  });
+  // Reads the shared /runs/active cache; the app-shell poller owns the timer.
+  const active = useRunsActive();
 
   const isActive = Boolean(active.data?.active);
   const startMsRef = useRef<number | null>(null);
@@ -574,13 +567,8 @@ export default function App() {
     setFirstSetupStatus,
   ]);
 
-  const runActiveQuery = useQuery({
-    queryKey: ["runs-active"],
-    queryFn: api.runActive,
-    enabled: appReady,
-    refetchInterval: 5000,
-    staleTime: 1500,
-  });
+  // The single /runs/active poller for the whole UI (see hooks/useRunsActive).
+  const runActiveQuery = useRunsActivePoller(appReady);
   const runActive = Boolean((runActiveQuery.data as RunActiveData | undefined)?.active);
 
   const healthRecord = healthQuery.data as

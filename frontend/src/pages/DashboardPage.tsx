@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useRunsActive } from "../hooks/useRunsActive";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -38,7 +39,7 @@ import {
   SearchOutlined,
   WarningOutlined,
 } from "@ant-design/icons";
-import type { AlertSource, RunActiveData, MeData } from "../api/types";
+import type { AlertSource, MeData } from "../api/types";
 import { api } from "../api/client";
 import { notify, notifyError } from "../notify";
 import { FeatureDisabled } from "../features/features/FeatureDisabled";
@@ -243,12 +244,7 @@ export function DashboardPage() {
   // dedupes and we don't double-poll the orchestrator. Lets the empty-state
   // card distinguish "no data yet, but a run is in flight" from "no run has
   // ever produced data".
-  const runActiveQuery = useQuery({
-    queryKey: ["runs-active"],
-    queryFn: api.runActive,
-    refetchInterval: (q) => ((q.state.data as RunActiveData | undefined)?.active ? 3000 : 30000),
-    staleTime: 1500,
-  });
+  const runActiveQuery = useRunsActive();
   const meQuery = useQuery({
     queryKey: ["auth", "me"],
     queryFn: api.me,

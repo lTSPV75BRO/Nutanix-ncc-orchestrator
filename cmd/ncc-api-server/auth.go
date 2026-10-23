@@ -399,7 +399,8 @@ func routeMinRoleFor(p string, isRead bool) Role {
 		return RoleOperator
 	case p == "/api/v1/alerts":
 		return RoleViewer
-	case p == "/api/v1/alerts/ncc-dispositions":
+	case p == "/api/v1/alerts/ncc-dispositions",
+		p == "/api/v1/alerts/ncc", strings.HasPrefix(p, "/api/v1/alerts/ncc/"):
 		if isRead {
 			return RoleViewer
 		}
@@ -575,16 +576,19 @@ func (s *apiServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	username := strings.TrimSpace(body.Username)
 
-	// Per-account brute-force lockout: reject early (before touching the user
-	// store / directory) when an account has too many recent failures.
-	if locked, retryAfter := s.loginGuard.locked(username, time.Now()); locked {
+	// Brute-force / credential-stuffing protection: reject early (before
+	// touching the user store / directory) when this account+source, the
+	// account, or the source has too many recent failures. The response is
+	// identical whether or not the username exists.
+	clientIP := cleanClientIP(r)
+	if locked, retryAfter := s.loginGuard.check(username, clientIP, time.Now()); locked {
 		secs := int(retryAfter.Seconds()) + 1
 		s.loginFailureTotal.Add(1)
 		w.Header().Set("Retry-After", strconv.Itoa(secs))
-		s.audit(r, "auth.login", false, map[string]interface{}{"username": username, "error": "account_locked"})
+		s.audit(r, "auth.login", false, map[string]interface{}{"username": username, "error": "throttled", "locked": true})
 		writeJSON(w, http.StatusTooManyRequests, envelope{
 			Success:   false,
-			Error:     fmt.Sprintf("too many failed attempts; this account is temporarily locked. Try again in about %ds.", secs),
+			Error:     fmt.Sprintf("too many failed sign-in attempts; try again in about %ds.", secs),
 			ErrorCode: "NCC_API_ACCOUNT_LOCKED",
 		})
 		return
@@ -624,7 +628,7 @@ func (s *apiServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !ok {
-		locked := s.loginGuard.recordFailure(username, time.Now())
+		locked := s.loginGuard.recordFailureFrom(username, clientIP, time.Now())
 		s.loginFailureTotal.Add(1)
 		if locked {
 			s.lockoutTotal.Add(1)

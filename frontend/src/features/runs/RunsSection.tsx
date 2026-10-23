@@ -13,7 +13,10 @@ import {
   StopOutlined,
   ClockCircleOutlined,
 } from "@ant-design/icons";
+import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../../api/client";
+import { runStatusDisplay } from "../../utils/runStatus";
+import { RUNS_ACTIVE_QUERY_KEY, useRunsActive } from "../../hooks/useRunsActive";
 import type { ActiveRunEntry, ArtifactInfo, ConfigListItem, RunActiveData, RunInfo, RunPreflightData } from "../../api/types";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { CodeEditor } from "../../components/CodeEditor";
@@ -66,7 +69,10 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
   const [extraArgs, setExtraArgs] = useLocalStorageState("runs.extraArgs", "");
   const [runs, setRuns] = useState<RunInfo[]>([]);
   const [artifacts, setArtifacts] = useState<ArtifactInfo[]>([]);
-  const [active, setActive] = useState<RunActiveData | null>(null);
+  const queryClient = useQueryClient();
+  // Shared, centrally-polled /runs/active cache (see hooks/useRunsActive).
+  const activeQuery = useRunsActive();
+  const active: RunActiveData | null = activeQuery.data ?? null;
   const [preflight, setPreflight] = useState<RunPreflightData | null>(null);
   const [followTail, setFollowTail] = useLocalStorageState("runs.logs.followTail", true);
   const [jumpToLastSignal, setJumpToLastSignal] = useState(0);
@@ -113,7 +119,7 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
 
   const loadRunActive = async () => {
     try {
-      setActive(await api.runActive());
+      await queryClient.invalidateQueries({ queryKey: RUNS_ACTIVE_QUERY_KEY });
     } catch (e) {
       onError(e);
     }
@@ -144,10 +150,8 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
       initialLoadCompletedRef.current = true;
     };
     void bootstrap();
-    const t = setInterval(() => {
-      void loadRunActive();
-    }, 3000);
-    return () => clearInterval(t);
+    // No local timer: the app-shell poller refreshes /runs/active for every
+    // consumer (this page used to add its own 3 s interval).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -349,19 +353,13 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
   };
 
   const renderStatus = (row: RunInfo) => {
-    if (row.source === "trigger") {
-      return row.success === false
-        ? <Tag color="error" style={{ marginInlineEnd: 0 }}>Trigger failed</Tag>
-        : <Tag color="processing" style={{ marginInlineEnd: 0 }}>Triggered</Tag>;
-    }
-    if (row.success === true) {
-      return <Tag color="success" style={{ marginInlineEnd: 0 }}>Success</Tag>;
-    }
-    if (row.success === false) {
-      const ec = typeof row.exit_code === "number" && row.exit_code !== 0 ? ` · exit ${row.exit_code}` : "";
-      return <Tag color="error" style={{ marginInlineEnd: 0 }}>{`Failed${ec}`}</Tag>;
-    }
-    return <Tag style={{ marginInlineEnd: 0 }}>—</Tag>;
+    const d = runStatusDisplay(row);
+    const tag = (
+      <Tag color={d.color} style={{ marginInlineEnd: 0 }}>
+        {d.label}
+      </Tag>
+    );
+    return d.hint ? <Tooltip title={d.hint}>{tag}</Tooltip> : tag;
   };
 
   const runColumns: ColumnsType<RunInfo> = [

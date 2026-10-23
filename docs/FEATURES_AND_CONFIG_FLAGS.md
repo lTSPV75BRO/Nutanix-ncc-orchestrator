@@ -1,4 +1,4 @@
-# Features and Config Flags (v2.2.0)
+# Features and Config Flags (v2.2.1)
 
 Comprehensive reference for NCC Orchestrator features, configuration keys, and CLI flags.
 
@@ -115,10 +115,16 @@ one target or `items` (max 200):
 }
 ```
 
-`action` is `acknowledge`, `resolve`, or `reopen`. Marks live in
-`outputfiles/ncc-alert-dispositions.json`. GET also clears a resolve mark
-when a later run still reports the same cluster and check
-(`alerts.ncc.auto-reopen`). Prism Central alerts are not stored here.
+`action` is `acknowledge`, `resolve`, or `reopen`. Since v2.2.1 marks live in
+the persistent alert lifecycle store `<repo-root>/.ncc-api-alert-lifecycle.json`
+(outside the pruned output directory, captured by `v2-backup`); the old
+`outputfiles/ncc-alert-dispositions.json` is imported once and kept current as
+a compatibility mirror. Acknowledge persists across runs; a resolved check that
+a newer run still reports opens a new linked alert instance (status
+`reopened`, shown as **Returned**). Each instance has a UUIDv4 `id`; history and
+the lifecycle API (`/api/v1/alerts/ncc`, `/events`, `/{id}`) are documented in
+[`docs/integrations/third-party-alert-integrations.md`](integrations/third-party-alert-integrations.md).
+Prism Central alerts are not stored here.
 
 ### 2.3c Optional views
 
@@ -1075,7 +1081,15 @@ These are runtime flags for v2 services (`cmd/ncc-api-server`, `cmd/ncc-ui-serve
 | `ncc-api-server` | `--max-concurrent-runs` | `4` | Maximum orchestrator runs executing at once. Triggers beyond this queue and start automatically as slots free; clusters already being refreshed by another active run are skipped so a shared cluster runs only once. |
 | `ncc-api-server` | `--login-lockout-threshold` | `5` | Failed logins per account before a temporary lockout (`0` disables). |
 | `ncc-api-server` | `--login-lockout-window` | `15m` | Rolling window for accumulating failed logins toward a lockout. |
-| `ncc-api-server` | `--login-lockout-duration` | `15m` | How long a locked account stays locked after exceeding the threshold. |
+| `ncc-api-server` | `--login-lockout-duration` | `15m` | Base lock duration; repeated lockouts of the same key double it (up to 8x). |
+| `ncc-api-server` | `--login-lockout-account-threshold` | `0` (= 4x threshold) | Failures for one account from any source before an account-wide lock. |
+| `ncc-api-server` | `--login-lockout-source-threshold` | `0` (= 4x threshold) | Failures from one client IP across all accounts before that source is locked. |
+| `ncc-api-server` | `--login-guard-state-file` | empty (Kubernetes: `<repo-root>/.ncc-login-guard.json`) | Shared login-failure counters so limits hold across replicas. Env `NCC_LOGIN_GUARD_STATE_FILE`. |
+| `ncc-api-server` | `--trusted-proxy-cidrs` | `private,loopback` | Peers whose `X-Forwarded-For` is honored (CIDRs, `loopback`, `private`, `none`); parsed right-to-left. Env `NCC_TRUSTED_PROXY_CIDRS`. Narrow to your proxy/ingress/UI-pod CIDRs. |
+| `ncc-api-server` | `--alert-history-retain-days` | `365` | Days to keep closed NCC alert instances and their events (active alerts are never pruned; `0` keeps forever). |
+| `ncc-api-server` | `--audit-log-keep` | `10` | Rotated audit log generations kept (`<path>.1` … `<path>.N`). |
+| `ncc-api-server` | `--require-encrypted-user-store` | `false` | Refuse to start unless the user store is envelope-encrypted (`NCC_MASTER_KEY` / `--users-db-key-file`). Env `NCC_REQUIRE_ENCRYPTED_USER_STORE=true`. |
+| `ncc-api-server` | env `NCC_BACKUP_ENCRYPTION` | `required` | `required`: refuse plaintext backups (needs a passphrase or `NCC_BACKUP_KEY_FILE`/`NCC_BACKUP_KEY`/`NCC_BACKUP_PASSPHRASE`); `optional`: legacy behavior. |
 | `ncc-api-server` | `--auth-mode` | `token` | API auth mode: `token`, `session`, `hybrid`. |
 | `ncc-api-server` | `--token-file-path` | `.ncc-api-token` | Token file used by UI proxy and local tooling. |
 | `ncc-api-server` | `--cookie-secure` / `--cookie-insecure` | auto | Force the session cookie `Secure` attribute on/off. Auto-set by `v2-start` to track whether the UI is on HTTPS (the default). Kubernetes manifests pass `--cookie-secure` because the UI serves HTTPS. Set `--cookie-insecure` only when serving plain HTTP. |

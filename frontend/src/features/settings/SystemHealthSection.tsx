@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useRunsActive } from "../../hooks/useRunsActive";
 import {
   Alert,
   Button,
@@ -121,12 +122,7 @@ export function SystemHealthSection() {
     queryFn: api.scheduleHealth,
     staleTime: 30_000,
   });
-  const activeRun = useQuery({
-    queryKey: ["runs-active"],
-    queryFn: api.runActive,
-    staleTime: 5_000,
-    refetchInterval: 10_000,
-  });
+  const activeRun = useRunsActive();
   const backups = useQuery({
     queryKey: ["settings", "backups"],
     queryFn: api.listBackups,

@@ -7,11 +7,11 @@ namespace: ncc-orchestrator-v2
 
 images:
   - name: docker.io/prajwalnutant/nutanix-ncc-orchestrator
-    newTag: "2.2.0"
+    newTag: "2.2.1"
   - name: docker.io/prajwalnutant/ncc-api-server
-    newTag: "2.2.0"
+    newTag: "2.2.1"
   - name: docker.io/prajwalnutant/ncc-ui-server
-    newTag: "2.2.0"
+    newTag: "2.2.1"
 
 resources:
   - namespace.yaml

@@ -143,7 +143,12 @@ func nccLogsForReport(s *apiServer, flags featureFlags) []map[string]string {
 	if s == nil || !flags.NCCLogIndex {
 		return []map[string]string{}
 	}
-	return listNCCLogs(s.absPath(s.logDir))
+	logs := listNCCLogs(s.absPath(s.logDir))
+	for _, l := range logs {
+		// Report data is viewer-readable; don't disclose the absolute log dir.
+		l["path"] = s.displayRelPath(l["path"])
+	}
+	return logs
 }
 
 func nccSummaryForReport(s *apiServer, flags featureFlags) map[string]int {

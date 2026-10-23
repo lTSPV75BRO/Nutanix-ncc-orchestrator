@@ -2,7 +2,7 @@
 
 A project-wide list of improvements and new features for the NCC Orchestrator: application, scripts, Kubernetes, CI/CD, and documentation. Use as a backlog; prioritize by impact and effort.
 
-For the latest completed release summary, see [RELEASE_NOTES_v2.2.0.md](RELEASE_NOTES_v2.2.0.md) and [CHANGELOG.md](CHANGELOG.md).
+For the latest completed release summary, see [RELEASE_NOTES_v2.2.1.md](RELEASE_NOTES_v2.2.1.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ---
 

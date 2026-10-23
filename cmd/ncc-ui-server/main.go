@@ -217,7 +217,7 @@ func detectBackendLogin(backendURL string, transport *http.Transport) bool {
 // package. Without this match the ui-server would silently keep its
 // in-source defaults (e.g. `stream: dev`) even on a tagged release.
 var (
-	Version     = "2.2.0"
+	Version     = "2.2.1"
 	BuildDate   = "unknown"
 	Stream      = "dev"
 	GoVersion   = "unknown"
@@ -605,11 +605,11 @@ func main() {
 			}
 			body := map[string]interface{}{
 				"success":    false,
-				"error":      "Backend rejected the UI server's API token: " + cause + ". Confirm that " + absTokenFile + " contains the same token the ncc-api-server is using (or set NCC_API_TOKEN to the same value for both processes), then restart this UI server.",
+				"error":      "Backend rejected the UI server's API token: " + cause + ". Confirm that the UI server's token file (" + filepath.Base(absTokenFile) + ") contains the same token the ncc-api-server is using (or set NCC_API_TOKEN to the same value for both processes), then restart this UI server.",
 				"error_code": "NCC_UI_TOKEN_MISMATCH",
 				"data": map[string]interface{}{
 					"backend_status":     401,
-					"token_file":         absTokenFile,
+					"token_file":         filepath.Base(absTokenFile),
 					"token_file_present": fileExists(tokenFile),
 					"token_override_set": apiToken != "",
 				},
@@ -649,7 +649,9 @@ func main() {
 		}
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, e error) {
-		writeAPIError(w, http.StatusBadGateway, "api proxy error: "+e.Error(), r.TLS != nil, apiCSP)
+		// Log the detail (backend address, dial error) server-side only.
+		log.Printf("api proxy error for %s: %v", r.URL.Path, e)
+		writeAPIError(w, http.StatusBadGateway, "the API server is unreachable; check that ncc-api-server is running", r.TLS != nil, apiCSP)
 	}
 
 	originSet := map[string]struct{}{}

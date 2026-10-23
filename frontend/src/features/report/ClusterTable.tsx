@@ -488,6 +488,16 @@ function NCCAlertInspector({
           </Typography.Paragraph>
         )}
         {mark?.note ? <Typography.Paragraph className="ncc-handling-note">{mark.note}</Typography.Paragraph> : null}
+        {mark?.detection === "not_detected" ? (
+          <Typography.Paragraph type="secondary" className="ncc-handling-detection">
+            The latest run no longer reports this check. It stays {current.text.toLowerCase()} until someone changes it.
+          </Typography.Paragraph>
+        ) : null}
+        {mark?.id ? (
+          <Typography.Paragraph type="secondary" className="ncc-handling-id">
+            Alert ID <Typography.Text code copyable>{mark.id}</Typography.Text>
+          </Typography.Paragraph>
+        ) : null}
         <Input.TextArea
           value={note}
           onChange={(event) => onNote(event.target.value)}

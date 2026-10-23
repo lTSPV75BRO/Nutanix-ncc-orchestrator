@@ -1,4 +1,5 @@
-FROM node:26-alpine AS frontend-builder
+# node 26.12.1 = first 26.x release with the CVE-2026-111497 (Brotli decoder) fix.
+FROM node:26.12.1-alpine AS frontend-builder
 
 WORKDIR /frontend
 # Node 22.8+ code cache, kept by 24 and 26. tsc and Vite share compiled modules in this stage.
@@ -44,7 +45,7 @@ LABEL org.opencontainers.image.title="ncc-ui-server" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       com.ncc-orchestrator.stream="${STREAM}"
 
-RUN apk add --no-cache ca-certificates tzdata wget
+RUN apk add --no-cache --upgrade ca-certificates tzdata wget
 
 WORKDIR /app
 

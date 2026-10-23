@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestOperatorCanAcknowledgeNCCDisposition(t *testing.T) {
@@ -123,36 +122,28 @@ func TestResolvedMarkReopensWhenLaterRunRepeatsTheCheck(t *testing.T) {
 		t.Fatalf("history = %#v", items[0].History)
 	}
 
-	// The same run must not clear a resolve made against it.
-	stay := []nccDisposition{{
-		Cluster: "prod-a", Check: "other check", Status: "resolved", By: "alice",
-		At: "2026-10-05T12:05:00Z", RunAt: "2026-10-05T12:00:00Z",
-	}}
-	got, n := applyResolvedRecurrence(stay, "2026-10-05T12:00:00Z", map[string]struct{}{
-		nccDispositionKey("prod-a", "other check"): {},
-	}, time.Now())
-	if n != 0 || got[0].Status != "resolved" {
-		t.Fatalf("same run reopened %#v (%d)", got, n)
+	// The recurrence opened a new instance and kept the resolved one as history.
+	doc, err := s.alerts().read()
+	if err != nil {
+		t.Fatal(err)
 	}
+	var closed, open int
+	for _, a := range doc.Alerts {
+		if a.Closed && a.CloseReason == "recurred" && a.State == alertStateResolved && a.ResolvedBy == "alice" {
+			closed++
+		}
+		if !a.Closed && a.Reopened && a.PreviousID != "" {
+			open++
+		}
+	}
+	if closed != 1 || open != 1 {
+		t.Fatalf("expected one closed resolved instance and one reopened successor, got %s", mustJSON(doc.Alerts))
+	}
+}
 
-	// A later run that no longer contains the check keeps the resolve.
-	gone, n := applyResolvedRecurrence(stay, "2026-10-06T12:00:00Z", map[string]struct{}{
-		nccDispositionKey("prod-a", "something else"): {},
-	}, time.Now())
-	if n != 0 || gone[0].Status != "resolved" {
-		t.Fatalf("absent check reopened %#v", gone)
-	}
-
-	acked := []nccDisposition{{
-		Cluster: "prod-a", Check: "CVM memory", Status: "acknowledged", By: "alice",
-		At: "2026-10-05T10:00:00Z", RunAt: "2026-10-05T09:00:00Z",
-	}}
-	kept, n := applyResolvedRecurrence(acked, "2026-10-05T12:00:00Z", map[string]struct{}{
-		nccDispositionKey("prod-a", "CVM memory"): {},
-	}, time.Now())
-	if n != 0 || kept[0].Status != "acknowledged" {
-		t.Fatalf("acknowledge was cleared %#v", kept)
-	}
+func mustJSON(v interface{}) string {
+	b, _ := json.Marshal(v)
+	return string(b)
 }
 
 func TestResolvePCAlertClusterCanonicalUUID(t *testing.T) {

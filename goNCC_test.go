@@ -5367,3 +5367,32 @@ func TestEncryptedBackupRoundTrip(t *testing.T) {
 func base64StdKey32() string {
 	return base64.StdEncoding.EncodeToString(make([]byte, 32))
 }
+
+// Regression: artifact retention ran after every report and deleted any
+// non-protected file in the output directory — including the api-server's NCC
+// acknowledge/resolve marks, so marks vanished whenever a new report arrived.
+func TestArtifactRetentionKeepsServerStateAndSidecar(t *testing.T) {
+	tmpDir := t.TempDir()
+	old := time.Now().Add(-30 * 24 * time.Hour)
+	keep := []string{"ncc-alert-dispositions.json", "feature-flags.json", "aggregated-data.json"}
+	for _, name := range append(keep, "stale-cluster.log.html") {
+		p := filepath.Join(tmpDir, name)
+		if err := os.WriteFile(p, []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := applyArtifactRetentionPolicies(tmpDir, 1, 1, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range keep {
+		if _, err := os.Stat(filepath.Join(tmpDir, name)); err != nil {
+			t.Fatalf("%s must survive artifact retention: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, "stale-cluster.log.html")); err == nil {
+		t.Fatal("ordinary stale artifacts should still be pruned")
+	}
+}

@@ -16,3 +16,13 @@ func detachProcess(cmd *exec.Cmd) {
 	}
 	cmd.SysProcAttr.Setpgid = true
 }
+
+// startDetached starts build() in its own process group.
+func startDetached(build func() *exec.Cmd) (*exec.Cmd, error) {
+	cmd := build()
+	detachProcess(cmd)
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return cmd, nil
+}

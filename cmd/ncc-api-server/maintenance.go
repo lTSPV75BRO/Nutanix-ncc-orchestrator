@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -54,7 +55,15 @@ func (s *apiServer) handleBackup(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "passphrase too long"})
 		return
 	}
+	// A downloaded archive leaves the server, so the server key is not used
+	// here (the recipient could not decrypt it); a passphrase is required
+	// unless the policy explicitly allows plaintext.
 	encrypt := passphrase != ""
+	if !encrypt && backupEncryptionRequired() {
+		s.audit(r, "settings.backup", false, map[string]interface{}{"encrypted": false, "error": "encryption_required"})
+		writeJSON(w, http.StatusPreconditionFailed, envelope{Success: false, Error: "downloaded backups must be encrypted: enter a passphrase (" + backupEncryptionEnv + "=required)", ErrorCode: "NCC_BACKUP_ENCRYPTION_REQUIRED"})
+		return
+	}
 
 	stamp := time.Now().UTC().Format("20060102T150405Z")
 	outName := "ncc-backup-" + stamp + ".tar.gz"
@@ -66,12 +75,19 @@ func (s *apiServer) handleBackup(w http.ResponseWriter, r *http.Request) {
 	var extraEnv []string
 	if encrypt {
 		args = append(args, "--encrypt")
-		extraEnv = []string{"NCC_BACKUP_PASSPHRASE=" + passphrase}
+		// Override any server-side key: the downloader must be able to
+		// decrypt with the passphrase they chose.
+		extraEnv = []string{"NCC_BACKUP_PASSPHRASE=" + passphrase, "NCC_BACKUP_KEY_FILE=", "NCC_BACKUP_KEY="}
 	}
 	out, err := s.runOrchestratorEnv(args, 2*time.Minute, extraEnv)
 	if err != nil {
-		s.audit(r, "settings.backup", false, map[string]interface{}{"install_dir": installDir, "encrypted": encrypt})
-		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "backup failed: " + strings.TrimSpace(out)})
+		s.audit(r, "settings.backup", false, map[string]interface{}{"encrypted": false})
+		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "backup failed: " + redactPaths(strings.TrimSpace(out))})
+		return
+	}
+	if encrypt && !backupFileEncrypted(outPath) {
+		s.audit(r, "settings.backup", false, map[string]interface{}{"encrypted": false, "error": "encryption_not_applied"})
+		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "backup was not encrypted as requested; nothing was downloaded"})
 		return
 	}
 	f, err := os.Open(outPath)
@@ -96,7 +112,7 @@ func (s *apiServer) handleBackup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, f)
-	s.audit(r, "settings.backup", true, map[string]interface{}{"install_dir": installDir, "bytes": fi.Size(), "encrypted": encrypt})
+	s.audit(r, "settings.backup", true, map[string]interface{}{"bytes": fi.Size(), "encrypted": backupFileEncrypted(outPath)})
 }
 
 // maxRestoreUploadBytes caps the uploaded archive size. Backups are small
@@ -564,30 +580,48 @@ func (s *apiServer) spawnDetachedRestart(installDir string) bool {
 	go func() {
 		// Give the response time to reach the client before we tear down.
 		time.Sleep(2 * time.Second)
-		var cmd *exec.Cmd
-		if useSystemd {
-			// Restart the service in a detached shell so we can do a best-effort
-			// pre-clean first:
-			//  1) relabel binaries for SELinux (fixes status=203/EXEC),
-			//  2) stop detached leftovers that can hold :8080/:8081 and cause
-			//     supervisor child bind failures during restart.
-			script := detachedSystemdRestartScript(installDir)
-			cmd = exec.Command("/bin/sh", "-c", script)
-		} else {
-			args := append(append([]string{}, base[1:]...), "v2-restart", "--install-dir", installDir)
-			cmd = exec.Command(base[0], args...)
-			cmd.Dir = s.absPath(s.repoRoot)
-		}
-		cmd.Env = childEnv()
-		// Detach from this process group so a group-directed stop signal can't
-		// take the restarter down with us, and so it outlives our shutdown.
-		detachProcess(cmd)
 		logf := filepath.Join(installDir, "logs", "v2-restart.log")
-		if f, err := os.OpenFile(logf, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
-			cmd.Stdout, cmd.Stderr = f, f
+		_ = os.MkdirAll(filepath.Dir(logf), 0o755)
+		f, ferr := os.OpenFile(logf, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if ferr == nil {
 			defer f.Close()
 		}
-		if err := cmd.Start(); err != nil {
+		build := func() *exec.Cmd {
+			var cmd *exec.Cmd
+			if useSystemd {
+				// Restart the service in a detached shell so we can do a best-effort
+				// pre-clean first:
+				//  1) relabel binaries for SELinux (fixes status=203/EXEC),
+				//  2) stop detached leftovers that can hold :8080/:8081 and cause
+				//     supervisor child bind failures during restart.
+				script := detachedSystemdRestartScript(installDir)
+				cmd = exec.Command("/bin/sh", "-c", script)
+			} else {
+				// Argument vector, never a shell string: install paths with
+				// spaces (C:\Program Files\...) are passed through intact.
+				args := append(append([]string{}, base[1:]...), "v2-restart", "--install-dir", installDir)
+				cmd = exec.Command(base[0], args...)
+				cmd.Dir = s.absPath(s.repoRoot)
+			}
+			cmd.Env = childEnv()
+			if ferr == nil {
+				cmd.Stdout, cmd.Stderr = f, f
+			}
+			return cmd
+		}
+		// Detach from this process group (and, on Windows, from a kill-on-close
+		// job object when allowed) so the restarter outlives our shutdown.
+		cmd, err := startDetached(build)
+		if err != nil {
+			log.Printf("in-app restart could not start the restarter: %v", err)
+			// Only an in-flight software update is waiting on this restart;
+			// surface the failure there instead of leaving it "restarting".
+			updateJob.mu.Lock()
+			waiting := updateJob.inProgress && updateJob.phase == updPhaseRestart
+			updateJob.mu.Unlock()
+			if waiting {
+				updateJob.fail("update installed, but the automatic restart could not be started (" + redactPaths(err.Error()) + "); restart the stack (v2-restart) to load the new version")
+			}
 			return
 		}
 		// Release so we don't wait on it; it continues after we exit.

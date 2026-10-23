@@ -16,7 +16,7 @@ LABEL org.opencontainers.image.title="ncc-orchestrator" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       com.ncc-orchestrator.stream="${STREAM}"
 
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache --upgrade ca-certificates tzdata
 
 # Buildx provides TARGETARCH (amd64/arm64). Default to amd64 for local builds.
 ARG TARGETARCH=amd64

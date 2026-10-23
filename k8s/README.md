@@ -143,7 +143,7 @@ Applying `k8s/` creates:
 
 ## Deployment steps
 
-1. Set image tags in `k8s/kustomization.yaml` if they are not already `2.2.0`.
+1. Set image tags in `k8s/kustomization.yaml` if they are not already `2.2.1`.
 2. Put Prism credentials and `jwt-secret` in `ncc-v2-secrets` (see `k8s/secret.yaml`).
 3. Apply:
 

@@ -636,6 +636,10 @@ export type RunInfo = {
   info_total?: number;
   exit_code?: number;
   success?: boolean;
+  /** Explicit outcome from the API (v2.2.1+). */
+  status?: "success" | "partial" | "failed" | "running" | "queued" | "pending" | "cancelled" | "triggered" | "trigger_failed" | "unknown";
+  /** How `status` was derived: exit_code, legacy_summary, audit, or none. */
+  status_source?: string;
   run_source?: string;
   client?: string;
   user_agent?: string;
@@ -816,6 +820,23 @@ export type NCCDispositionEvent = {
   reason?: string;
 };
 
+export type NCCAlertEvent = {
+  id: string;
+  alert_id: string;
+  correlation_key: string;
+  type: string;
+  at: string;
+  actor: string;
+  run_at?: string;
+  from_state?: string;
+  to_state?: string;
+  from_severity?: string;
+  to_severity?: string;
+  note?: string;
+  reason?: string;
+  seq: number;
+};
+
 export type NCCDisposition = {
   cluster: string;
   check: string;
@@ -826,6 +847,15 @@ export type NCCDisposition = {
   run_at?: string;
   reason?: string;
   history?: NCCDispositionEvent[];
+  /** Server-generated UUIDv4 of this alert instance (v2.2.1+). */
+  id?: string;
+  /** Stable identity of the underlying finding across runs and instances. */
+  finding_id?: string;
+  /** Whether the latest run that covered this cluster still reported the check. */
+  detection?: "detected" | "not_detected" | "unknown";
+  severity?: string;
+  first_seen_at?: string;
+  last_seen_at?: string;
 };
 
 export type FeatureFlags = {
@@ -844,7 +874,7 @@ export type NCCDispositionInput = {
   run_at?: string;
   cluster?: string;
   check?: string;
-  items?: Array<{ cluster: string; check: string }>;
+  items?: Array<{ cluster: string; check: string; id?: string }>;
 };
 
 export type PCAlertsData = {
