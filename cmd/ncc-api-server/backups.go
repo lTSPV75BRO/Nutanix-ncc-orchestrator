@@ -330,6 +330,7 @@ func (s *apiServer) handleBackupsList(w http.ResponseWriter, _ *http.Request) {
 // (NCC_BACKUP_PASSPHRASE), never argv, so it stays out of the process list and
 // audit log.
 func (s *apiServer) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
+	extendDeadlines(w, 2*time.Minute)
 	var body struct {
 		Passphrase string `json:"passphrase"`
 	}
@@ -414,6 +415,7 @@ func (s *apiServer) handleBackupRestoreNamed(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
+	extendDeadlines(w, 3*time.Minute)
 	var body struct {
 		Name       string `json:"name"`
 		Passphrase string `json:"passphrase"`
@@ -492,6 +494,7 @@ func (s *apiServer) handleBackupVerifyNamed(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
+	extendDeadlines(w, 2*time.Minute)
 	var body struct {
 		Name       string `json:"name"`
 		Passphrase string `json:"passphrase"`

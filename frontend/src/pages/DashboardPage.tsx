@@ -45,12 +45,14 @@ import { NCC_ALERTS_QUERY_KEY } from "../utils/alertLifecycle";
 import { notify, notifyError } from "../notify";
 import { FeatureDisabled } from "../features/features/FeatureDisabled";
 import { useFeatureFlags } from "../features/features/useFeatureFlags";
+import { SetupChecklistCard } from "../features/onboarding/SetupChecklist";
 import { ClusterTable } from "../features/report/ClusterTable";
 import {
   asArray,
   asRecord,
   buildClusterNameMap,
   displayClusterName,
+  healthPillValue,
   mergePCClusterIdentityMap,
   resolveClusterName,
   toNumber,
@@ -408,6 +410,7 @@ export function DashboardPage() {
     (totalPlugins > 0 ? (infoCount / totalPlugins) * 100 : 0) * 2.2 +
     (totalPlugins > 0 ? (unknownCount / totalPlugins) * 100 : 0) * 3.0;
   const weightedHealth = Math.max(0, Math.min(100, rawPassRate - weightedPenalty));
+  const healthText = healthPillValue(totalPlugins, weightedHealth);
 
   const runSummary = asRecord(reportData.run_summary);
   const runTimestamp = String(runSummary.timestamp || "");
@@ -587,6 +590,7 @@ export function DashboardPage() {
 
   return (
     <div className="dashboard-page">
+      <SetupChecklistCard />
       {/* HERO STRIP */}
       <Card className="page-card dashboard-hero">
         <Row gutter={[12, 12]} align="middle">
@@ -594,12 +598,17 @@ export function DashboardPage() {
             <Space size={12} align="center">
               <div
                 className="health-pill"
+                role="img"
+                aria-label={healthText ? `Health ${healthText}` : "Health: no completed checks yet"}
+                title={healthText ? undefined : "No completed checks yet — run NCC to get a health score"}
                 style={{
-                  background: `linear-gradient(135deg, ${healthGradeColor(weightedHealth)}, ${healthGradeColor(weightedHealth)}b0)`,
+                  background: healthText
+                    ? `linear-gradient(135deg, ${healthGradeColor(weightedHealth)}, ${healthGradeColor(weightedHealth)}b0)`
+                    : "linear-gradient(135deg, #3f3f46, #27272ab0)",
                 }}
               >
                 <div className="health-pill-label">HEALTH</div>
-                <div className="health-pill-value">{weightedHealth.toFixed(1)}%</div>
+                <div className="health-pill-value">{healthText ?? "—"}</div>
               </div>
               <div>
                 <Typography.Title level={4} className="tile-title">

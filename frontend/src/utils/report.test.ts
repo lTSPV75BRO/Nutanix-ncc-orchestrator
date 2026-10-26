@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildClusterNameMap, displayClusterName, resolveClusterName } from "./report";
+import { buildClusterNameMap, displayClusterName, healthPillValue, resolveClusterName } from "./report";
 
 describe("cluster identity", () => {
   it("prefers a name or IP over a UUID on the same row", () => {
@@ -15,5 +15,14 @@ describe("cluster identity", () => {
     });
     expect(resolveClusterName(`{${uuid}}`, map)).toBe("prod-east");
     expect(resolveClusterName("https://10.1.2.3:9440", map)).toBe("prod-east");
+  });
+});
+
+describe("healthPillValue", () => {
+  it("distinguishes no data from a 0% score", () => {
+    expect(healthPillValue(0, 0)).toBeNull();
+    expect(healthPillValue(Number.NaN, 50)).toBeNull();
+    expect(healthPillValue(120, 0)).toBe("0.0%");
+    expect(healthPillValue(120, 97.456)).toBe("97.5%");
   });
 });

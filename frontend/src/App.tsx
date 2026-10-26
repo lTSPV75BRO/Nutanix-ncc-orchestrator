@@ -21,13 +21,12 @@ import { api, ApiError, setOnUnauthorized, resetUnauthorizedRedirect } from "./a
 import type { MeData, RunActiveData, RunConflictData, UserRole } from "./api/types";
 import { notify, notifyError } from "./notify";
 import { AuthContext, useAuth, type AuthValue } from "./auth/AuthContext";
-import { LoginPage } from "./pages/LoginPage";
+import { LoginPage, setLoginNotice } from "./pages/LoginPage";
 import { ChangePasswordPage, ChangePasswordModal } from "./pages/ChangePasswordPage";
 import { PersonalTokensModal } from "./features/tokens/PersonalTokensModal";
 import { SessionIdleGuard } from "./components/SessionIdleGuard";
-import { FirstTimeSetupModal } from "./features/onboarding/FirstTimeSetupModal";
+import { SetupHeaderButton } from "./features/onboarding/SetupChecklist";
 import { CommandJump } from "./components/CommandJump";
-import { useLocalStorageState } from "./hooks/useLocalStorageState";
 import { formatDateTime, formatTime, localDateKey, parseInstant } from "./utils/datetime";
 
 const { Header, Content } = Layout;
@@ -464,12 +463,6 @@ export default function App() {
   const authValue: AuthValue = { me: me ?? null, role, isAdmin, canOperate, loginEnabled, authenticated };
   const [changePwOpen, setChangePwOpen] = useState(false);
   const [tokensOpen, setTokensOpen] = useState(false);
-  const [firstSetupStatus, setFirstSetupStatus] = useLocalStorageState<"pending" | "completed" | "skipped">(
-    "ux.firstSetup.status",
-    "pending",
-  );
-  const [firstSetupPausedUntilMs, setFirstSetupPausedUntilMs] = useLocalStorageState<number>("ux.firstSetup.pausedUntilMs", 0);
-  const [showFirstSetup, setShowFirstSetup] = useState(false);
 
   const handleLogout = async () => {
     try {
@@ -480,6 +473,7 @@ export default function App() {
     // Drop every cached (authenticated) query so no stale data lingers, then do
     // a clean re-bootstrap. A hard navigation guarantees the UI returns to the
     // login screen regardless of any in-flight query or cached auth state.
+    setLoginNotice({ type: "info", text: "You have been signed out." });
     queryClient.clear();
     resetUnauthorizedRedirect();
     window.location.assign("/login");
@@ -492,6 +486,7 @@ export default function App() {
     } catch (e) {
       notifyError(e, "Could not sign out other sessions");
     }
+    setLoginNotice({ type: "info", text: "You have been signed out on every device." });
     queryClient.clear();
     resetUnauthorizedRedirect();
     window.location.assign("/login");
@@ -500,6 +495,9 @@ export default function App() {
   useEffect(() => {
     setOnUnauthorized(() => {
       const previous = queryClient.getQueryData<MeData>(["me"]);
+      if (previous?.authenticated) {
+        setLoginNotice({ type: "warning", text: "Your session ended. Sign in again to continue where you left off." });
+      }
       queryClient.setQueryData<MeData>(["me"], {
         authenticated: false,
         login_enabled: previous?.login_enabled ?? true,
@@ -534,38 +532,17 @@ export default function App() {
   const appReady = !meQuery.isLoading && (authenticated || !loginEnabled);
   const canSeeSettings = isAdmin || canOperate;
 
-  // If a new setup used "restore backup", skip the first-time guided flow.
-  const restoreAuditQuery = useQuery({
-    queryKey: ["audit", "first-setup-restore-detect"],
-    queryFn: () => api.audit({ limit: 20, action: "settings.backup.restore", failures: false }),
-    enabled: appReady && canSeeSettings && firstSetupStatus === "pending",
-    staleTime: 60_000,
-    retry: 0,
-  });
-
+  // The old browser-local first-time setup modal kept its progress under
+  // these keys; the server-derived setup checklist replaces it.
   useEffect(() => {
-    if (firstSetupStatus !== "pending") return;
-    const now = Date.now();
-    if (firstSetupPausedUntilMs > now) {
-      setShowFirstSetup(false);
-      return;
+    try {
+      for (const k of ["ux.firstSetup.status", "ux.firstSetup.pausedUntilMs", "ux.firstSetup.doneTabs", "ux.firstSetup.currentStep"]) {
+        window.localStorage.removeItem(k);
+      }
+    } catch {
+      // storage unavailable (private mode); nothing to clean
     }
-    const restored = (restoreAuditQuery.data?.entries?.length || 0) > 0;
-    if (restored) {
-      setFirstSetupStatus("skipped");
-      setShowFirstSetup(false);
-      return;
-    }
-    if (!restoreAuditQuery.isLoading) {
-      setShowFirstSetup(true);
-    }
-  }, [
-    firstSetupStatus,
-    firstSetupPausedUntilMs,
-    restoreAuditQuery.data?.entries?.length,
-    restoreAuditQuery.isLoading,
-    setFirstSetupStatus,
-  ]);
+  }, []);
 
   // The single /runs/active poller for the whole UI (see hooks/useRunsActive).
   const runActiveQuery = useRunsActivePoller(appReady);
@@ -611,6 +588,7 @@ export default function App() {
     return (
       <LoginPage
         localEnabled={me?.local_enabled ?? true}
+        ldapEnabled={Boolean(me?.ldap_enabled)}
         samlEnabled={Boolean(me?.saml_enabled)}
         bootstrapPending={Boolean(me?.bootstrap_pending)}
         apiUnreachable={meQuery.isError}
@@ -636,6 +614,7 @@ export default function App() {
       <ChangePasswordPage
         forced
         username={me?.username}
+        offerRestore={Boolean(me?.is_admin && me?.bootstrap_pending)}
         onSuccess={() => {
           resetUnauthorizedRedirect();
           void queryClient.invalidateQueries();
@@ -691,6 +670,7 @@ export default function App() {
 
           <div className="header-actions">
             <CommandJump />
+            {appReady && canSeeSettings ? <SetupHeaderButton /> : null}
             <HeaderTriggerRunButton />
             <HeaderHealthPill health={healthState} onRetry={() => void healthQuery.refetch()} />
             <Dropdown
@@ -767,26 +747,6 @@ export default function App() {
           onStayLoggedIn={() => void meQuery.refetch()}
         />
       ) : null}
-      <FirstTimeSetupModal
-        open={showFirstSetup && firstSetupStatus === "pending"}
-        onPause={(forMs) => {
-          // Pause prompts long enough for users to complete current setup work.
-          const ms = typeof forMs === "number" && forMs > 0 ? forMs : 30 * 60 * 1000;
-          setFirstSetupPausedUntilMs(Date.now() + ms);
-          setShowFirstSetup(false);
-        }}
-        onSkip={() => {
-          setFirstSetupStatus("skipped");
-          setFirstSetupPausedUntilMs(0);
-          setShowFirstSetup(false);
-        }}
-        onComplete={() => {
-          setFirstSetupStatus("completed");
-          setFirstSetupPausedUntilMs(0);
-          setShowFirstSetup(false);
-          notify.success("First-time setup marked complete.");
-        }}
-      />
     </Layout>
     </AuthContext.Provider>
   );

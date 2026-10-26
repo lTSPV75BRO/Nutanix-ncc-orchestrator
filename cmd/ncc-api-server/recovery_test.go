@@ -201,6 +201,7 @@ func TestRevokeSessionsBumpsGeneration(t *testing.T) {
 // and the response advertises the self-reset rather than queuing a request.
 func TestForgotPasswordAdminSelfReset(t *testing.T) {
 	s := newDBServer(t)
+	s.adminSelfResetEnabled = true // opt-in; off by default
 	oldPW, _, err := s.users.bootstrapAdminIfEmpty("admin")
 	if err != nil {
 		t.Fatal(err)
@@ -244,5 +245,41 @@ func TestForgotPasswordAdminSelfReset(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "password:") {
 		t.Fatalf("initial password file missing password line: %s", string(raw))
+	}
+}
+
+// By default (no --allow-admin-self-reset) the anonymous forgot-password call
+// for the built-in admin must not rotate the password or end admin sessions,
+// must answer exactly like the generic (no-enumeration) response, and queues a
+// request like any other account.
+func TestForgotPasswordAdminSelfResetOffByDefault(t *testing.T) {
+	s := newDBServer(t)
+	pw, _, err := s.users.bootstrapAdminIfEmpty("admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := s.users.lookup("admin")
+
+	rr := httptest.NewRecorder()
+	body := strings.NewReader(`{"username":"admin"}`)
+	s.handleForgotPassword(rr, httptest.NewRequest(http.MethodPost, "/api/v1/auth/forgot-password", body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("forgot admin: %d (%s)", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "admin_reset") {
+		t.Fatalf("default must not report a self-reset: %s", rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "If that account exists") {
+		t.Fatalf("expected the generic response, got %s", rr.Body.String())
+	}
+	if _, ok, _ := s.users.verify("admin", pw); !ok {
+		t.Fatal("admin password must be unchanged by default")
+	}
+	after, _ := s.users.lookup("admin")
+	if after.TokenGen != before.TokenGen {
+		t.Fatalf("admin sessions must not be revoked: gen %d -> %d", before.TokenGen, after.TokenGen)
+	}
+	if got := s.users.listResetRequests(); len(got) != 1 || got[0].Username != "admin" {
+		t.Fatalf("default should queue an admin reset request, got %+v", got)
 	}
 }

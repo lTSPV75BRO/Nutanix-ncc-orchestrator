@@ -133,6 +133,10 @@ func (g *gzipAPIWriter) finish() {
 	}
 }
 
+// Unwrap lets http.ResponseController reach the connection (per-request
+// read/write deadlines for long-running handlers; see extendDeadlines).
+func (g *gzipAPIWriter) Unwrap() http.ResponseWriter { return g.ResponseWriter }
+
 // Flush supports handlers that stream (it forces the compression decision).
 func (g *gzipAPIWriter) Flush() {
 	if !g.decided {

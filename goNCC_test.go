@@ -300,6 +300,10 @@ func TestValidateSecretsFileHardening(t *testing.T) {
 	if err := os.WriteFile(loosePath, []byte("password: secret\n"), 0o644); err != nil {
 		t.Fatalf("write loose secrets file: %v", err)
 	}
+	if runtime.GOOS == "windows" {
+		// No POSIX mode bits on Windows (NTFS ACLs govern access).
+		return
+	}
 	if err := validateSecretsFileHardening(loosePath); err == nil {
 		t.Fatal("expected loose permissions to fail hardening check")
 	}
@@ -1553,7 +1557,9 @@ func TestResolveUnderBase(t *testing.T) {
 	}{
 		{"relative is anchored", "outputfiles", filepath.Join(base, "outputfiles")},
 		{"nested relative is anchored", filepath.Join("data", "runs"), filepath.Join(base, "data", "runs")},
-		{"absolute is untouched", filepath.Join(string(filepath.Separator), "var", "lib", "x"), filepath.Join(string(filepath.Separator), "var", "lib", "x")},
+		// os.TempDir() is absolute on every platform; "/var/lib/x" is not
+		// absolute on Windows (no volume), so it was anchored there.
+		{"absolute is untouched", filepath.Join(os.TempDir(), "var", "lib", "x"), filepath.Join(os.TempDir(), "var", "lib", "x")},
 		{"empty stays empty", "", ""},
 	}
 	for _, tc := range cases {
@@ -2984,10 +2990,10 @@ func TestBuildPreflightReportPathPermissionFailure(t *testing.T) {
 	cfg := fmt.Sprintf(`
 clusters: "10.0.0.1"
 username: "admin"
-output-dir-logs: "%s"
-output-dir-filtered: "%s"
-log-file: "%s"
-prom-dir: "%s"
+output-dir-logs: %q
+output-dir-filtered: %q
+log-file: %q
+prom-dir: %q
 `, blockPath, filepath.Join(tmpDir, "out"), filepath.Join(tmpDir, "logs", "ncc-runner.log"), filepath.Join(tmpDir, "prom"))
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -3012,10 +3018,10 @@ username: "admin"
 insecure-skip-verify: true
 log-http: true
 max-parallel: 25
-output-dir-logs: "%s"
-output-dir-filtered: "%s"
-log-file: "%s"
-prom-dir: "%s"
+output-dir-logs: %q
+output-dir-filtered: %q
+log-file: %q
+prom-dir: %q
 `, filepath.Join(tmpDir, "raw"), filepath.Join(tmpDir, "out"), filepath.Join(tmpDir, "logs", "ncc-runner.log"), filepath.Join(tmpDir, "prom"))
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)

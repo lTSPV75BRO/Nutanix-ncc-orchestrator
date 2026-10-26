@@ -54,6 +54,7 @@ func (s *apiServer) handleHealthSupportBundle(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
+	extendDeadlines(w, 2*time.Minute)
 	installDir := s.maintenanceInstallDir()
 	outPath := filepath.Join(installDir, "logs", fmt.Sprintf("ncc-support-%s.tar.gz", time.Now().UTC().Format("20060102T150405Z")))
 	out, err := s.runOrchestrator([]string{"doctor", "--install-dir", installDir, "--output-file", outPath}, 2*time.Minute)

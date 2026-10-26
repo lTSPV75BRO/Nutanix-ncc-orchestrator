@@ -34,7 +34,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: stage-orchestrator-binary
-          image: docker.io/prajwalnutant/nutanix-ncc-orchestrator:2.2.1
+          image: docker.io/prajwalnutant/nutanix-ncc-orchestrator:2.3.0
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "cp /usr/local/bin/ncc-orchestrator /tools/ncc-orchestrator && chmod 0755 /tools/ncc-orchestrator"]
           securityContext:
@@ -57,7 +57,7 @@ spec:
 
       containers:
         - name: api
-          image: docker.io/prajwalnutant/ncc-api-server:2.2.1
+          image: docker.io/prajwalnutant/ncc-api-server:2.3.0
           imagePullPolicy: IfNotPresent
           args:
             - "--listen"
@@ -93,11 +93,11 @@ spec:
             - name: NCC_RUNTIME_MODE
               value: "kubernetes"
             - name: NCC_IMAGE_TAG
-              value: "2.2.1"
+              value: "2.3.0"
             - name: NCC_ORCHESTRATOR_IMAGE_TAG
-              value: "2.2.1"
+              value: "2.3.0"
             - name: NCC_UI_IMAGE_TAG
-              value: "2.2.1"
+              value: "2.3.0"
             - name: NCC_UI_ORIGIN
               valueFrom:
                 configMapKeyRef:
@@ -156,8 +156,11 @@ spec:
             failureThreshold: 12
             timeoutSeconds: 2
           readinessProbe:
+            # Checks the user store, runner binary and output volume; liveness
+            # stays on /api/v1/health so a dependency problem removes the pod
+            # from the Service instead of restart-looping it.
             httpGet:
-              path: /api/v1/health
+              path: /api/v1/health/ready
               port: 8081
             initialDelaySeconds: 3
             periodSeconds: 10

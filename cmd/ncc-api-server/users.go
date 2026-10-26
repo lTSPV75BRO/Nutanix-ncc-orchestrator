@@ -130,7 +130,28 @@ type usersDBFile struct {
 	Resets        []passwordResetRequest `json:"password_resets,omitempty"`
 	ClusterGroups []clusterGroup         `json:"cluster_groups,omitempty"`
 	Tokens        []personalToken        `json:"personal_tokens,omitempty"`
+	Deleted       []deletedAccount       `json:"deleted_accounts,omitempty"`
 }
+
+// deletedAccount is the tombstone a deleted local account leaves behind.
+// Sessions are stateless, and a subject missing from the store is otherwise
+// indistinguishable from an SSO/LDAP user, so without it a deleted user kept
+// their session (and role) until it expired. Sessions issued at or before
+// DeletedAt are rejected; TokenGen is carried over if the name is re-created
+// so the new account never accepts the old account's tokens.
+type deletedAccount struct {
+	Username  string `json:"username"`
+	TokenGen  int    `json:"token_gen"`
+	DeletedAt string `json:"deleted_at"`
+}
+
+// Tombstones must outlive any session issued before the deletion
+// (sessionTTLMax, or a longer --session-ttl). They are pruned after
+// deletedAccountRetention and capped at maxDeletedAccounts (oldest dropped).
+const (
+	deletedAccountRetention = 30 * 24 * time.Hour
+	maxDeletedAccounts      = 1000
+)
 
 // passwordResetRequest is a queued self-service "forgot password" request that
 // an admin resolves out-of-band from Settings → Access. No secrets are stored;
@@ -172,10 +193,14 @@ type userDB struct {
 	resets        []passwordResetRequest
 	clusterGroups []clusterGroup
 	tokens        []personalToken
+	deleted       map[string]deletedAccount // lower-cased username -> tombstone
 	refreshMu     sync.Mutex
 	lastRefresh   time.Time
 	loadedHash    [32]byte
 	hasHash       bool
+	// version is the backend's version of the document last applied (the
+	// Kubernetes Secret resourceVersion); saves are conditional on it.
+	version string
 }
 
 func newUserDB(path string) *userDB {
@@ -193,10 +218,11 @@ func openUserDBFromBackend(be userStoreBackend) (*userDB, error) {
 	if fb, ok := be.(*fileStoreBackend); ok {
 		db.path = fb.path
 	}
-	raw, err := be.load()
+	raw, version, err := backendLoad(be)
 	if err != nil {
 		return nil, fmt.Errorf("load users db: %w", err)
 	}
+	db.version = version
 	if len(raw) == 0 {
 		return db, nil
 	}
@@ -232,6 +258,12 @@ func (db *userDB) applyDocument(f usersDBFile) error {
 	db.resets = f.Resets
 	db.clusterGroups = f.ClusterGroups
 	db.tokens = f.Tokens
+	db.deleted = map[string]deletedAccount{}
+	for _, d := range f.Deleted {
+		if key := strings.ToLower(strings.TrimSpace(d.Username)); key != "" {
+			db.deleted[key] = d
+		}
+	}
 	return nil
 }
 
@@ -246,13 +278,20 @@ func (db *userDB) refreshIfStale() {
 	if time.Since(db.lastRefresh) < userDBReloadMinInterval {
 		return
 	}
-	raw, err := db.backend.load()
+	raw, version, err := backendLoad(db.backend)
 	if err != nil || len(raw) == 0 {
 		db.lastRefresh = time.Now()
 		return
 	}
 	sum := sha256.Sum256(raw)
 	if db.hasHash && sum == db.loadedHash {
+		// Same document; adopt a newer version (another Secret key changed)
+		// so the next conditional save does not conflict needlessly.
+		db.mu.Lock()
+		if db.loadedHash == sum {
+			db.version = version
+		}
+		db.mu.Unlock()
 		db.lastRefresh = time.Now()
 		return
 	}
@@ -267,6 +306,7 @@ func (db *userDB) refreshIfStale() {
 	}
 	db.loadedHash = sum
 	db.hasHash = true
+	db.version = version
 	db.lastRefresh = time.Now()
 }
 
@@ -394,12 +434,22 @@ func (db *userDB) saveLocked() error {
 	for _, k := range keys {
 		out.Users = append(out.Users, *db.accounts[k])
 	}
+	out.Deleted = db.deletedListLocked()
 	b, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := db.backend.save(b); err != nil {
+	newVersion, err := backendSave(db.backend, b, db.version)
+	if err != nil {
+		if errors.Is(err, errStoreConflict) {
+			// Drop the unsaved change: the next reload brings in the
+			// other replica's version.
+			db.hasHash = false
+		}
 		return err
+	}
+	if newVersion != "" {
+		db.version = newVersion
 	}
 	db.loadedHash = sha256.Sum256(b)
 	db.hasHash = true
@@ -429,6 +479,7 @@ func (db *userDB) addResetRequest(username, clientIP string) {
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
 	now := time.Now().UTC().Format(time.RFC3339)
 	for i := range db.resets {
 		if strings.EqualFold(db.resets[i].Username, name) {
@@ -466,6 +517,7 @@ func (db *userDB) clearResetRequest(username string) {
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
 	kept := make([]passwordResetRequest, 0, len(db.resets))
 	changed := false
 	for _, r := range db.resets {
@@ -546,21 +598,35 @@ func (db *userDB) upsertUser(username, passwordHash string, role Role, mustChang
 	now := time.Now().UTC().Format(time.RFC3339)
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
 	existing, ok := db.accounts[key]
 	created := now
+	gen := 0
+	runConfig := ""
 	if ok {
 		created = existing.CreatedAt
 		if passwordHash == "" {
 			passwordHash = existing.PasswordHash
 		}
+		// Never move the token generation backwards: a reset to 0 would
+		// re-validate sessions that were revoked by an earlier bump.
+		gen = existing.TokenGen
+		runConfig = existing.RunConfigPath
+	} else if tomb, dead := db.deleted[key]; dead {
+		// Re-creating a deleted name continues its generation so tokens the
+		// old account was issued stay invalid for the new one.
+		gen = tomb.TokenGen
+		delete(db.deleted, key)
 	}
 	db.accounts[key] = &account{
-		Username:     name,
-		PasswordHash: passwordHash,
-		Role:         role.String(),
-		MustChange:   mustChange,
-		CreatedAt:    created,
-		UpdatedAt:    now,
+		Username:      name,
+		PasswordHash:  passwordHash,
+		Role:          role.String(),
+		RunConfigPath: runConfig,
+		MustChange:    mustChange,
+		TokenGen:      gen,
+		CreatedAt:     created,
+		UpdatedAt:     now,
 	}
 	return db.saveLocked()
 }
@@ -570,6 +636,7 @@ func (db *userDB) setRole(username string, role Role) error {
 	key := strings.ToLower(strings.TrimSpace(username))
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
 	a, ok := db.accounts[key]
 	if !ok {
 		return errUserNotFound
@@ -591,6 +658,7 @@ func (db *userDB) setPassword(username, passwordHash string, mustChange bool) er
 	key := strings.ToLower(strings.TrimSpace(username))
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
 	a, ok := db.accounts[key]
 	if !ok {
 		return errUserNotFound
@@ -612,6 +680,7 @@ func (db *userDB) revokeSessions(username string) error {
 	key := strings.ToLower(strings.TrimSpace(username))
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
 	a, ok := db.accounts[key]
 	if !ok {
 		return errUserNotFound
@@ -638,6 +707,7 @@ func (db *userDB) setRunConfigPath(username, runConfigPath string) error {
 	key := strings.ToLower(strings.TrimSpace(username))
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
 	a, ok := db.accounts[key]
 	if !ok {
 		return errUserNotFound
@@ -690,6 +760,7 @@ func (db *userDB) deleteUser(username string) error {
 	key := strings.ToLower(strings.TrimSpace(username))
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
 	a, ok := db.accounts[key]
 	if !ok {
 		return errUserNotFound
@@ -702,7 +773,69 @@ func (db *userDB) deleteUser(username string) error {
 		return errLastAdmin
 	}
 	delete(db.accounts, key)
+	if db.deleted == nil {
+		db.deleted = map[string]deletedAccount{}
+	}
+	db.deleted[key] = deletedAccount{
+		Username:  a.Username,
+		TokenGen:  a.TokenGen + 1,
+		DeletedAt: time.Now().UTC().Format(time.RFC3339),
+	}
 	return db.saveLocked()
+}
+
+// sessionPredatesDeletion reports whether a session for username issued at
+// issuedAt was minted for a local account that has since been deleted. A
+// zero issuedAt is treated as predating the deletion (fail closed). Sessions
+// issued after the deletion (e.g. an LDAP/SSO user who shares the name) are
+// unaffected.
+func (db *userDB) sessionPredatesDeletion(username string, issuedAt time.Time) bool {
+	if db == nil {
+		return false
+	}
+	db.mu.RLock()
+	tomb, ok := db.deleted[strings.ToLower(strings.TrimSpace(username))]
+	db.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	deletedAt, err := time.Parse(time.RFC3339, tomb.DeletedAt)
+	if err != nil || issuedAt.IsZero() {
+		return true
+	}
+	return !issuedAt.After(deletedAt)
+}
+
+// deletedListLocked returns the tombstones to persist, dropping those older
+// than deletedAccountRetention and keeping at most maxDeletedAccounts (the
+// newest). Caller holds db.mu.
+func (db *userDB) deletedListLocked() []deletedAccount {
+	if len(db.deleted) == 0 {
+		return nil
+	}
+	cutoff := time.Now().UTC().Add(-deletedAccountRetention)
+	out := make([]deletedAccount, 0, len(db.deleted))
+	for key, d := range db.deleted {
+		if t, err := time.Parse(time.RFC3339, d.DeletedAt); err == nil && t.Before(cutoff) {
+			delete(db.deleted, key)
+			continue
+		}
+		out = append(out, d)
+	}
+	// Newest first, then by name for a stable document.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].DeletedAt != out[j].DeletedAt {
+			return out[i].DeletedAt > out[j].DeletedAt
+		}
+		return out[i].Username < out[j].Username
+	})
+	if len(out) > maxDeletedAccounts {
+		for _, d := range out[maxDeletedAccounts:] {
+			delete(db.deleted, strings.ToLower(strings.TrimSpace(d.Username)))
+		}
+		out = out[:maxDeletedAccounts]
+	}
+	return out
 }
 
 func (db *userDB) adminCountLocked() int {
@@ -723,6 +856,7 @@ func (db *userDB) importSeed(seed *userDB) error {
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
 	if len(db.accounts) > 0 {
 		return nil
 	}
@@ -746,6 +880,7 @@ func (db *userDB) importSeed(seed *userDB) error {
 func (db *userDB) bootstrapAdminIfEmpty(username string) (string, bool, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
 	if len(db.accounts) > 0 {
 		return "", false, nil
 	}
@@ -808,6 +943,7 @@ func (db *userDB) getSAML() *samlPersisted {
 func (db *userDB) setSAML(cfg *samlPersisted) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
 	db.saml = cfg
 	return db.saveLocked()
 }
@@ -830,6 +966,7 @@ func (db *userDB) getLDAP() *ldapPersisted {
 func (db *userDB) setLDAP(cfg *ldapPersisted) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
 	db.ldapCfg = cfg
 	return db.saveLocked()
 }
@@ -848,6 +985,7 @@ func (db *userDB) getClusterGroups() []clusterGroup {
 func (db *userDB) setClusterGroups(groups []clusterGroup) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
 	db.clusterGroups = cloneClusterGroups(groups)
 	return db.saveLocked()
 }
@@ -887,6 +1025,7 @@ func (db *userDB) addToken(pt personalToken) error {
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
 	n := 0
 	for _, t := range db.tokens {
 		if strings.EqualFold(t.Owner, pt.Owner) {
@@ -967,6 +1106,7 @@ func (db *userDB) listTokensForOwner(owner string) []personalToken {
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
 	db.pruneExpiredTokensLocked(time.Now().UTC())
 	for _, t := range db.tokens {
 		if strings.EqualFold(t.Owner, owner) {
@@ -985,6 +1125,7 @@ func (db *userDB) listAllTokens() []personalToken {
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
 	db.pruneExpiredTokensLocked(time.Now().UTC())
 	for _, t := range db.tokens {
 		out = append(out, tokenView(t))
@@ -1006,6 +1147,7 @@ func (db *userDB) deleteToken(id, requester string, isAdmin bool) (personalToken
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
 	for i, t := range db.tokens {
 		if t.ID != id {
 			continue
@@ -1029,6 +1171,7 @@ func (db *userDB) touchTokenLastUsed(id, clientIP string) {
 	now := time.Now().UTC()
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
 	for i := range db.tokens {
 		if db.tokens[i].ID != id {
 			continue
@@ -1080,6 +1223,7 @@ func (db *userDB) getTLSPolicy() *tlsPolicy {
 func (db *userDB) setTLSPolicy(p *tlsPolicy) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
 	if p == nil {
 		db.tls = nil
 	} else {
@@ -1095,6 +1239,7 @@ func (db *userDB) setTLSPolicy(p *tlsPolicy) error {
 func (db *userDB) setSessionTTLSeconds(seconds int) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
 	if seconds <= 0 {
 		db.session = nil
 	} else {
@@ -1279,14 +1424,18 @@ func (b *fileStoreBackend) load() ([]byte, error) {
 }
 
 func (b *fileStoreBackend) save(data []byte) error {
-	tmp := b.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	// Unique temp name per write: two processes sharing the file used the
+	// same ".tmp" and could rename each other's half-written file in place.
+	if err := writeFileAtomic(b.path, data, 0o600); err != nil {
 		return fmt.Errorf("write users db: %w", err)
 	}
-	if err := os.Rename(tmp, b.path); err != nil {
-		return fmt.Errorf("replace users db: %w", err)
-	}
 	return nil
+}
+
+// lockForWrite serializes writers across processes sharing the store file
+// (e.g. replicas on one volume) so reload-modify-save cannot interleave.
+func (b *fileStoreBackend) lockForWrite() (func(), error) {
+	return lockStateFile(b.path+".lock", userStoreLockTimeout)
 }
 
 func (b *fileStoreBackend) setInitialPassword(username, password string) (string, error) {

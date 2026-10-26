@@ -38,6 +38,7 @@ func (s *apiServer) handleBackup(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
+	extendDeadlines(w, 2*time.Minute)
 	installDir := s.maintenanceInstallDir()
 	tmpDir, err := os.MkdirTemp("", "ncc-backup-*")
 	if err != nil {
@@ -134,6 +135,9 @@ func (s *apiServer) handleRestore(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
+	// Covers the upload (up to maxRestoreUploadBytes, which the default 15s
+	// read timeout could not) plus the 3-minute v2-restore below.
+	extendDeadlines(w, 5*time.Minute)
 	r.Body = http.MaxBytesReader(w, r.Body, maxRestoreUploadBytes+(1<<20))
 	if err := r.ParseMultipartForm(8 << 20); err != nil {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "invalid upload (expected multipart/form-data with an 'archive' file): " + err.Error()})
@@ -425,7 +429,10 @@ func normalizeConfigOutputDirPaths(configPath, installDir string) bool {
 	changed := false
 	for i, line := range lines {
 		key, val, ok := parseConfigYAMLKV(line)
-		if !ok || !strInStrings(outputDirConfigKeys, key) || val == "" || !filepath.IsAbs(val) {
+		// The values healed here come from a Linux backup ("/root/..."); on a
+		// Windows install those are rooted but not filepath.IsAbs (no volume),
+		// so they were never rewritten there.
+		if !ok || !strInStrings(outputDirConfigKeys, key) || val == "" || !(filepath.IsAbs(val) || strings.HasPrefix(val, "/")) {
 			continue
 		}
 		if val == installDir || strings.HasPrefix(val, installDir+string(filepath.Separator)) {

@@ -162,3 +162,14 @@ export function resolveClusterName(value: unknown, clusterNameMap: Record<string
   if (!isIPv4Like(normalizeClusterKey(raw))) return raw;
   return raw;
 }
+
+/**
+ * Text for the Dashboard health pill. With no completed checks there is no
+ * score to show: return null so the pill renders "no data" instead of a red
+ * "0.0%", which read as "every check failed" on a fresh install or after a run
+ * that produced no NCC results.
+ */
+export function healthPillValue(totalChecks: number, weightedHealth: number): string | null {
+  if (!Number.isFinite(totalChecks) || totalChecks <= 0 || !Number.isFinite(weightedHealth)) return null;
+  return `${weightedHealth.toFixed(1)}%`;
+}

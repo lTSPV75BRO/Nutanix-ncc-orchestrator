@@ -138,3 +138,67 @@ describe("api client credentials and 401 interceptor", () => {
     expect(revokeCall[1].method).toBe("DELETE");
   });
 });
+
+// Regression: long server-side operations (preflight 120s, backup create 2m)
+// were aborted by the client's 30s default, so the UI reported a timeout for
+// work that was still running and later succeeded.
+describe("api client long-operation timeouts", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  // fetch that resolves after `ms` unless the request signal aborts first.
+  function slowFetch(ms: number) {
+    return vi.fn(
+      (_path: string, init?: RequestInit) =>
+        new Promise<Response>((resolve, reject) => {
+          const timer = setTimeout(() => resolve(jsonResponse(200, { success: true, data: {} })), ms);
+          init?.signal?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(new DOMException("aborted", "AbortError"));
+          });
+        }),
+    );
+  }
+
+  it.each([
+    ["runPreflight", () => api.runPreflight({ config_path: "config.yaml" })],
+    ["createBackup", () => api.createBackup()],
+  ])("%s outlives the 30s default timeout", async (_name, call) => {
+    vi.useFakeTimers();
+    globalThis.fetch = slowFetch(90_000) as unknown as typeof fetch;
+    const pending = call();
+    await vi.advanceTimersByTimeAsync(90_000);
+    await expect(pending).resolves.toBeDefined();
+  });
+
+  it("ordinary calls still time out at 30s", async () => {
+    vi.useFakeTimers();
+    globalThis.fetch = slowFetch(90_000) as unknown as typeof fetch;
+    const pending = api.health().catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(31_000);
+    const err = await pending;
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(408);
+  });
+});
+
+describe("api client request IDs", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("puts the server's request ID on ApiError", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      jsonResponse(400, { success: false, error: "bad input", request_id: "req-1234abcd" }),
+    ) as unknown as typeof fetch;
+    const err = await api.runs().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).requestId).toBe("req-1234abcd");
+  });
+});

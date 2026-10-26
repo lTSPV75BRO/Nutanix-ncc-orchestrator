@@ -37,10 +37,13 @@ func TestParseSimpleYAMLKV(t *testing.T) {
 }
 
 func TestRelativeAndAbsolutizeOutputDirKeys(t *testing.T) {
+	// An OS-absolute path: "/abs/runs" has no volume and is therefore
+	// relative on Windows, where the runner (correctly) anchors it.
+	absRuns := filepath.Join(os.TempDir(), "abs", "runs")
 	yaml := "clusters: \"10.0.0.1\"\n" +
 		"output-dir-logs: \"nccfiles\"\n" +
 		"output-dir-filtered: outputfiles   # comment kept\n" +
-		"run-history-dir: /abs/runs\n"
+		"run-history-dir: " + absRuns + "\n"
 
 	rel := relativeOutputDirKeys(yaml)
 	if len(rel) != 2 || !strInList(rel, "output-dir-logs") || !strInList(rel, "output-dir-filtered") {
@@ -59,7 +62,7 @@ func TestRelativeAndAbsolutizeOutputDirKeys(t *testing.T) {
 	if !strings.Contains(out, "# comment kept") {
 		t.Error("inline comment was dropped during rewrite")
 	}
-	if !strings.Contains(out, "run-history-dir: /abs/runs") {
+	if !strings.Contains(out, "run-history-dir: "+absRuns) {
 		t.Error("already-absolute key must be left untouched")
 	}
 }
@@ -194,6 +197,10 @@ func TestCheckStalePIDs(t *testing.T) {
 	}
 
 	holder := exec.Command("sleep", "30")
+	if runtime.GOOS == "windows" {
+		// No `sleep` binary unless Git's usr/bin is on PATH.
+		holder = exec.Command("powershell", "-NoProfile", "-Command", "Start-Sleep -Seconds 30")
+	}
 	if err := holder.Start(); err != nil {
 		t.Fatal(err)
 	}

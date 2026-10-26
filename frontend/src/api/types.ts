@@ -3,6 +3,9 @@ export type Envelope<T> = {
   message?: string;
   data?: T;
   error?: string;
+  error_code?: string;
+  /** Set on errors; quote it to an administrator to find the matching log/audit line. */
+  request_id?: string;
 };
 
 export type HealthData = {
@@ -968,4 +971,43 @@ export type ReportTrendsData = {
   count: number;
   limit: number;
   report_source_dir: string;
+};
+
+/** One item of the server-derived setup checklist (GET /api/v1/onboarding). */
+export type OnboardingStep = {
+  id: string;
+  title: string;
+  description: string;
+  done: boolean;
+  optional?: boolean;
+  detail?: string;
+  /** Settings tab where the step is completed. */
+  tab: string;
+  action_label: string;
+  /** Operators cannot complete this step themselves. */
+  admin_only?: boolean;
+};
+
+export type OnboardingStatus = {
+  steps: OnboardingStep[];
+  required_done: number;
+  required_total: number;
+  completed: boolean;
+  dismissed: boolean;
+  dismissed_at?: string;
+  dismissed_by?: string;
+};
+
+/** One run option accepted in extra_args (GET /api/v1/runs/extra-args). */
+export type ExtraArgOption = {
+  flag: string;
+  takes_value: boolean;
+  label: string;
+  help: string;
+  example?: string;
+  choices?: string[];
+  multi?: boolean;
+  path?: boolean;
+  admin_only?: boolean;
+  advanced?: boolean;
 };

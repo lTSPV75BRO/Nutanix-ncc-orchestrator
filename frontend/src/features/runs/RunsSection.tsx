@@ -13,7 +13,7 @@ import {
   StopOutlined,
   ClockCircleOutlined,
 } from "@ant-design/icons";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import { runStatusDisplay } from "../../utils/runStatus";
 import { RUNS_ACTIVE_QUERY_KEY, useRunsActive } from "../../hooks/useRunsActive";
@@ -23,6 +23,7 @@ import { CodeEditor } from "../../components/CodeEditor";
 import { notify } from "../../notify";
 import { useAuth } from "../../auth/AuthContext";
 import { formatDateTime } from "../../utils/datetime";
+import { buildExtraArgs, describeExtraArgs, type RunOptionValues } from "../../utils/runOptions";
 
 const RUN_TOAST_KEY = "ncc-run-active";
 
@@ -30,10 +31,6 @@ type Props = {
   backendConfigPath: string;
   onError: (e: unknown) => void;
 };
-
-function parseExtraArgs(raw: string): string[] {
-  return raw.trim() ? raw.trim().split(/\s+/) : [];
-}
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
@@ -67,6 +64,15 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
   const [runConfigOptions, setRunConfigOptions] = useState<ConfigListItem[]>([]);
   const [runPassword, setRunPassword] = useState("");
   const [extraArgs, setExtraArgs] = useLocalStorageState("runs.extraArgs", "");
+  const [runOptionValues, setRunOptionValues] = useLocalStorageState<RunOptionValues>("runs.options", {});
+  const extraArgOptionsQuery = useQuery({
+    queryKey: ["runs", "extra-args"],
+    queryFn: api.runExtraArgs,
+    staleTime: 10 * 60_000,
+  });
+  const extraArgOptions = useMemo(() => extraArgOptionsQuery.data?.options ?? [], [extraArgOptionsQuery.data]);
+  const setRunOption = (flag: string, value: string | boolean | undefined) =>
+    setRunOptionValues((prev) => ({ ...prev, [flag]: value }));
   const [runs, setRuns] = useState<RunInfo[]>([]);
   const [artifacts, setArtifacts] = useState<ArtifactInfo[]>([]);
   const queryClient = useQueryClient();
@@ -93,7 +99,15 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
 
   const loadRunConfigOptions = async () => {
     try {
-      const [cfgs, pref] = await Promise.all([api.runConfigs(), api.getRunConfigPreference()]);
+      // The per-user preference exists only for local accounts. It used to be
+      // fetched unconditionally inside Promise.all, so on token-only installs
+      // its 404 failed the whole load and the config list stayed empty.
+      const [cfgs, pref] = await Promise.all([
+        api.runConfigs(),
+        me?.is_local
+          ? api.getRunConfigPreference().catch(() => ({ path: undefined }) as { path?: string })
+          : Promise.resolve({ path: undefined } as { path?: string }),
+      ]);
       const items = cfgs.items ?? [];
       setRunConfigOptions(items);
       const fallbackPath = items.find((it) => it.is_active)?.path || backendConfigPath || "";
@@ -105,16 +119,21 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
     }
   };
 
+  const composedExtraArgs = useMemo(
+    () => buildExtraArgs(extraArgOptions, runOptionValues, extraArgs, { restricted: clusterRestricted }),
+    [extraArgOptions, runOptionValues, extraArgs, clusterRestricted],
+  );
+
   const triggerPayload = useMemo(
     () => ({
       config_path: runConfigPath || undefined,
       password: runPassword || undefined,
-      extra_args: parseExtraArgs(extraArgs),
+      extra_args: composedExtraArgs,
       // Only send an explicit cluster subset; an empty list lets the server run
       // the caller's full allowed set (members) or every cluster (admins).
       clusters: clusterRestricted && selectedClusters.length > 0 ? selectedClusters : undefined,
     }),
-    [runConfigPath, runPassword, extraArgs, clusterRestricted, selectedClusters],
+    [runConfigPath, runPassword, composedExtraArgs, clusterRestricted, selectedClusters],
   );
 
   const loadRunActive = async () => {
@@ -620,18 +639,113 @@ export function RunsSection({ backendConfigPath, onError }: Props) {
                 />
               </Col>
             ) : null}
+            {extraArgOptions
+              .filter((o) => !o.advanced)
+              .map((o) => (
+                <Col xs={24} md={o.takes_value ? 12 : 24} key={o.flag}>
+                  {o.takes_value ? (
+                    <>
+                      <label htmlFor={`run-opt-${o.flag}`} style={{ display: "block", marginBottom: 4 }}>
+                        <Typography.Text type="secondary">{o.label}</Typography.Text>
+                      </label>
+                      {o.choices?.length ? (
+                        <Select
+                          id={`run-opt-${o.flag}`}
+                          mode="multiple"
+                          allowClear
+                          style={{ width: "100%" }}
+                          placeholder="Configuration default"
+                          value={String(runOptionValues[o.flag] ?? "")
+                            .split(",")
+                            .map((v) => v.trim())
+                            .filter(Boolean)}
+                          onChange={(v: string[]) => setRunOption(o.flag, v.join(",") || undefined)}
+                          options={o.choices.map((c) => ({ value: c, label: c }))}
+                        />
+                      ) : (
+                        <Input
+                          id={`run-opt-${o.flag}`}
+                          value={String(runOptionValues[o.flag] ?? "")}
+                          onChange={(e) => setRunOption(o.flag, e.target.value)}
+                          placeholder={o.example}
+                          autoComplete="off"
+                        />
+                      )}
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        {o.help}
+                      </Typography.Text>
+                    </>
+                  ) : (
+                    <Space align="start">
+                      <Switch
+                        id={`run-opt-${o.flag}`}
+                        size="small"
+                        checked={runOptionValues[o.flag] === true}
+                        onChange={(checked) => setRunOption(o.flag, checked)}
+                        aria-label={o.label}
+                        aria-describedby={`run-opt-${o.flag}-help`}
+                      />
+                      <label htmlFor={`run-opt-${o.flag}`}>
+                        <Typography.Text>{o.label}</Typography.Text>{" "}
+                        <Typography.Text type="secondary" id={`run-opt-${o.flag}-help`} style={{ fontSize: 12 }}>
+                          {o.help}
+                        </Typography.Text>
+                      </label>
+                    </Space>
+                  )}
+                </Col>
+              ))}
             <Col xs={24}>
-              <label htmlFor="run-extra-args" style={{ display: "block", marginBottom: 4 }}>
-                <Typography.Text type="secondary">Additional flags (optional)</Typography.Text>
-              </label>
-              <Input
-                id="run-extra-args"
-                name="extra-args"
-                value={extraArgs}
-                onChange={(e) => setExtraArgs(e.target.value)}
-                placeholder="e.g. --no-html --output-dir outputfiles"
-                autoComplete="off"
+              <Collapse
+                size="small"
+                items={[
+                  {
+                    key: "advanced",
+                    label: "Advanced options",
+                    children: (
+                      <Row gutter={[12, 12]}>
+                        {extraArgOptions
+                          .filter((o) => o.advanced && o.takes_value && !(o.admin_only && clusterRestricted))
+                          .map((o) => (
+                            <Col xs={24} md={12} key={o.flag}>
+                              <label htmlFor={`run-opt-${o.flag}`} style={{ display: "block", marginBottom: 4 }}>
+                                <Typography.Text type="secondary">{o.label}</Typography.Text>
+                              </label>
+                              <Input
+                                id={`run-opt-${o.flag}`}
+                                value={String(runOptionValues[o.flag] ?? "")}
+                                onChange={(e) => setRunOption(o.flag, e.target.value)}
+                                placeholder={o.example}
+                                autoComplete="off"
+                              />
+                              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                                {o.help}
+                              </Typography.Text>
+                            </Col>
+                          ))}
+                        <Col xs={24}>
+                          <label htmlFor="run-extra-args" style={{ display: "block", marginBottom: 4 }}>
+                            <Typography.Text type="secondary">Additional flags (free text)</Typography.Text>
+                          </label>
+                          <Input
+                            id="run-extra-args"
+                            name="extra-args"
+                            value={extraArgs}
+                            onChange={(e) => setExtraArgs(e.target.value)}
+                            placeholder="Any allowed flag, e.g. --outputs csv,json"
+                            autoComplete="off"
+                          />
+                        </Col>
+                      </Row>
+                    ),
+                  },
+                ]}
               />
+            </Col>
+            <Col xs={24}>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                Run options sent: <Typography.Text code>{describeExtraArgs(composedExtraArgs)}</Typography.Text>
+              </Typography.Text>
             </Col>
           </Row>
           <button type="submit" style={{ display: "none" }} aria-hidden="true" tabIndex={-1} />

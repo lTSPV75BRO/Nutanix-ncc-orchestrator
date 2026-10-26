@@ -2094,3 +2094,359 @@ pre {
   }
 }
 
+
+/* ---- Setup checklist (features/onboarding/SetupChecklist.tsx) ---------- */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.setup-card {
+  margin-bottom: 16px;
+}
+
+.setup-card-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.setup-card-progress .ant-progress {
+  flex: 1;
+  margin: 0;
+}
+
+.setup-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.setup-step {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--control-border);
+  background: color-mix(in srgb, var(--control-bg) 70%, transparent);
+}
+
+.setup-step.is-next {
+  border-color: var(--menu-selected-border);
+  background: var(--menu-selected-bg);
+}
+
+.setup-step-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-top: 1px;
+  font-size: 20px;
+  color: var(--health-ok-dot);
+}
+
+.setup-step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1.5px solid var(--subtitle-text);
+  color: var(--app-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.setup-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.setup-step-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.setup-step.is-done .setup-step-title {
+  color: var(--subtitle-text);
+}
+
+.setup-step-desc,
+.setup-step-detail {
+  font-size: 13px;
+}
+
+.setup-step-detail.is-pending {
+  color: var(--health-warn-color);
+}
+
+.setup-step-action {
+  align-self: center;
+}
+
+@media (max-width: 600px) {
+  .setup-step {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+  .setup-step-action {
+    grid-column: 2;
+    justify-self: start;
+  }
+}
+
+.header-setup-btn.ant-btn {
+  height: 36px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--health-warn-bg);
+  border: 1px solid var(--health-warn-border);
+  color: var(--health-warn-color);
+}
+
+.header-setup-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+@media (max-width: 900px) {
+  .header-setup-label {
+    display: none;
+  }
+}
+
+/* ---- Signed-out screens (components/AuthShell.tsx, LoginPage, ChangePasswordPage) */
+.auth-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr);
+  background: var(--layout-bg);
+  color: var(--app-text);
+}
+
+.auth-brand {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 40px;
+  padding: 56px 48px;
+  background:
+    radial-gradient(circle at 15% 20%, rgba(139, 92, 246, 0.28), transparent 55%),
+    radial-gradient(circle at 85% 85%, rgba(56, 189, 248, 0.2), transparent 55%),
+    var(--header-bg);
+  border-right: 1px solid var(--header-border);
+  overflow: hidden;
+}
+
+.auth-brand-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.auth-brand-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  background: var(--brand-logo-bg);
+  border: 1px solid var(--brand-version-border);
+}
+
+.auth-brand-logo img {
+  width: 30px;
+  height: 30px;
+}
+
+.auth-brand-name {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  background: var(--brand-name-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.auth-brand-tagline {
+  color: var(--subtitle-text);
+  font-size: 14px;
+}
+
+.auth-highlights {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  max-width: 420px;
+}
+
+.auth-highlights li {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.auth-highlight-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  font-size: 17px;
+  color: var(--nav-pill-active-color);
+  background: var(--menu-selected-bg);
+}
+
+.auth-highlight-title {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.auth-highlight-text {
+  display: block;
+  color: var(--subtitle-text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.auth-brand-version.ant-typography {
+  color: var(--subtitle-text);
+  font-size: 12px;
+}
+
+.auth-main {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+}
+
+.auth-panel {
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.auth-heading .auth-title.ant-typography {
+  margin: 0 0 4px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.auth-alerts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.auth-alerts:empty {
+  display: none;
+}
+
+.auth-form .ant-form-item {
+  margin-bottom: 16px;
+}
+
+.auth-form-links {
+  display: flex;
+  justify-content: center;
+  margin-top: 8px;
+}
+
+.auth-capslock {
+  color: var(--health-warn-color);
+}
+
+.auth-first-run {
+  margin-top: 8px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid var(--card-border);
+  background: color-mix(in srgb, var(--control-bg) 75%, transparent);
+}
+
+.auth-first-run-title.ant-typography {
+  margin: 0 0 10px;
+}
+
+.auth-first-run-options {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.auth-first-run-options .auth-collapse {
+  margin-top: 8px;
+}
+
+.auth-where-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+
+@media (max-width: 900px) {
+  .auth-shell {
+    grid-template-columns: 1fr;
+  }
+  .auth-brand {
+    padding: 20px 24px;
+    gap: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--header-border);
+  }
+  .auth-highlights,
+  .auth-brand-version {
+    display: none;
+  }
+  .auth-brand-logo {
+    width: 40px;
+    height: 40px;
+  }
+  .auth-brand-name {
+    font-size: 19px;
+  }
+  .auth-main {
+    align-items: flex-start;
+    padding: 28px 16px 40px;
+  }
+}

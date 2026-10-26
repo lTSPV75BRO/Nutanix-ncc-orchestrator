@@ -205,6 +205,8 @@ func writeUserStoreError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, envelope{Success: false, Error: err.Error(), ErrorCode: "NCC_API_LAST_ADMIN"})
 	case errors.Is(err, errReservedAdminRole), errors.Is(err, errReservedAdminDelete):
 		writeJSON(w, http.StatusConflict, envelope{Success: false, Error: err.Error(), ErrorCode: "NCC_API_RESERVED_ADMIN"})
+	case errors.Is(err, errStoreConflict):
+		writeJSON(w, http.StatusConflict, envelope{Success: false, Error: err.Error(), ErrorCode: "NCC_API_STORE_CONFLICT"})
 	default:
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: err.Error()})
 	}

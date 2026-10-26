@@ -39,7 +39,7 @@ Hints below: **RO** = read-only, **OW** = open-world (contacts clusters/external
 | **replay_reports** | OW | Regenerate HTML/CSV from existing logs (no NCC API; may send notifications). Requires `config_path`. |
 | **list_run_artifacts** | RO | List files in an NCC run output directory (run-summary.json, ncc-run-record.json, regression-summary.json, checks-snapshot.json, drilldown-diff.json, flaky-checks.json, slo-dashboard.json, index.html, per-cluster .log/.html/.csv/.sarif). Optional `output_dir` (default `outputfiles`). |
 | **get_report** | RO | Read the aggregated index.html or a specific cluster report file. Optional `output_dir` (default `outputfiles`), `file` (`index` or a filename like `10.0.0.1.html`). The `file` is confined to `output_dir` (no `../` traversal). For `*.log` files, `KB NNNN` references are turned into markdown links to `portal.nutanix.com/kb/NNNN` for Cursor/IDE. Large reports are truncated for context. |
-| **create_schedule** | — | Create/update scheduler entries via `create-schedule` (`type`, `task_name`, `config`, `command`, `cron`, `every`, `log_path`, `print_only`). |
+| **create_schedule** | — | Create/update scheduler entries via `create-schedule` (`type`, `task_name`, `config`, `command`, `cron`, `every`, `log_path`, `print_only`). A custom `command` installs an arbitrary recurring command line, so it is refused unless the MCP server runs with `NCC_MCP_ALLOW_SCHEDULE_COMMAND=true`. |
 | **list_schedules** | RO | List scheduler entries for a task name (`type`, `task_name`). |
 | **delete_schedule** | D | Remove scheduler entries for a task name (`type`, `task_name`, `print_only`). |
 

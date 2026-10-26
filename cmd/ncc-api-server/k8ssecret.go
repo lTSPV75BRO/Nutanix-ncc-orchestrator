@@ -224,6 +224,57 @@ func (b *k8sSecretBackend) save(data []byte) error {
 	return b.client.patchData(b.name, map[string]*string{b.key: &enc})
 }
 
+// loadVersioned is load plus the Secret's resourceVersion.
+func (b *k8sSecretBackend) loadVersioned() ([]byte, string, error) {
+	sec, found, err := b.client.getSecret(b.name)
+	if err != nil {
+		return nil, "", err
+	}
+	if !found {
+		return nil, "", nil
+	}
+	version := sec.Metadata.ResourceVersion
+	enc, ok := sec.Data[b.key]
+	if !ok || strings.TrimSpace(enc) == "" {
+		return nil, version, nil
+	}
+	raw, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil {
+		return nil, "", fmt.Errorf("decode secret key %q: %w", b.key, err)
+	}
+	return raw, version, nil
+}
+
+// saveVersioned patches the document only if the Secret is still at
+// ifVersion: a resourceVersion in a merge patch is an optimistic-concurrency
+// precondition, and the API server answers 409 Conflict when it is stale.
+func (b *k8sSecretBackend) saveVersioned(data []byte, ifVersion string) (string, error) {
+	enc := base64.StdEncoding.EncodeToString(data)
+	patch := map[string]any{
+		"metadata": map[string]any{"resourceVersion": ifVersion},
+		"data":     map[string]*string{b.key: &enc},
+	}
+	body, err := json.Marshal(patch)
+	if err != nil {
+		return "", err
+	}
+	code, resp, err := b.client.do(http.MethodPatch, b.client.secretPath(b.name), "application/merge-patch+json", body)
+	if err != nil {
+		return "", err
+	}
+	if code == http.StatusConflict {
+		return "", errStoreConflict
+	}
+	if code/100 != 2 {
+		return "", apiError(code, resp)
+	}
+	var sec k8sSecret
+	if err := json.Unmarshal(resp, &sec); err != nil {
+		return "", nil // saved; the next load picks up the version
+	}
+	return sec.Metadata.ResourceVersion, nil
+}
+
 func (b *k8sSecretBackend) setInitialPassword(username, password string) (string, error) {
 	enc := base64.StdEncoding.EncodeToString([]byte(password))
 	if err := b.client.patchData(b.name, map[string]*string{initialPasswordSecretKey: &enc}); err != nil {

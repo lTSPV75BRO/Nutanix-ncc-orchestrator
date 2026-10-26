@@ -1,6 +1,7 @@
 package main
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -135,6 +136,11 @@ func TestSystemdSupervisorUnit(t *testing.T) {
 }
 
 func TestSystemdApplyUpdateWatcherUnits(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// systemd units are generated only on Linux; the unit builder uses
+		// filepath.Join, which yields backslashes on Windows.
+		t.Skip("systemd units are Linux-only")
+	}
 	o := installServiceOptions{
 		InstallDir:      "/root/test",
 		ServiceName:     "ncc-orchestrator",

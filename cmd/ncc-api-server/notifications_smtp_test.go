@@ -38,3 +38,11 @@ func TestBase64MIMEBodyRoundTripsAndWraps(t *testing.T) {
 		t.Fatalf("round trip failed: err=%v", err)
 	}
 }
+
+// Regression: an unparsable webhook URL left http.NewRequest's request nil
+// and sendWebhookJSON dereferenced it (a panic in the notification path).
+func TestSendWebhookJSONRejectsMalformedURL(t *testing.T) {
+	if err := sendWebhookJSON("http://[::1", map[string]interface{}{"x": 1}); err == nil {
+		t.Fatal("expected an error for a malformed webhook URL")
+	}
+}

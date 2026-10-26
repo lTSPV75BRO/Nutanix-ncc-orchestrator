@@ -4,9 +4,146 @@ All notable changes to the Nutanix NCC Orchestrator are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-**Release checklist (for maintainers):** Ensure [`VERSION`](VERSION) matches the intended tag; default `main.Version` in code is `2.2.1` when not set via ldflags. Run `go vet ./...`, `go test -race ./...`, and `go build ./...` (and `go build ./cmd/ncc-mcp-server`). Confirm `k8s/` and `helm/` image tags match `VERSION`. Tag `v2.2.1` and create a GitHub release using the matching `RELEASE_NOTES_v*.md`; attach `ncc-orchestrator-*` standalone binaries, `ncc-v2-stack-*` archives, and `checksums.txt` only — **do not** attach standalone `ncc-api-server-*` / `ncc-ui-server-*` binaries (the v1.x self-updater would silently mis-select them; see [2.0.0] known-issue note below and the v2.0.1 selector fix).
+**Release checklist (for maintainers):** Ensure [`VERSION`](VERSION) matches the intended tag; default `main.Version` in code is `2.3.0` when not set via ldflags. Run `go vet ./...`, `go test -race ./...`, and `go build ./...` (and `go build ./cmd/ncc-mcp-server`). Confirm `k8s/` and `helm/` image tags match `VERSION`. Tag `v2.3.0` and create a GitHub release using the matching `RELEASE_NOTES_v*.md`; attach `ncc-orchestrator-*` standalone binaries, `ncc-v2-stack-*` archives, and `checksums.txt` only — **do not** attach standalone `ncc-api-server-*` / `ncc-ui-server-*` binaries (the v1.x self-updater would silently mis-select them; see [2.0.0] known-issue note below and the v2.0.1 selector fix).
 
 ---
+
+## [2.3.0] - Unreleased (date set when the v2.3.0 tag is published)
+
+Setup checklist, redesigned sign-in, HA-safe user store, transactional restore,
+Windows fixes, and security hardening from a full application audit. Release
+notes: [`RELEASE_NOTES_v2.3.0.md`](RELEASE_NOTES_v2.3.0.md). Findings and
+evidence: [`docs/audit/`](docs/audit/executive-summary.md).
+
+### Security
+
+- **Deleting a local account now ends its sessions.** A deleted user's
+  JWT/HMAC session kept working with its original role until expiry (up to
+  24 h), because a subject missing from the store looked like an SSO user.
+  Deleted accounts leave a tombstone (`deleted_accounts` in the user store,
+  shared by all replicas); sessions issued before the deletion are rejected,
+  and re-creating the name continues the token generation instead of
+  restarting at 0 (which revived the old account's tokens).
+- **The anonymous admin self-reset is now off by default.** Any network
+  client could use the login page's forgot-password form for `admin` to rotate
+  the admin password and end every admin session, once a minute per source IP.
+  A request for `admin` is now queued like any other account's and changes
+  nothing. Re-enable the old behaviour with `--allow-admin-self-reset` (or
+  `NCC_ALLOW_ADMIN_SELF_RESET=true`).
+
+### Added
+
+- **Setup checklist replaces the first-time setup modal.** The old modal kept
+  its progress in each browser (so every new browser saw "New install
+  detected"), showed to viewers who cannot open Settings, used manual "mark as
+  done" boxes, and its restore auto-skip looked for the wrong audit action. The
+  checklist (`GET/PUT /api/v1/onboarding`) is derived on the server from the
+  install's real state: clusters configured (sample values do not count), a
+  run that reached at least one cluster, a recurring schedule, scheduled
+  backups, plus optional notifications and team access. It ticks itself off,
+  shows as a Dashboard card and a "Setup n/m" header button with a drawer, and
+  an admin's "hide" applies to everyone.
+- **Redesigned sign-in and first-password screens** (shared two-pane layout,
+  responsive). Directory-only (AD/LDAP) installs now get the sign-in form (it
+  was hidden without local accounts); Caps Lock warning; lockouts shown as a
+  warning; a notice after sign-out or when a session ends; clearer first-run
+  guidance with a copyable Kubernetes command.
+- **Run options builder:** `GET /api/v1/runs/extra-args` publishes the allowed
+  run flags with labels and allowed values (generated from the server
+  allowlist); the Runs page shows them as controls with a preview of what will
+  be sent. Values outside a flag's choices (e.g. `--outputs pdf`) are rejected
+  up front.
+- **Readiness endpoint** `GET /api/v1/health/ready` (public, check names only):
+  user store readable, runner binary executable, output directory writable.
+  Kubernetes/Helm readiness probes use it; liveness stays on `/api/v1/health`.
+- **Request IDs:** every API response carries `X-Request-ID` (the UI server
+  mints one per request); it is recorded in audit entries, returned as
+  `request_id` in error bodies, and shown in UI error toasts.
+- **HTTP metrics:** `ncc_http_requests_total{route,method,code}` and
+  `ncc_http_request_duration_seconds{route}` on `/metrics`, with bounded route
+  labels.
+
+### Upgrade notes
+
+- A locked-out sole admin recovers on the host with
+  `ncc-orchestrator v2-reset-password --user admin` (or
+  `ncc-api-server --reset-admin`; on Kubernetes, run it in the API pod), unless
+  the server runs with `--allow-admin-self-reset`.
+- Run-trigger `--prom-dir` values are confined under the repo root.
+- MCP server: Prism passwords are passed via `NCC_PASSWORD` only, no longer
+  also as `--password` on the command line (visible in the process list);
+  `create_schedule` refuses a custom `command` unless
+  `NCC_MCP_ALLOW_SCHEDULE_COMMAND=true`.
+- Runner email: subject/From/To header values are flattened and encoded, so
+  CR/LF in templated run data can no longer inject headers.
+
+### Fixed
+
+- **Windows: process liveness always reported "dead".** `Process.Signal(0)` is
+  unsupported on Windows, so restore could overwrite a running stack, a second
+  supervisor could start, `v2-stop` always waited the full timeout and then
+  force-killed, and the api-server deleted the heartbeat of every running
+  scheduled run (hidden from Active Runs). Windows now queries the process
+  object (`internal/procutil`) and matches stale pid files by executable name.
+- **Windows: the file secrets provider rejected every secrets file** ("permissions
+  are too open (0666)"): Windows has no POSIX mode bits.
+- **Run extra args:** the allowlist contained flags the runner does not have
+  (`--no-html`, `--output-dir`, `--log-dir`, `--cluster-file`, `--compare-with`,
+  `--maintenance-window`) and valueless entries for flags that take a value, so
+  runs were accepted and then failed with "unknown flag" — including the
+  samples shown in the Runs page, API Explorer and OpenAPI. The allowlist now
+  matches the runner (`--clusters`, `--prom-dir`, `--outputs`,
+  `--severity-filter`, `--quiet-hours`, `--maintenance-windows`, `--dry-run`);
+  retired names return 400 with a hint.
+- **Long operations were cut off.** Preflight (120 s), backup create/verify/
+  download, support bundle (2 min) and restores (3 min, 50 MiB upload) ran
+  past the 15 s read / 60 s write server timeouts and the UI's 30 s client
+  timeout, so the UI reported failures for work still running. These requests
+  now get per-request deadlines in the api-server and UI proxy, and matching
+  client timeouts.
+- **SMTP had no timeouts** (api-server and runner): a stalled relay hung the
+  test-notification request and the run's notification stage indefinitely.
+  Sends now run under a 30 s deadline. The runner no longer attempts an empty
+  AUTH against unauthenticated relays.
+- A malformed webhook URL could panic the api-server notification path.
+- **Graceful shutdown:** the api and UI servers now drain in-flight requests
+  (up to 20 s) on SIGTERM/SIGINT instead of cutting them off during rolling
+  updates, `systemctl stop` and `v2-stop`.
+- Dashboard: with no completed checks the health pill showed a red "0.0%"
+  (read as "everything failed"); it now shows a neutral "—" with an accessible
+  "no completed checks yet" label.
+- First-time setup: step titles ("Connection", "Configuration") broke
+  mid-word in the 760 px modal; titles now sit under the step icons.
+- **User-store changes could be lost across API replicas.** Each replica saved
+  its cached copy of the whole document, so a write on one replica (even a
+  PAT last-used update) could undo a deletion, demotion, token revocation, or
+  "sign out everywhere" made on another within seconds. Every change now
+  reloads the stored document first (under a file lock for the file store),
+  and the Kubernetes Secret store saves with a `resourceVersion` precondition;
+  a concurrent conflict returns `409 NCC_API_STORE_CONFLICT` instead of
+  losing data.
+- **Restore is transactional.** Files are staged and swapped in with the
+  previous versions kept aside; a failure part-way (size cap, disk full,
+  locked file) rolls everything back, including `frontend-dist`, which used to
+  be deleted up front.
+- **Restoring from the sign-in or first-password screen could not use the
+  default encrypted backups**: the file picker hid `.tar.gz.enc` and there was
+  no passphrase field. Both screens now share one restore dialog that accepts
+  encrypted backups and a passphrase.
+- Runs page on token-only installs: the per-user config preference request
+  404'd inside the same `Promise.all` as the config list, so the list stayed
+  empty and an error was shown.
+- A validly signed session with an unknown or empty role was treated as
+  admin; it is now rejected.
+- The UI server no longer routes its API traffic (which carries the admin
+  token in token mode) through `HTTP(S)_PROXY`.
+- Golden-report tests failed on CRLF (Windows) checkouts; fixtures are now
+  pinned to LF. Several tests assumed POSIX paths.
+
+### CI
+
+- Windows `go vet` + `go test` job; advisory full `npm audit`; Dependabot for
+  Go modules, npm and GitHub Actions.
 
 ## [2.2.1] - Unreleased (date set when the v2.2.1 tag is published)
 

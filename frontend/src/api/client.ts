@@ -58,6 +58,8 @@ import type {
   NCCDispositionInput,
   FeatureFlags,
   ComponentsData,
+  OnboardingStatus,
+  ExtraArgOption,
 } from "./types";
 
 // ApiError preserves both the human-readable message and the structured `data`
@@ -67,11 +69,14 @@ import type {
 export class ApiError extends Error {
   status: number;
   data: unknown;
-  constructor(message: string, status: number, data: unknown) {
+  /** Server-assigned X-Request-ID, when the API returned one. */
+  requestId?: string;
+  constructor(message: string, status: number, data: unknown, requestId?: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.data = data;
+    this.requestId = requestId || undefined;
   }
 }
 
@@ -218,7 +223,12 @@ async function requestJSON<T>(path: string, init?: RequestInit, timeoutMs = 30_0
   }
   const payload = (await response.json().catch(() => ({}))) as Envelope<T>;
   if (!response.ok || !payload.success) {
-    throw new ApiError(payload.error ?? response.statusText, response.status, payload.data);
+    throw new ApiError(
+      payload.error ?? response.statusText,
+      response.status,
+      payload.data,
+      payload.request_id ?? response.headers.get("x-request-id") ?? undefined,
+    );
   }
   return payload;
 }
@@ -230,9 +240,19 @@ async function callApi<T>(path: string, init?: RequestInit, timeoutMs = 30_000):
 
 // callApiEnvelope is like callApi but returns the full envelope so callers can
 // read the server-provided `message` (e.g. the admin self-reset guidance).
-async function callApiEnvelope<T>(path: string, init?: RequestInit): Promise<Envelope<T>> {
-  return requestJSON<T>(path, init);
+async function callApiEnvelope<T>(path: string, init?: RequestInit, timeoutMs = 30_000): Promise<Envelope<T>> {
+  return requestJSON<T>(path, init, timeoutMs);
 }
+
+// Client timeouts for calls the API server lets run past the 30s default
+// (preflight 120s; backup create/verify and support bundle 2m; restore 3m),
+// each with slack for the response. With the default the UI reported "did
+// not answer in time" while the operation was still running server-side.
+export const LONG_CALL_TIMEOUT_MS = {
+  preflight: 150_000,
+  backup: 150_000,
+  restore: 210_000,
+} as const;
 
 function tryParseJSON(raw: string, fallback: unknown): unknown {
   try {
@@ -327,7 +347,11 @@ export const api = {
       body: JSON.stringify({ check_ids: checkIds, verify_after_fix: verifyAfterFix }),
     }),
   createDiagnosticsSupportBundle: () =>
-    callApi<{ path: string }>("/api/v1/health/diagnostics/support-bundle", { method: "POST" }),
+    callApi<{ path: string }>(
+      "/api/v1/health/diagnostics/support-bundle",
+      { method: "POST" },
+      LONG_CALL_TIMEOUT_MS.backup,
+    ),
   runs: (opts?: { limit?: number; source?: "history" | "summary" | "trigger"; since?: string }) => {
     const params = new URLSearchParams();
     if (typeof opts?.limit === "number" && opts.limit > 0) params.set("limit", String(opts.limit));
@@ -339,6 +363,7 @@ export const api = {
   runById: (id: string) => callApi<RunByIdData>(`/api/v1/runs/${encodeURIComponent(id)}`),
   runSummary: () => callApi<unknown>("/api/v1/runs/summary"),
   runActive: (signal?: AbortSignal) => callApi<RunActiveData>("/api/v1/runs/active", signal ? { signal } : undefined),
+  runExtraArgs: () => callApi<{ options: ExtraArgOption[] }>("/api/v1/runs/extra-args"),
   getRunConfigPreference: () => callApi<{ path?: string }>("/api/v1/runs/config-preference"),
   updateRunConfigPreference: (path?: string) =>
     callApi<{ path?: string }>("/api/v1/runs/config-preference", {
@@ -351,10 +376,14 @@ export const api = {
       method: "DELETE",
     }),
   runPreflight: (payload: { config_path?: string }) =>
-    callApi<RunPreflightData>("/api/v1/runs/preflight", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }),
+    callApi<RunPreflightData>(
+      "/api/v1/runs/preflight",
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+      LONG_CALL_TIMEOUT_MS.preflight,
+    ),
   runTrigger: (payload: {
     config_path?: string;
     password?: string;
@@ -550,17 +579,25 @@ export const api = {
     ),
   createBackup: (passphrase?: string) => {
     const pass = (passphrase ?? "").trim();
-    return callApiEnvelope<{ backup: BackupEntry }>("/api/v1/settings/backups", {
-      method: "POST",
-      ...(pass ? { body: JSON.stringify({ passphrase: pass }) } : {}),
-    });
+    return callApiEnvelope<{ backup: BackupEntry }>(
+      "/api/v1/settings/backups",
+      {
+        method: "POST",
+        ...(pass ? { body: JSON.stringify({ passphrase: pass }) } : {}),
+      },
+      LONG_CALL_TIMEOUT_MS.backup,
+    );
   },
   restoreNamedBackup: (name: string, passphrase?: string) => {
     const pass = (passphrase ?? "").trim();
-    return callApiEnvelope<{ restarting?: boolean }>("/api/v1/settings/backups/restore", {
-      method: "POST",
-      body: JSON.stringify(pass ? { name, passphrase: pass } : { name }),
-    });
+    return callApiEnvelope<{ restarting?: boolean }>(
+      "/api/v1/settings/backups/restore",
+      {
+        method: "POST",
+        body: JSON.stringify(pass ? { name, passphrase: pass } : { name }),
+      },
+      LONG_CALL_TIMEOUT_MS.restore,
+    );
   },
   getNotifications: () => callApi<NotificationState>("/api/v1/settings/notifications"),
   updateNotifications: (state: NotificationState) =>
@@ -587,10 +624,14 @@ export const api = {
     }),
   verifyNamedBackup: (name: string, passphrase?: string) => {
     const pass = (passphrase ?? "").trim();
-    return callApiEnvelope<{ output?: string }>("/api/v1/settings/backups/verify", {
-      method: "POST",
-      body: JSON.stringify(pass ? { name, passphrase: pass } : { name }),
-    });
+    return callApiEnvelope<{ output?: string }>(
+      "/api/v1/settings/backups/verify",
+      {
+        method: "POST",
+        body: JSON.stringify(pass ? { name, passphrase: pass } : { name }),
+      },
+      LONG_CALL_TIMEOUT_MS.backup,
+    );
   },
   deleteBackup: (name: string) =>
     callApi<unknown>("/api/v1/settings/backups/delete", {
@@ -610,6 +651,9 @@ export const api = {
     return { blob: await response.blob(), filename: name };
   },
   featureFlags: () => callApi<FeatureFlags>("/api/v1/features"),
+  onboarding: () => callApi<OnboardingStatus>("/api/v1/onboarding"),
+  setOnboardingDismissed: (dismissed: boolean) =>
+    callApi<OnboardingStatus>("/api/v1/onboarding", { method: "PUT", body: JSON.stringify({ dismissed }) }),
   updateFeatureFlags: (patch: Partial<FeatureFlags>) =>
     callApi<FeatureFlags>("/api/v1/features", {
       method: "PUT",

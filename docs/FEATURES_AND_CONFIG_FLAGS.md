@@ -468,16 +468,22 @@ A caller's role can come from a static token or an interactive login:
   next login. End users can request a reset from the login page's **Forgot
   password?** link (public `POST /api/v1/auth/forgot-password`, always a generic
   200, no account enumeration); admins resolve the queue from Settings → Access
-  (`GET`/`DELETE /api/v1/settings/password-resets[/<name>]`). **Admin lockout
-  self-recovery:** if the forgot-password username is the built-in `admin`, the
-  server skips the queue and self-resets it exactly like first-run setup — a
-  fresh random password is generated, a change is forced at next login, existing
+  (`GET`/`DELETE /api/v1/settings/password-resets[/<name>]`). A request for the
+  built-in `admin` is queued like any other account. **Admin lockout recovery**
+  is the offline `ncc-orchestrator v2-reset-password --user admin` (or
+  `ncc-api-server --reset-admin`) on the host. **Optional login-screen
+  self-recovery (off by default):** with `--allow-admin-self-reset` (or
+  `NCC_ALLOW_ADMIN_SELF_RESET=true`), a forgot-password request for `admin`
+  skips the queue and self-resets it exactly like first-run setup — a fresh
+  random password is generated, a change is forced at next login, existing
   admin sessions are invalidated, and the new password is written only to the
   `.ncc-initial-admin-password` file (the server log names that file but never
-  contains the password, and it is never returned over the network), so a locked-out operator can recover even when no other admin
-  exists. This matches the offline `v2-reset-password --user admin` outcome but
-  is reachable from the login screen. A short per-IP cooldown (60s, returning
-  `429 NCC_API_RATE_LIMITED`) blunts repeated force-rotation. The authenticated
+  contains the password, and it is never returned over the network). A short
+  per-IP cooldown (60s, returning `429 NCC_API_RATE_LIMITED`) blunts repeated
+  force-rotation. It is off by default because any network client could then
+  rotate the admin password (and end every admin session) once a minute per
+  source IP, while reading the new password needs the same host access the
+  offline command does. The authenticated
   **Settings → Access → Reset password** dialog mirrors the same behaviour for
   the `admin` row — it offers **Generate & reset** (random password, shown once
   and copyable) instead of asking the admin to type one (`PUT

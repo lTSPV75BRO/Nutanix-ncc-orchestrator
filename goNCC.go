@@ -44,6 +44,7 @@ import (
 	"goncc/internal/model"
 	"goncc/internal/nccparse"
 	"goncc/internal/notify"
+	"goncc/internal/procutil"
 	"goncc/internal/promtext"
 	"goncc/internal/retryutil"
 	"goncc/internal/runtimecaps"
@@ -562,7 +563,11 @@ func validateSecretsFileHardening(path string) error {
 	if st.Size() > maxSecretsFileBytes {
 		return fmt.Errorf("secrets-file exceeds max size (%d bytes)", maxSecretsFileBytes)
 	}
-	if st.Mode().Perm()&0o077 != 0 {
+	// Windows has no POSIX mode bits: Go reports every writable file as 0666,
+	// so this check rejected every secrets file there and the file provider
+	// was unusable. Access is governed by NTFS ACLs (see checkSecretsPerms,
+	// which likewise skips Windows).
+	if runtime.GOOS != "windows" && st.Mode().Perm()&0o077 != 0 {
 		return fmt.Errorf("secrets-file permissions are too open (%#o); expected owner-only (e.g. 0600)", st.Mode().Perm())
 	}
 	return nil
@@ -7402,7 +7407,7 @@ var (
 func init() {
 	// Defaults
 	if Version == "" {
-		Version = "2.2.1"
+		Version = "2.3.0"
 	}
 	if BuildDate == "" {
 		BuildDate = "unknown"
@@ -8918,24 +8923,20 @@ func runV2Status(opts v2StatusOptions) error {
 
 // processIsAlive returns true when a process with the given pid exists
 // and signal 0 reports "yes" (not "no such process" / EPERM-on-others).
-// Cross-platform: on Windows os.FindProcess always succeeds and Signal
-// is unsupported, so we fall back to a stat under /proc on linux/darwin
-// and assume alive on Windows (the readPIDFromFile path already
-// validated the file is fresh enough for our purposes).
+// On Windows, Process.Signal supports only Kill, so a signal-0 probe there
+// reported every live process as dead (restore could overwrite a running
+// stack, a second supervisor could start); procutil queries the process
+// object instead.
 func processIsAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
+	if runtime.GOOS == "windows" {
+		return procutil.Exists(pid)
+	}
 	p, err := os.FindProcess(pid)
 	if err != nil {
 		return false
-	}
-	if runtime.GOOS == "windows" {
-		// FindProcess on Windows returns a handle even for dead PIDs,
-		// so probe via Wait with a 0-timeout fallback. The simplest
-		// robust check is signal 0 emulation:
-		err := p.Signal(syscall.Signal(0))
-		return err == nil
 	}
 	if err := p.Signal(syscall.Signal(0)); err != nil {
 		return false
@@ -9890,16 +9891,42 @@ func runV2Restore(opts v2RestoreOptions) error {
 			break
 		}
 	}
-	// A versioned snapshot must replace the live frontend, not merge with it —
-	// leftover chunks from a newer UI would mix with the restored index.
+	// Pass 2 is transactional: each file is written to a staged sibling and
+	// swapped in through an installTxn, which moves the previous file aside.
+	// Any failure (size cap on a later file, disk full, a locked file) rolls
+	// every replaced file back, so a failed restore leaves the install exactly
+	// as it was instead of a mix of old and restored files. Before this, files
+	// were overwritten in place one by one and frontend-dist was deleted up
+	// front, with no way back.
+	txn := newInstallTxn()
+	committed := false
+	defer func() {
+		if !committed {
+			if notRestored := txn.rollback(); len(notRestored) > 0 {
+				fmt.Fprintf(os.Stderr, "restore rollback could not restore: %s\n", strings.Join(notRestored, ", "))
+			}
+		}
+	}()
+
+	// A versioned snapshot must replace the live frontend, not merge with it:
+	// leftover chunks from a newer UI would mix with the restored index. The
+	// old directory is moved aside (not deleted) so a rollback can bring it back.
 	if includesStack {
-		if err := os.RemoveAll(filepath.Join(installDir, "frontend-dist")); err != nil {
-			return fmt.Errorf("replace frontend-dist: %w", err)
+		frontDir := filepath.Join(installDir, "frontend-dist")
+		if _, err := os.Lstat(frontDir); err == nil {
+			empty := frontDir + ".ncc-restore-stage-" + txn.stamp
+			if err := os.MkdirAll(empty, 0o755); err != nil {
+				return fmt.Errorf("replace frontend-dist: %w", err)
+			}
+			if err := txn.replace(empty, frontDir); err != nil {
+				_ = os.RemoveAll(empty)
+				return fmt.Errorf("replace frontend-dist: %w", err)
+			}
 		}
 	}
 
-	// Pass 2: stream each data/ file body straight to disk, enforcing a
-	// per-file and a cumulative size cap.
+	// Stream each data/ file body to its staged path, enforcing a per-file
+	// and a cumulative size cap.
 	modeByRel := make(map[string]int64, len(files))
 	for _, p := range files {
 		modeByRel[p.rel] = p.mode
@@ -9950,39 +9977,47 @@ func runV2Restore(opts v2RestoreOptions) error {
 			if stackBinaryRel(clean) {
 				mode |= 0o111
 			}
-			out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+			staged := dst + ".ncc-restore-stage-" + txn.stamp
+			out, err := os.OpenFile(staged, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 			if err != nil {
 				return fmt.Errorf("write %s: %w", dst, err)
 			}
 			// +1 so an oversize file is detected (n > cap) rather than silently
 			// truncated to the cap.
-			n, err := io.Copy(out, io.LimitReader(tr, maxBackupFileBytes+1))
+			n, copyErr := io.Copy(out, io.LimitReader(tr, maxBackupFileBytes+1))
 			closeErr := out.Close()
-			if err != nil {
-				return fmt.Errorf("write %s: %w", dst, err)
+			var fail error
+			switch {
+			case copyErr != nil:
+				fail = fmt.Errorf("write %s: %w", dst, copyErr)
+			case closeErr != nil:
+				fail = fmt.Errorf("write %s: %w", dst, closeErr)
+			case n > maxBackupFileBytes:
+				fail = fmt.Errorf("archive file %q exceeds the per-file limit (%d bytes)", clean, maxBackupFileBytes)
+			case total+n > maxBackupTotalBytes:
+				fail = fmt.Errorf("archive exceeds the total restore size limit (%d bytes)", maxBackupTotalBytes)
 			}
-			if closeErr != nil {
-				return fmt.Errorf("write %s: %w", dst, closeErr)
+			if fail == nil {
+				if err := os.Chmod(staged, mode); err != nil {
+					fail = fmt.Errorf("chmod %s: %w", dst, err)
+				}
 			}
-			// OpenFile on an existing path keeps the old mode; chmod so
-			// restored binaries stay executable.
-			if err := os.Chmod(dst, mode); err != nil {
-				return fmt.Errorf("chmod %s: %w", dst, err)
-			}
-			if n > maxBackupFileBytes {
-				_ = os.Remove(dst)
-				return fmt.Errorf("archive file %q exceeds the per-file limit (%d bytes)", clean, maxBackupFileBytes)
+			if fail != nil {
+				_ = os.Remove(staged)
+				return fail
 			}
 			total += n
-			if total > maxBackupTotalBytes {
-				_ = os.Remove(dst)
-				return fmt.Errorf("archive exceeds the total restore size limit (%d bytes)", maxBackupTotalBytes)
+			if err := txn.replace(staged, dst); err != nil {
+				_ = os.Remove(staged)
+				return err
 			}
 		}
 		return nil
 	}(); err != nil {
-		return err
+		return fmt.Errorf("%w (restore rolled back; the install is unchanged)", err)
 	}
+	txn.commit()
+	committed = true
 
 	fmt.Printf("Restored %d file(s) into %s\n", len(files), installDir)
 	for _, p := range files {
@@ -10889,17 +10924,11 @@ func waitForPIDExit(pid int, timeout time.Duration) bool {
 	if pid <= 0 {
 		return true
 	}
-	if runtime.GOOS == "windows" {
-		time.Sleep(timeout)
-		return false
-	}
+	// Windows used to sleep the whole timeout and report "still running", so
+	// every v2-stop there waited stopTimeout and then force-killed.
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		proc, err := os.FindProcess(pid)
-		if err != nil {
-			return true
-		}
-		if err := proc.Signal(syscall.Signal(0)); err != nil {
+		if !processIsAlive(pid) {
 			return true
 		}
 		time.Sleep(100 * time.Millisecond)

@@ -2,8 +2,10 @@ package main
 
 import (
 	"compress/gzip"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -26,6 +28,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"goncc/internal/graceful"
 	"goncc/internal/selfsigned"
 	"goncc/internal/v2layout"
 )
@@ -274,7 +277,7 @@ func detectBackendLogin(backendURL string, transport *http.Transport) bool {
 // package. Without this match the ui-server would silently keep its
 // in-source defaults (e.g. `stream: dev`) even on a tagged release.
 var (
-	Version     = "2.2.1"
+	Version     = "2.3.0"
 	BuildDate   = "unknown"
 	Stream      = "dev"
 	GoVersion   = "unknown"
@@ -719,7 +722,8 @@ func main() {
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, e error) {
 		// Log the detail (backend address, dial error) server-side only.
-		log.Printf("api proxy error for %s: %v", r.URL.Path, e)
+		log.Printf("api proxy error for %s (request_id=%s): %v", r.URL.Path, r.Header.Get("X-Request-ID"), e)
+		w.Header().Set("X-Request-ID", r.Header.Get("X-Request-ID"))
 		writeAPIError(w, http.StatusBadGateway, "the API server is unreachable; check that ncc-api-server is running", r.TLS != nil, apiCSP)
 	}
 
@@ -756,6 +760,17 @@ func main() {
 		if !strings.HasPrefix(r.URL.Path, "/api/v1/") {
 			writeAPIError(w, http.StatusForbidden, "path not allowed", r.TLS != nil, apiCSP)
 			return
+		}
+		// One ID for the whole hop: the api-server keeps a well-formed
+		// inbound X-Request-ID, so its audit lines and this proxy's error
+		// log share it.
+		if strings.TrimSpace(r.Header.Get("X-Request-ID")) == "" {
+			r.Header.Set("X-Request-ID", newProxyRequestID())
+		}
+		if d, ok := longRunningAPIDeadline(r); ok {
+			rc := http.NewResponseController(w)
+			_ = rc.SetReadDeadline(time.Now().Add(d))
+			_ = rc.SetWriteDeadline(time.Now().Add(d))
 		}
 		proxy.ServeHTTP(w, r)
 	}))
@@ -850,14 +865,45 @@ func main() {
 			log.Fatalf("TLS certificate: %v", err)
 		}
 		log.Printf("TLS enabled: serving HTTPS on %s (HTTP is redirected; certs hot-reload)", listen)
-		if err := serveTLSWithRedirect(srv, listen, rot.get); err != nil {
+		if err := graceful.Serve(srv, func() error { return serveTLSWithRedirect(srv, listen, rot.get) }, graceful.DefaultGrace); err != nil {
 			log.Fatal(err)
 		}
 		return
 	}
-	if err := srv.ListenAndServe(); err != nil {
+	if err := graceful.Serve(srv, srv.ListenAndServe, graceful.DefaultGrace); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// newProxyRequestID returns a random 16-hex-character request ID.
+func newProxyRequestID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return hex.EncodeToString(b)
+}
+
+// longRunningAPIDeadline returns the per-request deadline for proxied API
+// calls that outlast this server's 15s read / 60s write timeouts. The
+// api-server extends its own deadlines for the same calls; without matching
+// values here the proxy still cut the browser off at 60s (or a restore upload
+// at 15s) while the backend kept working. Each value is the api-server's
+// operation timeout plus slack.
+func longRunningAPIDeadline(r *http.Request) (time.Duration, bool) {
+	switch {
+	case r.URL.Path == "/api/v1/settings/restore":
+		return 6 * time.Minute, true
+	case r.URL.Path == "/api/v1/settings/backups/restore":
+		return 4 * time.Minute, true
+	case r.URL.Path == "/api/v1/runs/preflight",
+		r.URL.Path == "/api/v1/settings/backups/verify",
+		r.URL.Path == "/api/v1/settings/backup",
+		r.URL.Path == "/api/v1/health/diagnostics/support-bundle",
+		r.URL.Path == "/api/v1/settings/backups" && r.Method == http.MethodPost:
+		return 3 * time.Minute, true
+	}
+	return 0, false
 }
 
 // --- HTTP→HTTPS redirect on the TLS port -----------------------------------
@@ -1068,7 +1114,11 @@ func buildBackendTransport(caFile, certFile, keyFile string, skipVerify bool) (*
 		tlsCfg.Certificates = []tls.Certificate{cert}
 	}
 	return &http.Transport{
-		Proxy:               http.ProxyFromEnvironment,
+		// Never route UI→API traffic through HTTP(S)_PROXY: the backend is
+		// always internal, and in token-injection mode every request carries
+		// the admin token, which a corporate proxy env var (common in
+		// Kubernetes pods) would otherwise receive — in clear for http://.
+		Proxy:               nil,
 		TLSClientConfig:     tlsCfg,
 		ForceAttemptHTTP2:   true,
 		MaxIdleConns:        50,

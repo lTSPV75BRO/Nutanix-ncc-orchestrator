@@ -205,6 +205,25 @@ func decodeJSON(r io.Reader, out interface{}) error {
 	return nil
 }
 
+// longOperationGrace is added on top of a handler's own orchestrator timeout
+// so the response (including an error) still reaches the client.
+const longOperationGrace = 30 * time.Second
+
+// extendDeadlines lifts the server-wide --read-timeout/--write-timeout (15s /
+// 60s by default) for one request whose work legitimately runs longer: the
+// preflight check (120s), backup create/verify/download and support bundle
+// (2m), and restores (3m, plus a 50 MiB upload). Without it the connection
+// was cut at 60s while the orchestrator child kept running, so the UI showed
+// a network error for an operation that later succeeded (or a restore whose
+// upload took over 15s never arrived). Errors are ignored: if the writer
+// cannot set deadlines the server-wide timeouts simply stay in force.
+func extendDeadlines(w http.ResponseWriter, d time.Duration) {
+	rc := http.NewResponseController(w)
+	deadline := time.Now().Add(d + longOperationGrace)
+	_ = rc.SetReadDeadline(deadline)
+	_ = rc.SetWriteDeadline(deadline)
+}
+
 func requireJSONContentType(r *http.Request) error {
 	ct := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
 	if ct == "" {
@@ -467,22 +486,109 @@ func validateScheduleInput(st scheduleState) error {
 	return nil
 }
 
+// extraArgsAllowed lists the run flags API callers may pass through, mapped
+// to whether the flag takes a value. Every entry must exist on the runner's
+// root command: the previous list carried names the runner never had
+// (--no-html, --output-dir, --log-dir, --cluster-file, --compare-with,
+// --maintenance-window) and valueless entries for flags that need a value
+// (--quiet-hours, --gen-test-agg), so the run was accepted and then exited
+// with "unknown flag" — including for the samples the UI and OpenAPI showed.
+//
+// extraArgSpecs is the single source of truth: the allowlist, the path
+// confinement set, and GET /api/v1/runs/extra-args (which the Runs page turns
+// into form controls) are all derived from it.
+type extraArgSpec struct {
+	Flag       string   `json:"flag"`
+	TakesValue bool     `json:"takes_value"`
+	Label      string   `json:"label"`
+	Help       string   `json:"help"`
+	Example    string   `json:"example,omitempty"`
+	Choices    []string `json:"choices,omitempty"`    // allowed comma-separated values
+	Multi      bool     `json:"multi,omitempty"`      // value is a comma-separated subset of Choices
+	Path       bool     `json:"path,omitempty"`       // confined under the repo root
+	AdminOnly  bool     `json:"admin_only,omitempty"` // cluster-group members cannot use it
+	Advanced   bool     `json:"advanced,omitempty"`   // shown under "Advanced" in the UI
+}
+
+var extraArgSpecs = []extraArgSpec{
+	{Flag: "--outputs", TakesValue: true, Label: "Report formats", Help: "Per-cluster files to write. Leave out html to skip the HTML reports.", Example: "csv,json", Choices: []string{"html", "csv", "json", "markdown", "sarif"}, Multi: true},
+	{Flag: "--severity-filter", TakesValue: true, Label: "Severities", Help: "Only include these severities in reports (all when empty).", Example: "FAIL,WARN", Choices: []string{"FAIL", "WARN", "ERR", "INFO"}, Multi: true},
+	{Flag: "--dry-run", Label: "Dry run", Help: "Validate the configuration and connectivity without running NCC checks."},
+	{Flag: "--quiet-hours", TakesValue: true, Label: "Quiet hours", Help: "Suppress notifications for this run during local quiet hours.", Example: "22:00-06:00", Advanced: true},
+	{Flag: "--maintenance-windows", TakesValue: true, Label: "Maintenance windows", Help: "Suppress notifications during RFC3339 windows (start/end, comma-separated).", Example: "2026-11-01T00:00:00Z/2026-11-01T04:00:00Z", Advanced: true},
+	{Flag: "--clusters", TakesValue: true, Label: "Clusters", Help: "Run only these clusters (comma-separated). Members of cluster groups pick clusters from their groups instead.", Example: "10.0.0.1,10.0.0.2", AdminOnly: true, Advanced: true},
+	{Flag: "--prom-dir", TakesValue: true, Label: "Prometheus directory", Help: "Directory for Prometheus textfile metrics, relative to the install directory.", Example: "outputfiles/prom", Path: true, Advanced: true},
+}
+
+// extraArgsAllowed maps each allowed flag to whether it takes a value.
+var extraArgsAllowed = func() map[string]bool {
+	m := make(map[string]bool, len(extraArgSpecs))
+	for _, s := range extraArgSpecs {
+		m[s.Flag] = s.TakesValue
+	}
+	return m
+}()
+
+// extraArgsPathValued are allowlisted flags whose value is a filesystem path;
+// the trigger handler confines them under the repo root.
+var extraArgsPathValued = func() map[string]bool {
+	m := map[string]bool{}
+	for _, s := range extraArgSpecs {
+		if s.Path {
+			m[s.Flag] = true
+		}
+	}
+	return m
+}()
+
+// checkExtraArgChoices rejects values outside a flag's fixed choices (e.g.
+// --outputs pdf), which the runner would otherwise fail on after the run was
+// accepted.
+func checkExtraArgChoices(flag, val string) error {
+	for _, s := range extraArgSpecs {
+		if s.Flag != flag || len(s.Choices) == 0 {
+			continue
+		}
+		allowed := map[string]bool{}
+		for _, c := range s.Choices {
+			allowed[strings.ToLower(c)] = true
+		}
+		for _, part := range strings.Split(val, ",") {
+			if p := strings.ToLower(strings.TrimSpace(part)); p != "" && !allowed[p] {
+				return fmt.Errorf("%s: %q is not one of %s", flag, strings.TrimSpace(part), strings.Join(s.Choices, ", "))
+			}
+		}
+	}
+	return nil
+}
+
+// handleRunExtraArgs serves GET /api/v1/runs/extra-args: the run options
+// API callers may pass in extra_args, with labels and allowed values.
+func (s *apiServer) handleRunExtraArgs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{"options": extraArgSpecs}})
+}
+
+// extraArgsRetired explains the formerly allowlisted names that never worked
+// so API clients get an actionable 400 instead of a failed run.
+var extraArgsRetired = map[string]string{
+	"--no-html":            "use --outputs csv,json to skip per-cluster HTML",
+	"--output-dir":         "per-run output directories are managed by the API server",
+	"--log-dir":            "per-run log directories are managed by the API server",
+	"--cluster-file":       "use --clusters with a comma-separated list",
+	"--compare-with":       "regression comparison against the previous run is automatic",
+	"--maintenance-window": "use --maintenance-windows",
+	"--gen-test-agg":       "use the `ncc-orchestrator gen-test-agg` subcommand",
+}
+
 func sanitizeExtraArgs(args []string) ([]string, error) {
 	if len(args) > maxExtraArgs {
 		return nil, fmt.Errorf("too many extra args: max %d", maxExtraArgs)
 	}
-	allowed := map[string]bool{
-		"--output-dir":         true,
-		"--log-dir":            true,
-		"--cluster-file":       true,
-		"--clusters":           true,
-		"--prom-dir":           true,
-		"--compare-with":       true,
-		"--gen-test-agg":       false,
-		"--no-html":            false,
-		"--quiet-hours":        false,
-		"--maintenance-window": false,
-	}
+	allowed := extraArgsAllowed
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		a := strings.TrimSpace(args[i])
@@ -495,6 +601,9 @@ func sanitizeExtraArgs(args []string) ([]string, error) {
 		if strings.HasPrefix(a, "--") {
 			expectsVal, ok := allowed[a]
 			if !ok {
+				if hint, retired := extraArgsRetired[a]; retired {
+					return nil, fmt.Errorf("extra arg %s is not a runner flag (%s)", a, hint)
+				}
 				return nil, fmt.Errorf("extra arg not allowed: %s", a)
 			}
 			out = append(out, a)
@@ -506,12 +615,35 @@ func sanitizeExtraArgs(args []string) ([]string, error) {
 				if val == "" || strings.ContainsAny(val, "&;|`$><\n\r\t") || !reSafeArg.MatchString(val) {
 					return nil, fmt.Errorf("unsafe value for arg: %s", a)
 				}
+				if err := checkExtraArgChoices(a, val); err != nil {
+					return nil, err
+				}
 				out = append(out, val)
 				i++
 			}
 			continue
 		}
 		return nil, fmt.Errorf("standalone arg values are not allowed: %s", a)
+	}
+	return out, nil
+}
+
+// confineExtraArgPaths rewrites the value of every path-valued extra arg to
+// an absolute path confined under the repo root. reSafeArg admits "/" and
+// "..", so without this an operator could point the runner's writes (e.g.
+// --prom-dir) anywhere the service account can write.
+func (s *apiServer) confineExtraArgPaths(args []string) ([]string, error) {
+	out := append([]string(nil), args...)
+	for i := 0; i+1 < len(out); i++ {
+		if !extraArgsPathValued[out[i]] {
+			continue
+		}
+		abs, err := s.normalizeAndConfinePath(out[i+1])
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", out[i], err)
+		}
+		out[i+1] = abs
+		i++
 	}
 	return out, nil
 }
@@ -758,6 +890,9 @@ func (s *apiServer) audit(r *http.Request, action string, success bool, fields m
 		"method":    r.Method,
 		"client":    cleanClientIP(r),
 		"auth_mode": s.authMode,
+	}
+	if id := requestIDFromContext(r.Context()); id != "" {
+		payload["request_id"] = id
 	}
 	if ua := strings.TrimSpace(r.Header.Get("User-Agent")); ua != "" {
 		if len(ua) > 200 {

@@ -7,8 +7,9 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
+
+	"goncc/internal/procutil"
 )
 
 // This file lets the api-server surface orchestrator runs it did NOT spawn —
@@ -30,25 +31,12 @@ type runHeartbeat struct {
 	Source    string   `json:"source"`
 }
 
-// processAlive reports whether pid refers to a live process. Uses signal 0
-// (no-op probe) on POSIX; a permission error still means the process exists.
+// processAlive reports whether pid refers to a live process; a permission
+// error still means the process exists. The former signal-0 probe always
+// failed on Windows, which deleted the heartbeat of every running scheduled
+// run there and hid it from Active Runs.
 func processAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	err = p.Signal(syscall.Signal(0))
-	return err == nil || err == os.ErrPermission || strings.Contains(strings.ToLower(safeErr(err)), "permission")
-}
-
-func safeErr(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
+	return procutil.Exists(pid)
 }
 
 // processCmdline reads the process command line for pid from /proc. It returns

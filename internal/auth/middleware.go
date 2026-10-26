@@ -62,6 +62,7 @@ type Identity struct {
 	Source   string // header or cookie (drives CSRF in the api-server)
 	Gen      int
 	Groups   []string
+	IssuedAt time.Time // JWT iat; zero for PAT and static-token callers
 }
 
 // UserIDFromContext returns the authenticated user id, or "".
@@ -143,6 +144,10 @@ func Authenticate(r *http.Request, jwtSecret []byte, userStore UserStore, static
 		if err != nil {
 			return nil, err
 		}
+		var iat time.Time
+		if claims.IssuedAt != nil {
+			iat = claims.IssuedAt.Time
+		}
 		return &Identity{
 			UserID:   claims.Subject,
 			Role:     claims.Role,
@@ -150,6 +155,7 @@ func Authenticate(r *http.Request, jwtSecret []byte, userStore UserStore, static
 			Source:   source,
 			Gen:      claims.Gen,
 			Groups:   append([]string(nil), claims.Groups...),
+			IssuedAt: iat,
 		}, nil
 	}
 

@@ -13,7 +13,7 @@ write_files:
   - path: /etc/ncc/ncc-install.env
     permissions: "0600"
     content: |
-      NCC_VERSION="2.2.1"
+      NCC_VERSION="2.3.0"
       NCC_RELEASE_BASE_URL="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download"
       NCC_INSTALL_DIR="/opt/ncc-v2"
       NCC_CONFIG="/opt/ncc-v2/config.yaml"

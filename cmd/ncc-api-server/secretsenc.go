@@ -171,6 +171,36 @@ func (b *encryptingBackend) save(data []byte) error {
 	return b.inner.save(sealed)
 }
 
+// loadVersioned / saveVersioned / lockForWrite pass the inner backend's
+// concurrency control through the encryption layer (version "" and a no-op
+// lock when the inner backend has none).
+func (b *encryptingBackend) loadVersioned() ([]byte, string, error) {
+	data, version, err := backendLoad(b.inner)
+	if err != nil || len(data) == 0 {
+		return data, version, err
+	}
+	if !documentIsEncrypted(data) {
+		return data, version, nil
+	}
+	plain, err := openDocument(b.key, data)
+	return plain, version, err
+}
+
+func (b *encryptingBackend) saveVersioned(data []byte, ifVersion string) (string, error) {
+	sealed, err := sealDocument(b.key, data)
+	if err != nil {
+		return "", fmt.Errorf("encrypt user store: %w", err)
+	}
+	return backendSave(b.inner, sealed, ifVersion)
+}
+
+func (b *encryptingBackend) lockForWrite() (func(), error) {
+	if lb, ok := b.inner.(lockingBackend); ok {
+		return lb.lockForWrite()
+	}
+	return func() {}, nil
+}
+
 func (b *encryptingBackend) setInitialPassword(username, password string) (string, error) {
 	return b.inner.setInitialPassword(username, password)
 }

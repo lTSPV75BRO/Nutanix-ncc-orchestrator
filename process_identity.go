@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"goncc/internal/procutil"
 )
 
 // processIdentityMatches checks whether a live PID is running one of the
@@ -18,7 +20,7 @@ func processIdentityMatches(pid int, expected ...string) (known bool, matches bo
 		return true, false
 	}
 	if runtime.GOOS == "windows" {
-		return false, true
+		return windowsImageIdentity(pid, expected...)
 	}
 	var raw string
 	if runtime.GOOS == "linux" {
@@ -48,6 +50,41 @@ func processIdentityMatches(pid int, expected ...string) (known bool, matches bo
 			if arg == want || filepath.Base(arg) == wantBase {
 				return true, true
 			}
+		}
+	}
+	return true, false
+}
+
+// windowsImageIdentity matches pid's executable name against the expected
+// tokens. Windows has no permission-safe way to read another process's argv,
+// but the image name is enough to tell a stack binary from an unrelated
+// process that reused the pid (Windows recycles pids quickly, so after a
+// reboot a stale run/*.pid usually points at something else). Identities
+// that name a v2 helper loop (v2-api-supervisor, v2-ui-supervisor) run under
+// a shell whose image says nothing, so they stay unknown, as before.
+func windowsImageIdentity(pid int, expected ...string) (known bool, matches bool) {
+	stackBinary := false
+	for _, want := range expected {
+		w := strings.ToLower(strings.TrimSuffix(filepath.Base(strings.TrimSpace(want)), ".exe"))
+		if strings.HasSuffix(w, "-supervisor") {
+			return false, true
+		}
+		if w == "ncc-orchestrator" || w == "ncc-api-server" || w == "ncc-ui-server" {
+			stackBinary = true
+		}
+	}
+	if !stackBinary {
+		return false, true
+	}
+	image, err := procutil.ImagePath(pid)
+	if err != nil || strings.TrimSpace(image) == "" {
+		return false, true
+	}
+	got := strings.ToLower(strings.TrimSuffix(filepath.Base(image), filepath.Ext(image)))
+	for _, want := range expected {
+		w := strings.ToLower(strings.TrimSuffix(filepath.Base(strings.TrimSpace(want)), ".exe"))
+		if w != "" && w == got {
+			return true, true
 		}
 	}
 	return true, false

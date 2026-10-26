@@ -1,109 +1,59 @@
-import { useState } from "react";
-import { Alert, Button, Card, Divider, Form, Input, Modal, Space, Tooltip, Typography, Upload, message } from "antd";
+import { useState, type KeyboardEvent } from "react";
+import { Alert, Button, Collapse, Divider, Form, Input, Modal, Space, Typography } from "antd";
 import {
   CloudUploadOutlined,
   CopyOutlined,
   DownloadOutlined,
-  InfoCircleOutlined,
   LockOutlined,
   LoginOutlined,
-  PauseCircleOutlined,
-  PlayCircleOutlined,
   SafetyCertificateOutlined,
   SafetyOutlined,
-  UploadOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { api, ApiError } from "../api/client";
 import type { PublicTLSInfo } from "../api/types";
-import { useLocalStorageState } from "../hooks/useLocalStorageState";
+import { AuthShell } from "../components/AuthShell";
+import { RestoreBackupDialog } from "../features/backup/RestoreBackupDialog";
+import { notify } from "../notify";
 
-// Poll the backend health endpoint until the restarted stack answers, then
-// reload so the SPA re-bootstraps against the restored deployment.
-async function waitForRestartAndReload() {
-  const deadline = Date.now() + 120_000;
-  await new Promise((r) => setTimeout(r, 4000));
-  while (Date.now() < deadline) {
-    try {
-      const resp = await fetch("/api/v1/health", { cache: "no-store", credentials: "include" });
-      if (resp.ok) break;
-    } catch {
-      // still down — keep waiting
-    }
-    await new Promise((r) => setTimeout(r, 2000));
+const { Title, Text, Paragraph } = Typography;
+
+/** One-shot message for the next login screen (session expired, signed out). */
+export type LoginNotice = { type: "info" | "warning"; text: string };
+
+const LOGIN_NOTICE_KEY = "ncc.login.notice";
+
+/** Leave a notice for the login screen that renders next (survives a reload). */
+export function setLoginNotice(notice: LoginNotice): void {
+  try {
+    window.sessionStorage.setItem(LOGIN_NOTICE_KEY, JSON.stringify(notice));
+  } catch {
+    // storage unavailable — the notice is a nicety
   }
-  window.location.reload();
 }
 
-const { Title, Text } = Typography;
-
-// Animated login backdrop: a few large, blurred gradient orbs that drift
-// slowly behind the sign-in card. Rendered only when the user has the
-// animation enabled (preference persisted in localStorage). Honors
-// prefers-reduced-motion by freezing the orbs in place.
-const LOGIN_BG_CSS = `
-.ncc-login-bg {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  overflow: hidden;
-  pointer-events: none;
+function takeLoginNotice(): LoginNotice | null {
+  try {
+    const raw = window.sessionStorage.getItem(LOGIN_NOTICE_KEY);
+    window.sessionStorage.removeItem(LOGIN_NOTICE_KEY);
+    if (!raw) return null;
+    const n = JSON.parse(raw) as LoginNotice;
+    return n && typeof n.text === "string" ? n : null;
+  } catch {
+    return null;
+  }
 }
-.ncc-login-orb {
-  position: absolute;
-  display: block;
-  border-radius: 50%;
-  filter: blur(70px);
-  opacity: 0.55;
-  will-change: transform;
-}
-.ncc-login-orb-1 {
-  width: 460px; height: 460px;
-  top: -120px; left: -100px;
-  background: radial-gradient(circle at 30% 30%, #4f8cff, #2b5cff 60%, transparent 70%);
-  animation: nccOrbA 18s ease-in-out infinite;
-}
-.ncc-login-orb-2 {
-  width: 520px; height: 520px;
-  bottom: -160px; right: -120px;
-  background: radial-gradient(circle at 70% 70%, #8b5cf6, #d946ef 60%, transparent 72%);
-  animation: nccOrbB 22s ease-in-out infinite;
-}
-.ncc-login-orb-3 {
-  width: 360px; height: 360px;
-  top: 40%; left: 55%;
-  background: radial-gradient(circle at 50% 50%, #22d3ee, #0ea5e9 60%, transparent 72%);
-  animation: nccOrbC 26s ease-in-out infinite;
-}
-@keyframes nccOrbA {
-  0%   { transform: translate(0, 0) scale(1); }
-  50%  { transform: translate(60px, 40px) scale(1.12); }
-  100% { transform: translate(0, 0) scale(1); }
-}
-@keyframes nccOrbB {
-  0%   { transform: translate(0, 0) scale(1); }
-  50%  { transform: translate(-70px, -50px) scale(1.08); }
-  100% { transform: translate(0, 0) scale(1); }
-}
-@keyframes nccOrbC {
-  0%   { transform: translate(0, 0) scale(1); }
-  50%  { transform: translate(-50px, 60px) scale(1.15); }
-  100% { transform: translate(0, 0) scale(1); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .ncc-login-orb { animation: none !important; }
-}
-`;
 
 type LoginPageProps = {
   localEnabled: boolean;
+  /** Active Directory / LDAP sign-in is configured (works without local accounts). */
+  ldapEnabled?: boolean;
   samlEnabled: boolean;
   /** When true, the built-in admin still has its initial bootstrap password. */
   bootstrapPending: boolean;
   onSuccess: () => void;
-  /** Called after a successful admin self-reset so the caller can refresh
-   *  bootstrap_pending and show the retrieval hint immediately. */
+  /** Called after an admin self-reset so the caller can refresh bootstrap state. */
   onBootstrapReset?: () => void;
   /** /auth/me failed — offer Retry so a hung bootstrap is not a dead end. */
   apiUnreachable?: boolean;
@@ -137,64 +87,71 @@ function downloadCertPEM(pem: string) {
 async function copyText(text: string, ok: string) {
   try {
     await navigator.clipboard.writeText(text);
-    message.success(ok);
+    notify.success(ok);
   } catch {
-    message.info(text);
+    notify.info(text);
   }
 }
 
-function TrustCertCard({ tls }: { tls: PublicTLSInfo | undefined }) {
+function TrustCertNotice({ tls }: { tls: PublicTLSInfo | undefined }) {
   if (!tls?.https_enabled && !tls?.cert_pem) return null;
   const fp = tls.fingerprint_sha256;
   const pem = tls.cert_pem;
   return (
-    <Card style={{ width: 380, maxWidth: "100%", position: "relative", zIndex: 1, marginTop: 12 }}>
-      <Space orientation="vertical" size={8} style={{ width: "100%" }}>
-        <Typography.Text strong>
-          <SafetyCertificateOutlined /> Trust this UI certificate
-        </Typography.Text>
-        <Typography.Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
-          Chrome flags the stack-managed self-signed certificate until you download it and trust it
-          (or confirm the fingerprint below). Generate in Settings does not replace this step.
-        </Typography.Paragraph>
-        {fp ? (
-          <div>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              SHA-256 fingerprint
-            </Typography.Text>
-            <Typography.Paragraph
-              code
-              copyable={{ text: fp, tooltips: ["Copy fingerprint", "Copied"] }}
-              style={{ marginBottom: 8, fontSize: 11, wordBreak: "break-all" }}
-            >
-              {fp}
-            </Typography.Paragraph>
-            <Button size="small" icon={<CopyOutlined />} onClick={() => void copyText(fp, "Fingerprint copied")}>
-              Copy fingerprint
-            </Button>
-          </div>
-        ) : (
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {tls.message || "Certificate details are not available yet. Reload after HTTPS finishes starting."}
-          </Typography.Text>
-        )}
-        {pem ? (
-          <Button icon={<DownloadOutlined />} onClick={() => downloadCertPEM(pem)}>
-            Download certificate
-          </Button>
-        ) : null}
-      </Space>
-    </Card>
+    <Collapse
+      className="auth-collapse"
+      size="small"
+      items={[
+        {
+          key: "cert",
+          label: (
+            <span>
+              <SafetyCertificateOutlined /> Browser warns about the certificate?
+            </span>
+          ),
+          children: (
+            <Space orientation="vertical" size={8} style={{ width: "100%" }}>
+              <Text type="secondary" style={{ fontSize: 13 }}>
+                This install uses a self-signed certificate. Download it and trust it in your browser
+                or OS, or compare the fingerprint below with the one your administrator gives you.
+              </Text>
+              {fp ? (
+                <>
+                  <Paragraph code style={{ marginBottom: 0, fontSize: 11, wordBreak: "break-all" }}>
+                    {fp}
+                  </Paragraph>
+                  <Space wrap>
+                    <Button size="small" icon={<CopyOutlined />} onClick={() => void copyText(fp, "Fingerprint copied")}>
+                      Copy fingerprint
+                    </Button>
+                    {pem ? (
+                      <Button size="small" icon={<DownloadOutlined />} onClick={() => downloadCertPEM(pem)}>
+                        Download certificate
+                      </Button>
+                    ) : null}
+                  </Space>
+                </>
+              ) : (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {tls.message || "Certificate details are not available yet. Reload after HTTPS finishes starting."}
+                </Text>
+              )}
+            </Space>
+          ),
+        },
+      ]}
+    />
   );
 }
 
 /**
- * Full-screen login gate shown when the backend has interactive login enabled
- * and the current browser has no authenticated session. Offers local
- * username/password sign-in and/or a "Sign in with SSO" button (SAML).
+ * Full-screen sign-in shown when the backend has interactive login enabled and
+ * this browser has no session. Local and directory (AD/LDAP) accounts share
+ * the username/password form; SAML SSO has its own button.
  */
 export function LoginPage({
   localEnabled,
+  ldapEnabled,
   samlEnabled,
   bootstrapPending,
   onSuccess,
@@ -203,109 +160,48 @@ export function LoginPage({
   onRetryBootstrap,
 }: LoginPageProps) {
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // Animated background preference persists across visits (per browser).
-  const [animateBg, setAnimateBg] = useLocalStorageState<boolean>("ncc.login.animateBg", true);
+  const [error, setError] = useState<{ text: string; throttled: boolean } | null>(null);
+  const [notice] = useState<LoginNotice | null>(() => takeLoginNotice());
+  const [capsLock, setCapsLock] = useState(false);
   const [forgotOpen, setForgotOpen] = useState(false);
   const [forgotSubmitting, setForgotSubmitting] = useState(false);
   const [forgotForm] = Form.useForm<{ username: string }>();
   const [restoreOpen, setRestoreOpen] = useState(false);
-  const [restoreSubmitting, setRestoreSubmitting] = useState(false);
-  const [restoreFile, setRestoreFile] = useState<File | null>(null);
-  const [restoreForm] = Form.useForm<{ username: string; password: string }>();
   const httpInsecure = isNonLocalHTTP();
-  const tlsQuery = useQuery({
-    queryKey: ["tls-public"],
-    queryFn: api.tlsPublic,
-    staleTime: 60_000,
-    retry: 0,
-  });
-  const healthQuery = useQuery({
-    queryKey: ["health"],
-    queryFn: api.health,
-    staleTime: 15_000,
-    retry: 0,
-  });
+  const tlsQuery = useQuery({ queryKey: ["tls-public"], queryFn: api.tlsPublic, staleTime: 60_000, retry: 0 });
+  const healthQuery = useQuery({ queryKey: ["health"], queryFn: api.health, staleTime: 15_000, retry: 0 });
   const cookieSecure = Boolean(healthQuery.data?.cookie_secure);
+  // Before this change the form only appeared with local accounts, so an
+  // install that signs in through Active Directory alone showed no form.
+  const passwordLogin = localEnabled || Boolean(ldapEnabled);
 
-  // First-login restore: authenticate with the bootstrap admin credentials (the
-  // restore endpoint is the one action allowed through the forced-change gate),
-  // upload the archive, then let the orchestrator restart the stack. After the
-  // reload the restored deployment governs: the old admin's stored state decides
-  // whether a password change is still owed, so it behaves exactly as the
-  // original deployment did (a still-pending admin is prompted to reset).
-  const handleRestore = async (values: { username: string; password: string }) => {
-    if (!restoreFile) {
-      message.error("Choose a backup archive (.tar.gz) to restore.");
-      return;
-    }
-    setRestoreSubmitting(true);
-    try {
-      await api.login(values.username.trim(), values.password);
-    } catch (e) {
-      setRestoreSubmitting(false);
-      message.error(
-        e instanceof ApiError
-          ? `Sign-in failed: ${e.message}. Enter the current bootstrap admin password to restore.`
-          : "Sign-in failed. Enter the current bootstrap admin password to restore.",
-      );
-      return;
-    }
-    try {
-      const res = await api.restoreBackup(restoreFile);
-      const data = (res.data ?? {}) as { restarting?: boolean };
-      setRestoreOpen(false);
-      if (data.restarting) {
-        Modal.success({
-          title: "Backup restored — restarting",
-          content:
-            res.message ??
-            "The stack is restarting to load the restored deployment. This page will reconnect automatically — then sign in with the credentials from the restored deployment (you may be prompted to set a password if that deployment still required it).",
-          okText: "OK",
-        });
-        void waitForRestartAndReload();
-      } else {
-        Modal.success({
-          title: "Backup restored",
-          content:
-            res.message ??
-            "Restart the stack (v2-stop then v2-start) for the restored deployment to take effect, then sign in with its credentials.",
-        });
-      }
-    } catch (e) {
-      message.error(e instanceof ApiError ? `Restore failed: ${e.message}` : "Restore failed");
-    } finally {
-      setRestoreSubmitting(false);
-    }
+  const trackCapsLock = (e: KeyboardEvent<HTMLInputElement>) => {
+    setCapsLock(Boolean(e.getModifierState?.("CapsLock")));
   };
 
   const handleForgot = async (values: { username: string }) => {
     setForgotSubmitting(true);
     try {
       const res = await api.forgotPassword(values.username.trim());
-      // For the built-in admin the server self-resets to a fresh random
-      // password (first-run workflow) and returns tailored guidance; for every
-      // other account it stays generic and never reveals whether it exists.
+      // With --allow-admin-self-reset the server self-resets the built-in
+      // admin and returns tailored guidance; otherwise (the default, and for
+      // every other account) the reply is generic and never reveals whether
+      // the account exists.
       if (res.data?.admin_reset) {
-        message.success(
-          res.message ??
-            "A new temporary password for the admin account was generated. Retrieve it from the server logs or the .ncc-initial-admin-password file, then sign in and change it.",
-          8,
-        );
-        // The admin now owes a forced change again — refresh so the login
-        // screen re-shows the "where's the admin password?" retrieval hint.
+        notify.success({
+          message:
+            res.message ??
+            "A new temporary password for the admin account was generated. Retrieve it from the server, then sign in and change it.",
+          duration: 8,
+        });
         onBootstrapReset?.();
       } else {
-        message.success(
-          res.message ??
-            "If that account exists, an administrator has been notified to reset it.",
-        );
+        notify.success(res.message ?? "If that account exists, an administrator has been notified to reset it.");
       }
       setForgotOpen(false);
       forgotForm.resetFields();
     } catch (e) {
-      const msg = e instanceof ApiError ? e.message : "Request failed";
-      message.error(msg);
+      notify.error(e instanceof ApiError ? e.message : "Request failed");
     } finally {
       setForgotSubmitting(false);
     }
@@ -318,68 +214,33 @@ export function LoginPage({
       await api.login(values.username.trim(), values.password);
       onSuccess();
     } catch (e) {
-      const msg = e instanceof ApiError ? e.message : "Login failed";
-      setError(msg);
+      if (e instanceof ApiError) {
+        setError({ text: e.message, throttled: e.status === 429 });
+      } else {
+        setError({ text: "Sign-in failed. Check your connection and try again.", throttled: false });
+      }
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <div
-      style={{
-        position: "relative",
-        minHeight: "100vh",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 24,
-        overflow: "hidden",
-      }}
-    >
-      <style>{LOGIN_BG_CSS}</style>
-      {animateBg ? (
-        <div className="ncc-login-bg" aria-hidden="true">
-          <span className="ncc-login-orb ncc-login-orb-1" />
-          <span className="ncc-login-orb ncc-login-orb-2" />
-          <span className="ncc-login-orb ncc-login-orb-3" />
-        </div>
-      ) : null}
+    <AuthShell>
+      <div className="auth-heading">
+        <Title level={2} className="auth-title">
+          Sign in
+        </Title>
+        <Text type="secondary">Use your NCC Orchestrator{ldapEnabled ? " or directory" : ""} account.</Text>
+      </div>
 
-      <Tooltip title={animateBg ? "Stop background animation" : "Start background animation"}>
-        <Button
-          type="text"
-          size="small"
-          aria-label={animateBg ? "Stop background animation" : "Start background animation"}
-          icon={animateBg ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
-          onClick={() => setAnimateBg((v) => !v)}
-          style={{ position: "absolute", top: 16, right: 16, zIndex: 2 }}
-        >
-          {animateBg ? "Stop animation" : "Animate"}
-        </Button>
-      </Tooltip>
-
-      <Card style={{ width: 380, maxWidth: "100%", position: "relative", zIndex: 1 }}>
-        <div style={{ textAlign: "center", marginBottom: 16 }}>
-          <img src="/logo.svg" alt="" style={{ height: 40, marginBottom: 8 }} />
-          <Title level={4} style={{ marginBottom: 0 }}>
-            NCC Orchestrator
-          </Title>
-          <Text type="secondary">Sign in to continue</Text>
-        </div>
-
-        {error ? (
-          <Alert type="error" showIcon title={error} style={{ marginBottom: 16 }} closable onClose={() => setError(null)} />
-        ) : null}
-
+      <div className="auth-alerts" aria-live="polite">
+        {notice ? <Alert type={notice.type} showIcon title={notice.text} /> : null}
         {apiUnreachable ? (
           <Alert
             type="warning"
             showIcon
-            title="Can't reach the API through this UI"
-            description="Retry bootstrap, or sign in if the API is already back."
-            style={{ marginBottom: 16 }}
+            title="Can't reach the server"
+            description="The API did not answer. It may be restarting — retry in a moment."
             action={
               onRetryBootstrap ? (
                 <Button size="small" onClick={onRetryBootstrap}>
@@ -389,121 +250,145 @@ export function LoginPage({
             }
           />
         ) : null}
-
         {httpInsecure && cookieSecure ? (
           <Alert
             type="error"
             showIcon
-            title="HTTP will not keep you signed in"
+            title="Switch to HTTPS to stay signed in"
             description={
               <span>
-                Session cookies are marked Secure, so Chrome drops them on this HTTP URL. Open{" "}
-                <Typography.Link href={httpsURL()}>{httpsURL()}</Typography.Link>
-                , accept the certificate warning, or download the certificate below and trust it.
+                This server only sends secure cookies, which browsers drop on plain HTTP. Open{" "}
+                <Typography.Link href={httpsURL()}>{httpsURL()}</Typography.Link> instead.
               </span>
             }
-            style={{ marginBottom: 16 }}
           />
         ) : null}
-
-        {localEnabled ? (
-          <Form layout="vertical" onFinish={handleFinish} requiredMark={false} disabled={submitting}>
-            <Form.Item
-              name="username"
-              label="Username"
-              rules={[{ required: true, message: "Enter your username" }]}
-            >
-              <Input name="username" prefix={<UserOutlined />} autoComplete="username" autoFocus />
-            </Form.Item>
-            <Form.Item
-              name="password"
-              label="Password"
-              rules={[{ required: true, message: "Enter your password" }]}
-            >
-              <Input.Password name="password" prefix={<LockOutlined />} autoComplete="current-password" />
-            </Form.Item>
-            <Form.Item style={{ marginBottom: 0 }}>
-              <Button type="primary" htmlType="submit" block loading={submitting} icon={<LoginOutlined />}>
-                Sign in
-              </Button>
-            </Form.Item>
-            <div style={{ textAlign: "center", marginTop: 8 }}>
-              <Button type="link" size="small" onClick={() => setForgotOpen(true)} style={{ padding: 0 }}>
-                Forgot password?
-              </Button>
-            </div>
-          </Form>
+        {error ? (
+          <Alert
+            type={error.throttled ? "warning" : "error"}
+            showIcon
+            title={error.throttled ? "Too many attempts" : "Couldn't sign you in"}
+            description={error.text}
+            closable
+            onClose={() => setError(null)}
+          />
         ) : null}
+      </div>
 
-        {localEnabled && samlEnabled ? <Divider plain>or</Divider> : null}
-
-        {samlEnabled ? (
-          <Button
-            block
-            icon={<SafetyOutlined />}
-            onClick={() => {
-              window.location.href = "/saml/login";
-            }}
+      {passwordLogin ? (
+        <Form layout="vertical" onFinish={handleFinish} requiredMark={false} disabled={submitting} className="auth-form">
+          <Form.Item
+            name="username"
+            label="Username"
+            extra={ldapEnabled ? "Directory users: your usual Windows/AD username (e.g. jdoe)." : undefined}
+            rules={[{ required: true, message: "Enter your username" }]}
           >
-            Sign in with SSO
-          </Button>
-        ) : null}
-
-        {!localEnabled && !samlEnabled ? (
-          <Alert type="info" showIcon title="No login methods are configured on the server." />
-        ) : null}
-
-        {localEnabled && bootstrapPending ? (
-          <>
-            <Divider plain style={{ marginTop: 24 }}>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                First-time sign-in
-              </Text>
-            </Divider>
-            <Alert
-              type="info"
-              showIcon
-              icon={<InfoCircleOutlined />}
-              title="Initial administrator password"
-              description={
-                <Typography.Paragraph style={{ marginBottom: 0, fontSize: 12 }}>
-                  On first launch, the server creates an <Text code>admin</Text> account with a
-                  randomly generated password that must be changed at first sign-in. You can
-                  retrieve it from:
-                  <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
-                    <li>
-                      the api-server console output (the{" "}
-                      <Text code>FIRST-RUN ADMIN CREATED</Text> banner) or the{" "}
-                      <Text code>.ncc-initial-admin-password</Text> file beside the user database; or
-                    </li>
-                    <li>
-                      on Kubernetes, the <Text code>initial-admin-password</Text> key of the
-                      user-database Secret:{" "}
-                      <Text code copyable={{ text: "kubectl get secret ncc-v2-users -o jsonpath='{.data.initial-admin-password}' | base64 -d" }}>
-                        kubectl get secret …
-                      </Text>
-                    </li>
-                  </ul>
-                </Typography.Paragraph>
-              }
+            <Input name="username" size="large" prefix={<UserOutlined />} autoComplete="username" autoFocus />
+          </Form.Item>
+          <Form.Item
+            name="password"
+            label="Password"
+            rules={[{ required: true, message: "Enter your password" }]}
+            extra={capsLock ? <span className="auth-capslock">Caps Lock is on</span> : undefined}
+          >
+            <Input.Password
+              name="password"
+              size="large"
+              prefix={<LockOutlined />}
+              autoComplete="current-password"
+              onKeyUp={trackCapsLock}
+              onKeyDown={trackCapsLock}
             />
-            <Button
-              block
-              icon={<CloudUploadOutlined />}
-              onClick={() => setRestoreOpen(true)}
-              style={{ marginTop: 12 }}
-            >
-              Restore from a backup
+          </Form.Item>
+          <Button type="primary" htmlType="submit" size="large" block loading={submitting} icon={<LoginOutlined />}>
+            Sign in
+          </Button>
+          <div className="auth-form-links">
+            <Button type="link" size="small" onClick={() => setForgotOpen(true)}>
+              Forgot password?
             </Button>
-            <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
-              Migrating an existing deployment? Upload its backup to restore all accounts, roles,
-              configuration, and the most recent run, then continue without further setup.
-            </Typography.Paragraph>
-          </>
-        ) : null}
-      </Card>
+          </div>
+        </Form>
+      ) : null}
 
-      <TrustCertCard tls={tlsQuery.data} />
+      {passwordLogin && samlEnabled ? <Divider plain>or</Divider> : null}
+
+      {samlEnabled ? (
+        <Button
+          block
+          size="large"
+          type={passwordLogin ? "default" : "primary"}
+          icon={<SafetyOutlined />}
+          onClick={() => {
+            window.location.href = "/saml/login";
+          }}
+        >
+          Sign in with single sign-on
+        </Button>
+      ) : null}
+
+      {!passwordLogin && !samlEnabled ? (
+        <Alert
+          type="info"
+          showIcon
+          title="No sign-in method is configured"
+          description="An administrator needs to enable local accounts, Active Directory, or SSO on the server."
+        />
+      ) : null}
+
+      {localEnabled && bootstrapPending ? (
+        <section className="auth-first-run" aria-labelledby="first-run-title">
+          <Title level={5} id="first-run-title" className="auth-first-run-title">
+            New install? Two ways to start
+          </Title>
+          <ol className="auth-first-run-options">
+            <li>
+              <Text strong>Sign in as admin</Text> with the initial password the server generated. You&apos;ll
+              choose a new password next.
+              <Collapse
+                className="auth-collapse"
+                size="small"
+                items={[
+                  {
+                    key: "where",
+                    label: "Where do I find the initial password?",
+                    children: (
+                      <ul className="auth-where-list">
+                        <li>
+                          In the <Text code>.ncc-initial-admin-password</Text> file next to the user database
+                          on the server, or in the api-server console under{" "}
+                          <Text code>FIRST-RUN ADMIN CREATED</Text>.
+                        </li>
+                        <li>
+                          On Kubernetes, in the user-database Secret:
+                          <Paragraph
+                            code
+                            copyable={{ text: "kubectl -n <namespace> get secret ncc-v2-users -o jsonpath='{.data.initial-admin-password}' | base64 -d" }}
+                            style={{ margin: "4px 0 0", fontSize: 12 }}
+                          >
+                            kubectl -n &lt;namespace&gt; get secret ncc-v2-users -o jsonpath=&apos;&#123;.data.initial-admin-password&#125;&apos; | base64 -d
+                          </Paragraph>
+                        </li>
+                      </ul>
+                    ),
+                  },
+                ]}
+              />
+            </li>
+            <li>
+              <Text strong>Moving an existing install here?</Text> Restore its backup instead — accounts,
+              configuration, and history come with it.
+              <div style={{ marginTop: 8 }}>
+                <Button icon={<CloudUploadOutlined />} onClick={() => setRestoreOpen(true)}>
+                  Restore from a backup
+                </Button>
+              </div>
+            </li>
+          </ol>
+        </section>
+      ) : null}
+
+      <TrustCertNotice tls={tlsQuery.data} />
 
       <Modal
         title="Reset your password"
@@ -517,89 +402,28 @@ export function LoginPage({
         onOk={() => forgotForm.submit()}
         destroyOnHidden
       >
-        <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
-          Enter your username and an administrator will be asked to reset your
-          password. They will give you a temporary password to change at next
-          login. No email is sent. If you are the built-in <code>admin</code> and
-          are locked out, a fresh temporary password is generated and written to
-          the server logs and the <code>.ncc-initial-admin-password</code> file.
-        </Typography.Paragraph>
+        <Paragraph type="secondary" style={{ fontSize: 13 }}>
+          An administrator will be asked to reset your password and give you a temporary one to
+          change at next sign-in. No email is sent.
+        </Paragraph>
+        {ldapEnabled ? (
+          <Paragraph type="secondary" style={{ fontSize: 13 }}>
+            Signing in with a directory (Active Directory) account? Reset that password the way you
+            normally do with your IT team; this form only covers local accounts.
+          </Paragraph>
+        ) : null}
+        <Paragraph type="secondary" style={{ fontSize: 13 }}>
+          Locked-out built-in <Text code>admin</Text>: reset it on the server with{" "}
+          <Text code>ncc-orchestrator v2-reset-password --user admin</Text>.
+        </Paragraph>
         <Form form={forgotForm} layout="vertical" requiredMark={false} onFinish={handleForgot}>
-          <Form.Item
-            name="username"
-            label="Username"
-            rules={[{ required: true, message: "Enter your username" }]}
-          >
+          <Form.Item name="username" label="Username" rules={[{ required: true, message: "Enter your username" }]}>
             <Input prefix={<UserOutlined />} autoComplete="username" autoFocus />
           </Form.Item>
         </Form>
       </Modal>
 
-      <Modal
-        title="Restore from backup"
-        open={restoreOpen}
-        onCancel={() => {
-          setRestoreOpen(false);
-          setRestoreFile(null);
-          restoreForm.resetFields();
-        }}
-        okText="Restore and restart"
-        okButtonProps={{ danger: true, icon: <CloudUploadOutlined /> }}
-        confirmLoading={restoreSubmitting}
-        onOk={() => restoreForm.submit()}
-        destroyOnHidden
-      >
-        <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
-          Recover an existing deployment onto this fresh install. Sign in with the current{" "}
-          <code>admin</code> bootstrap password, choose its backup archive, and the stack will be
-          restored and <b>restarted automatically</b>. Afterwards you&apos;ll sign in with the{" "}
-          <b>restored</b> deployment&apos;s credentials — if that admin still owed a password change,
-          you&apos;ll be prompted to set one, exactly as on the original deployment.
-        </Typography.Paragraph>
-        <Form
-          form={restoreForm}
-          layout="vertical"
-          requiredMark={false}
-          onFinish={handleRestore}
-          disabled={restoreSubmitting}
-        >
-          <Form.Item
-            name="username"
-            label="Admin username"
-            initialValue="admin"
-            rules={[{ required: true, message: "Enter the admin username" }]}
-          >
-            <Input prefix={<UserOutlined />} autoComplete="username" />
-          </Form.Item>
-          <Form.Item
-            name="password"
-            label="Bootstrap admin password"
-            rules={[{ required: true, message: "Enter the bootstrap admin password" }]}
-          >
-            <Input.Password prefix={<LockOutlined />} autoComplete="current-password" />
-          </Form.Item>
-          <Form.Item label="Backup archive" style={{ marginBottom: 0 }}>
-            <Upload
-              accept=".gz,.tgz,.tar.gz,application/gzip"
-              maxCount={1}
-              showUploadList={false}
-              beforeUpload={(file) => {
-                setRestoreFile(file as unknown as File);
-                return false;
-              }}
-            >
-              <Button icon={<UploadOutlined />}>Choose backup (.tar.gz)</Button>
-            </Upload>
-            {restoreFile ? (
-              <Typography.Text style={{ marginLeft: 8 }}>{restoreFile.name}</Typography.Text>
-            ) : (
-              <Typography.Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
-                No file selected
-              </Typography.Text>
-            )}
-          </Form.Item>
-        </Form>
-      </Modal>
-    </div>
+      <RestoreBackupDialog open={restoreOpen} onClose={() => setRestoreOpen(false)} requireSignIn />
+    </AuthShell>
   );
 }

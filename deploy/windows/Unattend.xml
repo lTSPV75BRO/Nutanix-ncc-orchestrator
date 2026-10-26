@@ -16,7 +16,7 @@
           xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"
           Order="1">
           <Description>Install NCC Orchestrator v2</Description>
-          <Path>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$env:NCC_VERSION='2.2.1'; $env:NCC_RELEASE_BASE_URL='https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download'; $env:NCC_CLUSTERS=''; $env:NCC_PCS=''; $env:NCC_USERNAME='admin'; $env:NCC_PASSWORD='CHANGE_ME'; &amp; 'C:\NCC\setup-ncc.ps1'"</Path>
+          <Path>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$env:NCC_VERSION='2.3.0'; $env:NCC_RELEASE_BASE_URL='https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download'; $env:NCC_CLUSTERS=''; $env:NCC_PCS=''; $env:NCC_USERNAME='admin'; $env:NCC_PASSWORD='CHANGE_ME'; &amp; 'C:\NCC\setup-ncc.ps1'"</Path>
         </RunSynchronousCommand>
       </RunSynchronous>
     </component>

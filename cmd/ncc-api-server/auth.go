@@ -270,9 +270,11 @@ func (s *apiServer) resolveLegacyPrincipal(r *http.Request) (principal, error) {
 }
 
 func (s *apiServer) principalFromHMACClaims(claims sessionClaims, method authMethod) (principal, bool) {
+	// Every session this server mints carries a valid role. A missing or
+	// unknown one used to be promoted to admin (fail-open); reject it.
 	role, ok := parseRole(claims.Role)
 	if !ok {
-		role = RoleAdmin
+		return principal{}, false
 	}
 	subject := claims.Sub
 	if subject == "" {
@@ -290,6 +292,8 @@ func (s *apiServer) principalFromHMACClaims(claims sessionClaims, method authMet
 					role = r2
 				}
 			}
+		} else if s.users.sessionPredatesDeletion(subject, time.Unix(claims.Iat, 0)) {
+			validSession = false
 		}
 	}
 	if !validSession {
@@ -318,7 +322,7 @@ func (s *apiServer) principalFromIdentity(ident *auth.Identity) (principal, bool
 	case auth.AuthTypeJWT:
 		role, ok := parseRole(ident.Role)
 		if !ok {
-			role = RoleAdmin
+			return principal{}, false // fail closed, as for HMAC sessions
 		}
 		method := authSessionBearer
 		if ident.Source == auth.SourceCookie {
@@ -340,6 +344,10 @@ func (s *apiServer) principalFromIdentity(ident *auth.Identity) (principal, bool
 						role = r2
 					}
 				}
+			} else if s.users.sessionPredatesDeletion(subject, ident.IssuedAt) {
+				// A deleted local account is otherwise indistinguishable
+				// from an SSO/LDAP subject and kept its session and role.
+				validSession = false
 			}
 		}
 		if !validSession {
@@ -405,6 +413,12 @@ func routeMinRoleFor(p string, isRead bool) Role {
 			return RoleViewer
 		}
 		return RoleOperator
+	case p == "/api/v1/onboarding":
+		// The checklist guides operators and admins; only admins hide it.
+		if isRead {
+			return RoleOperator
+		}
+		return RoleAdmin
 	case p == "/api/v1/features":
 		if isRead {
 			return RoleViewer
@@ -525,8 +539,8 @@ func (s *apiServer) setAuthTokenCookie(w http.ResponseWriter, hmacToken string, 
 		sub = "session"
 	}
 	role := strings.TrimSpace(claims.Role)
-	if role == "" {
-		role = RoleAdmin.String()
+	if _, ok := parseRole(role); !ok {
+		return
 	}
 	jwtTok, err := auth.GenerateSessionJWTWithMeta(sub, role, dur, s.jwtSecret, claims.Gen, claims.Grps)
 	if err != nil {
@@ -832,6 +846,14 @@ func (s *apiServer) handleForgotPassword(w http.ResponseWriter, r *http.Request)
 	adminReset := false
 	if username != "" && s.users != nil {
 		switch {
+		case isReservedAdmin(username) && s.users.writable() && !s.adminSelfResetEnabled:
+			// Self-reset not enabled (the default, see --allow-admin-self-reset):
+			// treat it like any other account — queue a request another admin
+			// can see, answer generically, leave the password and sessions alone.
+			if _, ok := s.users.lookup(username); ok {
+				s.users.addResetRequest(username, cleanClientIP(r))
+				recorded = true
+			}
 		case isReservedAdmin(username) && s.users.writable():
 			// Admin lockout recovery: a queued reset request is useless when the
 			// only admin is locked out, so self-service the built-in admin the

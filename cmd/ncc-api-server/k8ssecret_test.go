@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -17,9 +18,14 @@ type fakeK8sAPI struct {
 	mu      sync.Mutex
 	secrets map[string]map[string]string // name -> data(base64)
 	rv      int
+	// versions tracks each Secret's resourceVersion; a PATCH carrying a stale
+	// metadata.resourceVersion gets 409, like the real API server.
+	versions map[string]int
 }
 
-func newFakeK8sAPI() *fakeK8sAPI { return &fakeK8sAPI{secrets: map[string]map[string]string{}} }
+func newFakeK8sAPI() *fakeK8sAPI {
+	return &fakeK8sAPI{secrets: map[string]map[string]string{}, versions: map[string]int{}}
+}
 
 func (f *fakeK8sAPI) handler(t *testing.T, namespace string) http.Handler {
 	prefix := "/api/v1/namespaces/" + namespace + "/secrets"
@@ -34,7 +40,7 @@ func (f *fakeK8sAPI) handler(t *testing.T, namespace string) http.Handler {
 			obj := map[string]any{
 				"apiVersion": "v1",
 				"kind":       "Secret",
-				"metadata":   map[string]any{"name": name, "resourceVersion": "1"},
+				"metadata":   map[string]any{"name": name, "resourceVersion": strconv.Itoa(f.versions[name])},
 				"type":       "Opaque",
 				"data":       f.secrets[name],
 			}
@@ -64,6 +70,7 @@ func (f *fakeK8sAPI) handler(t *testing.T, namespace string) http.Handler {
 				obj.Data = map[string]string{}
 			}
 			f.secrets[obj.Metadata.Name] = obj.Data
+			f.versions[obj.Metadata.Name] = f.rv
 			w.WriteHeader(http.StatusCreated)
 			writeObj(obj.Metadata.Name)
 		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, prefix+"/"):
@@ -74,6 +81,9 @@ func (f *fakeK8sAPI) handler(t *testing.T, namespace string) http.Handler {
 				return
 			}
 			var patch struct {
+				Metadata struct {
+					ResourceVersion string `json:"resourceVersion"`
+				} `json:"metadata"`
 				Data map[string]*string `json:"data"`
 			}
 			body, _ := io.ReadAll(r.Body)
@@ -81,6 +91,11 @@ func (f *fakeK8sAPI) handler(t *testing.T, namespace string) http.Handler {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
+			if rv := patch.Metadata.ResourceVersion; rv != "" && rv != strconv.Itoa(f.versions[name]) {
+				http.Error(w, `{"kind":"Status","code":409,"reason":"Conflict"}`, http.StatusConflict)
+				return
+			}
+			f.versions[name] = f.rv
 			for k, v := range patch.Data {
 				if v == nil {
 					delete(cur, k) // merge-patch null deletes the key

@@ -1,7 +1,7 @@
 # Run elevated during Sysprep specialize or manually as Administrator.
 $ErrorActionPreference = "Stop"
 
-$NccVersion = if ($env:NCC_VERSION) { $env:NCC_VERSION } else { "2.2.1" }
+$NccVersion = if ($env:NCC_VERSION) { $env:NCC_VERSION } else { "2.3.0" }
 $ReleaseBaseUrl = if ($env:NCC_RELEASE_BASE_URL) {
     $env:NCC_RELEASE_BASE_URL.TrimEnd("/")
 } else {

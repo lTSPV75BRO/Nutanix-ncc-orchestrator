@@ -57,7 +57,7 @@ spec:
             - name: NCC_TRUSTED_PROXY_CIDRS
               value: {{ .Values.api.trustedProxyCIDRs | default "private,loopback" | quote }}
           ports: [{ name: http, containerPort: 8081 }]
-          readinessProbe: { httpGet: { path: /api/v1/health, port: 8081 } }
+          readinessProbe: { httpGet: { path: /api/v1/health/ready, port: 8081 } }
           livenessProbe: { httpGet: { path: /api/v1/health, port: 8081 }, initialDelaySeconds: 10 }
           resources: {{ .Values.resources.api | toYaml | nindent 12 }}
           securityContext:

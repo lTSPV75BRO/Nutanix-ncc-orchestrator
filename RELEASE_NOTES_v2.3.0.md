@@ -1,0 +1,152 @@
+# NCC Orchestrator — v2.3.0
+
+**Release status:** Release candidate. Planned date: set when the `v2.3.0` tag is pushed (the release workflow publishes on tag push).
+
+> **Affiliation:** This is an independent open-source project. It is not
+> affiliated with or endorsed by Nutanix, Inc. The project is MIT licensed.
+
+v2.3.0 follows a full application audit (findings and evidence in
+[`docs/audit/`](docs/audit/executive-summary.md)). It replaces the first-time
+setup modal with a setup checklist derived from the install's real state,
+redesigns the sign-in screens, makes the user store safe with several API
+replicas, makes restores roll back on failure, fixes a set of Windows-only
+defects, and adds request IDs, per-route metrics, and a readiness endpoint.
+
+**Before upgrading:** the anonymous admin self-reset from the login page is
+now **off by default**. See [Upgrade](#upgrade).
+
+## New
+
+### Setup checklist (replaces the first-time setup modal)
+
+The old modal kept its progress in each browser, so every new browser saw
+"New install detected" on established installs; it was shown to viewers who
+cannot open Settings; its steps were manual "mark as done" boxes; and its
+restore detection looked for the wrong audit action.
+
+The checklist (`GET/PUT /api/v1/onboarding`) is computed on the server from
+the install's real state and ticks itself off:
+
+- Required: clusters configured (sample values do not count) with a username;
+  a run that reached at least one cluster; a recurring schedule; scheduled
+  backups.
+- Optional: notifications; team access (more accounts, AD/LDAP, or SSO).
+
+It shows as a Dashboard card and a **Setup n/m** header button with a drawer.
+Each step links to its Settings tab; operators see "Ask an administrator" for
+admin-only steps. An admin's **Hide** applies to the whole install.
+
+### Redesigned sign-in and first-password screens
+
+- Shared two-pane layout, responsive down to phone width, static background
+  (the animated background and its toggle are gone).
+- The sign-in form now appears on installs that sign in only through Active
+  Directory/LDAP (it was hidden without local accounts).
+- Caps Lock warning; lockouts shown as a warning with the server's retry time;
+  a notice after sign-out or when a session ends.
+- First-run guidance with a copyable Kubernetes command for the initial
+  password.
+- **Restore from a backup** (sign-in page and first-password page) now accepts
+  the default encrypted `.tar.gz.enc` archives and has a passphrase field.
+  Before, the file picker hid them and no passphrase could be given.
+- The new-password form validates the confirmation as you type.
+
+### Run options builder
+
+`GET /api/v1/runs/extra-args` publishes the allowed run options with labels
+and allowed values. The Runs page turns them into controls (report formats,
+severities, dry run, and advanced options) and shows exactly what will be sent.
+Values outside a flag's choices (e.g. `--outputs pdf`) are rejected before
+the run starts.
+
+### Operability
+
+- **Readiness:** `GET /api/v1/health/ready` (public; check names only) checks
+  that the user store is readable, the runner binary is executable, and the
+  output directory is writable. Kubernetes and Helm readiness probes use it;
+  liveness stays on `/api/v1/health`.
+- **Request IDs:** every API response carries `X-Request-ID` (the UI server
+  mints one per request). It is recorded in audit entries, returned as
+  `request_id` in error bodies, and shown in UI error toasts.
+- **HTTP metrics:** `ncc_http_requests_total{route,method,code}` and
+  `ncc_http_request_duration_seconds{route}` on `/metrics`.
+- **Graceful shutdown:** the API and UI servers drain in-flight requests for
+  up to 20 s on SIGTERM/SIGINT.
+
+## Bug fixes
+
+- **User-store changes could be lost with several API replicas** (Helm default
+  2): a write on one replica could undo a user deletion, demotion, token
+  revocation, or sign-out-everywhere made on another. Every change now reloads
+  the stored document first (file lock for the file store); the Kubernetes
+  Secret store saves with a `resourceVersion` precondition and answers
+  `409 NCC_API_STORE_CONFLICT` on a concurrent change.
+- **Restore is transactional:** a failure part-way rolls every file back
+  (including `frontend-dist`, previously deleted up front).
+- **Deleting a local account now ends its sessions** (they stayed valid with
+  their role until expiry); re-creating the name no longer revives old tokens.
+- **Windows:** process liveness always reported "dead" (restore over a running
+  stack, duplicate supervisors, forced kills on every stop, scheduled runs
+  hidden from Active Runs); the file secrets provider rejected every file;
+  post-restore path healing skipped Windows.
+- **Run options:** 8 of the 10 previously allowed extra args were not runner
+  flags, so runs started with them (including the UI/OpenAPI samples) failed
+  with "unknown flag".
+- **Long operations** (preflight, backup, restore, support bundle) were cut off
+  by 15 s/60 s server timeouts and a 30 s client timeout while still running.
+- **SMTP** sends (API and runner) had no timeout; the runner no longer tries
+  AUTH against unauthenticated relays.
+- Runs page on token-only installs: the config list stayed empty because a
+  per-user preference request 404'd.
+- Dashboard showed a red "0.0%" health score with no data.
+- A malformed webhook URL could panic the notification path.
+
+## Security
+
+- Anonymous admin self-reset off by default (`--allow-admin-self-reset` to
+  opt in).
+- Sessions with an unknown or empty role are rejected (were treated as admin).
+- Run `--prom-dir` values are confined under the install root.
+- The UI server no longer routes API traffic (with the admin token in token
+  mode) through `HTTP(S)_PROXY`.
+- MCP server: Prism passwords only via `NCC_PASSWORD` (not on the command
+  line); `create_schedule` refuses a custom command unless
+  `NCC_MCP_ALLOW_SCHEDULE_COMMAND=true`.
+- Runner email headers are encoded (no CR/LF header injection from run data).
+
+## CI and dependencies
+
+- Windows `go vet` + `go test` job; advisory full `npm audit`; Dependabot for
+  Go modules, npm and GitHub Actions.
+- golang.org/x/crypto 0.58.0, x/sys 0.49.0, x/term 0.47.0, go-ldap 3.4.15.
+
+## Upgrade
+
+1. **Admin recovery:** a locked-out sole admin now resets the password on the
+   host with `ncc-orchestrator v2-reset-password --user admin` (Kubernetes: run
+   it in the API pod), unless you start the API with `--allow-admin-self-reset`
+   / `NCC_ALLOW_ADMIN_SELF_RESET=true`.
+2. **Kubernetes/Helm:** the API readiness probe moves to
+   `/api/v1/health/ready`. The manifests and chart in this release already use
+   it; custom manifests should be updated.
+3. **Integrations sending run extra args:** only `--outputs`,
+   `--severity-filter`, `--dry-run`, `--quiet-hours`, `--maintenance-windows`,
+   `--clusters` and `--prom-dir` are accepted; the old names never worked and
+   now return 400 with a hint.
+4. The user store gains an optional `deleted_accounts` field; older versions
+   ignore it.
+
+## Rollback
+
+Roll back to v2.2.1 with the in-app rollback point or by redeploying v2.2.1
+images/binaries. The user store and state files stay compatible.
+
+## Known issues and residual risks
+
+- Frontend build tooling has 12 advisories (vite 8.3.1, undici, source-map-js,
+  @vitest/mocker); production dependencies are clean. Update with npm before
+  tagging (commands in [`docs/audit/dependency-health.md`](docs/audit/dependency-health.md)).
+- Restored stack binaries are not yet checked against signed release
+  checksums (SEC-07).
+- Not yet exercised in this cycle: the new Windows CI job on GitHub-hosted
+  runners, `go test -race`, and real multi-replica Kubernetes deployments.

@@ -124,10 +124,23 @@ export function notifyError(error: unknown, fallback = "Something went wrong"): 
   ) : (
     message
   );
+  const requestId =
+    error && typeof error === "object" && "requestId" in error && typeof (error as { requestId?: unknown }).requestId === "string"
+      ? (error as { requestId: string }).requestId
+      : "";
   notify.error({
     message: "Request failed",
-    description,
-    duration: detail ? 12 : COMMON_OPTS.duration,
+    description: requestId ? (
+      <div>
+        {description}
+        <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>
+          Request ID: <code>{requestId}</code>
+        </div>
+      </div>
+    ) : (
+      description
+    ),
+    duration: detail || requestId ? 12 : COMMON_OPTS.duration,
   });
 }
 

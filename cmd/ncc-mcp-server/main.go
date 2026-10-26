@@ -24,7 +24,7 @@ const serverName = "ncc-orchestrator"
 // serverVersion is the advertised MCP server version. It is overridable at build
 // time via -ldflags "-X main.serverVersion=<v>" (the release build stamps the
 // orchestrator version here) and otherwise defaults to the current release.
-var serverVersion = "2.2.1"
+var serverVersion = "2.3.0"
 
 // orchestratorBinaryName is the platform-specific orchestrator executable name.
 func orchestratorBinaryName() string {
@@ -253,6 +253,23 @@ type RunNCCInput struct {
 	DryRun             bool   `json:"dry_run,omitempty" jsonschema:"If true, only validate config and do not run checks."`
 }
 
+// withPasswordEnv passes a Prism password to the orchestrator through
+// NCC_PASSWORD (read via viper's NCC_ env binding). It used to be passed as
+// --password as well, which exposes it to every local user through the
+// process list (ps, /proc/<pid>/cmdline, Task Manager).
+func withPasswordEnv(env []string, password string) []string {
+	if password == "" {
+		return env
+	}
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, "NCC_PASSWORD=") {
+			out = append(out, kv)
+		}
+	}
+	return append(out, "NCC_PASSWORD="+password)
+}
+
 func runNCC(ctx context.Context, req *mcp.CallToolRequest, input RunNCCInput) (*mcp.CallToolResult, any, error) {
 	bin := orchestratorBin()
 	args := []string{}
@@ -265,9 +282,6 @@ func runNCC(ctx context.Context, req *mcp.CallToolRequest, input RunNCCInput) (*
 	if input.Username != "" {
 		args = append(args, "--username", input.Username)
 	}
-	if input.Password != "" {
-		args = append(args, "--password", input.Password)
-	}
 	if input.InsecureSkipVerify {
 		args = append(args, "--insecure-skip-verify")
 	}
@@ -277,11 +291,7 @@ func runNCC(ctx context.Context, req *mcp.CallToolRequest, input RunNCCInput) (*
 
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Stdin = nil
-	cmd.Env = os.Environ()
-	// Pass password via env so the orchestrator gets it without TTY prompt when run non-interactively
-	if input.Password != "" {
-		cmd.Env = append(cmd.Env, "NCC_PASSWORD="+input.Password)
-	}
+	cmd.Env = withPasswordEnv(os.Environ(), input.Password)
 	out, err := cmd.CombinedOutput()
 	text := string(out)
 	if err != nil {
@@ -334,9 +344,6 @@ func discoverClusters(ctx context.Context, req *mcp.CallToolRequest, input Disco
 	if input.Username != "" {
 		args = append(args, "--username", input.Username)
 	}
-	if input.Password != "" {
-		args = append(args, "--password", input.Password)
-	}
 	if input.InsecureSkipVerify {
 		args = append(args, "--insecure-skip-verify")
 	}
@@ -351,7 +358,7 @@ func discoverClusters(ctx context.Context, req *mcp.CallToolRequest, input Disco
 	}
 
 	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Env = os.Environ()
+	cmd.Env = withPasswordEnv(os.Environ(), input.Password)
 	out, err := cmd.CombinedOutput()
 	text := string(out)
 	if err != nil {
@@ -587,14 +594,35 @@ type CreateScheduleInput struct {
 	Type      string `json:"type,omitempty" jsonschema:"Scheduler type: auto, cron, windows"`
 	TaskName  string `json:"task_name,omitempty" jsonschema:"Schedule/task name (default ncc-orchestrator)"`
 	Config    string `json:"config,omitempty" jsonschema:"Config file path passed to orchestrator --config"`
-	Command   string `json:"command,omitempty" jsonschema:"Custom command for scheduler"`
+	Command   string `json:"command,omitempty" jsonschema:"Custom command for scheduler (refused unless the MCP server runs with NCC_MCP_ALLOW_SCHEDULE_COMMAND=true)"`
 	Cron      string `json:"cron,omitempty" jsonschema:"Cron expression for cron scheduler"`
 	Every     string `json:"every,omitempty" jsonschema:"Interval duration like 30m, 4h"`
 	LogPath   string `json:"log_path,omitempty" jsonschema:"Log path for cron redirection"`
 	PrintOnly bool   `json:"print_only,omitempty" jsonschema:"Preview only; do not apply changes"`
 }
 
+// allowScheduleCommandEnv opts in to create_schedule's free-form "command".
+// That field installs an arbitrary command line as a recurring cron job or
+// Windows scheduled task, i.e. persistent code execution chosen by the model;
+// text an assistant reads (a report, a ticket) could steer it there. The
+// orchestrator's own run command needs no override, so it is off by default.
+const allowScheduleCommandEnv = "NCC_MCP_ALLOW_SCHEDULE_COMMAND"
+
+func scheduleCommandAllowed() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(allowScheduleCommandEnv))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
 func createSchedule(ctx context.Context, req *mcp.CallToolRequest, input CreateScheduleInput) (*mcp.CallToolResult, any, error) {
+	if strings.TrimSpace(input.Command) != "" && !scheduleCommandAllowed() {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "create_schedule: a custom \"command\" is disabled for MCP clients. Omit it to schedule the standard ncc-orchestrator run, or start the MCP server with " + allowScheduleCommandEnv + "=true to allow it."}},
+			IsError: true,
+		}, nil, nil
+	}
 	bin := orchestratorBin()
 	args := []string{"create-schedule", "--action", "create"}
 	if strings.TrimSpace(input.Type) != "" {

@@ -72,7 +72,9 @@ func TestHealthDoesNotDiscloseInternalsToAnonymousCallers(t *testing.T) {
 		t.Fatalf("invalid token got admin detail: %s", bad)
 	}
 	admin := get("health-test-admin-token")
-	if !strings.Contains(admin, "/data/auth/.ncc-api-token") || !strings.Contains(admin, "users_store_encrypted") {
+	// Match the token file by name: on Windows the absolute path is
+	// rendered with (JSON-escaped) backslashes.
+	if !strings.Contains(admin, `"token_file"`) || !strings.Contains(admin, ".ncc-api-token") || !strings.Contains(admin, "users_store_encrypted") {
 		t.Fatalf("admin health should keep operational detail: %s", admin)
 	}
 }

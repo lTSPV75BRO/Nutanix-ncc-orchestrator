@@ -18,10 +18,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/smtp"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	texttemplate "text/template"
@@ -209,8 +211,20 @@ func SendEmail(cfg model.Config, subj string, body string, attachPath string) er
 		return nil
 	}
 
-	addr := fmt.Sprintf("%s:%d", cfg.SMTPServer, cfg.SMTPPort)
-	auth := smtp.PlainAuth("", cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPServer)
+	addr := net.JoinHostPort(cfg.SMTPServer, strconv.Itoa(cfg.SMTPPort))
+	// AUTH only with credentials: an empty PLAIN login made every send to an
+	// unauthenticated relay fail with "server doesn't support AUTH".
+	var auth smtp.Auth
+	if strings.TrimSpace(cfg.SMTPUser) != "" {
+		auth = smtp.PlainAuth("", cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPServer)
+	}
+
+	// Header values are flattened/encoded: the subject comes from templates
+	// over run data (cluster and check names), and a CR/LF in it previously
+	// went straight into the header block.
+	fromHdr := HeaderValue(cfg.EmailFrom)
+	toHdr := HeaderValue(strings.Join(cfg.EmailTo, ","))
+	subjHdr := HeaderValue(subj)
 
 	var msg bytes.Buffer
 	attachHTML := cfg.EmailAttachHTML && attachPath != ""
@@ -220,9 +234,9 @@ func SendEmail(cfg model.Config, subj string, body string, attachPath string) er
 			return fmt.Errorf("read attachment %s: %w", attachPath, err)
 		}
 		boundary := "ncc-report-boundary"
-		msg.WriteString(fmt.Sprintf("From: %s\r\n", cfg.EmailFrom))
-		msg.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(cfg.EmailTo, ",")))
-		msg.WriteString(fmt.Sprintf("Subject: %s\r\n", subj))
+		msg.WriteString(fmt.Sprintf("From: %s\r\n", fromHdr))
+		msg.WriteString(fmt.Sprintf("To: %s\r\n", toHdr))
+		msg.WriteString(fmt.Sprintf("Subject: %s\r\n", subjHdr))
 		msg.WriteString("MIME-Version: 1.0\r\n")
 		msg.WriteString(fmt.Sprintf("Content-Type: multipart/mixed; boundary=%s\r\n", boundary))
 		msg.WriteString("\r\n")
@@ -239,48 +253,22 @@ func SendEmail(cfg model.Config, subj string, body string, attachPath string) er
 		msg.WriteString("\r\n")
 		msg.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
 	} else {
-		msg.WriteString(fmt.Sprintf("From: %s\r\n", cfg.EmailFrom))
-		msg.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(cfg.EmailTo, ",")))
-		msg.WriteString(fmt.Sprintf("Subject: %s\r\n", subj))
+		msg.WriteString(fmt.Sprintf("From: %s\r\n", fromHdr))
+		msg.WriteString(fmt.Sprintf("To: %s\r\n", toHdr))
+		msg.WriteString(fmt.Sprintf("Subject: %s\r\n", subjHdr))
 		msg.WriteString("MIME-Version: 1.0\r\n")
 		msg.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
 		msg.WriteString("\r\n")
 		msg.WriteString(body)
 	}
 
+	out := SMTPMessage{Addr: addr, Auth: auth, From: cfg.EmailFrom, To: cfg.EmailTo, Body: msg.Bytes()}
 	if cfg.EmailUseTLS {
-		// STARTTLS-style connection:
-		c, err := smtp.Dial(addr)
-		if err != nil {
-			return err
-		}
-		defer c.Close()
-
-		if err := c.StartTLS(&tls.Config{ServerName: cfg.SMTPServer, InsecureSkipVerify: cfg.SMTPInsecureSkipVerify}); err != nil {
-			return err
-		}
-		if err := c.Auth(auth); err != nil {
-			return err
-		}
-		if err := c.Mail(cfg.EmailFrom); err != nil {
-			return err
-		}
-		for _, rcpt := range cfg.EmailTo {
-			if err := c.Rcpt(rcpt); err != nil {
-				return err
-			}
-		}
-		w, err := c.Data()
-		if err != nil {
-			return err
-		}
-		if _, err := w.Write(msg.Bytes()); err != nil {
-			return err
-		}
-		return w.Close()
+		// STARTTLS is mandatory in this mode (and may skip verification).
+		out.RequireTLS = true
+		out.TLS = &tls.Config{ServerName: cfg.SMTPServer, InsecureSkipVerify: cfg.SMTPInsecureSkipVerify, MinVersion: tls.VersionTLS12}
 	}
-
-	return smtp.SendMail(addr, auth, cfg.EmailFrom, cfg.EmailTo, msg.Bytes())
+	return SendMail(out)
 }
 
 // SendEmailWithRetry sends an email with retry/backoff and records the outcome.

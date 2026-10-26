@@ -1,2 +1,6 @@
 binaryGO.txt text eol=lf
 binaryGO.cmd text eol=crlf
+
+# Golden report fixtures are compared byte-for-byte; a CRLF checkout
+# (core.autocrlf=true, the Windows default) made the golden tests fail.
+testdata/golden/* text eol=lf

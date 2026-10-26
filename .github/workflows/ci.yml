@@ -39,6 +39,25 @@ jobs:
       - name: go test -race
         run: go test -race -count=1 ./...
 
+  test-windows:
+    # Windows is a supported install target (zip stack, Task Scheduler
+    # service), but CI only ran on Linux, so Windows-only defects shipped
+    # unnoticed: process liveness always reported "dead" (restore over a
+    # running stack, duplicate supervisors, scheduled runs hidden from Active
+    # Runs) and the golden-report tests broke on CRLF checkouts.
+    name: build & tests (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test -count=1 ./...
+
   lint:
     name: golangci-lint
     runs-on: ubuntu-latest
@@ -83,6 +102,11 @@ jobs:
         run: npm ci
       - name: npm audit (production)
         run: npm audit --omit=dev
+      - name: npm audit (all, advisory)
+        # Build/test tooling (vite, vitest, undici via jsdom) runs on developer
+        # machines and CI runners; report its advisories without blocking.
+        continue-on-error: true
+        run: npm audit --audit-level=high
       - name: npm test
         run: npm test
       - name: npm run build

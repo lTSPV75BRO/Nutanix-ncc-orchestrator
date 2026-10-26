@@ -34,6 +34,7 @@ import (
 
 	yaml "go.yaml.in/yaml/v3"
 	"goncc/internal/auth"
+	"goncc/internal/graceful"
 	"goncc/internal/promtext"
 	"goncc/internal/runtimecaps"
 	"goncc/internal/v2layout"
@@ -56,7 +57,7 @@ var (
 
 func init() {
 	if Version == "" {
-		Version = "2.2.1"
+		Version = "2.3.0"
 	}
 	if BuildDate == "" {
 		BuildDate = "unknown"
@@ -149,15 +150,23 @@ type apiServer struct {
 	// first-run admin and enables login. Set --disable-local-accounts (or
 	// NCC_DISABLE_LOCAL_ACCOUNTS=1) for pure token-only automation.
 	disableLocalAccounts bool
-	users                *userDB
-	samlEnabled          bool
-	samlFromFlags        bool // SAML came from startup flags (not runtime-editable)
-	samlMu               sync.RWMutex
-	saml                 *samlProvider
-	ldapEnabled          bool
-	ldapFromFlags        bool // LDAP came from startup flags (not runtime-editable)
-	ldapMu               sync.RWMutex
-	ldap                 ldapAuthenticator
+	readyCache           readinessCache
+	httpMetrics          httpMetrics
+	// adminSelfResetEnabled enables the anonymous forgot-password recovery for
+	// the built-in admin. Off by default: that path lets any network client
+	// rotate the admin password (and end every admin session) once a minute
+	// per source IP, while the offline v2-reset-password / --reset-admin
+	// recovery needs the same host access reading the new password does.
+	adminSelfResetEnabled bool
+	users                 *userDB
+	samlEnabled           bool
+	samlFromFlags         bool // SAML came from startup flags (not runtime-editable)
+	samlMu                sync.RWMutex
+	saml                  *samlProvider
+	ldapEnabled           bool
+	ldapFromFlags         bool // LDAP came from startup flags (not runtime-editable)
+	ldapMu                sync.RWMutex
+	ldap                  ldapAuthenticator
 	// pcCacheMu guards the Prism Central -> managed-clusters discovery cache used
 	// to expand cluster-group PC entries into their registered clusters.
 	pcCacheMu        sync.Mutex
@@ -295,6 +304,9 @@ type envelope struct {
 	Data      interface{} `json:"data,omitempty"`
 	Error     string      `json:"error,omitempty"`
 	ErrorCode string      `json:"error_code,omitempty"`
+	// RequestID is set on errors so a user can quote it and an operator can
+	// find the matching audit/log line.
+	RequestID string `json:"request_id,omitempty"`
 }
 
 type routeMeta struct {
@@ -563,6 +575,7 @@ func main() {
 	flag.BoolVar(&s.requireEncryptedUserStore, "require-encrypted-user-store", envBool("NCC_REQUIRE_ENCRYPTED_USER_STORE"), "Refuse to start unless the user store (password/PAT hashes, SAML SP key, LDAP bind password) is envelope-encrypted with a master key (NCC_MASTER_KEY / --users-db-key-file). Also via NCC_REQUIRE_ENCRYPTED_USER_STORE=true")
 	flag.StringVar(&s.usersDBKeyFile, "users-db-key-file", "", "Path to a file holding a 32-byte master key (base64 or hex) to envelope-encrypt the user store at rest with AES-256-GCM. NCC_MASTER_KEY env takes precedence. Unset => plaintext (default). Keep this key off the protected disk/backup.")
 	flag.BoolVar(&s.disableLocalAccounts, "disable-local-accounts", false, "Opt out of the default-on user database (no first-run admin bootstrap, login disabled). Use for pure token-only automation")
+	flag.BoolVar(&s.adminSelfResetEnabled, "allow-admin-self-reset", envBool("NCC_ALLOW_ADMIN_SELF_RESET"), "Let the login page's anonymous forgot-password request self-reset the built-in admin (new password written to the .ncc-initial-admin-password file / Kubernetes Secret). Off by default because any network client can then rotate the admin password once a minute per IP; recover with 'ncc-orchestrator v2-reset-password --user admin' or --reset-admin on the host instead. Also via NCC_ALLOW_ADMIN_SELF_RESET=true")
 	flag.BoolVar(&s.cookieInsecure, "cookie-insecure", false, "Force the Secure attribute OFF on session cookies even when HTTPS is enabled (only behind a TLS-terminating proxy that talks plain http to the stack). Insecure is already the default.")
 	flag.BoolVar(&s.cookieSecureForce, "cookie-secure", false, "Force the Secure attribute ON on session cookies regardless of the runtime HTTPS policy (for deployments terminating TLS in front of the stack)")
 	var samlCfg samlConfig
@@ -905,12 +918,12 @@ func main() {
 			tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
 		}
 		srv.TLSConfig = tlsCfg
-		if err := srv.ListenAndServeTLS(s.tlsCertFile, s.tlsKeyFile); err != nil {
+		if err := graceful.Serve(srv, func() error { return srv.ListenAndServeTLS(s.tlsCertFile, s.tlsKeyFile) }, graceful.DefaultGrace); err != nil {
 			log.Fatal(err)
 		}
 		return
 	}
-	if err := srv.ListenAndServe(); err != nil {
+	if err := graceful.Serve(srv, srv.ListenAndServe, graceful.DefaultGrace); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -952,7 +965,7 @@ func (s *apiServer) withAuth(next http.Handler) http.Handler {
 }
 
 func (s *apiServer) isPublicAuthPath(r *http.Request) bool {
-	if r.Method == http.MethodOptions || r.URL.Path == "/api/v1/health" {
+	if r.Method == http.MethodOptions || r.URL.Path == "/api/v1/health" || r.URL.Path == "/api/v1/health/ready" {
 		return true
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/api/v1/tls/public" {
@@ -1649,6 +1662,9 @@ func (s *apiServer) handlePrometheusMetrics(w http.ResponseWriter, r *http.Reque
 
 	// NCC alert lifecycle gauges (persistent store; see alertlifecycle.go).
 	s.writeAlertLifecycleMetrics(w)
+
+	// Per-route request counts and latency (see requestmeta.go).
+	s.httpMetrics.write(w)
 }
 
 // latestRunSummaryView loads the most recent run-summary.json into the view
@@ -3680,6 +3696,10 @@ func (s *apiServer) cancelActiveRun(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// preflightTimeout bounds the preflight-check child. The UI client waits a
+// little longer (see runPreflight in frontend/src/api/client.ts).
+const preflightTimeout = 120 * time.Second
+
 func (s *apiServer) handleRunPreflight(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
@@ -3702,7 +3722,8 @@ func (s *apiServer) handleRunPreflight(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 		return
 	}
-	out, err := s.runOrchestrator([]string{"preflight-check", "--config", resolvedCfgPath, "--format", "json"}, 120*time.Second)
+	extendDeadlines(w, preflightTimeout)
+	out, err := s.runOrchestrator([]string{"preflight-check", "--config", resolvedCfgPath, "--format", "json"}, preflightTimeout)
 	if err != nil {
 		s.audit(r, "runs.preflight", false, map[string]interface{}{
 			"config_path": resolvedCfgPath,
@@ -3768,6 +3789,9 @@ func (s *apiServer) handleRunTrigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cleanExtraArgs, err := sanitizeExtraArgs(req.ExtraArgs)
+	if err == nil {
+		cleanExtraArgs, err = s.confineExtraArgPaths(cleanExtraArgs)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 		return
@@ -4204,6 +4228,7 @@ func (s *apiServer) handleMetaRoutes(w http.ResponseWriter, r *http.Request) {
 func apiRouteCatalog() []routeMeta {
 	routes := []routeMeta{
 		{Path: "/api/v1/health", Methods: []string{http.MethodGet}, Description: "Backend health, version, and resolved paths"},
+		{Path: "/api/v1/health/ready", Methods: []string{http.MethodGet}, Description: "Public readiness probe: 200 when the user store is readable, the runner binary is executable, and the output directory is writable; 503 otherwise (check names only)"},
 		{Path: "/api/v1/tls/public", Methods: []string{http.MethodGet}, Description: "Public: UI certificate SHA-256 fingerprint and PEM (no private key) so the login page can offer download/trust for self-signed HTTPS"},
 		{Path: "/api/v1/components", Methods: []string{http.MethodGet}, Description: "Viewer+: report orchestrator, API server, and UI server versions"},
 		{Path: "/api/v1/alerts", Methods: []string{http.MethodGet}, Description: "Viewer+: fetch normalized Prism Central alerts with bounded caching and per-source errors"},
@@ -4212,6 +4237,7 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/alerts/ncc/events", Methods: []string{http.MethodGet}, Description: "Viewer+: append-only NCC alert lifecycle events (detected, redetected, not_detected, severity_changed, acknowledged, resolved, reopened, recurred, closed) ordered by seq. Incremental sync: pass next_cursor back as cursor. Optional alert_id filter. Cluster-group scoped."},
 		{Path: "/api/v1/alerts/ncc/{id}", Methods: []string{http.MethodGet}, Description: "Viewer+: one NCC alert instance with its full event history and the other instances (earlier/later episodes) of the same finding"},
 		{Path: "/api/v1/alerts/ncc/{id}/{action}", Methods: []string{http.MethodPost}, Description: "Operator+: action is acknowledge, resolve, or reopen. Optional JSON body {\"note\": \"...\"} (max 500 chars). Idempotent: repeating the current state with the same note records nothing new.", SampleBody: "{\n  \"note\": \"Vendor case 12345 opened\"\n}"},
+		{Path: "/api/v1/onboarding", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET operator+: the setup checklist, derived from the install's real state (clusters configured, first successful run, schedule, backups, notifications, team access). PUT admin-only: hide or show the checklist for everyone.", SampleBody: "{\n  \"dismissed\": true\n}"},
 		{Path: "/api/v1/features", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET viewer+: which optional views are on. PUT admin-only: turn Insights, Prism Central alerts, discovery, comparison, flaky checks, SLO, or the log index on or off.", SampleBody: "{\n  \"insights\": false,\n  \"pc_alerts\": false\n}"},
 		{Path: "/api/v1/audit", Methods: []string{http.MethodGet}, Description: "Read recent audit log entries (limit, action, failures filters)"},
 		{Path: "/api/v1/metrics/rate-limit", Methods: []string{http.MethodGet}, Description: "Rate limiter configuration and counters"},
@@ -4272,7 +4298,8 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/runs/summary", Methods: []string{http.MethodGet}, Description: "Read latest run summary (with on-read error-class healing)"},
 		{Path: "/api/v1/runs/active", Methods: []string{http.MethodGet, http.MethodDelete}, Description: "GET: read all queued/running runs (concurrent engine) plus the legacy single-run summary. DELETE: cancel a run by ?id=<run-id>, or all queued/running runs when no id is given."},
 		{Path: "/api/v1/runs/preflight", Methods: []string{http.MethodPost}, Description: "Run preflight checks (config/secrets/path permissions)", SampleBody: "{\n  \"config_path\": \"config.yaml\"\n}"},
-		{Path: "/api/v1/runs/trigger", Methods: []string{http.MethodPost}, Description: "Trigger an orchestrator run. Concurrent runs are allowed; clusters already being refreshed by another active run are skipped (reported in skipped_clusters) and the run executes only the remainder. When all concurrency slots are busy the run is queued and starts automatically.", SampleBody: "{\n  \"config_path\": \"config.yaml\",\n  \"password\": \"\",\n  \"group\": \"\",\n  \"clusters\": [],\n  \"extra_args\": [\"--no-html\"]\n}"},
+		{Path: "/api/v1/runs/extra-args", Methods: []string{http.MethodGet}, Description: "Run options accepted in extra_args by POST /runs/trigger, with labels, allowed values and examples (generated from the server allowlist)."},
+		{Path: "/api/v1/runs/trigger", Methods: []string{http.MethodPost}, Description: "Trigger an orchestrator run. Concurrent runs are allowed; clusters already being refreshed by another active run are skipped (reported in skipped_clusters) and the run executes only the remainder. When all concurrency slots are busy the run is queued and starts automatically.", SampleBody: "{\n  \"config_path\": \"config.yaml\",\n  \"password\": \"\",\n  \"group\": \"\",\n  \"clusters\": [],\n  \"extra_args\": [\"--outputs\", \"csv,json\"]\n}"},
 		{Path: "/api/v1/report/data", Methods: []string{http.MethodGet}, Description: "Aggregated report payload (supports optional limit/offset pagination for large arrays)"},
 		{Path: "/api/v1/report/trends", Methods: []string{http.MethodGet}, Description: "Historical trends from run summaries"},
 		{Path: "/api/v1/logs/runner", Methods: []string{http.MethodGet}, Description: "Read tail of runner log"},
@@ -4357,7 +4384,7 @@ func (s *apiServer) buildOpenAPISpecBase() map[string]interface{} {
 		"openapi": "3.0.3",
 		"info": map[string]interface{}{
 			"title":       "NCC Orchestrator API",
-			"version":     "2.2.1",
+			"version":     "2.3.0",
 			"description": "REST API for NCC orchestrator run control, artifacts, settings, and analytics.",
 		},
 		"servers": []map[string]interface{}{
@@ -4835,7 +4862,7 @@ func (s *apiServer) buildOpenAPISpecBase() map[string]interface{} {
 								"example": map[string]interface{}{
 									"config_path": "config.yaml",
 									"password":    "",
-									"extra_args":  []string{"--no-html"},
+									"extra_args":  []string{"--outputs", "csv,json"},
 								},
 							},
 						},
@@ -4957,6 +4984,9 @@ func (s *apiServer) absPath(p string) string {
 func writeJSON(w http.ResponseWriter, status int, v envelope) {
 	if !v.Success && strings.TrimSpace(v.Error) != "" && strings.TrimSpace(v.ErrorCode) == "" {
 		v.ErrorCode = defaultAPIErrorCode(status)
+	}
+	if !v.Success && v.RequestID == "" {
+		v.RequestID = w.Header().Get(requestIDHeader)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -5685,10 +5715,12 @@ func handleSubcommandArgs(args []string) {
 func (s *apiServer) buildHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/health", s.handleHealth)
+	mux.HandleFunc("/api/v1/health/ready", s.handleReady)
 	mux.HandleFunc("/api/v1/tls/public", s.handlePublicTLS)
 	mux.HandleFunc("/api/v1/components", s.handleComponents)
 	mux.HandleFunc("/api/v1/alerts", s.handleAlerts)
 	mux.HandleFunc("/api/v1/features", s.handleFeatureFlags)
+	mux.HandleFunc("/api/v1/onboarding", s.handleOnboarding)
 	mux.HandleFunc("/api/v1/alerts/ncc-dispositions", s.handleNCCDispositions)
 	mux.HandleFunc("/api/v1/alerts/ncc", s.handleNCCAlerts)
 	mux.HandleFunc("/api/v1/alerts/ncc/", s.handleNCCAlerts)
@@ -5768,6 +5800,7 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/api/v1/runs/active", s.handleRunActive)
 	mux.HandleFunc("/api/v1/runs/config-preference", s.handleRunConfigPreference)
 	mux.HandleFunc("/api/v1/runs/configs", s.handleConfigsList)
+	mux.HandleFunc("/api/v1/runs/extra-args", s.handleRunExtraArgs)
 	mux.HandleFunc("/api/v1/runs/preflight", s.handleRunPreflight)
 	mux.HandleFunc("/api/v1/runs/trigger", s.handleRunTrigger)
 	mux.HandleFunc("/api/v1/report/data", s.handleReportData)
@@ -5778,7 +5811,7 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/docs/assets/", s.handleSwaggerAsset)
 	mux.HandleFunc("/", s.handleAPIDocsHome)
 
-	return s.withCompression(s.withCORS(s.withRateLimit(s.withAuth(mux))))
+	return s.withRequestMeta(s.withCompression(s.withCORS(s.withRateLimit(s.withAuth(mux)))))
 }
 
 // initJWTSecret loads NCC_JWT_SECRET (or reuses --session-secret) for HS256

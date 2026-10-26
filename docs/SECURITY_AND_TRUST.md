@@ -828,10 +828,16 @@ persisted in the user store and is rate-limited via the global limiter; no admin
 emails are stored, so the queue + the `auth.forgot_password` audit line are the
 notification surface.
 
-**The admin is locked out — self-service via the same link.** When the
-forgot-password username is the built-in `admin`, queuing a request is useless
-(there may be no other admin to action it), so the server instead self-resets
-the admin exactly like first-run setup: it generates a **new random password**,
+**The admin is locked out.** By default a forgot-password request for the
+built-in `admin` is queued like any other (another admin can act on it) and
+changes nothing; a locked-out sole admin recovers on the host with
+`ncc-orchestrator v2-reset-password --user admin` (or
+`ncc-api-server --reset-admin`).
+
+**Optional: self-service via the same link (`--allow-admin-self-reset`, off by
+default).** With the flag (or `NCC_ALLOW_ADMIN_SELF_RESET=true`), the server
+instead self-resets the admin exactly like first-run setup: it generates a
+**new random password**,
 forces a change at next login, and **invalidates all existing admin sessions**
 (token-generation bump). The new password is written only to the sibling
 **`.ncc-initial-admin-password`** file (or the Kubernetes Secret's
@@ -846,8 +852,10 @@ the admin password (a nuisance/DoS that repeatedly invalidates the real admin's
 sessions) but **cannot learn the new password or take over the account**; every
 attempt is recorded with `admin_self_reset` in the `auth.forgot_password` audit
 line. A dedicated **per-IP cooldown (60s)** rejects rapid repeats with
-`429 NCC_API_RATE_LIMITED` on top of the global rate limiter; front a public
-deployment with network controls to blunt rotation from many source IPs.
+`429 NCC_API_RATE_LIMITED` on top of the global rate limiter. That nuisance is
+why the path is off by default: enable it only where the login page is not
+reachable by untrusted clients, and front such deployments with network
+controls to blunt rotation from many source IPs.
 
 An authenticated admin can produce the same outcome from **Settings → Access →
 Reset password** on the `admin` row: the dialog offers **Generate & reset**
@@ -869,7 +877,8 @@ stops an attacker who rotates source IPs while grinding one account — somethin
 the IP limiter alone cannot. A successful login or any password reset clears the
 lockout; set the threshold to `0` to disable. The built-in `admin` is not
 exempt (so it is also protected), and remains recoverable via the
-forgot-password self-reset or the offline `v2-reset-password` command if locked.
+offline `v2-reset-password` command (or, when enabled, the forgot-password
+self-reset) if locked.
 
 Every session is an HMAC token stamped with the account's **token generation**;
 bumping that generation invalidates all outstanding sessions for the user at

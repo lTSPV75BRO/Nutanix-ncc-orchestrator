@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -219,6 +220,11 @@ func TestNormalizeAndConfinePathRejectsSymlinkEscape(t *testing.T) {
 	outside := t.TempDir()
 	linkDir := filepath.Join(root, "linked")
 	if err := os.Symlink(outside, linkDir); err != nil {
+		if runtime.GOOS == "windows" {
+			// Creating symlinks needs SeCreateSymbolicLinkPrivilege
+			// (admin or Developer Mode) on Windows.
+			t.Skipf("symlinks unavailable: %v", err)
+		}
 		t.Fatalf("create symlink: %v", err)
 	}
 	s := &apiServer{repoRoot: root}

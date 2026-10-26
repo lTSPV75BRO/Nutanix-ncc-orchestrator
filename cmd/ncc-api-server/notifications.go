@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"mime"
+	"net"
 	"net/http"
 	"net/mail"
 	"net/smtp"
@@ -20,6 +21,8 @@ import (
 	"time"
 
 	yaml "go.yaml.in/yaml/v3"
+
+	"goncc/internal/notify"
 )
 
 // urlRedactPattern matches http(s) URLs so they can be stripped from
@@ -942,7 +945,11 @@ func requestedChannels(channel string) (map[string]bool, error) {
 
 func sendWebhookJSON(endpoint string, payload map[string]interface{}) error {
 	b, _ := json.Marshal(payload)
-	req, _ := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(b))
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(b))
+	if err != nil {
+		// A malformed stored URL used to leave req nil and panic below.
+		return fmt.Errorf("webhook request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	cli := &http.Client{Timeout: 10 * time.Second}
 	resp, err := cli.Do(req)
@@ -970,7 +977,7 @@ func sendSlackWebhook(cfg slackNotificationConfig, title, text string) error {
 }
 
 func sendSMTPMail(cfg emailNotificationConfig, subject, body string) error {
-	addr := fmt.Sprintf("%s:%d", strings.TrimSpace(cfg.SMTPHost), cfg.SMTPPort)
+	addr := net.JoinHostPort(strings.TrimSpace(cfg.SMTPHost), strconv.Itoa(cfg.SMTPPort))
 	host := strings.TrimSpace(cfg.SMTPHost)
 	var auth smtp.Auth
 	if strings.TrimSpace(cfg.Username) != "" {
@@ -1010,7 +1017,10 @@ func sendSMTPMail(cfg emailNotificationConfig, subject, body string) error {
 		"",
 		base64MIMEBody(body),
 	}, "\r\n")
-	return smtp.SendMail(addr, auth, from.Address, recipients, []byte(msg))
+	// notify.SendMail is smtp.SendMail under a deadline: without one, a relay
+	// that accepted the connection and stalled hung the test-notification
+	// request and every run-finished notification indefinitely.
+	return notify.SendMail(notify.SMTPMessage{Addr: addr, Auth: auth, From: from.Address, To: recipients, Body: []byte(msg)})
 }
 
 // stripCRLF flattens line breaks so a value can sit on a single header line.

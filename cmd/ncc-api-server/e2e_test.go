@@ -216,11 +216,13 @@ func TestEndToEndFirstRunAdminFlow(t *testing.T) {
 }
 
 // TestEndToEndAdminForgotPasswordSelfReset exercises the admin lockout recovery
-// path over the real handler stack: an anonymous forgot-password for the
-// built-in admin self-resets it (first-run workflow) — the prior password stops
-// working, the new one lands only in the .ncc-initial-admin-password file,
-// /me re-advertises bootstrap_pending, and a second immediate attempt from the
-// same client is throttled (429).
+// path over the real handler stack. By default (no --allow-admin-self-reset)
+// an anonymous forgot-password for the built-in admin changes nothing: generic
+// response, password and sessions intact, a queued request for other admins.
+// With the opt-in, it self-resets the admin (first-run workflow) — the prior
+// password stops working, the new one lands only in the
+// .ncc-initial-admin-password file, /me re-advertises bootstrap_pending, and a
+// second immediate attempt from the same client is throttled (429).
 func TestEndToEndAdminForgotPasswordSelfReset(t *testing.T) {
 	dir := t.TempDir()
 	db, err := openUserDB(filepath.Join(dir, "users.json"))
@@ -308,8 +310,33 @@ func TestEndToEndAdminForgotPasswordSelfReset(t *testing.T) {
 	pwFile := filepath.Join(dir, ".ncc-initial-admin-password")
 	_ = os.Remove(pwFile)
 
-	// Anonymous forgot-password for admin self-resets the account.
+	// Default: anonymous forgot-password for admin must not rotate anything.
 	code, env := do(http.MethodPost, "/api/v1/auth/forgot-password", `{"username":"admin"}`)
+	if code != http.StatusOK {
+		t.Fatalf("forgot admin (default): %d (%+v)", code, env)
+	}
+	if _, reset := data(env)["admin_reset"]; reset {
+		t.Fatalf("admin self-reset must be off by default: %+v", env)
+	}
+	if msg, _ := env["message"].(string); !strings.Contains(msg, "If that account exists") {
+		t.Fatalf("default response should be the generic one: %+v", env)
+	}
+	if _, err := os.Stat(pwFile); err == nil {
+		t.Fatal("default must not write a new initial-password file")
+	}
+	code, _ = do(http.MethodPost, "/api/v1/auth/login", `{"username":"admin","password":"`+settledPW+`"}`)
+	if code != http.StatusOK {
+		t.Fatalf("admin password must still work after a default forgot-password: %d", code)
+	}
+	do(http.MethodPost, "/api/v1/auth/logout", "")
+	if reqs := db.listResetRequests(); len(reqs) != 1 || !strings.EqualFold(reqs[0].Username, "admin") {
+		t.Fatalf("default should queue an admin reset request for other admins, got %+v", reqs)
+	}
+
+	// Opt-in (--allow-admin-self-reset): anonymous forgot-password for admin
+	// self-resets the account.
+	s.adminSelfResetEnabled = true
+	code, env = do(http.MethodPost, "/api/v1/auth/forgot-password", `{"username":"admin"}`)
 	if code != http.StatusOK {
 		t.Fatalf("forgot admin: %d (%+v)", code, env)
 	}

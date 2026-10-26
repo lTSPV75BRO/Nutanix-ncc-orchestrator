@@ -104,7 +104,7 @@ const PRESETS: EndpointPreset[] = [
       {
         config_path: "config.yaml",
         password: "",
-        extra_args: ["--no-html"],
+        extra_args: ["--outputs", "csv,json"],
       },
       null,
       2,
