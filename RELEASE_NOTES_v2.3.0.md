@@ -38,8 +38,11 @@ admin-only steps. An admin's **Hide** applies to the whole install.
 
 ### Redesigned sign-in and first-password screens
 
-- Shared two-pane layout, responsive down to phone width, static background
-  (the animated background and its toggle are gone).
+- New look, always dark: a product pane on the left ("Automate Nutanix
+  Cluster Health Checks", parallel execution, analysis, and unified
+  operations) with a purple wave ribbon that flows slowly from left to right,
+  and a gradient sign-in form on the right. Responsive down to phone width;
+  the wave stays still when the operating system asks for reduced motion.
 - The sign-in form now appears on installs that sign in only through Active
   Directory/LDAP (it was hidden without local accounts).
 - Caps Lock warning; lockouts shown as a warning with the server's retry time;
@@ -50,6 +53,20 @@ admin-only steps. An admin's **Hide** applies to the whole install.
   the default encrypted `.tar.gz.enc` archives and has a passphrase field.
   Before, the file picker hid them and no passphrase could be given.
 - The new-password form validates the confirmation as you type.
+
+### Opening title
+
+When the site is opened, the name "NCC Orchestrator" draws itself in outline
+and fills in while the sign-in page behind it shows through frosted; the
+frost then smoothly clears (about four seconds in all). It plays once per
+browser tab, not on every reload. Click anywhere, press Escape, Enter or
+Space, or use **Skip** to go straight to sign-in. It is not shown when the
+operating system asks for reduced motion.
+
+The title uses the StrokeText component from React Bits, which needs the new
+`gsap` 3.15.0 dependency (GSAP's Standard "no charge" license, which allows
+commercial use). GSAP loads only when the title plays, so the main bundle does
+not grow.
 
 ### Run options builder
 

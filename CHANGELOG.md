@@ -44,10 +44,20 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   shows as a Dashboard card and a "Setup n/m" header button with a drawer, and
   an admin's "hide" applies to everyone.
 - **Redesigned sign-in and first-password screens** (shared two-pane layout,
-  responsive). Directory-only (AD/LDAP) installs now get the sign-in form (it
+  responsive, always dark): a product pane ("Automate Nutanix Cluster Health
+  Checks", three feature highlights, version) over a purple wave ribbon that
+  flows left to right (still under reduced motion), and a gradient sign-in
+  form with placeholder-only fields (labelled for screen readers). Directory-only (AD/LDAP) installs now get the sign-in form (it
   was hidden without local accounts); Caps Lock warning; lockouts shown as a
   warning; a notice after sign-out or when a session ends; clearer first-run
   guidance with a copyable Kubernetes command.
+- **Opening title:** when the site is opened, "NCC Orchestrator" draws itself
+  in outline and fills in (React Bits `StrokeText`, built on GSAP) while the
+  page behind it shows through frosted; the blur then eases away to reveal
+  sign-in. Once per browser tab; click, Skip, Escape, Enter or Space skips it;
+  not shown when the OS asks for reduced motion. GSAP loads in a separate
+  chunk only when the title plays. New dependency: `gsap` 3.15.0 (GSAP
+  Standard "no charge" license).
 - **Run options builder:** `GET /api/v1/runs/extra-args` publishes the allowed
   run flags with labels and allowed values (generated from the server
   allowlist); the Runs page shows them as controls with a preview of what will

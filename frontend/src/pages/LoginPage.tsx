@@ -279,15 +279,21 @@ export function LoginPage({
         <Form layout="vertical" onFinish={handleFinish} requiredMark={false} disabled={submitting} className="auth-form">
           <Form.Item
             name="username"
-            label="Username"
             extra={ldapEnabled ? "Directory users: your usual Windows/AD username (e.g. jdoe)." : undefined}
             rules={[{ required: true, message: "Enter your username" }]}
           >
-            <Input name="username" size="large" prefix={<UserOutlined />} autoComplete="username" autoFocus />
+            <Input
+              name="username"
+              size="large"
+              prefix={<UserOutlined />}
+              placeholder="Username"
+              aria-label="Username"
+              autoComplete="username"
+              autoFocus
+            />
           </Form.Item>
           <Form.Item
             name="password"
-            label="Password"
             rules={[{ required: true, message: "Enter your password" }]}
             extra={capsLock ? <span className="auth-capslock">Caps Lock is on</span> : undefined}
           >
@@ -295,6 +301,8 @@ export function LoginPage({
               name="password"
               size="large"
               prefix={<LockOutlined />}
+              placeholder="Password"
+              aria-label="Password"
               autoComplete="current-password"
               onKeyUp={trackCapsLock}
               onKeyDown={trackCapsLock}
