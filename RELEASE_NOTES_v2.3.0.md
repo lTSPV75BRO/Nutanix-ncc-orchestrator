@@ -38,10 +38,11 @@ admin-only steps. An admin's **Hide** applies to the whole install.
 
 ### Redesigned sign-in and first-password screens
 
-- New look, always dark: a product pane on the left ("Automate Nutanix
-  Cluster Health Checks", parallel execution, analysis, and unified
-  operations) with a purple wave ribbon that flows slowly from left to right,
-  and a gradient sign-in form on the right. Responsive down to phone width;
+- New, minimal look in the colours of the selected app theme (dark, light or
+  IT Professional): a product pane on the left ("Automate Nutanix cluster
+  health checks", parallel execution, analysis, and unified operations) with
+  a quiet wave ribbon in the theme accent that flows slowly from left to
+  right, and the sign-in form on the right. Responsive down to phone width;
   the wave stays still when the operating system asks for reduced motion.
 - The sign-in form now appears on installs that sign in only through Active
   Directory/LDAP (it was hidden without local accounts).

@@ -44,10 +44,11 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   shows as a Dashboard card and a "Setup n/m" header button with a drawer, and
   an admin's "hide" applies to everyone.
 - **Redesigned sign-in and first-password screens** (shared two-pane layout,
-  responsive, always dark): a product pane ("Automate Nutanix Cluster Health
-  Checks", three feature highlights, version) over a purple wave ribbon that
-  flows left to right (still under reduced motion), and a gradient sign-in
-  form with placeholder-only fields (labelled for screen readers). Directory-only (AD/LDAP) installs now get the sign-in form (it
+  responsive, minimal, in the selected app theme's colours): a product pane
+  ("Automate Nutanix cluster health checks", three feature highlights,
+  version) over a quiet wave ribbon in the theme accent that flows left to
+  right (still under reduced motion), and a sign-in form with
+  placeholder-only fields (labelled for screen readers). Directory-only (AD/LDAP) installs now get the sign-in form (it
   was hidden without local accounts); Caps Lock warning; lockouts shown as a
   warning; a notice after sign-out or when a session ends; clearer first-run
   guidance with a copyable Kubernetes command.
