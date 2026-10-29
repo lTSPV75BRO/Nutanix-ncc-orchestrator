@@ -1,6 +1,6 @@
 # Internal pages: UI/UX redesign plan
 
-Status: in progress — Phases 0–2 done (2026-10-29). Scope: every signed-in page of the web UI
+Status: in progress — Phases 0–3 done (2026-10-29). Scope: every signed-in page of the web UI
 (`frontend/src`). The API stays as it is; this is frontend-only work.
 
 ## Where we are
@@ -206,6 +206,28 @@ type checks.
 - `RunsSection.tsx` is removed; Settings no longer has a Runs section.
 - Left for Phase 5: on phones, tables scroll inside their panel instead of
   becoming cards.
+
+### Phase 3 — done (2026-10-29)
+
+- **Insights** (`pages/InsightsPage.tsx`): run line and four stat tiles
+  (health score, checks, clusters at risk, duration), then tabs kept in the
+  URL (`?tab=clusters|trends|triage`):
+  - Summary — what the run is saying, results bar with legend, top failing
+    checks (row opens the check drawer, also by keyboard), review first,
+    about this report;
+  - Clusters — health ranking, run reliability and versions, SLO panel;
+  - Trends — failures over the last 12 runs (column chart), comparison with
+    the previous run, new/resolved findings, flaky checks;
+  - Triage — triage queue (link to Findings), alert lifecycle, the same
+    check on several clusters, KB articles.
+- **No data** shows "Nothing to analyse yet" with a link to Runs instead of
+  a red "0% Critical".
+- **One health formula:** the cluster ranking and `SloPanel` now use
+  `weightedHealthScore` (SloPanel ignored warnings and weighted errors like
+  failures); the unused `InsightsCards.tsx` (warnings at 2.2) is removed.
+- The older report panels (SLO, diff, flaky, lifecycle) keep their markup but
+  take the Panel look inside Insights (CSS bridge in styles.css); rebuilding
+  them on `src/ui` is left for Phase 5.
 
 ## Risks and constraints
 

@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { buildClusterNameMap, displayClusterName, healthPillValue, resolveClusterName } from "./report";
+import { buildClusterNameMap, displayClusterName, healthPillValue, resolveClusterName, weightedHealthScore } from "./report";
+
+describe("weightedHealthScore", () => {
+  it("is null without checks, not 0", () => {
+    expect(weightedHealthScore({})).toBeNull();
+    expect(weightedHealthScore({ total_plugins: 0 })).toBeNull();
+  });
+
+  it("is the pass rate minus a penalty per severity, clamped to 0–100", () => {
+    expect(weightedHealthScore({ total_plugins: 100, pass: 100 })).toBe(100);
+    // 95% pass, 1% fail (×8) and 4% warn (×3.5) = 95 - 8 - 14 = 73.
+    expect(weightedHealthScore({ total_plugins: 100, pass: 95, fail: 1, warn: 4 })).toBeCloseTo(73);
+    expect(weightedHealthScore({ total_plugins: 10, pass: 1, fail: 9 })).toBe(0);
+  });
+});
 
 describe("cluster identity", () => {
   it("prefers a name or IP over a UUID on the same row", () => {

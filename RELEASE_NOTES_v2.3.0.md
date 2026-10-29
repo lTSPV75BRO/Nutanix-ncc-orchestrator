@@ -108,6 +108,26 @@ Links shared from the old Dashboard open the matching Findings view.
 Viewers can now browse runs and their details; starting and cancelling runs
 still needs the operator role.
 
+### Insights in tabs
+
+Insights was one long page; it now opens with a summary (health score,
+checks, clusters at risk, run duration) and four tabs:
+
+- **Summary** — what the run is saying, a results breakdown, the most
+  frequent failing checks (select one for its clusters and output), and the
+  findings to review first.
+- **Clusters** — clusters from worst to best health, why clusters could not
+  be checked, NCC/AOS versions, and SLOs.
+- **Trends** — failures across the last runs, the comparison with the
+  previous run, new and resolved findings, and flaky checks.
+- **Triage** — how critical alerts are being handled, alert lifecycle,
+  checks failing on several clusters, and knowledge-base articles.
+
+The tab is part of the address, so a view can be bookmarked or shared. Before
+the first run, Insights says there is nothing to analyse yet instead of
+showing "0% Critical". The health score is now calculated the same way on
+every page (the SLO panel used a different formula).
+
 ### Opening title
 
 When the site is opened, the name "NCC Orchestrator" draws itself in outline

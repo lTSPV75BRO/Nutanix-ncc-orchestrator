@@ -79,6 +79,17 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   first, with errors), every check that did not pass, the comparison with the
   previous run, and the run's saved files. Viewers can now browse runs
   (read-only). Run statuses read the same on every page.
+- **Insights reorganised into tabs.** A summary strip (health score, checks,
+  clusters at risk, run duration) sits above four tabs kept in the URL:
+  **Summary** (what the run is saying, results, top failing checks, findings
+  to review first), **Clusters** (health ranking, reliability and versions,
+  SLOs), **Trends** (failures across recent runs, comparison with the
+  previous run, new/resolved and flaky checks) and **Triage** (triage queue,
+  alert lifecycle, checks failing on several clusters, KB articles). With no
+  results yet it says so instead of showing a red "0% Critical".
+- **One health score everywhere.** The SLO panel computed cluster health
+  without warnings and weighted errors like failures, so it disagreed with
+  the cluster ranking and the Overview; all now use the same formula.
 - **Opening title:** when the site is opened, "NCC Orchestrator" draws itself
   in outline and fills in (React Bits `StrokeText`, built on GSAP) while the
   page behind it shows through frosted; the blur then eases away to reveal

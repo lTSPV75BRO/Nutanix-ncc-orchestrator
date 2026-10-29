@@ -1,6 +1,6 @@
 import { Card, Col, Empty, List, Progress, Row, Statistic, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { asArray, asRecord, resolveClusterName, toNumber } from "../../utils/report";
+import { asArray, asRecord, resolveClusterName, toNumber, weightedHealthScore } from "../../utils/report";
 
 type Props = {
   sloDashboard: unknown;
@@ -19,10 +19,9 @@ export function SloPanel({ sloDashboard, nccClusterSummary, regressionSummary, c
     const errCount = useNCCSummary ? toNumber(cc.error) : toNumber(cc.error_count);
     const failCount = failOnlyCount + errCount;
     const failRate = checks > 0 ? (failCount / checks) * 100 : 0;
-    const healthRaw = useNCCSummary ? toNumber(cc.health_rate) : toNumber(cc.health_score);
-    const infoRate = checks > 0 ? (useNCCSummary ? (toNumber(cc.info) / checks) * 100 : 0) : 0;
-    const unknownRate = checks > 0 ? (useNCCSummary ? (toNumber(cc.unknown) / checks) * 100 : 0) : 0;
-    const health = useNCCSummary ? Math.max(0, healthRaw - failRate * 8.0 - infoRate * 2.2 - unknownRate * 3.0) : healthRaw;
+    // Same weighted score as the Overview and the cluster ranking; the SLO
+    // export (no NCC summary) carries the runner's own health_score.
+    const health = useNCCSummary ? (weightedHealthScore(cc) ?? 0) : toNumber(cc.health_score);
     const status = failRate >= 2 ? "critical" : failRate >= 1 ? "at-risk" : String(cc.status || "ok");
     return {
       key: `${String(cc.address || "cluster")}-${idx}`,

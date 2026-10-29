@@ -3093,6 +3093,311 @@ label.ui-field-inline {
   border-top: 1px solid var(--ui-border);
 }
 
+/* ---- Insights (pages/InsightsPage.tsx) */
+.insights-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-5);
+}
+
+.insights-tab {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-4);
+}
+
+.insights-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: var(--ui-space-4);
+}
+
+.insights-tabs .ant-tabs-nav {
+  margin-bottom: var(--ui-space-4);
+}
+
+/* Older report panels (SLO, diff, flaky, lifecycle) still render antd Cards;
+   inside Insights they take the same flat look as Panel. */
+.insights-page .page-card.ant-card {
+  margin: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-surface);
+  box-shadow: none;
+}
+
+.insights-page .page-card.ant-card:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.insights-page .page-card .section-title.ant-typography {
+  font-size: var(--ui-text-lg);
+  font-weight: 600;
+}
+
+.insights-brief {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-2);
+}
+
+.insights-brief li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ui-space-3);
+  padding: var(--ui-space-3) var(--ui-space-4);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-hover);
+  font-size: var(--ui-text-md);
+}
+
+.insights-brief-icon {
+  margin-top: 2px;
+}
+
+.insights-brief .tone-fail .insights-brief-icon {
+  color: var(--ui-fail);
+}
+
+.insights-brief .tone-warn .insights-brief-icon {
+  color: var(--ui-warn);
+}
+
+.insights-brief .tone-ok .insights-brief-icon {
+  color: var(--ui-ok);
+}
+
+.insights-brief .tone-info .insights-brief-icon,
+.insights-brief .tone-neutral .insights-brief-icon {
+  color: var(--ui-info);
+}
+
+.insights-stack {
+  display: flex;
+  height: 12px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--ui-surface-hover);
+}
+
+.insights-stack .overview-bar-fill {
+  border-radius: 0;
+}
+
+.overview-bar-fill.tone-neutral {
+  background: var(--ui-neutral);
+}
+
+.insights-legend {
+  list-style: none;
+  margin: var(--ui-space-4) 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--ui-space-3);
+}
+
+.insights-legend li {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.insights-check {
+  display: flex;
+  flex-direction: column;
+}
+
+.insights-page .ant-table,
+.insights-table .ant-table {
+  background: transparent;
+}
+
+.insights-page tr.is-clickable {
+  cursor: pointer;
+}
+
+.insights-page tr.is-clickable:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: -2px;
+}
+
+.insights-findings,
+.insights-ranking,
+.insights-kb,
+.insights-output {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.insights-findings li,
+.insights-ranking li {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-1);
+  padding: var(--ui-space-3) var(--ui-space-5);
+}
+
+.insights-findings li + li,
+.insights-ranking li + li {
+  border-top: 1px solid var(--ui-border);
+}
+
+.insights-findings p {
+  margin: 0;
+  font-size: var(--ui-text-sm);
+  color: var(--ui-text-secondary);
+}
+
+.insights-finding-head,
+.insights-ranking-head {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+}
+
+.insights-ranking-head {
+  justify-content: space-between;
+}
+
+.insights-score {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.insights-score.tone-ok {
+  color: var(--ui-ok);
+}
+
+.insights-score.tone-warn {
+  color: var(--ui-warn);
+}
+
+.insights-score.tone-fail {
+  color: var(--ui-fail);
+}
+
+.insights-ok {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+  margin: 0 0 var(--ui-space-3);
+  color: var(--ui-ok);
+}
+
+.insights-trend {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: var(--ui-space-2);
+  height: 180px;
+}
+
+.insights-trend-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ui-space-1);
+  min-width: 0;
+  height: 100%;
+}
+
+.insights-trend-value {
+  font-size: var(--ui-text-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.insights-trend-track {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  width: 100%;
+  max-width: 36px;
+}
+
+.insights-trend-bar {
+  display: block;
+  width: 100%;
+  border-radius: var(--ui-radius-sm) var(--ui-radius-sm) 0 0;
+}
+
+.insights-trend-bar.tone-fail {
+  background: var(--ui-fail);
+}
+
+.insights-trend-bar.tone-ok {
+  background: var(--ui-ok);
+}
+
+.insights-trend-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--ui-text-tertiary);
+}
+
+.insights-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+}
+
+.insights-kb {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-3);
+}
+
+.insights-kb li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--ui-space-2);
+}
+
+.insights-output {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-3);
+  margin-top: var(--ui-space-2);
+}
+
+.insights-output pre {
+  margin: var(--ui-space-1) 0 0;
+  padding: var(--ui-space-3);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-hover);
+  font-size: var(--ui-text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1100px) {
+  .insights-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .insights-trend {
+    height: 150px;
+    gap: 4px;
+  }
+  .insights-trend-label {
+    display: none;
+  }
+}
+
 /* ---- Setup progress banner (features/onboarding/SetupChecklist.tsx) */
 .setup-banner {
   display: flex;

@@ -1,36 +1,28 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import {
-  Alert,
-  Badge,
-  Button,
-  Card,
-  Col,
-  Descriptions,
-  Drawer,
-  Empty,
-  List,
-  Progress,
-  Row,
-  Skeleton,
-  Space,
-  Statistic,
-  Table,
-  Tag,
-  Tooltip,
-  Typography,
-} from "antd";
+import { Alert, Button, Drawer, Skeleton, Table, Tabs, Tooltip } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
-  ClockCircleOutlined,
+  BarChartOutlined,
+  CheckCircleOutlined,
   ExclamationCircleOutlined,
+  InfoCircleOutlined,
   LinkOutlined,
   MinusOutlined,
-  SafetyCertificateOutlined,
+  WarningOutlined,
 } from "@ant-design/icons";
-import { asArray, asRecord, buildClusterNameMap, nccDispositionKey, resolveClusterName, toNumber } from "../utils/report";
+import {
+  asArray,
+  asRecord,
+  buildClusterNameMap,
+  nccDispositionKey,
+  resolveClusterName,
+  toNumber,
+  weightedHealthScore,
+} from "../utils/report";
 import { api } from "../api/client";
 import { FeatureDisabled } from "../features/features/FeatureDisabled";
 import { useFeatureFlags } from "../features/features/useFeatureFlags";
@@ -38,8 +30,11 @@ import { DrilldownDiffPanel } from "../features/report/DrilldownDiffPanel";
 import { FlakyChecksPanel } from "../features/report/FlakyChecksPanel";
 import { LifecycleInsightsCard } from "../features/report/LifecycleInsightsCard";
 import { SloPanel } from "../features/report/SloPanel";
+import { sectionHref } from "../navigation";
 import { notifyError } from "../notify";
-import { ageMs, relativeTime } from "../utils/datetime";
+import { EmptyState, KeyValueList, Panel, StatTile, StatusBadge, toneFor, type Tone } from "../ui";
+import { formatDateTime, relativeTime } from "../utils/datetime";
+import { formatDuration, freshness } from "../utils/freshness";
 
 // ---------- helpers ----------
 
@@ -86,22 +81,11 @@ function kbUrl(row: Record<string, unknown>): string {
   return id ? `http://portal.nutanix.com/kb/${id}` : "";
 }
 
-function freshnessTag(iso: string): { color: string; label: string } {
-  if (!iso) return { color: "default", label: "Unknown" };
-  const age = ageMs(iso);
-  if (!Number.isFinite(age)) return { color: "default", label: "Unknown" };
-  if (age <= 6 * 3600_000) return { color: "success", label: "Fresh" };
-  if (age <= 24 * 3600_000) return { color: "processing", label: "Recent" };
-  if (age <= 72 * 3600_000) return { color: "warning", label: "Aging" };
-  return { color: "error", label: "Stale" };
-}
-
-function healthGradeColor(score: number): string {
-  if (score >= 90) return "#22c55e";
-  if (score >= 75) return "#84cc16";
-  if (score >= 60) return "#f59e0b";
-  if (score >= 40) return "#f97316";
-  return "#f43f5e";
+function scoreTone(score: number | null): "ok" | "warn" | "fail" | undefined {
+  if (score == null) return undefined;
+  if (score >= 90) return "ok";
+  if (score >= 60) return "warn";
+  return "fail";
 }
 
 function healthGrade(score: number): string {
@@ -125,6 +109,9 @@ type DrillRow = {
   sample: Record<string, unknown>;
 };
 
+type TabKey = "summary" | "clusters" | "trends" | "triage";
+const TABS: TabKey[] = ["summary", "clusters", "trends", "triage"];
+
 // Module-level fallback so each render doesn't allocate a fresh empty object —
 // otherwise downstream `useMemo` hooks that depend on `data` re-execute on
 // every render, defeating their memoization.
@@ -142,6 +129,18 @@ const EMPTY_REPORT_DATA = Object.freeze({
   artifact_links: {},
 }) as Record<string, unknown>;
 
+const BRIEF_ICON: Record<Tone, React.ReactNode> = {
+  fail: <ExclamationCircleOutlined />,
+  warn: <WarningOutlined />,
+  info: <InfoCircleOutlined />,
+  ok: <CheckCircleOutlined />,
+  neutral: <InfoCircleOutlined />,
+};
+
+/**
+ * Insights: what the latest run says, per cluster, over time, and how
+ * findings are being handled — one tab each (kept in the URL as ?tab=).
+ */
 export function InsightsPage() {
   const features = useFeatureFlags();
   const insightsOff = features.data?.insights === false;
@@ -149,6 +148,9 @@ export function InsightsPage() {
   const trends = useQuery({ queryKey: ["report-trends"], queryFn: () => api.reportTrends(24), enabled: features.isFetched && !insightsOff });
   const nccMarks = useQuery({ queryKey: ["ncc-dispositions"], queryFn: api.nccDispositions, staleTime: 15_000, enabled: features.isFetched && !insightsOff });
   const [drillCheck, setDrillCheck] = useState<DrillRow | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requested = searchParams.get("tab") as TabKey | null;
+  const tab: TabKey = requested && TABS.includes(requested) ? requested : "summary";
 
   useEffect(() => {
     if (report.error) notifyError(report.error, "Failed to load insights");
@@ -174,13 +176,8 @@ export function InsightsPage() {
   const infoCount = toNumber(summaryCounts.info);
   const unknownCount = toNumber(summaryCounts.unknown);
   const rawPassRate = totalPlugins > 0 ? (passCount / totalPlugins) * 100 : 0;
-  const weightedPenalty =
-    (totalPlugins > 0 ? (failCount / totalPlugins) * 100 : 0) * 8.0 +
-    (totalPlugins > 0 ? (errorCount / totalPlugins) * 100 : 0) * 5.5 +
-    (totalPlugins > 0 ? (warnCount / totalPlugins) * 100 : 0) * 3.5 +
-    (totalPlugins > 0 ? (infoCount / totalPlugins) * 100 : 0) * 2.2 +
-    (totalPlugins > 0 ? (unknownCount / totalPlugins) * 100 : 0) * 3.0;
-  const weightedHealth = Math.max(0, Math.min(100, rawPassRate - weightedPenalty));
+  // Null with no checks: a fresh install is "no data", not "0% Critical".
+  const weightedHealth = weightedHealthScore(summaryCounts);
   const consistencyOk =
     passCount + failCount + warnCount + errorCount + infoCount + unknownCount === totalPlugins;
   const affectedClusters = clusterSummary.filter((c) => toNumber(c.fail) > 0 || toNumber(c.error) > 0);
@@ -202,7 +199,7 @@ export function InsightsPage() {
   const trendPoints = asArray(asRecord(trends.data || {}).points).map((p) => asRecord(p));
   const recentTrends = trendPoints.slice(-12);
   const runTimestamp = String(runSummary.timestamp || "");
-  const fresh = freshnessTag(runTimestamp);
+  const fresh = freshness(runTimestamp);
   const runDuration = toNumber(runSummary.duration_s);
   const failureClasses = asRecord(runSummary.failure_classes);
   const failureClassEntries = Object.entries(failureClasses)
@@ -375,14 +372,6 @@ export function InsightsPage() {
         const pass = toNumber(c.pass);
         const info = toNumber(c.info);
         const unknown = toNumber(c.unknown);
-        const passRate = total > 0 ? (pass / total) * 100 : 0;
-        const penalty =
-          (total > 0 ? (fail / total) * 100 : 0) * 8.0 +
-          (total > 0 ? (err / total) * 100 : 0) * 5.5 +
-          (total > 0 ? (warn / total) * 100 : 0) * 3.5 +
-          (total > 0 ? (info / total) * 100 : 0) * 2.2 +
-          (total > 0 ? (unknown / total) * 100 : 0) * 3.0;
-        const health = Math.max(0, Math.min(100, passRate - penalty));
         return {
           address: String(c.address || ""),
           name: resolveClusterName(String(c.address || ""), clusterNameMap),
@@ -393,7 +382,7 @@ export function InsightsPage() {
           pass,
           info,
           unknown,
-          health,
+          health: weightedHealthScore(c) ?? 0,
           riskCount: fail + err,
         };
       })
@@ -416,7 +405,7 @@ export function InsightsPage() {
       .slice(0, 50);
   }, [aggRows, drillCheck]);
 
-  // ---------- render skeleton ----------
+  // ---------- render ----------
 
   if (insightsOff) {
     return <FeatureDisabled feature="insights" />;
@@ -424,13 +413,39 @@ export function InsightsPage() {
 
   if ((features.isLoading && !features.data) || (report.isLoading && !report.data)) {
     return (
-      <Card className="page-card">
-        <Skeleton active paragraph={{ rows: 6 }} />
-      </Card>
+      <div className="insights-page">
+        <div className="overview-stats">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="ui-stat">
+              <Skeleton active paragraph={{ rows: 1 }} title={false} />
+            </div>
+          ))}
+        </div>
+        <Panel>
+          <Skeleton active paragraph={{ rows: 6 }} />
+        </Panel>
+      </div>
     );
   }
 
-  // ---------- main render ----------
+  if (totalPlugins === 0 && trendPoints.length === 0) {
+    return (
+      <div className="insights-page">
+        <Panel>
+          <EmptyState
+            icon={<BarChartOutlined />}
+            title="Nothing to analyse yet"
+            description="Insights appear after the first run that records check results: health per cluster, trends across runs, and how findings are being handled."
+            actions={
+              <Link to={sectionHref("runs")}>
+                <Button type="primary">Go to Runs</Button>
+              </Link>
+            }
+          />
+        </Panel>
+      </div>
+    );
+  }
 
   const deltaFail = toNumber(regression.delta_fail_total);
   const hasRegression = Boolean(regression.has_regression);
@@ -449,36 +464,36 @@ export function InsightsPage() {
   const trendFailDelta = lastTrend && prevTrend ? toNumber(lastTrend.fail_total) - toNumber(prevTrend.fail_total) : null;
   const trendHealthDelta = lastTrend && prevTrend ? toNumber(lastTrend.avg_health_score) - toNumber(prevTrend.avg_health_score) : null;
 
-  const briefing: Array<{ tone: "error" | "warning" | "info" | "success"; text: string }> = [];
+  const briefing: Array<{ tone: Tone; text: string }> = [];
   if (clustersFailed > 0) {
     const classes = failureClassEntries.map((e) => `${e.count} ${e.name.replace(/_/g, " ")}`).join(", ");
     briefing.push({
-      tone: "error",
+      tone: "fail",
       text: `${clustersFailed} of ${clustersOk + clustersFailed} clusters did not complete this run.${classes ? ` Reasons: ${classes}.` : ""}`,
     });
   }
   if (fresh.label === "Stale" || fresh.label === "Aging") {
     briefing.push({
-      tone: fresh.label === "Stale" ? "error" : "warning",
+      tone: fresh.label === "Stale" ? "fail" : "warn",
       text: `These results are ${fresh.label.toLowerCase()} (${relativeTime(runTimestamp)}). They describe that run.`,
     });
   }
   if (newFailCount > 0 || resolvedFailCount > 0) {
     briefing.push({
-      tone: newFailCount > resolvedFailCount ? "warning" : "success",
+      tone: newFailCount > resolvedFailCount ? "warn" : "ok",
       text: `${newFailCount} FAIL ${newFailCount === 1 ? "finding is" : "findings are"} new since the previous run, and ${resolvedFailCount} ${resolvedFailCount === 1 ? "was" : "were"} resolved.`,
     });
   }
   if (triage.returned > 0) {
     briefing.push({
-      tone: "warning",
+      tone: "warn",
       text: `${triage.returned} resolved ${triage.returned === 1 ? "alert was" : "alerts were"} found again on this run.`,
     });
   }
   if (triage.needsAttention > 0) {
     const hottest = triage.clusters.find((c) => c.needs > 0);
     briefing.push({
-      tone: "warning",
+      tone: "warn",
       text: `${triage.needsAttention} critical ${triage.needsAttention === 1 ? "alert has" : "alerts have"} not been acknowledged or resolved.${hottest ? ` ${hottest.name} still has ${hottest.needs}.` : ""}`,
     });
   }
@@ -497,803 +512,513 @@ export function InsightsPage() {
   }
   if (triage.nccVersions.length > 1) {
     briefing.push({
-      tone: "warning",
+      tone: "warn",
       text: `NCC versions differ across clusters: ${triage.nccVersions.map((v) => `${v.version} (${v.clusters.length})`).join(", ")}.`,
     });
   }
   if (briefing.length === 0 && totalPlugins > 0) {
     briefing.push({
-      tone: "success",
+      tone: "ok",
       text: previousTs
         ? "Every cluster completed, there are no new failures since the previous run, and no critical alerts are waiting."
         : "Every cluster completed, and no critical alerts are waiting. There is no earlier run to compare.",
     });
   }
 
-  const severityRows = [
-    { label: "PASS", count: passCount, color: "#22c55e" },
-    { label: "FAIL", count: failCount, color: "#f43f5e" },
-    { label: "WARN", count: warnCount, color: "#f59e0b" },
-    { label: "ERR", count: errorCount, color: "#f97316" },
-    { label: "INFO", count: infoCount, color: "#38bdf8" },
-    { label: "UNKNOWN", count: unknownCount, color: "#94a3b8" },
+  const severityRows: Array<{ label: string; count: number; tone: Tone }> = [
+    { label: "Pass", count: passCount, tone: "ok" },
+    { label: "Fail", count: failCount, tone: "fail" },
+    { label: "Error", count: errorCount, tone: "fail" },
+    { label: "Warning", count: warnCount, tone: "warn" },
+    { label: "Info", count: infoCount, tone: "info" },
+    { label: "Unknown", count: unknownCount, tone: "neutral" },
   ];
+
+  const openDrill = (record: (typeof checkAgg)[number]) =>
+    setDrillCheck({
+      key: `${record.name}|${record.severity}`,
+      name: record.name,
+      severity: record.severity,
+      count: record.count,
+      clusterList: record.clusterList,
+      kb: record.kb,
+      kbId: record.kbId,
+      sample: record.sample,
+    });
+  const drillRow = (record: (typeof checkAgg)[number]) => ({
+    onClick: () => openDrill(record),
+    onKeyDown: (e: React.KeyboardEvent) => {
+      if (e.key === "Enter") openDrill(record);
+    },
+    tabIndex: 0,
+    className: "is-clickable",
+  });
+
+  const kbCell = (row: { kb: string; kbId: string }) =>
+    row.kbId ? (
+      <a href={row.kb} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+        <LinkOutlined /> KB {row.kbId}
+      </a>
+    ) : (
+      "—"
+    );
 
   const checkAggColumns: ColumnsType<(typeof checkAgg)[number]> = [
     {
       title: "Check",
       key: "name",
       render: (_, row) => (
-        <Space orientation="vertical" size={0}>
-          <Typography.Text strong>{row.name}</Typography.Text>
+        <span className="insights-check">
+          <strong>{row.name}</strong>
           {row.clusterList.length > 0 ? (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            <span className="ui-field-help">
               {row.clusterList.slice(0, 4).join(", ")}
               {row.clusterList.length > 4 ? ` +${row.clusterList.length - 4} more` : ""}
-            </Typography.Text>
+            </span>
           ) : null}
-        </Space>
+        </span>
       ),
     },
-    {
-      title: "Severity",
-      dataIndex: "severity",
-      key: "severity",
-      width: 100,
-      render: (v: string) => (
-        <Tag color={v === "FAIL" ? "error" : v === "ERR" ? "volcano" : "warning"}>{v}</Tag>
-      ),
-    },
-    { title: "Occurrences", dataIndex: "count", key: "count", width: 110, align: "right" },
-    {
-      title: "Affected Clusters",
-      key: "clusters",
-      width: 130,
-      align: "right",
-      render: (_, row) => row.clusterList.length,
-    },
-    {
-      title: "KB",
-      key: "kb",
-      width: 90,
-      render: (_, row) =>
-        row.kbId ? (
-          <a href={row.kb} target="_blank" rel="noreferrer">
-            <Tag color="processing" icon={<LinkOutlined />}>
-              KB {row.kbId}
-            </Tag>
-          </a>
-        ) : (
-          <Typography.Text type="secondary">—</Typography.Text>
-        ),
-    },
+    { title: "Severity", dataIndex: "severity", key: "severity", width: 110, render: (v: string) => <StatusBadge tone={toneFor(v)}>{v}</StatusBadge> },
+    { title: "Occurrences", dataIndex: "count", key: "count", width: 120, align: "right" },
+    { title: "Clusters", key: "clusters", width: 100, align: "right", render: (_, row) => row.clusterList.length },
+    { title: "KB", key: "kb", width: 100, render: (_, row) => kbCell(row) },
   ];
 
-  return (
-    <>
-    <Space orientation="vertical" size={16} style={{ width: "100%" }}>
-      {/* HERO HEADER */}
-      <Card className="page-card insights-hero">
-        <Row gutter={[16, 16]} align="middle">
-          <Col xs={24} md={8}>
-            <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-              <Tooltip
-                title={`Pass rate ${rawPassRate.toFixed(1)}% (${passCount.toLocaleString()} of ${totalPlugins.toLocaleString()} checks). Health also weighs warnings and errors.`}
-              >
-                <Progress
-                  type="dashboard"
-                  percent={Number(weightedHealth.toFixed(1))}
-                  strokeColor={healthGradeColor(weightedHealth)}
-                  size={140}
-                  format={(percent) => (
-                    <div style={{ textAlign: "center" }}>
-                      <div style={{ fontSize: 24, fontWeight: 700 }}>{percent}%</div>
-                      <div style={{ fontSize: 12, color: healthGradeColor(weightedHealth), fontWeight: 600 }}>
-                        {healthGrade(weightedHealth)}
-                      </div>
-                    </div>
-                  )}
-                />
-              </Tooltip>
-              <div>
-                <Typography.Text type="secondary" style={{ fontSize: 12, letterSpacing: 1, textTransform: "uppercase" }}>
-                  Weighted Health
-                </Typography.Text>
-                <div>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    Pass rate {totalPlugins > 0 ? `${rawPassRate.toFixed(1)}%` : "—"}
-                  </Typography.Text>
-                </div>
-                <Typography.Title level={4} style={{ margin: "4px 0 6px" }}>
-                  Cluster Insights
-                </Typography.Title>
-                <Space size={6} wrap>
-                  <Tooltip title={runTimestamp || "Run time unavailable"}>
-                    <Tag icon={<ClockCircleOutlined />} color={fresh.color}>
-                      {fresh.label} · {relativeTime(runTimestamp)}
-                    </Tag>
-                  </Tooltip>
-                  {hasRegression ? (
-                    <Tag icon={<ArrowUpOutlined />} color="error">
-                      Regression
-                    </Tag>
-                  ) : deltaFail < 0 ? (
-                    <Tag icon={<ArrowDownOutlined />} color="success">
-                      Improving
-                    </Tag>
-                  ) : (
-                    <Tag icon={<MinusOutlined />} color="default">
-                      Stable
-                    </Tag>
-                  )}
-                </Space>
-              </div>
-            </div>
-          </Col>
-          <Col xs={24} md={16}>
-            <Row gutter={[12, 12]}>
-              <Col xs={12} md={6}>
-                <Statistic title="Checks" value={totalPlugins} />
-              </Col>
-              <Col xs={12} md={6}>
-                <Statistic title="Clusters" value={clusterSummary.length} />
-              </Col>
-              <Col xs={12} md={6}>
-                <Statistic
-                  title="At-risk Clusters"
-                  value={affectedClusters.length}
-                  valueStyle={{ color: affectedClusters.length > 0 ? "#f43f5e" : "#22c55e" }}
-                />
-              </Col>
-              <Col xs={12} md={6}>
-                <Statistic
-                  title="Run Duration"
-                  value={runDuration > 0 ? runDuration.toFixed(1) : "—"}
-                  suffix={runDuration > 0 ? "s" : ""}
-                />
-              </Col>
-              <Col xs={12} md={4}>
-                <Statistic
-                  title="FAIL"
-                  value={failCount}
-                  valueStyle={{ color: failCount > 0 ? "#f43f5e" : undefined }}
-                  prefix={<ExclamationCircleOutlined />}
-                />
-              </Col>
-              <Col xs={12} md={4}>
-                <Statistic
-                  title="WARN"
-                  value={warnCount}
-                  valueStyle={{ color: warnCount > 0 ? "#f59e0b" : undefined }}
-                />
-              </Col>
-              <Col xs={12} md={4}>
-                <Statistic
-                  title="ERR"
-                  value={errorCount}
-                  valueStyle={{ color: errorCount > 0 ? "#f97316" : undefined }}
-                />
-              </Col>
-              <Col xs={12} md={4}>
-                <Statistic
-                  title="INFO"
-                  value={infoCount}
-                  valueStyle={{ color: infoCount > 0 ? "#38bdf8" : undefined }}
-                />
-              </Col>
-              <Col xs={12} md={8}>
-                <Statistic
-                  title="PASS"
-                  value={passCount}
-                  valueStyle={{ color: "#22c55e" }}
-                  prefix={<SafetyCertificateOutlined />}
-                />
-              </Col>
-            </Row>
-          </Col>
-        </Row>
-        {!consistencyOk ? (
-          <Alert
-            type="warning"
-            showIcon
-            style={{ marginTop: 16 }}
-            title="Check totals do not match"
-            description="The severity counts do not add up to the total number of checks. Start the run again if this looks wrong."
-          />
-        ) : null}
-      </Card>
+  const trendMax = Math.max(1, ...recentTrends.map((p) => toNumber(p.fail_total) + toNumber(p.err_total)));
 
-      {briefing.length > 0 ? (
-        <Card className="page-card">
-          <Typography.Title level={4} className="section-title">
-            What this run is saying
-          </Typography.Title>
-          <Typography.Text type="secondary" className="section-subtitle">
-            Highlights from this run and the one before it.
-          </Typography.Text>
-          <Space orientation="vertical" size={8} style={{ width: "100%", marginTop: 12 }}>
-            {briefing.map((item) => (
-              <Alert key={item.text} type={item.tone} showIcon title={item.text} />
-            ))}
-          </Space>
-        </Card>
-      ) : null}
+  const summaryTab = (
+    <div className="insights-tab">
+      <Panel title="What this run is saying" description="Highlights from this run and the one before it.">
+        <ul className="insights-brief">
+          {briefing.map((item) => (
+            <li key={item.text} className={`tone-${item.tone}`}>
+              <span className="insights-brief-icon" aria-hidden="true">
+                {BRIEF_ICON[item.tone]}
+              </span>
+              <span>{item.text}</span>
+            </li>
+          ))}
+        </ul>
+      </Panel>
 
-      <Card className="page-card">
-        <Typography.Title level={4} className="section-title">
-          NCC triage queue
-        </Typography.Title>
-        <Typography.Text type="secondary" className="section-subtitle">
-          Critical alerts and how they have been handled. Resolved alerts return to Needs attention if a later run finds them again.
-        </Typography.Text>
-        <Row gutter={[12, 12]} style={{ marginTop: 16 }}>
-          <Col xs={12} md={6}>
-            <Statistic title="Needs attention" value={triage.needsAttention} valueStyle={{ color: triage.needsAttention > 0 ? "#f43f5e" : "#22c55e" }} />
-          </Col>
-          <Col xs={12} md={6}>
-            <Statistic title="Acknowledged, still open" value={triage.acknowledged} />
-          </Col>
-          <Col xs={12} md={6}>
-            <Statistic title="Resolved" value={triage.resolved} />
-          </Col>
-          <Col xs={24} md={6}>
-            <Statistic
-              title="Most acknowledgements"
-              value={triage.topOwner || "—"}
-              suffix={triage.topCount > 0 ? `(${triage.topCount})` : ""}
-            />
-          </Col>
-        </Row>
-        {triage.returned > 0 ? (
-          <Typography.Paragraph type="secondary" style={{ margin: "12px 0 0" }}>
-            {triage.returned} resolved {triage.returned === 1 ? "alert was" : "alerts were"} found again on this run.
-          </Typography.Paragraph>
-        ) : null}
-        {triage.clusters.some((c) => c.needs > 0) ? (
-          <Table
-            style={{ marginTop: 16 }}
-            size="small"
-            pagination={false}
-            rowKey="name"
-            dataSource={triage.clusters.filter((c) => c.needs > 0).slice(0, 8)}
-            columns={[
-              { title: "Cluster", dataIndex: "name", key: "name" },
-              { title: "Needs attention", dataIndex: "needs", key: "needs", width: 160, align: "right" },
-              { title: "Acknowledged", dataIndex: "acknowledged", key: "acknowledged", width: 140, align: "right" },
-              { title: "Resolved", dataIndex: "resolved", key: "resolved", width: 120, align: "right" },
-            ]}
-          />
-        ) : null}
-        {triage.missingKb > 0 ? (
-          <Typography.Text type="secondary" style={{ display: "block", marginTop: 8 }}>
-            {triage.missingKb} of these alerts have no knowledge-base article.
-          </Typography.Text>
-        ) : null}
-      </Card>
-
-      <LifecycleInsightsCard enabled={features.isFetched && !insightsOff} />
-
-      {sharedChecks.length > 0 ? (
-        <Card className="page-card">
-          <Typography.Title level={4} className="section-title">
-            Same check, several clusters
-          </Typography.Title>
-          <Typography.Text type="secondary" className="section-subtitle">
-            The same critical check on more than one cluster.
-          </Typography.Text>
-          <Table
-            style={{ marginTop: 12 }}
-            size="small"
-            pagination={false}
-            rowKey={(row) => `${row.name}|${row.severity}`}
-            dataSource={sharedChecks.slice(0, 8)}
-            onRow={(record) => ({
-              onClick: () =>
-                setDrillCheck({
-                  key: `${record.name}|${record.severity}`,
-                  name: record.name,
-                  severity: record.severity,
-                  count: record.count,
-                  clusterList: record.clusterList,
-                  kb: record.kb,
-                  kbId: record.kbId,
-                  sample: record.sample,
-                }),
-              style: { cursor: "pointer" },
-            })}
-            columns={[
-              { title: "Check", dataIndex: "name", key: "name" },
-              {
-                title: "Severity",
-                dataIndex: "severity",
-                key: "severity",
-                width: 110,
-                render: (v: string) => <Tag color={v === "FAIL" ? "error" : "volcano"}>{v}</Tag>,
-              },
-              { title: "Clusters", key: "clusters", width: 110, align: "right", render: (_, row) => row.clusterList.length },
-              { title: "Rows", dataIndex: "count", key: "count", width: 90, align: "right" },
-              {
-                title: "KB",
-                key: "kb",
-                width: 110,
-                render: (_, row) => (row.kbId ? <a href={row.kb} target="_blank" rel="noreferrer">KB {row.kbId}</a> : "—"),
-              },
-            ]}
-          />
-        </Card>
-      ) : null}
-
-      {/* SEVERITY DISTRIBUTION */}
-      <Card className="page-card">
-        <Typography.Title level={4} className="section-title">
-          Severity Distribution
-        </Typography.Title>
-        <Typography.Text type="secondary" className="section-subtitle">
-          How {totalPlugins.toLocaleString()} plugin checks are distributed across severities for the current run.
-        </Typography.Text>
-        {totalPlugins === 0 ? (
-          <Empty description="No check totals for this run." />
-        ) : (
+      <Panel
+        title="Results"
+        description={totalPlugins > 0 ? `${totalPlugins.toLocaleString()} checks in this run.` : "No check totals for this run."}
+      >
+        {totalPlugins > 0 ? (
           <>
-            <div
-              style={{
-                display: "flex",
-                height: 14,
-                borderRadius: 999,
-                overflow: "hidden",
-                marginTop: 12,
-                marginBottom: 12,
-                background: "rgba(148,163,184,0.18)",
-              }}
-            >
+            <div className="insights-stack" role="img" aria-label={severityRows.map((s) => `${s.label} ${s.count}`).join(", ")}>
               {severityRows.map((s) =>
                 s.count > 0 ? (
                   <Tooltip key={s.label} title={`${s.label}: ${s.count} (${((s.count / totalPlugins) * 100).toFixed(1)}%)`}>
-                    <div style={{ width: `${(s.count / totalPlugins) * 100}%`, background: s.color }} />
+                    <span className={`overview-bar-fill tone-${s.tone}`} style={{ width: `${(s.count / totalPlugins) * 100}%` }} />
                   </Tooltip>
                 ) : null,
               )}
             </div>
-            <Row gutter={[12, 12]}>
+            <ul className="insights-legend">
               {severityRows.map((s) => (
-                <Col key={s.label} xs={12} md={Math.floor(24 / severityRows.length)}>
-                  <Space size={8} align="center">
-                    <Badge color={s.color} />
-                    <Typography.Text strong style={{ minWidth: 70, display: "inline-block" }}>
-                      {s.label}
-                    </Typography.Text>
-                    <Typography.Text>{s.count.toLocaleString()}</Typography.Text>
-                    <Typography.Text type="secondary">
-                      ({totalPlugins > 0 ? ((s.count / totalPlugins) * 100).toFixed(1) : "0.0"}%)
-                    </Typography.Text>
-                  </Space>
-                </Col>
+                <li key={s.label}>
+                  <StatusBadge tone={s.tone}>{s.label}</StatusBadge>
+                  <strong>{s.count.toLocaleString()}</strong>
+                  <span className="ui-field-help">{((s.count / totalPlugins) * 100).toFixed(1)}%</span>
+                </li>
               ))}
-            </Row>
-          </>
-        )}
-      </Card>
-
-      {/* TOP FAILING CHECKS + ACTIONABLE FINDINGS */}
-      <Row gutter={[16, 16]}>
-        <Col xs={24} lg={14}>
-          <Card className="page-card">
-            <Typography.Title level={4} className="section-title">
-              Top Failing Checks
-            </Typography.Title>
-            <Typography.Text type="secondary" className="section-subtitle">
-              Most frequent failed checks.
-            </Typography.Text>
-            {checkAgg.length === 0 ? (
-              <Empty description="No FAIL/ERR/WARN findings." />
-            ) : (
-              <Table
-                size="small"
-                rowKey={(r) => `${r.name}|${r.severity}`}
-                columns={checkAggColumns}
-                dataSource={checkAgg.slice(0, 10)}
-                pagination={false}
-                onRow={(record) => ({
-                  onClick: () =>
-                    setDrillCheck({
-                      key: `${record.name}|${record.severity}`,
-                      name: record.name,
-                      severity: record.severity,
-                      count: record.count,
-                      clusterList: record.clusterList,
-                      kb: record.kb,
-                      kbId: record.kbId,
-                      sample: record.sample,
-                    }),
-                  style: { cursor: "pointer" },
-                })}
+            </ul>
+            {!consistencyOk ? (
+              <Alert
+                type="warning"
+                showIcon
+                title="Check totals do not match"
+                description="The severity counts do not add up to the total number of checks. Start the run again if this looks wrong."
               />
-            )}
-            <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginTop: 8 }}>
-              Select a row to see the clusters and the original check output.
-            </Typography.Text>
-          </Card>
-        </Col>
-        <Col xs={24} lg={10}>
-          <Card className="page-card" style={{ height: "100%" }}>
-            <Typography.Title level={4} className="section-title">
-              Top Actionable Findings
-            </Typography.Title>
-            <Typography.Text type="secondary" className="section-subtitle">
-              Critical findings to review first.
-            </Typography.Text>
-            {actionableFindings.length === 0 ? (
-              <Empty description="No critical findings in this run." />
-            ) : (
-              <Space orientation="vertical" size={10} style={{ width: "100%" }}>
-                {actionableFindings.map((item, idx) => {
-                  const cluster = resolveClusterName(String(item.row.cluster || "-"), clusterNameMap);
-                  const reason = deriveReason(item.row, item.severity);
-                  const kbId = extractKbId(item.row);
-                  return (
-                    <Card key={`${cluster}-${item.checkName}-${idx}`} size="small" className="finding-card">
-                      <Space size={6} wrap style={{ marginBottom: 4 }}>
-                        <Tag color={item.severity === "ERR" ? "volcano" : "error"}>{item.severity}</Tag>
-                        <Typography.Text strong>{cluster}</Typography.Text>
-                        <Typography.Text type="secondary">·</Typography.Text>
-                        <Typography.Text>{item.checkName}</Typography.Text>
-                      </Space>
-                      <Typography.Paragraph type="secondary" style={{ marginBottom: 6 }}>
-                        {reason}
-                      </Typography.Paragraph>
-                      {kbId ? (
-                        <a href={item.kb} target="_blank" rel="noreferrer">
-                          <Tag color="processing" icon={<LinkOutlined />}>
-                            Open KB {kbId}
-                          </Tag>
-                        </a>
-                      ) : null}
-                    </Card>
-                  );
-                })}
-              </Space>
-            )}
-          </Card>
-        </Col>
-      </Row>
-
-      {/* CLUSTER RANKING + SEVERITY TREND */}
-      <Row gutter={[16, 16]}>
-        <Col xs={24} lg={14}>
-          <Card className="page-card">
-            <Typography.Title level={4} className="section-title">
-              Cluster Health Ranking
-            </Typography.Title>
-            <Typography.Text type="secondary" className="section-subtitle">
-              Clusters ordered from worst to best weighted health.
-            </Typography.Text>
-            {clusterRanking.length === 0 ? (
-              <Empty description="No cluster summaries available." />
-            ) : (
-              <Space orientation="vertical" size={10} style={{ width: "100%", marginTop: 8 }}>
-                {clusterRanking.map((c) => (
-                  <div key={c.address}>
-                    <Space size={8} style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                      <Space size={6}>
-                        <Typography.Text strong>{c.name}</Typography.Text>
-                        {(() => {
-                          const open = triage.clusters.find((item) => item.name === c.name);
-                          return open && open.needs > 0 ? <Tag color="gold">{open.needs} unmarked</Tag> : null;
-                        })()}
-                        {c.fail > 0 ? <Tag color="error">FAIL {c.fail}</Tag> : null}
-                        {c.err > 0 ? <Tag color="volcano">ERR {c.err}</Tag> : null}
-                        {c.warn > 0 ? <Tag color="warning">WARN {c.warn}</Tag> : null}
-                        {c.info > 0 ? <Tag color="processing">INFO {c.info}</Tag> : null}
-                      </Space>
-                      <Typography.Text strong style={{ color: healthGradeColor(c.health) }}>
-                        {c.health.toFixed(1)}% · {healthGrade(c.health)}
-                      </Typography.Text>
-                    </Space>
-                    <Progress
-                      percent={Number(c.health.toFixed(1))}
-                      strokeColor={healthGradeColor(c.health)}
-                      showInfo={false}
-                      size="small"
-                    />
-                  </div>
-                ))}
-              </Space>
-            )}
-          </Card>
-        </Col>
-        <Col xs={24} lg={10}>
-          <Card className="page-card" style={{ height: "100%" }}>
-            <Typography.Title level={4} className="section-title">
-              Severity Trend
-            </Typography.Title>
-            <Typography.Text type="secondary" className="section-subtitle">
-              Failed checks across the last {recentTrends.length || 0} runs.
-              {trendFailDelta !== null ? ` Failures versus the previous run: ${trendFailDelta > 0 ? "+" : ""}${trendFailDelta}.` : ""}
-              {trendHealthDelta !== null ? ` Average health ${trendHealthDelta > 0 ? "+" : ""}${trendHealthDelta.toFixed(0)}.` : ""}
-            </Typography.Text>
-            {recentTrends.length === 0 ? (
-              <Empty description="Not enough runs to show a trend." />
-            ) : (
-              <Space orientation="vertical" size={6} style={{ width: "100%", marginTop: 8 }}>
-                {recentTrends.map((p, idx) => {
-                  const total = Math.max(1, toNumber(p.total_checks, 1));
-                  const riskPct = Math.min(100, ((toNumber(p.fail_total) + toNumber(p.err_total)) / total) * 100);
-                  const ts = String(p.timestamp || "-");
-                  return (
-                    <div key={`${ts}-${idx}`}>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-                        <Typography.Text type="secondary">{relativeTime(ts)}</Typography.Text>
-                        <Typography.Text type="secondary">
-                          FAIL {toNumber(p.fail_total)} · ERR {toNumber(p.err_total)}
-                        </Typography.Text>
-                      </div>
-                      <Progress
-                        percent={Number(riskPct.toFixed(2))}
-                        size="small"
-                        showInfo={false}
-                        status={riskPct >= 3 ? "exception" : riskPct >= 1 ? "active" : "success"}
-                      />
-                    </div>
-                  );
-                })}
-              </Space>
-            )}
-          </Card>
-        </Col>
-      </Row>
-
-      {/* KB INDEX + RUN RELIABILITY */}
-      <Row gutter={[16, 16]}>
-        <Col xs={24} lg={14}>
-          <Card className="page-card">
-            <Typography.Title level={4} className="section-title">
-              Knowledge Base References
-            </Typography.Title>
-            <Typography.Text type="secondary" className="section-subtitle">
-              Articles referenced by failed checks. Select one to open it.
-            </Typography.Text>
-            {kbIndex.length === 0 ? (
-              <Empty description="No knowledge-base articles in this run." />
-            ) : (
-              <Space size={[8, 8]} wrap style={{ marginTop: 8 }}>
-                {kbIndex.map((kb) => (
-                  <Tooltip
-                    key={kb.id}
-                    title={
-                      <>
-                        <div>{kb.titlesArr.slice(0, 3).join(", ")}</div>
-                        <div style={{ marginTop: 4, opacity: 0.85 }}>
-                          {kb.clustersArr.slice(0, 4).join(", ")}
-                          {kb.clustersArr.length > 4 ? ` +${kb.clustersArr.length - 4}` : ""}
-                        </div>
-                      </>
-                    }
-                  >
-                    <a href={kb.url} target="_blank" rel="noreferrer">
-                      <Tag color="processing" icon={<LinkOutlined />} style={{ fontSize: 13, padding: "2px 10px" }}>
-                        KB {kb.id} <span style={{ opacity: 0.7, marginLeft: 4 }}>×{kb.count}</span>
-                      </Tag>
-                    </a>
-                  </Tooltip>
-                ))}
-              </Space>
-            )}
-          </Card>
-        </Col>
-        <Col xs={24} lg={10}>
-          <Card className="page-card" style={{ height: "100%" }}>
-            <Typography.Title level={4} className="section-title">
-              Run Reliability
-            </Typography.Title>
-            <Typography.Text type="secondary" className="section-subtitle">
-              Clusters that could not be reached.
-            </Typography.Text>
-            {failureClassEntries.length === 0 ? (
-              <Alert type="success" showIcon style={{ marginTop: 8 }} title="Every cluster completed this run." />
-            ) : (
-              <Space orientation="vertical" size={8} style={{ width: "100%", marginTop: 8 }}>
-                {failureClassEntries.map((e) => (
-                  <div key={e.name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <Tag color={e.name === "rate_limit" || e.name === "timeout" ? "warning" : "error"}>{e.name.replace(/_/g, " ")}</Tag>
-                    <Typography.Text strong>{e.count}</Typography.Text>
-                  </div>
-                ))}
-              </Space>
-            )}
-            {triage.nccVersions.length > 0 || triage.aosVersions.length > 0 ? (
-              <div style={{ marginTop: 16 }}>
-                <Typography.Text strong>Versions in this run</Typography.Text>
-                <div style={{ marginTop: 8 }}>
-                  <Space size={[6, 6]} wrap>
-                    {triage.nccVersions.map((v) => (
-                      <Tooltip key={`ncc-${v.version}`} title={v.clusters.slice(0, 6).join(", ")}>
-                        <Tag>NCC {v.version} · {v.clusters.length}</Tag>
-                      </Tooltip>
-                    ))}
-                    {triage.aosVersions.map((v) => (
-                      <Tooltip key={`aos-${v.version}`} title={v.clusters.slice(0, 6).join(", ")}>
-                        <Tag>{v.version} · {v.clusters.length}</Tag>
-                      </Tooltip>
-                    ))}
-                  </Space>
-                </div>
-              </div>
             ) : null}
-            <div style={{ marginTop: 16 }}>
-              <Descriptions size="small" column={1} bordered>
-                <Descriptions.Item label="Clusters completed">{toNumber(runSummary.clusters_ok)}</Descriptions.Item>
-                <Descriptions.Item label="Clusters not completed">
-                  <Typography.Text type={toNumber(runSummary.clusters_failed) > 0 ? "danger" : undefined}>
-                    {toNumber(runSummary.clusters_failed)}
-                  </Typography.Text>
-                </Descriptions.Item>
-                <Descriptions.Item label="Run result">{toNumber(runSummary.exit_code) === 0 ? "Completed" : `Failed (${toNumber(runSummary.exit_code)})`}</Descriptions.Item>
-              </Descriptions>
-            </div>
-          </Card>
-        </Col>
-      </Row>
+          </>
+        ) : null}
+      </Panel>
 
-      {/* REGRESSION SUMMARY */}
-      <Card className="page-card">
-        <Typography.Title level={4} className="section-title">
-          Run-over-Run Comparison
-        </Typography.Title>
-        <Typography.Text type="secondary" className="section-subtitle">
-          {previousTs
-            ? <>Compared with previous run from {relativeTime(previousTs)}.</>
-            : "No previous run found for comparison."}
-        </Typography.Text>
-        <Row gutter={[12, 12]} style={{ marginTop: 8 }}>
-          <Col xs={12} md={6}>
-            <Statistic title="Previous FAILs" value={toNumber(regression.previous_fail_total)} />
-          </Col>
-          <Col xs={12} md={6}>
-            <Statistic title="Current FAILs" value={toNumber(regression.current_fail_total)} />
-          </Col>
-          <Col xs={12} md={6}>
-            <Statistic
-              title="Change"
-              value={deltaFail}
-              prefix={deltaFail > 0 ? <ArrowUpOutlined /> : deltaFail < 0 ? <ArrowDownOutlined /> : <MinusOutlined />}
-              valueStyle={{ color: deltaFail > 0 ? "#f43f5e" : deltaFail < 0 ? "#22c55e" : undefined }}
-            />
-          </Col>
-          <Col xs={12} md={6}>
-            <Statistic
-              title="Outcome"
-              value={hasRegression ? "Regression" : deltaFail < 0 ? "Improvement" : "Stable"}
-              valueStyle={{ color: hasRegression ? "#f43f5e" : deltaFail < 0 ? "#22c55e" : undefined }}
-            />
-          </Col>
-        </Row>
-      </Card>
+      <div className="insights-grid">
+        <Panel title="Top failing checks" description="Most frequent problems. Select one for its clusters and output." flush>
+          <Table
+            size="middle"
+            rowKey={(r) => `${r.name}|${r.severity}`}
+            columns={checkAggColumns}
+            dataSource={checkAgg.slice(0, 10)}
+            pagination={false}
+            scroll={{ x: 560 }}
+            onRow={drillRow}
+            locale={{ emptyText: <EmptyState title="No failures, errors or warnings" /> }}
+          />
+        </Panel>
+        <Panel title="Review first" description="The critical findings most worth a look." flush>
+          {actionableFindings.length === 0 ? (
+            <EmptyState title="No critical findings in this run" />
+          ) : (
+            <ul className="insights-findings">
+              {actionableFindings.map((item, idx) => {
+                const cluster = resolveClusterName(String(item.row.cluster || "-"), clusterNameMap);
+                const kbId = extractKbId(item.row);
+                return (
+                  <li key={`${cluster}-${item.checkName}-${idx}`}>
+                    <div className="insights-finding-head">
+                      <StatusBadge tone={toneFor(item.severity)}>{item.severity}</StatusBadge>
+                      <strong>{item.checkName}</strong>
+                    </div>
+                    <span className="ui-field-help">{cluster}</span>
+                    <p>{deriveReason(item.row, item.severity)}</p>
+                    {kbId ? (
+                      <a href={item.kb} target="_blank" rel="noreferrer">
+                        <LinkOutlined /> KB {kbId}
+                      </a>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </Panel>
+      </div>
 
-      {/* EXISTING DETAIL PANELS */}
-      <DrilldownDiffPanel drilldownDiff={data.drilldown_diff} clusterNameMap={clusterNameMap} />
-      <FlakyChecksPanel flakyChecks={data.flaky_checks} clusterNameMap={clusterNameMap} />
+      {Object.keys(meta).length > 0 ? (
+        <Panel title="About this report">
+          <KeyValueList
+            items={[
+              { label: "Orchestrator version", value: String(meta.version || "—") },
+              { label: "Build", value: `${String(meta.build_date || "—")}${meta.stream ? ` · ${String(meta.stream)}` : ""}` },
+              { label: "Revision", value: String(meta.git_revision || "—"), mono: true },
+              { label: "Host", value: String(meta.hostname || "—") },
+              { label: "Started by", value: String(meta.scheduler_source || "—") },
+            ]}
+          />
+        </Panel>
+      ) : null}
+    </div>
+  );
+
+  const clustersTab = (
+    <div className="insights-tab">
+      <div className="insights-grid">
+        <Panel title="Cluster health" description="Worst first, by weighted health." flush>
+          {clusterRanking.length === 0 ? (
+            <EmptyState title="No per-cluster results" />
+          ) : (
+            <ul className="insights-ranking">
+              {clusterRanking.map((c) => {
+                const open = triage.clusters.find((item) => item.name === c.name);
+                const t = scoreTone(c.health) ?? "neutral";
+                return (
+                  <li key={c.address}>
+                    <div className="insights-ranking-head">
+                      <strong>{c.name}</strong>
+                      <span className={`insights-score tone-${t}`}>
+                        {c.health.toFixed(1)}% · {healthGrade(c.health)}
+                      </span>
+                    </div>
+                    <span className="overview-bar" aria-hidden="true">
+                      <span className={`overview-bar-fill tone-${t}`} style={{ width: `${Math.max(1, c.health)}%` }} />
+                    </span>
+                    <span className="ui-field-help">
+                      {[c.fail && `${c.fail} fail`, c.err && `${c.err} error`, c.warn && `${c.warn} warn`, c.info && `${c.info} info`]
+                        .filter(Boolean)
+                        .join(" · ") || "No findings"}
+                      {open && open.needs > 0 ? ` · ${open.needs} not yet handled` : ""}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </Panel>
+        <Panel title="Run reliability" description="Clusters that could not be checked, and versions seen.">
+          {failureClassEntries.length === 0 ? (
+            <p className="insights-ok">
+              <CheckCircleOutlined /> Every cluster completed this run.
+            </p>
+          ) : (
+            <KeyValueList items={failureClassEntries.map((e) => ({ label: e.name.replace(/_/g, " "), value: `${e.count} cluster(s)` }))} />
+          )}
+          <KeyValueList
+            items={[
+              { label: "Clusters completed", value: String(clustersOk) },
+              { label: "Clusters not completed", value: String(clustersFailed) },
+              { label: "Run result", value: toNumber(runSummary.exit_code) === 0 ? "Completed" : `Failed (exit ${toNumber(runSummary.exit_code)})` },
+              ...(triage.nccVersions.length
+                ? [{ label: "NCC versions", value: triage.nccVersions.map((v) => `${v.version} (${v.clusters.length})`).join(", ") }]
+                : []),
+              ...(triage.aosVersions.length
+                ? [{ label: "AOS versions", value: triage.aosVersions.map((v) => `${v.version} (${v.clusters.length})`).join(", ") }]
+                : []),
+            ]}
+          />
+        </Panel>
+      </div>
       <SloPanel
         sloDashboard={data.slo_dashboard}
         nccClusterSummary={Array.isArray(data.ncc_cluster_summary) ? data.ncc_cluster_summary : []}
         regressionSummary={data.regression_summary}
         clusterNameMap={clusterNameMap}
       />
+    </div>
+  );
 
-      {/* REPORT META — moved to bottom as small footer */}
-      <Card className="page-card">
-        <Typography.Title level={5} className="section-title">
-          Report Metadata
-        </Typography.Title>
-        {Object.keys(meta).length === 0 ? (
-          <Empty description="No report metadata available." />
+  const trendsTab = (
+    <div className="insights-tab">
+      <Panel
+        title="Failures over recent runs"
+        description={
+          recentTrends.length
+            ? `Failing and error checks in the last ${recentTrends.length} runs.${
+                trendFailDelta !== null ? ` Versus the previous run: ${trendFailDelta > 0 ? "+" : ""}${trendFailDelta}.` : ""
+              }${trendHealthDelta !== null ? ` Average health ${trendHealthDelta > 0 ? "+" : ""}${trendHealthDelta.toFixed(0)}.` : ""}`
+            : undefined
+        }
+      >
+        {recentTrends.length === 0 ? (
+          <EmptyState title="Not enough runs for a trend" description="A trend appears after a few runs have finished." />
         ) : (
-          <Descriptions size="small" column={2} bordered>
-            <Descriptions.Item label="Version">{String(meta.version || "-")}</Descriptions.Item>
-            <Descriptions.Item label="Stream">{String(meta.stream || "-")}</Descriptions.Item>
-            <Descriptions.Item label="Build Date">{String(meta.build_date || "-")}</Descriptions.Item>
-            <Descriptions.Item label="Git Revision">{String(meta.git_revision || "-")}</Descriptions.Item>
-            <Descriptions.Item label="Hostname">{String(meta.hostname || "-")}</Descriptions.Item>
-            <Descriptions.Item label="Source">{String(meta.scheduler_source || "-")}</Descriptions.Item>
-          </Descriptions>
+          <div className="insights-trend" role="img" aria-label={`Failures across ${recentTrends.length} runs`}>
+            {recentTrends.map((p, idx) => {
+              const value = toNumber(p.fail_total) + toNumber(p.err_total);
+              const ts = String(p.timestamp || "");
+              return (
+                <Tooltip
+                  key={`${ts}-${idx}`}
+                  title={`${formatDateTime(ts)} · ${toNumber(p.fail_total)} fail · ${toNumber(p.err_total)} error`}
+                >
+                  <div className="insights-trend-col">
+                    <span className="insights-trend-value">{value}</span>
+                    <span className="insights-trend-track">
+                      <span
+                        className={`insights-trend-bar tone-${value > 0 ? "fail" : "ok"}`}
+                        style={{ height: `${Math.max(4, (value / trendMax) * 100)}%` }}
+                      />
+                    </span>
+                    <span className="insights-trend-label">{relativeTime(ts)}</span>
+                  </div>
+                </Tooltip>
+              );
+            })}
+          </div>
         )}
-      </Card>
-    </Space>
+      </Panel>
 
-    <Drawer
-      open={Boolean(drillCheck)}
-      onClose={() => setDrillCheck(null)}
-      width={Math.min(720, typeof window !== "undefined" ? window.innerWidth - 64 : 720)}
-      destroyOnHidden
-      title={
-        drillCheck ? (
-          <Space size={8} wrap>
-            <Tag color={drillCheck.severity === "FAIL" ? "error" : drillCheck.severity === "ERR" ? "volcano" : "warning"}>
-              {drillCheck.severity}
-            </Tag>
-            <span>{drillCheck.name}</span>
-          </Space>
-        ) : null
-      }
-      extra={
-        drillCheck?.kbId ? (
-          <a href={drillCheck.kb} target="_blank" rel="noreferrer">
-            <Button type="primary" icon={<LinkOutlined />} size="small">
-              Open KB {drillCheck.kbId}
-            </Button>
-          </a>
-        ) : null
-      }
-    >
-      {drillCheck ? (
-        <Space orientation="vertical" size={16} style={{ width: "100%" }}>
-          <Descriptions size="small" column={2} bordered>
-            <Descriptions.Item label="Occurrences">{drillCheck.count}</Descriptions.Item>
-            <Descriptions.Item label="Affected clusters">{drillCheck.clusterList.length}</Descriptions.Item>
-          </Descriptions>
-
-          <div>
-            <Typography.Title level={5} style={{ marginBottom: 8 }}>
-              Clusters where this check fired
-            </Typography.Title>
-            {drillCheck.clusterList.length === 0 ? (
-              <Empty description="No clusters listed." />
-            ) : (
-              <Space size={[6, 6]} wrap>
-                {drillCheck.clusterList.map((c) => (
-                  <Tag key={c} color="default">{c}</Tag>
-                ))}
-              </Space>
-            )}
+      <Panel title="Compared with the previous run" description={previousTs ? `Previous run ${relativeTime(previousTs)}.` : "No earlier run to compare."}>
+        {previousTs ? (
+          <div className="overview-stats">
+            <StatTile label="Failing before" value={toNumber(regression.previous_fail_total)} />
+            <StatTile label="Failing now" value={toNumber(regression.current_fail_total)} />
+            <StatTile
+              label="Change"
+              value={
+                <span className="insights-delta">
+                  {deltaFail > 0 ? <ArrowUpOutlined /> : deltaFail < 0 ? <ArrowDownOutlined /> : <MinusOutlined />}
+                  {deltaFail > 0 ? `+${deltaFail}` : deltaFail}
+                </span>
+              }
+              tone={deltaFail > 0 ? "fail" : deltaFail < 0 ? "ok" : undefined}
+            />
+            <StatTile
+              label="Outcome"
+              value={hasRegression ? "Regression" : deltaFail < 0 ? "Improved" : "Stable"}
+              tone={hasRegression ? "fail" : deltaFail < 0 ? "ok" : undefined}
+            />
           </div>
+        ) : null}
+      </Panel>
 
-          <div>
-            <Typography.Title level={5} style={{ marginBottom: 8 }}>
-              Check output
-            </Typography.Title>
-            {drillOccurrences.length === 0 ? (
-              <Empty description="No details for this check." />
-            ) : (
-              <List
-                size="small"
-                bordered
-                dataSource={drillOccurrences}
-                renderItem={(row) => {
-                  const cluster = resolveClusterName(String(row.cluster || "-"), clusterNameMap);
-                  const detail = String(row.detail || row.details || row.message || "").trim();
-                  return (
-                    <List.Item style={{ display: "block" }}>
-                      <Space size={6} wrap style={{ marginBottom: 4 }}>
-                        <Typography.Text strong>{cluster}</Typography.Text>
-                        {row.host ? <Typography.Text type="secondary">· {String(row.host)}</Typography.Text> : null}
-                      </Space>
-                      {detail ? (
-                        <Typography.Paragraph
-                          style={{
-                            margin: 0,
-                            whiteSpace: "pre-wrap",
-                            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-                            fontSize: 12,
-                            background: "var(--surface-muted, rgba(0,0,0,0.04))",
-                            padding: 8,
-                            borderRadius: 4,
-                          }}
-                        >
-                          {detail.length > 400 ? `${detail.slice(0, 400)}…` : detail}
-                        </Typography.Paragraph>
-                      ) : (
-                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                          (no detail captured)
-                        </Typography.Text>
-                      )}
-                    </List.Item>
-                  );
-                }}
-              />
-            )}
-          </div>
-        </Space>
+      <DrilldownDiffPanel drilldownDiff={data.drilldown_diff} clusterNameMap={clusterNameMap} />
+      <FlakyChecksPanel flakyChecks={data.flaky_checks} clusterNameMap={clusterNameMap} />
+    </div>
+  );
+
+  const triageTab = (
+    <div className="insights-tab">
+      <Panel title="Triage queue" description="Critical alerts and how they have been handled. Resolved alerts come back here if a later run finds them again.">
+        <div className="overview-stats">
+          <StatTile label="Need attention" value={triage.needsAttention} tone={triage.needsAttention > 0 ? "fail" : "ok"} />
+          <StatTile label="Acknowledged, still open" value={triage.acknowledged} />
+          <StatTile label="Resolved" value={triage.resolved} />
+          <StatTile label="Most acknowledgements" value={triage.topOwner || "—"} hint={triage.topCount > 0 ? `${triage.topCount} alerts` : undefined} />
+        </div>
+        {triage.returned > 0 ? (
+          <p className="ui-field-help">
+            {triage.returned} resolved {triage.returned === 1 ? "alert was" : "alerts were"} found again on this run.
+          </p>
+        ) : null}
+        {triage.clusters.some((c) => c.needs > 0) ? (
+          <Table
+            className="insights-table"
+            size="middle"
+            pagination={false}
+            rowKey="name"
+            dataSource={triage.clusters.filter((c) => c.needs > 0).slice(0, 8)}
+            columns={[
+              { title: "Cluster", dataIndex: "name", key: "name" },
+              { title: "Need attention", dataIndex: "needs", key: "needs", width: 150, align: "right" },
+              { title: "Acknowledged", dataIndex: "acknowledged", key: "acknowledged", width: 140, align: "right" },
+              { title: "Resolved", dataIndex: "resolved", key: "resolved", width: 120, align: "right" },
+            ]}
+          />
+        ) : null}
+        {triage.missingKb > 0 ? <p className="ui-field-help">{triage.missingKb} of these alerts have no knowledge-base article.</p> : null}
+        <Link to="/findings">
+          <Button>Work through them in Findings</Button>
+        </Link>
+      </Panel>
+
+      <LifecycleInsightsCard enabled={features.isFetched && !insightsOff} />
+
+      {sharedChecks.length > 0 ? (
+        <Panel title="Same check, several clusters" description="The same critical check failing on more than one cluster." flush>
+          <Table
+            size="middle"
+            pagination={false}
+            rowKey={(row) => `${row.name}|${row.severity}`}
+            dataSource={sharedChecks.slice(0, 8)}
+            scroll={{ x: 520 }}
+            onRow={drillRow}
+            columns={[
+              { title: "Check", dataIndex: "name", key: "name" },
+              { title: "Severity", dataIndex: "severity", key: "severity", width: 110, render: (v: string) => <StatusBadge tone={toneFor(v)}>{v}</StatusBadge> },
+              { title: "Clusters", key: "clusters", width: 100, align: "right", render: (_, row) => row.clusterList.length },
+              { title: "Rows", dataIndex: "count", key: "count", width: 80, align: "right" },
+              { title: "KB", key: "kb", width: 100, render: (_, row) => kbCell(row) },
+            ]}
+          />
+        </Panel>
       ) : null}
-    </Drawer>
-    </>
+
+      <Panel title="Knowledge base articles" description="Articles referenced by failing checks.">
+        {kbIndex.length === 0 ? (
+          <EmptyState title="No articles referenced in this run" />
+        ) : (
+          <ul className="insights-kb">
+            {kbIndex.map((kb) => (
+              <li key={kb.id}>
+                <a href={kb.url} target="_blank" rel="noreferrer">
+                  <LinkOutlined /> KB {kb.id}
+                </a>
+                <span className="ui-field-help">
+                  {kb.count}× · {kb.titlesArr.slice(0, 2).join(", ")}
+                  {kb.clustersArr.length ? ` · ${kb.clustersArr.slice(0, 3).join(", ")}${kb.clustersArr.length > 3 ? ` +${kb.clustersArr.length - 3}` : ""}` : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Panel>
+    </div>
+  );
+
+  return (
+    <div className="insights-page">
+      <div className="overview-runline">
+        <div className="overview-runline-text">
+          {runTimestamp ? (
+            <>
+              <StatusBadge tone={fresh.tone}>{fresh.label}</StatusBadge>
+              <Tooltip title={formatDateTime(runTimestamp)}>
+                <span>Latest run {relativeTime(runTimestamp)}</span>
+              </Tooltip>
+              <StatusBadge tone={hasRegression ? "fail" : deltaFail < 0 ? "ok" : "neutral"}>
+                {hasRegression ? "Regression" : deltaFail < 0 ? "Improving" : "Stable"}
+              </StatusBadge>
+            </>
+          ) : (
+            <span>No completed run yet</span>
+          )}
+        </div>
+      </div>
+
+      <div className="overview-stats">
+        <StatTile
+          label="Health score"
+          value={weightedHealth == null ? "—" : `${weightedHealth.toFixed(1)}%`}
+          tone={scoreTone(weightedHealth)}
+          hint={weightedHealth == null ? "No completed checks" : `${healthGrade(weightedHealth)} · pass rate ${rawPassRate.toFixed(1)}%`}
+        />
+        <StatTile label="Checks" value={totalPlugins.toLocaleString()} hint={`${clusterSummary.length} cluster(s)`} />
+        <StatTile
+          label="Clusters at risk"
+          value={`${affectedClusters.length}/${clusterSummary.length}`}
+          tone={affectedClusters.length > 0 ? "fail" : clusterSummary.length ? "ok" : undefined}
+          hint="With failing or error checks"
+        />
+        <StatTile label="Run duration" value={runDuration > 0 ? formatDuration(runDuration) : "—"} />
+      </div>
+
+      <Tabs
+        className="insights-tabs"
+        activeKey={tab}
+        onChange={(k) => {
+          const next = new URLSearchParams(searchParams);
+          if (k === "summary") next.delete("tab");
+          else next.set("tab", k);
+          setSearchParams(next, { replace: true });
+        }}
+        items={[
+          { key: "summary", label: "Summary", children: summaryTab },
+          { key: "clusters", label: "Clusters", children: clustersTab },
+          { key: "trends", label: "Trends", children: trendsTab },
+          { key: "triage", label: `Triage${triage.needsAttention ? ` (${triage.needsAttention})` : ""}`, children: triageTab },
+        ]}
+      />
+
+      <Drawer
+        open={Boolean(drillCheck)}
+        onClose={() => setDrillCheck(null)}
+        size={640}
+        destroyOnHidden
+        title={
+          drillCheck ? (
+            <span className="insights-finding-head">
+              <StatusBadge tone={toneFor(drillCheck.severity)}>{drillCheck.severity}</StatusBadge>
+              <span>{drillCheck.name}</span>
+            </span>
+          ) : null
+        }
+        extra={
+          drillCheck?.kbId ? (
+            <a href={drillCheck.kb} target="_blank" rel="noreferrer">
+              <Button type="primary" icon={<LinkOutlined />} size="small">
+                Open KB {drillCheck.kbId}
+              </Button>
+            </a>
+          ) : null
+        }
+      >
+        {drillCheck ? (
+          <div className="insights-tab">
+            <KeyValueList
+              items={[
+                { label: "Occurrences", value: String(drillCheck.count) },
+                { label: "Clusters", value: drillCheck.clusterList.join(", ") || "—" },
+              ]}
+            />
+            <div>
+              <h4 className="ui-panel-title">Check output</h4>
+              {drillOccurrences.length === 0 ? (
+                <EmptyState title="No output captured for this check" />
+              ) : (
+                <ul className="insights-output">
+                  {drillOccurrences.map((row, i) => {
+                    const cluster = resolveClusterName(String(row.cluster || "-"), clusterNameMap);
+                    const detail = String(row.detail || row.details || row.message || "").trim();
+                    return (
+                      <li key={i}>
+                        <strong>{cluster}</strong>
+                        {row.host ? <span className="ui-field-help"> · {String(row.host)}</span> : null}
+                        {detail ? <pre>{detail.length > 400 ? `${detail.slice(0, 400)}…` : detail}</pre> : <span className="ui-field-help">No detail captured.</span>}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </Drawer>
+    </div>
   );
 }
