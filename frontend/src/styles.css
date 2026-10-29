@@ -2921,6 +2921,178 @@ a.overview-cluster-row:focus-visible {
   }
 }
 
+/* ---- Form fields and drawers (src/ui conventions) */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.ui-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-1);
+}
+
+.ui-field-label {
+  font-size: var(--ui-text-sm);
+  font-weight: 500;
+}
+
+.ui-field-help {
+  font-size: var(--ui-text-xs);
+  color: var(--ui-text-secondary);
+}
+
+.ui-field-inline {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: var(--ui-space-2);
+}
+
+label.ui-field-inline,
+.ui-field-inline label {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+}
+
+label.ui-field-inline {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--ui-space-2);
+  font-size: var(--ui-text-sm);
+}
+
+.ui-drawer-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--ui-space-2);
+}
+
+/* ---- Runs (pages/RunsPage.tsx, RunDetailPage.tsx, features/runs) */
+.runs-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-5);
+}
+
+.new-run-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-4);
+}
+
+.preflight-result {
+  margin-top: var(--ui-space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-3);
+}
+
+.preflight-checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+}
+
+.preflight-checks li {
+  padding: var(--ui-space-3) var(--ui-space-4);
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.preflight-checks li:last-child {
+  border-bottom: 0;
+}
+
+.preflight-checks p {
+  margin: var(--ui-space-1) 0 0;
+  font-size: var(--ui-text-sm);
+}
+
+.runs-table .ant-table {
+  background: transparent;
+}
+
+.runs-table tr.is-clickable {
+  cursor: pointer;
+}
+
+.runs-table tr.is-clickable:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: -2px;
+}
+
+.runs-open {
+  color: var(--ui-text-tertiary);
+}
+
+.runs-table tr.is-clickable:hover .runs-open {
+  color: var(--ui-accent);
+}
+
+.run-back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+  width: fit-content;
+  font-size: var(--ui-text-sm);
+  color: var(--ui-text-secondary);
+}
+
+.run-back:hover {
+  color: var(--ui-accent);
+}
+
+.run-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ui-space-3);
+}
+
+.run-head .ui-page-header-desc {
+  overflow-wrap: anywhere;
+}
+
+.run-tabs .ant-tabs-nav {
+  margin-bottom: var(--ui-space-4);
+}
+
+.run-details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-4);
+}
+
+.run-files {
+  list-style: none;
+  margin: 0;
+  padding: var(--ui-space-2) 0;
+}
+
+.run-files li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--ui-space-3);
+  padding: var(--ui-space-3) var(--ui-space-5);
+}
+
+.run-files li + li {
+  border-top: 1px solid var(--ui-border);
+}
+
 /* ---- Setup progress banner (features/onboarding/SetupChecklist.tsx) */
 .setup-banner {
   display: flex;

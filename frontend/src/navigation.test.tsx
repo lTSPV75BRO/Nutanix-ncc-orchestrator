@@ -18,7 +18,8 @@ describe("navigation", () => {
     expect(visibleSections(operator).map((s) => s.key).sort()).toEqual(
       ["audit", "connection", "logs", "runs", "schedule"].sort(),
     );
-    expect(visibleSections(viewer)).toEqual([]);
+    // Viewers read run history only.
+    expect(visibleSections(viewer).map((s) => s.key)).toEqual(["runs"]);
     expect(visibleSections(admin).map((s) => s.key)).toContain("access");
   });
 
@@ -53,6 +54,7 @@ describe("navigation", () => {
 
   it("names pages for the top bar", () => {
     expect(pageTitle("/findings")).toBe("Findings");
+    expect(pageTitle("/runs/20261029T0940Z")).toBe("Run details");
     expect(pageTitle("/")).toBe("Overview");
     expect(pageTitle("/system/status")).toBe("System status");
     expect(pageTitle("/settings/config/")).toBe("Clusters & config");

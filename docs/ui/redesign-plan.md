@@ -1,6 +1,6 @@
 # Internal pages: UI/UX redesign plan
 
-Status: in progress — Phases 0 and 1 done (2026-10-29). Scope: every signed-in page of the web UI
+Status: in progress — Phases 0–2 done (2026-10-29). Scope: every signed-in page of the web UI
 (`frontend/src`). The API stays as it is; this is frontend-only work.
 
 ## Where we are
@@ -182,6 +182,30 @@ type checks.
   (utils/freshness) are shared.
 - Found for Phase 3: `InsightsCards` weights warnings at 2.2 while the
   Overview/Insights page use 3.5, so the same run can show two health scores.
+
+### Phase 2 — done (2026-10-29)
+
+- **Runs** (`pages/RunsPage.tsx`, `/runs`): New run (operators) opens
+  `features/runs/NewRunDrawer.tsx` — config, one-off password, cluster
+  subset for group members, run options, advanced flags, preflight result in
+  place; closes when the server accepts the run. `ActiveRuns.tsx` shows
+  running/queued runs with live output, queue ETA and Cancel (not for
+  scheduler-launched runs). History (`RunsTable.tsx`, shared with the
+  Overview) with an All / With problems filter; archived rows open their
+  detail page by click or Enter. Files from the latest run (unrestricted
+  callers only).
+- **Run detail** (`pages/RunDetailPage.tsx`, `/runs/:id`): status, duration,
+  clusters, failing checks, average health; tabs Clusters (worst first, with
+  errors), Checks (non-passing, severity filter), Details (IDs, why clusters
+  failed, comparison with the previous run, the run's saved JSON files as
+  downloads). Runner output is not stored per run, so it links to System →
+  Logs.
+- **Viewers** now see Runs (history and detail, read-only); the server
+  already allowed it. Starting and cancelling remain operator-only.
+- One status vocabulary everywhere (`runStatusTone` over `runStatusDisplay`).
+- `RunsSection.tsx` is removed; Settings no longer has a Runs section.
+- Left for Phase 5: on phones, tables scroll inside their panel instead of
+  becoming cards.
 
 ## Risks and constraints
 

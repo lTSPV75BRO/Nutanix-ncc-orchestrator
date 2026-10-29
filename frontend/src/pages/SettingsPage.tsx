@@ -48,9 +48,6 @@ const ConfigSection = lazy(() =>
 const ScheduleSection = lazy(() =>
   import("../features/settings/ScheduleSection").then(({ ScheduleSection: Component }) => ({ default: Component })),
 );
-const RunsSection = lazy(() =>
-  import("../features/runs/RunsSection").then(({ RunsSection: Component }) => ({ default: Component })),
-);
 const LogsSection = lazy(() =>
   import("../features/settings/LogsSection").then(({ LogsSection: Component }) => ({ default: Component })),
 );
@@ -506,11 +503,7 @@ export function SettingsPage({ isAdmin = true, section }: { isAdmin?: boolean; s
             />,
           ),
         },
-        {
-          key: "runs",
-          label: tabLabel(<ThunderboltOutlined />, "Runs"),
-          children: lazySection(<RunsSection backendConfigPath={backendConfigPath} onError={notifyError} />),
-        },
+        // Runs has its own page (/runs, pages/RunsPage.tsx) since the redesign.
         {
           key: "logs",
           label: tabLabel(<FileTextOutlined />, "Logs"),

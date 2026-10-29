@@ -1,12 +1,12 @@
 import { useMemo } from "react";
 import { Link, useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Skeleton, Table, Tooltip } from "antd";
+import { Alert, Button, Skeleton, Tooltip } from "antd";
 import { ArrowRightOutlined, ClusterOutlined, ReloadOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { api } from "../api/client";
-import type { RunInfo } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { SetupBanner } from "../features/onboarding/SetupChecklist";
+import { RunsTable } from "../features/runs/RunsTable";
 import { useRunsActive } from "../hooks/useRunsActive";
 import { sectionHref } from "../navigation";
 import { EmptyState, Panel, StatTile, StatusBadge, type Tone } from "../ui";
@@ -41,30 +41,6 @@ function clusterCounts(c: ClusterRow): string {
     c.warn ? `${c.warn} warn` : "",
   ].filter(Boolean);
   return parts.length ? parts.join(" · ") : "No findings";
-}
-
-function runStatus(r: RunInfo): { tone: Tone; label: string } {
-  switch (r.status) {
-    case "success":
-      return { tone: "ok", label: "Succeeded" };
-    case "partial":
-      return { tone: "warn", label: "Partial" };
-    case "failed":
-    case "trigger_failed":
-      return { tone: "fail", label: "Failed" };
-    case "running":
-    case "triggered":
-      return { tone: "info", label: "Running" };
-    case "queued":
-    case "pending":
-      return { tone: "info", label: "Queued" };
-    case "cancelled":
-      return { tone: "neutral", label: "Cancelled" };
-    default:
-      if (r.success === true) return { tone: "ok", label: "Succeeded" };
-      if (r.success === false) return { tone: "fail", label: "Failed" };
-      return { tone: "neutral", label: "Unknown" };
-  }
 }
 
 function scoreTone(score: number | null): "ok" | "warn" | "fail" | undefined {
@@ -350,63 +326,18 @@ export function OverviewPage() {
         title="Recent runs"
         flush
         extra={
-          canOperate ? (
-            <Link to={sectionHref("runs")}>
-              <Button size="small" type="text" icon={<ArrowRightOutlined />} iconPosition="end">
-                All runs
-              </Button>
-            </Link>
-          ) : null
+          <Link to={sectionHref("runs")}>
+            <Button size="small" type="text" icon={<ArrowRightOutlined />} iconPosition="end">
+              All runs
+            </Button>
+          </Link>
         }
       >
-        <Table<RunInfo>
-          className="overview-runs"
-          size="middle"
-          rowKey="id"
+        <RunsTable
+          runs={(runs.data ?? []).slice(0, 5)}
           loading={runs.isLoading}
-          pagination={false}
-          dataSource={(runs.data ?? []).slice(0, 5)}
-          locale={{ emptyText: <EmptyState title="No runs yet" description="Runs you start, and scheduled runs, appear here." /> }}
-          scroll={{ x: 640 }}
-          columns={[
-            {
-              title: "Started",
-              key: "started",
-              render: (_: unknown, r) => {
-                const at = r.timestamp || r.mod_time;
-                return <Tooltip title={formatDateTime(at)}>{relativeTime(at)}</Tooltip>;
-              },
-            },
-            {
-              title: "Status",
-              key: "status",
-              render: (_: unknown, r) => {
-                const st = runStatus(r);
-                return <StatusBadge tone={st.tone}>{st.label}</StatusBadge>;
-              },
-            },
-            {
-              title: "Trigger",
-              key: "trigger",
-              render: (_: unknown, r) => {
-                const src = (r.run_source || "").toLowerCase();
-                return src === "scheduled" ? "Scheduled" : src === "manual" ? "Manual" : src === "external" ? "External" : "—";
-              },
-            },
-            { title: "Duration", key: "duration", render: (_: unknown, r) => formatDuration(r.duration_s) },
-            {
-              title: "Clusters",
-              key: "clusters",
-              render: (_: unknown, r) =>
-                r.clusters_ok == null && r.clusters_failed == null ? "—" : `${r.clusters_ok ?? 0}/${(r.clusters_ok ?? 0) + (r.clusters_failed ?? 0)}`,
-            },
-            {
-              title: "Findings",
-              key: "findings",
-              render: (_: unknown, r) =>
-                r.fail_total == null && r.warn_total == null ? "—" : `${(r.fail_total ?? 0) + (r.err_total ?? 0)} fail · ${r.warn_total ?? 0} warn`,
-            },
-          ]}
+          onOpen={(r) => navigate(`/runs/${encodeURIComponent(r.id)}`)}
+          empty={<EmptyState title="No runs yet" description="Runs you start, and scheduled runs, appear here." />}
         />
       </Panel>
     </div>

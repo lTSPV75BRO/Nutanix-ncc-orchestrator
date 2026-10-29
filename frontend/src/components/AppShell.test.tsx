@@ -42,9 +42,15 @@ describe("AppShell", () => {
     expect(nav()).toHaveTextContent("Overview");
     expect(nav()).toHaveTextContent("Findings");
     expect(nav()).toHaveTextContent("Insights");
-    expect(nav()).not.toHaveTextContent("Runs");
+    expect(nav()).toHaveTextContent("Runs");
     expect(nav()).not.toHaveTextContent("Settings");
     expect(nav()).not.toHaveTextContent("System");
+  });
+
+  it("keeps Runs selected on a run's detail page", () => {
+    renderShell({ isAdmin: true, canOperate: true, loginEnabled: true }, "/runs/abc");
+    expect(screen.getByRole("heading", { level: 1, name: "Run details" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Runs/ })).toHaveClass("ant-menu-item-selected");
   });
 
   it("navigates from the sidebar", () => {

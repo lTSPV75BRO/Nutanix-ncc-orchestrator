@@ -90,6 +90,24 @@ The Dashboard is now two pages:
 
 Links shared from the old Dashboard open the matching Findings view.
 
+### Runs and run details
+
+- **New run** opens a side panel with the config file, an optional one-off
+  password, run options, and **Run preflight**, whose result appears right
+  there. The panel closes once the run is accepted.
+- **In progress** shows each running run's live output, queued runs with
+  their place in line and an estimated wait, and Cancel.
+- **History** lists every run with its status, trigger, duration, clusters
+  and findings; switch to **With problems** to see only partial or failed
+  runs.
+- Click a run to open its **details**: per-cluster results (unreachable and
+  failing clusters first, with the error), every check that did not pass,
+  how it compares with the previous run, and the run's saved files to
+  download.
+
+Viewers can now browse runs and their details; starting and cancelling runs
+still needs the operator role.
+
 ### Opening title
 
 When the site is opened, the name "NCC Orchestrator" draws itself in outline

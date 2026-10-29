@@ -35,7 +35,8 @@ export type SectionKey =
   | "maintenance"
   | "developer";
 
-export type SectionAccess = "operator" | "admin";
+/** viewer: anyone signed in (read-only for viewers); operator; admin. */
+export type SectionAccess = "viewer" | "operator" | "admin";
 
 export type SectionDef = {
   key: SectionKey;
@@ -52,7 +53,8 @@ export type SectionDef = {
 };
 
 export const SECTIONS: SectionDef[] = [
-  { key: "runs", path: "/runs", label: "Runs", title: "Runs", icon: <ThunderboltOutlined />, group: "main", access: "operator" },
+  // Viewers may read run history (GET /api/v1/runs); starting/cancelling stays operator-only.
+  { key: "runs", path: "/runs", label: "Runs", title: "Runs", icon: <ThunderboltOutlined />, group: "main", access: "viewer" },
   { key: "config", path: "/settings/config", label: "Clusters & config", title: "Clusters & config", icon: <SettingOutlined />, group: "settings", access: "admin" },
   { key: "schedule", path: "/settings/schedule", label: "Schedule", title: "Schedule", icon: <CalendarOutlined />, group: "settings", access: "operator" },
   { key: "notifications", path: "/settings/notifications", label: "Notifications", title: "Notifications", icon: <BellOutlined />, group: "settings", access: "admin" },
@@ -100,6 +102,7 @@ export type Viewer = { isAdmin: boolean; canOperate: boolean; loginEnabled: bool
 
 export function canOpenSection(s: SectionDef, v: Viewer): boolean {
   if (s.needsLogin && !v.loginEnabled) return false;
+  if (s.access === "viewer") return true;
   return s.access === "admin" ? v.isAdmin : v.isAdmin || v.canOperate;
 }
 
@@ -147,6 +150,7 @@ export function legacySettingsTarget(search: string, v: Viewer): string {
 
 /** Title for the top bar. */
 export function pageTitle(pathname: string): string {
+  if (/^\/runs\/[^/]+/.test(pathname)) return "Run details";
   const s = sectionByPath(pathname);
   if (s) return s.title;
   const p = PAGES.find((pg) => pg.path === (pathname.replace(/\/+$/, "") || "/"));

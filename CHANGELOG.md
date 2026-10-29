@@ -71,6 +71,14 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   sharing and acknowledge/resolve unchanged; its severity counts now cover the
   whole run and work as filters. Old shared Dashboard links redirect to
   Findings.
+- **Runs page and run details.** Runs (`/runs`) has a **New run** drawer
+  (config, one-off password, run options, preflight shown in place), an
+  **In progress** panel with live output, queue position, estimated wait and
+  Cancel, and a run history filterable to runs with problems. Each archived
+  run opens a detail page (`/runs/<id>`) with per-cluster results (worst
+  first, with errors), every check that did not pass, the comparison with the
+  previous run, and the run's saved files. Viewers can now browse runs
+  (read-only). Run statuses read the same on every page.
 - **Opening title:** when the site is opened, "NCC Orchestrator" draws itself
   in outline and fills in (React Bits `StrokeText`, built on GSAP) while the
   page behind it shows through frosted; the blur then eases away to reveal

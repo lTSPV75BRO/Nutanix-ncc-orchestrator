@@ -26,10 +26,10 @@ function navItems(viewer: Viewer): MenuItem[] {
   return [...main, ...groups];
 }
 
-/** Menu key for the current location: exact page/section path. */
+/** Menu key for the current location: the page/section path (a run's detail page belongs to Runs). */
 function selectedKey(pathname: string): string {
   const p = pathname.replace(/\/+$/, "") || "/";
-  return p;
+  return p.startsWith("/runs/") ? "/runs" : p;
 }
 
 function Brand({ brand, onNavigate }: { brand?: ReactNode; onNavigate?: () => void }) {

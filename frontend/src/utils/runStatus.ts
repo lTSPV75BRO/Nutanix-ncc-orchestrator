@@ -1,4 +1,17 @@
 import type { RunInfo } from "../api/types";
+import type { Tone } from "../ui/StatusBadge";
+
+/** runStatusDisplay as a StatusBadge tone, for the redesigned pages. */
+export function runStatusTone(row: Pick<RunInfo, "source" | "status" | "success" | "exit_code" | "status_source">): {
+  tone: Tone;
+  label: string;
+  hint?: string;
+} {
+  const d = runStatusDisplay(row);
+  const tone: Tone =
+    d.color === "success" ? "ok" : d.color === "error" ? "fail" : d.color === "warning" ? "warn" : d.color === "processing" ? "info" : "neutral";
+  return { tone, label: d.label, hint: d.hint };
+}
 
 export type RunStatusDisplay = {
   label: string;
