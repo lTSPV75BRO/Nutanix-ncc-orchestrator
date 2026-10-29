@@ -2,20 +2,26 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useRunsActive, useRunsActivePoller } from "./hooks/useRunsActive";
 import {
   BgColorsOutlined,
-  BarChartOutlined,
-  DashboardOutlined,
+  CheckOutlined,
   KeyOutlined,
   LockOutlined,
   LogoutOutlined,
   PlayCircleOutlined,
-  SettingOutlined,
   ThunderboltOutlined,
   UserOutlined,
   WifiOutlined,
 } from "@ant-design/icons";
-import { Alert, Button, Dropdown, Layout, Spin, Tag, Tooltip } from "antd";
+import { Alert, Button, Dropdown, Spin, Tag, Tooltip } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, Navigate, NavLink, Route, Routes, useLocation } from "react-router";
+import { Navigate, Route, Routes, useLocation } from "react-router";
+import { AppShell } from "./components/AppShell";
+import {
+  canOpenSection,
+  legacySettingsTarget,
+  sectionByPath,
+  settingsLanding,
+  type Viewer,
+} from "./navigation";
 import { THEME_OPTIONS, useAppTheme, type AppThemeSelection } from "./theme";
 import { api, ApiError, setOnUnauthorized, resetUnauthorizedRedirect } from "./api/client";
 import type { MeData, RunActiveData, RunConflictData, UserRole } from "./api/types";
@@ -29,17 +35,27 @@ import { SetupHeaderButton } from "./features/onboarding/SetupChecklist";
 import { CommandJump } from "./components/CommandJump";
 import { formatDateTime, formatTime, localDateKey, parseInstant } from "./utils/datetime";
 
-const { Header, Content } = Layout;
 const DashboardPage = lazy(() => import("./pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 const InsightsPage = lazy(() => import("./pages/InsightsPage").then((m) => ({ default: m.InsightsPage })));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage").then((m) => ({ default: m.NotFoundPage })));
 
-const NAV_ITEMS = [
-  { to: "/", label: "Dashboard", icon: <DashboardOutlined /> },
-  { to: "/insights", label: "Insights", icon: <BarChartOutlined /> },
-  { to: "/settings", label: "Settings", icon: <SettingOutlined /> },
-] as const;
+/** A Settings/System section route; sends viewers who may not open it to their landing. */
+function SectionRoute({ viewer }: { viewer: Viewer }) {
+  const location = useLocation();
+  const s = sectionByPath(location.pathname);
+  if (!s || !canOpenSection(s, viewer)) {
+    const landing = settingsLanding(viewer);
+    return <Navigate to={landing === location.pathname ? "/" : landing} replace />;
+  }
+  return <SettingsPage key={s.key} isAdmin={viewer.isAdmin} section={s.key} />;
+}
+
+/** Old `/settings?tab=X` links (bookmarks, docs) keep working. */
+function LegacySettingsRedirect({ viewer }: { viewer: Viewer }) {
+  const location = useLocation();
+  return <Navigate to={legacySettingsTarget(location.search, viewer)} replace />;
+}
 
 const APP_BASE_TITLE = "NCC Orchestrator v2";
 const RUN_TOAST_KEY = "ncc-run-active";
@@ -303,7 +319,7 @@ function HeaderTriggerRunButton() {
         message: "Run accepted",
         description: `PID ${out.pid} · Started ${
           out.started_at ? formatTime(out.started_at) : "just now"
-        }. Live logs are visible on Settings → Runs.`,
+        }. Live logs are on the Runs page.`,
       });
       startMsRef.current = out.started_at ? (parseInstant(out.started_at)?.getTime() ?? Date.now()) : Date.now();
       void active.refetch();
@@ -363,10 +379,21 @@ function HeaderTriggerRunButton() {
 
 /** Header control showing the signed-in user, their role, and a logout action.
  *  Rendered only when interactive login is enabled. */
+/** Theme choices as menu entries, with a tick on the selected one. */
+function themeMenuItems(selected: AppThemeSelection) {
+  return THEME_OPTIONS.map((opt) => ({
+    key: `theme:${opt.value}`,
+    label: opt.label,
+    icon: opt.value === selected ? <CheckOutlined /> : <span className="ui-menu-icon-spacer" />,
+  }));
+}
+
 function HeaderUserMenu({
   username,
   role,
   canChangePassword,
+  selectedTheme,
+  onTheme,
   onChangePassword,
   onManageTokens,
   onLogout,
@@ -375,6 +402,8 @@ function HeaderUserMenu({
   username: string;
   role: UserRole;
   canChangePassword: boolean;
+  selectedTheme: AppThemeSelection;
+  onTheme: (t: AppThemeSelection) => void;
   onChangePassword: () => void;
   onManageTokens: () => void;
   onLogout: () => void;
@@ -392,6 +421,7 @@ function HeaderUserMenu({
       disabled: true,
     },
     { type: "divider" as const },
+    { key: "theme", icon: <BgColorsOutlined />, label: "Theme", children: themeMenuItems(selectedTheme) },
     { key: "tokens", icon: <KeyOutlined />, label: "Personal access tokens" },
     ...(canChangePassword
       ? [{ key: "change-password", icon: <LockOutlined />, label: "Change password" }]
@@ -408,7 +438,8 @@ function HeaderUserMenu({
       menu={{
         items,
         onClick: ({ key }) => {
-          if (key === "logout") onLogout();
+          if (key.startsWith("theme:")) onTheme(key.slice("theme:".length) as AppThemeSelection);
+          else if (key === "logout") onLogout();
           else if (key === "logout-all") onLogoutEverywhere();
           else if (key === "change-password") onChangePassword();
           else if (key === "tokens") onManageTokens();
@@ -426,7 +457,6 @@ function HeaderUserMenu({
 }
 
 export default function App() {
-  const location = useLocation();
   const queryClient = useQueryClient();
   const { selectedTheme, setTheme } = useAppTheme();
   const themeLabel = THEME_OPTIONS.find((opt) => opt.value === selectedTheme)?.label ?? "Theme";
@@ -561,11 +591,6 @@ export default function App() {
 
   useDocumentTitleSync(healthState, runActive);
 
-  const isActive = (to: string): boolean => {
-    if (to === "/") return location.pathname === "/" || location.pathname === "";
-    return location.pathname.startsWith(to);
-  };
-
   // Wait for /auth/me before routing. While it is in flight, login_enabled is
   // unknown (falsy), so rendering the app would mount Dashboard queries that
   // 401 and bounce /login → / forever. After 6s (or on error) offer Retry /
@@ -624,62 +649,51 @@ export default function App() {
     );
   }
 
-  // Settings is reachable by operators and admins (viewers have no settings
-  // actions). Operators see a reduced set of tabs (see SettingsPage); the
-  // secret-bearing tabs stay admin-only. Hide the nav pill from viewers.
-  const navItems = NAV_ITEMS.filter((item) => item.to !== "/settings" || canSeeSettings);
+  // Sections are filtered by role in navigation.tsx: operators get the
+  // operational ones, the secret-bearing ones stay admin-only, viewers none.
+  const viewer: Viewer = { isAdmin, canOperate, loginEnabled };
+  const signedIn = loginEnabled && authenticated;
 
   return (
     <AuthContext.Provider value={authValue}>
-    <Layout className="app-shell">
-      <Header className="app-header">
-        <div className="app-header-inner">
-          <Link to="/" className="brand-block" aria-label="NCC Orchestrator home">
-            <span className="brand-logo-wrap">
-              <img src="/logo.svg" alt="" className="brand-logo" />
-            </span>
-            <span className="brand-text">
-              <span className="brand-name">NCC Orchestrator</span>
-              <span className="brand-tagline">
-                <BrandVersionTag
-                  version={healthRecord?.version}
-                  buildDate={healthRecord?.build_date}
-                  stream={healthRecord?.stream}
-                  goVersion={healthRecord?.go_version}
-                  os={healthRecord?.os}
-                  arch={healthRecord?.arch}
-                />
-                <span className="brand-tagline-text">Cluster Healthcheck Platform</span>
-              </span>
-            </span>
-          </Link>
-
-          <nav className="header-nav" aria-label="Primary">
-            {navItems.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                className={`nav-pill${isActive(item.to) ? " active" : ""}`}
-                end={item.to === "/"}
-              >
-                <span className="nav-pill-icon">{item.icon}</span>
-                <span className="nav-pill-label">{item.label}</span>
-              </NavLink>
-            ))}
-          </nav>
-
-          <div className="header-actions">
-            <CommandJump />
-            {appReady && canSeeSettings ? <SetupHeaderButton /> : null}
-            <HeaderTriggerRunButton />
-            <HeaderHealthPill health={healthState} onRetry={() => void healthQuery.refetch()} />
+    <AppShell
+      viewer={viewer}
+      brand={
+        <BrandVersionTag
+          version={healthRecord?.version}
+          buildDate={healthRecord?.build_date}
+          stream={healthRecord?.stream}
+          goVersion={healthRecord?.go_version}
+          os={healthRecord?.os}
+          arch={healthRecord?.arch}
+        />
+      }
+      actions={
+        <>
+          <CommandJump />
+          {appReady && canSeeSettings ? <SetupHeaderButton /> : null}
+          <HeaderHealthPill health={healthState} onRetry={() => void healthQuery.refetch()} />
+          <HeaderTriggerRunButton />
+          {signedIn ? (
+            <HeaderUserMenu
+              username={me?.username ?? ""}
+              role={role}
+              canChangePassword={Boolean(me?.is_local)}
+              selectedTheme={selectedTheme}
+              onTheme={setTheme}
+              onChangePassword={() => setChangePwOpen(true)}
+              onManageTokens={() => setTokensOpen(true)}
+              onLogout={handleLogout}
+              onLogoutEverywhere={handleLogoutEverywhere}
+            />
+          ) : (
+            // No user menu without sign-in, so the theme picker stands alone.
             <Dropdown
               placement="bottomRight"
               trigger={["click"]}
               menu={{
-                selectedKeys: [selectedTheme],
-                items: THEME_OPTIONS.map((opt) => ({ key: opt.value, label: opt.label })),
-                onClick: ({ key }) => setTheme(key as AppThemeSelection),
+                items: themeMenuItems(selectedTheme),
+                onClick: ({ key }) => setTheme(key.slice("theme:".length) as AppThemeSelection),
               }}
             >
               <Button
@@ -689,32 +703,13 @@ export default function App() {
                 className="header-icon-btn"
               />
             </Dropdown>
-            {loginEnabled && authenticated ? (
-              <HeaderUserMenu
-                username={me?.username ?? ""}
-                role={role}
-                canChangePassword={Boolean(me?.is_local)}
-                onChangePassword={() => setChangePwOpen(true)}
-                onManageTokens={() => setTokensOpen(true)}
-                onLogout={handleLogout}
-                onLogoutEverywhere={handleLogoutEverywhere}
-              />
-            ) : null}
-          </div>
-        </div>
-      </Header>
-      <Content className="app-content">
-        <div className="app-content-inner">
+          )}
+        </>
+      }
+    >
           <Suspense
             fallback={
-              <div
-                style={{
-                  minHeight: "70vh",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
+              <div className="ui-route-loading">
                 <Spin size="large" />
               </div>
             }
@@ -722,16 +717,14 @@ export default function App() {
             <Routes>
               <Route path="/" element={<DashboardPage />} />
               <Route path="/login" element={<Navigate to="/" replace />} />
-              <Route
-                path="/settings"
-                element={canSeeSettings ? <SettingsPage isAdmin={isAdmin} /> : <Navigate to="/" replace />}
-              />
               <Route path="/insights" element={<InsightsPage />} />
+              <Route path="/runs" element={<SectionRoute viewer={viewer} />} />
+              <Route path="/settings" element={<LegacySettingsRedirect viewer={viewer} />} />
+              <Route path="/settings/:section" element={<SectionRoute viewer={viewer} />} />
+              <Route path="/system/:section" element={<SectionRoute viewer={viewer} />} />
               <Route path="*" element={<NotFoundPage />} />
             </Routes>
           </Suspense>
-        </div>
-      </Content>
       <ChangePasswordModal
         open={changePwOpen}
         onClose={() => setChangePwOpen(false)}
@@ -747,7 +740,7 @@ export default function App() {
           onStayLoggedIn={() => void meQuery.refetch()}
         />
       ) : null}
-    </Layout>
+    </AppShell>
     </AuthContext.Provider>
   );
 }

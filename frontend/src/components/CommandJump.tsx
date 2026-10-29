@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { Button, Input, Modal, Typography } from "antd";
 import { SearchOutlined } from "@ant-design/icons";
+import { sectionHref } from "../navigation";
 
 export type JumpItem = {
   id: string;
@@ -12,19 +13,21 @@ export type JumpItem = {
 };
 
 export const JUMP_ITEMS: JumpItem[] = [
-  { id: "dashboard", title: "Dashboard", keywords: "home alerts findings ncc pc", to: "/", hint: "Alerts" },
+  { id: "dashboard", title: "Overview", keywords: "home dashboard alerts findings ncc pc", to: "/", hint: "Overview" },
   { id: "insights", title: "Insights", keywords: "kb compare trends knowledge", to: "/insights", hint: "Reports" },
-  { id: "tls", title: "HTTPS / TLS", keywords: "tls cert certificate https ssl trust fingerprint", to: "/settings?tab=access&focus=tls", hint: "Access" },
-  { id: "users", title: "Users & roles", keywords: "users accounts rbac admin password access", to: "/settings?tab=access&focus=users", hint: "Access" },
-  { id: "ldap", title: "LDAP / SSO", keywords: "ldap ad saml sso directory authentication access", to: "/settings?tab=access&focus=ldap", hint: "Access" },
-  { id: "backup", title: "Backups", keywords: "backup restore snapshot maintenance", to: "/settings?tab=maintenance&focus=backup", hint: "Maintenance" },
-  { id: "health", title: "System Health", keywords: "health diagnostics doctor", to: "/settings?tab=health&focus=health", hint: "Health" },
-  { id: "config", title: "Config", keywords: "clusters prism pc yaml", to: "/settings?tab=config", hint: "Settings" },
-  { id: "schedule", title: "Schedule", keywords: "cron job recurring", to: "/settings?tab=schedule", hint: "Settings" },
-  { id: "runs", title: "Runs", keywords: "trigger history logs", to: "/settings?tab=runs", hint: "Settings" },
-  { id: "notifications", title: "Notifications", keywords: "email slack webhook", to: "/settings?tab=notifications", hint: "Settings" },
-  { id: "access", title: "Access", keywords: "login session cookies", to: "/settings?tab=access", hint: "Settings" },
-  { id: "maintenance", title: "Maintenance", keywords: "update upgrade", to: "/settings?tab=maintenance", hint: "Settings" },
+  { id: "tls", title: "HTTPS / TLS", keywords: "tls cert certificate https ssl trust fingerprint", to: sectionHref("access", { focus: "tls" }), hint: "Access" },
+  { id: "users", title: "Users & roles", keywords: "users accounts rbac admin password access", to: sectionHref("access", { focus: "users" }), hint: "Access" },
+  { id: "ldap", title: "LDAP / SSO", keywords: "ldap ad saml sso directory authentication access", to: sectionHref("access", { focus: "ldap" }), hint: "Access" },
+  { id: "backup", title: "Backups", keywords: "backup restore snapshot maintenance", to: sectionHref("maintenance", { focus: "backup" }), hint: "Maintenance" },
+  { id: "health", title: "System health", keywords: "health diagnostics doctor", to: sectionHref("health", { focus: "health" }), hint: "System" },
+  { id: "config", title: "Clusters & config", keywords: "clusters prism pc yaml config", to: sectionHref("config"), hint: "Settings" },
+  { id: "schedule", title: "Schedule", keywords: "cron job recurring", to: sectionHref("schedule"), hint: "Settings" },
+  { id: "runs", title: "Runs", keywords: "trigger history run start", to: sectionHref("runs"), hint: "Runs" },
+  { id: "logs", title: "Logs", keywords: "logs runner api output", to: sectionHref("logs"), hint: "System" },
+  { id: "audit", title: "Audit log", keywords: "audit who changed history", to: sectionHref("audit"), hint: "System" },
+  { id: "notifications", title: "Notifications", keywords: "email slack webhook", to: sectionHref("notifications"), hint: "Settings" },
+  { id: "access", title: "Access", keywords: "login session cookies", to: sectionHref("access"), hint: "Settings" },
+  { id: "maintenance", title: "Maintenance", keywords: "update upgrade", to: sectionHref("maintenance"), hint: "System" },
 ];
 
 export function matchJumpItems(query: string, items: JumpItem[] = JUMP_ITEMS): JumpItem[] {
@@ -39,9 +42,9 @@ function shortcutLabel(): string {
 }
 
 /**
- * Global jump palette (⌘K / Ctrl+K) for buried Settings tabs and the main
- * pages. Selecting an item navigates to `/settings?tab=&focus=` so the
- * destination can scroll the matching card into view.
+ * Global jump palette (⌘K / Ctrl+K) for the pages and Settings/System
+ * sections. Items with `?focus=` let the destination scroll the matching card
+ * into view.
  */
 export function CommandJump() {
   const navigate = useNavigate();
@@ -79,7 +82,7 @@ export function CommandJump() {
         aria-label={`Jump to (${shortcutLabel()})`}
         title={`Jump to (${shortcutLabel()})`}
         icon={<SearchOutlined />}
-        className="header-icon-btn"
+        className="header-icon-btn command-jump-btn"
         onClick={() => {
           setOpen(true);
           setQ("");

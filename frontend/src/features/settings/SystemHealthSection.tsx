@@ -29,6 +29,7 @@ import {
 } from "@ant-design/icons";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router";
+import { sectionHref } from "../../navigation";
 import { api } from "../../api/client";
 import type { DiagnosticCheck, DiagnosticsData } from "../../api/types";
 import { notify, notifyError } from "../../notify";
@@ -184,12 +185,12 @@ export function SystemHealthSection() {
   const actionableCount = actionableSummary?.count ?? (data?.summary.warn ?? 0) + (data?.summary.fail ?? 0);
 
   const remediationTarget = (category: string): string => {
-    if (category === "config") return "/settings?tab=config";
-    if (category === "backups") return "/settings?tab=access";
-    if (category === "runs") return "/settings?tab=runs";
-    if (category === "process") return "/settings?tab=connection";
-    if (category === "directory" || category === "sso") return "/settings?tab=access";
-    return "/settings?tab=health";
+    if (category === "config") return sectionHref("config");
+    if (category === "backups") return sectionHref("maintenance", { focus: "backup" });
+    if (category === "runs") return sectionHref("runs");
+    if (category === "process") return sectionHref("connection");
+    if (category === "directory" || category === "sso") return sectionHref("access");
+    return sectionHref("health");
   };
 
   const readinessFixLabel = (key: string): string => {
@@ -262,17 +263,17 @@ export function SystemHealthSection() {
       message: c.message,
     }));
     return [
-      { key: "api", label: "API health", ok: apiOk, fix: "/settings?tab=connection" },
+      { key: "api", label: "API health", ok: apiOk, fix: sectionHref("connection") },
       {
         key: "supervisor",
         label: supervisorLabel,
         ok: supervisorGateOk,
-        fix: "/settings?tab=health",
+        fix: sectionHref("health"),
         details: processSnapshot,
       },
-      { key: "schedule", label: "Schedule configured", ok: scheduleOk, fix: "/settings?tab=schedule" },
-      { key: "backups", label: "Backups available", ok: hasBackup, fix: "/settings?tab=maintenance&focus=backup" },
-      { key: "runs", label: "No active long-running run", ok: noActiveRun, fix: "/settings?tab=runs" },
+      { key: "schedule", label: "Schedule configured", ok: scheduleOk, fix: sectionHref("schedule") },
+      { key: "backups", label: "Backups available", ok: hasBackup, fix: sectionHref("maintenance", { focus: "backup" }) },
+      { key: "runs", label: "No active long-running run", ok: noActiveRun, fix: sectionHref("runs") },
     ];
   }, [
     backups.data?.backups?.length,

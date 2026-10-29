@@ -52,6 +52,16 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   was hidden without local accounts); Caps Lock warning; lockouts shown as a
   warning; a notice after sign-out or when a session ends; clearer first-run
   guidance with a copyable Kubernetes command.
+- **New app navigation:** a sidebar (Overview, Insights, Runs; Settings;
+  System) replaces the header pills and the 13-tab Settings page; it
+  collapses to icons and becomes a drawer on phones. A slim top bar shows the
+  page title, search, setup progress, API status, Run and the user menu (the
+  theme picker moved into it). Each former Settings tab has its own URL
+  (`/runs`, `/settings/config`, `/system/audit`, …); old `/settings?tab=…`
+  links redirect. Roles see the same sections as before. Shared design tokens
+  and building blocks (`src/ui`) for the page redesigns that follow
+  ([`docs/ui/redesign-plan.md`](docs/ui/redesign-plan.md)). System Health's
+  fix link for backup problems now opens Maintenance instead of Access.
 - **Opening title:** when the site is opened, "NCC Orchestrator" draws itself
   in outline and fills in (React Bits `StrokeText`, built on GSAP) while the
   page behind it shows through frosted; the blur then eases away to reveal

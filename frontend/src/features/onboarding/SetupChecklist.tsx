@@ -3,6 +3,7 @@ import { CheckCircleFilled, ClockCircleOutlined, EyeInvisibleOutlined, EyeOutlin
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate } from "react-router";
+import { sectionHref } from "../../navigation";
 import { api } from "../../api/client";
 import type { OnboardingStatus, OnboardingStep } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
@@ -58,7 +59,7 @@ export function SetupStepList({ status, onNavigate }: { status: OnboardingStatus
         type={step.id === firstPending ? "primary" : "default"}
         onClick={() => {
           onNavigate?.();
-          navigate(`/settings?tab=${encodeURIComponent(step.tab)}`);
+          navigate(sectionHref(step.tab));
         }}
       >
         {step.done ? "Review" : step.action_label}

@@ -55,6 +55,24 @@ admin-only steps. An admin's **Hide** applies to the whole install.
   Before, the file picker hid them and no passphrase could be given.
 - The new-password form validates the confirmation as you type.
 
+### New navigation
+
+The header pills and the 13-tab Settings page are replaced by a sidebar:
+
+- **Overview**, **Insights** and **Runs** at the top (Runs used to be a
+  Settings tab).
+- **Settings:** Clusters & config, Schedule, Notifications, Access, Features.
+- **System:** Status, Health, Logs, Audit log, Maintenance, Developer.
+
+The sidebar collapses to icons (the choice is remembered) and opens as a
+drawer on phones. The top bar shows the page title, search (Ctrl+K / ⌘K),
+setup progress, API status, **Trigger** and your user menu; the theme picker
+is now in the user menu (or beside it when sign-in is off). Every section has
+its own address, so it can be bookmarked; old `/settings?tab=…` links still
+work. Each role sees the same sections as before. This is the first step of
+a wider redesign of the signed-in pages
+([`docs/ui/redesign-plan.md`](docs/ui/redesign-plan.md)).
+
 ### Opening title
 
 When the site is opened, the name "NCC Orchestrator" draws itself in outline

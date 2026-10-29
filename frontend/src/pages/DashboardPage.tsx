@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { useRunsActive } from "../hooks/useRunsActive";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
+import { sectionHref } from "../navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
@@ -888,7 +889,7 @@ export function DashboardPage() {
                       <Typography.Text type="secondary">
                         Started {startedAt}. The dashboard will refresh automatically — there's nothing to do.
                       </Typography.Text>
-                      <Link to="/settings?tab=runs">
+                      <Link to={sectionHref("runs")}>
                         <Button size="small" type="link">
                           View live output →
                         </Button>
@@ -940,26 +941,26 @@ export function DashboardPage() {
                     <Typography.Text type="secondary">
                       {hasPriorRun
                         ? likelyEarlyFailure
-                          ? `The ${sourceLabel} finished before any check results were saved. ${summaryHint}${errorHint} Start it again from Settings → Runs and review the live output.`
+                          ? `The ${sourceLabel} finished before any check results were saved. ${summaryHint}${errorHint} Start it again from Runs and review the live output.`
                           : artifactGap
-                            ? `The ${sourceLabel} summary is available, but the check results are missing. Open Settings → Runs, review the latest run, then start it again.`
-                            : `The ${sourceLabel} completed without check results. Start it again from Settings → Runs.`
-                        : "Start a run from Settings → Runs. Add clusters or Prism Central under Config first."}
+                            ? `The ${sourceLabel} summary is available, but the check results are missing. Open Runs, review the latest run, then start it again.`
+                            : `The ${sourceLabel} completed without check results. Start it again from Runs.`
+                        : "Start a run from Runs. Add clusters or Prism Central under Clusters & config first."}
                     </Typography.Text>
                     {hasPriorRun ? (
-                      <Link to="/settings?tab=runs">
+                      <Link to={sectionHref("runs")}>
                         <Button size="small" type="link">
                           Open Runs →
                         </Button>
                       </Link>
                     ) : (
                       <Space>
-                        <Link to="/settings?tab=config">
+                        <Link to={sectionHref("config")}>
                           <Button size="small" type="primary">
-                            Open Config
+                            Open config
                           </Button>
                         </Link>
-                        <Link to="/settings?tab=runs">
+                        <Link to={sectionHref("runs")}>
                           <Button size="small">
                             Open Runs
                           </Button>

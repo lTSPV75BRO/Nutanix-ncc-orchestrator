@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect } from "react";
 import type { ReactNode } from "react";
-import { useSearchParams } from "react-router";
+import { Navigate, useSearchParams } from "react-router";
 import {
   Button,
   Card,
@@ -450,7 +450,12 @@ function DeveloperTab({ onError }: { onError: (e: unknown) => void }) {
   );
 }
 
-export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
+/**
+ * The former Settings tabs. With `section` (the app's routes, see
+ * navigation.tsx) it renders just that section — the sidebar is the
+ * navigation. Without it, it renders the legacy tab bar driven by `?tab=`.
+ */
+export function SettingsPage({ isAdmin = true, section }: { isAdmin?: boolean; section?: string }) {
   const [tab, setTab] = useLocalStorageState("settings.activeTab", "connection");
   const [devTab] = useLocalStorageState("settings.developer.section", "api");
   const [searchParams, setSearchParams] = useSearchParams();
@@ -572,19 +577,21 @@ export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
 
   // Keep the remembered tab in sync with the currently active tab.
   useEffect(() => {
+    if (section) return;
     if (tab !== activeTab) {
       setTab(activeTab);
     }
-  }, [activeTab, tab, setTab]);
+  }, [section, activeTab, tab, setTab]);
 
   // Keep the URL query param in sync so deep links like /settings?tab=runs
   // work and the current tab is shareable/bookmarkable.
   useEffect(() => {
+    if (section) return;
     if ((searchParams.get("tab") || "") === activeTab) return;
     const next = new URLSearchParams(searchParams);
     next.set("tab", activeTab);
     setSearchParams(next, { replace: true });
-  }, [activeTab, searchParams, setSearchParams]);
+  }, [section, activeTab, searchParams, setSearchParams]);
 
   useEffect(() => {
     const focus = (searchParams.get("focus") || "").trim();
@@ -602,7 +609,7 @@ export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
       window.clearTimeout(t1);
       window.clearTimeout(t2);
     };
-  }, [activeTab, searchParams]);
+  }, [section, activeTab, searchParams]);
 
   if (health.isLoading && !health.data) {
     return (
@@ -621,6 +628,18 @@ export function SettingsPage({ isAdmin = true }: { isAdmin?: boolean }) {
           void health.refetch();
         }}
       />
+    );
+  }
+
+  if (section) {
+    const item = visibleItems.find((it) => it.key === section);
+    // Not available to this role or on this install (e.g. Access without
+    // sign-in): send them to the Settings landing instead of a blank page.
+    if (!item) return <Navigate to="/settings" replace />;
+    return (
+      <div className="section-page" data-section={section}>
+        {item.children}
+      </div>
     );
   }
 

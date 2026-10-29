@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { sectionHref } from "../../navigation";
 import {
   Alert,
   Badge,
@@ -561,7 +562,7 @@ export function ApiExplorerSection({ onError }: Props) {
                 icon={<WarningOutlined />}
                 onClick={() => {
                   const actionPrefix = path.includes("/settings/") ? "settings." : method === "POST" ? "runs." : "";
-                  window.location.assign(`/settings?tab=audit${actionPrefix ? `&action=${encodeURIComponent(actionPrefix)}` : ""}`);
+                  window.location.assign(sectionHref("audit", { action: actionPrefix || undefined }));
                 }}
               >
                 Trace in audit

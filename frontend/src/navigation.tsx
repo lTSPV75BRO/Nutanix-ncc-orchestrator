@@ -1,0 +1,140 @@
+// Single source of truth for where things live in the app: the sidebar, the
+// Settings/System section routes, legacy /settings?tab= redirects, and every
+// in-app link to a section all read from here.
+import type { ReactNode } from "react";
+import {
+  ApiOutlined,
+  AuditOutlined,
+  BarChartOutlined,
+  BellOutlined,
+  CalendarOutlined,
+  CodeOutlined,
+  ControlOutlined,
+  DashboardOutlined,
+  FileTextOutlined,
+  HeartOutlined,
+  SettingOutlined,
+  TeamOutlined,
+  ThunderboltOutlined,
+  ToolOutlined,
+} from "@ant-design/icons";
+
+/** Keys of the sections SettingsPage can render (the former Settings tabs). */
+export type SectionKey =
+  | "connection"
+  | "config"
+  | "schedule"
+  | "runs"
+  | "logs"
+  | "audit"
+  | "notifications"
+  | "health"
+  | "features"
+  | "access"
+  | "maintenance"
+  | "developer";
+
+export type SectionAccess = "operator" | "admin";
+
+export type SectionDef = {
+  key: SectionKey;
+  path: string;
+  label: string;
+  /** Page title shown in the top bar. */
+  title: string;
+  icon: ReactNode;
+  group: "main" | "settings" | "system";
+  /** Lowest role that may open it (viewers see none of the sections). */
+  access: SectionAccess;
+  /** Only exists when interactive sign-in is enabled. */
+  needsLogin?: boolean;
+};
+
+export const SECTIONS: SectionDef[] = [
+  { key: "runs", path: "/runs", label: "Runs", title: "Runs", icon: <ThunderboltOutlined />, group: "main", access: "operator" },
+  { key: "config", path: "/settings/config", label: "Clusters & config", title: "Clusters & config", icon: <SettingOutlined />, group: "settings", access: "admin" },
+  { key: "schedule", path: "/settings/schedule", label: "Schedule", title: "Schedule", icon: <CalendarOutlined />, group: "settings", access: "operator" },
+  { key: "notifications", path: "/settings/notifications", label: "Notifications", title: "Notifications", icon: <BellOutlined />, group: "settings", access: "admin" },
+  { key: "access", path: "/settings/access", label: "Access", title: "Access", icon: <TeamOutlined />, group: "settings", access: "admin", needsLogin: true },
+  { key: "features", path: "/settings/features", label: "Features", title: "Features", icon: <ControlOutlined />, group: "settings", access: "admin" },
+  { key: "connection", path: "/system/status", label: "Status", title: "System status", icon: <ApiOutlined />, group: "system", access: "operator" },
+  { key: "health", path: "/system/health", label: "Health", title: "System health", icon: <HeartOutlined />, group: "system", access: "admin" },
+  { key: "logs", path: "/system/logs", label: "Logs", title: "Logs", icon: <FileTextOutlined />, group: "system", access: "operator" },
+  { key: "audit", path: "/system/audit", label: "Audit log", title: "Audit log", icon: <AuditOutlined />, group: "system", access: "operator" },
+  { key: "maintenance", path: "/system/maintenance", label: "Maintenance", title: "Maintenance", icon: <ToolOutlined />, group: "system", access: "admin" },
+  { key: "developer", path: "/system/developer", label: "Developer", title: "Developer tools", icon: <CodeOutlined />, group: "system", access: "admin" },
+];
+
+/** Top-level pages that are not Settings sections. */
+export const PAGES = [
+  { path: "/", label: "Overview", title: "Overview", icon: <DashboardOutlined /> },
+  { path: "/insights", label: "Insights", title: "Insights", icon: <BarChartOutlined /> },
+] as const;
+
+const BY_KEY = new Map(SECTIONS.map((s) => [s.key, s]));
+
+export function sectionByKey(key: string): SectionDef | undefined {
+  return BY_KEY.get(key as SectionKey);
+}
+
+export function sectionByPath(pathname: string): SectionDef | undefined {
+  const p = pathname.replace(/\/+$/, "");
+  return SECTIONS.find((s) => s.path === p);
+}
+
+export type Viewer = { isAdmin: boolean; canOperate: boolean; loginEnabled: boolean };
+
+export function canOpenSection(s: SectionDef, v: Viewer): boolean {
+  if (s.needsLogin && !v.loginEnabled) return false;
+  return s.access === "admin" ? v.isAdmin : v.isAdmin || v.canOperate;
+}
+
+export function visibleSections(v: Viewer): SectionDef[] {
+  return SECTIONS.filter((s) => canOpenSection(s, v));
+}
+
+/**
+ * Link to a section, e.g. `sectionHref("maintenance", { focus: "backup" })`.
+ * Unknown keys fall back to the Settings landing so a stale key never 404s.
+ */
+export function sectionHref(key: string, params?: Record<string, string | undefined>): string {
+  const base = sectionByKey(key)?.path ?? "/settings";
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params ?? {})) {
+    if (v) qs.set(k, v);
+  }
+  const s = qs.toString();
+  return s ? `${base}?${s}` : base;
+}
+
+/** First section a viewer lands on from `/settings` with no section. */
+export function settingsLanding(v: Viewer): string {
+  const order: SectionKey[] = ["config", "schedule", "connection"];
+  for (const key of order) {
+    const s = sectionByKey(key);
+    if (s && canOpenSection(s, v)) return s.path;
+  }
+  return "/";
+}
+
+/**
+ * Where an old `/settings?tab=X&…` URL now lives. Other query parameters
+ * (focus, dev, action, …) are kept.
+ */
+export function legacySettingsTarget(search: string, v: Viewer): string {
+  const params = new URLSearchParams(search);
+  const tab = (params.get("tab") || "").trim();
+  params.delete("tab");
+  const s = sectionByKey(tab);
+  const base = s && canOpenSection(s, v) ? s.path : settingsLanding(v);
+  const rest = params.toString();
+  return rest ? `${base}?${rest}` : base;
+}
+
+/** Title for the top bar. */
+export function pageTitle(pathname: string): string {
+  const s = sectionByPath(pathname);
+  if (s) return s.title;
+  const p = PAGES.find((pg) => pg.path === (pathname.replace(/\/+$/, "") || "/"));
+  return p?.title ?? "";
+}

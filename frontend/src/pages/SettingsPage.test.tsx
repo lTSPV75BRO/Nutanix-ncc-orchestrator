@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SettingsPage } from "./SettingsPage";
 import { AppThemeProvider } from "../theme";
@@ -40,6 +40,23 @@ function renderSettings(opts?: { fetchImpl?: typeof fetch; isAdmin?: boolean; pa
   );
 }
 
+function renderSection(section: string, isAdmin = true) {
+  globalThis.fetch = vi.fn(defaultFetchImpl) as typeof fetch;
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <AppThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/x"]}>
+          <Routes>
+            <Route path="/x" element={<SettingsPage isAdmin={isAdmin} section={section} />} />
+            <Route path="/settings" element={<div>landing</div>} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    </AppThemeProvider>,
+  );
+}
+
 function fetchedPaths(): string[] {
   return vi.mocked(fetch).mock.calls.map(([input]) => {
     if (typeof input === "string") return input;
@@ -63,6 +80,18 @@ describe("SettingsPage", () => {
     await screen.findByText("Connected");
     fireEvent.click(screen.getByRole("tab", { name: /Config/ }));
     await waitFor(() => expect(screen.getByText("Lazy config loaded")).toBeInTheDocument());
+  });
+
+  it("renders a single section without the tab bar", async () => {
+    renderSection("config");
+    expect(await screen.findByText("Lazy config loaded")).toBeInTheDocument();
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+  });
+
+  it("sends operators away from an admin-only section", async () => {
+    renderSection("config", false);
+    expect(await screen.findByText("landing")).toBeInTheDocument();
+    expect(fetchedPaths().some((p) => p.includes("/api/v1/settings/"))).toBe(false);
   });
 
   it("shows an API failure state when health cannot be loaded", async () => {

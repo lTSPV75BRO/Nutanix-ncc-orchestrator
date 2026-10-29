@@ -67,7 +67,7 @@ describe("SetupChecklistCard", () => {
     expect(await screen.findByText("1 of 3 required steps done")).toBeInTheDocument();
     expect(screen.getByText("2 cluster(s) configured.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Open runs" }));
-    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/settings?tab=runs"));
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/runs"));
   });
 
   it("tells operators to ask an admin for admin-only steps and hides the Hide button", async () => {
