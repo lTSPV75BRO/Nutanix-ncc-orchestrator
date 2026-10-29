@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  findingsRedirect,
   legacySettingsTarget,
   pageTitle,
   sectionHref,
@@ -44,7 +45,14 @@ describe("navigation", () => {
     expect(settingsLanding(viewer)).toBe("/");
   });
 
+  it("sends old shared Dashboard links to Findings", () => {
+    expect(findingsRedirect("?source=ncc&sev=FAIL")).toBe("/findings?source=ncc&sev=FAIL");
+    expect(findingsRedirect("")).toBeNull();
+    expect(findingsRedirect("?utm=x")).toBeNull();
+  });
+
   it("names pages for the top bar", () => {
+    expect(pageTitle("/findings")).toBe("Findings");
     expect(pageTitle("/")).toBe("Overview");
     expect(pageTitle("/system/status")).toBe("System status");
     expect(pageTitle("/settings/config/")).toBe("Clusters & config");

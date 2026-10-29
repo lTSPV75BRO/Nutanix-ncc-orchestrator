@@ -1,6 +1,6 @@
 # Internal pages: UI/UX redesign plan
 
-Status: in progress — Phase 0 done (2026-10-29). Scope: every signed-in page of the web UI
+Status: in progress — Phases 0 and 1 done (2026-10-29). Scope: every signed-in page of the web UI
 (`frontend/src`). The API stays as it is; this is frontend-only work.
 
 ## Where we are
@@ -162,6 +162,26 @@ Left for later phases: the old header/pill CSS (`.app-header`, `.nav-pill`,
 (Phases 1 and 4). Not checked live: the user menu's Theme submenu (the test
 stack with sign-in has an unknown admin password); it is covered only by
 type checks.
+
+### Phase 1 — done (2026-10-29)
+
+- **Overview** (`pages/OverviewPage.tsx`, `/`): run line (freshness, when,
+  duration, Refresh, View findings); regression and policy-gate banners;
+  four stat tiles (health score, need attention, clusters checked, last run);
+  "Checks by result" (each severity links to `/findings?sev=…`); "Clusters"
+  from the run summary's per-cluster results, worst first, each linking to
+  `/findings?clusters=…`; "Recent runs" (last 5). No run yet → one empty
+  state with Start a run / Configure clusters. Setup progress is a slim
+  `SetupBanner` (next step, All steps drawer, Hide).
+- **Findings** (`pages/FindingsPage.tsx`, `/findings`, renamed from
+  `DashboardPage` with history kept): filters, sharing, acknowledge/resolve and
+  the table are unchanged; the hero card is replaced by a summary bar whose
+  severity pills count the whole run and act as filters. Old shared Dashboard
+  links (`/?sev=…`, `/?source=…`) redirect to `/findings`.
+- `weightedHealthScore` (utils/report) and `freshness`/`formatDuration`
+  (utils/freshness) are shared.
+- Found for Phase 3: `InsightsCards` weights warnings at 2.2 while the
+  Overview/Insights page use 3.5, so the same run can show two health scores.
 
 ## Risks and constraints
 

@@ -17,6 +17,7 @@ import { Navigate, Route, Routes, useLocation } from "react-router";
 import { AppShell } from "./components/AppShell";
 import {
   canOpenSection,
+  findingsRedirect,
   legacySettingsTarget,
   sectionByPath,
   settingsLanding,
@@ -35,7 +36,8 @@ import { SetupHeaderButton } from "./features/onboarding/SetupChecklist";
 import { CommandJump } from "./components/CommandJump";
 import { formatDateTime, formatTime, localDateKey, parseInstant } from "./utils/datetime";
 
-const DashboardPage = lazy(() => import("./pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
+const OverviewPage = lazy(() => import("./pages/OverviewPage").then((m) => ({ default: m.OverviewPage })));
+const FindingsPage = lazy(() => import("./pages/FindingsPage").then((m) => ({ default: m.FindingsPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 const InsightsPage = lazy(() => import("./pages/InsightsPage").then((m) => ({ default: m.InsightsPage })));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage").then((m) => ({ default: m.NotFoundPage })));
@@ -49,6 +51,13 @@ function SectionRoute({ viewer }: { viewer: Viewer }) {
     return <Navigate to={landing === location.pathname ? "/" : landing} replace />;
   }
   return <SettingsPage key={s.key} isAdmin={viewer.isAdmin} section={s.key} />;
+}
+
+/** `/`, except that old shared Dashboard links (`/?sev=FAIL…`) open Findings. */
+function OverviewRoute() {
+  const location = useLocation();
+  const to = findingsRedirect(location.search);
+  return to ? <Navigate to={to} replace /> : <OverviewPage />;
 }
 
 /** Old `/settings?tab=X` links (bookmarks, docs) keep working. */
@@ -715,7 +724,8 @@ export default function App() {
             }
           >
             <Routes>
-              <Route path="/" element={<DashboardPage />} />
+              <Route path="/" element={<OverviewRoute />} />
+              <Route path="/findings" element={<FindingsPage />} />
               <Route path="/login" element={<Navigate to="/" replace />} />
               <Route path="/insights" element={<InsightsPage />} />
               <Route path="/runs" element={<SectionRoute viewer={viewer} />} />

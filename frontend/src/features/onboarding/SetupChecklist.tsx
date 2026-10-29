@@ -101,7 +101,8 @@ function progressPercent(status: OnboardingStatus): number {
 }
 
 /**
- * Dashboard card. Shown to operators and admins until the required steps are
+ * Full checklist card (kept for embedding; the Overview uses SetupBanner).
+ * Shown to operators and admins until the required steps are
  * done or an admin hides it for everyone.
  */
 export function SetupChecklistCard() {
@@ -156,11 +157,111 @@ export function SetupChecklistCard() {
   );
 }
 
+/** Every step, in a drawer; shared by the top-bar button and the Overview banner. */
+function SetupDrawer({ open, onClose, status, loading }: { open: boolean; onClose: () => void; status: OnboardingStatus; loading?: boolean }) {
+  const { isAdmin } = useAuth();
+  const setDismissed = useSetDismissed();
+  return (
+    <Drawer
+      title="Setup checklist"
+      open={open}
+      onClose={onClose}
+      width={560}
+      extra={
+        isAdmin ? (
+          <Button
+            size="small"
+            icon={status.dismissed ? <EyeOutlined /> : <EyeInvisibleOutlined />}
+            loading={setDismissed.isPending}
+            onClick={() => setDismissed.mutate(!status.dismissed)}
+          >
+            {status.dismissed ? "Show on Overview" : "Hide from Overview"}
+          </Button>
+        ) : null
+      }
+    >
+      {loading ? (
+        <Skeleton active />
+      ) : (
+        <Space orientation="vertical" size={16} style={{ width: "100%" }}>
+          <Progress percent={progressPercent(status)} size="small" />
+          <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+            Steps tick themselves off as the work is done — there is nothing to mark manually.
+          </Typography.Paragraph>
+          <SetupStepList status={status} onNavigate={onClose} />
+        </Space>
+      )}
+    </Drawer>
+  );
+}
+
+/**
+ * Slim Overview banner: progress, the next required step and its button, and
+ * the full list in a drawer. Shown until setup is done or an admin hides it.
+ */
+export function SetupBanner() {
+  const { isAdmin, canOperate, loginEnabled } = useAuth();
+  const navigate = useNavigate();
+  const query = useOnboarding(isAdmin || canOperate);
+  const setDismissed = useSetDismissed();
+  const [open, setOpen] = useState(false);
+  const status = query.data;
+  if (!status || status.completed || status.dismissed) return null;
+  const next = status.steps.find((s) => !s.done && !s.optional);
+  // Same rules as the step list: admin-only steps and Access without sign-in have no button.
+  const canDoNext = next && !(next.admin_only && !isAdmin) && !(next.tab === "access" && !loginEnabled);
+
+  return (
+    <section className="setup-banner" aria-label="Setup progress">
+      <RocketOutlined className="setup-banner-icon" aria-hidden="true" />
+      <div className="setup-banner-text">
+        <span className="setup-banner-title">
+          Finish setting up · {status.required_done} of {status.required_total} required steps done
+        </span>
+        {next ? <span className="setup-banner-next">Next: {next.title}</span> : null}
+      </div>
+      <Progress
+        className="setup-banner-progress"
+        percent={progressPercent(status)}
+        size="small"
+        showInfo={false}
+        aria-label={`${status.required_done} of ${status.required_total} required steps done`}
+      />
+      <Space size={8} wrap>
+        {next && canDoNext ? (
+          <Button type="primary" size="small" onClick={() => navigate(sectionHref(next.tab))}>
+            {next.action_label}
+          </Button>
+        ) : null}
+        <Button size="small" onClick={() => setOpen(true)}>
+          All steps
+        </Button>
+        {isAdmin ? (
+          <Tooltip title="Hide this for everyone. It stays available from Setup in the top bar.">
+            <Button
+              size="small"
+              type="text"
+              icon={<EyeInvisibleOutlined />}
+              aria-label="Hide setup progress"
+              loading={setDismissed.isPending}
+              onClick={() =>
+                setDismissed.mutate(true, {
+                  onSuccess: () => notify.info("Setup progress hidden. Reopen it from Setup in the top bar."),
+                })
+              }
+            />
+          </Tooltip>
+        ) : null}
+      </Space>
+      <SetupDrawer open={open} onClose={() => setOpen(false)} status={status} loading={query.isLoading} />
+    </section>
+  );
+}
+
 /** Header entry point: visible to operators/admins while setup is incomplete. */
 export function SetupHeaderButton() {
   const { isAdmin, canOperate } = useAuth();
   const query = useOnboarding(isAdmin || canOperate);
-  const setDismissed = useSetDismissed();
   const [open, setOpen] = useState(false);
   const status = query.data;
   if (!status || status.completed) return null;
@@ -180,36 +281,7 @@ export function SetupHeaderButton() {
           </span>
         </Button>
       </Tooltip>
-      <Drawer
-        title="Setup checklist"
-        open={open}
-        onClose={() => setOpen(false)}
-        width={560}
-        extra={
-          isAdmin ? (
-            <Button
-              size="small"
-              icon={status.dismissed ? <EyeOutlined /> : <EyeInvisibleOutlined />}
-              loading={setDismissed.isPending}
-              onClick={() => setDismissed.mutate(!status.dismissed)}
-            >
-              {status.dismissed ? "Show on dashboard" : "Hide from dashboard"}
-            </Button>
-          ) : null
-        }
-      >
-        {query.isLoading ? (
-          <Skeleton active />
-        ) : (
-          <Space orientation="vertical" size={16} style={{ width: "100%" }}>
-            <Progress percent={progressPercent(status)} size="small" />
-            <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-              Steps tick themselves off as the work is done — there is nothing to mark manually.
-            </Typography.Paragraph>
-            <SetupStepList status={status} onNavigate={() => setOpen(false)} />
-          </Space>
-        )}
-      </Drawer>
+      <SetupDrawer open={open} onClose={() => setOpen(false)} status={status} loading={query.isLoading} />
     </>
   );
 }

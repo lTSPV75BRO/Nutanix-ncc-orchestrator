@@ -31,7 +31,7 @@ describe("AppShell", () => {
   it("shows admins every group and titles the page", () => {
     renderShell({ isAdmin: true, canOperate: true, loginEnabled: true }, "/settings/config");
     expect(screen.getByRole("heading", { level: 1, name: "Clusters & config" })).toBeInTheDocument();
-    for (const label of ["Overview", "Insights", "Runs", "Clusters & config", "Access", "Audit log", "Developer"]) {
+    for (const label of ["Overview", "Findings", "Insights", "Runs", "Clusters & config", "Access", "Audit log", "Developer"]) {
       expect(nav()).toHaveTextContent(label);
     }
     expect(screen.getByRole("button", { name: "Act" })).toBeInTheDocument();
@@ -40,6 +40,7 @@ describe("AppShell", () => {
   it("shows viewers only the read-only pages", () => {
     renderShell({ isAdmin: false, canOperate: false, loginEnabled: true });
     expect(nav()).toHaveTextContent("Overview");
+    expect(nav()).toHaveTextContent("Findings");
     expect(nav()).toHaveTextContent("Insights");
     expect(nav()).not.toHaveTextContent("Runs");
     expect(nav()).not.toHaveTextContent("Settings");

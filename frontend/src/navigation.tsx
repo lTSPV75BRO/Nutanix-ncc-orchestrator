@@ -3,6 +3,7 @@
 // in-app link to a section all read from here.
 import type { ReactNode } from "react";
 import {
+  AlertOutlined,
   ApiOutlined,
   AuditOutlined,
   BarChartOutlined,
@@ -68,8 +69,21 @@ export const SECTIONS: SectionDef[] = [
 /** Top-level pages that are not Settings sections. */
 export const PAGES = [
   { path: "/", label: "Overview", title: "Overview", icon: <DashboardOutlined /> },
+  { path: "/findings", label: "Findings", title: "Findings", icon: <AlertOutlined /> },
   { path: "/insights", label: "Insights", title: "Insights", icon: <BarChartOutlined /> },
 ] as const;
+
+/** Query keys of a shared findings view (the former Dashboard's link format). */
+export const FINDINGS_SHARE_KEYS = ["q", "sev", "clusters", "mode", "source", "resolved"] as const;
+
+/**
+ * The Dashboard used to live at `/` and shared links carried its filters
+ * (`/?sev=FAIL&source=ncc`). Those now belong to Findings.
+ */
+export function findingsRedirect(search: string): string | null {
+  const params = new URLSearchParams(search);
+  return FINDINGS_SHARE_KEYS.some((k) => params.has(k)) ? `/findings?${params.toString()}` : null;
+}
 
 const BY_KEY = new Map(SECTIONS.map((s) => [s.key, s]));
 

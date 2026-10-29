@@ -169,6 +169,19 @@ export function resolveClusterName(value: unknown, clusterNameMap: Record<string
  * "0.0%", which read as "every check failed" on a fresh install or after a run
  * that produced no NCC results.
  */
+/**
+ * Weighted health score (0–100) from NCC summary counts: the pass rate minus
+ * a penalty per severity. Null when the run has no checks (a fresh install is
+ * "no data", not "0%").
+ */
+export function weightedHealthScore(counts: Record<string, unknown>): number | null {
+  const total = toNumber(counts.total_plugins);
+  if (!(total > 0)) return null;
+  const pct = (key: string) => (toNumber(counts[key]) / total) * 100;
+  const penalty = pct("fail") * 8.0 + pct("error") * 5.5 + pct("warn") * 3.5 + pct("info") * 2.2 + pct("unknown") * 3.0;
+  return Math.max(0, Math.min(100, pct("pass") - penalty));
+}
+
 export function healthPillValue(totalChecks: number, weightedHealth: number): string | null {
   if (!Number.isFinite(totalChecks) || totalChecks <= 0 || !Number.isFinite(weightedHealth)) return null;
   return `${weightedHealth.toFixed(1)}%`;

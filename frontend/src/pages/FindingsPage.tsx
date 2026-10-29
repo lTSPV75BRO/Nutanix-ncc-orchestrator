@@ -9,23 +9,19 @@ import {
   Badge,
   Button,
   Card,
-  Col,
   Empty,
   Flex,
   Input,
-  Row,
   Select,
   Segmented,
   Skeleton,
   Space,
-  Statistic,
   Tag,
   Tooltip,
   Typography,
   Divider,
 } from "antd";
 import {
-  ArrowRightOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
   ClearOutlined,
@@ -46,20 +42,19 @@ import { NCC_ALERTS_QUERY_KEY } from "../utils/alertLifecycle";
 import { notify, notifyError } from "../notify";
 import { FeatureDisabled } from "../features/features/FeatureDisabled";
 import { useFeatureFlags } from "../features/features/useFeatureFlags";
-import { SetupChecklistCard } from "../features/onboarding/SetupChecklist";
 import { ClusterTable } from "../features/report/ClusterTable";
 import {
   asArray,
   asRecord,
   buildClusterNameMap,
   displayClusterName,
-  healthPillValue,
   mergePCClusterIdentityMap,
   resolveClusterName,
   toNumber,
 } from "../utils/report";
 import { useLocalStorageState } from "../hooks/useLocalStorageState";
-import { ageMs, formatDateTime, formatTime, relativeTime } from "../utils/datetime";
+import { formatDateTime, formatTime, relativeTime } from "../utils/datetime";
+import { freshness } from "../utils/freshness";
 
 type Severity = "FAIL" | "WARN" | "ERR" | "INFO";
 type CompareMode = "all" | "changed" | "flaky";
@@ -76,25 +71,13 @@ const SEVERITY_META: Array<{ key: Severity; color: string; label: string; icon: 
   { key: "INFO", color: "#38bdf8", label: "INFO", icon: <InfoCircleOutlined /> },
 ];
 
-function freshnessTag(iso: string): { color: string; label: string } {
-  if (!iso) return { color: "default", label: "Unknown" };
-  const age = ageMs(iso);
-  if (!Number.isFinite(age)) return { color: "default", label: "Unknown" };
-  if (age <= 6 * 3600_000) return { color: "success", label: "Fresh" };
-  if (age <= 24 * 3600_000) return { color: "processing", label: "Recent" };
-  if (age <= 72 * 3600_000) return { color: "warning", label: "Aging" };
-  return { color: "error", label: "Stale" };
-}
 
-function healthGradeColor(score: number): string {
-  if (score >= 90) return "#22c55e";
-  if (score >= 75) return "#84cc16";
-  if (score >= 60) return "#f59e0b";
-  if (score >= 40) return "#f97316";
-  return "#f43f5e";
-}
-
-export function DashboardPage() {
+/**
+ * Findings: every NCC (and, in beta, Prism Central) alert from the latest run,
+ * with filters kept in the URL, acknowledge/resolve, and per-row detail. The
+ * summary of the run itself lives on the Overview.
+ */
+export function FindingsPage() {
   const PREVIEW_LIMIT = 1500;
   const queryClient = useQueryClient();
   const [filterText, setFilterText] = useLocalStorageState("dashboard.filterText", "");
@@ -172,7 +155,7 @@ export function DashboardPage() {
 
   const copyDashboardLink = async () => {
     const u = new URL(window.location.href);
-    u.pathname = "/";
+    u.pathname = "/findings";
     u.hash = "";
     const next = new URLSearchParams();
     next.set("source", alertSource.toLowerCase());
@@ -185,9 +168,9 @@ export function DashboardPage() {
     const link = u.toString();
     try {
       await navigator.clipboard.writeText(link);
-      notify.success("Dashboard link copied");
+      notify.success("Link to these findings copied");
     } catch {
-      notify.info({ message: "Copy this dashboard link", description: link, duration: 8 });
+      notify.info({ message: "Copy this link", description: link, duration: 8 });
     }
   };
 
@@ -393,25 +376,13 @@ export function DashboardPage() {
       .map((name) => ({ label: name, value: name }));
   }, [reportData.run_summary, filteredAggRows, filteredChecksSnapshot, clusterNameMap]);
 
-  // ----------------- HERO METRICS -----------------
+  // ----------------- RUN SUMMARY -----------------
 
   const summaryCounts = asRecord(reportData.ncc_summary_counts);
-  const totalPlugins = toNumber(summaryCounts.total_plugins);
-  const passCount = toNumber(summaryCounts.pass);
   const failCount = toNumber(summaryCounts.fail);
   const errorCount = toNumber(summaryCounts.error);
-  const infoCount = toNumber(summaryCounts.info);
   const unknownCount = toNumber(summaryCounts.unknown);
   const warnCount = toNumber(summaryCounts.warn);
-  const rawPassRate = totalPlugins > 0 ? (passCount / totalPlugins) * 100 : 0;
-  const weightedPenalty =
-    (totalPlugins > 0 ? (failCount / totalPlugins) * 100 : 0) * 8.0 +
-    (totalPlugins > 0 ? (errorCount / totalPlugins) * 100 : 0) * 5.5 +
-    (totalPlugins > 0 ? (warnCount / totalPlugins) * 100 : 0) * 3.5 +
-    (totalPlugins > 0 ? (infoCount / totalPlugins) * 100 : 0) * 2.2 +
-    (totalPlugins > 0 ? (unknownCount / totalPlugins) * 100 : 0) * 3.0;
-  const weightedHealth = Math.max(0, Math.min(100, rawPassRate - weightedPenalty));
-  const healthText = healthPillValue(totalPlugins, weightedHealth);
 
   const runSummary = asRecord(reportData.run_summary);
   const runTimestamp = String(runSummary.timestamp || "");
@@ -419,14 +390,9 @@ export function DashboardPage() {
   const runTotalChecks = toNumber(runSummary.total_checks);
   const runSource = String(runSummary.source || runSummary.run_source || "").trim();
   const latestRunError = String(runActiveQuery.data?.last_error || "").trim();
-  const fresh = freshnessTag(runTimestamp);
+  const fresh = freshness(runTimestamp);
   const clustersOk = toNumber(runSummary.clusters_ok);
   const clustersFailed = toNumber(runSummary.clusters_failed);
-
-  const regression = asRecord(reportData.regression_summary);
-  const hasRegression = Boolean(regression.has_regression);
-  const deltaFail = toNumber(regression.delta_fail_total);
-  const policyViolations = Array.isArray(reportData.policy_violations) ? reportData.policy_violations : [];
 
   // Severity totals fall back to agg_rows if NCC summary missing (e.g. some setups).
   const aggRows = filteredAggRows.map((r) => asRecord(r));
@@ -448,12 +414,19 @@ export function DashboardPage() {
   const aggErr = aggRows.filter((r) => String(r.severity || "").toUpperCase() === "ERR").length;
   const aggWarn = aggRows.filter((r) => String(r.severity || "").toUpperCase() === "WARN").length;
   const aggInfo = aggRows.filter((r) => String(r.severity || "").toUpperCase() === "INFO").length;
-  const displayedSevTotals: Record<Severity, number> = {
-    FAIL: tableSummary?.fail ?? aggFail,
-    ERR: tableSummary?.err ?? aggErr,
-    WARN: tableSummary?.warn ?? aggWarn,
-    INFO: tableSummary?.info ?? aggInfo,
-  };
+  // The pills double as severity filters, so they count the whole run, not
+  // the filtered table (which would show 0 for every severity not selected).
+  // The table's own counts are the fallback for PC alerts and older runs
+  // without agg rows.
+  const useRunTotals = alertSource === "NCC" && aggRows.length > 0;
+  const displayedSevTotals: Record<Severity, number> = useRunTotals
+    ? { FAIL: aggFail, ERR: aggErr, WARN: aggWarn, INFO: aggInfo }
+    : {
+        FAIL: tableSummary?.fail ?? aggFail,
+        ERR: tableSummary?.err ?? aggErr,
+        WARN: tableSummary?.warn ?? aggWarn,
+        INFO: tableSummary?.info ?? aggInfo,
+      };
 
   const refreshAll = async () => {
     await Promise.all([
@@ -472,7 +445,7 @@ export function DashboardPage() {
           ])
         : Promise.resolve(),
     ]);
-    notify.success("Dashboard refreshed.");
+    notify.success("Findings refreshed.");
   };
 
   const toggleSeverity = (severity: Severity) => {
@@ -498,58 +471,12 @@ export function DashboardPage() {
   const initialLoading = previewReport.isLoading && !previewReport.data && !fullReport.data;
 
   if (initialLoading) {
-    // The loading state mirrors the *exact* structure of the loaded dashboard
-    // (hero card with the four stats + severity strip, then the filter-toolbar
-    // card, then the table) rather than a generic stack of skeletons. This
-    // keeps the LCP element (the "Operations Dashboard" <h4>) painting on first
-    // render and — critically — holds the above-the-fold layout at a stable
-    // height so the loading→loaded transition causes almost no layout shift
-    // (lower CLS). Numbers render as "—" placeholders that swap to real values
-    // in place without resizing their rows.
+    // Mirrors the loaded layout (summary bar, filters, table) so the
+    // loading→loaded swap does not shift the page.
     return (
       <div className="dashboard-page">
-        {/* HERO STRIP */}
-        <Card className="page-card dashboard-hero">
-          <Row gutter={[12, 12]} align="middle">
-            <Col xs={24} md={6}>
-              <Space size={12} align="center">
-                <div
-                  className="health-pill"
-                  style={{ background: "linear-gradient(135deg, #3f3f46, #27272ab0)" }}
-                >
-                  <div className="health-pill-label">HEALTH</div>
-                  <div className="health-pill-value">—</div>
-                </div>
-                <div>
-                  <Typography.Title level={4} className="tile-title">
-                    Operations Dashboard
-                  </Typography.Title>
-                  <Tag icon={<ClockCircleOutlined />} style={{ marginTop: 6 }}>
-                    Loading…
-                  </Tag>
-                </div>
-              </Space>
-            </Col>
-            <Col xs={24} md={12}>
-              <Row gutter={[8, 8]}>
-                {["Completed", "Failed", "Checks", "Pass"].map((t) => (
-                  <Col xs={12} md={6} key={t}>
-                    <Statistic title={t} value="—" />
-                  </Col>
-                ))}
-              </Row>
-            </Col>
-            <Col xs={24} md={6}>
-              <Space size={8} style={{ display: "flex", justifyContent: "flex-end" }} wrap>
-                <Button icon={<ReloadOutlined />} disabled>
-                  Refresh
-                </Button>
-                <Button type="primary" icon={<ArrowRightOutlined />} iconPosition="end" disabled>
-                  Insights
-                </Button>
-              </Space>
-            </Col>
-          </Row>
+        <div className="findings-summary">
+          <Tag icon={<ClockCircleOutlined />}>Loading…</Tag>
           <div className="severity-totals-row">
             {SEVERITY_META.map((sm) => (
               <div key={sm.key} className="severity-total-pill" style={{ borderColor: sm.color }}>
@@ -560,12 +487,11 @@ export function DashboardPage() {
                 <Typography.Text strong>—</Typography.Text>
               </div>
             ))}
-            <div className="severity-total-pill subtle">
-              <Typography.Text type="secondary">UNKNOWN</Typography.Text>
-              <Typography.Text strong>—</Typography.Text>
-            </div>
           </div>
-        </Card>
+          <Button icon={<ReloadOutlined />} disabled className="findings-summary-refresh">
+            Refresh
+          </Button>
+        </div>
 
         {/* FILTER TOOLBAR */}
         <Card className="page-card filter-toolbar-card">
@@ -591,137 +517,52 @@ export function DashboardPage() {
 
   return (
     <div className="dashboard-page">
-      <SetupChecklistCard />
-      {/* HERO STRIP */}
-      <Card className="page-card dashboard-hero">
-        <Row gutter={[12, 12]} align="middle">
-          <Col xs={24} md={6}>
-            <Space size={12} align="center">
-              <div
-                className="health-pill"
-                role="img"
-                aria-label={healthText ? `Health ${healthText}` : "Health: no completed checks yet"}
-                title={healthText ? undefined : "No completed checks yet — run NCC to get a health score"}
-                style={{
-                  background: healthText
-                    ? `linear-gradient(135deg, ${healthGradeColor(weightedHealth)}, ${healthGradeColor(weightedHealth)}b0)`
-                    : "linear-gradient(135deg, #3f3f46, #27272ab0)",
-                }}
-              >
-                <div className="health-pill-label">HEALTH</div>
-                <div className="health-pill-value">{healthText ?? "—"}</div>
-              </div>
-              <div>
-                <Typography.Title level={4} className="tile-title">
-                  Operations Dashboard
-                </Typography.Title>
-                <Tooltip title={runTimestamp || "no timestamp"}>
-                  <Tag icon={<ClockCircleOutlined />} color={fresh.color} style={{ marginTop: 6 }}>
-                    {fresh.label} · {relativeTime(runTimestamp)}
-                  </Tag>
-                </Tooltip>
-              </div>
-            </Space>
-          </Col>
-          <Col xs={24} md={12}>
-            <Row gutter={[8, 8]}>
-              <Col xs={12} md={6}>
-                <Statistic
-                  title="Completed"
-                  value={clustersOk}
-                  prefix={<CheckCircleOutlined style={{ color: "#22c55e" }} />}
-                />
-              </Col>
-              <Col xs={12} md={6}>
-                <Statistic
-                  title="Failed"
-                  value={clustersFailed}
-                  valueStyle={{ color: clustersFailed > 0 ? "#f43f5e" : undefined }}
-                />
-              </Col>
-              <Col xs={12} md={6}>
-                <Statistic title="Checks" value={totalPlugins} />
-              </Col>
-              <Col xs={12} md={6}>
-                <Statistic title="Pass" value={passCount} valueStyle={{ color: "#22c55e" }} />
-              </Col>
-            </Row>
-          </Col>
-          <Col xs={24} md={6}>
-            <Space size={8} style={{ display: "flex", justifyContent: "flex-end" }} wrap>
-              <Button
-                icon={<ReloadOutlined />}
-                onClick={refreshAll}
-                loading={previewReport.isFetching || fullReport.isFetching}
-              >
-                Refresh
-              </Button>
-              <Link to="/insights">
-                <Button type="primary" icon={<ArrowRightOutlined />} iconPosition="end">
-                  Insights
-                </Button>
-              </Link>
-            </Space>
-          </Col>
-        </Row>
-
-        {/* Severity totals strip */}
-        {clusterRestricted ? (
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginTop: 12 }}
-            title="Cluster-group view active"
-            description="Severity totals and alert table are scoped to your allowed cluster groups."
-          />
-        ) : null}
+      {/* Which run these findings come from, and how many of each severity. */}
+      <div className="findings-summary">
+        <Tooltip title={runTimestamp ? formatDateTime(runTimestamp) : "No completed run yet"}>
+          <Tag icon={<ClockCircleOutlined />} color={fresh.color}>
+            {runTimestamp ? `${fresh.label} · run ${relativeTime(runTimestamp)}` : "No run yet"}
+          </Tag>
+        </Tooltip>
         <div className="severity-totals-row">
           {SEVERITY_META.map((sm) => (
-            <div key={sm.key} className="severity-total-pill" style={{ borderColor: sm.color }}>
+            <button
+              type="button"
+              key={sm.key}
+              className={`severity-total-pill${severityFilters.includes(sm.key) ? " is-active" : ""}`}
+              style={{ borderColor: sm.color }}
+              aria-pressed={severityFilters.includes(sm.key)}
+              aria-label={`${sm.label}: ${displayedSevTotals[sm.key]}. Filter by ${sm.label}.`}
+              onClick={() => toggleSeverity(sm.key)}
+            >
               <Badge color={sm.color} />
               <Typography.Text strong style={{ color: sm.color }}>
                 {sm.label}
               </Typography.Text>
               <Typography.Text strong>{displayedSevTotals[sm.key].toLocaleString()}</Typography.Text>
-            </div>
+            </button>
           ))}
           <div className="severity-total-pill subtle">
             <Typography.Text type="secondary">UNKNOWN</Typography.Text>
             <Typography.Text strong>{(tableSummary?.unknown ?? unknownCount).toLocaleString()}</Typography.Text>
           </div>
         </div>
-      </Card>
+        <Button
+          icon={<ReloadOutlined />}
+          className="findings-summary-refresh"
+          onClick={refreshAll}
+          loading={previewReport.isFetching || fullReport.isFetching}
+        >
+          Refresh
+        </Button>
+      </div>
 
-      {/* CONTEXTUAL BANNERS */}
-      {hasRegression ? (
+      {clusterRestricted ? (
         <Alert
-          type="error"
+          type="info"
           showIcon
-          title="Regression detected vs previous run"
-          description={`FAIL count increased by ${deltaFail}. Check Insights → Run-over-Run Comparison for details.`}
-          action={
-            <Link to="/insights">
-              <Button size="small" type="primary">
-                Open Insights
-              </Button>
-            </Link>
-          }
-        />
-      ) : null}
-
-      {policyViolations.length > 0 ? (
-        <Alert
-          type="warning"
-          showIcon
-          title={`${policyViolations.length} policy gate violation${policyViolations.length > 1 ? "s" : ""}`}
-          description={
-            <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
-              {policyViolations.slice(0, 5).map((v, i) => (
-                <li key={i}>{v}</li>
-              ))}
-              {policyViolations.length > 5 ? <li>+{policyViolations.length - 5} more…</li> : null}
-            </ul>
-          }
+          title="Cluster-group view active"
+          description="Severity totals and findings are scoped to your allowed cluster groups."
         />
       ) : null}
 

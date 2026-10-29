@@ -73,6 +73,23 @@ work. Each role sees the same sections as before. This is the first step of
 a wider redesign of the signed-in pages
 ([`docs/ui/redesign-plan.md`](docs/ui/redesign-plan.md)).
 
+### Overview and Findings
+
+The Dashboard is now two pages:
+
+- **Overview** (the home page) shows whether everything is healthy at a
+  glance: health score, checks needing attention, clusters checked, and when
+  the last run finished; checks by result; each cluster's status, worst
+  first; and the last five runs. Regressions and policy-gate violations show
+  as banners, and setup progress as a slim banner with the next step. Every
+  number links to the matching findings.
+- **Findings** is the alerts table, with the same filters, shareable links,
+  and acknowledge/resolve as before. The severity counts above it now cover
+  the whole run (they used to drop to 0 for severities you filtered out) and
+  can be clicked to filter.
+
+Links shared from the old Dashboard open the matching Findings view.
+
 ### Opening title
 
 When the site is opened, the name "NCC Orchestrator" draws itself in outline

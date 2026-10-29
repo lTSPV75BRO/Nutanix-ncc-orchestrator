@@ -62,6 +62,15 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   and building blocks (`src/ui`) for the page redesigns that follow
   ([`docs/ui/redesign-plan.md`](docs/ui/redesign-plan.md)). System Health's
   fix link for backup problems now opens Maintenance instead of Access.
+- **New Overview and Findings pages.** The Dashboard is split in two:
+  **Overview** (`/`) answers "is everything healthy?" — health score, checks
+  needing attention, clusters checked, last run, checks by result, per-cluster
+  status (worst first), recent runs, regression and policy-gate banners, and a
+  slim setup-progress banner — with every block linking to the detail.
+  **Findings** (`/findings`) is the former alerts table with its filters,
+  sharing and acknowledge/resolve unchanged; its severity counts now cover the
+  whole run and work as filters. Old shared Dashboard links redirect to
+  Findings.
 - **Opening title:** when the site is opened, "NCC Orchestrator" draws itself
   in outline and fills in (React Bits `StrokeText`, built on GSAP) while the
   page behind it shows through frosted; the blur then eases away to reveal
