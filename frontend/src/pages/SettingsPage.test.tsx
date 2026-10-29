@@ -88,6 +88,14 @@ describe("SettingsPage", () => {
     expect(screen.queryByRole("tab")).not.toBeInTheDocument();
   });
 
+  it("introduces the section and lays out the status page", async () => {
+    renderSection("connection");
+    expect(await screen.findByText(/Whether the API server is up/)).toBeInTheDocument();
+    expect(await screen.findByText("Connected")).toBeInTheDocument();
+    expect(screen.getByText("Server paths")).toBeInTheDocument();
+    expect(screen.getByText("Config file")).toBeInTheDocument();
+  });
+
   it("sends operators away from an admin-only section", async () => {
     renderSection("config", false);
     expect(await screen.findByText("landing")).toBeInTheDocument();

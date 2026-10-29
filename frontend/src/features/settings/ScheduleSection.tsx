@@ -263,7 +263,7 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
     <Space orientation="vertical" size={16} style={{ width: "100%" }}>
       <Card className="page-card">
         <Typography.Title level={4} className="section-title">
-          Schedule
+          Recurring run
         </Typography.Title>
         <Typography.Text type="secondary" className="section-subtitle">
           Define a recurring NCC run. Use Simple mode for typical intervals, or Advanced for custom cron and platform options.

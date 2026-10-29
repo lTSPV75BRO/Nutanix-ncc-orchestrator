@@ -1,35 +1,19 @@
 import { lazy, Suspense, useEffect } from "react";
 import type { ReactNode } from "react";
 import { Navigate, useSearchParams } from "react-router";
+import { Button, Card, Space, Tabs, Tooltip, Typography } from "antd";
 import {
-  Button,
-  Card,
-  Col,
-  Row,
-  Space,
-  Tabs,
-  Tag,
-  Tooltip,
-  Typography,
-} from "antd";
-import {
-  ApartmentOutlined,
   ApiOutlined,
   AuditOutlined,
   BellOutlined,
   CalendarOutlined,
-  CheckCircleOutlined,
-  CloseCircleOutlined,
-  CodeOutlined,
   ControlOutlined,
   FileTextOutlined,
   HeartOutlined,
-  KeyOutlined,
   LinkOutlined,
   ReloadOutlined,
   SettingOutlined,
   TeamOutlined,
-  ThunderboltOutlined,
   ToolOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
@@ -38,6 +22,8 @@ import { useLocalStorageState } from "../hooks/useLocalStorageState";
 import { ErrorStateCard, LoadingStateCard } from "../components/UxStates";
 import { notify, notifyError } from "../notify";
 import { localDateKey as localDayKey, relativeTime } from "../utils/datetime";
+import { sectionByKey } from "../navigation";
+import { KeyValueList, middleEllipsis, Panel, StatTile, StatusBadge, type KeyValueItem } from "../ui";
 
 const FeaturesSection = lazy(() =>
   import("../features/settings/FeaturesSection").then(({ FeaturesSection: Component }) => ({ default: Component })),
@@ -216,34 +202,23 @@ function RecentRunsSparkline({ days = 7 }: { days?: number }) {
   );
 }
 
-function PathRow({ icon, label, value, hint }: { icon: React.ReactNode; label: string; value: string; hint?: string }) {
-  const display = value && value !== "-" ? value : "(not configured)";
-  const isMissing = !value || value === "-";
-  return (
-    <div className="resolved-path-row">
-      <div className="resolved-path-label">
-        <span className="resolved-path-icon">{icon}</span>
-        <Typography.Text strong>{label}</Typography.Text>
-        {hint ? (
-          <Tooltip title={hint}>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              ⓘ
-            </Typography.Text>
-          </Tooltip>
-        ) : null}
-      </div>
-      <Typography.Text
-        copyable={!isMissing ? { text: value } : false}
-        type={isMissing ? "secondary" : undefined}
-        className="mono"
-        style={{ fontSize: 13, wordBreak: "break-all" }}
-      >
-        {display}
-      </Typography.Text>
-    </div>
-  );
+/** A server path row: truncated on one line, full path on hover, copy button. */
+function pathItem(label: string, value: string, hint: string): KeyValueItem {
+  const missing = !value || value === "-";
+  return {
+    label: (
+      <Tooltip title={hint}>
+        <span className="status-path-label">{label}</span>
+      </Tooltip>
+    ),
+    value: missing ? "Not configured" : middleEllipsis(value),
+    title: missing ? undefined : value,
+    mono: !missing,
+    copy: missing ? undefined : value,
+  };
 }
 
+/** System → Status: is the API up, what is it running, and which paths does it use. */
 function ConnectionTab({
   health,
   report,
@@ -277,132 +252,61 @@ function ConnectionTab({
   })();
 
   return (
-    <Space orientation="vertical" size={16} style={{ width: "100%" }}>
-      <Card className="page-card connection-status-card">
-        <Row gutter={[16, 16]} align="middle">
-          <Col xs={24} md={14}>
-            <Space size={16} align="start">
-              <div className={`connection-orb ${isOk ? "ok" : "err"}`}>
-                {isOk ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
-              </div>
-              <div>
-                <Typography.Title level={4} style={{ margin: 0 }}>
-                  {isOk ? "Connected" : "Disconnected"}
-                </Typography.Title>
-                <Typography.Text type="secondary">
-                  {isOk
-                    ? "API server is responding to health probes."
-                    : "API server is not reachable. Check that v2 services are running."}
-                </Typography.Text>
-                <div style={{ marginTop: 8 }}>
-                  <Space size={[8, 8]} wrap>
-                    <Tag icon={<KeyOutlined />} color={authMode === "token" ? "processing" : "default"}>
-                      Auth: {authMode}
-                    </Tag>
-                    <Tag color="default">Token: {tokenSource}</Tag>
-                    {version ? (
-                      <Tooltip
-                        title={
-                          <div style={{ fontSize: 12, lineHeight: 1.5 }}>
-                            <div><strong>{version}</strong></div>
-                            {buildLabel ? <div>Built {buildLabel}</div> : null}
-                            {stream ? <div>Stream: {stream}</div> : null}
-                            {goVersion ? <div>Go: {goVersion}</div> : null}
-                            {osName || arch ? <div>{[osName, arch].filter(Boolean).join("/")}</div> : null}
-                          </div>
-                        }
-                      >
-                        <Tag color="geekblue">
-                          v{version.split("-")[0]}{buildLabel ? ` · built ${buildLabel}` : ""}
-                        </Tag>
-                      </Tooltip>
-                    ) : null}
-                    {lastChecked ? (
-                      <Tooltip title={lastChecked.toLocaleString()}>
-                        <Tag>Checked {relativeTime(lastChecked.toISOString())}</Tag>
-                      </Tooltip>
-                    ) : null}
-                  </Space>
-                </div>
-              </div>
-            </Space>
-          </Col>
-          <Col xs={24} md={10}>
-            <Space
-              orientation="vertical"
-              size={12}
-              style={{ display: "flex", alignItems: "flex-end", width: "100%" }}
-            >
-              <RecentRunsSparkline />
-              <Space size={8} wrap>
-                <Button
-                  icon={<ReloadOutlined />}
-                  onClick={async () => {
-                    await health.refetch();
-                    notify.success("Health refreshed.");
-                  }}
-                  loading={health.isFetching}
-                >
-                  Refresh Health
-                </Button>
-                <Button
-                  type="primary"
-                  icon={<ThunderboltOutlined />}
-                  onClick={async () => {
-                    await report.refetch();
-                    notify.success("Report data refreshed.");
-                  }}
-                  loading={report.isFetching}
-                >
-                  Refresh Report
-                </Button>
-              </Space>
-            </Space>
-          </Col>
-        </Row>
-      </Card>
-
-      <Card className="page-card">
-        <Typography.Title level={4} className="section-title">
-          Resolved Paths
-        </Typography.Title>
-        <Typography.Text type="secondary" className="section-subtitle">
-          The paths this server is using. Select a value to copy it.
-        </Typography.Text>
-        <div className="resolved-paths-grid">
-          <PathRow
-            icon={<FileTextOutlined />}
-            label="Config file"
-            value={backendConfigPath}
-            hint="The configuration file in use."
-          />
-          <PathRow
-            icon={<ApartmentOutlined />}
-            label="Output directory"
-            value={outputDir}
-            hint="Where run results and logs are saved."
-          />
-          <PathRow
-            icon={<FileTextOutlined />}
-            label="Log directory"
-            value={logDir}
-            hint="NCC logs for each run."
-          />
-          <PathRow
-            icon={<KeyOutlined />}
-            label="Token file"
-            value={tokenFile}
-            hint="API token persisted on disk. Used by UI and CLI clients."
-          />
-          <PathRow
-            icon={<CodeOutlined />}
-            label="Orchestrator binary"
-            value={orchestratorBin}
-            hint="The exec target the API server invokes for runs and schedule installs."
-          />
+    <div className="status-page">
+      <div className="overview-runline">
+        <div className="overview-runline-text">
+          <StatusBadge tone={isOk ? "ok" : "fail"}>{isOk ? "Connected" : "Disconnected"}</StatusBadge>
+          <span>
+            {isOk ? "The API server is answering health checks." : "The API server is not answering. Check that the services are running."}
+          </span>
+          {lastChecked ? (
+            <Tooltip title={lastChecked.toLocaleString()}>
+              <span>· checked {relativeTime(lastChecked.toISOString())}</span>
+            </Tooltip>
+          ) : null}
         </div>
-      </Card>
-    </Space>
+        <div className="overview-runline-actions">
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={async () => {
+              await Promise.all([health.refetch(), report.refetch()]);
+              notify.success("Status refreshed.");
+            }}
+            loading={health.isFetching || report.isFetching}
+          >
+            Refresh
+          </Button>
+        </div>
+      </div>
+
+      <div className="overview-stats">
+        <StatTile label="API" value={isOk ? "Healthy" : status} tone={isOk ? "ok" : "fail"} />
+        <StatTile
+          label="Version"
+          value={version ? `v${version.split("-")[0]}` : "—"}
+          hint={[buildLabel && `Built ${buildLabel}`, stream].filter(Boolean).join(" · ") || undefined}
+        />
+        <StatTile label="Authentication" value={authMode} hint={tokenSource !== "-" ? `Token from ${tokenSource}` : undefined} />
+        <StatTile label="Platform" value={[osName, arch].filter(Boolean).join("/") || "—"} hint={goVersion ? `Go ${goVersion}` : undefined} />
+      </div>
+
+      <div className="insights-grid">
+        <Panel title="Server paths" description="Files and folders this server uses. Hover for what each is; copy with the icon.">
+          <KeyValueList
+            items={[
+              pathItem("Config file", backendConfigPath, "The configuration file in use."),
+              pathItem("Output folder", outputDir, "Where run results and reports are saved."),
+              pathItem("Log folder", logDir, "NCC logs for each run."),
+              pathItem("Token file", tokenFile, "API token on disk, used by the UI and CLI clients."),
+              pathItem("Orchestrator", orchestratorBin, "The program the API server runs for checks and schedule installs."),
+            ]}
+          />
+        </Panel>
+        <Panel title="Run activity">
+          <RecentRunsSparkline />
+        </Panel>
+      </div>
+    </div>
   );
 }
 
@@ -629,8 +533,10 @@ export function SettingsPage({ isAdmin = true, section }: { isAdmin?: boolean; s
     // Not available to this role or on this install (e.g. Access without
     // sign-in): send them to the Settings landing instead of a blank page.
     if (!item) return <Navigate to="/settings" replace />;
+    const description = sectionByKey(section)?.description;
     return (
       <div className="section-page" data-section={section}>
+        {description ? <p className="section-intro">{description}</p> : null}
         {item.children}
       </div>
     );

@@ -46,6 +46,7 @@ import type { ConfigBatchOperation, ConfigListItem, ConfigRelatedFileBatchOperat
 import { PolicyGateBuilderSection } from "./PolicyGateBuilderSection";
 import { SecretsMigrationModal } from "./SecretsMigrationModal";
 import { notify } from "../../notify";
+import { SaveBar } from "../../ui";
 import { SECTIONS, KNOWN_KEYS, type FieldDef, type SectionDef } from "./configSchema";
 import defaultConfigTemplate from "../../../../example_config.yaml?raw";
 
@@ -917,15 +918,7 @@ export function ConfigSection({ onError }: Props) {
             description={parseError}
           />
         ) : null}
-        {dirty && !parseError ? (
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginTop: 12 }}
-            title="Unsaved changes"
-            description={`${dirtyCount} field${dirtyCount === 1 ? "" : "s"} changed since last load. Click Save to persist.`}
-          />
-        ) : null}
+        {/* Unsaved changes are shown by the SaveBar at the bottom of the page. */}
       </Card>
 
       {/* Mode body */}
@@ -1176,6 +1169,18 @@ export function ConfigSection({ onError }: Props) {
           />
         </Space>
       </Modal>
+      <SaveBar
+        dirty={dirty}
+        onSave={() => void save()}
+        onDiscard={revert}
+        saveDisabled={Boolean(parseError)}
+        message={
+          parseError
+            ? "The YAML has an error; fix it before saving."
+            : `${dirtyCount > 0 ? `${dirtyCount} field${dirtyCount === 1 ? "" : "s"} changed` : "Unsaved changes"} · Ctrl/⌘+S to save`
+        }
+        saveLabel="Save config"
+      />
     </Space>
   );
 }

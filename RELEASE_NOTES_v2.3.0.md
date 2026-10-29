@@ -128,6 +128,21 @@ the first run, Insights says there is nothing to analyse yet instead of
 showing "0% Critical". The health score is now calculated the same way on
 every page (the SLO panel used a different formula).
 
+### Settings and System
+
+- Every section starts with a short line saying what it is for, and all
+  sections share one look.
+- **Unsaved changes** on Notifications and Clusters & config show a bar at
+  the bottom of the screen with **Discard** and **Save**, so the Save button
+  is always in reach. Config still saves with Ctrl/⌘+S and will not save
+  YAML that has an error.
+- **System → Status** shows API health, version, authentication and
+  platform, and the server's paths with the start and the file name visible
+  (full path on hover, copy button).
+- **Access** is now in tabs: Users & roles, Sign-in (directory, SSO, session
+  length), Cluster groups, API tokens and HTTPS. Searching for "TLS",
+  "users" or "LDAP" opens the right tab.
+
 ### Opening title
 
 When the site is opened, the name "NCC Orchestrator" draws itself in outline

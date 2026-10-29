@@ -8,7 +8,20 @@ export type KeyValueItem = {
   copy?: string;
   /** Render the value in a monospace font (paths, IDs). */
   mono?: boolean;
+  /** Full text for the hover tooltip when `value` is shortened. */
+  title?: string;
 };
+
+/**
+ * Shorten long paths in the middle so both the root and the file name stay
+ * visible: "C:\Users\me\…\smoke\root\config.yaml".
+ */
+export function middleEllipsis(text: string, max = 56): string {
+  if (text.length <= max) return text;
+  const tail = Math.ceil((max - 1) * 0.6);
+  const head = max - 1 - tail;
+  return `${text.slice(0, head)}…${text.slice(-tail)}`;
+}
 
 /**
  * Label/value rows (paths, IDs, settings). Long values are truncated on one
@@ -24,7 +37,7 @@ export function KeyValueList({ items }: { items: KeyValueItem[] }) {
             <span className="ui-kv-value">
               <span
                 className={`ui-kv-text${it.mono ? " is-mono" : ""}`}
-                title={typeof it.value === "string" ? it.value : undefined}
+                title={it.title ?? (typeof it.value === "string" ? it.value : undefined)}
               >
                 {it.value}
               </span>

@@ -1,6 +1,6 @@
 # Internal pages: UI/UX redesign plan
 
-Status: in progress — Phases 0–3 done (2026-10-29). Scope: every signed-in page of the web UI
+Status: in progress — Phases 0–4 done (2026-10-29). Scope: every signed-in page of the web UI
 (`frontend/src`). The API stays as it is; this is frontend-only work.
 
 ## Where we are
@@ -228,6 +228,30 @@ type checks.
 - The older report panels (SLO, diff, flaky, lifecycle) keep their markup but
   take the Panel look inside Insights (CSS bridge in styles.css); rebuilding
   them on `src/ui` is left for Phase 5.
+
+### Phase 4 — done (2026-10-29)
+
+- Every Settings/System section opens with a one-line description (from
+  `navigation.tsx`) under the top-bar title, and its cards take the Panel
+  look (CSS on `.section-page .page-card`).
+- **SaveBar** (`src/ui/SaveBar.tsx`): fixed to the bottom of the content
+  area (clear of the sidebar, full width on phones) while a form is dirty,
+  with Discard and Save. Used by Notifications (replaces the in-card
+  "Unsaved changes" alert) and Clusters & config (replaces its banner; Save,
+  Revert and Ctrl/⌘+S stay; Save is blocked while the YAML is invalid).
+- **System → Status** rebuilt: status line, tiles (API, version, auth,
+  platform), server paths with middle-ellipsis (`middleEllipsis`), full path
+  on hover, copy button; run activity.
+- **Access** in tabs (Users & roles, Sign-in, Cluster groups, API tokens,
+  HTTPS), kept in `?view=`; `?focus=users|ldap|sso|tls` (search shortcuts,
+  health fixes) open the right tab.
+- Duplicate titles: "Schedule" → "Recurring run", Notifications' first card
+  → "When to notify".
+- Not done here, moved to Phase 5: moving code out of `AccessSection.tsx`
+  (3,000 lines; Backups and Updates live there but belong to Maintenance) —
+  the tabs solve the overloaded page, the file move is a pure refactor; Schedule
+  has no dirty tracking, so it keeps its own Save button; stat tiles stack
+  one per row on phones.
 
 ## Risks and constraints
 

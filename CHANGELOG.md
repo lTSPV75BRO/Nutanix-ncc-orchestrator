@@ -90,6 +90,14 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 - **One health score everywhere.** The SLO panel computed cluster health
   without warnings and weighted errors like failures, so it disagreed with
   the cluster ranking and the Overview; all now use the same formula.
+- **Settings and System pages tidied.** Each section opens with a one-line
+  description and shares the same panel style. Notifications and Clusters &
+  config show a save bar at the bottom while there are unsaved changes
+  (Discard / Save; config keeps Ctrl/⌘+S and blocks saving invalid YAML).
+  **System → Status** shows API health, version, authentication and platform
+  at a glance, and server paths shortened in the middle with copy buttons.
+  **Access** is split into tabs — Users & roles, Sign-in, Cluster groups,
+  API tokens, HTTPS — and search shortcuts open the right one.
 - **Opening title:** when the site is opened, "NCC Orchestrator" draws itself
   in outline and fills in (React Bits `StrokeText`, built on GSAP) while the
   page behind it shows through frosted; the blur then eases away to reveal

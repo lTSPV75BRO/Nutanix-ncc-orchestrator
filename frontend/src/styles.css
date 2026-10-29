@@ -3398,6 +3398,116 @@ label.ui-field-inline {
   }
 }
 
+/* ---- Settings and System sections (pages/SettingsPage.tsx section mode) */
+.section-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-4);
+  /* Room for the save bar so it never covers the last field. */
+  padding-bottom: var(--ui-space-6);
+}
+
+.section-intro {
+  margin: 0;
+  font-size: var(--ui-text-md);
+  color: var(--ui-text-secondary);
+}
+
+/* The sections still render antd Cards; give them the Panel look. */
+.section-page .page-card.ant-card {
+  margin: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-surface);
+  box-shadow: none;
+}
+
+.section-page .page-card.ant-card:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.section-page .page-card .ant-card-head {
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.section-page .page-card .section-title.ant-typography,
+.section-page .page-card .ant-card-head-title {
+  font-size: var(--ui-text-lg);
+  font-weight: 600;
+}
+
+.access-tabs .ant-tabs-nav {
+  margin-bottom: var(--ui-space-4);
+}
+
+.status-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-4);
+}
+
+.status-path-label {
+  cursor: help;
+  border-bottom: 1px dotted var(--ui-border-strong);
+}
+
+/* Save bar (src/ui/SaveBar.tsx): pinned to the bottom of the content area,
+   clear of the sidebar (fixed, because section forms nest it in wrappers a
+   sticky element could not escape). */
+.ui-savebar {
+  position: fixed;
+  bottom: var(--ui-space-4);
+  left: calc(var(--ui-sidebar-w) + var(--ui-space-5));
+  right: var(--ui-space-5);
+  max-width: 1100px;
+  margin: 0 auto;
+  z-index: 90;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ui-space-3);
+  padding: var(--ui-space-3) var(--ui-space-4);
+  border: 1px solid color-mix(in srgb, var(--ui-warn) 45%, var(--ui-border));
+  border-radius: var(--ui-radius-lg);
+  background: color-mix(in srgb, var(--ui-warn) 8%, var(--ui-surface));
+  box-shadow: 0 8px 24px var(--shadow-color);
+}
+
+.ui-sidebar.is-collapsed ~ .ui-main .ui-savebar {
+  left: calc(var(--ui-sidebar-w-collapsed) + var(--ui-space-5));
+}
+
+@media (max-width: 767px) {
+  .ui-savebar,
+  .ui-sidebar.is-collapsed ~ .ui-main .ui-savebar {
+    left: var(--ui-space-3);
+    right: var(--ui-space-3);
+    bottom: var(--ui-space-3);
+  }
+}
+
+.section-page:has(.ui-savebar) {
+  padding-bottom: 88px;
+}
+
+.ui-savebar-message {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+  font-weight: 500;
+}
+
+.ui-savebar-message .anticon {
+  color: var(--ui-warn);
+}
+
+.ui-savebar-actions {
+  display: flex;
+  gap: var(--ui-space-2);
+}
+
 /* ---- Setup progress banner (features/onboarding/SetupChecklist.tsx) */
 .setup-banner {
   display: flex;

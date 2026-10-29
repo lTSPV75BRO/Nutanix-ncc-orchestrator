@@ -27,6 +27,7 @@ import { api } from "../../api/client";
 import type { MaintenanceWindow, NotificationState } from "../../api/types";
 import { notify, notifyError } from "../../notify";
 import { formatDateTime } from "../../utils/datetime";
+import { SaveBar } from "../../ui";
 
 const DIGEST_EVERY_OPTIONS = [
   { value: "6h", label: "Every 6 hours" },
@@ -177,7 +178,7 @@ export function NotificationsSection() {
         title={
           <Space>
             <BellOutlined />
-            Notifications
+            When to notify
           </Space>
         }
         extra={
@@ -232,15 +233,6 @@ export function NotificationsSection() {
             </Form.Item>
           </Space>
         </Form>
-        {isDirty ? (
-          <Alert
-            style={{ marginTop: 12 }}
-            type="warning"
-            showIcon
-            title="Unsaved changes"
-            description="Save to apply notification changes."
-          />
-        ) : null}
       </Card>
 
       {/* Channels */}
@@ -575,6 +567,15 @@ export function NotificationsSection() {
           <Tag>saved</Tag> last updated {formatDateTime(state.updated_at)}
         </Typography.Text>
       ) : null}
+      <SaveBar
+        dirty={isDirty}
+        saving={saveMut.isPending}
+        onSave={onSave}
+        onDiscard={() => {
+          if (baseline) setState(baseline);
+        }}
+        message="Notification settings have unsaved changes."
+      />
     </Space>
   );
 }

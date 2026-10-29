@@ -6,4 +6,5 @@ export { Panel } from "./Panel";
 export { StatTile } from "./StatTile";
 export { StatusBadge, toneFor, type Tone } from "./StatusBadge";
 export { EmptyState } from "./EmptyState";
-export { KeyValueList, type KeyValueItem } from "./KeyValueList";
+export { KeyValueList, middleEllipsis, type KeyValueItem } from "./KeyValueList";
+export { SaveBar } from "./SaveBar";
