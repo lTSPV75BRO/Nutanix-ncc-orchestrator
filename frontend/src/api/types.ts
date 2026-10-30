@@ -46,6 +46,8 @@ export type HealthData = {
   local_login?: boolean;
   saml_enabled?: boolean;
   ldap_enabled?: boolean;
+  /** Settings → Features "Opening title"; public so the sign-in page can honour it. */
+  intro_title?: boolean;
   /** True when session cookies carry the Secure attribute (HTTPS or --cookie-secure). */
   cookie_secure?: boolean;
 };
@@ -204,6 +206,8 @@ export type UpdateStatus = {
   supported?: boolean;
   check_error?: string;
   check_skipped?: string;
+  /** Settings → Features "Update checks" is off: no release lookup or install. */
+  disabled?: boolean;
   raw?: string;
   job: UpdateJob;
 };
@@ -930,6 +934,10 @@ export type FeatureFlags = {
   slo: boolean;
   ncc_log_index: boolean;
   pc_discovery: boolean;
+  alert_handling: boolean;
+  self_heal: boolean;
+  update_checks: boolean;
+  intro_title: boolean;
 };
 
 export type NCCDispositionInput = {

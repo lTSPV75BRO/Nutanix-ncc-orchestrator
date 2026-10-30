@@ -40,6 +40,10 @@ func (s *apiServer) handleHealthDiagnostics(w http.ResponseWriter, r *http.Reque
 	case http.MethodGet:
 		s.writeDiagnostics(w, r, diagnosticsRequest{})
 	case http.MethodPost:
+		if !s.loadFeatureFlags().SelfHeal {
+			writeFeatureDisabled(w, "Self-heal")
+			return
+		}
 		var req diagnosticsRequest
 		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&req)
 		req.Fix = true

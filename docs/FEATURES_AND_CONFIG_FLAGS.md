@@ -126,14 +126,30 @@ the lifecycle API (`/api/v1/alerts/ncc`, `/events`, `/{id}`) are documented in
 [`docs/integrations/third-party-alert-integrations.md`](integrations/third-party-alert-integrations.md).
 Prism Central alerts are not stored here.
 
-### 2.3c Optional views
+### 2.3c Optional views and actions
 
 `GET /api/v1/features` (viewer+) and `PUT` (admin) persist
-`outputfiles/feature-flags.json`. Missing keys stay on. Known keys:
-`insights`, `pc_alerts`, `pc_discovery`, `run_comparison`, `flaky_checks`,
-`slo`, `ncc_log_index`. A disabled Insights page, PC · Beta table, or
-related panel shows a note instead of loading extra files or calling
-Prism Central. Health checks keep running.
+`outputfiles/feature-flags.json`. Missing keys stay on. Settings → Features
+lists them in three groups.
+
+**Views:** `insights`, `pc_alerts`, `pc_discovery`, `run_comparison`,
+`flaky_checks`, `slo`, `ncc_log_index`. A disabled Insights page, PC · Beta
+table, or related panel shows a note instead of loading extra files or
+calling Prism Central. Health checks keep running.
+
+**Actions** (v2.3.0). Off is enforced by the API, which answers the refused
+request with `403` and `error_code: NCC_API_FEATURE_DISABLED`:
+
+| Key | Off means |
+| --- | --------- |
+| `alert_handling` | `POST /api/v1/alerts/ncc-dispositions` and `POST /api/v1/alerts/ncc/{id}/{action}` are refused. Findings has no checkboxes, bulk bar or Acknowledge / Resolve / Reopen; earlier marks and history stay visible. |
+| `self_heal` | `POST /api/v1/health/diagnostics` (apply fixes) is refused; `GET` still runs the checks. System → Health has no Heal buttons. |
+| `update_checks` | `GET /api/v1/settings/update` returns `disabled: true` without contacting the release server; `POST /api/v1/settings/update/apply` is refused. |
+
+**Sign-in:** `intro_title` turns the opening title off for everyone. It is
+also returned as `intro_title` on the public `GET /api/v1/health`, because
+the page needs it before anyone signs in; the browser remembers the last
+answer so later visits skip the title from the first frame.
 
 ### 2.3d Dashboard filters, sharing, and pagination
 

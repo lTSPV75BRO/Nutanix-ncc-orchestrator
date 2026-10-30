@@ -18,6 +18,24 @@ type featureFlags struct {
 	SLO           bool `json:"slo"`
 	NCCLogIndex   bool `json:"ncc_log_index"`
 	PCDiscovery   bool `json:"pc_discovery"`
+	// AlertHandling allows acknowledging, resolving and reopening NCC alerts.
+	// Off makes findings read-only; existing marks and history stay visible.
+	AlertHandling bool `json:"alert_handling"`
+	// SelfHeal allows applying remediations from System → Health (POST to
+	// /health/diagnostics). Off leaves the checks report-only.
+	SelfHeal bool `json:"self_heal"`
+	// UpdateChecks allows looking up and installing new releases. Off makes
+	// no outbound release lookup, for air-gapped or change-controlled sites.
+	UpdateChecks bool `json:"update_checks"`
+	// IntroTitle shows the opening title before sign-in. It is exposed on the
+	// public /health payload because the page needs it before anyone signs in.
+	IntroTitle bool `json:"intro_title"`
+}
+
+// featureFlagKeys lists every switch, in the order the API documents them.
+var featureFlagKeys = []string{
+	"insights", "pc_alerts", "run_comparison", "flaky_checks", "slo", "ncc_log_index", "pc_discovery",
+	"alert_handling", "self_heal", "update_checks", "intro_title",
 }
 
 func defaultFeatureFlags() featureFlags {
@@ -29,16 +47,30 @@ func defaultFeatureFlags() featureFlags {
 		SLO:           true,
 		NCCLogIndex:   true,
 		PCDiscovery:   true,
+		AlertHandling: true,
+		SelfHeal:      true,
+		UpdateChecks:  true,
+		IntroTitle:    true,
 	}
 }
 
 func knownFeatureFlag(key string) bool {
-	switch key {
-	case "insights", "pc_alerts", "run_comparison", "flaky_checks", "slo", "ncc_log_index", "pc_discovery":
-		return true
-	default:
-		return false
+	for _, k := range featureFlagKeys {
+		if k == key {
+			return true
+		}
 	}
+	return false
+}
+
+// writeFeatureDisabled answers a request for something an administrator
+// turned off under Settings → Features.
+func writeFeatureDisabled(w http.ResponseWriter, what string) {
+	writeJSON(w, http.StatusForbidden, envelope{
+		Success:   false,
+		Error:     what + " is turned off. An administrator can turn it on under Settings → Features.",
+		ErrorCode: "NCC_API_FEATURE_DISABLED",
+	})
 }
 
 func (f *featureFlags) apply(raw map[string]bool) {
@@ -54,6 +86,10 @@ func (f *featureFlags) apply(raw map[string]bool) {
 	set(&f.SLO, "slo")
 	set(&f.NCCLogIndex, "ncc_log_index")
 	set(&f.PCDiscovery, "pc_discovery")
+	set(&f.AlertHandling, "alert_handling")
+	set(&f.SelfHeal, "self_heal")
+	set(&f.UpdateChecks, "update_checks")
+	set(&f.IntroTitle, "intro_title")
 }
 
 func (s *apiServer) featureFlagsPath() string {
@@ -114,7 +150,7 @@ func (s *apiServer) handleFeatureFlags(w http.ResponseWriter, r *http.Request) {
 		}
 		for key := range raw {
 			if !knownFeatureFlag(key) {
-				writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "Unknown feature " + key + ". Use insights, pc_alerts, run_comparison, flaky_checks, slo, ncc_log_index, or pc_discovery."})
+				writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "Unknown feature " + key + ". Use one of: " + strings.Join(featureFlagKeys, ", ") + "."})
 				return
 			}
 		}
@@ -132,6 +168,10 @@ func (s *apiServer) handleFeatureFlags(w http.ResponseWriter, r *http.Request) {
 			"slo":            flags.SLO,
 			"ncc_log_index":  flags.NCCLogIndex,
 			"pc_discovery":   flags.PCDiscovery,
+			"alert_handling": flags.AlertHandling,
+			"self_heal":      flags.SelfHeal,
+			"update_checks":  flags.UpdateChecks,
+			"intro_title":    flags.IntroTitle,
 		})
 		writeJSON(w, http.StatusOK, envelope{Success: true, Message: "Feature settings saved", Data: flags})
 	default:

@@ -116,6 +116,19 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   Copy link), and severity is filtered with the totals above them, so the
   table shows about twice as many rows. **Full page** works again in the
   sidebar layout and hides the sidebar.
+- **Four new switches in Settings → Features**, now grouped as Views,
+  Actions and Sign-in. All default to on, and the API enforces them
+  (`403`, `NCC_API_FEATURE_DISABLED`):
+  - **Alert handling** (`alert_handling`): off makes Findings read-only (no
+    Acknowledge / Resolve / Reopen, checkboxes or bulk bar); marks and
+    history stay visible.
+  - **Self-heal actions** (`self_heal`): off removes the Heal buttons on
+    System → Health and refuses `POST /health/diagnostics`; checks still run.
+  - **Update checks** (`update_checks`): off makes no request to the release
+    server and refuses in-app updates, for air-gapped or change-controlled
+    sites.
+  - **Opening title** (`intro_title`): off skips the intro for everyone; it
+    is exposed on the public `/health` so the sign-in page can honour it.
 - **Consistent wording.** Buttons, titles and column headers use sentence
   case everywhere (e.g. "Save schedule", "Scheduler health", "Entity
   name"); section titles no longer repeat the page title; long config and

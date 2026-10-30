@@ -34,6 +34,7 @@ import { api } from "../../api/client";
 import type { DiagnosticCheck, DiagnosticsData } from "../../api/types";
 import { notify, notifyError } from "../../notify";
 import { formatTime } from "../../utils/datetime";
+import { useFeatureFlags } from "../features/useFeatureFlags";
 
 const STATUS_META: Record<
   DiagnosticCheck["status"],
@@ -118,6 +119,11 @@ export function SystemHealthSection() {
   const isKubernetes = Boolean(
     (health.data as { runtime?: { kubernetes?: boolean } } | undefined)?.runtime?.kubernetes,
   );
+  // Settings → Features "Self-heal actions": off leaves this page report-only.
+  const healOn = useFeatureFlags().data?.self_heal !== false;
+  // Readiness cards heal in place only on hosts with self-heal on; otherwise
+  // they link to the details.
+  const healsInline = healOn && !isKubernetes;
   const schedule = useQuery({
     queryKey: ["schedule-health"],
     queryFn: api.scheduleHealth,
@@ -194,7 +200,7 @@ export function SystemHealthSection() {
   };
 
   const readinessFixLabel = (key: string): string => {
-    if (isKubernetes && (key === "api" || key === "supervisor" || key === "runs")) return "Open details";
+    if (!healsInline && (key === "api" || key === "supervisor" || key === "runs")) return "Open details";
     if (key === "api" || key === "supervisor" || key === "runs") return "Heal now";
     if (key === "schedule") return "Open Schedule";
     if (key === "backups") return "Open Backups";
@@ -202,7 +208,7 @@ export function SystemHealthSection() {
   };
 
   const runReadinessFix = (key: string, path: string) => {
-    if (isKubernetes && (key === "api" || key === "supervisor" || key === "runs")) {
+    if (!healsInline && (key === "api" || key === "supervisor" || key === "runs")) {
       navigate(path);
       return;
     }
@@ -357,7 +363,9 @@ export function SystemHealthSection() {
               <Typography.Text type="secondary">
                 {isKubernetes
                   ? "Kubernetes-aware checks across configuration, shared storage, secrets, backups, runs, directory/SSO, UI HTTPS, and replica-safe runtime. Host supervisor checks are omitted because controllers own those."
-                  : "Self-heal checks across configuration, storage, secrets, backups, runs, directory/SSO, TLS, and processes. Safe remediations can be applied with one click."}
+                  : `Self-heal checks across configuration, storage, secrets, backups, runs, directory/SSO, TLS, and processes.${
+                      healOn ? " Safe remediations can be applied with one click." : ""
+                    }`}
               </Typography.Text>
               <Typography.Paragraph type="secondary" style={{ margin: "6px 0 0 0" }}>
                 {actionableCount} actionable issue{actionableCount === 1 ? "" : "s"}:{" "}
@@ -384,6 +392,8 @@ export function SystemHealthSection() {
             <Button icon={<ReloadOutlined />} onClick={() => diag.refetch()} loading={diag.isFetching}>
               Re-scan
             </Button>
+            {healOn ? (
+              <>
             <Popconfirm
               title="Apply safe remediations?"
               description="Runs non-disruptive self-heal fixers (no restart/stop actions): anchor relative output paths, create missing dirs, tighten secret-file perms, repair config, renew the self-signed TLS cert, rotate oversized logs, and verify/auto-take a backup."
@@ -425,6 +435,12 @@ export function SystemHealthSection() {
                 Heal disruptive issues
               </Button>
             </Popconfirm>
+              </>
+            ) : (
+              <Tooltip title="Turned off under Settings → Features. Checks still run and report problems.">
+                <Tag>Self-heal off</Tag>
+              </Tooltip>
+            )}
             <Button onClick={() => bundle.mutate()} loading={bundle.isPending}>
               Collect support bundle
             </Button>
@@ -518,8 +534,8 @@ export function SystemHealthSection() {
                     ) : null}
                     <Button
                       size="small"
-                      icon={!isKubernetes && (c.key === "api" || c.key === "supervisor" || c.key === "runs") ? <ThunderboltOutlined /> : undefined}
-                      loading={!isKubernetes && (c.key === "api" || c.key === "supervisor" || c.key === "runs") ? heal.isPending : false}
+                      icon={healsInline && (c.key === "api" || c.key === "supervisor" || c.key === "runs") ? <ThunderboltOutlined /> : undefined}
+                      loading={healsInline && (c.key === "api" || c.key === "supervisor" || c.key === "runs") ? heal.isPending : false}
                       onClick={() => runReadinessFix(c.key, c.fix)}
                     >
                       {readinessFixLabel(c.key)}
@@ -599,16 +615,18 @@ export function SystemHealthSection() {
                       <Link to={remediationTarget(c.category)}>
                         <Button size="small">Open fix</Button>
                       </Link>
-                      <Button
-                        size="small"
-                        icon={<ThunderboltOutlined />}
-                        loading={heal.isPending}
-                        onClick={() => healSingleCheck(c, false)}
-                        disabled={c.source !== "orchestrator" || c.status === "ok" || heal.isPending}
-                      >
-                        Heal this check
-                      </Button>
-                      {c.disruptive && c.source === "orchestrator" && c.status !== "ok" ? (
+                      {healOn ? (
+                        <Button
+                          size="small"
+                          icon={<ThunderboltOutlined />}
+                          loading={heal.isPending}
+                          onClick={() => healSingleCheck(c, false)}
+                          disabled={c.source !== "orchestrator" || c.status === "ok" || heal.isPending}
+                        >
+                          Heal this check
+                        </Button>
+                      ) : null}
+                      {healOn && c.disruptive && c.source === "orchestrator" && c.status !== "ok" ? (
                         <Popconfirm
                           title="Run disruptive fix for this check?"
                           description="This action may restart NCC services. It is blocked automatically while runs are active."

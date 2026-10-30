@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { INTRO_EXIT_MS, INTRO_HOLD_MS, SiteIntro } from "./SiteIntro";
+import { INTRO_EXIT_MS, INTRO_HOLD_MS, OFF_KEY, SiteIntro } from "./SiteIntro";
+
+const health = vi.hoisted(() => vi.fn());
+vi.mock("../api/client", () => ({ api: { health } }));
 
 describe("opening title", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     window.sessionStorage.clear();
     window.localStorage.clear();
+    health.mockReset();
+    health.mockResolvedValue({ status: "ok", intro_title: true });
   });
   afterEach(() => {
     cleanup();
@@ -46,6 +51,35 @@ describe("opening title", () => {
     render(<SiteIntro />);
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.getByTestId("site-intro")).toHaveClass("is-leaving");
+  });
+
+  it("closes when the server says the opening title is off, and stays off next time", async () => {
+    health.mockResolvedValue({ status: "ok", intro_title: false });
+    render(<SiteIntro />);
+    expect(screen.getByTestId("site-intro")).toBeInTheDocument();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId("site-intro")).toBeNull();
+    expect(window.localStorage.getItem(OFF_KEY)).toBe("1");
+
+    cleanup();
+    render(<SiteIntro />);
+    expect(screen.queryByTestId("site-intro")).toBeNull();
+  });
+
+  it("plays again once the switch is back on", async () => {
+    window.localStorage.setItem(OFF_KEY, "1");
+    render(<SiteIntro />);
+    expect(screen.queryByTestId("site-intro")).toBeNull();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(window.localStorage.getItem(OFF_KEY)).toBeNull();
+
+    cleanup();
+    render(<SiteIntro />);
+    expect(screen.getByTestId("site-intro")).toBeInTheDocument();
   });
 
   it("is not shown when the OS asks for reduced motion", () => {

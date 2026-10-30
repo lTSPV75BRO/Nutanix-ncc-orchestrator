@@ -219,6 +219,7 @@ describe("ClusterTable alert sources", () => {
           { cluster: "ncc-a", check: "Handled check", severity: "FAIL", detail: "disk detail" },
           { cluster: "ncc-b", check: "Open check", severity: "ERR" },
         ]}
+        onDisposition={() => undefined}
       />,
     );
 
@@ -231,5 +232,27 @@ describe("ClusterTable alert sources", () => {
     expect(screen.getAllByText("disk detail").length).toBeGreaterThan(1);
     expect(screen.getByRole("button", { name: "Resolve" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Resolved" })).not.toBeInTheDocument();
+  });
+
+  it("is read-only when alert handling is turned off", () => {
+    render(
+      <ClusterTable
+        {...baseProps}
+        alertSource="NCC"
+        dispositions={[
+          { cluster: "ncc-a", check: "Handled check", status: "resolved", by: "alice", at: "2026-10-05T10:00:00Z" },
+        ]}
+        aggRows={[{ cluster: "ncc-a", check: "Handled check", severity: "FAIL", detail: "disk detail" }]}
+      />,
+    );
+
+    // No row checkboxes, so no bulk Acknowledge/Resolve either.
+    expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+
+    fireEvent.click(screen.getByText("Handled check"));
+    expect(screen.getByText(/alice/)).toBeInTheDocument();
+    expect(screen.getByText(/marks are read-only/)).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Optional note")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Resolve" })).not.toBeInTheDocument();
   });
 });

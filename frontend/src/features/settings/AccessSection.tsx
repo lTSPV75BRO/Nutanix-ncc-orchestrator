@@ -2854,6 +2854,7 @@ function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
 
   const supported = status?.supported !== false;
   const updateAvailable = status?.update_available === true;
+  const checksOff = status?.disabled === true;
 
   return (
     <Card
@@ -2868,12 +2869,21 @@ function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
           icon={<ReloadOutlined />}
           onClick={handleCheck}
           loading={checking}
-          disabled={isKubernetes || (busy && !checking)}
+          disabled={isKubernetes || checksOff || (busy && !checking)}
         >
           Check for updates
         </Button>
       }
     >
+      {checksOff ? (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          title="Update checks are turned off"
+          description="Nothing is looked up or installed from the release server. An administrator can turn it on under Settings → Features."
+        />
+      ) : null}
       {isKubernetes ? (
         <Alert
           type="info"
@@ -2927,7 +2937,7 @@ function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
           </>
         ) : null}
 
-        {!supported ? (
+        {!supported && !checksOff ? (
           <Alert
             type="info"
             showIcon

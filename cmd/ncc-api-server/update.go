@@ -127,6 +127,16 @@ func (s *apiServer) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
+	// Turned off: answer without contacting the release server at all.
+	if !s.loadFeatureFlags().UpdateChecks {
+		writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
+			"current_version": Version,
+			"supported":       false,
+			"disabled":        true,
+			"job":             updateJob.snapshot(),
+		}})
+		return
+	}
 	// A self-update requires a real built orchestrator binary; the `go run`
 	// dev fallback can't replace itself.
 	supported := true
@@ -279,6 +289,10 @@ func firstNonEmptyLine(primary, fallback string) string {
 func (s *apiServer) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	if !s.loadFeatureFlags().UpdateChecks {
+		writeFeatureDisabled(w, "Checking for updates")
 		return
 	}
 	if err := s.capabilities.RejectHostOperation("in-place software updates"); err != nil {

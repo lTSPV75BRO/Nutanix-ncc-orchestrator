@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { api } from "../api/client";
 import type { StrokeTextProps } from "./StrokeText/StrokeText";
 
 /** Plain name if the StrokeText chunk cannot be loaded. */
@@ -17,6 +18,8 @@ function Ready({ onReady }: { onReady: () => void }) {
 }
 
 const SEEN_KEY = "ncc.intro.seen";
+/** Last answer from the server's "Opening title" switch (Settings → Features). */
+export const OFF_KEY = "ncc.intro.off";
 const NAME = "NCC Orchestrator";
 
 // StrokeText timing (seconds). Outlines finish at DRAW + (len-1)*STAGGER; the
@@ -39,10 +42,20 @@ function prefersReducedMotion(): boolean {
 function shouldShowIntro(): boolean {
   try {
     if (window.sessionStorage.getItem(SEEN_KEY)) return false;
+    if (window.localStorage.getItem(OFF_KEY) === "1") return false;
   } catch {
     // storage unavailable — still show it
   }
   return !prefersReducedMotion();
+}
+
+function rememberSwitch(on: boolean) {
+  try {
+    if (on) window.localStorage.removeItem(OFF_KEY);
+    else window.localStorage.setItem(OFF_KEY, "1");
+  } catch {
+    // not remembered; the next visit asks the server again
+  }
 }
 
 function markSeen() {
@@ -58,12 +71,31 @@ function markSeen() {
  * The page underneath (normally sign-in) is already rendered and shows
  * through frosted while the name draws itself (React Bits StrokeText); then
  * the name fades and the frost smoothly clears. Click, Escape, Enter or Space
- * skips it. Not shown when the OS asks for reduced motion.
+ * skips it. Not shown when the OS asks for reduced motion, or when an
+ * administrator turned "Opening title" off (read from the public /health; the
+ * answer is remembered so later visits skip it from the first frame).
  */
 export function SiteIntro() {
   const [phase, setPhase] = useState<"show" | "leaving" | "done">(() => (shouldShowIntro() ? "show" : "done"));
   const [ready, setReady] = useState(false);
   const onReady = useCallback(() => setReady(true), []);
+
+  useEffect(() => {
+    let live = true;
+    api
+      .health()
+      .then((h) => {
+        const on = h.intro_title !== false;
+        rememberSwitch(on);
+        if (!on && live) setPhase("done");
+      })
+      .catch(() => {
+        // Unknown: keep whatever the last answer was.
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
 
   const leave = useCallback(() => {
     markSeen();

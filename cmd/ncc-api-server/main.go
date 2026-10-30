@@ -1170,6 +1170,8 @@ func (s *apiServer) healthPayload(p *principal) map[string]interface{} {
 		"ldap_enabled":  s.ldapIsEnabled(),
 		"cookie_secure": s.cookieSecure(),
 		"detail_level":  "public",
+		// The sign-in page decides on the opening title before anyone signs in.
+		"intro_title": s.loadFeatureFlags().IntroTitle,
 	}
 	if p == nil || p.mustChange {
 		return data

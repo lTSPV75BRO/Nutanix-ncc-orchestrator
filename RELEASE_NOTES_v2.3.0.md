@@ -153,6 +153,19 @@ every page (the SLO panel used a different formula).
   visible focus ring on links and controls.
 - On phones the Overview tiles sit two to a row instead of one long column.
 
+### More switches in Settings → Features
+
+Features is now grouped into **Views**, **Actions** and **Sign-in**, with
+four new switches. All are on after upgrading, and the server refuses what
+is switched off rather than only hiding it:
+
+| Switch | When off |
+| ------ | -------- |
+| Alert handling | Findings is read-only: no Acknowledge, Resolve or Reopen. Earlier marks stay visible. |
+| Self-heal actions | System → Health reports problems but has no Heal buttons. |
+| Update checks | Nothing is fetched from the release server and in-app updates are refused. |
+| Opening title | The animated title before sign-in is skipped for everyone. |
+
 ### Findings on laptop screens
 
 - The alert table fits a 14" MacBook Pro (1512px) without scrolling

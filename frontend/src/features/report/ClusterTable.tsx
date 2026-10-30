@@ -49,6 +49,7 @@ type Props = {
   pcResolvedFilter: "all" | "No" | "Yes";
   compareMode: "all" | "changed" | "flaky";
   dispositions?: NCCDisposition[];
+  /** Left out when alert handling is turned off: no checkboxes, bulk bar or handling buttons. */
   onDisposition?: (input: {
     action: "acknowledge" | "resolve" | "reopen";
     note?: string;
@@ -499,7 +500,8 @@ function NCCAlertInspector({
   note: string;
   onNote: (value: string) => void;
   pending?: boolean;
-  onAction: (action: "acknowledge" | "resolve" | "reopen") => void;
+  /** Absent when alert handling is turned off: marks are shown read-only. */
+  onAction?: (action: "acknowledge" | "resolve" | "reopen") => void;
 }) {
   const current = handlingLabel(mark?.status || "");
   const history = [...(mark?.history || [])].reverse();
@@ -533,32 +535,45 @@ function NCCAlertInspector({
             Alert ID <Typography.Text code copyable>{mark.id}</Typography.Text>
           </Typography.Paragraph>
         ) : null}
-        <Input.TextArea
-          value={note}
-          onChange={(event) => onNote(event.target.value)}
-          maxLength={500}
-          rows={2}
-          placeholder="Optional note"
-        />
-        <Space wrap className="ncc-handling-actions">
-          <Button disabled={pending} onClick={() => onAction("acknowledge")}>
-            Acknowledge
-          </Button>
-          <Button type="primary" disabled={pending} onClick={() => onAction("resolve")}>
-            Resolve
-          </Button>
-          {hasMark ? (
-            <Button disabled={pending} onClick={() => onAction("reopen")}>
-              Reopen
-            </Button>
-          ) : null}
-        </Space>
-        <Typography.Paragraph type="secondary" className="ncc-handling-hint">
-          Acknowledge notes that you have seen it. Resolve marks it done until a later run finds the same alert.
-        </Typography.Paragraph>
+        {onAction ? (
+          <>
+            <Input.TextArea
+              value={note}
+              onChange={(event) => onNote(event.target.value)}
+              maxLength={500}
+              rows={2}
+              placeholder="Optional note"
+            />
+            <Space wrap className="ncc-handling-actions">
+              <Button disabled={pending} onClick={() => onAction("acknowledge")}>
+                Acknowledge
+              </Button>
+              <Button type="primary" disabled={pending} onClick={() => onAction("resolve")}>
+                Resolve
+              </Button>
+              {hasMark ? (
+                <Button disabled={pending} onClick={() => onAction("reopen")}>
+                  Reopen
+                </Button>
+              ) : null}
+            </Space>
+            <Typography.Paragraph type="secondary" className="ncc-handling-hint">
+              Acknowledge notes that you have seen it. Resolve marks it done until a later run finds the same alert.
+            </Typography.Paragraph>
+          </>
+        ) : (
+          <Typography.Paragraph type="secondary" className="ncc-handling-hint">
+            Alert handling is turned off under Settings → Features, so marks are read-only.
+          </Typography.Paragraph>
+        )}
       </Card>
 
-      <NCCLifecyclePanel cluster={row.cluster} check={row.alert} pending={pending} onResolve={() => onAction("resolve")} />
+      <NCCLifecyclePanel
+        cluster={row.cluster}
+        check={row.alert}
+        pending={pending}
+        onResolve={onAction ? () => onAction("resolve") : undefined}
+      />
 
       <div className="pc-alert-metric-grid">
         <div className="pc-alert-metric">
@@ -660,6 +675,8 @@ export function ClusterTable({
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
   const screens = Grid.useBreakpoint();
+  // NCC rows can be marked unless alert handling is off (no onDisposition).
+  const canHandle = alertSource !== "PC" && Boolean(onDisposition);
 
   const rows = useMemo<RowRecord[]>(() => {
     const needle = filterText.toLowerCase();
@@ -1127,7 +1144,7 @@ export function ClusterTable({
   // Fixed columns plus room for the flexible Detail column (and checkboxes).
   const scrollX =
     columns.reduce((sum, c) => sum + (typeof c.width === "number" ? c.width : DETAIL_MIN_WIDTH), 0) +
-    (alertSource === "PC" ? 0 : SELECTION_COLUMN_WIDTH);
+    (canHandle ? SELECTION_COLUMN_WIDTH : 0);
 
   const copyDetail = async (text: string) => {
     try {
@@ -1222,7 +1239,7 @@ export function ClusterTable({
           </Typography.Text>
         </div>
       ) : null}
-      {alertSource !== "PC" && selectedKeys.length > 0 ? (
+      {canHandle && selectedKeys.length > 0 ? (
         <div className="alerts-bulk-bar">
           <Typography.Text strong>{selectedKeys.length} selected</Typography.Text>
           <Button
@@ -1299,7 +1316,7 @@ export function ClusterTable({
                 style: { cursor: "pointer" },
               })}
               rowSelection={
-                alertSource === "PC"
+                !canHandle
                   ? undefined
                   : {
                       selectedRowKeys: selectedKeys,
@@ -1400,14 +1417,17 @@ export function ClusterTable({
               note={handlingNote}
               onNote={setHandlingNote}
               pending={dispositionPending}
-              onAction={(action) =>
-                onDisposition?.({
-                  cluster: drawerRow.cluster,
-                  check: drawerRow.alert,
-                  action,
-                  note: handlingNote.trim(),
-                  run_at: runAt,
-                })
+              onAction={
+                onDisposition
+                  ? (action) =>
+                      onDisposition({
+                        cluster: drawerRow.cluster,
+                        check: drawerRow.alert,
+                        action,
+                        note: handlingNote.trim(),
+                        run_at: runAt,
+                      })
+                  : undefined
               }
             />
           )

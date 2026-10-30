@@ -1443,6 +1443,21 @@ html.alerts-expanded .alerts-expanded-count {
   gap: 10px;
 }
 
+.feature-group + .feature-group {
+  margin-top: var(--ui-space-5);
+  padding-top: var(--ui-space-4);
+  border-top: 1px solid var(--ui-border);
+}
+
+.feature-group-title.ant-typography {
+  margin: 0;
+}
+
+.feature-group-description {
+  display: block;
+  font-size: var(--ui-text-sm);
+}
+
 .feature-flag-row {
   display: flex;
   align-items: flex-start;

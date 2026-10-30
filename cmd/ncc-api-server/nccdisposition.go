@@ -280,6 +280,10 @@ func (s *apiServer) handleNCCDispositions(w http.ResponseWriter, r *http.Request
 	case http.MethodGet:
 		s.handleGetNCCDispositions(w, r)
 	case http.MethodPost:
+		if !s.loadFeatureFlags().AlertHandling {
+			writeFeatureDisabled(w, "Alert handling")
+			return
+		}
 		s.handlePostNCCDispositions(w, r)
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
@@ -503,6 +507,10 @@ func (s *apiServer) handleNCCAlerts(w http.ResponseWriter, r *http.Request) {
 		}
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+			return
+		}
+		if !s.loadFeatureFlags().AlertHandling {
+			writeFeatureDisabled(w, "Alert handling")
 			return
 		}
 		s.handleNCCAlertAction(w, r, parts[0], parts[1])

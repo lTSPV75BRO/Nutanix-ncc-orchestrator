@@ -810,7 +810,9 @@ export function FindingsPage() {
           dispositions={nccDispositionsQuery.data?.items}
           dispositionPending={setNCCDisposition.isPending}
           runAt={runTimestamp}
-          onDisposition={(input) => setNCCDisposition.mutate(input)}
+          onDisposition={
+            features.data?.alert_handling === false ? undefined : (input) => setNCCDisposition.mutate(input)
+          }
         />
       )}
     </div>

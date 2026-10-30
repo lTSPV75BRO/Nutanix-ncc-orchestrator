@@ -19,7 +19,8 @@ export function NCCLifecyclePanel({
   cluster: string;
   check: string;
   pending?: boolean;
-  onResolve: () => void;
+  /** Absent when alert handling is turned off: the hint shows without a button. */
+  onResolve?: () => void;
 }) {
   const instances = useQuery({
     queryKey: [NCC_ALERTS_QUERY_KEY, "finding", cluster, check],
@@ -73,11 +74,13 @@ export function NCCLifecyclePanel({
               ? `Not reported since the ${formatDateTime(active.not_detected_since_run)} run`
               : "The latest run no longer reports this check"
           }
-          description={`It is still ${stateLabel}. Resolve it if the issue is fixed.`}
+          description={onResolve ? `It is still ${stateLabel}. Resolve it if the issue is fixed.` : `It is still ${stateLabel}.`}
           action={
-            <Button size="small" type="primary" disabled={pending} onClick={onResolve}>
-              Resolve
-            </Button>
+            onResolve ? (
+              <Button size="small" type="primary" disabled={pending} onClick={onResolve}>
+                Resolve
+              </Button>
+            ) : undefined
           }
         />
       ) : null}
