@@ -5,7 +5,8 @@ import { api } from "../../api/client";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { notify } from "../../notify";
 import { formatDateTime as formatTime, formatDateTime, relativeTime } from "../../utils/datetime";
-import type { ConfigListItem } from "../../api/types";
+import type { ConfigListItem, ScheduleState } from "../../api/types";
+import { SaveBar } from "../../ui";
 
 type Props = {
   backendConfigPath: string;
@@ -97,6 +98,26 @@ function approxNextRun(every?: string, cron?: string, lastModIso?: string): Date
   return new Date(base + k * ms);
 }
 
+type SchedulePayload = {
+  type: string;
+  action: string;
+  cron: string;
+  every: string;
+  config: string;
+  log_path: string;
+  with_lock: boolean;
+  task_name: string;
+  print_only: boolean;
+};
+
+/**
+ * What a save would change, for the unsaved-changes bar. The interval is
+ * ignored when a cron expression is set, since cron wins.
+ */
+function scheduleKey(p: SchedulePayload): string {
+  return JSON.stringify([p.type, p.action, p.cron, p.cron ? "" : p.every, p.config, p.log_path, p.with_lock, p.task_name, p.print_only]);
+}
+
 export function ScheduleSection({ backendConfigPath, onError, isKubernetes = false }: Props) {
   const [mode, setMode] = useLocalStorageState<Mode>("settings.schedule.mode", "simple");
   const [type, setType] = useLocalStorageState("settings.schedule.type", "auto");
@@ -138,26 +159,71 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
     };
   }, [mode, type, action, cron, everyValue, everyUnit, config, logPath, withLock, taskName, printOnly, apply]);
 
+  // The saved schedule, as a scheduleKey; null until one is fetched (or none is saved).
+  const [baseline, setBaseline] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const dirty = baseline !== null && scheduleKey(payload) !== baseline;
+
+  /** The saved state with the same defaults the form applies. */
+  const savedKey = (s: ScheduleState) =>
+    scheduleKey({
+      type: s.type || "auto",
+      action: s.action || "create",
+      cron: (s.cron || "").trim(),
+      every: s.every || "",
+      config: s.config || backendConfigPath || "config.yaml",
+      log_path: s.log_path || "logs/ncc-scheduler.log",
+      with_lock: Boolean(s.with_lock ?? true),
+      task_name: s.task_name || "ncc-orchestrator",
+      print_only: Boolean(s.print_only),
+    });
+
+  // Without updated_at the server is returning defaults: nothing is saved yet.
+  const baselineFor = (s: ScheduleState) => (s.updated_at ? savedKey(s) : null);
+
+  const applySaved = (s: ScheduleState) => {
+    setType(s.type || "auto");
+    setAction(s.action || "create");
+    setCron(s.cron || "");
+    setConfig(s.config || backendConfigPath || "config.yaml");
+    setLogPath(s.log_path || "logs/ncc-scheduler.log");
+    setWithLock(Boolean(s.with_lock ?? true));
+    setTaskName(s.task_name || "ncc-orchestrator");
+    setPrintOnly(Boolean(s.print_only));
+    const m = String(s.every || "").match(/^(\d+)([mhd])$/);
+    if (m) {
+      setEveryValue(Number(m[1]));
+      setEveryUnit(m[2]);
+    }
+    setMode((s.type !== "auto" || s.action !== "create" || (s.cron || "").trim()) ? "advanced" : "simple");
+    setBaseline(baselineFor(s));
+  };
+
   const load = async () => {
     try {
-      const s = await api.loadSchedule();
-      setType(s.type || "auto");
-      setAction(s.action || "create");
-      setCron(s.cron || "");
-      setConfig(s.config || backendConfigPath || "config.yaml");
-      setLogPath(s.log_path || "logs/ncc-scheduler.log");
-      setWithLock(Boolean(s.with_lock ?? true));
-      setTaskName(s.task_name || "ncc-orchestrator");
-      setPrintOnly(Boolean(s.print_only));
-      const m = String(s.every || "").match(/^(\d+)([mhd])$/);
-      if (m) {
-        setEveryValue(Number(m[1]));
-        setEveryUnit(m[2]);
-      }
-      setMode((s.type !== "auto" || s.action !== "create" || (s.cron || "").trim()) ? "advanced" : "simple");
+      applySaved(await api.loadSchedule());
       notify.success("Schedule loaded.");
     } catch (e) {
       onError(e);
+    }
+  };
+
+  /** Discard: put the saved schedule back in the form. */
+  const discard = async () => {
+    try {
+      applySaved(await api.loadSchedule());
+    } catch (e) {
+      onError(e);
+    }
+  };
+
+  // The form keeps its draft across visits, so only the baseline is fetched
+  // on mount. When nothing is saved yet there is no bar; Install now covers it.
+  const loadBaseline = async () => {
+    try {
+      setBaseline(baselineFor(await api.loadSchedule()));
+    } catch {
+      setBaseline(null);
     }
   };
 
@@ -194,11 +260,15 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
       notify.warning("Config path is required.");
       return;
     }
+    setSaving(true);
     try {
       await api.saveSchedule(payload);
+      setBaseline(scheduleKey(payload));
       notify.success(apply ? "Schedule saved and applied." : "Schedule saved.");
     } catch (e) {
       onError(e);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -222,6 +292,7 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
       // Persist apply=on / print_only=off so subsequent saves stay sticky.
       setApply(true);
       setPrintOnly(false);
+      setBaseline(scheduleKey({ ...payload, print_only: false }));
       notify.close("ncc-schedule-install");
       notify.success({
         message: "Schedule installed",
@@ -237,6 +308,7 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
   useEffect(() => {
     void loadHealth(true);
     void loadConfigOptions(true);
+    void loadBaseline();
   }, []);
 
   const configSelectOptions = useMemo(
@@ -455,7 +527,7 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
 
           <Space size={8} wrap>
             <Button icon={<ReloadOutlined />} onClick={load}>Load Current</Button>
-            <Button type="primary" icon={<SaveOutlined />} onClick={save}>Save Schedule</Button>
+            <Button type="primary" icon={<SaveOutlined />} onClick={save} loading={saving}>Save Schedule</Button>
             <Button icon={<HeartOutlined />} onClick={() => loadHealth(false)}>Refresh Health</Button>
           </Space>
         </Form>
@@ -637,6 +709,14 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
           <Typography.Text type="secondary">Click "Refresh Health" to load scheduler status.</Typography.Text>
         )}
       </Card>
+      <SaveBar
+        dirty={dirty}
+        saving={saving}
+        onSave={() => void save()}
+        onDiscard={() => void discard()}
+        message="The schedule differs from the saved one."
+        saveLabel="Save schedule"
+      />
     </Space>
   );
 }

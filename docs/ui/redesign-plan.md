@@ -1,6 +1,6 @@
 # Internal pages: UI/UX redesign plan
 
-Status: in progress — Phases 0–4 done (2026-10-29). Scope: every signed-in page of the web UI
+Status: done — Phases 0–5 complete (2026-10-31). Scope: every signed-in page of the web UI
 (`frontend/src`). The API stays as it is; this is frontend-only work.
 
 ## Where we are
@@ -252,6 +252,38 @@ type checks.
   the tabs solve the overloaded page, the file move is a pure refactor; Schedule
   has no dirty tracking, so it keeps its own Save button; stat tiles stack
   one per row on phones.
+
+### Phase 5 — done (2026-10-31)
+
+- **Contrast (UX-10):** measured every text/background pair in the three
+  themes. Badges failed AA in light (2.7–4.1:1), fail/neutral badges in dark
+  and IT Pro, and light tertiary text. Fix: status tokens get text variants
+  (`--ui-ok-text` … `--ui-neutral-text`) used for badge text, scores and
+  "all clear" text, while `--ui-ok` etc. stay as fills and dots; tertiary
+  text darkened. All pairs now ≥4.5:1 (large stat values ≥3:1).
+- **Keyboard:** "Skip to content" link first in the shell (focuses
+  `#main-content`); visible focus ring on links, `tabIndex=0` rows and
+  non-antd buttons.
+- **Phones:** Overview stat tiles two per row with tighter padding; no
+  horizontal page scroll at 375px.
+- **Schedule save bar:** the saved schedule is fetched on mount as a
+  baseline (the form keeps its draft across visits, so it is not
+  overwritten); the bar shows when a save would change it. No bar until a
+  schedule has been saved (`updated_at` empty) — Install now covers that.
+- **Dead code removed:** `UxModernizationSection`, `ClusterHealthWidget`,
+  `Pagination`, `PerClusterReportsList`, `PolicyStatus` (none imported) and
+  the old header/hero CSS (`.app-header`, `.nav-pill`, `.dashboard-hero`,
+  `.finding-card`, …).
+- **Guard test** (`src/designRules.test.ts`): no hex colours and only
+  width/height/custom-property inline styles in `src/ui`, `features/runs`,
+  the shell and the redesigned pages.
+- **Deferred, not blocking:**
+  - moving Backups/Updates out of `AccessSection.tsx` into a Maintenance
+    file — a pure refactor with no user-visible change;
+  - phone tables as cards (they scroll inside their panel);
+  - rebuilding the older Insights panels (SLO, diff, flaky, lifecycle) on
+    `src/ui` — they already take the Panel look through the CSS bridge;
+  - extending the guard test to the older Settings sections.
 
 ## Risks and constraints
 

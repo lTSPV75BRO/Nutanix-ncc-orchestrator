@@ -89,6 +89,10 @@ export function AppShell({
 
   return (
     <div className="ui-shell">
+      {/* First stop for keyboard users: skip the sidebar and top bar. */}
+      <a href="#main-content" className="ui-skip-link">
+        Skip to content
+      </a>
       <aside className={`ui-sidebar${collapsed ? " is-collapsed" : ""}`} aria-label="Primary">
         <Brand brand={brand} />
         <nav className="ui-sidebar-nav">{menu(collapsed)}</nav>
@@ -133,7 +137,9 @@ export function AppShell({
           <h1 className="ui-topbar-title">{title}</h1>
           <div className="ui-topbar-actions">{actions}</div>
         </header>
-        <main className="ui-content">{children}</main>
+        <main className="ui-content" id="main-content" tabIndex={-1}>
+          {children}
+        </main>
       </div>
     </div>
   );

@@ -512,141 +512,7 @@ a {
   background: transparent;
 }
 
-.app-shell {
-  min-height: 100vh;
-}
-
-.app-header {
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  width: 100%;
-  height: 68px;
-  line-height: 1;
-  padding: 0 !important;
-  border-bottom: 1px solid var(--header-border);
-  background: var(--header-bg);
-  backdrop-filter: blur(14px) saturate(140%);
-  -webkit-backdrop-filter: blur(14px) saturate(140%);
-  box-shadow: var(--header-shadow, 0 1px 0 rgba(255, 255, 255, 0.04), 0 8px 24px rgba(2, 6, 23, 0.18));
-  transition:
-    background var(--anim-normal) var(--anim-ease),
-    border-color var(--anim-normal) var(--anim-ease);
-}
-
-.app-header::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 1px;
-  background: var(
-    --header-underglow,
-    linear-gradient(
-      90deg,
-      transparent 0%,
-      color-mix(in srgb, var(--menu-selected-border) 55%, transparent) 25%,
-      color-mix(in srgb, #06b6d4 55%, transparent) 75%,
-      transparent 100%
-    )
-  );
-  pointer-events: none;
-}
-
-.app-header-inner {
-  display: flex;
-  align-items: center;
-  gap: 24px;
-  height: 100%;
-  max-width: 1400px;
-  margin: 0 auto;
-  padding: 0 24px;
-}
-
-.brand-block {
-  display: inline-flex;
-  align-items: center;
-  gap: 14px;
-  flex-shrink: 0;
-  color: inherit;
-  text-decoration: none;
-  padding: 6px 8px 6px 0;
-  border-radius: 10px;
-  transition: transform var(--anim-fast) var(--anim-ease);
-}
-
-.brand-block:hover {
-  color: inherit;
-  text-decoration: none;
-  transform: translateY(-1px);
-}
-
-.brand-logo-wrap {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
-  background: var(--brand-logo-bg, linear-gradient(135deg, rgba(139, 92, 246, 0.22), rgba(56, 189, 248, 0.22)));
-  box-shadow:
-    0 4px 14px var(--shadow-color),
-    inset 0 0 0 1px var(--brand-logo-inner, rgba(255, 255, 255, 0.08));
-}
-
-.brand-logo-wrap::after {
-  content: "";
-  position: absolute;
-  inset: -2px;
-  border-radius: 14px;
-  background: var(--brand-logo-glow, linear-gradient(135deg, rgba(139, 92, 246, 0.55), rgba(56, 189, 248, 0.55)));
-  filter: blur(10px);
-  opacity: 0;
-  transition: opacity var(--anim-normal) var(--anim-ease);
-  z-index: -1;
-}
-
-.brand-block:hover .brand-logo-wrap::after {
-  opacity: 0.6;
-}
-
-.brand-logo {
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  filter: drop-shadow(0 2px 4px rgba(2, 6, 23, 0.4));
-}
-
-.brand-text {
-  display: inline-flex;
-  flex-direction: column;
-  gap: 2px;
-  line-height: 1.15;
-}
-
-.brand-name {
-  font-weight: 700;
-  font-size: 16px;
-  letter-spacing: 0.2px;
-  background: var(--brand-name-grad, linear-gradient(90deg, #c4b5fd, #67e8f9));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-
-.brand-tagline {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 11px;
-  color: var(--subtitle-text);
-  font-weight: 500;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
-}
-
+/* Version chip beside the product name (sidebar brand, App.tsx BrandVersionTag). */
 .brand-version {
   display: inline-flex;
   align-items: center;
@@ -659,63 +525,6 @@ a {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.6px;
-}
-
-.brand-tagline-text {
-  opacity: 0.85;
-}
-
-.header-nav {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--control-bg) 60%, transparent);
-  border: 1px solid color-mix(in srgb, var(--control-border) 70%, transparent);
-}
-
-.nav-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  border-radius: 8px;
-  color: var(--menu-text);
-  font-weight: 500;
-  font-size: 14px;
-  text-decoration: none;
-  line-height: 1;
-  transition:
-    background var(--anim-fast) var(--anim-ease),
-    color var(--anim-fast) var(--anim-ease),
-    transform var(--anim-fast) var(--anim-ease);
-}
-
-.nav-pill:hover {
-  color: var(--menu-hover-text);
-  background: color-mix(in srgb, var(--control-bg) 92%, transparent);
-  text-decoration: none;
-}
-
-.nav-pill.active {
-  color: var(--nav-pill-active-color, #ffffff);
-  background: var(--menu-selected-bg);
-  box-shadow:
-    0 4px 14px var(--nav-pill-active-shadow, rgba(139, 92, 246, 0.28)),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.12);
-}
-
-.nav-pill-icon {
-  display: inline-flex;
-  align-items: center;
-  font-size: 15px;
-  opacity: 0.85;
-}
-
-.nav-pill.active .nav-pill-icon,
-.nav-pill:hover .nav-pill-icon {
-  opacity: 1;
 }
 
 .header-actions {
@@ -964,56 +773,6 @@ a {
   background: color-mix(in srgb, var(--menu-selected-border) 18%, var(--control-bg));
 }
 
-.app-content {
-  position: relative;
-}
-
-.app-content-inner {
-  max-width: 1400px;
-  width: 100%;
-  margin: 0 auto;
-  padding: var(--app-content-pad-top) 24px var(--app-content-pad-bottom);
-}
-
-@media (max-width: 960px) {
-  .app-header {
-    height: auto;
-  }
-  .app-header-inner {
-    flex-wrap: wrap;
-    padding: 12px 16px;
-    gap: 12px;
-  }
-  .brand-tagline-text {
-    display: none;
-  }
-  .header-nav {
-    order: 3;
-    width: 100%;
-    justify-content: center;
-  }
-  .header-actions {
-    margin-left: auto;
-  }
-  /* Save horizontal space on small headers: keep the avatar + role tag, drop
-     the username text (still shown in the dropdown). */
-  .header-user-name {
-    display: none;
-  }
-}
-
-@media (max-width: 600px) {
-  .nav-pill-label {
-    display: none;
-  }
-  .nav-pill {
-    padding: 8px 10px;
-  }
-  .header-health-label {
-    display: none;
-  }
-}
-
 .page-card {
   margin-bottom: 16px;
 }
@@ -1051,79 +810,6 @@ a {
 
 .dashboard-page > .ant-card:hover {
   transform: none;
-}
-
-.insights-hero {
-  background: linear-gradient(
-      135deg,
-      color-mix(in srgb, var(--card-bg) 88%, transparent),
-      color-mix(in srgb, var(--card-bg) 96%, transparent)
-    ),
-    radial-gradient(600px 300px at 20% 0%, rgba(139, 92, 246, 0.18), transparent 60%),
-    radial-gradient(500px 280px at 100% 100%, rgba(56, 189, 248, 0.16), transparent 60%);
-  border: 1px solid var(--card-border);
-  position: relative;
-  overflow: hidden;
-}
-
-.insights-hero::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 240px;
-  height: 240px;
-  background: radial-gradient(closest-side, rgba(56, 189, 248, 0.18), transparent);
-  pointer-events: none;
-}
-
-.finding-card {
-  background: color-mix(in srgb, var(--card-bg) 96%, transparent) !important;
-  border-color: var(--table-cell-border) !important;
-  transition:
-    border-color var(--anim-fast) var(--anim-ease),
-    transform var(--anim-fast) var(--anim-ease);
-}
-
-.finding-card:hover {
-  border-color: var(--card-hover-border) !important;
-  transform: translateX(2px);
-}
-
-.dashboard-hero {
-  background: linear-gradient(
-      135deg,
-      color-mix(in srgb, var(--card-bg) 90%, transparent),
-      color-mix(in srgb, var(--card-bg) 96%, transparent)
-    ),
-    radial-gradient(500px 240px at 0% 0%, rgba(56, 189, 248, 0.12), transparent 60%),
-    radial-gradient(500px 240px at 100% 100%, rgba(139, 92, 246, 0.14), transparent 60%);
-}
-
-.health-pill {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  min-width: 96px;
-  height: 64px;
-  padding: 8px 14px;
-  border-radius: var(--card-radius);
-  color: #ffffff;
-  box-shadow: 0 6px 18px var(--shadow-color);
-}
-
-.health-pill-label {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  opacity: 0.9;
-}
-
-.health-pill-value {
-  font-size: var(--stat-value-size);
-  font-weight: var(--stat-value-weight);
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
 }
 
 .dashboard-page .ant-statistic-title {
@@ -1228,9 +914,6 @@ a {
   color: var(--subtitle-text) !important;
 }
 
-.connection-status-card {
-  background: linear-gradient(135deg, color-mix(in srgb, var(--control-bg) 92%, transparent), var(--card-bg));
-}
 
 .config-toolbar-card {
   position: sticky;
@@ -1462,49 +1145,6 @@ a {
 .connection-orb.err {
   background: linear-gradient(135deg, #dc2626, #ef4444);
   color: #fff;
-}
-
-.resolved-paths-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 12px;
-}
-
-.resolved-path-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 12px 14px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--control-bg) 92%, transparent);
-  border: 1px solid var(--table-cell-border);
-  transition: background 0.15s ease;
-}
-
-.resolved-path-row:hover {
-  background: color-mix(in srgb, var(--control-bg) 80%, transparent);
-}
-
-.resolved-path-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-  min-width: 180px;
-}
-
-.resolved-path-icon {
-  display: inline-flex;
-  width: 24px;
-  height: 24px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--menu-selected-border) 18%, transparent);
-  color: var(--menu-selected-border);
-  font-size: 13px;
 }
 
 .ant-btn-primary {
@@ -2270,6 +1910,14 @@ pre {
   --ui-fail: #f43f5e;
   --ui-info: #38bdf8;
   --ui-neutral: #71717a;
+  /* Status colours for small text (badges, inline labels): each passes WCAG
+     AA 4.5:1 on its 14% tint and on the surface, per theme. The plain
+     --ui-ok/... colours are for fills, bars, icons and large numbers. */
+  --ui-ok-text: #22c55e;
+  --ui-warn-text: #f59e0b;
+  --ui-fail-text: #fb7185;
+  --ui-info-text: #38bdf8;
+  --ui-neutral-text: #a1a1aa;
   --ui-sidebar-w: 232px;
   --ui-sidebar-w-collapsed: 64px;
   --ui-topbar-h: 56px;
@@ -2280,11 +1928,16 @@ html[data-theme="light"] {
   --ui-surface-hover: #f4f4f5;
   --ui-border: #e4e4e7;
   --ui-border-strong: #d4d4d8;
-  --ui-text-tertiary: rgba(24, 24, 27, 0.5);
+  --ui-text-tertiary: rgba(24, 24, 27, 0.66);
   --ui-ok: #16a34a;
   --ui-warn: #d97706;
   --ui-fail: #dc2626;
   --ui-info: #0284c7;
+  --ui-ok-text: #166534;
+  --ui-warn-text: #92400e;
+  --ui-fail-text: #b91c1c;
+  --ui-info-text: #0369a1;
+  --ui-neutral-text: #52525b;
 }
 
 html[data-theme="it-pro"] {
@@ -2292,8 +1945,9 @@ html[data-theme="it-pro"] {
   --ui-surface-hover: #172540;
   --ui-border: #24324a;
   --ui-border-strong: #334155;
-  --ui-text-tertiary: rgba(219, 234, 254, 0.5);
+  --ui-text-tertiary: rgba(219, 234, 254, 0.56);
   --ui-info: #0284c7;
+  --ui-info-text: #38bdf8;
 }
 
 /* ---- App shell: sidebar + top bar (components/AppShell.tsx) */
@@ -2462,6 +2116,38 @@ html[data-theme="it-pro"] {
   max-width: 1600px;
   margin: 0 auto;
   padding: var(--ui-space-5);
+}
+
+.ui-skip-link {
+  position: absolute;
+  top: var(--ui-space-2);
+  left: var(--ui-space-2);
+  z-index: 1000;
+  padding: var(--ui-space-2) var(--ui-space-4);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-accent);
+  color: #fff;
+  font-weight: 600;
+  transform: translateY(-200%);
+}
+
+.ui-skip-link:focus {
+  transform: none;
+  color: #fff;
+}
+
+.ui-content:focus {
+  outline: none;
+}
+
+/* Keyboard focus for links and custom interactive elements; antd controls
+   bring their own focus style. */
+.ui-shell a:focus-visible,
+.ui-shell [tabindex="0"]:focus-visible,
+.ui-shell button:not(.ant-btn):not([role="switch"]):focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 2px;
+  border-radius: var(--ui-radius-sm);
 }
 
 .ui-route-loading {
@@ -2635,7 +2321,7 @@ html[data-theme="it-pro"] {
   font-weight: 500;
   line-height: 20px;
   white-space: nowrap;
-  color: var(--ui-badge-color);
+  color: var(--ui-badge-text);
   background: color-mix(in srgb, var(--ui-badge-color) 14%, transparent);
 }
 
@@ -2648,22 +2334,32 @@ html[data-theme="it-pro"] {
 
 .ui-badge.tone-ok {
   --ui-badge-color: var(--ui-ok);
+  --ui-badge-text: var(--ui-ok-text);
 }
 
 .ui-badge.tone-warn {
   --ui-badge-color: var(--ui-warn);
+  --ui-badge-text: var(--ui-warn-text);
 }
 
 .ui-badge.tone-fail {
   --ui-badge-color: var(--ui-fail);
+  --ui-badge-text: var(--ui-fail-text);
 }
 
 .ui-badge.tone-info {
   --ui-badge-color: var(--ui-info);
+  --ui-badge-text: var(--ui-info-text);
 }
 
 .ui-badge.tone-neutral {
   --ui-badge-color: var(--ui-neutral);
+  --ui-badge-text: var(--ui-neutral-text);
+}
+
+/* The dot keeps the fill colour. */
+.ui-badge .ui-badge-dot {
+  background: var(--ui-badge-color);
 }
 
 .ui-empty {
@@ -2895,10 +2591,6 @@ a.overview-cluster-row:focus-visible {
   padding-left: 18px;
 }
 
-.overview-runs .ant-table {
-  background: transparent;
-}
-
 @media (max-width: 1100px) {
   .overview-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2909,8 +2601,17 @@ a.overview-cluster-row:focus-visible {
 }
 
 @media (max-width: 520px) {
+  /* Two tiles a row on phones; one per row wasted a screen of scrolling. */
   .overview-stats {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--ui-space-2);
+  }
+  .ui-stat {
+    padding: var(--ui-space-3);
+  }
+  .ui-stat-value {
+    font-size: var(--ui-text-xl);
+    overflow-wrap: anywhere;
   }
   .overview-severity-row {
     grid-template-columns: 88px minmax(0, 1fr) 48px;
@@ -3273,15 +2974,15 @@ label.ui-field-inline {
 }
 
 .insights-score.tone-ok {
-  color: var(--ui-ok);
+  color: var(--ui-ok-text);
 }
 
 .insights-score.tone-warn {
-  color: var(--ui-warn);
+  color: var(--ui-warn-text);
 }
 
 .insights-score.tone-fail {
-  color: var(--ui-fail);
+  color: var(--ui-fail-text);
 }
 
 .insights-ok {
@@ -3289,7 +2990,7 @@ label.ui-field-inline {
   align-items: center;
   gap: var(--ui-space-2);
   margin: 0 0 var(--ui-space-3);
-  color: var(--ui-ok);
+  color: var(--ui-ok-text);
 }
 
 .insights-trend {

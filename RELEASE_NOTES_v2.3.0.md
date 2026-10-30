@@ -142,6 +142,16 @@ every page (the SLO panel used a different formula).
 - **Access** is now in tabs: Users & roles, Sign-in (directory, SSO, session
   length), Cluster groups, API tokens and HTTPS. Searching for "TLS",
   "users" or "LDAP" opens the right tab.
+- **Schedule** shows the same bar when the form differs from the saved
+  schedule; Discard puts the saved values back.
+
+### Accessibility and phones
+
+- Status badges, scores and secondary text are readable in every theme
+  (WCAG AA contrast, 4.5:1); the light theme's badges were too faint before.
+- Keyboard users get a **Skip to content** link on the first Tab press and a
+  visible focus ring on links and controls.
+- On phones the Overview tiles sit two to a row instead of one long column.
 
 ### Opening title
 

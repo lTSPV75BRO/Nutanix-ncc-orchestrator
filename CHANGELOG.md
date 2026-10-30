@@ -98,6 +98,15 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   at a glance, and server paths shortened in the middle with copy buttons.
   **Access** is split into tabs — Users & roles, Sign-in, Cluster groups,
   API tokens, HTTPS — and search shortcuts open the right one.
+- **Polish and accessibility.** Status badges, scores and secondary text now
+  meet WCAG AA contrast in all three themes (badges had 2.7–4.1:1 in the
+  light theme). A "Skip to content" link is the first Tab stop, and keyboard
+  focus is visible on links and custom controls. On phones the Overview stat
+  tiles sit two to a row. **Schedule** shows the save bar when the form
+  differs from the saved schedule (Discard puts the saved values back).
+  Removed unused components and about 300 lines of dead CSS from the old
+  header layout; a test now keeps hex colours and styling props out of the
+  redesigned pages.
 - **Opening title:** when the site is opened, "NCC Orchestrator" draws itself
   in outline and fills in (React Bits `StrokeText`, built on GSAP) while the
   page behind it shows through frosted; the blur then eases away to reveal
