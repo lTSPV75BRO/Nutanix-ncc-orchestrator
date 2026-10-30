@@ -107,6 +107,20 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   Removed unused components and about 300 lines of dead CSS from the old
   header layout; a test now keeps hex colours and styling props out of the
   redesigned pages.
+- **Findings alert table fits a 14" laptop.** At 1512px the table no longer
+  scrolls sideways or clips the details button: columns are narrower, the
+  table width comes from its columns, and the Detail column gets the room.
+  The cluster cell is two lines (name; address and versions), and the PC
+  table moves Entity type and Impact type into the details drawer below
+  1600px. The filters are one row (source, search, clusters, mode, Reset,
+  Copy link), and severity is filtered with the totals above them, so the
+  table shows about twice as many rows. **Full page** works again in the
+  sidebar layout and hides the sidebar.
+- **Consistent wording.** Buttons, titles and column headers use sentence
+  case everywhere (e.g. "Save schedule", "Scheduler health", "Entity
+  name"); section titles no longer repeat the page title; long config and
+  log paths are shortened in the middle. Insights' comparison panels use the
+  theme's status colours instead of fixed hex values.
 - **Opening title:** when the site is opened, "NCC Orchestrator" draws itself
   in outline and fills in (React Bits `StrokeText`, built on GSAP) while the
   page behind it shows through frosted; the blur then eases away to reveal

@@ -425,7 +425,7 @@ export function SettingsPage({ isAdmin = true, section }: { isAdmin?: boolean; s
         },
         {
           key: "health",
-          label: tabLabel(<HeartOutlined />, "System Health"),
+          label: tabLabel(<HeartOutlined />, "System health"),
           children: lazySection(<SystemHealthSection />),
         },
         {

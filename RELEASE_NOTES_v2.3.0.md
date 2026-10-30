@@ -153,6 +153,14 @@ every page (the SLO panel used a different formula).
   visible focus ring on links and controls.
 - On phones the Overview tiles sit two to a row instead of one long column.
 
+### Findings on laptop screens
+
+- The alert table fits a 14" MacBook Pro (1512px) without scrolling
+  sideways, and shows about twice as many rows: filters are one row, and
+  severity is picked from the totals above them.
+- **Full page** fills the window again and hides the sidebar.
+- Labels across Settings, System and Insights use the same sentence case.
+
 ### Opening title
 
 When the site is opened, the name "NCC Orchestrator" draws itself in outline

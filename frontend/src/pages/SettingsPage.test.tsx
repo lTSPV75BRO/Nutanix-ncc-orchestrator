@@ -119,7 +119,7 @@ describe("SettingsPage", () => {
     expect(fetchedPaths().some((p) => p.includes("/api/v1/settings/"))).toBe(false);
 
     fireEvent.click(screen.getByRole("tab", { name: /Schedule/ }));
-    await screen.findByText("Scheduler Health");
+    await screen.findByText("Scheduler health");
     await waitFor(() => {
       expect(fetchedPaths().some((p) => p.includes("/api/v1/runs/configs"))).toBe(true);
     });

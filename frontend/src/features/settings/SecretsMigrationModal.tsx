@@ -97,8 +97,8 @@ export function SecretsMigrationModal({
       message: "Config rewritten to use secret references",
       description:
         mode === "env"
-          ? `password is now secret://${SECRET_NAME}. Set the env var (snippet copied below) and click Save Config.`
-          : `password is now secret://${FILE_KEY}. Create the secrets file (snippet copied below) with mode 0600, then click Save Config.`,
+          ? `password is now secret://${SECRET_NAME}. Set the env var (snippet copied below) and click Save.`
+          : `password is now secret://${FILE_KEY}. Create the secrets file (snippet copied below) with mode 0600, then click Save.`,
       duration: 8,
     });
     setStep(2);
@@ -276,7 +276,7 @@ export function SecretsMigrationModal({
             title="Password replaced with a secret reference"
             description={
               <>
-                Don't forget to click <Typography.Text strong>Save Config</Typography.Text> on the
+                Don't forget to click <Typography.Text strong>Save</Typography.Text> on the
                 Config tab to persist the change.
               </>
             }

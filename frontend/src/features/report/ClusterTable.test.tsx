@@ -60,11 +60,13 @@ describe("ClusterTable alert sources", () => {
     expect(screen.queryByText("NCC finding")).not.toBeInTheDocument();
     expect(screen.getByText("PC finding")).toBeInTheDocument();
     expect(screen.getByText("Title")).toBeInTheDocument();
-    expect(screen.getByText("Entity Name")).toBeInTheDocument();
-    expect(screen.getByText("Entity Type")).toBeInTheDocument();
-    expect(screen.getByText("Last Occurred")).toBeInTheDocument();
+    expect(screen.getByText("Entity name")).toBeInTheDocument();
+    expect(screen.getByText("Last occurred")).toBeInTheDocument();
     expect(screen.getByText("Status")).toBeInTheDocument();
-    expect(screen.getByText("Impact Type")).toBeInTheDocument();
+    // Below 1600px these two live only in the details drawer, so the table
+    // fits a 14" laptop without scrolling sideways.
+    expect(screen.queryByText("Entity type")).not.toBeInTheDocument();
+    expect(screen.queryByText("Impact type")).not.toBeInTheDocument();
   });
 
   it("sizes the virtual alerts table from the host instead of a fixed 620px pane", () => {
@@ -164,7 +166,7 @@ describe("ClusterTable alert sources", () => {
     expect(screen.getByText("Timeline")).toBeInTheDocument();
     expect(screen.getByText("Stargate")).toBeInTheDocument();
     expect(screen.getAllByText("KB 1234").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Open Prism").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Open in Prism").length).toBeGreaterThan(0);
   });
 
   it("fills the page under the header and keeps the alerts toolbar", () => {

@@ -11,6 +11,7 @@ import {
 import { api } from "../../api/client";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { CodeEditor } from "../../components/CodeEditor";
+import { middleEllipsis } from "../../ui";
 
 type Props = {
   onError: (e: unknown) => void;
@@ -117,9 +118,14 @@ export function LogsSection({ onError }: Props) {
         <Space size={10} align="center">
           <FileTextOutlined className="section-header-icon" />
           <div style={{ display: "inline-flex", flexDirection: "column", lineHeight: 1.15 }}>
-            <Typography.Text strong>Runner Logs</Typography.Text>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }} copyable={path ? { text: path } : false}>
-              {path || "logs/ncc-runner.log"}
+            <Typography.Text strong>Runner log</Typography.Text>
+            <Typography.Text
+              type="secondary"
+              style={{ fontSize: 12 }}
+              copyable={path ? { text: path } : false}
+              title={path || undefined}
+            >
+              {middleEllipsis(path || "logs/ncc-runner.log", 72)}
             </Typography.Text>
           </div>
         </Space>

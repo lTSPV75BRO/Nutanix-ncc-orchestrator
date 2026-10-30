@@ -88,9 +88,9 @@ const PRESETS: EndpointPreset[] = [
   { label: "Report trends", method: "GET", path: "/api/v1/report/trends?limit=30" },
   { label: "Runs summary", method: "GET", path: "/api/v1/runs/summary" },
   { label: "Run files", method: "GET", path: "/api/v1/artifacts" },
-  { label: "Schedule Health", method: "GET", path: "/api/v1/schedule/health" },
-  { label: "Diagnostics (System Health)", method: "GET", path: "/api/v1/health/diagnostics" },
-  { label: "List Backups", method: "GET", path: "/api/v1/settings/backups" },
+  { label: "Schedule health", method: "GET", path: "/api/v1/schedule/health" },
+  { label: "Diagnostics (system health)", method: "GET", path: "/api/v1/health/diagnostics" },
+  { label: "List backups", method: "GET", path: "/api/v1/settings/backups" },
   {
     label: "Create Snapshot (optionally encrypted)",
     method: "POST",

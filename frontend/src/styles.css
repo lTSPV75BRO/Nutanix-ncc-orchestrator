@@ -83,9 +83,6 @@
   --anim-fast: 140ms;
   --anim-normal: 220ms;
   --anim-ease: cubic-bezier(0.2, 0, 0.2, 1);
-  --app-header-height: 68px;
-  --app-content-pad-top: 16px;
-  --app-content-pad-bottom: 32px;
   --dashboard-gap: 16px;
   --card-radius: 10px;
   --card-pad-y: 20px;
@@ -795,9 +792,8 @@ a {
   flex-direction: column;
   gap: var(--dashboard-gap);
   width: 100%;
-  min-height: calc(
-    100dvh - var(--app-header-height) - var(--app-content-pad-top) - var(--app-content-pad-bottom)
-  );
+  /* Fill the window below the top bar so the alert table takes the rest. */
+  min-height: calc(100dvh - var(--ui-topbar-h) - 2 * var(--ui-space-5));
 }
 
 .dashboard-page > .page-card {
@@ -849,38 +845,40 @@ a {
   border-color: var(--table-cell-border);
 }
 
-.filter-toolbar-card {
-  position: sticky;
-  top: var(--app-header-height);
-  z-index: 5;
-  backdrop-filter: blur(6px);
-}
-
-.filter-toolbar-head {
-  margin-bottom: 16px;
-}
-
-.filter-toolbar-icon {
-  color: var(--menu-selected-border);
-  font-size: 16px;
-}
-
 .filter-control-icon {
   color: var(--subtitle-text);
 }
 
-.filter-toolbar-label {
-  font-size: 13px;
+/* Findings filters: one row (source, search, clusters, mode, actions). */
+.filter-toolbar-card.ant-card > .ant-card-body {
+  padding: var(--ui-space-3) var(--ui-space-4);
 }
 
-.filter-toolbar-card .ant-tag-checkable {
-  border-radius: 4px;
-  padding: 2px 10px;
-  font-size: var(--pill-font-size);
+.findings-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ui-space-3);
 }
 
-.filter-toolbar-divider.ant-divider {
-  margin: 16px 0;
+.findings-toolbar-search {
+  flex: 2 1 260px;
+  min-width: 220px;
+}
+
+.findings-toolbar-clusters {
+  flex: 1 1 200px;
+  min-width: 180px;
+}
+
+.findings-toolbar-select.ant-select {
+  width: 140px;
+}
+
+.findings-toolbar-actions {
+  display: flex;
+  gap: var(--ui-space-1);
+  margin-left: auto;
 }
 
 .ide-editor-wrap {
@@ -1317,18 +1315,18 @@ a {
 }
 
 .alerts-handling-chip-open.is-selected {
-  border-color: color-mix(in srgb, #f43f5e 55%, var(--control-border));
-  background: color-mix(in srgb, #f43f5e 16%, var(--control-bg));
+  border-color: color-mix(in srgb, var(--ui-fail) 55%, var(--control-border));
+  background: color-mix(in srgb, var(--ui-fail) 16%, var(--control-bg));
 }
 
 .alerts-handling-chip-acked.is-selected {
-  border-color: color-mix(in srgb, #f59e0b 55%, var(--control-border));
-  background: color-mix(in srgb, #f59e0b 16%, var(--control-bg));
+  border-color: color-mix(in srgb, var(--ui-warn) 55%, var(--control-border));
+  background: color-mix(in srgb, var(--ui-warn) 16%, var(--control-bg));
 }
 
 .alerts-handling-chip-resolved.is-selected {
-  border-color: color-mix(in srgb, #22c55e 55%, var(--control-border));
-  background: color-mix(in srgb, #22c55e 16%, var(--control-bg));
+  border-color: color-mix(in srgb, var(--ui-ok) 55%, var(--control-border));
+  background: color-mix(in srgb, var(--ui-ok) 16%, var(--control-bg));
 }
 
 .alerts-handling-chip-returned.is-selected,
@@ -1363,64 +1361,39 @@ html.alerts-expanded body {
   height: 100dvh;
 }
 
-html.alerts-expanded .app-shell.ant-layout {
+/* Full page: the alert list fills the window below the top bar, full width. */
+html.alerts-expanded .ui-shell,
+html.alerts-expanded .ui-main {
   height: 100dvh;
-  max-height: 100dvh;
-  overflow: hidden;
-}
-
-html.alerts-expanded .app-content {
-  flex: 1 1 auto;
   min-height: 0;
-  height: calc(100dvh - var(--app-header-height));
   overflow: hidden;
-  display: flex;
-  flex-direction: column;
 }
 
-html.alerts-expanded .app-content-inner {
+html.alerts-expanded .ui-content {
   max-width: none;
   flex: 1 1 auto;
   min-height: 0;
-  height: 100%;
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  padding-top: 10px;
-  padding-bottom: 10px;
+  padding-top: var(--ui-space-3);
+  padding-bottom: var(--ui-space-3);
 }
 
 html.alerts-expanded .dashboard-page {
   flex: 1 1 auto;
   min-height: 0;
-  height: 100%;
   overflow: hidden;
-  gap: 10px;
+  gap: var(--ui-space-3);
 }
 
-html.alerts-expanded .dashboard-page > .dashboard-hero,
-html.alerts-expanded .dashboard-page > .ant-alert {
+html.alerts-expanded .dashboard-page > .ant-alert,
+html.alerts-expanded .ui-sidebar {
   display: none;
 }
 
 html.alerts-expanded .dashboard-page > .filter-toolbar-card {
-  position: static;
-  top: auto;
-  z-index: 1;
   flex: 0 0 auto;
-  backdrop-filter: none;
-}
-
-html.alerts-expanded .dashboard-page > .filter-toolbar-card > .ant-card-body {
-  padding: 12px 16px !important;
-}
-
-html.alerts-expanded .filter-toolbar-head {
-  margin-bottom: 8px;
-}
-
-html.alerts-expanded .filter-toolbar-divider.ant-divider {
-  margin: 8px 0;
 }
 
 html.alerts-expanded .dashboard-page > .alerts-card.ant-card,
@@ -1504,6 +1477,30 @@ html.alerts-expanded .alerts-expanded-count {
 
 .alerts-table-host .alerts-table {
   height: 100%;
+}
+
+.alerts-cluster-cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.alerts-cluster-cell > a,
+.alerts-cluster-name,
+.alerts-cluster-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.alerts-cluster-name {
+  font-weight: 600;
+}
+
+.alerts-cluster-meta {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--ui-text-xs);
+  color: var(--ui-text-secondary);
 }
 
 .alerts-pagination {
@@ -3268,8 +3265,18 @@ label.ui-field-inline {
   cursor: pointer;
 }
 
+.findings-summary button.severity-total-pill:hover {
+  background: var(--ui-surface-hover);
+}
+
+/* The totals are the severity filter: chosen ones filled, the rest dimmed. */
 .findings-summary button.severity-total-pill.is-active {
   background: var(--ui-surface-hover);
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+
+.findings-summary .severity-totals-row:has(.is-active) button.severity-total-pill:not(.is-active) {
+  opacity: 0.55;
 }
 
 .findings-summary button.severity-total-pill:focus-visible {

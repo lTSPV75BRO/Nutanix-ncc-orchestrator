@@ -275,7 +275,7 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
   /**
    * One-click install: forces apply=true and print_only=false so the schedule
    * is actually installed on the host scheduler. Used by the "Not installed"
-   * alert in the Scheduler Health card.
+   * alert in the Scheduler health card.
    */
   const installNow = async () => {
     if (!payload.config) {
@@ -526,16 +526,16 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
           </Space>
 
           <Space size={8} wrap>
-            <Button icon={<ReloadOutlined />} onClick={load}>Load Current</Button>
-            <Button type="primary" icon={<SaveOutlined />} onClick={save} loading={saving}>Save Schedule</Button>
-            <Button icon={<HeartOutlined />} onClick={() => loadHealth(false)}>Refresh Health</Button>
+            <Button icon={<ReloadOutlined />} onClick={load}>Load saved</Button>
+            <Button type="primary" icon={<SaveOutlined />} onClick={save} loading={saving}>Save schedule</Button>
+            <Button icon={<HeartOutlined />} onClick={() => loadHealth(false)}>Refresh health</Button>
           </Space>
         </Form>
       </Card>
 
       <Card className="page-card">
         <Typography.Title level={4} className="section-title">
-          Scheduler Health
+          Scheduler health
         </Typography.Title>
         <Typography.Text type="secondary" className="section-subtitle">
           Authoritative status from the host scheduler ({health?.detector || "crontab"}). Saved means the UI has stored
@@ -706,7 +706,7 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
             </Descriptions>
           </>
         ) : (
-          <Typography.Text type="secondary">Click "Refresh Health" to load scheduler status.</Typography.Text>
+          <Typography.Text type="secondary">Click "Refresh health" to load scheduler status.</Typography.Text>
         )}
       </Card>
       <SaveBar

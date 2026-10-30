@@ -28,7 +28,7 @@ export function DrilldownDiffPanel({ drilldownDiff, clusterNameMap }: Props) {
     { title: "Cluster", dataIndex: "cluster", key: "cluster" },
     { title: "New FAIL", dataIndex: "newFail", key: "newFail", width: 110 },
     { title: "Resolved FAIL", dataIndex: "resolvedFail", key: "resolvedFail", width: 130 },
-    { title: "Severity Changes", dataIndex: "severityChanges", key: "severityChanges", width: 140 },
+    { title: "Severity changes", dataIndex: "severityChanges", key: "severityChanges", width: 140 },
     {
       title: "Net",
       dataIndex: "net",
@@ -45,34 +45,34 @@ export function DrilldownDiffPanel({ drilldownDiff, clusterNameMap }: Props) {
   return (
     <Card className="page-card">
       <Typography.Title level={4} className="section-title">
-        Drilldown Diff
-      </Typography.Title>
+        Changes since the previous run
+</Typography.Title>
       <Typography.Text type="secondary" className="section-subtitle">
         Compare signal between current and previous run to spot newly introduced failures quickly.
       </Typography.Text>
       <Row gutter={[12, 12]} style={{ marginTop: 8, marginBottom: 8 }}>
         <Col xs={24} md={6}>
           <Card size="small">
-            <Statistic title="New FAIL" value={newFailCount} styles={{ content: { color: "#f43f5e" } }} />
+            <Statistic title="New FAIL" value={newFailCount} styles={{ content: { color: "var(--ui-fail-text)" } }} />
           </Card>
         </Col>
         <Col xs={24} md={6}>
           <Card size="small">
-            <Statistic title="Resolved FAIL" value={resolvedFailCount} styles={{ content: { color: "#22c55e" } }} />
+            <Statistic title="Resolved FAIL" value={resolvedFailCount} styles={{ content: { color: "var(--ui-ok-text)" } }} />
           </Card>
         </Col>
         <Col xs={24} md={6}>
           <Card size="small">
             <Statistic
-              title="Net FAIL Change"
+              title="Net FAIL change"
               value={netFail}
-              styles={{ content: { color: netFail > 0 ? "#f43f5e" : netFail < 0 ? "#22c55e" : undefined } }}
+              styles={{ content: { color: netFail > 0 ? "var(--ui-fail-text)" : netFail < 0 ? "var(--ui-ok-text)" : undefined } }}
             />
           </Card>
         </Col>
         <Col xs={24} md={6}>
           <Card size="small">
-            <Statistic title="Impacted Clusters" value={clusters.length} />
+            <Statistic title="Clusters affected" value={clusters.length} />
           </Card>
         </Col>
       </Row>

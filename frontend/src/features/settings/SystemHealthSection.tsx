@@ -198,7 +198,7 @@ export function SystemHealthSection() {
     if (key === "api" || key === "supervisor" || key === "runs") return "Heal now";
     if (key === "schedule") return "Open Schedule";
     if (key === "backups") return "Open Backups";
-    return "Open Fix Area";
+    return "Open fix";
   };
 
   const runReadinessFix = (key: string, path: string) => {
@@ -352,7 +352,7 @@ export function SystemHealthSection() {
             <div className={`connection-orb ${overall === "ok" ? "ok" : "err"}`}>{overallMeta.icon}</div>
             <div>
               <Typography.Title level={4} style={{ margin: 0 }}>
-                System Health
+                Overall health
               </Typography.Title>
               <Typography.Text type="secondary">
                 {isKubernetes
@@ -486,7 +486,7 @@ export function SystemHealthSection() {
         <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <Space align="center" style={{ justifyContent: "space-between", width: "100%" }}>
             <Typography.Title level={5} style={{ margin: 0 }}>
-              Release Readiness Gates
+              Release readiness gates
             </Typography.Title>
             <Tag color={readinessPass === readinessChecks.length ? "success" : "warning"}>
               {readinessPass}/{readinessChecks.length} pass
@@ -539,7 +539,7 @@ export function SystemHealthSection() {
         <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <Space align="center" style={{ justifyContent: "space-between", width: "100%" }} wrap>
             <Typography.Title level={5} style={{ margin: 0 }}>
-              Guided Remediation
+              Guided remediation
             </Typography.Title>
             <Space wrap>
               <Segmented
@@ -597,7 +597,7 @@ export function SystemHealthSection() {
                     {c.hint ? <Typography.Text type="secondary">{c.hint}</Typography.Text> : null}
                     <Space wrap>
                       <Link to={remediationTarget(c.category)}>
-                        <Button size="small">Open Fix Area</Button>
+                        <Button size="small">Open fix</Button>
                       </Link>
                       <Button
                         size="small"

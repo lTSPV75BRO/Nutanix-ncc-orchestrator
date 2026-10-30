@@ -6,6 +6,7 @@ import {
   Descriptions,
   Drawer,
   Empty,
+  Grid,
   Input,
   Pagination,
   Space,
@@ -323,7 +324,7 @@ function PCAlertInspector({
           {prismURL ? (
             <div style={{ marginTop: 8 }}>
               <a href={prismURL} target="_blank" rel="noreferrer">
-                Open Prism
+                Open in Prism
               </a>
             </div>
           ) : null}
@@ -397,6 +398,44 @@ function displayPCStatus(raw: Record<string, unknown>): string {
   if (status === "OPEN") return "—";
   return String(raw.status ?? "—").replace(/_/g, " ");
 }
+
+/**
+ * Cluster name (linked to Prism when known) over one muted line with the
+ * address and versions, so a row stays two lines tall. Both lines truncate
+ * with the full text on hover.
+ */
+function ClusterCell({ row, url, subtitle }: { row: RowRecord; url?: string; subtitle?: string }) {
+  const meta = [subtitle, row.clusterVersion, row.nccVersion ? `NCC ${row.nccVersion}` : ""].filter(Boolean).join(" · ");
+  return (
+    <div className="alerts-cluster-cell">
+      {url ? (
+        <a
+          href={url}
+          target="_blank"
+          rel="noreferrer"
+          className="cluster-link kb-like-link"
+          title={row.clusterName}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {row.clusterName}
+        </a>
+      ) : (
+        <span className="alerts-cluster-name" title={row.clusterName}>
+          {row.clusterName}
+        </span>
+      )}
+      {meta ? (
+        <span className="alerts-cluster-meta" title={meta}>
+          {meta}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+const SELECTION_COLUMN_WIDTH = 42;
+const DETAIL_MIN_WIDTH = 260;
+const PC_WIDE_ONLY_COLUMNS = new Set(["entityType", "impactType"]);
 
 const ALERTS_TABLE_MIN_Y = 240;
 const ALERTS_TABLE_FALLBACK_Y = 620;
@@ -620,6 +659,7 @@ export function ClusterTable({
   const [handlingNote, setHandlingNote] = useState("");
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
+  const screens = Grid.useBreakpoint();
 
   const rows = useMemo<RowRecord[]>(() => {
     const needle = filterText.toLowerCase();
@@ -906,17 +946,19 @@ export function ClusterTable({
     title: "Alert",
     dataIndex: "alert",
     key: "alert",
-    width: 280,
+    width: 260,
     sorter: (a: RowRecord, b: RowRecord) => a.alert.localeCompare(b.alert),
     render: (value: string, row: RowRecord) => (
       <Space orientation="vertical" size={2} style={{ width: "100%" }}>
         <Typography.Text strong style={{ wordBreak: "break-word" }}>
           {value}
         </Typography.Text>
-        <Space size={4} wrap>
-          {row.isChanged ? <Tag color="gold" style={{ margin: 0 }}>changed</Tag> : null}
-          {row.isFlaky ? <Tag color="purple" style={{ margin: 0 }}>flaky</Tag> : null}
-        </Space>
+        {row.isChanged || row.isFlaky ? (
+          <Space size={4} wrap>
+            {row.isChanged ? <Tag color="gold" style={{ margin: 0 }}>changed</Tag> : null}
+            {row.isFlaky ? <Tag color="purple" style={{ margin: 0 }}>flaky</Tag> : null}
+          </Space>
+        ) : null}
       </Space>
     ),
   };
@@ -924,7 +966,7 @@ export function ClusterTable({
     title: "Severity",
     dataIndex: "severity",
     key: "severity",
-    width: 110,
+    width: 96,
     sorter: (a: RowRecord, b: RowRecord) => severityRank[a.severity] - severityRank[b.severity],
     defaultSortOrder: "descend" as const,
     render: (value: Severity, row: RowRecord) => {
@@ -936,7 +978,7 @@ export function ClusterTable({
   const actionColumn = {
     title: " ",
     key: "actions",
-    width: 50,
+    width: 44,
     align: "center" as const,
     render: (_: unknown, row: RowRecord) => (
       <Tooltip title="Open details">
@@ -959,27 +1001,11 @@ export function ClusterTable({
       title: "Cluster",
       dataIndex: "clusterName",
       key: "clusterName",
-      width: 240,
+      width: 210,
       sorter: (a, b) => a.clusterName.localeCompare(b.clusterName),
-      render: (_, row) => {
-        const url = clusterPrismURL(row.cluster, clusterNameMap);
-        return (
-          <Space orientation="vertical" size={0}>
-            {url ? (
-              <a href={url} target="_blank" rel="noreferrer" className="cluster-link kb-like-link" onClick={(e) => e.stopPropagation()}>
-                {row.clusterName}
-              </a>
-            ) : <Typography.Text strong>{row.clusterName}</Typography.Text>}
-            <Typography.Text type="secondary" style={{ fontSize: 12 }} className="mono">{row.cluster}</Typography.Text>
-            {(row.clusterVersion || row.nccVersion) && (
-              <Space size={4} wrap style={{ marginTop: 2 }}>
-                {row.clusterVersion ? <Tag style={{ fontSize: 11, lineHeight: "16px", padding: "0 6px" }}>{row.clusterVersion}</Tag> : null}
-                {row.nccVersion ? <Tag style={{ fontSize: 11, lineHeight: "16px", padding: "0 6px" }}>NCC {row.nccVersion}</Tag> : null}
-              </Space>
-            )}
-          </Space>
-        );
-      },
+      render: (_, row) => (
+        <ClusterCell row={row} url={clusterPrismURL(row.cluster, clusterNameMap)} subtitle={row.cluster} />
+      ),
     },
     titleColumn,
     {
@@ -1005,7 +1031,7 @@ export function ClusterTable({
     {
       title: "Handling",
       key: "handling",
-      width: 168,
+      width: 120,
       render: (_, row) => {
         const mark = markFor(row);
         if (mark?.status === "acknowledged") {
@@ -1032,73 +1058,42 @@ export function ClusterTable({
       title: "Title",
       dataIndex: "alert",
       key: "title",
-      width: 280,
+      width: 250,
       sorter: (a, b) => a.alert.localeCompare(b.alert),
     },
     severityColumn,
     {
-      title: "Entity Name",
+      title: "Entity name",
       dataIndex: "entityName",
       key: "entityName",
-      width: 220,
+      width: 190,
       sorter: (a, b) => a.entityName.localeCompare(b.entityName),
     },
     {
-      title: "Entity Type",
+      title: "Entity type",
       dataIndex: "entityType",
       key: "entityType",
-      width: 150,
+      width: 130,
     },
     {
       title: "Cluster",
       dataIndex: "clusterName",
       key: "clusterName",
-      width: 240,
+      width: 200,
       sorter: (a, b) => a.clusterName.localeCompare(b.clusterName),
       render: (_, row) => {
         const url = clusterPrismURL(row.cluster, clusterNameMap);
         const subtitle = row.clusterIP && row.clusterIP !== row.clusterName
           ? row.clusterIP
           : (row.cluster && row.cluster !== row.clusterName ? row.cluster : "");
-        return (
-          <Space orientation="vertical" size={0}>
-            {url ? (
-              <a
-                href={url}
-                target="_blank"
-                rel="noreferrer"
-                className="cluster-link kb-like-link"
-                onClick={(e) => e.stopPropagation()}
-              >
-                {row.clusterName}
-              </a>
-            ) : (
-              <Typography.Text strong>{row.clusterName}</Typography.Text>
-            )}
-            {subtitle ? (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }} className="mono">
-                {subtitle}
-              </Typography.Text>
-            ) : null}
-            {(row.clusterVersion || row.nccVersion) && (
-              <Space size={4} wrap style={{ marginTop: 2 }}>
-                {row.clusterVersion ? (
-                  <Tag style={{ fontSize: 11, lineHeight: "16px", padding: "0 6px" }}>{row.clusterVersion}</Tag>
-                ) : null}
-                {row.nccVersion ? (
-                  <Tag style={{ fontSize: 11, lineHeight: "16px", padding: "0 6px" }}>NCC {row.nccVersion}</Tag>
-                ) : null}
-              </Space>
-            )}
-          </Space>
-        );
+        return <ClusterCell row={row} url={url} subtitle={subtitle} />;
       },
     },
     {
-      title: "Last Occurred",
+      title: "Last occurred",
       dataIndex: "lastOccurred",
       key: "lastOccurred",
-      width: 190,
+      width: 170,
       sorter: (a, b) => a.lastOccurredTime - b.lastOccurredTime,
       render: (value: string) => (value === "—" ? value : formatDateTime(value)),
     },
@@ -1106,24 +1101,33 @@ export function ClusterTable({
       title: "Status",
       dataIndex: "status",
       key: "status",
-      width: 130,
+      width: 120,
     },
     {
       title: "Resolved",
       dataIndex: "resolved",
       key: "resolved",
-      width: 110,
+      width: 96,
       render: (value: string) => <Tag color={value === "Yes" ? "green" : "blue"}>{value}</Tag>,
     },
     {
-      title: "Impact Type",
+      title: "Impact type",
       dataIndex: "impactType",
       key: "impactType",
-      width: 150,
+      width: 130,
     },
     actionColumn,
   ];
-  const columns = alertSource === "PC" ? pcColumns : nccColumns;
+  // Below 1600px (a 14" laptop) the PC table drops the two least-used
+  // columns rather than scroll sideways; both stay in the details drawer.
+  const columns =
+    alertSource === "PC"
+      ? pcColumns.filter((c) => screens.xxl || !PC_WIDE_ONLY_COLUMNS.has(String(c.key)))
+      : nccColumns;
+  // Fixed columns plus room for the flexible Detail column (and checkboxes).
+  const scrollX =
+    columns.reduce((sum, c) => sum + (typeof c.width === "number" ? c.width : DETAIL_MIN_WIDTH), 0) +
+    (alertSource === "PC" ? 0 : SELECTION_COLUMN_WIDTH);
 
   const copyDetail = async (text: string) => {
     try {
@@ -1166,16 +1170,8 @@ export function ClusterTable({
             {shownRows.length !== totalRows ? ` · ${totalRows.toLocaleString()} match the dashboard filters` : ""}
           </Typography.Text>
         </div>
+        {/* Severity totals sit above the filters; no second copy here. */}
         <Space size={[8, 8]} wrap className="alerts-summary-pills">
-          <Tag color="error" className="severity-pill">FAIL {fail}</Tag>
-          <Tag color="warning" className="severity-pill">WARN {warn}</Tag>
-          <Tag color="volcano" className="severity-pill">ERR {err}</Tag>
-          <Tag color="processing" className="severity-pill">INFO {info}</Tag>
-          {unknown > 0 ? (
-            <Tag className="severity-pill severity-pill-unknown" color="default">
-              UNKNOWN {unknown}
-            </Tag>
-          ) : null}
           <Tooltip title={density === "compact" ? "Switch to comfortable rows" : "Switch to compact rows"}>
             <Button
               size="small"
@@ -1308,13 +1304,13 @@ export function ClusterTable({
                   : {
                       selectedRowKeys: selectedKeys,
                       preserveSelectedRowKeys: true,
-                      columnWidth: 42,
+                      columnWidth: SELECTION_COLUMN_WIDTH,
                       onChange: (keys) => setSelectedKeys(keys.map(String)),
                     }
               }
               pagination={false}
               size={density === "compact" ? "small" : "middle"}
-              scroll={{ x: 1200, y: tableY }}
+              scroll={{ x: scrollX, y: tableY }}
             />
           </div>
           {expanded ? (
@@ -1382,7 +1378,7 @@ export function ClusterTable({
                   href={clusterPrismURL(drawerRow.cluster, clusterNameMap, drawerRow.clusterName)}
                   target="_blank"
                 >
-                  Open Prism
+                  Open in Prism
                 </Button>
               ) : null}
               {drawerRow.source === "PC" && drawerRow.kb ? (

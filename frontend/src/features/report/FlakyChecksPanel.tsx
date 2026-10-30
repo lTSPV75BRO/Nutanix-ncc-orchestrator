@@ -50,25 +50,25 @@ export function FlakyChecksPanel({ flakyChecks, clusterNameMap }: Props) {
   return (
     <Card className="page-card">
       <Typography.Title level={4} className="section-title">
-        Flaky Checks
-      </Typography.Title>
+        Flaky checks
+</Typography.Title>
       <Typography.Text type="secondary" className="section-subtitle">
         Highlights checks that frequently change state across recent runs.
       </Typography.Text>
       <Row gutter={[12, 12]} style={{ marginTop: 8, marginBottom: 8 }}>
         <Col xs={24} md={8}>
           <Card size="small">
-            <Statistic title="Total Flaky Checks" value={toNumber(data.total_flaky_checks, checks.length)} />
+            <Statistic title="Flaky checks" value={toNumber(data.total_flaky_checks, checks.length)} />
           </Card>
         </Col>
         <Col xs={24} md={8}>
           <Card size="small">
-            <Statistic title="Lookback Runs" value={toNumber(data.lookback_runs)} />
+            <Statistic title="Runs compared" value={toNumber(data.lookback_runs)} />
           </Card>
         </Col>
         <Col xs={24} md={8}>
           <Card size="small">
-            <Statistic title="Min Transitions Threshold" value={toNumber(data.min_transitions)} />
+            <Statistic title="State changes to count as flaky" value={toNumber(data.min_transitions)} />
           </Card>
         </Col>
       </Row>

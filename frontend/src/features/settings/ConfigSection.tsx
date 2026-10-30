@@ -46,7 +46,7 @@ import type { ConfigBatchOperation, ConfigListItem, ConfigRelatedFileBatchOperat
 import { PolicyGateBuilderSection } from "./PolicyGateBuilderSection";
 import { SecretsMigrationModal } from "./SecretsMigrationModal";
 import { notify } from "../../notify";
-import { SaveBar } from "../../ui";
+import { SaveBar, middleEllipsis } from "../../ui";
 import { SECTIONS, KNOWN_KEYS, type FieldDef, type SectionDef } from "./configSchema";
 import defaultConfigTemplate from "../../../../example_config.yaml?raw";
 
@@ -854,12 +854,17 @@ export function ConfigSection({ onError }: Props) {
               <SettingOutlined className="section-header-icon lg" />
               <div>
                 <Typography.Title level={4} style={{ margin: 0 }}>
-                  Application Config
+                  Application config
                 </Typography.Title>
                 <Typography.Text type="secondary" style={{ fontSize: 13 }}>
                   {configPath ? (
                     <>
-                      Editing <Typography.Text code copyable={{ text: configPath }}>{configPath}</Typography.Text>
+                      Editing{" "}
+                      <Tooltip title={configPath}>
+                        <Typography.Text code copyable={{ text: configPath }}>
+                          {middleEllipsis(configPath, 48)}
+                        </Typography.Text>
+                      </Tooltip>
                     </>
                   ) : (
                     "Edit your YAML config below."
@@ -892,7 +897,7 @@ export function ConfigSection({ onError }: Props) {
                   setConfigDialogOpen(true);
                 }}
               >
-                Manage Config Files
+                Config files
               </Button>
               <Tooltip title="Revert unsaved changes (⇧⌘Z / Ctrl+Shift+Z)">
                 <Button icon={<RocketOutlined />} onClick={revert} disabled={!dirty}>
@@ -902,7 +907,7 @@ export function ConfigSection({ onError }: Props) {
               <Tooltip title="Save config (⌘S / Ctrl+S)">
                 <Badge count={dirtyCount} offset={[-2, 4]} size="small">
                   <Button type="primary" icon={<SaveOutlined />} onClick={save} disabled={!dirty || Boolean(parseError)}>
-                    Save Config
+                    Save
                   </Button>
                 </Badge>
               </Tooltip>
@@ -961,7 +966,7 @@ export function ConfigSection({ onError }: Props) {
               {otherKeys.length > 0 ? (
                 <Card className="page-card" id="config-section-other">
                   <Typography.Title level={4} style={{ margin: 0 }}>
-                    Other Settings
+                    Other settings
                   </Typography.Title>
                   <Typography.Text type="secondary" className="section-subtitle">
                     Keys present in your YAML that aren't covered by the form. Switch to YAML mode to edit.
@@ -999,7 +1004,7 @@ export function ConfigSection({ onError }: Props) {
       {/* Linked files */}
       <Card className="page-card">
         <Typography.Title level={4} className="section-title">
-          Linked Files
+          Linked files
         </Typography.Title>
         <Typography.Text type="secondary" className="section-subtitle">
           Files referenced by the active config. Edit them in place without leaving Settings.
@@ -1028,7 +1033,7 @@ export function ConfigSection({ onError }: Props) {
               height={160}
             />
             <Button type="primary" onClick={() => void bulkAddOrUpdateFiles()}>
-              Add/Update Multiple Files
+              Add or update files
             </Button>
           </Space>
         </Card>
@@ -1048,7 +1053,7 @@ export function ConfigSection({ onError }: Props) {
               placeholder="Select files to remove"
             />
             <Button danger onClick={() => void bulkRemoveFiles()}>
-              Remove Selected Files
+              Remove selected files
             </Button>
           </Space>
         </Card>
@@ -1089,7 +1094,7 @@ export function ConfigSection({ onError }: Props) {
                 Reload
               </Button>
               <Button size="small" type="primary" icon={<SaveOutlined />} onClick={saveRelatedFile} disabled={dirtyFile}>
-                Save File
+                Save file
               </Button>
             </Space>
             <CodeEditor
@@ -1113,7 +1118,7 @@ export function ConfigSection({ onError }: Props) {
         onClose={() => setSecretsModalOpen(false)}
       />
       <Modal
-        title="Manage Config Files"
+        title="Config files"
         open={configDialogOpen}
         onCancel={() => setConfigDialogOpen(false)}
         footer={null}

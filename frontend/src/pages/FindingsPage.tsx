@@ -10,7 +10,6 @@ import {
   Button,
   Card,
   Empty,
-  Flex,
   Input,
   Select,
   Segmented,
@@ -19,7 +18,6 @@ import {
   Tag,
   Tooltip,
   Typography,
-  Divider,
 } from "antd";
 import {
   CheckCircleOutlined,
@@ -28,7 +26,6 @@ import {
   CloseCircleOutlined,
   CopyOutlined,
   ExclamationCircleOutlined,
-  FilterOutlined,
   InfoCircleOutlined,
   LoadingOutlined,
   PlayCircleOutlined,
@@ -495,16 +492,7 @@ export function FindingsPage() {
 
         {/* FILTER TOOLBAR */}
         <Card className="page-card filter-toolbar-card">
-          <Typography.Title level={4} className="tile-title" style={{ marginBottom: 8 }}>
-            Alert Filters
-          </Typography.Title>
-          <Skeleton.Input active block style={{ height: 32 }} />
-          <Space size={[6, 6]} wrap style={{ marginTop: 12 }}>
-            <Skeleton.Button active size="small" />
-            <Skeleton.Button active size="small" />
-            <Skeleton.Button active size="small" />
-            <Skeleton.Button active size="small" />
-          </Space>
+          <Skeleton.Input active block />
         </Card>
 
         {/* MAIN TABLE */}
@@ -576,25 +564,21 @@ export function FindingsPage() {
       )}
 
       {/* FILTER TOOLBAR */}
+      {/* One row of filters; severity is filtered with the totals above. */}
       <Card className="page-card filter-toolbar-card">
-        <Flex align="center" justify="space-between" className="filter-toolbar-head">
-          <Flex align="center" gap={8}>
-            <FilterOutlined className="filter-toolbar-icon" />
-            <Typography.Title level={4} className="tile-title">Alert Filters</Typography.Title>
-          </Flex>
-          <Flex align="center" gap={8}>
-            {filtersActive ? (
-              <Button type="text" danger icon={<ClearOutlined />} onClick={clearFilters} size="small">
-                Reset filters
-              </Button>
-            ) : null}
-            <Button type="text" icon={<CopyOutlined />} onClick={() => void copyDashboardLink()} size="small">
-              Copy link
-            </Button>
-          </Flex>
-        </Flex>
-        <Flex gap={12} wrap="wrap" align="center">
-          <div style={{ flex: "1 1 280px", minWidth: 260 }}>
+        <div className="findings-toolbar">
+          <Tooltip title="Prism Central alerts are in beta and can be turned off in Settings → Features.">
+            <Segmented
+              aria-label="Alert source"
+              value={alertSource}
+              onChange={(value) => setAlertSource(value as AlertSource)}
+              options={[
+                { label: "NCC", value: "NCC" },
+                { label: "PC · Beta", value: "PC" },
+              ]}
+            />
+          </Tooltip>
+          <div className="findings-toolbar-search">
             <Input
               id="alerts-search"
               name="alerts-search"
@@ -612,7 +596,7 @@ export function FindingsPage() {
               }
             />
           </div>
-          <div style={{ flex: "1 1 200px", minWidth: 180 }}>
+          <div className="findings-toolbar-clusters">
             <Select
               id="dashboard-cluster-filter"
               aria-label="Filter alerts by cluster"
@@ -626,54 +610,43 @@ export function FindingsPage() {
               options={clusterOptions}
             />
           </div>
-          <div style={{ width: 140 }}>
+          {alertSource === "PC" && !pcBlocked ? (
+            <Select
+              aria-label="PC resolved filter"
+              className="findings-toolbar-select"
+              value={pcResolvedFilter}
+              onChange={(value) => setPcResolvedFilter(value as "all" | "No" | "Yes")}
+              options={[
+                { value: "No", label: "Unresolved" },
+                { value: "Yes", label: "Resolved" },
+                { value: "all", label: "All statuses" },
+              ]}
+            />
+          ) : (
             <Select
               id="dashboard-compare-mode"
               aria-label="Compare mode"
-              style={{ width: "100%" }}
+              className="findings-toolbar-select"
               value={compareMode}
               onChange={(value) => setCompareMode(value as CompareMode)}
               options={[
-                { value: "all", label: "All Rows" },
-                { value: "changed", label: "Changed Only" },
-                { value: "flaky", label: "Flaky Only" },
+                { value: "all", label: "All rows" },
+                { value: "changed", label: "Changed only" },
+                { value: "flaky", label: "Flaky only" },
               ]}
             />
+          )}
+          <div className="findings-toolbar-actions">
+            {filtersActive ? (
+              <Button type="text" icon={<ClearOutlined />} onClick={clearFilters}>
+                Reset
+              </Button>
+            ) : null}
+            <Button type="text" icon={<CopyOutlined />} onClick={() => void copyDashboardLink()}>
+              Copy link
+            </Button>
           </div>
-        </Flex>
-        <Flex align="center" gap={8} wrap="wrap" style={{ marginTop: 16 }}>
-          <Typography.Text type="secondary" className="tile-subtitle" style={{ marginRight: 4 }}>Severity:</Typography.Text>
-          <Tag.CheckableTag checked={severityFilters.length === 0} onChange={(checked) => checked && setSeverityFilters([])}>
-            ALL
-          </Tag.CheckableTag>
-          {SEVERITY_META.map((sm) => (
-            <Tag.CheckableTag key={sm.key} checked={severityFilters.includes(sm.key)} onChange={() => toggleSeverity(sm.key)}>
-              <Space size={4}>{sm.icon}<span>{sm.label}</span></Space>
-            </Tag.CheckableTag>
-          ))}
-        </Flex>
-        <Divider className="filter-toolbar-divider" />
-        <Flex align="center" justify="space-between" wrap="wrap" gap={16}>
-          <Flex align="center" gap={12}>
-            <Typography.Text strong className="filter-toolbar-label">Alert Type:</Typography.Text>
-            <Tooltip title="Beta. Prism Central alerts can be turned off in Settings → Features.">
-              <Segmented aria-label="Alert source" size="middle" value={alertSource} onChange={(value) => setAlertSource(value as AlertSource)} options={[
-                { label: "NCC", value: "NCC" },
-                { label: "PC · Beta", value: "PC" },
-              ]} />
-            </Tooltip>
-          </Flex>
-          {alertSource === "PC" && !pcBlocked ? (
-            <Flex align="center" gap={8}>
-              <Typography.Text type="secondary" className="tile-subtitle">PC Alerts Filter:</Typography.Text>
-              <Select aria-label="PC resolved filter" value={pcResolvedFilter} onChange={(value) => setPcResolvedFilter(value as "all" | "No" | "Yes")} style={{ width: 160 }} options={[
-                { value: "No", label: "Resolved: No" },
-                { value: "Yes", label: "Resolved: Yes" },
-                { value: "all", label: "All Statuses" },
-              ]} />
-            </Flex>
-          ) : null}
-        </Flex>
+        </div>
       </Card>
 
       {alertSource === "PC" && !pcBlocked && pcAllAlertsQuery.isFetching ? (
@@ -832,7 +805,7 @@ export function FindingsPage() {
           severityFilters={severityFilters}
           alertSource={alertSource}
           pcResolvedFilter={pcResolvedFilter}
-          compareMode={compareMode}
+          compareMode={alertSource === "PC" ? "all" : compareMode}
           onSummaryChange={setTableSummary}
           dispositions={nccDispositionsQuery.data?.items}
           dispositionPending={setNCCDisposition.isPending}

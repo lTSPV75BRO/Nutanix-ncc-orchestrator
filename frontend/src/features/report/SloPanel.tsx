@@ -46,13 +46,13 @@ export function SloPanel({ sloDashboard, nccClusterSummary, regressionSummary, c
   const columns: ColumnsType<(typeof clusters)[number]> = [
     { title: "Cluster", dataIndex: "cluster", key: "cluster" },
     {
-      title: "Health Score",
+      title: "Health score",
       key: "health",
       width: 220,
       render: (_, row) => <Progress percent={Number(row.health.toFixed(1))} size="small" status={row.health < 75 ? "exception" : row.health < 90 ? "active" : "success"} />,
     },
     {
-      title: "Fail Rate",
+      title: "Fail rate",
       key: "failRate",
       width: 130,
       render: (_, row) => `${row.failRate.toFixed(1)}%`,
@@ -85,22 +85,22 @@ export function SloPanel({ sloDashboard, nccClusterSummary, regressionSummary, c
         </Col>
         <Col xs={24} md={6}>
           <Card size="small">
-            <Statistic title="Avg Health Score" value={Number(avgHealth.toFixed(1))} />
+            <Statistic title="Average health score" value={Number(avgHealth.toFixed(1))} />
           </Card>
         </Col>
         <Col xs={24} md={6}>
           <Card size="small">
-            <Statistic title="Avg Fail Rate" value={Number(avgFailRate.toFixed(2))} suffix="%" />
+            <Statistic title="Average fail rate" value={Number(avgFailRate.toFixed(2))} suffix="%" />
           </Card>
         </Col>
         <Col xs={24} md={6}>
           <Card size="small">
             <Statistic
-              title="Delta FAIL Total"
+              title="Change in FAIL total"
               value={toNumber(reg.delta_fail_total)}
               styles={{
                 content: {
-                  color: toNumber(reg.delta_fail_total) > 0 ? "#f43f5e" : toNumber(reg.delta_fail_total) < 0 ? "#22c55e" : undefined,
+                  color: toNumber(reg.delta_fail_total) > 0 ? "var(--ui-fail-text)" : toNumber(reg.delta_fail_total) < 0 ? "var(--ui-ok-text)" : undefined,
                 },
               }}
             />
@@ -108,27 +108,27 @@ export function SloPanel({ sloDashboard, nccClusterSummary, regressionSummary, c
         </Col>
       </Row>
 
-      <Typography.Title level={5}>SLO Dashboard</Typography.Title>
+      <Typography.Title level={5}>SLO by cluster</Typography.Title>
       {clusters.length === 0 ? (
         <Empty description="No SLO cluster data found." />
       ) : (
         <Table size="small" columns={columns} dataSource={clusters} pagination={{ pageSize: 8, showSizeChanger: false }} />
       )}
 
-      <Typography.Title level={5}>Regression Summary</Typography.Title>
+      <Typography.Title level={5}>Regression summary</Typography.Title>
       <Row gutter={[12, 12]}>
         <Col xs={24} md={8}>
-          <Card size="small" title="Increased Clusters">
+          <Card size="small" title="More failures">
             {increased.length ? <List size="small" dataSource={increased} renderItem={(item) => <List.Item>{item}</List.Item>} /> : <Typography.Text type="secondary">None</Typography.Text>}
           </Card>
         </Col>
         <Col xs={24} md={8}>
-          <Card size="small" title="Decreased Clusters">
+          <Card size="small" title="Fewer failures">
             {decreased.length ? <List size="small" dataSource={decreased} renderItem={(item) => <List.Item>{item}</List.Item>} /> : <Typography.Text type="secondary">None</Typography.Text>}
           </Card>
         </Col>
         <Col xs={24} md={8}>
-          <Card size="small" title="Unchanged Clusters">
+          <Card size="small" title="Unchanged">
             {unchanged.length ? <List size="small" dataSource={unchanged} renderItem={(item) => <List.Item>{item}</List.Item>} /> : <Typography.Text type="secondary">None</Typography.Text>}
           </Card>
         </Col>

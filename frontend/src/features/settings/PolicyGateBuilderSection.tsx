@@ -142,7 +142,7 @@ export function PolicyGateBuilderSection({ configContent, onApplyPolicyGates }: 
         </span>
         <div>
           <Typography.Title level={4} style={{ margin: 0 }}>
-            Policy Gates Builder
+            Policy gates
           </Typography.Title>
           <Typography.Text type="secondary" style={{ fontSize: 13 }}>
             Compose conditions that fail the run when thresholds are exceeded. The rules are serialized into the{" "}

@@ -291,7 +291,7 @@ export function AuditLogSection({ onError }: Props) {
         </span>
         <div>
           <Typography.Title level={4} style={{ margin: 0 }}>
-            Audit Log
+            Recorded changes
           </Typography.Title>
           <Typography.Text type="secondary" style={{ fontSize: 13 }}>
             Persisted JSONL trail of config saves, schedule changes, and run triggers. Useful for change reviews and support tickets.
