@@ -5,7 +5,7 @@ vi.mock("@monaco-editor/react", () => ({
   loader: { config: vi.fn() },
 }));
 
-vi.mock("monaco-editor", () => ({
+vi.mock("./monacoSlim", () => ({
   editor: {
     defineTheme: vi.fn(),
     setTheme: vi.fn(),

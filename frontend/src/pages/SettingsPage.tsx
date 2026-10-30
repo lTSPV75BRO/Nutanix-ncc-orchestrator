@@ -368,11 +368,11 @@ export function SettingsPage({ isAdmin = true, section }: { isAdmin?: boolean; s
   );
 
   useEffect(() => {
-    if (health.error) notifyError(health.error, "Failed to fetch API health");
+    if (health.error) notifyError(health.error, "Could not reach the API");
   }, [health.error]);
 
   useEffect(() => {
-    if (report.error) notifyError(report.error, "Failed to fetch report data");
+    if (report.error) notifyError(report.error, "Could not load report data");
   }, [report.error]);
 
   const apiOk = (health.data as { status?: string } | undefined)?.status === "ok";

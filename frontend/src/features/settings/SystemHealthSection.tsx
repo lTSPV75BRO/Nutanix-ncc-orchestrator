@@ -163,8 +163,8 @@ export function SystemHealthSection() {
   const overallMeta = STATUS_META[overall] ?? STATUS_META.ok;
   const diagErrorMessage =
     diag.error && typeof diag.error === "object" && "message" in diag.error
-      ? String(diag.error.message || "Failed to load diagnostics")
-      : "Failed to load diagnostics";
+      ? String(diag.error.message || "Could not load diagnostics")
+      : "Could not load diagnostics";
 
   const grouped = useMemo(() => {
     const out: Record<string, DiagnosticCheck[]> = {};

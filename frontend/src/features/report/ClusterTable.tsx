@@ -32,6 +32,7 @@ import { asArray, asRecord, displayClusterName, nccDispositionKey, resolveCluste
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { notify } from "../../notify";
 import { formatDateTime, relativeTime } from "../../utils/datetime";
+import { safeExternalUrl } from "../../utils/url";
 import { NCCLifecyclePanel } from "./NCCLifecyclePanel";
 
 type Props = {
@@ -150,7 +151,8 @@ function collectKBUrls(raw: Record<string, unknown>, detail: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   const add = (value: string) => {
-    const url = value.trim();
+    // Values come from report files and Prism Central; only web links pass.
+    const url = safeExternalUrl(value);
     if (!url || seen.has(url)) return;
     seen.add(url);
     out.push(url);
@@ -1394,12 +1396,13 @@ export function ClusterTable({
                   icon={<ExportOutlined />}
                   href={clusterPrismURL(drawerRow.cluster, clusterNameMap, drawerRow.clusterName)}
                   target="_blank"
+                  rel="noopener noreferrer"
                 >
                   Open in Prism
                 </Button>
               ) : null}
               {drawerRow.source === "PC" && drawerRow.kb ? (
-                <Button type="primary" icon={<LinkOutlined />} href={drawerRow.kb} target="_blank">
+                <Button type="primary" icon={<LinkOutlined />} href={drawerRow.kb} target="_blank" rel="noopener noreferrer">
                   {kbLabel(drawerRow.kb)}
                 </Button>
               ) : null}

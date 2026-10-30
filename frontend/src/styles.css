@@ -2130,6 +2130,15 @@ html[data-theme="it-pro"] {
   padding: var(--ui-space-5);
 }
 
+.ui-error-detail {
+  display: inline-block;
+  margin-top: var(--ui-space-2);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  font-size: var(--ui-text-xs);
+  color: var(--ui-text-tertiary);
+}
+
 .ui-skip-link {
   position: absolute;
   top: var(--ui-space-2);

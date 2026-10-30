@@ -35,6 +35,7 @@ import { notifyError } from "../notify";
 import { EmptyState, KeyValueList, Panel, StatTile, StatusBadge, toneFor, type Tone } from "../ui";
 import { formatDateTime, relativeTime } from "../utils/datetime";
 import { formatDuration, freshness } from "../utils/freshness";
+import { nutanixKbUrl, safeExternalUrl } from "../utils/url";
 
 // ---------- helpers ----------
 
@@ -75,10 +76,11 @@ function extractKbId(row: Record<string, unknown>): string {
 }
 
 function kbUrl(row: Record<string, unknown>): string {
-  const direct = String(row.kb || row.kb_link || row.kb_url || "").trim();
+  // Report data: only web links become an href.
+  const direct = safeExternalUrl(row.kb || row.kb_link || row.kb_url);
   if (direct) return direct;
   const id = extractKbId(row);
-  return id ? `http://portal.nutanix.com/kb/${id}` : "";
+  return id ? nutanixKbUrl(id) : "";
 }
 
 function scoreTone(score: number | null): "ok" | "warn" | "fail" | undefined {
@@ -153,10 +155,10 @@ export function InsightsPage() {
   const tab: TabKey = requested && TABS.includes(requested) ? requested : "summary";
 
   useEffect(() => {
-    if (report.error) notifyError(report.error, "Failed to load insights");
+    if (report.error) notifyError(report.error, "Could not load insights");
   }, [report.error]);
   useEffect(() => {
-    if (trends.error) notifyError(trends.error, "Failed to load trends");
+    if (trends.error) notifyError(trends.error, "Could not load trends");
   }, [trends.error]);
 
   const data = report.data ?? EMPTY_REPORT_DATA;

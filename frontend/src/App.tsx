@@ -19,6 +19,7 @@ import {
   canOpenSection,
   findingsRedirect,
   legacySettingsTarget,
+  pageTitle,
   sectionByPath,
   settingsLanding,
   type Viewer,
@@ -89,19 +90,23 @@ function deriveHealthState(
 }
 
 /**
- * Keep `document.title` in sync with API health and active-run state so users
- * notice issues even when the tab is in the background.
+ * Keep `document.title` in sync with the page, API health and active-run state
+ * ("● Findings · NCC Orchestrator v2"), so tabs, history and bookmarks say
+ * where they lead and users notice issues even when the tab is in the
+ * background.
  */
 function useDocumentTitleSync(health: HealthStatePayload, runActive: boolean) {
+  const { pathname } = useLocation();
+  const page = pageTitle(pathname);
   useEffect(() => {
     let prefix = "";
     if (runActive) prefix = "● ";
     else if (health.state === "err") prefix = "⚠ ";
-    document.title = `${prefix}${APP_BASE_TITLE}`;
+    document.title = `${prefix}${page ? `${page} · ` : ""}${APP_BASE_TITLE}`;
     return () => {
       document.title = APP_BASE_TITLE;
     };
-  }, [health.state, runActive]);
+  }, [health.state, runActive, page]);
 }
 
 function HeaderHealthPill({
@@ -358,7 +363,7 @@ function HeaderTriggerRunButton() {
         void active.refetch();
         return;
       }
-      notifyError(e, "Failed to trigger run");
+      notifyError(e, "Could not start the run");
     }
   };
 

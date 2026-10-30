@@ -129,6 +129,17 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
     sites.
   - **Opening title** (`intro_title`): off skips the intro for everyone; it
     is exposed on the public `/health` so the sign-in page can honour it.
+- **Hardening and polish.** Knowledge-base and Prism links taken from report
+  data or Prism Central now only become clickable when they are `http(s)`
+  (a `javascript:` or `data:` value is dropped), and generated KB links use
+  `https://portal.nutanix.com`. A page that fails to render now shows
+  "This page could not be shown" with Reload, instead of blanking the whole
+  app; the sidebar keeps working. The browser tab names the page
+  ("Findings · NCC Orchestrator v2"). The code editor loads only the
+  languages it uses (JSON, YAML, INI, HTML), which drops the TypeScript, CSS
+  and HTML language workers: the built UI goes from about 16 MB to 7.3 MB.
+  Logs stop polling while the browser tab is hidden. Error messages say
+  "Could not …" throughout.
 - **Consistent wording.** Buttons, titles and column headers use sentence
   case everywhere (e.g. "Save schedule", "Scheduler health", "Entity
   name"); section titles no longer repeat the page title; long config and

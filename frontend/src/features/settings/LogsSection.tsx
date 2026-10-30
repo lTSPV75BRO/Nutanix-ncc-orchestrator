@@ -65,7 +65,10 @@ export function LogsSection({ onError }: Props) {
 
   useEffect(() => {
     if (!auto) return;
-    const timer = setInterval(() => void load(), 3000);
+    // No reloads while the browser tab is hidden; the next tick catches up.
+    const timer = setInterval(() => {
+      if (!document.hidden) void load();
+    }, 3000);
     return () => clearInterval(timer);
   }, [auto]);
 

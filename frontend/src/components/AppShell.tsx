@@ -4,6 +4,7 @@ import { MenuFoldOutlined, MenuOutlined, MenuUnfoldOutlined } from "@ant-design/
 import { Link, useLocation, useNavigate } from "react-router";
 import { useLocalStorageState } from "../hooks/useLocalStorageState";
 import { PAGES, SECTIONS, canOpenSection, pageTitle, type Viewer } from "../navigation";
+import { PageErrorBoundary } from "./PageErrorBoundary";
 
 type MenuItem = Required<MenuProps>["items"][number];
 
@@ -138,7 +139,7 @@ export function AppShell({
           <div className="ui-topbar-actions">{actions}</div>
         </header>
         <main className="ui-content" id="main-content" tabIndex={-1}>
-          {children}
+          <PageErrorBoundary key={location.pathname}>{children}</PageErrorBoundary>
         </main>
       </div>
     </div>

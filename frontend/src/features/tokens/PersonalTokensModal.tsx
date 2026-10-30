@@ -77,7 +77,7 @@ export function PersonalTokensModal({
       form.resetFields();
       void queryClient.invalidateQueries({ queryKey: ["personal-tokens"] });
     },
-    onError: (e) => notifyError(e, "Failed to create token"),
+    onError: (e) => notifyError(e, "Could notcreate token"),
   });
 
   const revokeMutation = useMutation({
@@ -86,7 +86,7 @@ export function PersonalTokensModal({
       notify.success("Token revoked.");
       void queryClient.invalidateQueries({ queryKey: ["personal-tokens"] });
     },
-    onError: (e) => notifyError(e, "Failed to revoke token"),
+    onError: (e) => notifyError(e, "Could notrevoke token"),
   });
 
   const copySecret = async (value: string) => {

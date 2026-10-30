@@ -30,7 +30,7 @@ export function ChangePasswordForm({ submitLabel = "Change password", onSuccess 
       await api.changePassword(values.current, values.next);
       onSuccess();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Failed to change password");
+      setError(e instanceof ApiError ? e.message : "Could not change the password");
     } finally {
       setSubmitting(false);
     }

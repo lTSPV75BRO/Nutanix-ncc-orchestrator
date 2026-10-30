@@ -67,7 +67,7 @@ export function NotificationsSection() {
       notify.success("Notification settings saved.");
       void qc.invalidateQueries({ queryKey: ["settings", "notifications"] });
     },
-    onError: (e) => notifyError(e, "Failed to save notification settings"),
+    onError: (e) => notifyError(e, "Could not save notification settings"),
   });
 
   const [testing, setTesting] = useState<string | null>(null);

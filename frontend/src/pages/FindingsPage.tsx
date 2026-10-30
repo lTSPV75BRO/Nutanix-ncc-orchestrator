@@ -254,11 +254,11 @@ export function FindingsPage() {
   }, [fullReport.data, queryClient]);
 
   useEffect(() => {
-    if (previewReport.error) notifyError(previewReport.error, "Failed to load report preview");
+    if (previewReport.error) notifyError(previewReport.error, "Could not load the latest findings");
   }, [previewReport.error]);
 
   useEffect(() => {
-    if (fullReport.error) notifyError(fullReport.error, "Failed to load full report");
+    if (fullReport.error) notifyError(fullReport.error, "Could not load all findings");
   }, [fullReport.error]);
 
   const reportData = fullReport.data ?? previewReport.data ?? {

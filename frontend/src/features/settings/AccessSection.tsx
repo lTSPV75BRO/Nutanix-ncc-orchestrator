@@ -95,7 +95,7 @@ function UsersCard() {
       createForm.resetFields();
       void refresh();
     },
-    onError: (e) => notifyError(e, "Failed to create user"),
+    onError: (e) => notifyError(e, "Could notcreate user"),
   });
 
   const roleMut = useMutation({
@@ -104,7 +104,7 @@ function UsersCard() {
       notify.success("Role updated.");
       void refresh();
     },
-    onError: (e) => notifyError(e, "Failed to update role"),
+    onError: (e) => notifyError(e, "Could notupdate role"),
   });
 
   const resetMut = useMutation({
@@ -145,7 +145,7 @@ function UsersCard() {
         notify.success("Password reset; the user must change it on next login.");
       }
     },
-    onError: (e) => notifyError(e, "Failed to reset password"),
+    onError: (e) => notifyError(e, "Could notreset password"),
   });
 
   const resetIsAdmin = resetUser !== null && isReservedAdmin(resetUser);
@@ -156,7 +156,7 @@ function UsersCard() {
       notify.success(`All sessions for ${username} have been signed out.`);
       void refresh();
     },
-    onError: (e) => notifyError(e, "Failed to sign out sessions"),
+    onError: (e) => notifyError(e, "Could notsign out sessions"),
   });
 
   const deleteMut = useMutation({
@@ -165,7 +165,7 @@ function UsersCard() {
       notify.success("User deleted.");
       void refresh();
     },
-    onError: (e) => notifyError(e, "Failed to delete user"),
+    onError: (e) => notifyError(e, "Could notdelete user"),
   });
 
   const users = (usersQuery.data?.users ?? []) as UserAccount[];
@@ -386,7 +386,7 @@ function PasswordResetRequestsCard() {
       void refresh();
       void qc.invalidateQueries({ queryKey: ["settings", "users"] });
     },
-    onError: (e) => notifyError(e, "Failed to reset password"),
+    onError: (e) => notifyError(e, "Could notreset password"),
   });
 
   const dismissMut = useMutation({
@@ -395,7 +395,7 @@ function PasswordResetRequestsCard() {
       notify.success("Request dismissed.");
       void refresh();
     },
-    onError: (e) => notifyError(e, "Failed to dismiss request"),
+    onError: (e) => notifyError(e, "Could notdismiss request"),
   });
 
   const requests = (reqQuery.data?.requests ?? []) as PasswordResetRequest[];
@@ -536,7 +536,7 @@ function SSOCard({ embedded }: { embedded?: boolean }) {
       void qc.invalidateQueries({ queryKey: ["settings", "sso"] });
       void qc.invalidateQueries({ queryKey: ["me"] });
     },
-    onError: (e) => notifyError(e, "Failed to save SSO config"),
+    onError: (e) => notifyError(e, "Could notsave SSO config"),
   });
 
   const body = (
@@ -656,7 +656,7 @@ function SessionCard() {
       void qc.invalidateQueries({ queryKey: ["settings", "session"] });
       void qc.invalidateQueries({ queryKey: ["me"] });
     },
-    onError: (e) => notifyError(e, "Failed to update session duration"),
+    onError: (e) => notifyError(e, "Could notupdate session duration"),
   });
 
   const resetMut = useMutation({
@@ -666,7 +666,7 @@ function SessionCard() {
       void qc.invalidateQueries({ queryKey: ["settings", "session"] });
       void qc.invalidateQueries({ queryKey: ["me"] });
     },
-    onError: (e) => notifyError(e, "Failed to reset session duration"),
+    onError: (e) => notifyError(e, "Could notreset session duration"),
   });
 
   return (
@@ -816,7 +816,7 @@ function BackupRestoreCard() {
       setDownloadPass("");
       setDownloadPassConfirm("");
     } catch (e) {
-      notifyError(e, "Failed to create backup");
+      notifyError(e, "Could notcreate backup");
     } finally {
       setDownloading(false);
     }
@@ -831,7 +831,7 @@ function BackupRestoreCard() {
       setCreatePassConfirm("");
       void refresh();
     },
-    onError: (e) => notifyError(e, "Failed to create snapshot"),
+    onError: (e) => notifyError(e, "Could notcreate snapshot"),
   });
 
   const deleteMut = useMutation({
@@ -840,7 +840,7 @@ function BackupRestoreCard() {
       notify.success("Backup deleted.");
       void refresh();
     },
-    onError: (e) => notifyError(e, "Failed to delete backup"),
+    onError: (e) => notifyError(e, "Could notdelete backup"),
   });
 
   // Poll the backend health endpoint until the restarted stack answers, then
@@ -917,7 +917,7 @@ function BackupRestoreCard() {
       const { blob, filename } = await api.downloadNamedBackup(name);
       triggerBlobDownload(blob, filename);
     } catch (e) {
-      notifyError(e, "Failed to download backup");
+      notifyError(e, "Could notdownload backup");
     } finally {
       setBusyName(null);
     }
@@ -1441,7 +1441,7 @@ function ScheduledBackupCard() {
       void qc.invalidateQueries({ queryKey: ["settings", "backups"] });
       void res;
     },
-    onError: (e) => notifyError(e, "Failed to update scheduled backups"),
+    onError: (e) => notifyError(e, "Could notupdate scheduled backups"),
   });
 
   return (
@@ -1615,7 +1615,7 @@ function LDAPCard({ embedded }: { embedded?: boolean }) {
       void qc.invalidateQueries({ queryKey: ["settings", "ldap"] });
       void qc.invalidateQueries({ queryKey: ["me"] });
     },
-    onError: (e) => notifyError(e, "Failed to save LDAP config"),
+    onError: (e) => notifyError(e, "Could notsave LDAP config"),
   });
 
   const handleTest = async () => {
@@ -2032,7 +2032,7 @@ function ClusterGroupsCard() {
       form.resetFields();
       void refresh();
     },
-    onError: (e) => notifyError(e, "Failed to update cluster groups"),
+    onError: (e) => notifyError(e, "Could notupdate cluster groups"),
   });
 
   const openCreate = () => {
@@ -2302,7 +2302,7 @@ function TokensCard() {
       notify.success("Token revoked.");
       void refresh();
     },
-    onError: (e) => notifyError(e, "Failed to revoke token"),
+    onError: (e) => notifyError(e, "Could notrevoke token"),
   });
 
   const tokens = (tokensQuery.data?.tokens ?? []) as PersonalToken[];
@@ -2458,7 +2458,7 @@ function TLSCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
       void qc.invalidateQueries({ queryKey: ["settings", "tls"] });
       announceSchemeSwitch(res, "https");
     },
-    onError: (e) => notifyError(e, "Failed to enable HTTPS"),
+    onError: (e) => notifyError(e, "Could notenable HTTPS"),
   });
 
   // Generate (or renew) a self-signed certificate. We pass the hostname the
@@ -2470,7 +2470,7 @@ function TLSCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
       void qc.invalidateQueries({ queryKey: ["settings", "tls"] });
       announceSchemeSwitch(res, "https");
     },
-    onError: (e) => notifyError(e, "Failed to generate self-signed certificate"),
+    onError: (e) => notifyError(e, "Could notgenerate self-signed certificate"),
   });
 
   const disableMut = useMutation({
@@ -2479,7 +2479,7 @@ function TLSCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
       void qc.invalidateQueries({ queryKey: ["settings", "tls"] });
       announceSchemeSwitch(res, "http");
     },
-    onError: (e) => notifyError(e, "Failed to disable HTTPS"),
+    onError: (e) => notifyError(e, "Could notdisable HTTPS"),
   });
 
   const onFinish = async (v: { cert: string; key: string }) => {

@@ -1,6 +1,6 @@
 import MonacoEditor, { loader } from "@monaco-editor/react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import * as monaco from "monaco-editor";
+import * as monaco from "./monacoSlim";
 import { useAppTheme } from "../theme";
 import type { editor as MonacoEditorApi } from "monaco-editor";
 import type { CodeEditorProps } from "./CodeEditor";
@@ -21,10 +21,9 @@ import JsonWorker from "monaco-editor/language/json/json.worker.js?worker";
 // work offline. Pointing the loader at the already-bundled `monaco-editor`
 // package keeps everything served from the UI server itself.
 //
-// Note: importing the umbrella `monaco-editor` package pulls every language
-// contribution (~3.6 MB lazy chunk). That's acceptable here because Monaco is
-// already lazy-loaded via React.lazy() in CodeEditor.tsx — initial page load
-// is unaffected.
+// monacoSlim loads the editor with only the languages the app opens; Monaco
+// is also lazy-loaded via React.lazy() in CodeEditor.tsx, so the initial page
+// load is unaffected either way.
 loader.config({ monaco });
 
 // Wire web workers. Returning a real Worker (not null) is required: Monaco
