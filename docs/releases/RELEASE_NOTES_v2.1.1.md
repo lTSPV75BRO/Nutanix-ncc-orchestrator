@@ -3,7 +3,7 @@
 **Release date:** 2026-08-17
 **Type:** Patch release (Alerts-table severity-classification fix). Recommended for everyone on v2.1.0.
 
-> **Affiliation:** This is an independent open-source project. It is **not** affiliated with or endorsed by Nutanix, Inc. NCC and Nutanix are trademarks of their respective owners. The project is MIT licensed; see [`LICENSE`](LICENSE).
+> **Affiliation:** This is an independent open-source project. It is **not** affiliated with or endorsed by Nutanix, Inc. NCC and Nutanix are trademarks of their respective owners. The project is MIT licensed; see [`LICENSE`](../../LICENSE).
 
 v2.1.1 fixes a severity-classification issue introduced in v2.1.0: a cluster whose NCC run fails outright (connection refused, DNS failure, auth rejection, timeout, etc.) was surfaced in the Alerts table as a **`FAIL`**-severity `"NCC run failed"` row — the same severity used for a genuine failing NCC check. That overstated the finding (conflating "NCC never ran against this cluster" with "NCC found a real problem on this cluster") and skewed FAIL totals and drilldown-diff regression counts with connectivity noise. There was never any data loss or corruption — see [`RELEASE_NOTES_v2.1.0.md` → Known issues](RELEASE_NOTES_v2.1.0.md#known-issues-fixed-in-v211) for the full writeup and the workaround that applied before this fix.
 

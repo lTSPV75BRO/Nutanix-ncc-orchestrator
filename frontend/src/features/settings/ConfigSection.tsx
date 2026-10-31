@@ -48,7 +48,7 @@ import { SecretsMigrationModal } from "./SecretsMigrationModal";
 import { notify } from "../../notify";
 import { SaveBar, middleEllipsis } from "../../ui";
 import { SECTIONS, KNOWN_KEYS, type FieldDef, type SectionDef } from "./configSchema";
-import defaultConfigTemplate from "../../../../example_config.yaml?raw";
+import defaultConfigTemplate from "../../../../examples/example_config.yaml?raw";
 
 type Props = {
   onError: (e: unknown) => void;

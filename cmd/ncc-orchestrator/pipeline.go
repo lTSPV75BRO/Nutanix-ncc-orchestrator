@@ -2,7 +2,7 @@ package main
 
 // Run pipeline helpers for large fleets: processing-pool sizing, automatic
 // max-parallel, the retry pass for transient failures, and the run journal
-// behind --resume. The dispatch loop itself is in the root command (goNCC.go).
+// behind --resume. The dispatch loop itself is in the root command (goNCC.go in this package).
 
 import (
 	"bufio"

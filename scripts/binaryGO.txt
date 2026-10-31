@@ -2,9 +2,12 @@
 # Release build for ncc-orchestrator, ncc-api-server, and ncc-ui-server.
 #
 # Hosts (same script, same flags):
-#   Linux / macOS:   bash binaryGO.txt
-#   Windows:         binaryGO.cmd
-#                    or, from Git Bash: bash binaryGO.txt
+#   Linux / macOS:   bash scripts/binaryGO.txt
+#   Windows:         scriptsinaryGO.cmd
+#                    or, from Git Bash: bash scripts/binaryGO.txt
+#
+# The script changes to the repository root first, so it can be run from
+# any directory.
 #
 # Default output is all six platform pairs:
 #   linux, darwin, windows  ×  amd64, arm64
@@ -13,16 +16,19 @@
 # ELF, Mach-O, or PE header before the run is called successful.
 #
 # Examples:
-#   bash binaryGO.txt
-#   bash binaryGO.txt --os linux,darwin,windows --arch amd64,arm64 --jobs 8
-#   bash binaryGO.txt --bins-only --skip-tests
-#   bash binaryGO.txt --set-version 2.2.0
-#   bash binaryGO.txt --update-deps --govulncheck
+#   bash scripts/binaryGO.txt
+#   bash scripts/binaryGO.txt --os linux,darwin,windows --arch amd64,arm64 --jobs 8
+#   bash scripts/binaryGO.txt --bins-only --skip-tests
+#   bash scripts/binaryGO.txt --set-version 2.2.0
+#   bash scripts/binaryGO.txt --update-deps --govulncheck
 #
 # Link flags always include main.Version, main.Stream, main.GitRevision,
 # main.BuildDate, and main.GoVersion. Optional --docker packages the Linux
 # binaries after they exist; it is not required to produce release binaries.
 set -euo pipefail
+
+# Everything below uses repo-relative paths.
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 uname_s=$(uname -s 2>/dev/null || echo unknown)
 case "$uname_s" in
@@ -76,8 +82,8 @@ IMAGE_PREFIX="${NCC_IMAGE_PREFIX:-prajwalnutant}"
 
 usage() {
   cat <<'EOF'
-Usage: bash binaryGO.txt [options]
-       binaryGO.cmd [options]          (Windows cmd or PowerShell)
+Usage: bash scripts/binaryGO.txt [options]
+       scriptsinaryGO.cmd [options]          (Windows cmd or PowerShell)
 
 Build linux, macOS, and Windows binaries (default), then stack archives.
 Runs on Linux, macOS, and Windows Git Bash. A Linux or Windows host can
@@ -488,7 +494,7 @@ check_versions() {
 # ./... also descends into frontend/node_modules. That tree is not a Go
 # package, and npm ci removes it while preflight runs, so a scope directory
 # such as @oxc-project disappears mid-walk.
-GO_PKGS=". ./cmd/... ./internal/... ./tools/..."
+GO_PKGS="./cmd/... ./internal/... ./tools/..."
 
 update_deps() {
   echo "updating Go modules..."
@@ -679,11 +685,7 @@ build_one() {
   if [ "$goos" = "windows" ]; then
     ext=".exe"
   fi
-  if [ "$pkg" = "." ]; then
-    name="ncc-orchestrator"
-  else
-    name=$(basename "$pkg")
-  fi
+  name=$(basename "$pkg")
   flags="$LDFLAGS"
   if [ "$name" = "ncc-mcp-server" ]; then
     flags="$flags -X main.serverVersion=${VERSION}${GIT_DIRTY}"
@@ -699,7 +701,7 @@ wait_batch() {
   done
 }
 
-PKGS=". ./cmd/ncc-api-server ./cmd/ncc-ui-server"
+PKGS="./cmd/ncc-orchestrator ./cmd/ncc-api-server ./cmd/ncc-ui-server"
 if [ "$WITH_MCP" = 1 ]; then
   PKGS="$PKGS ./cmd/ncc-mcp-server"
 fi
@@ -720,7 +722,7 @@ done
 if [ "${#pids[@]}" -gt 0 ]; then
   wait_batch "${pids[@]}"
 fi
-rm -f resource_windows_*.syso cmd/ncc-api-server/resource_windows_*.syso cmd/ncc-ui-server/resource_windows_*.syso
+rm -f cmd/ncc-orchestrator/resource_windows_*.syso cmd/ncc-api-server/resource_windows_*.syso cmd/ncc-ui-server/resource_windows_*.syso
 
 LOCAL_OS=$(go env GOOS)
 LOCAL_ARCH=$(go env GOARCH)
@@ -839,9 +841,9 @@ if [ "$NEED_FRONTEND" = 1 ]; then
 fi
 
 if [ "$NO_STACKS" != 1 ]; then
-  cp example_config.yaml dist/ 2>/dev/null || true
-  if [ -f "RELEASE_NOTES_v${VERSION}.md" ]; then
-    cp "RELEASE_NOTES_v${VERSION}.md" dist/
+  cp examples/example_config.yaml dist/ 2>/dev/null || true
+  if [ -f "docs/releases/RELEASE_NOTES_v${VERSION}.md" ]; then
+    cp "docs/releases/RELEASE_NOTES_v${VERSION}.md" dist/
   fi
   rm -rf dist/.stack
   mkdir -p dist/.stack
@@ -932,7 +934,7 @@ if [ "$NO_STACKS" != 1 ]; then
   echo "wrote dist/release-attestation.json"
 
   if [ "$SKIP_SBOM" != 1 ] && command -v cyclonedx-gomod >/dev/null 2>&1; then
-    for spec in "ncc-orchestrator:." "ncc-api-server:./cmd/ncc-api-server" "ncc-ui-server:./cmd/ncc-ui-server"; do
+    for spec in "ncc-orchestrator:./cmd/ncc-orchestrator" "ncc-api-server:./cmd/ncc-api-server" "ncc-ui-server:./cmd/ncc-ui-server"; do
       name="${spec%%:*}"
       pkg="${spec##*:}"
       cyclonedx-gomod app -licenses -json -main "$pkg" -output "dist/bom-${name}.cdx.json" -output-version 1.5
@@ -957,7 +959,7 @@ if [ "$NO_STACKS" != 1 ]; then
   )
   echo "wrote dist/checksums.txt"
   if [ -n "${NCC_RELEASE_SIGN_KEY:-}" ]; then
-    go run . release-sign --key "${NCC_RELEASE_SIGN_KEY}" --in dist/checksums.txt --out dist/checksums.txt.sig
+    go run ./cmd/ncc-orchestrator release-sign --key "${NCC_RELEASE_SIGN_KEY}" --in dist/checksums.txt --out dist/checksums.txt.sig
     echo "wrote dist/checksums.txt.sig"
   fi
 fi

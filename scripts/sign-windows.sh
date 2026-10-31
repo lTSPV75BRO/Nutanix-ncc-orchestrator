@@ -16,7 +16,7 @@
 #     via GPO/Intune. See docs/SECURITY_AND_TRUST.md.
 #
 # For a public, no-warning experience you need a CA-issued certificate;
-# point binaryGO.txt's osslsigncode hook at that PFX instead
+# point scripts/binaryGO.txt's osslsigncode hook at that PFX instead
 # (NCC_WINDOWS_PFX_PATH=...). This script is the free, fleet-friendly
 # alternative.
 #

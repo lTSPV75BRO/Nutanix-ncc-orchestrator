@@ -12,7 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Setup checklist, redesigned sign-in, HA-safe user store, transactional restore,
 Windows fixes, and security hardening from a full application audit. Release
-notes: [`RELEASE_NOTES_v2.3.0.md`](RELEASE_NOTES_v2.3.0.md). Findings and
+notes: [`RELEASE_NOTES_v2.3.0.md`](docs/releases/RELEASE_NOTES_v2.3.0.md). Findings and
 evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 
 ### Security
@@ -233,6 +233,15 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   `NCC_MCP_ALLOW_SCHEDULE_COMMAND=true`.
 - Runner email: subject/From/To header values are flattened and encoded, so
   CR/LF in templated run data can no longer inject headers.
+- **Repository layout (building from source).** The root now holds only
+  project metadata. The runner moved to `cmd/ncc-orchestrator/` (build with
+  `go build ./cmd/ncc-orchestrator`, not `go build .`); the release build is
+  `scripts/binaryGO.txt` / `scriptsinaryGO.cmd`; source-build Dockerfiles
+  are in `build/docker/` (`docker-compose.yml` already points there); the
+  reference config is `examples/example_config.yaml`; release notes are in
+  `docs/releases/`; `Prometheus.md` and `IMPROVEMENTS.md` are now
+  `docs/PROMETHEUS.md` and `docs/IMPROVEMENTS.md`. Release assets, installed
+  file names and the install layout are unchanged.
 
 ### Fixed
 
@@ -305,7 +314,7 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 ## [2.2.1] - Unreleased (date set when the v2.2.1 tag is published)
 
 Bug fixes, alert history, security hardening, and integration docs. Release
-notes: [`RELEASE_NOTES_v2.2.1.md`](RELEASE_NOTES_v2.2.1.md). See
+notes: [`RELEASE_NOTES_v2.2.1.md`](docs/releases/RELEASE_NOTES_v2.2.1.md). See
 [`docs/security/security-assessment-2026-10.md`](docs/security/security-assessment-2026-10.md)
 and [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/third-party-alert-integrations.md).
 
@@ -613,7 +622,7 @@ Patch release fixing a severity-classification issue in v2.1.0's Alerts table: a
 
 ### Fixed
 
-- **A cluster that failed to run showed as a `FAIL` alert, misrepresenting "NCC never ran" as "NCC found a real failing check".** The synthetic `"NCC run failed"` row (added in v2.1.0 to keep a connection/auth/timeout failure visible in the Alerts table instead of the cluster silently vanishing) was tagged `FAIL`, the same severity as a genuine failing NCC check, which conflated "no finding" with "a real finding" and inflated FAIL totals/regression counts (`new_failures`) with connectivity noise unrelated to actual cluster health. It's now tagged `UNKNOWN` (already a recognized severity in the Alerts table/dashboard), and its Detail carries the real error plus an actionable, error-class-specific remediation hint (`runFailedRemediation` — e.g. "reduce --max-parallel, increase --timeout" for a network/timeout failure, "verify the username/password" for auth) instead of just the raw error; there's no real NCC KB article for "couldn't reach the cluster", so the KB column intentionally stays empty. Separately, severity priority (Alerts table default sort, dashboard hero pills/filter chips) now ranks `WARN` ahead of `ERR` — previously `ERR` outranked `WARN`, which is corrected app-wide (`ClusterTable.tsx`'s `severityRank`, `DashboardPage.tsx`'s `SEVERITY_META`) to `FAIL > WARN > ERR > INFO > UNKNOWN`. See [`RELEASE_NOTES_v2.1.0.md`](RELEASE_NOTES_v2.1.0.md#known-issues-fixed-in-v211) for the known-issue writeup and workaround that applied to v2.1.0. Pinned by `TestBuildClusterChecksSnapshotFromResultFailure`, `TestRunFailedRemediation`.
+- **A cluster that failed to run showed as a `FAIL` alert, misrepresenting "NCC never ran" as "NCC found a real failing check".** The synthetic `"NCC run failed"` row (added in v2.1.0 to keep a connection/auth/timeout failure visible in the Alerts table instead of the cluster silently vanishing) was tagged `FAIL`, the same severity as a genuine failing NCC check, which conflated "no finding" with "a real finding" and inflated FAIL totals/regression counts (`new_failures`) with connectivity noise unrelated to actual cluster health. It's now tagged `UNKNOWN` (already a recognized severity in the Alerts table/dashboard), and its Detail carries the real error plus an actionable, error-class-specific remediation hint (`runFailedRemediation` — e.g. "reduce --max-parallel, increase --timeout" for a network/timeout failure, "verify the username/password" for auth) instead of just the raw error; there's no real NCC KB article for "couldn't reach the cluster", so the KB column intentionally stays empty. Separately, severity priority (Alerts table default sort, dashboard hero pills/filter chips) now ranks `WARN` ahead of `ERR` — previously `ERR` outranked `WARN`, which is corrected app-wide (`ClusterTable.tsx`'s `severityRank`, `DashboardPage.tsx`'s `SEVERITY_META`) to `FAIL > WARN > ERR > INFO > UNKNOWN`. See [`RELEASE_NOTES_v2.1.0.md`](docs/releases/RELEASE_NOTES_v2.1.0.md#known-issues-fixed-in-v211) for the known-issue writeup and workaround that applied to v2.1.0. Pinned by `TestBuildClusterChecksSnapshotFromResultFailure`, `TestRunFailedRemediation`.
 
 ### Changed
 
@@ -686,7 +695,7 @@ Major **authentication + autonomic-operations** release on top of a maintenance/
 - **UI login screen, forced password-change gate, and role-aware controls.** The frontend bootstraps from `/api/v1/auth/me`, shows a login page (local form and/or "Sign in with SSO") when login is enabled, presents a blocking password-change screen for `must_change_password` accounts, hides the Settings nav/route from non-admins and the run-trigger button from viewers, and adds a user menu with role badge and sign-out. The Settings → Access tab manages local users and SAML/SSO. **External authentication (SAML and LDAP/AD) is presented under a single "External authentication" card with a provider dropdown** to switch which one you're editing; both providers remain independently configurable and can be enabled at the same time (the dropdown shows a live on/off badge for each), and switching does not disable or discard the other.
 - **ui-server session forwarding.** `ncc-ui-server` auto-detects (via backend health) when interactive login is enabled and forwards each browser's session cookie/CSRF instead of injecting the shared admin token (avoiding privilege escalation). Override with `--login-mode {auto|on|off}`.
 - **Audit entries are now attributed to the acting user + role.** `withAuth` stashes the resolved principal on the request context, so every audited action automatically records `user` (the account subject — a real username for local/SSO sessions, or the synthetic `static-admin-token` subject for token automation) and `role` alongside the client IP that was already captured. The admin account always reports role `admin`. The Settings → Audit table gains a **User** column, and the JSONL export carries the new fields.
-- Sample [`example_users.yaml`](example_users.yaml) and an expanded RBAC/login/SSO section in [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md).
+- Sample [`example_users.yaml`](examples/example_users.yaml) and an expanded RBAC/login/SSO section in [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md).
 - **Checksum verification for `v2-bootstrap` downloads.** `v2-bootstrap` now verifies every downloaded asset (the `ncc-v2-stack-*` archive, or the api/ui binaries + frontend archive in the legacy fallback) against the release `checksums.txt` before extracting/installing, matching the strictness `update` already enforced. Pinned by `TestVerifyDownloadedAsset`.
 - **`--skip-checksum-verify` flag** on both `update` and `v2-bootstrap` as an explicit, clearly-warned escape hatch for air-gapped or internally-mirrored installs. Default is hard-fail on a missing checksum manifest or hash mismatch.
 - **Windows self-update helper.** On Windows, `update` now writes an `apply-ncc-update.cmd` next to the binary that waits for the running process to exit, swaps in the downloaded `.new.exe`, and self-deletes — replacing the previous "copy the file yourself" instruction with a single command. Pinned by `TestWriteWindowsUpdateSwapHelper`. The helper is added to the `uninstall` cleanup set.
@@ -754,11 +763,11 @@ Major **authentication + autonomic-operations** release on top of a maintenance/
 
 ### Remaining (tracked in IMPROVEMENTS.md)
 
-- **`goNCC.go` slimming (continued).** The extraction (`internal/model`, `internal/promtext`, `internal/retryutil`, `internal/notify`, `internal/nccparse`, `internal/httpclient`) is complete for v2.1.0. `goNCC.go` is still large; the remaining obvious candidate is the report renderers (`generateHTML` / `generateCSV` / `generateMarkdown` / `generateJSON` / `generateSARIF`), which are coupled to the combined-HTML and drilldown code and need a coordinated move. It can follow the same alias-backed, behavior-preserving pattern. See [`IMPROVEMENTS.md`](IMPROVEMENTS.md).
+- **`goNCC.go` slimming (continued).** The extraction (`internal/model`, `internal/promtext`, `internal/retryutil`, `internal/notify`, `internal/nccparse`, `internal/httpclient`) is complete for v2.1.0. `goNCC.go` is still large; the remaining obvious candidate is the report renderers (`generateHTML` / `generateCSV` / `generateMarkdown` / `generateJSON` / `generateSARIF`), which are coupled to the combined-HTML and drilldown code and need a coordinated move. It can follow the same alias-backed, behavior-preserving pattern. See [`IMPROVEMENTS.md`](docs/IMPROVEMENTS.md).
 
 ### Known issues (fixed in v2.1.1)
 
-- **`"NCC run failed"` Alerts-table rows are tagged `FAIL` instead of `UNKNOWN`.** Cosmetic/classification only — no data is lost or corrupted — but a cluster that couldn't be reached at all (connection/auth/timeout error) reads identically to a genuine failing NCC check, and inflates FAIL totals / drilldown-diff `new_failures` counts with connectivity noise. Severity priority also ranks `ERR` ahead of `WARN` in the Alerts table's default sort and the dashboard's hero pills/filter chips, rather than `WARN` ahead of `ERR`. **Workaround:** cross-reference `run-summary.json`'s per-cluster `ok`/`error`/`error_class` (already correct) rather than trusting FAIL counts derived from the Alerts table when a `"NCC run failed"` row is present. **Fixed in v2.1.1** — see below. See [`RELEASE_NOTES_v2.1.0.md`](RELEASE_NOTES_v2.1.0.md#known-issues-fixed-in-v211) for full detail.
+- **`"NCC run failed"` Alerts-table rows are tagged `FAIL` instead of `UNKNOWN`.** Cosmetic/classification only — no data is lost or corrupted — but a cluster that couldn't be reached at all (connection/auth/timeout error) reads identically to a genuine failing NCC check, and inflates FAIL totals / drilldown-diff `new_failures` counts with connectivity noise. Severity priority also ranks `ERR` ahead of `WARN` in the Alerts table's default sort and the dashboard's hero pills/filter chips, rather than `WARN` ahead of `ERR`. **Workaround:** cross-reference `run-summary.json`'s per-cluster `ok`/`error`/`error_class` (already correct) rather than trusting FAIL counts derived from the Alerts table when a `"NCC run failed"` row is present. **Fixed in v2.1.1** — see below. See [`RELEASE_NOTES_v2.1.0.md`](docs/releases/RELEASE_NOTES_v2.1.0.md#known-issues-fixed-in-v211) for full detail.
 
 ---
 

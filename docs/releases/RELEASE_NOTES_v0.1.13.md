@@ -52,8 +52,8 @@ This allows the AI to pull the latest run summary or report as context without c
 
 ## Version / Docker / Checksums
 
-- **Version:** 0.1.13 (from [VERSION](VERSION); default in code when not set via ldflags).
+- **Version:** 0.1.13 (from [VERSION](../../VERSION); default in code when not set via ldflags).
 - **Docker:** `prajwalnutant/nutanix-ncc-orchestrator:0.1.13` (and `:latest` when built from main).
 - **Kubernetes:** `k8s/cronjob.yaml` and `k8s/job-debug.yaml` reference image tag `0.1.13`.
 - Build and test: `go build ./...` and `go test ./...` pass. MCP server builds with `go build -o ncc-mcp-server ./cmd/ncc-mcp-server/`.
-- Release maintainers: see [docs/RELEASE_CHECKSUMS.md](docs/RELEASE_CHECKSUMS.md) for checksum generation so `ncc-orchestrator -u` can verify downloads.
+- Release maintainers: see [docs/RELEASE_CHECKSUMS.md](../RELEASE_CHECKSUMS.md) for checksum generation so `ncc-orchestrator -u` can verify downloads.

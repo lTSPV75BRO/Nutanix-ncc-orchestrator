@@ -132,7 +132,7 @@ The 7,000-cluster row is measured; the smaller rows are scaled from it
 ## Reproducing the test
 
 ```bash
-go build -o ncc-orchestrator .
+go build -o ncc-orchestrator ./cmd/ncc-orchestrator
 go build -o ncc-api-server ./cmd/ncc-api-server
 go run ./tools/fakeprism -make-config /tmp/ncc-scale -clusters 7000 -parallel 500
 go run ./tools/fakeprism -task-duration 3m &   # answers every 127.x.y.z:9440 (Linux, Windows)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -37,7 +38,7 @@ func TestNormalizeCanonicalConfig(t *testing.T) {
 }
 
 func TestExampleConfigIsSafeSample(t *testing.T) {
-	b, err := os.ReadFile("example_config.yaml")
+	b, err := os.ReadFile(filepath.Join("..", "..", "examples", "example_config.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}

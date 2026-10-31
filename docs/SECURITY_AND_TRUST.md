@@ -197,7 +197,7 @@ and the publisher name from the certificate subject is shown instead of
 "Unknown publisher". Self-signed certificates are **not** trusted by
 machines that have not imported them, so this is unsuitable for public
 distribution — use a CA-issued (OV/EV) certificate for that, pointing
-`binaryGO.txt`'s `NCC_WINDOWS_PFX_PATH` hook at the issued `.pfx`.
+`scripts/binaryGO.txt`'s `NCC_WINDOWS_PFX_PATH` hook at the issued `.pfx`.
 
 ### Linux — executable bit
 
@@ -694,7 +694,7 @@ Kubernetes cannot restrict by name) plus `get`/`update`/`patch` limited to the
 single `ncc-v2-users` Secret via `resourceNames`. It cannot read other Secrets.
 
 The bundled deployments enable this by default. `docker-compose.yml` and
-`Dockerfile.api` use the file store on the persistent auth volume
+`build/docker/Dockerfile.api` use the file store on the persistent auth volume
 (`/app/data/auth/.ncc-api-users.json`); `k8s/api-deployment.yaml` uses the
 Kubernetes Secret store (`--users-db-secret ncc-v2-users`). Retrieve the
 first-run password:

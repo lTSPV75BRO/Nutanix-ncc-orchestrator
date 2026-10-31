@@ -20,7 +20,7 @@ operators' own identities.
 
 | Component | Path | Technology | Size |
 | --- | --- | --- | --- |
-| Runner (`ncc-orchestrator`) | `goNCC.go` + root `*.go` | Go 1.27.3, cobra/viper, zerolog, OTel | `goNCC.go` alone is 18,028 lines, 338 functions, 31 cobra commands |
+| Runner (`ncc-orchestrator`) | `cmd/ncc-orchestrator/*.go` (`goNCC.go` + supporting files) | Go 1.27.3, cobra/viper, zerolog, OTel | `goNCC.go` alone is 18,028 lines, 338 functions, 31 cobra commands |
 | API server | `cmd/ncc-api-server` | Go `net/http`, no framework | `main.go` 5.9k lines, 79 routes |
 | UI server | `cmd/ncc-ui-server` | Go static host + `httputil.ReverseProxy` | 1.1k lines |
 | MCP server | `cmd/ncc-mcp-server` | `modelcontextprotocol/go-sdk`, stdio transport | 0.75k lines |

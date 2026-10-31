@@ -1,4 +1,4 @@
-# Fast API image. Context is binaryGO.txt's staging dir.
+# Fast API image. Context is scripts/binaryGO.txt's staging dir.
 # Includes ncc-orchestrator because the API pod stages that binary for runs.
 FROM alpine:3.24
 

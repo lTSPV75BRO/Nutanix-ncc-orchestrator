@@ -3,7 +3,7 @@
 # - dist/ncc-orchestrator-linux-amd64
 # - dist/ncc-orchestrator-linux-arm64
 # Those binaries must already carry -X main.Stream / Version / GitRevision
-# (binaryGO.txt stamps them). This image only packages the binary.
+# (scripts/binaryGO.txt stamps them). This image only packages the binary.
 FROM alpine:3.24
 
 ARG STREAM=Release

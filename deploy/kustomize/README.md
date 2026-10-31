@@ -6,7 +6,7 @@ Kustomize entrypoint lives next to the manifests so paths stay valid:
 kubectl apply -k k8s/
 ```
 
-This uses [`k8s/kustomization.yaml`](../k8s/kustomization.yaml) (namespace `ncc-orchestrator`, optional common labels).
+This uses [`k8s/kustomization.yaml`](../../k8s/kustomization.yaml) (namespace `ncc-orchestrator`, optional common labels).
 
 ### Prerequisites
 

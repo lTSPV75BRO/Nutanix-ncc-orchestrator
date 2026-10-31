@@ -5056,8 +5056,8 @@ func (s *apiServer) orchestratorBaseCommand() []string {
 		return []string{binPath}
 	}
 	// Dev-friendly fallback: run source directly when binary is not built yet.
-	goNCCPath, _ := filepath.Abs(filepath.Join(s.absPath(s.repoRoot), "goNCC.go"))
-	return []string{"go", "run", goNCCPath}
+	pkgPath, _ := filepath.Abs(filepath.Join(s.absPath(s.repoRoot), "cmd", "ncc-orchestrator"))
+	return []string{"go", "run", pkgPath}
 }
 
 func (s *apiServer) makeOrchestratorCommand(ctx context.Context, args ...string) *exec.Cmd {
@@ -5360,7 +5360,7 @@ func listNCCLogs(logDir string) []map[string]string {
 
 // classifyClusterErrorMessage mirrors goncc.classifyClusterError so the
 // API server can heal stale `error_class` values written by older binaries.
-// Keep this in sync with the orchestrator implementation in goNCC.go.
+// Keep this in sync with the orchestrator implementation in cmd/ncc-orchestrator/goNCC.go.
 func classifyClusterErrorMessage(raw string) string {
 	msg := strings.ToLower(strings.TrimSpace(raw))
 	if msg == "" {

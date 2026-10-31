@@ -33,22 +33,36 @@ High-level flow:
 
 Top-level ownership map:
 
-- `goNCC.go`
-  - Main CLI entry and runtime orchestration logic
+- `cmd/ncc-orchestrator/`
+  - `goNCC.go`: main CLI entry and runtime orchestration logic
   - Subcommands (`discover-clusters`, `v2-start`, `quickstart`, `validate-*`, `preflight-check`)
   - Output generation and policy/notification/metrics logic
-- `goNCC_test.go`
-  - Core test coverage for runner behavior and contracts
+  - Supporting files: `pipeline.go`, `supervise.go`, `selfheal.go`, `update_install.go`, `backupcrypt.go`, `releasesign.go`, …
+  - `*_test.go` and `testdata/`: runner behavior and contract tests
 - `cmd/ncc-api-server/`
   - API routes, auth, path confinement, run trigger, config/schedule/notification persistence
 - `cmd/ncc-ui-server/`
   - Reverse proxy to API, token/session auth injection, static asset hosting
+- `cmd/ncc-mcp-server/`
+  - Optional Model Context Protocol bridge
+- `internal/`
+  - Shared Go packages (install layout, auth, HTTP client, NCC parsing, notifications, …)
 - `frontend/`
   - React app (dashboard, runs, settings, API explorer, report views)
-- `k8s/`
-  - Production deployment manifests (runner CronJob + API + UI + PVC + policies)
+- `examples/`
+  - `example_config.yaml` (reference config) and `example_users.yaml`
+- `build/docker/`
+  - Source-build Dockerfiles used by `docker-compose.yml`
+- `deploy/`
+  - Release-image Dockerfiles (`deploy/docker/`), cloud-init, Windows Sysprep, Grafana, kustomize overlays
+- `k8s/`, `helm/`
+  - Production deployment manifests (runner CronJob + API + UI + PVC + policies) and Helm chart
+- `scripts/`
+  - Release build (`binaryGO.txt`, `binaryGO.cmd`), signing and maintenance scripts
+- `tools/`
+  - `fakeprism` (load-test Prism simulator) and `winversioninfo`
 - `docs/`
-  - Operator and developer references
+  - Operator and developer references; per-version release notes in `docs/releases/`
 
 ---
 

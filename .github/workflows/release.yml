@@ -1,7 +1,7 @@
 name: Release
 
 # Tag-driven release pipeline. Pushing a `v*` tag (e.g. v2.2.0) builds
-# every binary + every stack archive via binaryGO.txt, generates SBOMs
+# every binary + every stack archive via scripts/binaryGO.txt, generates SBOMs
 # and a release-attestation.json, signs each artifact with a GitHub
 # Actions SLSA build-provenance attestation, and publishes the result
 # as a GitHub Release.
@@ -78,7 +78,7 @@ jobs:
           go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.7.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      - name: Run binaryGO.txt (build + sign + SBOM + attestation)
+      - name: Run scripts/binaryGO.txt (build + sign + SBOM + attestation)
         env:
           # binaryGO.txt's optional code-signing blocks are no-ops
           # unless the matching env vars are set. We don't ship signing
@@ -96,7 +96,7 @@ jobs:
           # binaryGO.txt is a shell script; source it line-by-line so
           # any failure short-circuits the workflow rather than
           # silently producing partial dist/ contents.
-          bash -euxo pipefail binaryGO.txt
+          bash -euxo pipefail scripts/binaryGO.txt
 
       - name: Verify dist/ inventory
         # Belt-and-suspenders: binaryGO.txt prints RELEASE_OK on

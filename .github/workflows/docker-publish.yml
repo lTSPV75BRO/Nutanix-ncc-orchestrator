@@ -8,9 +8,9 @@ on:
       - "frontend/**"
       - "go.mod"
       - "go.sum"
-      - "Dockerfile*"
+      - "build/docker/Dockerfile*"
       - "deploy/docker/**"
-      - "binaryGO.txt"
+      - "scripts/binaryGO.txt"
       - "VERSION"
       - ".github/workflows/docker-publish.yml"
   release:
@@ -74,7 +74,7 @@ jobs:
           GIT_REVISION: ${{ github.sha }}
           NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
         run: |
-          bash binaryGO.txt \
+          bash scripts/binaryGO.txt \
             --os linux --arch amd64 \
             --skip-tests --no-stacks \
             --docker --push --docker-arch amd64

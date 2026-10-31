@@ -559,7 +559,7 @@ lifecycle event to an `em_event`: `message_key = alert id`, `node = cluster`,
 ### 11.1 What exists
 
 `ncc-api-server` serves Prometheus text format at `GET /metrics`. Besides the
-run and per-cluster metrics documented in [`Prometheus.md`](../../Prometheus.md),
+run and per-cluster metrics documented in [`PROMETHEUS.md`](../PROMETHEUS.md),
 v2.2.1 adds aggregate alert lifecycle gauges:
 
 | Metric | Type | Labels | Description |

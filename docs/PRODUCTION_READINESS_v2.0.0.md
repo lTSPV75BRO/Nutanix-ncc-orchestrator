@@ -82,7 +82,7 @@ Checklist and status for releasing **Nutanix NCC Orchestrator** v2.0.0 to produc
 1. Tag release: `v2.0.0`.
 2. Build binaries for Linux/macOS/Windows targets.
 3. Generate and upload `checksums.txt` with binaries (see [docs/RELEASE_CHECKSUMS.md](./RELEASE_CHECKSUMS.md)).
-4. Publish GitHub release using [RELEASE_NOTES_v2.0.0.md](../RELEASE_NOTES_v2.0.0.md).
+4. Publish GitHub release using [RELEASE_NOTES_v2.0.0.md](releases/RELEASE_NOTES_v2.0.0.md).
 5. Verify Docker image `prajwalnutant/nutanix-ncc-orchestrator:2.0.0` is available.
 6. Verify `ncc-orchestrator -u` can discover and verify release assets.
 

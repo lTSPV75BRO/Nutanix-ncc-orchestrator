@@ -12,7 +12,7 @@ if exist "%ProgramFiles(x86)%\Git\bin\bash.exe" goto git86
 if exist "%LocalAppData%\Programs\Git\bin\bash.exe" goto gitlocal
 
 echo binaryGO.cmd: bash was not found. Install Git for Windows, then re-run.
-echo From WSL you can also run: bash binaryGO.txt
+echo From WSL you can also run: bash scripts/binaryGO.txt
 exit /b 1
 
 :havebash

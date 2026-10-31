@@ -6,7 +6,7 @@
 > affiliated with or endorsed by Nutanix, Inc. The project is MIT licensed.
 
 v2.3.0 follows a full application audit (findings and evidence in
-[`docs/audit/`](docs/audit/executive-summary.md)). It replaces the first-time
+[`docs/audit/`](../audit/executive-summary.md)). It replaces the first-time
 setup modal with a setup checklist derived from the install's real state,
 redesigns the sign-in screens, makes the user store safe with several API
 replicas, makes restores roll back on failure, fixes a set of Windows-only
@@ -71,7 +71,7 @@ is now in the user menu (or beside it when sign-in is off). Every section has
 its own address, so it can be bookmarked; old `/settings?tab=…` links still
 work. Each role sees the same sections as before. This is the first step of
 a wider redesign of the signed-in pages
-([`docs/ui/redesign-plan.md`](docs/ui/redesign-plan.md)).
+([`docs/ui/redesign-plan.md`](../ui/redesign-plan.md)).
 
 ### Overview and Findings
 
@@ -156,7 +156,7 @@ every page (the SLO panel used a different formula).
 ### Ready for large fleets
 
 Tested end to end with **7,000 clusters and 210,000 findings per run**
-(details and sizing in [`docs/SCALING.md`](docs/SCALING.md)):
+(details and sizing in [`docs/SCALING.md`](../SCALING.md)):
 
 - Findings now appear for very large runs. Above 20,000 findings they were
   missing from Findings, Overview and Insights.
@@ -300,6 +300,13 @@ the run starts.
    now return 400 with a hint.
 4. The user store gains an optional `deleted_accounts` field; older versions
    ignore it.
+5. **Building from source:** the repository root was tidied. The runner is
+   built with `go build ./cmd/ncc-orchestrator` (was `go build .`), the
+   release build is `bash scripts/binaryGO.txt` (Windows:
+   `scriptsinaryGO.cmd`), the reference config is
+   `examples/example_config.yaml`, source-build Dockerfiles are in
+   `build/docker/`, and release notes are in `docs/releases/`. Release assets,
+   installed file names and the install layout do not change.
 
 ## Rollback
 
@@ -310,7 +317,7 @@ images/binaries. The user store and state files stay compatible.
 
 - Frontend build tooling has 12 advisories (vite 8.3.1, undici, source-map-js,
   @vitest/mocker); production dependencies are clean. Update with npm before
-  tagging (commands in [`docs/audit/dependency-health.md`](docs/audit/dependency-health.md)).
+  tagging (commands in [`docs/audit/dependency-health.md`](../audit/dependency-health.md)).
 - Restored stack binaries are not yet checked against signed release
   checksums (SEC-07).
 - Not yet exercised in this cycle: the new Windows CI job on GitHub-hosted

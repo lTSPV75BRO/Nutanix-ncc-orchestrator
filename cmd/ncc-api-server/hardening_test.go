@@ -142,7 +142,7 @@ func TestSanitizeExtraArgs(t *testing.T) {
 // Every allowlisted extra arg must be a flag the runner's root command
 // actually defines; this is the drift that let --no-html et al. through.
 func TestExtraArgsAllowlistMatchesRunnerFlags(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join("..", "..", "goNCC.go"))
+	src, err := os.ReadFile(filepath.Join("..", "ncc-orchestrator", "goNCC.go"))
 	if err != nil {
 		t.Skipf("runner source not available: %v", err)
 	}

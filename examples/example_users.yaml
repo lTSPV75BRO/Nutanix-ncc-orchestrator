@@ -11,7 +11,7 @@
 # set and the database is still empty, these accounts are imported into the
 # database (after which the YAML file is ignored). It bypasses the random-admin
 # bootstrap, so prefer it only for automated/provisioned installs.
-#     ncc-api-server --users-db .ncc-api-users.json --users-file example_users.yaml
+#     ncc-api-server --users-db .ncc-api-users.json --users-file examples/example_users.yaml
 #
 # Generate a bcrypt password_hash for each account with:
 #     ncc-api-server --hash-password         # prompts, or reads $NCC_PASSWORD

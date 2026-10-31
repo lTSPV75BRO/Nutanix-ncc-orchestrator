@@ -123,7 +123,7 @@ configured; otherwise the dashboard continues to show NCC findings normally.
 
 ## VM provisioning
 
-The release includes [`deploy/README.md`](deploy/README.md) with cloud-init
+The release includes [`deploy/README.md`](../../deploy/README.md) with cloud-init
 and Windows Sysprep templates. They download and checksum-verify the selected
 `ncc-v2-stack` archive, install the full CLI/API/UI stack, create configuration
 and output locations, enable boot startup, and leave credential placeholders

@@ -2,7 +2,7 @@
 
 A project-wide list of improvements and new features for the NCC Orchestrator: application, scripts, Kubernetes, CI/CD, and documentation. Use as a backlog; prioritize by impact and effort.
 
-For the latest completed release summary, see [RELEASE_NOTES_v2.2.1.md](RELEASE_NOTES_v2.2.1.md) and [CHANGELOG.md](CHANGELOG.md).
+For the latest completed release summary, see [RELEASE_NOTES_v2.2.1.md](releases/RELEASE_NOTES_v2.2.1.md) and [CHANGELOG.md](../CHANGELOG.md).
 
 ---
 
@@ -161,7 +161,7 @@ Beyond the extraction, v2.1.0 also shipped:
 
 ## Shipped through v1.1.0 (not exhaustive)
 
-The following backlog themes were partially or fully addressed by **v1.0.0** and **v1.1.0**; see [CHANGELOG.md](CHANGELOG.md), [RELEASE_NOTES_v1.0.0.md](RELEASE_NOTES_v1.0.0.md), and [RELEASE_NOTES_v1.1.0.md](RELEASE_NOTES_v1.1.0.md) for the canonical list.
+The following backlog themes were partially or fully addressed by **v1.0.0** and **v1.1.0**; see [CHANGELOG.md](../CHANGELOG.md), [RELEASE_NOTES_v1.0.0.md](releases/RELEASE_NOTES_v1.0.0.md), and [RELEASE_NOTES_v1.1.0.md](releases/RELEASE_NOTES_v1.1.0.md) for the canonical list.
 
 | Theme | What shipped |
 |--------|----------------|
@@ -175,7 +175,7 @@ The following backlog themes were partially or fully addressed by **v1.0.0** and
 | MCP / Cursor | `get_report` on `*.log` adds markdown KB links (`internal/kblinks`) |
 | Tests | Golden CSV + per-cluster HTML, httptest 429 retry |
 | Helm / Kustomize | `helm/ncc-orchestrator`, `kubectl apply -k k8s/` |
-| Docs | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
+| Docs | [docs/TROUBLESHOOTING.md](TROUBLESHOOTING.md) |
 
 **Remaining** items in the sections below are still valid backlog (resume/checkpoint, cluster subset, templates, etc.).
 
@@ -323,7 +323,7 @@ These rows in the sections below are now **done** and kept only for history:
 
 | Suggestion | Description |
 |------------|-------------|
-| **Alerting example** | In k8s/README or Prometheus.md, add a sample PrometheusRule/Alertmanager config to alert on CronJob failure or NCC FAIL count. |
+| **Alerting example** | In k8s/README or docs/PROMETHEUS.md, add a sample PrometheusRule/Alertmanager config to alert on CronJob failure or NCC FAIL count. |
 | **ScheduledJob backoff** | Document or tune CronJob backoffLimit and restartPolicy so repeated failures don’t spawn too many jobs. |
 | **Readiness for nginx** | Add a readinessProbe for the nginx Deployment (e.g. GET /) so the Service doesn’t send traffic until the server is up. |
 | **SecurityContext** | Set runAsNonRoot and readOnlyRootFilesystem where possible; document any required capabilities. |
@@ -375,7 +375,7 @@ These rows in the sections below are now **done** and kept only for history:
 | Suggestion | Description |
 |------------|-------------|
 | **Runbook index** | In k8s/README, list runbook scenarios with links (CronJob failed, report empty, permissions, prune images). |
-| **Prometheus runbook** | In Prometheus.md, add “What to do when metrics disappear” (e.g. CronJob not running, textfile dir not updated). |
+| **Prometheus runbook** | In docs/PROMETHEUS.md, add “What to do when metrics disappear” (e.g. CronJob not running, textfile dir not updated). |
 | **Notification runbook** | “Notifications not received” → check SMTP/webhook URL, log level, retries, firewall. |
 
 ### 5.3 Developer and contributing

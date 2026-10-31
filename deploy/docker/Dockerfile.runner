@@ -1,4 +1,4 @@
-# Fast runner image. Build context is the staging dir produced by binaryGO.txt
+# Fast runner image. Build context is the staging dir produced by scripts/binaryGO.txt
 # (binaries already linked with -X main.Stream and the rest of the release ldflags).
 FROM alpine:3.24
 

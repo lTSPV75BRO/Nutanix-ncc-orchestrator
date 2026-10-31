@@ -205,7 +205,7 @@ This release line includes the orchestrator runtime plus the v2 API/UI and front
 ## Upgrade notes from v1.1.0
 
 - Update image/binary tag to `2.0.0`.
-- Use [docs/PRODUCTION_READINESS_v2.0.0.md](docs/PRODUCTION_READINESS_v2.0.0.md) as the release gate checklist.
+- Use [docs/PRODUCTION_READINESS_v2.0.0.md](../PRODUCTION_READINESS_v2.0.0.md) as the release gate checklist.
 - Use this file as the GitHub release description body for tag `v2.0.0`.
 
 ## Artifacts and deployment versions
@@ -219,9 +219,9 @@ This release line includes the orchestrator runtime plus the v2 API/UI and front
 ## GitHub release checklist (v2.0.0)
 
 1. Ensure `VERSION` is `2.0.0`.
-2. Ensure changelog `2.0.0` section is present in [CHANGELOG.md](CHANGELOG.md).
+2. Ensure changelog `2.0.0` section is present in [CHANGELOG.md](../../CHANGELOG.md).
 3. Build and attach binaries for Linux/macOS/Windows targets.
-4. Generate and attach `checksums.txt` (see [docs/RELEASE_CHECKSUMS.md](docs/RELEASE_CHECKSUMS.md)).
+4. Generate and attach `checksums.txt` (see [docs/RELEASE_CHECKSUMS.md](../RELEASE_CHECKSUMS.md)).
 5. Tag as `v2.0.0`.
 6. After publish, verify:
    - release assets are downloadable

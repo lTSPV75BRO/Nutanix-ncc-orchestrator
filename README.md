@@ -1,10 +1,10 @@
 # Nutanix NCC Orchestrator
 
-[![Version](https://img.shields.io/badge/version-2.2.1-blue)](RELEASE_NOTES_v2.2.1.md)
+[![Version](https://img.shields.io/badge/version-2.2.1-blue)](docs/releases/RELEASE_NOTES_v2.2.1.md)
 [![Go](https://img.shields.io/badge/go-1.27.3-00ADD8)](go.mod)
 [![Node](https://img.shields.io/badge/node-26.12.1%2B-5FA04E)](frontend/package.json)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Status](https://img.shields.io/badge/GA-green)](RELEASE_NOTES_v2.2.1.md)
+[![Status](https://img.shields.io/badge/version-2.2.1-green)](docs/releases/RELEASE_NOTES_v2.2.1.md)
 
 Run **Nutanix Cluster Check (NCC)** across many clusters in parallel, collect the results in one place, and work through them in a web dashboard — with history, alert handling, scheduling, RBAC/SSO, and an API for ServiceNow, Prometheus, and other tools.
 
@@ -66,7 +66,7 @@ flowchart LR
 
 | Binary | Source | Role |
 | --- | --- | --- |
-| `ncc-orchestrator` | [`goNCC.go`](goNCC.go) | Runs NCC on many clusters, writes reports, schedules runs, and manages the API + UI stack (`v2-start`, `v2-status`, …) |
+| `ncc-orchestrator` | [`cmd/ncc-orchestrator`](cmd/ncc-orchestrator) | Runs NCC on many clusters, writes reports, schedules runs, and manages the API + UI stack (`v2-start`, `v2-status`, …) |
 | `ncc-api-server` | [`cmd/ncc-api-server`](cmd/ncc-api-server) | REST API: runs, reports, alert lifecycle, settings, users, audit log, metrics |
 | `ncc-ui-server` | [`cmd/ncc-ui-server`](cmd/ncc-ui-server), [`frontend/`](frontend) | Serves the React dashboard and proxies `/api` to the API server |
 | `ncc-mcp-server` | [`cmd/ncc-mcp-server`](cmd/ncc-mcp-server) | Optional [Model Context Protocol](docs/MCP_SERVER.md) bridge for AI assistants |
@@ -136,7 +136,7 @@ Open **<https://localhost:8080>**. The UI uses HTTPS by default with a generated
 git clone https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator.git
 cd Nutanix-ncc-orchestrator
 
-mkdir -p config && cp example_config.yaml config/config.yaml   # then edit it
+mkdir -p config && cp examples/example_config.yaml config/config.yaml   # then edit it
 echo "NCC_PASSWORD=<your-prism-password>" > .env                 # forwarded to runs
 
 docker compose up -d --build
@@ -167,23 +167,23 @@ Requires **Go 1.27.3+** (the `go` directive in [`go.mod`](go.mod)) and **Node.js
 git clone https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator.git
 cd Nutanix-ncc-orchestrator
 
-go build -o ncc-orchestrator .
-go build -o ncc-api-server  ./cmd/ncc-api-server
-go build -o ncc-ui-server   ./cmd/ncc-ui-server
-go build -o ncc-mcp-server  ./cmd/ncc-mcp-server     # optional
+go build -o ncc-orchestrator ./cmd/ncc-orchestrator
+go build -o ncc-api-server   ./cmd/ncc-api-server
+go build -o ncc-ui-server    ./cmd/ncc-ui-server
+go build -o ncc-mcp-server   ./cmd/ncc-mcp-server     # optional
 
 (cd frontend && npm ci && npm run build)              # dashboard → frontend/dist
 
-./ncc-orchestrator v2-start --config-path example_config.yaml --api-listen 127.0.0.1:8081 --ui-listen :8080
+./ncc-orchestrator v2-start --config-path examples/example_config.yaml --api-listen 127.0.0.1:8081 --ui-listen :8080
 ```
 
-`go build ./...` only compile-checks; use `-o` as above to get the binaries. Release builds for every platform come from [`binaryGO.txt`](binaryGO.txt) (`bash binaryGO.txt`, or `binaryGO.cmd` on Windows); see [`docs/BUILD_FROM_SCRATCH.md`](docs/BUILD_FROM_SCRATCH.md).
+`go build ./...` only compile-checks; use `-o` as above to get the binaries. Release builds for every platform come from [`scripts/binaryGO.txt`](scripts/binaryGO.txt) (`bash scripts/binaryGO.txt`, or `scriptsinaryGO.cmd` on Windows); see [`docs/BUILD_FROM_SCRATCH.md`](docs/BUILD_FROM_SCRATCH.md).
 
 ---
 
 ## Configuration
 
-[`example_config.yaml`](example_config.yaml) is the reference template; every option has a comment naming its CLI flag and `NCC_` environment variable. Settings are applied in this order (later wins):
+[`examples/example_config.yaml`](examples/example_config.yaml) is the reference template; every option has a comment naming its CLI flag and `NCC_` environment variable. Settings are applied in this order (later wins):
 
 1. Built-in defaults
 2. YAML config (nested schema v1; legacy flat keys still work)
@@ -234,7 +234,7 @@ Light, Dark, IT Professional, or follow the system theme; keyboard friendly; str
 
 **Prism Central alerts.** Configure `pcs` or `prism-central-url` and pick **PC · Beta** on the dashboard. Alerts are fetched on demand, cached briefly (`pc-alerts-cache-ttl`, default `5m`), and keep their own status in Prism Central.
 
-**Third-party tools.** ServiceNow, SIEMs, and scripts can poll `GET /api/v1/alerts/ncc` and the incremental `GET /api/v1/alerts/ncc/events` feed with a viewer [personal access token](#http-api), and write back with `POST /api/v1/alerts/ncc/{id}/resolve`. The OpenAPI spec includes typed schemas for these endpoints. Step-by-step guide, field mappings, and examples: [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/third-party-alert-integrations.md). Prometheus setup: [`Prometheus.md`](Prometheus.md).
+**Third-party tools.** ServiceNow, SIEMs, and scripts can poll `GET /api/v1/alerts/ncc` and the incremental `GET /api/v1/alerts/ncc/events` feed with a viewer [personal access token](#http-api), and write back with `POST /api/v1/alerts/ncc/{id}/resolve`. The OpenAPI spec includes typed schemas for these endpoints. Step-by-step guide, field mappings, and examples: [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/third-party-alert-integrations.md). Prometheus setup: [`Prometheus.md`](docs/PROMETHEUS.md).
 
 ---
 
@@ -314,7 +314,7 @@ Details: [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md) and the [Oct
 
 **Self-healing.** `v2-start --detach --self-heal` (or the boot-time service) restarts a crashed or hung API/UI process using each server's built-in `--health-check` probe, with exponential back-off and a restart budget per window (`--self-heal-max-restarts`, `--self-heal-window`, `--self-heal-probe-interval`, `--self-heal-unhealthy-threshold`).
 
-**Metrics.** The API server exposes Prometheus metrics at `/metrics` (build info, run counters, per-cluster health and severity counts from the latest run, rate-limit and alert-store gauges). It needs the API token unless you start the API with `--metrics-public`. See [`Prometheus.md`](Prometheus.md) and the Grafana dashboard in [`deploy/grafana/`](deploy/grafana/).
+**Metrics.** The API server exposes Prometheus metrics at `/metrics` (build info, run counters, per-cluster health and severity counts from the latest run, rate-limit and alert-store gauges). It needs the API token unless you start the API with `--metrics-public`. See [`Prometheus.md`](docs/PROMETHEUS.md) and the Grafana dashboard in [`deploy/grafana/`](deploy/grafana/).
 
 **Running one component.** `ncc-api-server` and `ncc-ui-server` also run on their own (for example the API behind your own ingress with `--cors-origin`, or the UI against a remote API with `--backend-url`). Started from a stack's `bin/` folder, they find the stack's paths automatically and print a `[stack-aware]` line listing what they resolved. Run any binary with `-h` for its flags.
 
@@ -366,7 +366,7 @@ Raw NCC output goes to `nccfiles/`, runner logs to `logs/ncc-runner.log`, and th
 
 ## Upgrading to v2.2.1
 
-Before upgrading, configure a backup key: backups are now **encrypted by default**, and the in-app updater refuses to run without a server-side key (it takes an encrypted backup first). Set `NCC_BACKUP_KEY_FILE` (recommended), `NCC_BACKUP_KEY`, or `NCC_BACKUP_PASSPHRASE` on the API server — in Kubernetes, add `backup-key` to `ncc-v2-secrets` — or set `NCC_BACKUP_ENCRYPTION=optional` to keep plaintext backups. Existing acknowledge/resolve marks are imported automatically. Other changes and rollback notes: [`RELEASE_NOTES_v2.2.1.md`](RELEASE_NOTES_v2.2.1.md).
+Before upgrading, configure a backup key: backups are now **encrypted by default**, and the in-app updater refuses to run without a server-side key (it takes an encrypted backup first). Set `NCC_BACKUP_KEY_FILE` (recommended), `NCC_BACKUP_KEY`, or `NCC_BACKUP_PASSPHRASE` on the API server — in Kubernetes, add `backup-key` to `ncc-v2-secrets` — or set `NCC_BACKUP_ENCRYPTION=optional` to keep plaintext backups. Existing acknowledge/resolve marks are imported automatically. Other changes and rollback notes: [`RELEASE_NOTES_v2.2.1.md`](docs/releases/RELEASE_NOTES_v2.2.1.md).
 
 ---
 
@@ -379,7 +379,7 @@ Before upgrading, configure a backup key: backups are now **encrypted by default
 | Architecture and engineering handover | [`docs/ARCHITECTURE_AND_HANDOVER.md`](docs/ARCHITECTURE_AND_HANDOVER.md) |
 | Troubleshooting (TLS, Prism Central, API) | [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) |
 | ServiceNow, Prometheus, and other integrations | [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/third-party-alert-integrations.md) |
-| Prometheus | [`Prometheus.md`](Prometheus.md) |
+| Prometheus | [`docs/PROMETHEUS.md`](docs/PROMETHEUS.md) |
 | Security, trust, and binary verification | [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md), [`docs/RELEASE_CHECKSUMS.md`](docs/RELEASE_CHECKSUMS.md) |
 | Security assessment (October 2026) | [`docs/security/security-assessment-2026-10.md`](docs/security/security-assessment-2026-10.md) |
 | NIST CSF 2.0 baseline and evidence | [`docs/NIST_CSF_BASELINE.md`](docs/NIST_CSF_BASELINE.md), [`docs/NIST_CSF_EVIDENCE_MANIFEST.json`](docs/NIST_CSF_EVIDENCE_MANIFEST.json) |
@@ -387,7 +387,24 @@ Before upgrading, configure a backup key: backups are now **encrypted by default
 | VM provisioning (cloud-init, Windows Sysprep) | [`deploy/README.md`](deploy/README.md) |
 | MCP server for AI assistants | [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md) |
 | Migrating from v1 / from v2.0.2 | [`docs/MIGRATION_v1_TO_v2.md`](docs/MIGRATION_v1_TO_v2.md), [`docs/MIGRATION_v2.0.2_TO_v2.1.0.md`](docs/MIGRATION_v2.0.2_TO_v2.1.0.md) |
-| Release notes and history | [`RELEASE_NOTES_v2.2.1.md`](RELEASE_NOTES_v2.2.1.md), [`CHANGELOG.md`](CHANGELOG.md) |
+| Release notes and history | [`docs/releases/`](docs/releases) (latest: [v2.2.1](docs/releases/RELEASE_NOTES_v2.2.1.md)), [`CHANGELOG.md`](CHANGELOG.md) |
+
+---
+
+## Repository layout
+
+| Path | Contents |
+| --- | --- |
+| [`cmd/`](cmd) | One folder per binary: `ncc-orchestrator` (runner CLI and stack manager), `ncc-api-server`, `ncc-ui-server`, `ncc-mcp-server` |
+| [`internal/`](internal) | Shared Go packages used by the binaries |
+| [`frontend/`](frontend) | React + Vite + TypeScript dashboard |
+| [`examples/`](examples) | `example_config.yaml` (reference config) and `example_users.yaml` |
+| [`build/docker/`](build/docker) | Dockerfiles that build images from source (used by `docker-compose.yml`) |
+| [`deploy/`](deploy) | Release-image Dockerfiles, cloud-init, Windows Sysprep, Grafana, kustomize overlays |
+| [`k8s/`](k8s), [`helm/`](helm) | Kubernetes manifests and Helm chart |
+| [`scripts/`](scripts) | Release build (`binaryGO.txt` / `binaryGO.cmd`), signing, uninstall and maintenance scripts |
+| [`tools/`](tools) | Developer tools: a fake Prism for load tests, Windows version-info generator |
+| [`docs/`](docs) | Operator and developer guides; [`docs/releases/`](docs/releases) holds per-version release notes |
 
 ---
 

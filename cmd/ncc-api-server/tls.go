@@ -19,7 +19,7 @@ import (
 )
 
 // v2StartStateFileName mirrors the orchestrator's persisted start-state file
-// (goNCC.go: v2StartStateFile). The api-server patches it in place so a
+// (cmd/ncc-orchestrator/goNCC.go: v2StartStateFile). The api-server patches it in place so a
 // self-triggered v2-restart rebinds the UI server to (or off) TLS. Kept as a
 // literal because the two binaries do not share a package.
 const v2StartStateFileName = ".ncc-v2-start.json"

@@ -8,11 +8,15 @@ import (
 	"testing"
 )
 
-// releaseDockerfiles returns every Dockerfile that builds a shipped image.
+// releaseDockerfiles returns every Dockerfile that builds a shipped image
+// (paths are relative to this package, cmd/ncc-orchestrator).
 func releaseDockerfiles(t *testing.T) map[string]string {
 	t.Helper()
 	var paths []string
-	for _, pattern := range []string{"Dockerfile*", filepath.Join("deploy", "docker", "Dockerfile*")} {
+	for _, pattern := range []string{
+		filepath.Join("..", "..", "build", "docker", "Dockerfile*"),
+		filepath.Join("..", "..", "deploy", "docker", "Dockerfile*"),
+	} {
 		m, err := filepath.Glob(pattern)
 		if err != nil {
 			t.Fatal(err)
@@ -20,7 +24,7 @@ func releaseDockerfiles(t *testing.T) map[string]string {
 		paths = append(paths, m...)
 	}
 	if len(paths) < 6 {
-		t.Fatalf("expected the root and deploy/docker Dockerfiles, found %v", paths)
+		t.Fatalf("expected the build/docker and deploy/docker Dockerfiles, found %v", paths)
 	}
 	out := map[string]string{}
 	for _, p := range paths {
@@ -61,7 +65,7 @@ func TestDockerfilesKeepUpgradedCABundle(t *testing.T) {
 // stayed on an older one; official golang images set GOTOOLCHAIN=local, so
 // `docker compose build` failed with "go.mod requires go >= …".
 func TestDockerfileGoBuilderMatchesGoMod(t *testing.T) {
-	mod, err := os.ReadFile("go.mod")
+	mod, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
 	if err != nil {
 		t.Fatal(err)
 	}

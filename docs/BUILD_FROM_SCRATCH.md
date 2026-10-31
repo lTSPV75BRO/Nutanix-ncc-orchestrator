@@ -90,7 +90,7 @@ go build ./...
 Build named binaries explicitly:
 
 ```bash
-go build -o ncc-orchestrator .
+go build -o ncc-orchestrator ./cmd/ncc-orchestrator
 go build -o ncc-api-server ./cmd/ncc-api-server
 go build -o ncc-ui-server ./cmd/ncc-ui-server
 go build -o ncc-mcp-server ./cmd/ncc-mcp-server
@@ -103,7 +103,7 @@ go build -ldflags "-w -s \
   -X main.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
   -X main.Stream=Release \
   -X main.GoVersion=$(go version | cut -d ' ' -f 3)" \
-  -o ncc-orchestrator .
+  -o ncc-orchestrator ./cmd/ncc-orchestrator
 ```
 
 Verify binaries:
@@ -286,8 +286,7 @@ Typical release maintainer steps:
 Use:
 
 - `CHANGELOG.md`
-- `RELEASE_NOTES_v2.2.0.md`
-- `RELEASE_NOTES_v2.2.1.md`
+- `docs/releases/RELEASE_NOTES_v<version>.md`
 - `docs/RELEASE_CHECKSUMS.md`
 
 ---
@@ -352,4 +351,4 @@ See `k8s/README.md` for the full operations runbook.
 - `docs/V2_BACKEND_FRONTEND_MVP.md` (API/UI architecture details)
 - `docs/MIGRATION_v1_TO_v2.md` (v1 to v2 cutover)
 - `k8s/README.md` (Kubernetes deployment + operations)
-- `Prometheus.md` (monitoring and alerting)
+- `docs/PROMETHEUS.md` (monitoring and alerting)

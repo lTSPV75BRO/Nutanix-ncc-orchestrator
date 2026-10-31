@@ -22,7 +22,7 @@ RUN set -eu; \
     gv="$(go version | awk '{print $3}')"; \
     flags="-w -s -X main.Version=${ver} -X main.Stream=${STREAM} -X main.GitRevision=${GIT_REVISION} -X main.BuildDate=${bd} -X main.GoVersion=${gv}"; \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="${flags}" -o /out/ncc-api-server ./cmd/ncc-api-server; \
-    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="${flags}" -o /out/ncc-orchestrator .
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="${flags}" -o /out/ncc-orchestrator ./cmd/ncc-orchestrator
 
 FROM alpine:3.24
 

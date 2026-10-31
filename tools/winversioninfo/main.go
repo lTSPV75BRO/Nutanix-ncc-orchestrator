@@ -13,10 +13,10 @@
 //
 // Why generated, not committed: the .syso files are arch-specific
 // resource blobs and they embed the VERSION number, so generating
-// them at build time from binaryGO.txt's $VERSION keeps the embedded
+// them at build time from scripts/binaryGO.txt's $VERSION keeps the embedded
 // metadata in lock-step with the rest of the release artifacts.
 //
-// Usage (driven from binaryGO.txt before a Windows GOOS=windows build):
+// Usage (driven from scripts/binaryGO.txt before a Windows GOOS=windows build):
 //
 //	go run ./tools/winversioninfo \
 //	  --version=2.0.2 \
@@ -26,7 +26,7 @@
 //
 // Produces:
 //
-//	./resource_windows_amd64.syso             (orchestrator)
+//	./cmd/ncc-orchestrator/resource_windows_amd64.syso
 //	./cmd/ncc-api-server/resource_windows_amd64.syso
 //	./cmd/ncc-ui-server/resource_windows_amd64.syso
 //
@@ -80,7 +80,7 @@ var binaries = []binarySpec{
 		exeBaseName:     "ncc-orchestrator.exe",
 		internalName:    "ncc-orchestrator",
 		fileDescription: "NCC Orchestrator (CLI + v2 lifecycle manager)",
-		pkgRelDir:       ".",
+		pkgRelDir:       filepath.Join("cmd", "ncc-orchestrator"),
 	},
 	{
 		exeBaseName:     "ncc-api-server.exe",

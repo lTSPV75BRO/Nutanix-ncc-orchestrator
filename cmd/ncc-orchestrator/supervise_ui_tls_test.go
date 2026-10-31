@@ -52,7 +52,7 @@ func TestSuperviseKeepsHealthyTLSUIRunning(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		uiBin += ".exe"
 	}
-	if out, err := exec.Command(goBin, "build", "-buildvcs=false", "-o", uiBin, "./cmd/ncc-ui-server").CombinedOutput(); err != nil {
+	if out, err := exec.Command(goBin, "build", "-buildvcs=false", "-o", uiBin, "../ncc-ui-server").CombinedOutput(); err != nil {
 		t.Fatalf("build ncc-ui-server: %v\n%s", err, out)
 	}
 	certPEM, keyPEM, err := selfsigned.Generate([]string{"localhost", "127.0.0.1"}, time.Hour)

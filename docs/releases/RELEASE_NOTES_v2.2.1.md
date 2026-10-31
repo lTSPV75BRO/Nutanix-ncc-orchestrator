@@ -119,7 +119,7 @@ Published images were not affected (they package prebuilt binaries).
 
 ## Security
 
-Details and evidence: [`docs/security/security-assessment-2026-10.md`](docs/security/security-assessment-2026-10.md).
+Details and evidence: [`docs/security/security-assessment-2026-10.md`](../security/security-assessment-2026-10.md).
 
 - **Backups are encrypted by default** (`NCC_BACKUP_ENCRYPTION=required`):
   snapshots, downloads, scheduled backups, and pre-update rollback points are
@@ -193,14 +193,14 @@ justifications.
   dependency caches and do not persist git credentials; Docker publishing
   skips instead of failing when Docker Hub secrets are not set.
 - golangci-lint v2.15.0 (v2.13 cannot analyze Go 1.27) with a
-  [`.golangci.yml`](.golangci.yml); existing findings were fixed (unused code
+  [`.golangci.yml`](../../.golangci.yml); existing findings were fixed (unused code
   removed, dead assignments, unchecked errors).
 
 ## Documentation
 
-- New: [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/third-party-alert-integrations.md)
+- New: [`docs/integrations/third-party-alert-integrations.md`](../integrations/third-party-alert-integrations.md)
   (ServiceNow, Prometheus, API-only vs. full-stack, PATs, sync, errors).
-- [`README.md`](README.md) rewritten. Corrected instructions: a scan is
+- [`README.md`](../../README.md) rewritten. Corrected instructions: a scan is
   `ncc-orchestrator --config <file>` (there is no `run` subcommand); release
   archives have no top-level folder; the bundled template refers to four
   secrets; Docker Compose serves the UI over HTTP.

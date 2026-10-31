@@ -12,7 +12,7 @@ This release adds digest notifications, notification retries, run summary loggin
 
 - Send **one email, one webhook, and one Slack message per run** with a run overview (clusters OK/failed, duration) instead of one per cluster.
 - Optional: attach the aggregated `index.html` to the digest email (`email-attach-html`) or include it as base64 in the webhook payload (`webhook-include-html`).
-- Config: `notify-digest: true` or env `NCC_NOTIFY_DIGEST=true`. See [README](README.md#testing-email-and-webhook) for testing.
+- Config: `notify-digest: true` or env `NCC_NOTIFY_DIGEST=true`. See [README](../../README.md#testing-email-and-webhook) for testing.
 
 ### Run summary log
 
@@ -69,6 +69,6 @@ This release adds digest notifications, notification retries, run summary loggin
 
 ## Checksums / Docker
 
-- **Version:** 0.1.12 (from [VERSION](VERSION)).
+- **Version:** 0.1.12 (from [VERSION](../../VERSION)).
 - **Docker:** `prajwalnutant/nutanix-ncc-orchestrator:0.1.12` (and `:latest` when built from main).
 - Build and test: `go build ./...` and `go test ./...` pass.

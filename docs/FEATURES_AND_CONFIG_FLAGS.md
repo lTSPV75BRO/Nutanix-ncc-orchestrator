@@ -2,7 +2,7 @@
 
 Comprehensive reference for NCC Orchestrator features, configuration keys, and CLI flags.
 
-> Scope: covers the runtime configuration of the `ncc-orchestrator` CLI. For the v2 API/UI servers and React frontend, see [`../README.md`](../README.md) and [`../docs/ARCHITECTURE_AND_HANDOVER.md`](./ARCHITECTURE_AND_HANDOVER.md). For a ready-to-edit YAML template, see [`../example_config.yaml`](../example_config.yaml).
+> Scope: covers the runtime configuration of the `ncc-orchestrator` CLI. For the v2 API/UI servers and React frontend, see [`../README.md`](../README.md) and [`../docs/ARCHITECTURE_AND_HANDOVER.md`](./ARCHITECTURE_AND_HANDOVER.md). For a ready-to-edit YAML template, see [`../example_config.yaml`](../examples/example_config.yaml).
 
 ## 1) What this tool does
 
@@ -1350,11 +1350,11 @@ For complete v2 deployment examples, see:
 - `README.md` (Run backend / Run frontend)
 - `docs/V2_BACKEND_FRONTEND_MVP.md`
 - `k8s/README.md`
-- `Prometheus.md` (generalized monitoring patterns for CLI, v2, and Kubernetes)
+- `docs/PROMETHEUS.md` (generalized monitoring patterns for CLI, v2, and Kubernetes)
 
 ## 7) Full config example
 
-The committed template is [`example_config.yaml`](../example_config.yaml). It lists every runner option with its CLI flag and `NCC_` variable in a comment.
+The committed template is [`examples/example_config.yaml`](../examples/example_config.yaml). It lists every runner option with its CLI flag and `NCC_` variable in a comment.
 
 Safe sample values:
 

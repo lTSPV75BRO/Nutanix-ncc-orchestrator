@@ -16,12 +16,18 @@ For first-time setup and full local build instructions, start with:
 
 Main components you may touch:
 
-- `goNCC.go` - orchestrator runner CLI
+- `cmd/ncc-orchestrator` - orchestrator runner CLI (`goNCC.go` is the root command)
 - `cmd/ncc-api-server` - backend API service
 - `cmd/ncc-ui-server` - UI proxy/static server
+- `cmd/ncc-mcp-server` - optional MCP bridge
+- `internal/` - shared Go packages
 - `frontend/` - React + Vite + TypeScript UI
+- `examples/` - reference `example_config.yaml` and `example_users.yaml`
+- `build/docker/` - source-build Dockerfiles used by `docker-compose.yml`
+- `deploy/` - release-image Dockerfiles and VM provisioning
+- `scripts/` - release build (`binaryGO.txt`) and maintenance scripts
 - `k8s/` - full v2 Kubernetes manifests
-- `docs/` - user/operator/developer documentation
+- `docs/` - user/operator/developer documentation; release notes live in `docs/releases/`
 
 ## Development workflow
 
@@ -48,7 +54,7 @@ Main components you may touch:
 - `go test ./...`
 - `go vet ./...`
 - `go build ./...`
-- `go test .` (root CLI path sanity)
+- `go test ./cmd/ncc-orchestrator` (runner CLI sanity)
 - If MCP code changed: `go build ./cmd/ncc-mcp-server`
 - If frontend changed: `cd frontend && npm test && npm run build`
 - If Kubernetes manifests changed: `kubectl kustomize k8s`
@@ -61,15 +67,15 @@ If your change affects behavior, flags, APIs, setup, operations, or security:
   - `docs/FEATURES_AND_CONFIG_FLAGS.md`
   - `docs/V2_BACKEND_FRONTEND_MVP.md`
   - `docs/MIGRATION_v1_TO_v2.md`
-  - `Prometheus.md` (if metrics/monitoring changed)
+  - `docs/PROMETHEUS.md` (if metrics/monitoring changed)
 - For v2 release-line changes, update:
-  - `RELEASE_NOTES_v2.2.0.md`
+  - `docs/releases/RELEASE_NOTES_v<version>.md`
   - `CHANGELOG.md`
 
 ## Testing expectations by area
 
-- Runner (`goNCC.go`) changes:
-  - add/update unit tests in `goNCC_test.go`
+- Runner (`cmd/ncc-orchestrator`) changes:
+  - add/update unit tests in `cmd/ncc-orchestrator/*_test.go`
   - verify output artifact compatibility (`run-summary.json`, dashboards, policy outputs)
 - API server changes:
   - add/update tests in `cmd/ncc-api-server/*_test.go`

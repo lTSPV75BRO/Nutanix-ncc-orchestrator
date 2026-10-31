@@ -9,9 +9,9 @@ COPY frontend/package*.json ./
 RUN npm ci
 
 COPY frontend/ ./
-# ConfigSection.tsx imports ../../../../example_config.yaml?raw (the repo
+# ConfigSection.tsx imports ../../../../examples/example_config.yaml?raw (the repo
 # root); keep the same relative layout so the build can resolve it.
-COPY example_config.yaml /example_config.yaml
+COPY examples/example_config.yaml /examples/example_config.yaml
 RUN npm run build
 
 FROM golang:1.27.3-alpine AS go-builder

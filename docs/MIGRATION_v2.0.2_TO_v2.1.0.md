@@ -163,7 +163,7 @@ tree, with **no** `.ncc-api-users.json`, `.ncc-api-backup-schedule.json`, or
   returns a well-formed empty report rather than erroring.
 
 No code changes were required for the upgrade path itself — this release's
-[bug fixes](../RELEASE_NOTES_v2.1.0.md#bug-fixes) address a separate,
+[bug fixes](releases/RELEASE_NOTES_v2.1.0.md#bug-fixes) address a separate,
 unrelated issue (the Alerts table losing data after a failed/merged run,
 regardless of which version you upgraded from) that was found and fixed
 during this verification pass.

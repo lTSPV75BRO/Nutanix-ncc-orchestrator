@@ -69,11 +69,11 @@ Prometheus's counter semantics):
 | `ncc_alerts_last_ingested_run_timestamp_seconds` | gauge | Run timestamp last applied to the lifecycle |
 | `ncc_alerts_events_total` | gauge | Lifecycle events retained in history |
 
-See [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/third-party-alert-integrations.md#11-prometheus) for scrape authentication with a viewer PAT and example alerting rules.
+See [`docs/integrations/third-party-alert-integrations.md`](integrations/third-party-alert-integrations.md#11-prometheus) for scrape authentication with a viewer PAT and example alerting rules.
 
 A starter Grafana dashboard wiring these up (run throughput, run duration,
 login success/failure/lockouts, rate-limiter, update outcomes, process health)
-ships at [`deploy/grafana/ncc-orchestrator-dashboard.json`](deploy/grafana/ncc-orchestrator-dashboard.json) —
+ships at [`deploy/grafana/ncc-orchestrator-dashboard.json`](../deploy/grafana/ncc-orchestrator-dashboard.json) —
 import it and pick your Prometheus data source.
 
 Scrape it like any target (add `--metrics-public` to the api-server for

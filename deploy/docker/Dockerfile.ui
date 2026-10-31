@@ -1,4 +1,4 @@
-# Fast UI image. Context is binaryGO.txt's staging dir (binary + frontend-dist).
+# Fast UI image. Context is scripts/binaryGO.txt's staging dir (binary + frontend-dist).
 FROM alpine:3.24
 
 ARG TARGETARCH=amd64

@@ -3,7 +3,7 @@
 **Release date:** 2026-05-29
 **Type:** Patch + maturity release. Recommended for everyone running v2.0.0 / v2.0.1.
 
-> **Affiliation:** This is an independent open-source project. It is **not** affiliated with or endorsed by Nutanix, Inc. NCC and Nutanix are trademarks of their respective owners. The project is MIT licensed; see [`LICENSE`](LICENSE).
+> **Affiliation:** This is an independent open-source project. It is **not** affiliated with or endorsed by Nutanix, Inc. NCC and Nutanix are trademarks of their respective owners. The project is MIT licensed; see [`LICENSE`](../../LICENSE).
 
 v2.0.2 is the largest stability + operability release on the v2 line so far. It ships:
 
@@ -29,7 +29,7 @@ None of these changes break existing scripts. Every flag-explicit invocation fro
 | **CycloneDX SBOMs** | `binaryGO.txt` invokes `cyclonedx-gomod` to emit a CycloneDX 1.5 JSON SBOM for each binary (`bom-ncc-orchestrator.cdx.json`, `bom-ncc-api-server.cdx.json`, `bom-ncc-ui-server.cdx.json`). Drop-in for Trivy / Grype / Dependency-Track. |
 | **SLSA build provenance** | New `.github/workflows/release.yml` builds via `binaryGO.txt`, then signs every artifact with `actions/attest-build-provenance@v2`. Consumers verify with `gh attestation verify`. |
 
-See [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md) for the full handler chart, OS-by-OS first-run guidance (Gatekeeper / SmartScreen / executable-bit), and verification commands.
+See [`docs/SECURITY_AND_TRUST.md`](../SECURITY_AND_TRUST.md) for the full handler chart, OS-by-OS first-run guidance (Gatekeeper / SmartScreen / executable-bit), and verification commands.
 
 ### Operability
 
@@ -171,7 +171,7 @@ docker compose up -d
 # UI on http://localhost:8080
 ```
 
-For first-time installs from a release tarball, see [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md) for OS-specific quarantine bypass guidance and verification commands.
+For first-time installs from a release tarball, see [`docs/SECURITY_AND_TRUST.md`](../SECURITY_AND_TRUST.md) for OS-specific quarantine bypass guidance and verification commands.
 
 ---
 

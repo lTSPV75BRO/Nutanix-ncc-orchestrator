@@ -81,16 +81,16 @@ Runs now emit these additional artifacts in `outputfiles/`:
 
 ## MCP server notes
 
-MCP tooling remains aligned for run/discovery/report/scheduler operations. For setup and tool details, see [docs/MCP_SERVER.md](docs/MCP_SERVER.md).
+MCP tooling remains aligned for run/discovery/report/scheduler operations. For setup and tool details, see [docs/MCP_SERVER.md](../MCP_SERVER.md).
 
 ## GitHub release checklist (v1.1.0)
 
 Before clicking **Publish release** on GitHub:
 
 1. Ensure `VERSION` is `1.1.0`.
-2. Ensure changelog `1.1.0` section is present in [CHANGELOG.md](CHANGELOG.md).
+2. Ensure changelog `1.1.0` section is present in [CHANGELOG.md](../../CHANGELOG.md).
 3. Build and attach binaries for Linux/macOS/Windows targets.
-4. Generate and attach `checksums.txt` (see [docs/RELEASE_CHECKSUMS.md](docs/RELEASE_CHECKSUMS.md)).
+4. Generate and attach `checksums.txt` (see [docs/RELEASE_CHECKSUMS.md](../RELEASE_CHECKSUMS.md)).
 5. Tag as `v1.1.0`.
 6. Use this file as the GitHub release description body.
 7. After publish, verify:

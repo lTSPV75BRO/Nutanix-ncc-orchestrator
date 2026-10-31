@@ -28,7 +28,7 @@ services:
   ncc-api-server:
     build:
       context: .
-      dockerfile: Dockerfile.api
+      dockerfile: build/docker/Dockerfile.api
       args:
         STREAM: ${NCC_STREAM:-Release}
         GIT_REVISION: ${GIT_REVISION:-unknown}
@@ -79,7 +79,7 @@ services:
   ncc-ui-server:
     build:
       context: .
-      dockerfile: Dockerfile.ui
+      dockerfile: build/docker/Dockerfile.ui
       args:
         STREAM: ${NCC_STREAM:-Release}
         GIT_REVISION: ${GIT_REVISION:-unknown}

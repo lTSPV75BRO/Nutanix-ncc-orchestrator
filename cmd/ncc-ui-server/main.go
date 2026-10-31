@@ -271,7 +271,7 @@ func detectBackendLogin(backendURL string, transport *http.Transport) bool {
 
 // Build-time metadata; injected via -ldflags. Capitalized names
 // (Version / Stream / BuildDate / GoVersion) match the orchestrator
-// + api-server convention so binaryGO.txt's single
+// + api-server convention so scripts/binaryGO.txt's single
 // `-X main.Version=… -X main.Stream=… -X main.BuildDate=…
 // -X main.GoVersion=…` LDFLAGS string applies uniformly to every main
 // package. Without this match the ui-server would silently keep its
