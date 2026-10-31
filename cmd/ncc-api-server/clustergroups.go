@@ -456,10 +456,14 @@ func deepFilterClusters(v interface{}, access clusterAccess) interface{} {
 	}
 	switch t := v.(type) {
 	case map[string]interface{}:
+		// Copy, never filter in place: report artifacts are cached and shared
+		// between requests (artifactcache.go), so changing them would leak one
+		// caller's cluster scope into everyone else's view (and race).
+		out := make(map[string]interface{}, len(t))
 		for k, val := range t {
-			t[k] = deepFilterClusters(val, access)
+			out[k] = deepFilterClusters(val, access)
 		}
-		return t
+		return out
 	case []interface{}:
 		out := make([]interface{}, 0, len(t))
 		for _, item := range t {

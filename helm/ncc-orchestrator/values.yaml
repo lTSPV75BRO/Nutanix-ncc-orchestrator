@@ -55,9 +55,16 @@ ingress:
     enabled: false
     clusterIssuer: letsencrypt-prod
 
+# Sizing: the api-server keeps the latest report and alert history parsed in
+# memory — ~1 GiB measured at 7,000 clusters / 200k findings, well under
+# 256Mi for small fleets. When setting a memory limit for the api, also set
+# apiGoMemLimit to ~90% of it so the Go heap stays under the limit.
 resources:
   api: {}
   ui: {}
+
+# GOMEMLIMIT for the api-server, e.g. "1800MiB" with a 2Gi limit. Empty = unset.
+apiGoMemLimit: ""
 
 configMapName: ncc-orchestrator-config
 pvcName: ncc-orchestrator-output

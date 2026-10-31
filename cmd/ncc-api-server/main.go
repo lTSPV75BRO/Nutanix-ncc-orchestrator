@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	crand "crypto/rand"
 	"crypto/tls"
@@ -3944,33 +3945,38 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 	p, _ := principalFromContext(r.Context())
 	access := s.allowedClusters(p)
 	outDir := s.selectBestReportOutDir()
-	runSummary := readJSONArtifact(filepath.Join(outDir, "run-summary.json"), map[string]interface{}{})
-	// Heal `error_class` / `failure_classes` for runs persisted by older
-	// orchestrator builds that misclassified DNS-driven circuit-breaker errors
-	// as `rate_limit`. The fix in goNCC.go covers future runs; this read-side
-	// re-classification surfaces correct buckets for existing on-disk data
-	// without forcing the user to re-trigger.
-	if m, ok := runSummary.(map[string]interface{}); ok {
-		reclassifyRunSummaryInPlace(m)
-		scrubSummaryPaths(m)
-		runSummary = m
-	}
-	runSummary = deepFilterClusters(runSummary, access)
+	// Report files are parsed once per run and shared between requests (see
+	// artifactcache.go); deepFilterClusters copies whatever it filters.
+	//
+	// run-summary.json is healed at load: `error_class` / `failure_classes`
+	// from older orchestrator builds that misclassified DNS-driven
+	// circuit-breaker errors as `rate_limit` are re-classified, and absolute
+	// paths are scrubbed.
+	runSummary := deepFilterClusters(readRunSummaryCached(outDir), access)
 	flags := s.loadFeatureFlags()
-	checksSnapshot := deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "checks-snapshot.json"), []interface{}{}), access)
+	allAggRows := readAggRowsCached(outDir)
+	// With the aggregated rows present, the UI reads the checks snapshot only
+	// for cluster names, so its per-check lists (most of its size) are left out.
+	var rawChecks interface{}
+	if len(allAggRows) > 0 {
+		rawChecks = slimChecksSnapshotCached(outDir)
+	} else {
+		rawChecks = readJSONArtifactCached(filepath.Join(outDir, "checks-snapshot.json"), []interface{}{})
+	}
+	checksSnapshot := deepFilterClusters(rawChecks, access)
 	var drilldownDiff interface{} = map[string]interface{}{}
 	var regressionSummary interface{} = map[string]interface{}{}
 	if flags.RunComparison {
-		drilldownDiff = deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "drilldown-diff.json"), map[string]interface{}{}), access)
-		regressionSummary = deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "regression-summary.json"), map[string]interface{}{}), access)
+		drilldownDiff = deepFilterClusters(readJSONArtifactCached(filepath.Join(outDir, "drilldown-diff.json"), map[string]interface{}{}), access)
+		regressionSummary = deepFilterClusters(readJSONArtifactCached(filepath.Join(outDir, "regression-summary.json"), map[string]interface{}{}), access)
 	}
 	var flakyChecks interface{} = map[string]interface{}{}
 	if flags.FlakyChecks {
-		flakyChecks = deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "flaky-checks.json"), map[string]interface{}{}), access)
+		flakyChecks = deepFilterClusters(readJSONArtifactCached(filepath.Join(outDir, "flaky-checks.json"), map[string]interface{}{}), access)
 	}
 	var sloDashboard interface{} = map[string]interface{}{}
 	if flags.SLO {
-		sloDashboard = deepFilterClusters(readJSONArtifact(filepath.Join(outDir, "slo-dashboard.json"), map[string]interface{}{}), access)
+		sloDashboard = deepFilterClusters(readJSONArtifactCached(filepath.Join(outDir, "slo-dashboard.json"), map[string]interface{}{}), access)
 	}
 	policyViolations := []string{}
 	if b, err := os.ReadFile(filepath.Join(outDir, "policy-gates.txt")); err == nil {
@@ -3983,7 +3989,9 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	pagination := map[string]interface{}{}
-	aggRows := deepFilterClusters(readInlineJSONVar(filepath.Join(outDir, "index.html"), "AGG", []interface{}{}), access)
+	// Large runs keep the rows in aggregated-data.json rather than index.html;
+	// reading only index.html showed no findings above 20,000 rows.
+	aggRows := deepFilterClusters(allAggRows, access)
 	if rows, ok := checksSnapshot.([]interface{}); ok && pg.enabled() {
 		pageRows, meta := paginateAnySlice(rows, pg)
 		checksSnapshot = pageRows
@@ -4003,14 +4011,14 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 		"slo_dashboard":       sloDashboard,
 		"policy_violations":   policyViolations,
 		"agg_rows":            aggRows,
-		"diff_flags":          readInlineJSONVar(filepath.Join(outDir, "index.html"), "DIFF_FLAGS", map[string]interface{}{}),
-		"flaky_keys":          readInlineJSONVar(filepath.Join(outDir, "index.html"), "FLAKY_KEYS", map[string]interface{}{}),
-		"cluster_links":       deepFilterClusters(readInlineJSONVar(filepath.Join(outDir, "index.html"), "CLUSTER_LINKS", []interface{}{}), access),
-		"artifact_links":      readInlineJSONVar(filepath.Join(outDir, "index.html"), "ARTIFACT_LINKS", map[string]interface{}{}),
+		"diff_flags":          readInlineJSONVarCached(filepath.Join(outDir, "index.html"), "DIFF_FLAGS", map[string]interface{}{}),
+		"flaky_keys":          readInlineJSONVarCached(filepath.Join(outDir, "index.html"), "FLAKY_KEYS", map[string]interface{}{}),
+		"cluster_links":       deepFilterClusters(readInlineJSONVarCached(filepath.Join(outDir, "index.html"), "CLUSTER_LINKS", []interface{}{}), access),
+		"artifact_links":      readInlineJSONVarCached(filepath.Join(outDir, "index.html"), "ARTIFACT_LINKS", map[string]interface{}{}),
 		"report_meta":         loadReportMeta(outDir),
-		"ncc_logs":            nccLogsForReport(s, flags),
-		"ncc_summary_counts":  nccSummaryForReport(s, flags),
-		"ncc_cluster_summary": nccClusterSummaryForReport(s, flags, access),
+		"ncc_logs":            nccLogsForReport(s, flags, outDir),
+		"ncc_summary_counts":  nccSummaryForReport(s, flags, outDir),
+		"ncc_cluster_summary": nccClusterSummaryForReport(s, flags, access, outDir),
 		"trends":              trendsForReport(flags, outDir),
 		"report_source_dir":   s.pathForCaller(r, outDir),
 		"pagination":          pagination,
@@ -5122,31 +5130,29 @@ func readJSONArtifact(path string, fallback interface{}) interface{} {
 // before reportMeta carried these fields — are upgraded transparently.
 func loadReportMeta(outDir string) map[string]interface{} {
 	out := map[string]interface{}{}
-	if v, ok := readInlineJSONVar(filepath.Join(outDir, "index.html"), "REPORT_META", map[string]interface{}{}).(map[string]interface{}); ok {
+	if v, ok := readInlineJSONVarCached(filepath.Join(outDir, "index.html"), "REPORT_META", map[string]interface{}{}).(map[string]interface{}); ok {
 		for k, val := range v {
 			out[k] = val
 		}
 	}
-	recPath := filepath.Join(outDir, "ncc-run-record.json")
-	if b, err := os.ReadFile(recPath); err == nil {
-		var rec map[string]interface{}
-		if err := json.Unmarshal(b, &rec); err == nil {
-			fill := func(key string, recKey string) {
-				if cur, ok := out[key].(string); ok && strings.TrimSpace(cur) != "" {
-					return
-				}
-				if v, ok := rec[recKey].(string); ok && strings.TrimSpace(v) != "" {
-					out[key] = v
-				}
+	// ncc-run-record.json lists every cluster (1.5 MB at 7,000), so it is
+	// parsed once per run rather than on every report request.
+	if rec, ok := readJSONArtifactCached(filepath.Join(outDir, "ncc-run-record.json"), nil).(map[string]interface{}); ok {
+		fill := func(key string, recKey string) {
+			if cur, ok := out[key].(string); ok && strings.TrimSpace(cur) != "" {
+				return
 			}
-			fill("hostname", "hostname")
-			fill("scheduler_source", "scheduler_source")
-			fill("git_revision", "git_revision")
-			fill("stream", "stream")
-			if cur, ok := out["version"].(string); !ok || strings.TrimSpace(cur) == "" {
-				if v, ok := rec["orchestrator_version"].(string); ok && strings.TrimSpace(v) != "" {
-					out["version"] = v
-				}
+			if v, ok := rec[recKey].(string); ok && strings.TrimSpace(v) != "" {
+				out[key] = v
+			}
+		}
+		fill("hostname", "hostname")
+		fill("scheduler_source", "scheduler_source")
+		fill("git_revision", "git_revision")
+		fill("stream", "stream")
+		if cur, ok := out["version"].(string); !ok || strings.TrimSpace(cur) == "" {
+			if v, ok := rec["orchestrator_version"].(string); ok && strings.TrimSpace(v) != "" {
+				out["version"] = v
 			}
 		}
 	}
@@ -5262,23 +5268,32 @@ func readInlineJSONVar(path, varName string, fallback interface{}) interface{} {
 	if err != nil {
 		return fallback
 	}
+	if out, ok := parseInlineJSONVar(b, varName); ok {
+		return out
+	}
+	return fallback
+}
+
+// parseInlineJSONVar extracts and decodes `const NAME = <json>` from an HTML
+// report's bytes.
+func parseInlineJSONVar(b []byte, varName string) (interface{}, bool) {
 	loc := inlineVarPrefixPattern(varName).FindIndex(b)
 	if loc == nil {
-		return fallback
+		return nil, false
 	}
 	end, ok := findJSONValueEnd(b, loc[1])
 	if !ok {
-		return fallback
+		return nil, false
 	}
-	raw := strings.TrimSpace(string(b[loc[1]:end]))
-	if raw == "" {
-		return fallback
+	raw := bytes.TrimSpace(b[loc[1]:end])
+	if len(raw) == 0 {
+		return nil, false
 	}
 	var out interface{}
-	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return fallback
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, false
 	}
-	return out
+	return out, true
 }
 
 func (s *apiServer) selectBestReportOutDir() string {
@@ -5303,11 +5318,9 @@ func (s *apiServer) selectBestReportOutDir() string {
 	best := s.absPath(s.outputDir)
 	bestScore := -1
 	for _, c := range candidates {
-		agg := readInlineJSONVar(filepath.Join(c, "index.html"), "AGG", []interface{}{})
-		score := 0
-		if rows, ok := agg.([]interface{}); ok {
-			score = len(rows)
-		}
+		// Cached, and counts sidecar rows too: large runs keep them in
+		// aggregated-data.json, which scored 0 here before.
+		score := len(readAggRowsCached(c))
 		if score > bestScore {
 			best = c
 			bestScore = score
@@ -5429,6 +5442,31 @@ func reclassifyRunSummaryInPlace(m map[string]interface{}) {
 // logDir, recognising the NCC summary table. The "Warning" row was previously
 // omitted, which caused the UI to show a spurious "summary count mismatch"
 // banner whenever NCC reported any WARN rows.
+// nccPluginCountRes holds one compiled pattern per NCC "Plugin results" label
+// (`| Fail | 3 |`). Both log parsers used to compile them per label per file —
+// ~50k compilations per pass over a 7,000-cluster log directory.
+var (
+	nccPluginCountMu  sync.Mutex
+	nccPluginCountRes = map[string]*regexp.Regexp{}
+)
+
+// nccPluginCount returns the count on the `| <label> | <n> |` line, or 0.
+func nccPluginCount(content, label string) int {
+	nccPluginCountMu.Lock()
+	re, ok := nccPluginCountRes[label]
+	if !ok {
+		re = regexp.MustCompile(`(?im)\|\s*` + regexp.QuoteMeta(label) + `\s*\|\s*(\d+)\s*\|`)
+		nccPluginCountRes[label] = re
+	}
+	nccPluginCountMu.Unlock()
+	m := re.FindStringSubmatch(content)
+	if len(m) < 2 {
+		return 0
+	}
+	v, _ := strconv.Atoi(m[1])
+	return v
+}
+
 func parseNCCSummaryCounts(logDir string) map[string]int {
 	totals := map[string]int{
 		"fail":          0,
@@ -5443,15 +5481,7 @@ func parseNCCSummaryCounts(logDir string) map[string]int {
 	if err != nil {
 		return totals
 	}
-	parseCount := func(content, label string) int {
-		re := regexp.MustCompile(`(?im)\|\s*` + regexp.QuoteMeta(label) + `\s*\|\s*(\d+)\s*\|`)
-		m := re.FindStringSubmatch(content)
-		if len(m) < 2 {
-			return 0
-		}
-		v, _ := strconv.Atoi(m[1])
-		return v
-	}
+	parseCount := nccPluginCount
 	// Some NCC variants emit "Warning", others "Warn". Try both and take the
 	// first that produced a non-zero value (or the last one, to be safe).
 	parseWarn := func(content string) int {
@@ -5490,15 +5520,7 @@ func parseNCCClusterSummary(logDir string) []map[string]interface{} {
 		return []map[string]interface{}{}
 	}
 	out := make([]map[string]interface{}, 0, len(entries))
-	parseCount := func(content, label string) int {
-		re := regexp.MustCompile(`(?im)\|\s*` + regexp.QuoteMeta(label) + `\s*\|\s*(\d+)\s*\|`)
-		m := re.FindStringSubmatch(content)
-		if len(m) < 2 {
-			return 0
-		}
-		v, _ := strconv.Atoi(m[1])
-		return v
-	}
+	parseCount := nccPluginCount
 	for _, e := range entries {
 		if e.IsDir() {
 			continue

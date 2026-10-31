@@ -92,6 +92,9 @@ spec:
           env:
             - name: NCC_RUNTIME_MODE
               value: "kubernetes"
+            # Soft heap limit for the Go runtime, ~90% of the memory limit.
+            - name: GOMEMLIMIT
+              value: "1800MiB"
             - name: NCC_IMAGE_TAG
               value: "2.3.0"
             - name: NCC_ORCHESTRATOR_IMAGE_TAG
@@ -184,13 +187,17 @@ spec:
             - name: tools
               mountPath: /tools
               readOnly: true
+          # Sizing: the api-server keeps the latest report and alert history
+          # parsed in memory. Measured at 7,000 clusters / 200k findings it
+          # used ~1 GiB; small fleets use well under 256Mi. GOMEMLIMIT (env
+          # above) keeps the Go heap under the limit instead of OOM-killing.
           resources:
             requests:
               cpu: "100m"
               memory: "256Mi"
             limits:
               cpu: "1"
-              memory: "1Gi"
+              memory: "2Gi"
       volumes:
         - name: config-cm-vol
           configMap:

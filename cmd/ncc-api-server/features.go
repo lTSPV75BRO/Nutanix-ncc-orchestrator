@@ -179,30 +179,60 @@ func (s *apiServer) handleFeatureFlags(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func nccLogsForReport(s *apiServer, flags featureFlags) []map[string]string {
+// The three NCC-log views below read every raw log in the log directory
+// (7,000 files at 7,000 clusters, twice per report request before caching).
+// They are cached per run via cachedLogDirValue; results are shared and
+// read-only.
+
+func nccLogsForReport(s *apiServer, flags featureFlags, outDir string) []map[string]string {
 	if s == nil || !flags.NCCLogIndex {
 		return []map[string]string{}
 	}
-	logs := listNCCLogs(s.absPath(s.logDir))
-	for _, l := range logs {
+	logDir := s.absPath(s.logDir)
+	v := cachedLogDirValue("list", logDir, outDir, func() interface{} {
+		logs := listNCCLogs(logDir)
 		// Report data is viewer-readable; don't disclose the absolute log dir.
-		l["path"] = s.displayRelPath(l["path"])
-	}
+		// Resolve the directory once: resolving each of 7,000 files (symlink
+		// evaluation per path element) took ~30 s on Windows.
+		// Same result as displayRelPath per file: the path under the stack
+		// root, or just the file name when the log dir is outside it.
+		prefix := ""
+		root, dir := s.absPath(s.repoRoot), s.absPath(logDir)
+		if rel, err := filepath.Rel(root, dir); err == nil && rel != "." && rel != ".." &&
+			!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel) {
+			prefix = filepath.ToSlash(rel)
+		}
+		for _, l := range logs {
+			name := l["name"]
+			if prefix != "" {
+				l["path"] = prefix + "/" + name
+			} else {
+				l["path"] = name
+			}
+		}
+		return logs
+	})
+	logs, _ := v.([]map[string]string)
 	return logs
 }
 
-func nccSummaryForReport(s *apiServer, flags featureFlags) map[string]int {
+func nccSummaryForReport(s *apiServer, flags featureFlags, outDir string) map[string]int {
 	if s == nil || !flags.NCCLogIndex {
 		return map[string]int{}
 	}
-	return parseNCCSummaryCounts(s.absPath(s.logDir))
+	logDir := s.absPath(s.logDir)
+	v := cachedLogDirValue("counts", logDir, outDir, func() interface{} { return parseNCCSummaryCounts(logDir) })
+	counts, _ := v.(map[string]int)
+	return counts
 }
 
-func nccClusterSummaryForReport(s *apiServer, flags featureFlags, access clusterAccess) interface{} {
+func nccClusterSummaryForReport(s *apiServer, flags featureFlags, access clusterAccess, outDir string) interface{} {
 	if s == nil || !flags.NCCLogIndex {
 		return []interface{}{}
 	}
-	return deepFilterClusters(parseNCCClusterSummary(s.absPath(s.logDir)), access)
+	logDir := s.absPath(s.logDir)
+	v := cachedLogDirValue("clusters", logDir, outDir, func() interface{} { return parseNCCClusterSummary(logDir) })
+	return deepFilterClusters(v, access)
 }
 
 func trendsForReport(flags featureFlags, outDir string) []trendPoint {

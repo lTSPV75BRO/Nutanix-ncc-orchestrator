@@ -129,6 +129,46 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
     sites.
   - **Opening title** (`intro_title`): off skips the intro for everyone; it
     is exposed on the public `/health` so the sign-in page can honour it.
+- **Faster, sturdier runs across thousands of clusters.** See the engine
+  section of [`docs/SCALING.md`](docs/SCALING.md).
+  - `max-parallel` defaults to `0` (auto: one per cluster, up to 500); 7,000
+    clusters with ~3-minute NCC runs take ~45 min instead of ~90 h at the old
+    default of 4. Adaptive parallelism now backs off to 3/4 on HTTP 429/503
+    (once per 5 s) instead of by one.
+  - Cluster slots cover only starting, polling and reading NCC; reports and
+    per-cluster notifications run in a separate pool (a 3 s webhook per
+    cluster slowed a run by 18% before, ~1.5% now).
+  - Status polls use the task's percentage to land just after it finishes
+    (bounded by `poll-interval` and interval/5, at least 1 s).
+  - The HTTP pool keeps an idle connection per cluster in flight.
+  - New `retry-failed-clusters` (default 1): clusters that failed with a
+    timeout, network error or rate limit are run again at the end of the run.
+  - New `--resume` / `resume`: an interrupted run reuses the clusters it
+    already finished (run journal; same cluster list, within 24 h).
+  - `tools/fakeprism` gains `-task-duration` and a slow `/hook` receiver.
+- **Fleet scale (tested with 7,000 clusters / 210,000 findings).** See
+  [`docs/SCALING.md`](docs/SCALING.md) for measurements and sizing.
+  - Fixed: above 20,000 findings the report API returned no rows (they live in
+    `aggregated-data.json`), so Findings, Overview and Insights were empty;
+    run-history snapshots now keep that file too.
+  - api-server: report files and raw-log summaries are parsed once per run and
+    shared (keyed by file size and time; warmed in the background), alert
+    history is kept in memory, written compact and indexed by ID, and a run
+    already ingested is skipped. `/report/data` went from 32 s to 0.1–0.6 s,
+    alert endpoints from 1.5 s to <0.4 s, ingesting a run from 37 s to 0.9 s.
+    When rows are present the checks snapshot omits its per-check lists.
+    Cluster-group filtering copies instead of editing shared data.
+  - Orchestrator: parses summaries from memory instead of re-reading the file it
+    just wrote, keeps cluster metadata with results, drops finished progress
+    bars, splits lines without copying (−45% CPU). `max-parallel` now allows up
+    to 1,000 (was 100). `NCC_PROFILE_DIR` writes CPU/heap profiles.
+  - UI: Findings builds rows once per report and filters them separately (search
+    no longer freezes the page), resolves cluster logs and names once, works out
+    KB links only for visible rows, and stops refetching the preview after the
+    full report loads — all rows in 2 s instead of 9–21 s. Report requests get a
+    2-minute timeout.
+  - Kubernetes: api-server memory limit 2Gi with `GOMEMLIMIT`; Helm
+    `apiGoMemLimit`. New `tools/fakeprism` load-test server.
 - **Hardening and polish.** Knowledge-base and Prism links taken from report
   data or Prism Central now only become clickable when they are `http(s)`
   (a `javascript:` or `data:` value is dropped), and generated KB links use

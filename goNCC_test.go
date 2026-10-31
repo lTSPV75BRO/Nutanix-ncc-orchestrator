@@ -1540,8 +1540,12 @@ func TestBindConfigDefaults(t *testing.T) {
 	if cfg.RequestTimeout != 20*time.Second {
 		t.Errorf("Expected default RequestTimeout 20s, got %v", cfg.RequestTimeout)
 	}
-	if cfg.MaxParallel != 4 {
-		t.Errorf("Expected default MaxParallel 4, got %d", cfg.MaxParallel)
+	// 0 = auto: one worker per cluster, up to autoMaxParallelCap.
+	if cfg.MaxParallel != 0 {
+		t.Errorf("Expected default MaxParallel 0 (auto), got %d", cfg.MaxParallel)
+	}
+	if cfg.RetryFailedClusters != 1 || cfg.Resume {
+		t.Errorf("Expected retry-failed-clusters 1 and resume off, got %d / %v", cfg.RetryFailedClusters, cfg.Resume)
 	}
 	if cfg.RetryMaxAttempts != 6 {
 		t.Errorf("Expected default RetryMaxAttempts 6, got %d", cfg.RetryMaxAttempts)
@@ -2482,7 +2486,8 @@ func TestBindConfigMaxParallel(t *testing.T) {
 		{"Valid value", "8", 8},
 		{"Single cluster", "1", 1},
 		{"Large value", "100", 100},
-		{"Invalid string", "invalid", 4}, // viper returns 0; app defaults to 4 when <= 0
+		{"Auto", "0", 0},
+		{"Invalid string", "invalid", 0}, // viper returns 0, which means auto (sized when the run starts)
 	}
 
 	for _, tt := range tests {

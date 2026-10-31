@@ -494,6 +494,8 @@ func flattenCanonicalConfigMap(cfg map[string]interface{}) {
 		"poll-interval":               {"runner", "execution", "poll-interval"},
 		"poll-jitter":                 {"runner", "execution", "poll-jitter"},
 		"adaptive-parallelism":        {"runner", "execution", "adaptive-parallelism"},
+		"retry-failed-clusters":       {"runner", "execution", "retry-failed-clusters"},
+		"resume":                      {"runner", "execution", "resume"},
 		"dry-run":                     {"runner", "execution", "dry-run"},
 		"skip-preflight-check":        {"runner", "execution", "skip-preflight-check"},
 		"replay":                      {"runner", "execution", "replay"},

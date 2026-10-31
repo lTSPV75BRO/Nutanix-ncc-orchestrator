@@ -67,6 +67,15 @@ func TestSplitLines(t *testing.T) {
 	if got := SplitLines("x\ny"); len(got) != 2 {
 		t.Errorf("no trailing newline: got %v, want 2 lines", got)
 	}
+	// CRLF summaries (Windows-saved logs) split like bufio.ScanLines.
+	if got := SplitLines("a\r\nb\r\n"); len(got) != 3 || got[0] != "a" || got[1] != "b" || got[2] != "" {
+		t.Errorf("CRLF: got %q", got)
+	}
+	// Lines longer than the old 4 MiB scanner limit are no longer dropped.
+	long := strings.Repeat("x", 5<<20)
+	if got := SplitLines("start\n" + long + "\nend"); len(got) != 3 || len(got[1]) != len(long) || got[2] != "end" {
+		t.Errorf("long line: got %d lines", len(got))
+	}
 }
 
 func TestParseSummary(t *testing.T) {

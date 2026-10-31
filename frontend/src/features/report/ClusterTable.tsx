@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Alert,
   Button,
@@ -107,8 +107,8 @@ type RowRecord = {
   severity: Severity;
   isUnknownSeverity: boolean;
   detail: string;
-  kb: string;
-  kbLinks: string[];
+  /** The report row this came from; KB links are read from it on demand (kbLinksOf). */
+  raw: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
   resolvedAt: string;
@@ -123,6 +123,10 @@ type RowRecord = {
   isFlaky: boolean;
   logName: string;
   logPath: string;
+  /** Lower-cased "name address severity alert", built once for search. */
+  searchText: string;
+  /** Lower-cased display name and resolved address name, for the cluster filter. */
+  clusterKeys: string[];
 };
 
 const SEVERITY_TAG_COLOR: Record<Severity, string> = {
@@ -196,10 +200,24 @@ function pcCopyText(row: RowRecord): string {
     "",
     row.detail || "",
     row.rootCause && row.rootCause !== row.detail ? `\nRoot cause:\n${row.rootCause}` : "",
-    row.kbLinks.length ? `\nKB:\n${row.kbLinks.join("\n")}` : "",
+    kbLinksOf(row).length ? `\nKB:\n${kbLinksOf(row).join("\n")}` : "",
   ];
   return lines.filter((line) => line !== "").join("\n").trim();
 }
+
+// KB links come from parsing each row's detail text. Only the rows on screen
+// need them, so they are worked out on first use rather than for all 200k
+// rows of a fleet-scale report up front.
+const kbLinkCache = new WeakMap<RowRecord, string[]>();
+function kbLinksOf(row: RowRecord): string[] {
+  let links = kbLinkCache.get(row);
+  if (!links) {
+    links = collectKBUrls(row.raw, row.detail);
+    kbLinkCache.set(row, links);
+  }
+  return links;
+}
+const kbOf = (row: RowRecord): string => kbLinksOf(row)[0] || "";
 
 function normalizeCheckTitle(check: string): string {
   return check.replace(/^detailed information for\s*/i, "").replace(/:$/, "").trim();
@@ -236,13 +254,26 @@ function clusterPrismURL(
   return mappedIP ? `https://${normalizeClusterHost(mappedIP)}:9440` : "";
 }
 
-function matchingLogForCluster(
-  logs: Array<{ name: string; path: string }>,
-  cluster: string,
-): { name: string; path: string } | undefined {
-  const key = (cluster || "").trim();
-  if (!key) return undefined;
-  return logs.find((l) => l.name.includes(key) || l.path.includes(key));
+type NCCLog = { name: string; path: string };
+
+/**
+ * Builds a cluster → raw NCC log lookup. Logs are named "<cluster>.log", so
+ * an exact name is found directly; anything else falls back to the substring
+ * match, once per cluster. Scanning every log for every row was 7,000 × 200,000
+ * comparisons at fleet scale and froze the page.
+ */
+function logLookup(logs: NCCLog[]): (cluster: string) => NCCLog | undefined {
+  const byName = new Map<string, NCCLog>();
+  for (const l of logs) byName.set(l.name.replace(/\.log$/i, "").trim(), l);
+  const seen = new Map<string, NCCLog | undefined>();
+  return (cluster: string) => {
+    const key = (cluster || "").trim();
+    if (!key) return undefined;
+    if (seen.has(key)) return seen.get(key);
+    const found = byName.get(key) ?? logs.find((l) => l.name.includes(key) || l.path.includes(key));
+    seen.set(key, found);
+    return found;
+  };
 }
 
 function previewDetail(detail: string): string {
@@ -361,10 +392,10 @@ function PCAlertInspector({
         </Card>
       ) : null}
 
-      {row.kbLinks.length > 0 ? (
+      {kbLinksOf(row).length > 0 ? (
         <Card size="small" title="Knowledge base">
           <Space size={[8, 8]} wrap>
-            {row.kbLinks.map((url) => (
+            {kbLinksOf(row).map((url) => (
               <a key={url} href={url} target="_blank" rel="noreferrer">
                 <Tag color="processing" icon={<LinkOutlined />} style={{ margin: 0 }}>
                   {kbLabel(url)}
@@ -604,10 +635,10 @@ function NCCAlertInspector({
         </div>
       </div>
 
-      {row.kbLinks.length > 0 ? (
+      {kbLinksOf(row).length > 0 ? (
         <Card size="small" title="Knowledge base">
           <Space size={[8, 8]} wrap>
-            {row.kbLinks.map((url) => (
+            {kbLinksOf(row).map((url) => (
               <a key={url} href={url} target="_blank" rel="noreferrer">
                 <Tag color="processing" icon={<LinkOutlined />} style={{ margin: 0 }}>{kbLabel(url)}</Tag>
               </a>
@@ -680,25 +711,11 @@ export function ClusterTable({
   // NCC rows can be marked unless alert handling is off (no onDisposition).
   const canHandle = alertSource !== "PC" && Boolean(onDisposition);
 
-  const rows = useMemo<RowRecord[]>(() => {
-    const needle = filterText.toLowerCase();
-    const parsedTokens = {
-      sev: (() => {
-        const m = needle.match(/\b(?:sev|severity):([a-z]+)/);
-        return m ? m[1].toUpperCase() : "";
-      })(),
-      cluster: (() => {
-        const m = needle.match(/\bcluster:([^\s]+)/);
-        return m ? m[1] : "";
-      })(),
-      changed: /\bchanged:(true|1|yes)\b/.test(needle),
-      flaky: /\bflaky:(true|1|yes)\b/.test(needle),
-      terms: needle
-        .split(/\s+/)
-        .filter(Boolean)
-        .filter((t) => !/^(sev|severity|cluster|changed|flaky):/.test(t)),
-    };
-    const selectedSet = new Set((selectedClusters || []).map((v) => v.toLowerCase()));
+  // Rows are built once per data change; typing in search only re-filters
+  // them (below). The search text is deferred so the input stays responsive
+  // while 200k rows are filtered.
+  const baseRows = useMemo<RowRecord[]>(() => {
+    const findLog = logLookup(nccLogs || []);
     const dflags = diffFlags || {};
     const fkeys = flakyKeys || {};
     const pickDiff = (cluster: string, alert: string) => {
@@ -709,9 +726,25 @@ export function ClusterTable({
       }
       return {};
     };
-    const mapToRow = (raw: Record<string, unknown>, idx: number): RowRecord => {
+    // A fleet report repeats ~20 check titles and 7,000 clusters across 200k
+    // rows; normalize/resolve each distinct value once.
+    const once = <T,>(fn: (key: string) => T) => {
+      const memo = new Map<string, T>();
+      return (key: string) => {
+        let v = memo.get(key);
+        if (v === undefined) {
+          v = fn(key);
+          memo.set(key, v);
+        }
+        return v;
+      };
+    };
+    const titleOf = once(normalizeCheckTitle);
+    const nameOf = once((value) => resolveClusterName(value, clusterNameMap));
+    const mapToRow = (raw: Record<string, unknown>, idx: number, sourceHint?: string): RowRecord => {
+      const sourceRaw = String(sourceHint ?? raw.source ?? "");
       const cluster = String(raw.cluster || raw.address || raw.cluster_name || "-");
-      const alert = normalizeCheckTitle(String(raw.check_name ?? raw.check ?? raw.title ?? raw.alert ?? "-"));
+      const alert = titleOf(String(raw.check_name ?? raw.check ?? raw.title ?? raw.alert ?? "-"));
       const entityName = String(
         raw.entity_name ??
           raw.entityName ??
@@ -732,7 +765,7 @@ export function ClusterTable({
           "—",
       );
       const lastOccurredTime = Date.parse(lastOccurred) || 0;
-      const status = String(raw.source || "").toUpperCase() === "PC" ? displayPCStatus(raw) : String(raw.status ?? "—");
+      const status = sourceRaw.toUpperCase() === "PC" ? displayPCStatus(raw) : String(raw.status ?? "—");
       const impactType = String(raw.impact_type ?? raw.impactType ?? "—");
       const alertType = String(raw.alert_type ?? raw.alertType ?? "—");
       const acknowledged = raw.acknowledged === true ? "Yes" : raw.acknowledged === false ? "No" : "—";
@@ -741,14 +774,16 @@ export function ClusterTable({
       const isUnknownSeverity = !["FAIL", "WARN", "ERR", "INFO"].includes(severityRaw);
       const severity = (isUnknownSeverity ? "ERR" : severityRaw) as Severity;
       const detail = String(raw.detail || raw.message || "");
-      const kbLinks = collectKBUrls(raw, detail);
       const diff = pickDiff(cluster, alert);
       const isChanged = Boolean(diff.new_fail || diff.resolved_fail || diff.severity_changed);
       const isFlaky = Boolean(fkeys[rowKey(cluster, alert)]);
-      const log = matchingLogForCluster(nccLogs || [], cluster);
+      const log = findLog(cluster);
+      const clusterName = nameOf(displayClusterName(raw));
       return {
         key: `${cluster}-${alert}-${idx}`,
-        clusterName: resolveClusterName(displayClusterName(raw), clusterNameMap),
+        clusterName,
+        searchText: `${clusterName} ${cluster} ${severity} ${alert}`.toLowerCase(),
+        clusterKeys: [clusterName.toLowerCase(), nameOf(cluster).toLowerCase()],
         cluster,
         clusterIP: String(raw.cluster_ip ?? raw.address ?? ""),
         alert,
@@ -761,12 +796,11 @@ export function ClusterTable({
         alertType,
         acknowledged,
         resolved,
-        source: String(raw.source || "NCC").toUpperCase() === "PC" ? "PC" : "NCC",
+        source: sourceRaw.toUpperCase() === "PC" ? "PC" : "NCC",
         severity,
         isUnknownSeverity,
         detail,
-        kb: kbLinks[0] || "",
-        kbLinks,
+        raw,
         createdAt: String(raw.created_at ?? raw.creationTime ?? ""),
         updatedAt: String(raw.updated_at ?? raw.lastUpdatedTime ?? ""),
         resolvedAt: String(raw.resolved_at ?? raw.resolvedTime ?? ""),
@@ -784,19 +818,25 @@ export function ClusterTable({
       };
     };
 
-    let baseRows: RowRecord[] = [];
+    let built: RowRecord[] = [];
     const activeSourceFilter = String(alertSource || "NCC").toUpperCase();
-    const baseAgg = [
-      ...(aggRows || []).map((r) => ({ ...asRecord(r), source: "NCC" })),
-      ...(pcAlerts || []).map((r) => ({ ...asRecord(r), source: "PC" })),
-    ].filter((r) => activeSourceFilter === "ALL" || r.source === activeSourceFilter);
-    if (baseAgg.length > 0) {
-      baseRows = baseAgg.map((r, idx) => mapToRow(r, idx));
+    // No per-row copies: the source travels as an argument.
+    const nccRows = activeSourceFilter === "PC" ? [] : aggRows || [];
+    const pcRows = activeSourceFilter === "NCC" ? [] : pcAlerts || [];
+    if (nccRows.length + pcRows.length > 0) {
+      built = new Array<RowRecord>(nccRows.length + pcRows.length);
+      nccRows.forEach((r, idx) => {
+        built[idx] = mapToRow(asRecord(r), idx, "NCC");
+      });
+      pcRows.forEach((r, i) => {
+        const idx = nccRows.length + i;
+        built[idx] = mapToRow(asRecord(r), idx, "PC");
+      });
     } else {
       const snapshot = asRecord(checksSnapshot);
       const legacyClusters = asArray(snapshot.clusters).map((c) => asRecord(c));
       if (legacyClusters.length > 0) {
-        baseRows = legacyClusters.flatMap((cluster, cidx) =>
+        built = legacyClusters.flatMap((cluster, cidx) =>
           asArray(cluster.checks).map((chk, idx) =>
             mapToRow(
               asRecord({
@@ -809,43 +849,45 @@ export function ClusterTable({
           ),
         );
       } else {
-        baseRows = asArray(checksSnapshot).map((r, idx) => mapToRow(asRecord(r), idx));
+        built = asArray(checksSnapshot).map((r, idx) => mapToRow(asRecord(r), idx));
       }
     }
+    return built;
+  }, [checksSnapshot, aggRows, diffFlags, flakyKeys, nccLogs, clusterNameMap, pcAlerts, alertSource]);
 
+  const deferredFilterText = useDeferredValue(filterText);
+  const rows = useMemo<RowRecord[]>(() => {
+    const needle = deferredFilterText.toLowerCase();
+    const parsedTokens = {
+      sev: (() => {
+        const m = needle.match(/\b(?:sev|severity):([a-z]+)/);
+        return m ? m[1].toUpperCase() : "";
+      })(),
+      cluster: (() => {
+        const m = needle.match(/\bcluster:([^\s]+)/);
+        return m ? m[1] : "";
+      })(),
+      changed: /\bchanged:(true|1|yes)\b/.test(needle),
+      flaky: /\bflaky:(true|1|yes)\b/.test(needle),
+      terms: needle
+        .split(/\s+/)
+        .filter(Boolean)
+        .filter((t) => !/^(sev|severity|cluster|changed|flaky):/.test(t)),
+    };
+    const selectedSet = new Set((selectedClusters || []).map((v) => v.toLowerCase()));
     return baseRows.filter((r) => {
       if (severityFilters.length > 0 && !severityFilters.includes(r.severity as "FAIL" | "WARN" | "ERR" | "INFO")) return false;
       if (parsedTokens.sev && r.severity !== parsedTokens.sev) return false;
       if (parsedTokens.cluster && !`${r.clusterName} ${r.cluster}`.toLowerCase().includes(parsedTokens.cluster)) return false;
-      if (
-        selectedSet.size > 0 &&
-        !selectedSet.has(r.clusterName.toLowerCase()) &&
-        !selectedSet.has(resolveClusterName(r.cluster, clusterNameMap).toLowerCase())
-      )
-        return false;
+      if (selectedSet.size > 0 && !r.clusterKeys.some((k) => selectedSet.has(k))) return false;
       if (parsedTokens.changed && !r.isChanged) return false;
       if (parsedTokens.flaky && !r.isFlaky) return false;
       if (compareMode === "changed" && !r.isChanged) return false;
       if (compareMode === "flaky" && !r.isFlaky) return false;
       if (alertSource === "PC" && pcResolvedFilter !== "all" && r.resolved !== pcResolvedFilter) return false;
-      const hay = `${r.clusterName} ${r.cluster} ${r.severity} ${r.alert}`.toLowerCase();
-      return parsedTokens.terms.every((t) => hay.includes(t));
+      return parsedTokens.terms.every((t) => r.searchText.includes(t));
     });
-  }, [
-    checksSnapshot,
-    aggRows,
-    diffFlags,
-    flakyKeys,
-    nccLogs,
-    filterText,
-    selectedClusters,
-    clusterNameMap,
-    severityFilters,
-    pcAlerts,
-    alertSource,
-    pcResolvedFilter,
-    compareMode,
-  ]);
+  }, [baseRows, deferredFilterText, selectedClusters, severityFilters, alertSource, pcResolvedFilter, compareMode]);
 
   const dispositionByKey = useMemo(() => {
     const map = new Map<string, NCCDisposition>();
@@ -863,6 +905,11 @@ export function ClusterTable({
     "";
   const handlingCounts = useMemo(() => {
     const counts = { all: rows.length, open: 0, acknowledged: 0, resolved: 0, returned: 0 };
+    if (dispositionByKey.size === 0) {
+      // Nothing handled yet (the common case on a new run): all open.
+      counts.open = rows.length;
+      return counts;
+    }
     for (const row of rows) {
       const status =
         dispositionByKey.get(nccDispositionKey(row.cluster, row.alert))?.status ||
@@ -1031,9 +1078,9 @@ export function ClusterTable({
       title: "KB",
       key: "kb",
       width: 100,
-      render: (_, row) => row.kb ? (
-        <a href={row.kb} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
-          <Tag color="processing" icon={<LinkOutlined />} style={{ margin: 0 }}>{kbLabel(row.kb)}</Tag>
+      render: (_, row) => kbOf(row) ? (
+        <a href={kbOf(row)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+          <Tag color="processing" icon={<LinkOutlined />} style={{ margin: 0 }}>{kbLabel(kbOf(row))}</Tag>
         </a>
       ) : <Typography.Text type="secondary">—</Typography.Text>,
     },
@@ -1401,9 +1448,9 @@ export function ClusterTable({
                   Open in Prism
                 </Button>
               ) : null}
-              {drawerRow.source === "PC" && drawerRow.kb ? (
-                <Button type="primary" icon={<LinkOutlined />} href={drawerRow.kb} target="_blank" rel="noopener noreferrer">
-                  {kbLabel(drawerRow.kb)}
+              {drawerRow.source === "PC" && kbOf(drawerRow) ? (
+                <Button type="primary" icon={<LinkOutlined />} href={kbOf(drawerRow)} target="_blank" rel="noopener noreferrer">
+                  {kbLabel(kbOf(drawerRow))}
                 </Button>
               ) : null}
             </Space>

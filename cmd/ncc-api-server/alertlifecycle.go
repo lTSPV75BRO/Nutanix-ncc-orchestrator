@@ -156,6 +156,10 @@ type alertLifecycleDoc struct {
 	IngestedRuns   []string        `json:"ingested_runs"`
 	LastIngestRun  string          `json:"last_ingest_run,omitempty"`
 	LegacyImported bool            `json:"legacy_imported,omitempty"`
+
+	// idIndex maps alert ID -> position in Alerts (not stored; see
+	// findAlertIndex).
+	idIndex map[string]int
 }
 
 // nccFinding is one finding observed in a run report.
@@ -183,6 +187,66 @@ type alertLifecycleStore struct {
 	now        func() time.Time
 	newID      func() (string, error)
 	retainDays int
+
+	// cached is the last document read or written, valid while the file's
+	// stamp still matches (another replica writing shared storage changes
+	// it). At fleet scale the file is ~160 MB for 200k alerts, so parsing it
+	// on every list/get took ~1.5 s. cached is never modified: writers work
+	// on a clone and readers get this pointer directly. Guarded by mu.
+	cached      *alertLifecycleDoc
+	cachedStamp fileStamp
+}
+
+// clone copies the document for a writer. Every field of nccAlert and
+// nccAlertEvent is a value, so copying the slices copies the records.
+func (d *alertLifecycleDoc) clone() *alertLifecycleDoc {
+	cp := *d
+	cp.Alerts = append([]nccAlert(nil), d.Alerts...)
+	cp.Events = append([]nccAlertEvent(nil), d.Events...)
+	cp.IngestedRuns = append([]string(nil), d.IngestedRuns...)
+	cp.idIndex = nil // the writer builds its own; the shared one stays read-only
+	return &cp
+}
+
+// currentLocked returns the stored document, parsing the file only when it
+// changed since the last read or write. The result must not be modified.
+// Callers hold mu and the file lock.
+func (st *alertLifecycleStore) currentLocked() (*alertLifecycleDoc, error) {
+	stamp, exists := statStamp(st.path)
+	if exists && st.cached != nil && stamp == st.cachedStamp {
+		return st.cached, nil
+	}
+	doc, err := st.loadLocked()
+	if err != nil {
+		st.cached = nil
+		return nil, err
+	}
+	doc.indexForSharing()
+	if exists {
+		st.cached, st.cachedStamp = doc, stamp
+	} else {
+		st.cached = nil
+	}
+	return doc, nil
+}
+
+// hasIngested reports whether runAt is already in the store, without the
+// cost of building the run's findings (see syncNCCAlertLifecycle).
+func (st *alertLifecycleStore) hasIngested(runAt string) bool {
+	runAt = strings.TrimSpace(runAt)
+	if runAt == "" {
+		return true
+	}
+	doc, err := st.read()
+	if err != nil {
+		return false
+	}
+	for _, r := range doc.IngestedRuns {
+		if r == runAt {
+			return true
+		}
+	}
+	return doc.LastIngestRun != "" && !runIsNewer(runAt, doc.LastIngestRun)
 }
 
 func newAlertLifecycleStore(path, legacyPath string) *alertLifecycleStore {
@@ -238,8 +302,9 @@ func severityRank(sev string) int {
 func (st *alertLifecycleStore) lockPath() string { return st.path + ".lock" }
 
 // withLock runs fn with the in-process mutex and the cross-process file lock
-// held, against a freshly loaded document. When fn returns changed=true the
-// document is written back atomically (plus the legacy compatibility mirror).
+// held, against a private copy of the current document. When fn returns
+// changed=true the document is written back atomically (plus the legacy
+// compatibility mirror).
 func (st *alertLifecycleStore) withLock(fn func(doc *alertLifecycleDoc) (bool, error)) error {
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -251,10 +316,11 @@ func (st *alertLifecycleStore) withLock(fn func(doc *alertLifecycleDoc) (bool, e
 		return err
 	}
 	defer release()
-	doc, err := st.loadLocked()
+	base, err := st.currentLocked()
 	if err != nil {
 		return err
 	}
+	doc := base.clone()
 	migrated := false
 	if !doc.LegacyImported {
 		migrated, err = st.importLegacyLocked(doc)
@@ -274,17 +340,27 @@ func (st *alertLifecycleStore) withLock(fn func(doc *alertLifecycleDoc) (bool, e
 }
 
 // read returns a consistent snapshot without writing (except a one-time legacy
-// import, which is persisted so the import is not repeated).
+// import, which is persisted so the import is not repeated). The snapshot is
+// shared and must not be modified; copy before sorting or changing it.
 func (st *alertLifecycleStore) read() (*alertLifecycleDoc, error) {
-	var out *alertLifecycleDoc
-	err := st.withLock(func(doc *alertLifecycleDoc) (bool, error) {
-		cp := *doc
-		cp.Alerts = append([]nccAlert(nil), doc.Alerts...)
-		cp.Events = append([]nccAlertEvent(nil), doc.Events...)
-		out = &cp
-		return false, nil
-	})
-	return out, err
+	st.mu.Lock()
+	needsImport := st.cached == nil || !st.cached.LegacyImported
+	st.mu.Unlock()
+	if needsImport {
+		// Rare (first read): go through the write path so a legacy import is
+		// persisted once.
+		if err := st.withLock(func(*alertLifecycleDoc) (bool, error) { return false, nil }); err != nil {
+			return nil, err
+		}
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	release, err := lockStateFile(st.lockPath(), alertLifecycleLockTimeout)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return st.currentLocked()
 }
 
 func (st *alertLifecycleStore) loadLocked() (*alertLifecycleDoc, error) {
@@ -321,12 +397,20 @@ func (st *alertLifecycleStore) saveLocked(doc *alertLifecycleDoc) error {
 	if doc.Events == nil {
 		doc.Events = []nccAlertEvent{}
 	}
-	b, err := json.MarshalIndent(doc, "", "  ")
+	// Compact, not indented: the file holds every alert instance and event
+	// (~160 MB for 200k alerts indented), and only this server reads it.
+	b, err := json.Marshal(doc)
 	if err != nil {
 		return err
 	}
 	if err := writeFileAtomic(st.path, append(b, '\n'), 0o600); err != nil {
+		st.cached = nil
 		return err
+	}
+	if stamp, ok := statStamp(st.path); ok {
+		st.cached, st.cachedStamp = doc.indexForSharing(), stamp
+	} else {
+		st.cached = nil
 	}
 	// Compatibility mirror: keep the legacy dispositions file current so a
 	// rollback to an older api-server still sees today's marks.
@@ -396,16 +480,53 @@ func (st *alertLifecycleStore) newAlert(doc *alertLifecycleDoc, cluster, cluster
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	})
+	if doc.idIndex != nil {
+		doc.idIndex[id] = len(doc.Alerts) - 1
+	}
 	return &doc.Alerts[len(doc.Alerts)-1], nil
 }
 
+// findAlertIndex returns the position of the alert with id, or -1.
+//
+// It uses the document's ID index: a full scan per lookup made ingesting a
+// fleet-scale run quadratic (140k new alerts took 37 s). The index is built
+// here only on a writer's private copy (idIndex nil); a shared, cached
+// document is indexed before it is published (see indexForSharing), so
+// concurrent readers never write it.
 func findAlertIndex(doc *alertLifecycleDoc, id string) int {
+	if doc.idIndex == nil {
+		doc.buildIDIndex()
+	}
+	if len(doc.idIndex) == len(doc.Alerts) {
+		i, ok := doc.idIndex[id]
+		if !ok {
+			return -1
+		}
+		if i < len(doc.Alerts) && doc.Alerts[i].ID == id {
+			return i
+		}
+	}
+	// Index out of step (duplicate IDs, or the list changed): scan.
 	for i := range doc.Alerts {
 		if doc.Alerts[i].ID == id {
 			return i
 		}
 	}
 	return -1
+}
+
+func (d *alertLifecycleDoc) buildIDIndex() {
+	idx := make(map[string]int, len(d.Alerts))
+	for i := range d.Alerts {
+		idx[d.Alerts[i].ID] = i
+	}
+	d.idIndex = idx
+}
+
+// indexForSharing prepares a document to become the cached, shared copy.
+func (d *alertLifecycleDoc) indexForSharing() *alertLifecycleDoc {
+	d.buildIDIndex()
+	return d
 }
 
 // activeIndexByKey maps correlation key -> index of the single open instance.
@@ -945,6 +1066,7 @@ func (st *alertLifecycleStore) pruneLocked(doc *alertLifecycleDoc) {
 			kept = append(kept, a)
 		}
 		doc.Alerts = kept
+		doc.idIndex = nil // positions moved; rebuilt on next lookup
 		if len(drop) > 0 {
 			ev := doc.Events[:0]
 			for _, e := range doc.Events {

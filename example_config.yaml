@@ -39,8 +39,10 @@ runner:
     request-timeout: 20s            # --request-timeout / NCC_REQUEST_TIMEOUT
     poll-interval: 15s              # --poll-interval / NCC_POLL_INTERVAL
     poll-jitter: 2s                 # --poll-jitter / NCC_POLL_JITTER
-    max-parallel: 4                 # --max-parallel / NCC_MAX_PARALLEL
+    max-parallel: 0                 # --max-parallel / NCC_MAX_PARALLEL  0 = auto (one per cluster, up to 500)
     adaptive-parallelism: true      # --adaptive-parallelism / NCC_ADAPTIVE_PARALLELISM
+    retry-failed-clusters: 1        # --retry-failed-clusters / NCC_RETRY_FAILED_CLUSTERS  re-run timeouts/network errors (0-5)
+    resume: false                   # --resume / NCC_RESUME  reuse clusters an interrupted run finished (same list, within 24h)
     dry-run: false                  # --dry-run / NCC_DRY_RUN
     skip-preflight-check: false     # --skip-preflight-check / NCC_SKIP_PREFLIGHT_CHECK
     replay: false                   # --replay / NCC_REPLAY

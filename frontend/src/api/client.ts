@@ -182,6 +182,13 @@ function isAbortError(err: unknown): boolean {
   return err instanceof DOMException && err.name === "AbortError";
 }
 
+/**
+ * The full report is the one large response (200k findings ≈ 6 MB compressed
+ * at 7,000 clusters); give it longer than the 30 s default so a slow link or
+ * the first request after a run is not cut off.
+ */
+const REPORT_DATA_TIMEOUT_MS = 120_000;
+
 async function requestJSON<T>(path: string, init?: RequestInit, timeoutMs = 30_000): Promise<Envelope<T>> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
@@ -411,14 +418,14 @@ export const api = {
     if (typeof opts?.offset === "number" && opts.offset >= 0) params.set("offset", String(opts.offset));
     const path = params.size > 0 ? `/api/v1/report/data?${params.toString()}` : "/api/v1/report/data";
     try {
-      return await callApi<ReportData>(path);
+      return await callApi<ReportData>(path, undefined, REPORT_DATA_TIMEOUT_MS);
     } catch {
       return loadReportDataFallback();
     }
   },
   reportData: async () => {
     try {
-      return await callApi<ReportData>("/api/v1/report/data");
+      return await callApi<ReportData>("/api/v1/report/data", undefined, REPORT_DATA_TIMEOUT_MS);
     } catch {
       return loadReportDataFallback();
     }

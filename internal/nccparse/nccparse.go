@@ -8,7 +8,6 @@
 package nccparse
 
 import (
-	"bufio"
 	"fmt"
 	"regexp"
 	"strings"
@@ -23,16 +22,29 @@ var (
 	rePluginSev  = regexp.MustCompile(`\[\s*(FAIL|WARN|ERR|INFO)\s*\]`)
 )
 
-// SplitLines splits text into lines using a large scanner buffer, preserving a
-// trailing empty line when the input ends with a newline.
+// SplitLines splits text into lines (dropping a trailing "\r" from each, like
+// bufio.ScanLines), preserving a trailing empty line when the input ends with
+// a newline.
+//
+// The lines are substrings of s, not copies: a run parses every cluster's
+// summary twice, and copying each line was ~1 GB of garbage per 7,000
+// clusters. Callers that keep a line beyond s's lifetime should clone it.
 func SplitLines(s string) []string {
-	sc := bufio.NewScanner(strings.NewReader(s))
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	lines := []string{}
-	for sc.Scan() {
-		lines = append(lines, sc.Text())
+	if s == "" {
+		return []string{}
 	}
-	if len(s) > 0 && strings.HasSuffix(s, "\n") {
+	lines := make([]string, 0, strings.Count(s, "\n")+1)
+	rest := s
+	for rest != "" {
+		i := strings.IndexByte(rest, '\n')
+		if i < 0 {
+			lines = append(lines, strings.TrimSuffix(rest, "\r"))
+			break
+		}
+		lines = append(lines, strings.TrimSuffix(rest[:i], "\r"))
+		rest = rest[i+1:]
+	}
+	if strings.HasSuffix(s, "\n") {
 		lines = append(lines, "")
 	}
 	return lines
@@ -63,7 +75,8 @@ func ParseSummary(text string) ([]model.ParsedBlock, error) {
 	var blocks []model.ParsedBlock
 	for i := 0; i < len(lines); i++ {
 		if reBlockStart.MatchString(lines[i]) {
-			checkName := lines[i]
+			// Clone: lines share the whole summary's memory (see SplitLines).
+			checkName := strings.Clone(lines[i])
 			i++
 			var buf []string
 			for i < len(lines) && !reBlockEnd.MatchString(lines[i]) {

@@ -96,7 +96,19 @@ export function buildClusterNameMap(input: ClusterMapInput): Record<string, stri
     .map((c) => asRecord(c))
     .forEach(addFromRow);
 
-  (input.aggRows || []).map((r) => asRecord(r)).forEach(addFromRow);
+  // Every finding repeats its cluster's identity (200k rows for 7,000 clusters
+  // at fleet scale); adding the same identity again changes nothing, so each
+  // distinct one is added once.
+  const seenIdentities = new Set<string>();
+  for (const raw of input.aggRows || []) {
+    const r = asRecord(raw);
+    const identity = [r.clusterName, r.cluster_name, r.name, r.cluster, r.cluster_ip, r.ip, r.address, r.cluster_uuid, r.clusterUUID]
+      .map((v) => (v == null ? "" : String(v)))
+      .join("\u0000");
+    if (seenIdentities.has(identity)) continue;
+    seenIdentities.add(identity);
+    addFromRow(r);
+  }
 
   const snapshot = asRecord(input.checksSnapshot);
   asArray(snapshot.clusters)

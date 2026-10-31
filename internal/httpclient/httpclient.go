@@ -78,7 +78,25 @@ const (
 	DefaultMaxIdleConns        = 100
 	DefaultMaxIdleConnsPerHost = 10
 	DefaultIdleConnTimeout     = 90 * time.Second
+	// autoParallelIdleConns is used when max-parallel is 0 (auto, up to 500).
+	autoParallelIdleConns = 500
 )
+
+// DefaultIdleConnsFor sizes the idle-connection pool for a run. Every cluster
+// is its own host and keeps one connection open while it polls; with a pool
+// smaller than the clusters in flight, idle connections were dropped between
+// polls and most polls paid for a new TLS handshake (on both sides).
+func DefaultIdleConnsFor(maxParallel int) int {
+	want := maxParallel
+	if want <= 0 {
+		want = autoParallelIdleConns
+	}
+	want += want / 4 // headroom for notification and discovery calls
+	if want < DefaultMaxIdleConns {
+		return DefaultMaxIdleConns
+	}
+	return want
+}
 
 // LoggingTransport wraps a RoundTripper and logs redacted request/response
 // dumps at debug level. MaxBody caps the logged body size (0 = unlimited).
@@ -205,7 +223,7 @@ func New(cfg model.Config) *http.Client {
 	// Apply defaults for connection pooling
 	maxIdleConns := cfg.MaxIdleConns
 	if maxIdleConns <= 0 {
-		maxIdleConns = DefaultMaxIdleConns
+		maxIdleConns = DefaultIdleConnsFor(cfg.MaxParallel)
 	}
 	maxIdleConnsPerHost := cfg.MaxIdleConnsPerHost
 	if maxIdleConnsPerHost <= 0 {

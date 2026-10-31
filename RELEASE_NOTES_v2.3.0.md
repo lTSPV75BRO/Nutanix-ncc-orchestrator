@@ -153,6 +153,34 @@ every page (the SLO panel used a different formula).
   visible focus ring on links and controls.
 - On phones the Overview tiles sit two to a row instead of one long column.
 
+### Ready for large fleets
+
+Tested end to end with **7,000 clusters and 210,000 findings per run**
+(details and sizing in [`docs/SCALING.md`](docs/SCALING.md)):
+
+- Findings now appear for very large runs. Above 20,000 findings they were
+  missing from Findings, Overview and Insights.
+- Pages load in about 2 seconds at that size, and searching findings responds
+  as you type (it used to freeze the page).
+- The server answers report and alert requests in well under a second (up to
+  32 seconds before), and records a run's alert history in about a second
+  (37 seconds before).
+- `max-parallel` can go up to 1,000 clusters at once (was 100), and now
+  defaults to `0` (automatic: one per cluster, up to 500). With ~3-minute NCC
+  runs, 7,000 clusters take about 45 minutes instead of about 90 hours at the
+  old default of 4. If Prism pushes back (HTTP 429/503), the run slows down
+  on its own.
+- Writing reports and sending per-cluster notifications no longer hold up
+  other clusters, and status checks notice a finished NCC run sooner.
+- Clusters that time out or hit a network error are tried again at the end of
+  the run (`retry-failed-clusters`, default 1).
+- A long run that was interrupted can pick up where it stopped:
+  `ncc-orchestrator --resume` reuses the clusters already finished.
+- **Upgrade note:** if your config sets `max-parallel: 4` explicitly, that
+  value still applies; set `0` (or remove it) to get the automatic size.
+- Kubernetes: the api-server memory limit is now 2Gi. If you set your own
+  limits, allow about 1 GiB for the api-server at 7,000 clusters.
+
 ### More switches in Settings → Features
 
 Features is now grouped into **Views**, **Actions** and **Sign-in**, with

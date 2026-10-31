@@ -69,6 +69,12 @@ const SEVERITY_META: Array<{ key: Severity; color: string; label: string; icon: 
 ];
 
 
+// Stable empty values for ClusterTable props: a fresh {} or [] on each render
+// would make it rebuild every row (200k at fleet scale) on every render.
+const NO_ROWS: unknown[] = [];
+const NO_FLAGS: Record<string, unknown> = {};
+const NO_LOGS: Array<{ name: string; path: string }> = [];
+
 /**
  * Findings: every NCC (and, in beta, Prism Central) alert from the latest run,
  * with filters kept in the URL, acknowledge/resolve, and per-row detail. The
@@ -171,17 +177,24 @@ export function FindingsPage() {
     }
   };
 
-  const previewReport = useQuery({
-    queryKey: ["report-data", "preview", PREVIEW_LIMIT],
-    queryFn: () => api.reportDataWithPagination({ limit: PREVIEW_LIMIT }),
-    staleTime: 30_000,
-  });
-
   const fullReport = useQuery({
     queryKey: ["report-data", "full"],
     queryFn: () => api.reportData(),
     enabled: loadFullReport,
     staleTime: 30_000,
+    // 200k rows at fleet scale: comparing each new copy with the last one
+    // row by row costs more than it saves.
+    structuralSharing: false,
+  });
+
+  // The first page of rows, shown while the full report loads. Turned off
+  // once the full report is in (removing it while still observed made it
+  // fetch again and re-render the page).
+  const previewReport = useQuery({
+    queryKey: ["report-data", "preview", PREVIEW_LIMIT],
+    queryFn: () => api.reportDataWithPagination({ limit: PREVIEW_LIMIT }),
+    staleTime: 30_000,
+    enabled: !fullReport.data,
   });
 
   const nccDispositionsQuery = useQuery({
@@ -247,11 +260,6 @@ export function FindingsPage() {
       return () => clearTimeout(timer);
     }
   }, [previewReport.data]);
-
-  useEffect(() => {
-    if (!fullReport.data) return;
-    queryClient.removeQueries({ queryKey: ["report-data", "preview", PREVIEW_LIMIT], exact: true });
-  }, [fullReport.data, queryClient]);
 
   useEffect(() => {
     if (previewReport.error) notifyError(previewReport.error, "Could not load the latest findings");
@@ -348,7 +356,11 @@ export function FindingsPage() {
 
   const clusterOptions = useMemo(() => {
     const names = new Set<string>();
+    // Each cluster repeats on every one of its findings; resolve each value once.
+    const seen = new Set<unknown>();
     const add = (value: unknown) => {
+      if (seen.has(value)) return;
+      seen.add(value);
       const label = resolveClusterName(value, clusterNameMap).trim();
       if (!label || label === "-") return;
       names.add(label);
@@ -392,7 +404,7 @@ export function FindingsPage() {
   const clustersFailed = toNumber(runSummary.clusters_failed);
 
   // Severity totals fall back to agg_rows if NCC summary missing (e.g. some setups).
-  const aggRows = filteredAggRows.map((r) => asRecord(r));
+  const aggRows = filteredAggRows;
   // checks_snapshot can be either:
   // 1) a flat row array, or
   // 2) legacy/object form {clusters:[{checks:[...]}]}.
@@ -407,10 +419,18 @@ export function FindingsPage() {
     }
     return false;
   }, [filteredChecksSnapshot]);
-  const aggFail = aggRows.filter((r) => String(r.severity || "").toUpperCase() === "FAIL").length;
-  const aggErr = aggRows.filter((r) => String(r.severity || "").toUpperCase() === "ERR").length;
-  const aggWarn = aggRows.filter((r) => String(r.severity || "").toUpperCase() === "WARN").length;
-  const aggInfo = aggRows.filter((r) => String(r.severity || "").toUpperCase() === "INFO").length;
+  // One pass, once per data change (this ran four passes on every render).
+  const { aggFail, aggErr, aggWarn, aggInfo } = useMemo(() => {
+    const counts = { aggFail: 0, aggErr: 0, aggWarn: 0, aggInfo: 0 };
+    for (const r of aggRows) {
+      const sev = String(r.severity || "").toUpperCase();
+      if (sev === "FAIL") counts.aggFail += 1;
+      else if (sev === "ERR") counts.aggErr += 1;
+      else if (sev === "WARN") counts.aggWarn += 1;
+      else if (sev === "INFO") counts.aggInfo += 1;
+    }
+    return counts;
+  }, [aggRows]);
   // The pills double as severity filters, so they count the whole run, not
   // the filtered table (which would show 0 for every severity not selected).
   // The table's own counts are the fallback for PC alerts and older runs
@@ -427,8 +447,7 @@ export function FindingsPage() {
 
   const refreshAll = async () => {
     await Promise.all([
-      previewReport.refetch(),
-      loadFullReport ? fullReport.refetch() : Promise.resolve(),
+      loadFullReport ? fullReport.refetch() : previewReport.refetch(),
       queryClient.invalidateQueries({ queryKey: ["ncc-dispositions"] }),
       queryClient.invalidateQueries({ queryKey: [NCC_ALERTS_QUERY_KEY] }),
       alertSource === "PC"
@@ -794,11 +813,11 @@ export function FindingsPage() {
           pcAlerts={
             (pcResolvedFilter === "No"
               ? pcUnresolvedAlertsQuery.data?.alerts
-              : pcAllAlertsQuery.data?.alerts) ?? []
+              : pcAllAlertsQuery.data?.alerts) ?? NO_ROWS
           }
-          diffFlags={(reportData.diff_flags || {}) as Record<string, unknown>}
-          flakyKeys={(reportData.flaky_keys || {}) as Record<string, unknown>}
-          nccLogs={Array.isArray(reportData.ncc_logs) ? reportData.ncc_logs : []}
+          diffFlags={(reportData.diff_flags || NO_FLAGS) as Record<string, unknown>}
+          flakyKeys={(reportData.flaky_keys || NO_FLAGS) as Record<string, unknown>}
+          nccLogs={Array.isArray(reportData.ncc_logs) ? reportData.ncc_logs : NO_LOGS}
           filterText={filterText}
           selectedClusters={selectedClusters}
           clusterNameMap={clusterNameMap}

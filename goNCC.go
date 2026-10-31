@@ -143,7 +143,8 @@ const (
 	defaultRequestTimeout      = 20 * time.Second
 	defaultPollInterval        = 15 * time.Second
 	defaultPollJitter          = 2 * time.Second
-	defaultMaxParallel         = 4
+	defaultMaxParallel         = 4 // fallback for an invalid value; unset/0 = auto
+	defaultRetryFailedClusters = 1
 	defaultRetryAttempts       = 6
 	defaultRetryBaseDelay      = 400 * time.Millisecond
 	defaultRetryMaxDelay       = 8 * time.Second
@@ -161,6 +162,12 @@ const (
 
 	// Graceful shutdown
 	shutdownTimeout = 30 * time.Second
+
+	// maxParallelLimit caps max-parallel (clusters processed at once).
+	maxParallelLimit = 1000
+
+	// adaptiveDecreaseCooldown spaces adaptive-parallelism back-offs.
+	adaptiveDecreaseCooldown = 5 * time.Second
 
 	// Security
 	minPasswordLength = 1
@@ -1128,11 +1135,18 @@ func validateConfig(cfg Config) error {
 	}
 
 	// Validate concurrency
-	if cfg.MaxParallel <= 0 {
-		return errors.New("max-parallel must be greater than 0")
+	// 0 = auto: sized to the fleet when the run starts (autoMaxParallel).
+	if cfg.MaxParallel < 0 {
+		return errors.New("max-parallel must be 0 (auto) or greater")
 	}
-	if cfg.MaxParallel > 100 {
-		return errors.New("max-parallel cannot exceed 100 (safety limit)")
+	if cfg.RetryFailedClusters < 0 || cfg.RetryFailedClusters > 5 {
+		return errors.New("retry-failed-clusters must be between 0 and 5")
+	}
+	// Each worker mostly waits on its cluster's NCC task (polling every
+	// poll-interval), so hundreds in flight are cheap; the old limit of 100
+	// meant ~70 waves (12–23 h of NCC time) for a 7,000-cluster fleet.
+	if cfg.MaxParallel > maxParallelLimit {
+		return fmt.Errorf("max-parallel cannot exceed %d (safety limit)", maxParallelLimit)
 	}
 
 	// Validate output formats
@@ -1344,7 +1358,9 @@ poll-interval: "15s"                      # Polling interval for task status
 poll-jitter: "2s"                         # Random jitter to avoid herd behavior  
 
 # Concurrency and outputs
-max-parallel: 4                           # Parallel clusters processed  
+max-parallel: 0                           # Clusters checked at once; 0 = auto (one per cluster, up to 500)
+retry-failed-clusters: 1                  # Re-run clusters that timed out / hit network errors (0-5)
+resume: false                             # Reuse clusters an interrupted run already finished
 outputs: "html,csv"                       # One or more: html,csv,json,markdown,sarif
 output-dir-logs: "nccfiles"               # Directory for raw NCC summary text  
 output-dir-filtered: "outputfiles"        # Directory for generated HTML/CSV  
@@ -1444,7 +1460,9 @@ secrets-file: ""                          # YAML/JSON key-value map when secrets
   "request-timeout": "30s",
   "poll-interval": "15s",
   "poll-jitter": "2s",
-  "max-parallel": 4,
+  "max-parallel": 0,
+  "retry-failed-clusters": 1,
+  "resume": false,
   "outputs": "html,csv",
   "output-dir-logs": "nccfiles",
   "output-dir-filtered": "outputfiles",
@@ -1539,7 +1557,9 @@ poll-interval: "15s"                      # Polling interval for task status
 poll-jitter: "2s"                         # Random jitter to avoid herd behavior  
 
 # Concurrency and outputs
-max-parallel: 4                           # Parallel clusters processed  
+max-parallel: 0                           # Clusters checked at once; 0 = auto (one per cluster, up to 500)
+retry-failed-clusters: 1                  # Re-run clusters that timed out / hit network errors (0-5)
+resume: false                             # Reuse clusters an interrupted run already finished
 outputs: "html,csv"                       # One or more: html,csv,json,markdown,sarif
 output-dir-logs: "nccfiles"               # Directory for raw NCC summary text  
 output-dir-filtered: "outputfiles"        # Directory for generated HTML/CSV  
@@ -1722,7 +1742,7 @@ func validateConfigFileRawTypes() error {
 		"insecure-skip-verify": true, "ca-bundle": true, "pin-sha256": true, "timeout": true, "request-timeout": true, "poll-interval": true, "poll-jitter": true,
 		"max-parallel": true, "outputs": true, "output-dir-logs": true, "output-dir-filtered": true,
 		"single-report": true, "run-history": true, "run-history-dir": true, "retain-last": true, "retain-days": true, "artifact-retain-days": true, "artifact-retain-max-files": true,
-		"notify-on-regression": true, "adaptive-parallelism": true,
+		"notify-on-regression": true, "adaptive-parallelism": true, "retry-failed-clusters": true, "resume": true,
 		"policy-gates": true, "quiet-hours": true, "maintenance-windows": true,
 		"flaky-lookback-runs": true, "flaky-min-transitions": true,
 		"log-file": true, "log-level": true, "log-http": true,
@@ -1776,7 +1796,7 @@ func validateConfigFileRawTypes() error {
 		"skip-preflight-check",
 		"insecure-skip-verify", "dry-run", "replay", "log-http",
 		"prom-enabled",
-		"run-history", "single-report", "notify-on-regression", "adaptive-parallelism",
+		"run-history", "single-report", "notify-on-regression", "adaptive-parallelism", "resume",
 		"email-enabled", "email-attach-html", "notify-digest", "email-use-tls", "smtp-insecure-skip-verify",
 		"webhook-enabled", "webhook-include-html", "slack-enabled",
 	}
@@ -1789,7 +1809,7 @@ func validateConfigFileRawTypes() error {
 		}
 	}
 	intKeys := []string{
-		"schema-version", "max-parallel", "retry-max-attempts", "retry-circuit-breaker", "max-idle-conns", "max-idle-conns-per-host",
+		"schema-version", "max-parallel", "retry-failed-clusters", "retry-max-attempts", "retry-circuit-breaker", "max-idle-conns", "max-idle-conns-per-host",
 		"max-conns-per-host", "smtp-port", "retain-last", "retain-days", "artifact-retain-days", "artifact-retain-max-files", "gen-test-agg",
 		"flaky-lookback-runs", "flaky-min-transitions",
 	}
@@ -1895,6 +1915,8 @@ func normalizeCanonicalConfig() {
 		"runner.execution.poll-interval":             "poll-interval",
 		"runner.execution.poll-jitter":               "poll-jitter",
 		"runner.execution.adaptive-parallelism":      "adaptive-parallelism",
+		"runner.execution.retry-failed-clusters":     "retry-failed-clusters",
+		"runner.execution.resume":                    "resume",
 		"runner.execution.dry-run":                   "dry-run",
 		"runner.execution.skip-preflight-check":      "skip-preflight-check",
 		"runner.execution.replay":                    "replay",
@@ -2140,6 +2162,8 @@ func bindConfig() (Config, error) {
 		SingleReport:              viper.GetBool("single-report"),
 		NotifyOnRegression:        viper.GetBool("notify-on-regression"),
 		AdaptiveParallelism:       viper.GetBool("adaptive-parallelism"),
+		RetryFailedClusters:       viper.GetInt("retry-failed-clusters"),
+		Resume:                    viper.GetBool("resume"),
 		PolicyGates:               splitCSV(viper.GetString("policy-gates")),
 		QuietHours:                strings.TrimSpace(viper.GetString("quiet-hours")),
 		MaintenanceWindows:        splitCSVValue(viper.Get("maintenance-windows")),
@@ -2176,8 +2200,14 @@ func bindConfig() (Config, error) {
 	if len(cfg.OutputFormats) == 0 {
 		cfg.OutputFormats = []string{defaultOutputFormat}
 	}
-	if cfg.MaxParallel <= 0 {
+	// max-parallel 0 means auto and stays 0 until the run knows its fleet
+	// (autoMaxParallel); only an invalid negative value falls back.
+	if cfg.MaxParallel < 0 {
 		cfg.MaxParallel = defaultMaxParallel
+	}
+	// 0 is a valid choice (no retry pass), so only an unset value defaults.
+	if !viper.IsSet("retry-failed-clusters") {
+		cfg.RetryFailedClusters = defaultRetryFailedClusters
 	}
 	if cfg.LogFile == "" {
 		cfg.LogFile = defaultLogFile
@@ -2380,6 +2410,7 @@ const (
 var (
 	adaptiveCurrentParallel int32
 	adaptiveMaxParallel     int32
+	adaptiveLastDecrease    int64 // unix nanos of the last back-off
 	adaptiveNotifyMu        sync.Mutex
 	adaptiveNotifyCh        chan struct{}
 )
@@ -2431,15 +2462,29 @@ func noteHTTPStatusForAdaptiveParallelism(status int, cfg Config) {
 		return
 	}
 	switch status {
-	case http.StatusTooManyRequests:
+	case http.StatusTooManyRequests, http.StatusServiceUnavailable:
+		// Back off multiplicatively (to 3/4), at most once per cooldown so a
+		// burst of rejections from in-flight requests counts once. Taking one
+		// slot off per 429 barely registered at hundreds of clusters in flight.
+		now := time.Now().UnixNano()
+		last := atomic.LoadInt64(&adaptiveLastDecrease)
+		if now-last < int64(adaptiveDecreaseCooldown) || !atomic.CompareAndSwapInt64(&adaptiveLastDecrease, last, now) {
+			return
+		}
 		for {
 			cur := atomic.LoadInt32(&adaptiveCurrentParallel)
 			if cur <= 1 {
 				return
 			}
-			next := cur - 1
+			next := cur * 3 / 4
+			if next >= cur {
+				next = cur - 1
+			}
+			if next < 1 {
+				next = 1
+			}
 			if atomic.CompareAndSwapInt32(&adaptiveCurrentParallel, cur, next) {
-				log.Warn().Int("adaptive_parallel", int(next)).Int("max_parallel", maxP).Msg("adaptive parallelism reduced after 429")
+				log.Warn().Int("status", status).Int("adaptive_parallel", int(next)).Int("max_parallel", maxP).Msg("adaptive parallelism reduced after the server pushed back")
 				notifyAdaptiveParallelismChanged()
 				return
 			}
@@ -2558,21 +2603,33 @@ func parseNCCHeader(path string) (HTMLMeta, error) {
 	var meta HTMLMeta
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-
-		switch {
-		case strings.HasPrefix(line, "Cluster Name:"):
-			meta.ClusterName = strings.TrimSpace(strings.TrimPrefix(line, "Cluster Name:"))
-		case strings.HasPrefix(line, "Cluster Version:"):
-			meta.ClusterVersion = strings.TrimSpace(strings.TrimPrefix(line, "Cluster Version:"))
-		case strings.HasPrefix(line, "NCC Version:"):
-			meta.NCCVersion = strings.TrimSpace(strings.TrimPrefix(line, "NCC Version:"))
-		}
+		applyNCCHeaderLine(&meta, scanner.Text())
 	}
 	if err := scanner.Err(); err != nil {
 		return HTMLMeta{}, err
 	}
 	return meta, nil
+}
+
+// parseNCCHeaderText is parseNCCHeader for a summary already in memory.
+func parseNCCHeaderText(text string) HTMLMeta {
+	var meta HTMLMeta
+	for _, line := range strings.Split(text, "\n") {
+		applyNCCHeaderLine(&meta, line)
+	}
+	return meta
+}
+
+func applyNCCHeaderLine(meta *HTMLMeta, raw string) {
+	line := strings.TrimSpace(raw)
+	switch {
+	case strings.HasPrefix(line, "Cluster Name:"):
+		meta.ClusterName = strings.TrimSpace(strings.TrimPrefix(line, "Cluster Name:"))
+	case strings.HasPrefix(line, "Cluster Version:"):
+		meta.ClusterVersion = strings.TrimSpace(strings.TrimPrefix(line, "Cluster Version:"))
+	case strings.HasPrefix(line, "NCC Version:"):
+		meta.NCCVersion = strings.TrimSpace(strings.TrimPrefix(line, "NCC Version:"))
+	}
 }
 
 // ==================== Notifications ====================
@@ -3524,15 +3581,26 @@ func evaluatePolicyGates(gates []string, metrics map[string]float64) ([]string, 
 	return violations, nil
 }
 
+// copyFile streams src to dst (run-history snapshots include the aggregated
+// rows file, ~80 MB at 7,000 clusters, so it is not loaded into memory).
 func copyFile(src, dst string) error {
-	b, err := os.ReadFile(src)
+	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
+	defer in.Close()
 	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(dst, b, 0644)
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 func runHistoryTimestamp(now time.Time) string {
@@ -3684,6 +3752,9 @@ func writeRunHistorySnapshot(cfg Config) (string, error) {
 	}
 	candidates := []string{
 		"index.html",
+		// Runs above 20,000 findings keep their rows here instead of in
+		// index.html; without it a large run's history snapshot had none.
+		"aggregated-data.json",
 		"run-summary.json",
 		"ncc-run-record.json",
 		"regression-summary.json",
@@ -6993,15 +7064,23 @@ func sanitizeSummary(s string) string {
 }
 
 func writeSummary(fs FS, folder, cluster, summary string) (string, error) {
+	outPath, _, err := writeSummaryText(fs, folder, cluster, summary)
+	return outPath, err
+}
+
+// writeSummaryText saves the raw NCC summary and also returns the exact text
+// written (sanitized), so callers can parse it without reading the file back.
+func writeSummaryText(fs FS, folder, cluster, summary string) (string, string, error) {
 	if err := fs.MkdirAll(folder, 0755); err != nil {
-		return "", err
+		return "", "", err
 	}
 	outPath := filepath.Join(folder, fmt.Sprintf("%s.log", cluster))
 	log.Debug().Str("path", outPath).Int("bytes", len(summary)).Msg("writing summary")
-	if err := fs.WriteFile(outPath, []byte(sanitizeSummary(summary)), 0644); err != nil {
-		return "", err
+	text := sanitizeSummary(summary)
+	if err := fs.WriteFile(outPath, []byte(text), 0644); err != nil {
+		return "", "", err
 	}
-	return outPath, nil
+	return outPath, text, nil
 }
 
 func filterBlocksToFile(fs FS, inputPath, outputPath string) ([]ParsedBlock, error) {
@@ -7010,12 +7089,20 @@ func filterBlocksToFile(fs FS, inputPath, outputPath string) ([]ParsedBlock, err
 		return nil, err
 	}
 	log.Debug().Str("path", inputPath).Int("bytes", len(data)).Msg("read raw log")
-	blocks, err := ParseSummary(string(data))
+	return filterBlocksFromText(fs, string(data), inputPath, outputPath)
+}
+
+// filterBlocksFromText parses an NCC summary already in memory and writes the
+// filtered view. A live run uses this with the text it just saved, rather than
+// reading the raw log back from disk (at 7,000 clusters that re-read was ~40%
+// of the run's CPU/IO time, mostly waiting on a freshly written file).
+func filterBlocksFromText(fs FS, text, sourceLabel, outputPath string) ([]ParsedBlock, error) {
+	blocks, err := ParseSummary(text)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateParsedAlertsAgainstPluginResults(string(data), blocks); err != nil {
-		log.Warn().Err(err).Str("path", inputPath).Msg("parser validation: mismatch between parsed alerts and NCC plugin results")
+	if err := validateParsedAlertsAgainstPluginResults(text, blocks); err != nil {
+		log.Warn().Err(err).Str("path", sourceLabel).Msg("parser validation: mismatch between parsed alerts and NCC plugin results")
 	}
 	if err := fs.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
 		return nil, err
@@ -7045,6 +7132,33 @@ func runClusterWithBars(
 	onPct func(int),
 	setPhase func(string),
 ) (ClusterRunOutput, error) {
+	fetched, err := fetchClusterSummary(ctx, cfg, httpc, cluster, username, password, onPct, setPhase)
+	if err != nil {
+		return ClusterRunOutput{}, err
+	}
+	return processClusterSummary(ctx, cfg, fs, httpc, cluster, fetched, setPhase)
+}
+
+// clusterFetch is what a cluster hands back once its NCC run finished.
+type clusterFetch struct {
+	RunSummary string
+	Started    time.Time
+}
+
+// fetchClusterSummary is the part of a cluster's run that needs the cluster:
+// start NCC, poll the task, read the summary. A run's max-parallel slots cover
+// only this; writing reports and sending notifications (processClusterSummary)
+// happen in a separate pool so they never hold a cluster slot.
+func fetchClusterSummary(
+	ctx context.Context,
+	cfg Config,
+	httpc HTTPClient,
+	cluster string,
+	username string,
+	password string,
+	onPct func(int),
+	setPhase func(string),
+) (clusterFetch, error) {
 	l := log.With().Str("cluster", cluster).Logger()
 	client := NewNCCClient(cluster, username, password, httpc, cfg)
 	var clusterStart = time.Now()
@@ -7053,19 +7167,20 @@ func runClusterWithBars(
 	taskID, body, err := client.StartChecks(ctx)
 	if err != nil {
 		l.Error().Err(err).RawJSON("response_body", body).Msg("start checks failed")
-		return ClusterRunOutput{}, fmt.Errorf("start checks failed: %w", err)
+		return clusterFetch{}, fmt.Errorf("start checks failed: %w", err)
 	}
 	l.Info().Str("taskID", taskID).Msg("ncc task started")
+	taskStart := time.Now()
 	onPct(1)
 
 	last := 1
 	setPhase("polling")
-	for {
+	for done := false; !done; {
 		select {
 		case <-ctx.Done():
 			l.Warn().Err(ctx.Err()).Msg("context cancelled during polling, stopping gracefully")
-			return ClusterRunOutput{}, fmt.Errorf("operation cancelled: %w", ctx.Err())
-		case <-time.After(cfg.PollInterval + time.Duration(rand.Int63n(int64(cfg.PollJitter)))):
+			return clusterFetch{}, fmt.Errorf("operation cancelled: %w", ctx.Err())
+		case <-time.After(nextPollDelay(cfg.PollInterval, cfg.PollJitter, time.Since(taskStart), last)):
 			if dl, ok := ctx.Deadline(); ok {
 				rem := time.Until(dl)
 				if rem < 10*time.Second {
@@ -7075,7 +7190,7 @@ func runClusterWithBars(
 			status, body, err := client.GetTask(ctx, taskID)
 			if err != nil {
 				l.Error().Err(err).RawJSON("response_body", body).Msg("poll failed")
-				return ClusterRunOutput{}, fmt.Errorf("poll failed: %w", err)
+				return clusterFetch{}, fmt.Errorf("poll failed: %w", err)
 			}
 			pct := status.PercentageComplete
 			if pct < last {
@@ -7089,61 +7204,95 @@ func runClusterWithBars(
 			last = pct
 
 			if status.ProgressStatus == "Failed" {
-				return ClusterRunOutput{}, fmt.Errorf("ncc task failed")
+				return clusterFetch{}, fmt.Errorf("ncc task failed")
 			}
-			if pct >= 100 {
-				goto SUMMARY
-			}
+			done = pct >= 100
 		}
 	}
 
-SUMMARY:
 	setPhase("summary")
 	summary, body, err := client.GetRunSummary(ctx, taskID)
 	if err != nil {
 		l.Error().Err(err).RawJSON("response_body", body).Msg("get summary failed")
-		return ClusterRunOutput{}, fmt.Errorf("get summary failed: %w", err)
+		return clusterFetch{}, fmt.Errorf("get summary failed: %w", err)
 	}
+	return clusterFetch{RunSummary: summary.RunSummary, Started: clusterStart}, nil
+}
 
+// nextPollDelay picks when to ask a running NCC task for its status again.
+//
+// A fixed interval finds a finished task on average half an interval late
+// (~7.5 s per cluster at the 15 s default, ~4% of a 3-minute run, multiplied
+// across thousands of clusters). The task reports its percentage, so the
+// remaining time is estimated from it: early on it polls at the configured
+// interval (never less often), and near the end it aims for just after the
+// estimated finish — but never more often than interval/5, nor faster than
+// once a second, so a cluster is not hammered when the estimate is off.
+func nextPollDelay(interval, jitter, elapsed time.Duration, pct int) time.Duration {
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	spread := func(max time.Duration) time.Duration {
+		if max <= 0 {
+			return 0
+		}
+		return time.Duration(rand.Int63n(int64(max)))
+	}
+	if pct <= 1 || pct >= 100 || elapsed <= 0 {
+		return interval + spread(jitter)
+	}
+	remaining := time.Duration(float64(elapsed) * float64(100-pct) / float64(pct))
+	if remaining >= interval {
+		return interval + spread(jitter)
+	}
+	floor := interval / 5
+	if floor < time.Second {
+		floor = time.Second
+	}
+	if remaining < floor {
+		remaining = floor
+	}
+	// Land just after the estimate rather than just before it.
+	return remaining + remaining/10 + spread(jitter/4)
+}
+
+// processClusterSummary turns a fetched NCC summary into the cluster's
+// files, findings and notifications. It needs no cluster connection.
+func processClusterSummary(
+	ctx context.Context,
+	cfg Config,
+	fs FS,
+	httpc HTTPClient,
+	cluster string,
+	fetched clusterFetch,
+	setPhase func(string),
+) (ClusterRunOutput, error) {
+	l := log.With().Str("cluster", cluster).Logger()
+	clusterStart := fetched.Started
 	setPhase("writing")
-	logPath, err := writeSummary(fs, cfg.OutputDirLogs, cluster, summary.RunSummary)
+	logPath, rawText, err := writeSummaryText(fs, cfg.OutputDirLogs, cluster, fetched.RunSummary)
 	if err != nil {
 		l.Error().Err(err).Msg("write summary failed")
 		return ClusterRunOutput{}, err
 	}
 	l.Info().Str("logPath", logPath).Msg("summary written")
+	// Header metadata comes from the same text (used by the per-cluster
+	// reports here and by the run aggregate, which no longer re-reads 7,000
+	// raw logs one by one after the run).
+	meta := parseNCCHeaderText(rawText)
 
 	// Parse blocks and write filtered file in one operation to avoid duplicate parsing
 	filteredPath := filepath.Join(cfg.OutputDirFiltered, fmt.Sprintf("%s.log", cluster))
-	blocks, err := filterBlocksToFile(fs, logPath, filteredPath)
+	blocks, err := filterBlocksFromText(fs, rawText, logPath, filteredPath)
 	if err != nil {
 		l.Error().Err(err).Msg("filter blocks failed")
 		return ClusterRunOutput{}, err
 	}
 	l.Info().Str("filteredPath", filteredPath).Msg("filtered written")
 
-	// Apply severity filtering if configured
-	if len(cfg.SeverityFilter) > 0 {
-		originalCount := len(blocks)
-		blocks = filterBlocksBySeverity(blocks, cfg.SeverityFilter)
-		l.Info().Int("original", originalCount).Int("filtered", len(blocks)).Strs("severities", cfg.SeverityFilter).Msg("applied severity filter")
-	}
-	excludedByTitle := make([]ExcludedAlert, 0)
-	if len(cfg.ExcludeAlertTitles) > 0 {
-		originalCount := len(blocks)
-		filteredBlocks, excludedAlerts, err := filterBlocksByTitle(blocks, cfg.ExcludeAlertTitles, cfg.ExcludeAlertMatchMode)
-		if err != nil {
-			return ClusterRunOutput{}, err
-		}
-		blocks = filteredBlocks
-		excludedByTitle = excludedAlerts
-		l.Info().
-			Int("original", originalCount).
-			Int("filtered", len(blocks)).
-			Int("excluded", len(excludedByTitle)).
-			Str("mode", cfg.ExcludeAlertMatchMode).
-			Strs("titles", cfg.ExcludeAlertTitles).
-			Msg("applied alert title exclusion filter")
+	blocks, excludedByTitle, err := applyBlockFilters(cfg, blocks, l)
+	if err != nil {
+		return ClusterRunOutput{}, err
 	}
 
 	counts := map[string]int{"FAIL": 0, "WARN": 0, "ERR": 0, "INFO": 0}
@@ -7167,16 +7316,7 @@ SUMMARY:
 
 	var htmlPathForNotify string
 	base := filteredPath
-	rawPath := filepath.Join(cfg.OutputDirLogs, fmt.Sprintf("%s.log", cluster))
-	var meta HTMLMeta
-	metaLoaded := false
-	loadMeta := func() HTMLMeta {
-		if !metaLoaded {
-			meta, _ = parseNCCHeader(rawPath) // best effort
-			metaLoaded = true
-		}
-		return meta
-	}
+	loadMeta := func() HTMLMeta { return meta }
 	for _, f := range cfg.OutputFormats {
 		switch strings.ToLower(strings.TrimSpace(f)) {
 		case "html":
@@ -7256,7 +7396,7 @@ SUMMARY:
 		if suppressed, reason := notificationsSuppressedNow(cfg, time.Now()); suppressed {
 			l.Info().Str("reason", reason).Msg("notifications suppressed by quiet-hours/maintenance-window")
 			setPhase("done")
-			return ClusterRunOutput{Blocks: blocks, ExcludedByTitle: excludedByTitle}, nil
+			return ClusterRunOutput{Blocks: blocks, ExcludedByTitle: excludedByTitle, Meta: meta}, nil
 		}
 		if cfg.NotifyOnRegression {
 			prevFail := cfg.PreviousClusterFailCount[cluster]
@@ -7266,7 +7406,7 @@ SUMMARY:
 					Int("previous_fail", prevFail).
 					Msg("notify-on-regression enabled: skipping non-regression cluster notification")
 				setPhase("done")
-				return ClusterRunOutput{Blocks: blocks, ExcludedByTitle: excludedByTitle}, nil
+				return ClusterRunOutput{Blocks: blocks, ExcludedByTitle: excludedByTitle, Meta: meta}, nil
 			}
 		}
 		if err := sendEmailWithRetry(cfg, subj, bodyEmail, htmlPathForNotify); err != nil {
@@ -7285,7 +7425,7 @@ SUMMARY:
 	if len(excludedByTitle) > 0 {
 		l.Info().Int("excluded_alerts", len(excludedByTitle)).Msg("alerts excluded by title filters")
 	}
-	return ClusterRunOutput{Blocks: blocks, ExcludedByTitle: excludedByTitle}, nil
+	return ClusterRunOutput{Blocks: blocks, ExcludedByTitle: excludedByTitle, Meta: meta}, nil
 }
 
 // ==================== CLI ====================
@@ -7294,6 +7434,7 @@ type ClusterResult struct {
 	Cluster         string
 	Blocks          []ParsedBlock
 	ExcludedByTitle []ExcludedAlert
+	Meta            HTMLMeta // cluster name/versions from the NCC summary header
 	Err             error
 	ErrorClass      string
 }
@@ -7301,6 +7442,7 @@ type ClusterResult struct {
 type ClusterRunOutput struct {
 	Blocks          []ParsedBlock
 	ExcludedByTitle []ExcludedAlert
+	Meta            HTMLMeta
 }
 
 type proxyDecorator struct{ text string }
@@ -13894,7 +14036,7 @@ func configJSONSchema() map[string]interface{} {
 		"request-timeout":           map[string]interface{}{"type": "string"},
 		"poll-interval":             map[string]interface{}{"type": "string"},
 		"poll-jitter":               map[string]interface{}{"type": "string"},
-		"max-parallel":              map[string]interface{}{"type": "integer", "minimum": 1},
+		"max-parallel":              map[string]interface{}{"type": "integer", "minimum": 0, "maximum": maxParallelLimit},
 		"outputs":                   map[string]interface{}{"type": "string", "description": "Comma-separated html,csv,json,markdown,sarif"},
 		"output-dir-logs":           map[string]interface{}{"type": "string"},
 		"output-dir-filtered":       map[string]interface{}{"type": "string"},
@@ -13923,6 +14065,8 @@ func configJSONSchema() map[string]interface{} {
 		"artifact-retain-max-files": map[string]interface{}{"type": "integer", "minimum": 0},
 		"notify-on-regression":      map[string]interface{}{"type": "boolean"},
 		"adaptive-parallelism":      map[string]interface{}{"type": "boolean"},
+		"retry-failed-clusters":     map[string]interface{}{"type": "integer", "minimum": 0, "maximum": 5},
+		"resume":                    map[string]interface{}{"type": "boolean"},
 		"policy-gates":              map[string]interface{}{"type": "string"},
 		"quiet-hours":               map[string]interface{}{"type": "string", "description": "HH:MM-HH:MM local time"},
 		"maintenance-windows":       map[string]interface{}{"type": "string", "description": "comma-separated start/end RFC3339 windows"},
@@ -14512,7 +14656,7 @@ func applyFullAutoRuntimeTuning(cfg *Config) []string {
 		return nil
 	}
 	changes := []string{}
-	if cfg.MaxParallel > 12 {
+	if cfg.MaxParallel > 12 || cfg.MaxParallel == 0 { // 0 = auto, which can go far higher
 		old := cfg.MaxParallel
 		cfg.MaxParallel = 12
 		changes = append(changes, fmt.Sprintf("max-parallel %d -> %d", old, cfg.MaxParallel))
@@ -15763,6 +15907,11 @@ Examples:
 Run 'ncc-orchestrator --help' for a full list of options.
 `,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Opt-in profiling for large fleets: NCC_PROFILE_DIR=<dir> writes
+			// cpu.pprof and heap.pprof there for `go tool pprof`.
+			if stop := startRunProfiling(os.Getenv("NCC_PROFILE_DIR")); stop != nil {
+				defer stop()
+			}
 			// Setup console logger first for early error visibility
 			consoleWriter := zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}
 			consoleLogger := zerolog.New(consoleWriter).With().Timestamp().Logger()
@@ -16227,14 +16376,28 @@ Run 'ncc-orchestrator --help' for a full list of options.
 			// structured zerolog lines below (phase change / cluster run
 			// completed / cluster run failed) still record per-cluster progress.
 			progressOpts := []mpb.ContainerOption{mpb.WithWidth(80)}
-			if !term.IsTerminal(int(os.Stdout.Fd())) {
+			onTTY := term.IsTerminal(int(os.Stdout.Fd()))
+			if !onTTY {
 				progressOpts = append(progressOpts, mpb.WithOutput(io.Discard))
+			}
+			// Drop finished bars when nobody watches them or there are too many
+			// to show: every kept bar is redrawn on each refresh, which was ~15%
+			// of a 7,000-cluster run's CPU with all 14,000 bars kept.
+			dropDoneBars := !onTTY || len(cfg.Clusters) > 200
+			var doneBarOpts []mpb.BarOption
+			if dropDoneBars {
+				doneBarOpts = append(doneBarOpts, mpb.BarRemoveOnComplete())
 			}
 			p := mpb.New(progressOpts...)
 			defer func() {
 				// Ensure progress bars are cleaned up on exit
 				p.Wait()
 			}()
+			// max-parallel: 0 = auto, sized to the fleet now that it is known.
+			if cfg.MaxParallel == 0 {
+				cfg.MaxParallel = autoMaxParallel(len(cfg.Clusters))
+				log.Info().Int("max_parallel", cfg.MaxParallel).Int("clusters", len(cfg.Clusters)).Msg("max-parallel auto")
+			}
 			resetAdaptiveParallelism(cfg.MaxParallel)
 			gateChanged := make(chan struct{}, 1)
 			setAdaptiveParallelismNotify(gateChanged)
@@ -16247,8 +16410,9 @@ Run 'ncc-orchestrator --help' for a full list of options.
 			}
 			sem := make(chan struct{}, cfg.MaxParallel)
 			var activeWorkers int32
-			var wg sync.WaitGroup
-			results := make(chan ClusterResult, len(cfg.Clusters))
+			var wg sync.WaitGroup          // clusters of the current pass still talking to their cluster
+			var procPending sync.WaitGroup // fetched summaries queued for or in the processing pool
+			var results chan ClusterResult // final results, in cluster order (built after all passes)
 			runStart := time.Now()
 			notify.ResetMetrics()
 
@@ -16287,140 +16451,300 @@ Run 'ncc-orchestrator --help' for a full list of options.
 				_ = otelShutdown(shutdownCtx)
 			}()
 
-			for _, cluster := range cfg.Clusters {
-				clusterUser, clusterPass := credentialsForCluster(cfg, cluster)
-				wg.Add(1)
-			waitForWorkerSlot:
-				for {
-					limit := currentAdaptiveParallel(cfg.MaxParallel)
-					curActive := int(atomic.LoadInt32(&activeWorkers))
-					if curActive < limit {
+			// ---- Resume an interrupted run (--resume) ----
+			// Clusters it already finished are rebuilt from their saved raw NCC
+			// summaries instead of being run again.
+			resumed := map[string]ClusterResult{}
+			if cfg.Resume {
+				done, why := readRunJournal(runJournalPath(cfg), cfg.Clusters, time.Now())
+				if why != "" {
+					log.Info().Str("reason", why).Msg("resume: starting a full run")
+					fmt.Fprintf(os.Stderr, "Resume: %s; checking every cluster.\n", why)
+				}
+				for cl := range done {
+					if r, ok := resumedClusterResult(cfg, cl); ok {
+						resumed[cl] = r
+					}
+				}
+				if len(resumed) > 0 {
+					log.Info().Int("reused", len(resumed)).Int("clusters", len(cfg.Clusters)).Msg("resume: reusing clusters the interrupted run finished")
+					fmt.Fprintf(os.Stderr, "Resume: reusing %d of %d clusters from the interrupted run.\n", len(resumed), len(cfg.Clusters))
+				}
+			}
+			journal, jErr := openRunJournal(cfg, len(resumed) > 0, time.Now())
+			if jErr != nil {
+				log.Warn().Err(jErr).Msg("run journal unavailable; this run cannot be resumed if interrupted")
+			}
+			runCompleted := false
+			defer func() { journal.close(runCompleted) }()
+
+			// ---- Results ----
+			// Recorded as each cluster finishes (synchronously, so a pass is fully
+			// recorded when it returns); the latest result per cluster wins, so a
+			// retry replaces a failure. Finished clusters go into the run journal.
+			var collectedMu sync.Mutex
+			collected := make(map[string]ClusterResult, len(cfg.Clusters))
+			for cl, r := range resumed {
+				collected[cl] = r
+			}
+			record := func(r ClusterResult) {
+				collectedMu.Lock()
+				collected[r.Cluster] = r
+				collectedMu.Unlock()
+				if r.Err == nil {
+					journal.markDone(r.Cluster)
+				}
+			}
+
+			// ---- Processing pool ----
+			// Writing a cluster's files and sending its notifications needs no
+			// cluster connection, so it runs here, off the max-parallel slots: a
+			// slow SMTP server or webhook no longer holds a cluster slot.
+			procJobs := make(chan clusterProcessJob, processingWorkers(cfg.MaxParallel))
+			var procWorkers sync.WaitGroup
+			for i := 0; i < cap(procJobs); i++ {
+				procWorkers.Add(1)
+				go func() {
+					defer procWorkers.Done()
+					for job := range procJobs {
+						func() {
+							defer procPending.Done()
+							defer func() {
+								if r := recover(); r != nil {
+									job.finish(false)
+									log.Error().Interface("panic", r).Stack().Str("cluster", job.cluster).Msg("cluster processing panic")
+									panicErr := fmt.Errorf("panic: %v", r)
+									record(ClusterResult{Cluster: job.cluster, Err: panicErr, ErrorClass: classifyClusterError(panicErr)})
+								}
+							}()
+							runOut, err := processClusterSummary(ctx, cfg, fs, httpc, job.cluster, job.fetched, job.setPhase)
+							if err != nil {
+								job.setPhase("failed")
+								job.finish(false)
+								log.Error().Str("cluster", job.cluster).Err(err).Msg("cluster run failed")
+								fmt.Fprintf(os.Stderr, "\n❌ Cluster %s failed: %v\n", job.cluster, err)
+								record(ClusterResult{Cluster: job.cluster, Err: err, ErrorClass: classifyClusterError(err)})
+								return
+							}
+							job.setPhase("done")
+							job.finish(true)
+							log.Info().Str("cluster", job.cluster).Msg("cluster run completed")
+							record(ClusterResult{Cluster: job.cluster, Blocks: runOut.Blocks, ExcludedByTitle: runOut.ExcludedByTitle, Meta: runOut.Meta})
+						}()
+					}
+				}()
+			}
+
+			// dispatch runs one pass over clusters: each holds a slot only while
+			// it starts, polls and reads its NCC task, then hands the summary to
+			// the processing pool. It returns once every cluster of the pass is
+			// fully processed.
+			dispatch := func(clusters []string) error {
+				for _, cluster := range clusters {
+					clusterUser, clusterPass := credentialsForCluster(cfg, cluster)
+					wg.Add(1)
+				waitForWorkerSlot:
+					for {
+						limit := currentAdaptiveParallel(cfg.MaxParallel)
+						curActive := int(atomic.LoadInt32(&activeWorkers))
+						if curActive < limit {
+							break
+						}
+						select {
+						case <-ctx.Done():
+							break waitForWorkerSlot
+						case <-gateChanged:
+						}
+					}
+					if ctx.Err() != nil {
+						wg.Done()
 						break
 					}
-					select {
-					case <-ctx.Done():
-						break waitForWorkerSlot
-					case <-gateChanged:
-					}
-				}
-				if ctx.Err() != nil {
-					wg.Done()
-					break
-				}
-				sem <- struct{}{}
-				atomic.AddInt32(&activeWorkers, 1)
+					sem <- struct{}{}
+					atomic.AddInt32(&activeWorkers, 1)
 
-				mainBar := p.New(
-					100,
-					mpb.BarStyle().Rbound("|"),
-					mpb.PrependDecorators(
-						decor.Name(fmt.Sprintf("%-18s", cluster), decor.WC{W: 20, C: decor.DidentRight}),
-					),
-					mpb.AppendDecorators(
-						decor.Percentage(decor.WC{W: 4}),
-						decor.Name(" • "),
-						decor.Elapsed(decor.ET_STYLE_GO, decor.WC{W: 4}),
-					),
-				)
+					mainBar := p.New(
+						100,
+						mpb.BarStyle().Rbound("|"),
+						append([]mpb.BarOption{
+							mpb.PrependDecorators(
+								decor.Name(fmt.Sprintf("%-18s", cluster), decor.WC{W: 20, C: decor.DidentRight}),
+							),
+							mpb.AppendDecorators(
+								decor.Percentage(decor.WC{W: 4}),
+								decor.Name(" • "),
+								decor.Elapsed(decor.ET_STYLE_GO, decor.WC{W: 4}),
+							),
+						}, doneBarOpts...)...,
+					)
 
-				phaseProxy := &proxyDecorator{text: "starting"}
+					phaseProxy := &proxyDecorator{text: "starting"}
 
-				phaseBar := p.New(
-					1,
-					mpb.NopStyle(),
-					mpb.PrependDecorators(decor.Name(strings.Repeat(" ", 20))),
-					mpb.AppendDecorators(phaseProxy),
-				)
+					phaseBar := p.New(
+						1,
+						mpb.NopStyle(),
+						append([]mpb.BarOption{
+							mpb.PrependDecorators(decor.Name(strings.Repeat(" ", 20))),
+							mpb.AppendDecorators(phaseProxy),
+						}, doneBarOpts...)...,
+					)
 
-				go func(cl string, user string, pass string, b *mpb.Bar, phase *proxyDecorator, phaseBar *mpb.Bar) {
-					defer wg.Done()
-					defer func() {
-						<-sem
-						atomic.AddInt32(&activeWorkers, -1)
-						notifyGateChange()
-					}()
-					defer func() {
-						if r := recover(); r != nil {
-							b.Abort(false)
-							b.SetTotal(b.Current(), true)
-							phaseBar.SetCurrent(1)     // Set current to match total
-							phaseBar.SetTotal(1, true) // Complete phaseBar on panic
-							log.Error().Interface("panic", r).Stack().Str("cluster", cl).Msg("cluster goroutine panic")
-							panicErr := fmt.Errorf("panic: %v", r)
-							results <- ClusterResult{Cluster: cl, Blocks: nil, Err: panicErr, ErrorClass: classifyClusterError(panicErr)}
+					go func(cl string, user string, pass string, b *mpb.Bar, phase *proxyDecorator, phaseBar *mpb.Bar) {
+						defer wg.Done()
+						slotHeld := true
+						releaseSlot := func() {
+							if slotHeld {
+								slotHeld = false
+								<-sem
+								atomic.AddInt32(&activeWorkers, -1)
+								notifyGateChange()
+							}
 						}
-					}()
+						defer releaseSlot()
+						finish := func(ok bool) {
+							if ok {
+								b.SetCurrent(100)
+								b.SetTotal(100, true)
+							} else {
+								b.Abort(dropDoneBars)
+								b.SetTotal(b.Current(), true)
+							}
+							phaseBar.SetCurrent(1)     // Set current to match total
+							phaseBar.SetTotal(1, true) // Complete phaseBar
+						}
+						defer func() {
+							if r := recover(); r != nil {
+								finish(false)
+								log.Error().Interface("panic", r).Stack().Str("cluster", cl).Msg("cluster goroutine panic")
+								panicErr := fmt.Errorf("panic: %v", r)
+								record(ClusterResult{Cluster: cl, Blocks: nil, Err: panicErr, ErrorClass: classifyClusterError(panicErr)})
+							}
+						}()
 
-					reqCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
-					defer cancel()
+						reqCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
+						defer cancel()
 
-					reqCtx, span := trace.StartCluster(reqCtx, cl)
-					defer span.End()
+						reqCtx, span := trace.StartCluster(reqCtx, cl)
+						defer span.End()
 
-					onPct := func(pct int) { b.SetCurrent(int64(pct)) }
-					setPhase := func(text string) {
-						phase.SetText(text)
-						log.Info().Str("cluster", cl).Str("phase", text).Msg("phase change")
-					}
+						onPct := func(pct int) { b.SetCurrent(int64(pct)) }
+						setPhase := func(text string) {
+							phase.SetText(text)
+							log.Info().Str("cluster", cl).Str("phase", text).Msg("phase change")
+						}
 
-					runOut, err := runClusterWithBars(reqCtx, cfg, fs, httpc, cl, user, pass, onPct, setPhase)
-					if err != nil {
-						trace.RecordError(span, err)
-						b.Abort(false)
-						b.SetTotal(b.Current(), true)
-						setPhase("failed")
-						phaseBar.SetCurrent(1)     // Set current to match total
-						phaseBar.SetTotal(1, true) // Complete phaseBar on error
-						// Log with detailed error information
-						log.Error().
-							Str("cluster", cl).
-							Err(err).
-							Str("error_type", fmt.Sprintf("%T", err)).
-							Msg("cluster run failed")
-						// Also print to console for visibility
-						fmt.Fprintf(os.Stderr, "\n❌ Cluster %s failed: %v\n", cl, err)
-						results <- ClusterResult{Cluster: cl, Blocks: nil, Err: err, ErrorClass: classifyClusterError(err)}
-						return
-					}
+						fetched, err := fetchClusterSummary(reqCtx, cfg, httpc, cl, user, pass, onPct, setPhase)
+						if err != nil {
+							trace.RecordError(span, err)
+							setPhase("failed")
+							finish(false)
+							// Log with detailed error information
+							log.Error().
+								Str("cluster", cl).
+								Err(err).
+								Str("error_type", fmt.Sprintf("%T", err)).
+								Msg("cluster run failed")
+							// Also print to console for visibility
+							fmt.Fprintf(os.Stderr, "\n❌ Cluster %s failed: %v\n", cl, err)
+							if ctx.Err() != nil {
+								err = fmt.Errorf("%w: %v", errRunCancelled, err)
+							}
+							record(ClusterResult{Cluster: cl, Blocks: nil, Err: err, ErrorClass: classifyClusterError(err)})
+							return
+						}
+						setPhase("queued")
+						procPending.Add(1)
+						// Waits while the processing pool is busy, still holding the
+						// slot: that caps how many fetched summaries sit in memory.
+						procJobs <- clusterProcessJob{cluster: cl, fetched: fetched, setPhase: setPhase, finish: finish}
+						releaseSlot()
+					}(cluster, clusterUser, clusterPass, mainBar, phaseProxy, phaseBar) // Pass phaseBar and per-cluster credentials
+				}
 
-					b.SetCurrent(100)
-					b.SetTotal(100, true)
-					setPhase("done")
-					phaseBar.SetCurrent(1)     // Set current to match total
-					phaseBar.SetTotal(1, true) // Complete phaseBar on success
-					log.Info().Str("cluster", cl).Msg("cluster run completed")
-					results <- ClusterResult{Cluster: cl, Blocks: runOut.Blocks, ExcludedByTitle: runOut.ExcludedByTitle, Err: nil, ErrorClass: ""}
-				}(cluster, clusterUser, clusterPass, mainBar, phaseProxy, phaseBar) // Pass phaseBar and per-cluster credentials
-			}
+				// Wait for workers with context cancellation support
+				done := make(chan struct{})
+				go func() {
+					wg.Wait()
+					procPending.Wait()
+					close(done)
+				}()
 
-			// Wait for workers with context cancellation support
-			done := make(chan struct{})
-			go func() {
-				wg.Wait()
-				close(done)
-			}()
-
-			select {
-			case <-done:
-				// All workers completed normally
-			case <-ctx.Done():
-				// Context cancelled (shutdown signal received)
-				log.Warn().Msg("context cancelled, waiting for workers to finish")
-				fmt.Fprintln(os.Stderr, "⏳ Waiting for in-progress operations to complete...")
-				// Wait with timeout for workers to finish
-				waitCtx, waitCancel := context.WithTimeout(context.Background(), shutdownTimeout)
-				defer waitCancel()
 				select {
 				case <-done:
-					log.Info().Msg("all workers completed after cancellation")
-				case <-waitCtx.Done():
-					log.Error().Msg("timeout waiting for workers after cancellation")
-					fmt.Fprintln(os.Stderr, "❌ Timeout waiting for operations to complete")
-					return fmt.Errorf("graceful shutdown timeout: operations did not complete in time")
+					// All workers completed normally
+				case <-ctx.Done():
+					// Context cancelled (shutdown signal received)
+					log.Warn().Msg("context cancelled, waiting for workers to finish")
+					fmt.Fprintln(os.Stderr, "⏳ Waiting for in-progress operations to complete...")
+					// Wait with timeout for workers to finish
+					waitCtx, waitCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+					defer waitCancel()
+					select {
+					case <-done:
+						log.Info().Msg("all workers completed after cancellation")
+					case <-waitCtx.Done():
+						log.Error().Msg("timeout waiting for workers after cancellation")
+						fmt.Fprintln(os.Stderr, "❌ Timeout waiting for operations to complete")
+						return fmt.Errorf("graceful shutdown timeout: operations did not complete in time")
+					}
+				}
+				return nil
+			}
+
+			pending := make([]string, 0, len(cfg.Clusters))
+			for _, cl := range cfg.Clusters {
+				if _, ok := resumed[cl]; !ok {
+					pending = append(pending, cl)
+				}
+			}
+			if err := dispatch(pending); err != nil {
+				return err
+			}
+
+			// ---- Retry pass ----
+			// At fleet scale some clusters always hit a timeout or a network blip;
+			// give those another go in the same run rather than leaving them out
+			// of the report until the next one.
+			for attempt := 1; attempt <= cfg.RetryFailedClusters && ctx.Err() == nil; attempt++ {
+				var retry []string
+				collectedMu.Lock()
+				for _, cl := range cfg.Clusters {
+					if r, ok := collected[cl]; ok && retryableClusterError(r) {
+						retry = append(retry, cl)
+					}
+				}
+				collectedMu.Unlock()
+				if len(retry) == 0 {
+					break
+				}
+				log.Warn().Int("clusters", len(retry)).Int("attempt", attempt).Msg("retrying clusters that failed with a timeout, network error or rate limit")
+				fmt.Fprintf(os.Stderr, "\n↻ Retrying %d cluster(s) that failed with a timeout, network error or rate limit (attempt %d of %d)\n", len(retry), attempt, cfg.RetryFailedClusters)
+				select {
+				case <-ctx.Done():
+				case <-time.After(time.Duration(attempt) * 10 * time.Second):
+				}
+				if ctx.Err() != nil {
+					break
+				}
+				if err := dispatch(retry); err != nil {
+					return err
 				}
 			}
 
-			close(results)
+			close(procJobs)
+			procWorkers.Wait()
+			// Every cluster was attempted (a shutdown stops before that).
+			runCompleted = ctx.Err() == nil
+
+			// Hand the final results to the aggregation below in cluster order.
+			ordered := make(chan ClusterResult, len(collected))
+			for _, cl := range cfg.Clusters {
+				if r, ok := collected[cl]; ok {
+					ordered <- r
+				}
+			}
+			close(ordered)
+			results = ordered
 
 			var failed []string
 			var agg []AggBlock
@@ -16454,8 +16778,7 @@ Run 'ncc-orchestrator --help' for a full list of options.
 					excludedByCluster[r.Cluster] = append(excludedByCluster[r.Cluster], r.ExcludedByTitle...)
 				}
 
-				rawPath := filepath.Join(cfg.OutputDirLogs, fmt.Sprintf("%s.log", r.Cluster))
-				meta, _ := parseNCCHeader(rawPath) // ignore error
+				meta := r.Meta
 
 				for _, b := range r.Blocks {
 					agg = append(agg, AggBlock{
@@ -16785,7 +17108,9 @@ Run 'ncc-orchestrator --help' for a full list of options.
 	cmd.Flags().String("timeout", "15m", "Overall per-cluster timeout")
 	cmd.Flags().String("poll-interval", "15s", "Polling interval for task status")
 	cmd.Flags().String("poll-jitter", "2s", "Additive jitter to polling interval")
-	cmd.Flags().Int("max-parallel", 4, "Max concurrent clusters")
+	cmd.Flags().Int("max-parallel", 0, "Max clusters checked at once; 0 = auto (one per cluster, up to 500)")
+	cmd.Flags().Int("retry-failed-clusters", 1, "Extra passes that re-run clusters which failed with a timeout, network error or rate limit (0-5)")
+	cmd.Flags().Bool("resume", false, "Reuse clusters an interrupted run already finished (same cluster list, within 24h)")
 	cmd.Flags().String("outputs", "html,csv", "Comma-separated outputs: html,csv,json,markdown,sarif for per-cluster files")
 	cmd.Flags().String("output-dir-logs", "nccfiles", "Directory for raw logs")
 	cmd.Flags().String("output-dir-filtered", "outputfiles", "Directory for filtered and aggregated results")
@@ -16872,6 +17197,8 @@ Run 'ncc-orchestrator --help' for a full list of options.
 	_ = viper.BindPFlag("poll-interval", cmd.Flags().Lookup("poll-interval"))
 	_ = viper.BindPFlag("poll-jitter", cmd.Flags().Lookup("poll-jitter"))
 	_ = viper.BindPFlag("max-parallel", cmd.Flags().Lookup("max-parallel"))
+	_ = viper.BindPFlag("retry-failed-clusters", cmd.Flags().Lookup("retry-failed-clusters"))
+	_ = viper.BindPFlag("resume", cmd.Flags().Lookup("resume"))
 	_ = viper.BindPFlag("outputs", cmd.Flags().Lookup("outputs"))
 	_ = viper.BindPFlag("output-dir-logs", cmd.Flags().Lookup("output-dir-logs"))
 	_ = viper.BindPFlag("output-dir-filtered", cmd.Flags().Lookup("output-dir-filtered"))

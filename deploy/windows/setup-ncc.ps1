@@ -56,7 +56,7 @@ runner:
   execution:
     timeout: "15m"
     request-timeout: "20s"
-    max-parallel: 4
+    max-parallel: 0  # 0 = auto (one per cluster, up to 500)
   retry:
     max-attempts: 6
     base-delay: "400ms"

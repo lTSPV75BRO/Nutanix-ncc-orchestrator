@@ -126,8 +126,13 @@ func TestNew_AppliesDefaultsAndTimeout(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *http.Transport when logging disabled, got %T", c.Transport)
 	}
-	if tr.MaxIdleConns != DefaultMaxIdleConns {
-		t.Errorf("MaxIdleConns: got %d, want default %d", tr.MaxIdleConns, DefaultMaxIdleConns)
+	// max-parallel unset (0 = auto, up to 500 clusters in flight): the pool
+	// keeps a connection per cluster plus headroom.
+	if want := DefaultIdleConnsFor(0); tr.MaxIdleConns != want || want < 500 {
+		t.Errorf("MaxIdleConns: got %d, want %d (>= 500)", tr.MaxIdleConns, want)
+	}
+	if got := DefaultIdleConnsFor(4); got != DefaultMaxIdleConns {
+		t.Errorf("small runs keep the %d default, got %d", DefaultMaxIdleConns, got)
 	}
 	if tr.IdleConnTimeout != DefaultIdleConnTimeout {
 		t.Errorf("IdleConnTimeout: got %v, want default %v", tr.IdleConnTimeout, DefaultIdleConnTimeout)

@@ -821,7 +821,9 @@ ncc-orchestrator [flags]
 | `--log-http` | bool | `true`, `false` | `false` | Enables HTTP request/response logging for deep debugging. Can expose operationally sensitive payloads; keep off in normal production usage. |
 | `--log-level` | string | `trace`, `debug`, `info`, `warn`, `error`, or numeric `0..5` | `info` | Controls verbosity. Use `debug`/`trace` for troubleshooting and `info` for steady-state operations. |
 | `--maintenance-windows` | string | RFC3339 windows: `start/end[,start/end...]` | none | Suppresses notifications in explicit maintenance intervals. Best for planned change windows and patch operations. |
-| `--max-parallel` | int | Integer `1..100` | `4` | Maximum concurrent clusters. Tune down for rate-limited APIs or constrained environments; tune up for faster completion in stable networks. |
+| `--max-parallel` | int | Integer `0..1000` | `0` (auto) | Maximum concurrent clusters. `0` = automatic: one per cluster, up to 500. Workers mostly wait on NCC, so large fleets can use hundreds; adaptive parallelism backs off on 429/503 (see [SCALING.md](SCALING.md)). |
+| `--retry-failed-clusters` | int | Integer `0..5` | `1` | Extra passes at the end of a run for clusters that failed with a timeout, network error or rate limit. `0` turns it off. |
+| `--resume` | bool | `true`, `false` | `false` | Reuse the clusters an interrupted run already finished (same cluster list, within 24 h), from the run journal in the output directory. |
 | `--max-idle-conns` | int | Integer `>= 0` | `0` | Max idle HTTP connections in the client pool. `0` keeps the built-in default. |
 | `--max-idle-conns-per-host` | int | Integer `>= 0` | `0` | Max idle HTTP connections per Prism host. `0` keeps the built-in default. |
 | `--max-conns-per-host` | int | Integer `>= 0` | `0` | Max HTTP connections per host. `0` means unlimited. |

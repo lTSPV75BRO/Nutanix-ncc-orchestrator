@@ -144,15 +144,9 @@ func jsonFieldString(m map[string]interface{}, keys ...string) string {
 // readAggRows returns the aggregated NCC rows of a report directory: the AGG
 // array embedded in index.html, or — for very large runs where the runner
 // moves the rows out of the HTML — the aggregated-data.json sidecar.
+// The rows are cached per run and shared: do not modify them.
 func readAggRows(outDir string) []interface{} {
-	rows, _ := readInlineJSONVar(filepath.Join(outDir, "index.html"), "AGG", []interface{}{}).([]interface{})
-	if len(rows) > 0 {
-		return rows
-	}
-	if side, ok := readJSONArtifact(filepath.Join(outDir, "aggregated-data.json"), []interface{}{}).([]interface{}); ok {
-		return side
-	}
-	return rows
+	return readAggRowsCached(outDir)
 }
 
 // currentNCCRunSnapshot builds the lifecycle input for the latest completed
@@ -163,7 +157,7 @@ func (s *apiServer) currentNCCRunSnapshot() nccRunSnapshot {
 		return snap
 	}
 	outDir := s.selectBestReportOutDir()
-	summary, _ := readJSONArtifact(filepath.Join(outDir, "run-summary.json"), map[string]interface{}{}).(map[string]interface{})
+	summary, _ := readRunSummaryCached(outDir).(map[string]interface{})
 	if summary != nil {
 		snap.RunAt = jsonFieldString(summary, "timestamp")
 		if clusters, ok := summary["clusters"].([]interface{}); ok {
@@ -206,6 +200,13 @@ func (s *apiServer) currentNCCRunSnapshot() nccRunSnapshot {
 // syncNCCAlertLifecycle ingests the latest completed run into the lifecycle
 // store. Safe to call often: ingestion is idempotent per run timestamp.
 func (s *apiServer) syncNCCAlertLifecycle() (int, error) {
+	// Every alerts request calls this. Check the run timestamp first: building
+	// the snapshot walks every finding (200k at 7,000 clusters).
+	if summary, ok := readRunSummaryCached(s.selectBestReportOutDir()).(map[string]interface{}); ok {
+		if s.alerts().hasIngested(jsonFieldString(summary, "timestamp")) {
+			return 0, nil
+		}
+	}
 	snap := s.currentNCCRunSnapshot()
 	if snap.RunAt == "" {
 		return 0, nil
@@ -221,6 +222,9 @@ func (s *apiServer) startAlertLifecycleSyncLoop(ctx context.Context) {
 		t := time.NewTicker(alertSyncInterval)
 		defer t.Stop()
 		for {
+			// Warm the report first: pages need it, and ingesting a new run's
+			// alerts can take longer at fleet scale.
+			s.warmReportCache()
 			if n, err := s.syncNCCAlertLifecycle(); err != nil {
 				log.Printf("alert lifecycle sync: %v", err)
 			} else if n > 0 {

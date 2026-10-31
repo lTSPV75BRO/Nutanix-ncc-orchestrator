@@ -64,15 +64,21 @@ type Config struct {
 	DryRun bool // Don't actually run checks, just validate config
 
 	// History + regression
-	RunHistoryEnabled        bool
-	RunHistoryDir            string
-	RetainLastRuns           int
-	RetainDays               int
-	ArtifactRetainDays       int
-	ArtifactRetainMaxFiles   int
-	SingleReport             bool
-	NotifyOnRegression       bool
-	AdaptiveParallelism      bool
+	RunHistoryEnabled      bool
+	RunHistoryDir          string
+	RetainLastRuns         int
+	RetainDays             int
+	ArtifactRetainDays     int
+	ArtifactRetainMaxFiles int
+	SingleReport           bool
+	NotifyOnRegression     bool
+	AdaptiveParallelism    bool
+	// RetryFailedClusters is how many extra passes re-run clusters that failed
+	// with a transient error (timeout, network, rate limit) in the same run.
+	RetryFailedClusters int
+	// Resume reuses the clusters an interrupted run already finished (see
+	// the run journal in pipeline.go).
+	Resume                   bool
 	PreviousClusterFailCount map[string]int `mapstructure:"-"`
 	PolicyGates              []string
 	QuietHours               string

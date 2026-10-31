@@ -28,6 +28,10 @@ spec:
           env:
             - name: NCC_RUNTIME_MODE
               value: kubernetes
+            {{- if .Values.apiGoMemLimit }}
+            - name: GOMEMLIMIT
+              value: {{ .Values.apiGoMemLimit | quote }}
+            {{- end }}
             - name: NCC_IMAGE_TAG
               value: {{ .Values.images.api.tag | quote }}
             - name: NCC_ORCHESTRATOR_IMAGE_TAG
