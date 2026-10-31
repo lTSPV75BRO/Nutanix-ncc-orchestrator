@@ -131,7 +131,7 @@ func TestForgotPasswordQueueAndResolve(t *testing.T) {
 
 	// An admin password reset (via the users API) auto-clears the request.
 	rrReset := httptest.NewRecorder()
-	s.handleUserByName(rrReset, httptest.NewRequest(http.MethodPut, "/api/v1/settings/users/dave", strings.NewReader(`{"password":"dave-new-temp-pw"}`)))
+	s.handleUserByName(rrReset, httptest.NewRequest(http.MethodPut, "/api/v1/settings/users/dave", strings.NewReader(`{"password":"cobalt-harbor-tempo-7"}`)))
 	if rrReset.Code != http.StatusOK {
 		t.Fatalf("reset dave: %d (%s)", rrReset.Code, rrReset.Body.String())
 	}

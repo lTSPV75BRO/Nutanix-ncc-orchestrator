@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-const minPasswordLen = 8
-
 // handleUsers handles the local-accounts collection (admin-only via the
 // /api/v1/settings/* prefix): GET lists accounts, POST creates one.
 func (s *apiServer) handleUsers(w http.ResponseWriter, r *http.Request) {
@@ -49,8 +47,8 @@ func (s *apiServer) handleUsers(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "invalid role (want admin|operator|viewer)"})
 			return
 		}
-		if len(body.Password) < minPasswordLen {
-			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: fmt.Sprintf("password must be at least %d characters", minPasswordLen)})
+		if msg := validatePassword(username, body.Password); msg != "" {
+			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: msg})
 			return
 		}
 		hash, err := hashPassword(body.Password)
@@ -152,8 +150,8 @@ func (s *apiServer) handleUserByName(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if body.Password != nil {
-			if len(*body.Password) < minPasswordLen {
-				writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: fmt.Sprintf("password must be at least %d characters", minPasswordLen)})
+			if msg := validatePassword(username, *body.Password); msg != "" {
+				writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: msg})
 				return
 			}
 			hash, err := hashPassword(*body.Password)

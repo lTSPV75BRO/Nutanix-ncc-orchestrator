@@ -5118,18 +5118,6 @@ func readTailFile(path string, maxBytes int64) (string, error) {
 	return string(b), nil
 }
 
-func readJSONArtifact(path string, fallback interface{}) interface{} {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return fallback
-	}
-	var out interface{}
-	if err := json.Unmarshal(b, &out); err != nil {
-		return fallback
-	}
-	return out
-}
-
 // loadReportMeta reads REPORT_META embedded in index.html and enriches it with
 // fields from ncc-run-record.json (hostname, scheduler_source, git_revision,
 // orchestrator_version) when they are missing or empty. Older reports — produced

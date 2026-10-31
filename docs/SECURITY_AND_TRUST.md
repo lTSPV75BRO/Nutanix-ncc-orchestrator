@@ -420,8 +420,8 @@ The trust steps above cover the binary you run. These options cover how it
 talks to Prism, SMTP, and webhook receivers at runtime, and who can change
 state through the api-server.
 
-For NIST CSF-aligned control tracking (implemented/partial/missing plus evidence
-references), see [`docs/NIST_CSF_BASELINE.md`](NIST_CSF_BASELINE.md).
+For NIST CSF 2.0 and SP 800-218 (SSDF) mapping with evidence, the risk
+register and the incident response plan, see [`docs/compliance/`](compliance/README.md).
 
 ### Prism TLS: prefer a CA bundle or pinning over `insecure-skip-verify`
 
@@ -866,6 +866,23 @@ the response so the acting admin can share it securely (this path is authorized
 and CSRF-protected, unlike the anonymous login-screen route which never returns
 the password).
 
+#### Password policy (NIST SP 800-63B)
+
+Local passwords are a single authentication factor, so the api-server applies
+SP 800-63B rev. 4 whenever one is set (account creation, admin reset,
+self-service change):
+
+- at least **15 characters**, up to bcrypt's 72-byte limit; spaces and any
+  printable characters allowed, no composition rules;
+- rejected when the password contains the username, is one short pattern
+  repeated or a sequence (`aaaa…`, `123456…`), or is made only of common or
+  product words (`password`, `admin`, `nutanix`, …) with digits around them;
+- no forced periodic rotation. Existing shorter passwords keep working until
+  the next change; an admin can force a reset per user.
+
+For multi-factor sign-in, use SAML SSO with an identity provider that enforces
+MFA.
+
 #### Brute-force lockout and session revocation
 
 Login attempts are protected at two layers. The global per-IP rate limiter
@@ -1028,7 +1045,8 @@ certificate.
 
 If a binary you downloaded does not match `checksums.txt`, or
 `ncc-orchestrator verify` reports a SHA-256 that does not appear in the
-release manifest, **stop using it** and open an issue with:
+release manifest, **stop using it** and report it privately as described in
+[`SECURITY.md`](../.github/SECURITY.md), including:
 
 1. The exact filename you downloaded.
 2. The SHA-256 you observed (from `shasum`/`Get-FileHash`).

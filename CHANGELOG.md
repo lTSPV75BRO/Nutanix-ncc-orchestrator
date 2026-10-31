@@ -17,6 +17,28 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 
 ### Security
 
+- **Password policy follows NIST SP 800-63B rev. 4.** New, reset and changed
+  local passwords need at least 15 characters (up to 72 bytes, spaces
+  allowed, no composition rules) and are refused when they contain the
+  username, are repeated or sequential characters, or consist only of common
+  or product words (`password`, `admin`, `nutanix`, …) padded with digits.
+  Existing passwords keep working until the next change.
+- **Dependency CVEs fixed** (all 10 open Dependabot alerts, build/test
+  tooling only — nothing shipped in binaries or images was affected): vite
+  8.3.3 (CVE-2026-112942…112947), vitest/@vitest/* 4.1.12 (CVE-2026-112949,
+  CVE-2026-112950), undici 8.12.2 (CVE-2026-109869 and others), source-map-js
+  1.2.2 (CVE-2026-93749). golang.org/x/net 0.62.0 (GO-2026-6860, GO-2026-6866;
+  not reachable). `govulncheck` and `osv-scanner` now report nothing to fix;
+  the unfixable, unused x/crypto/openpgp advisory is a recorded exception.
+- **CI:** `npm audit --audit-level=high` over dev tooling now fails the
+  build instead of only warning.
+- **Compliance:** new [`docs/compliance/`](docs/compliance/README.md) — NIST
+  CSF 2.0 Current Profile (IDs corrected from CSF 1.1 codes), SP 800-218 SSDF
+  mapping, risk register with vulnerability SLA and exceptions, incident
+  response plan, control ownership, and [`.github/SECURITY.md`](.github/SECURITY.md)
+  for private vulnerability reports. A Go test validates the evidence
+  manifest; the evidence-bundle script fails on missing evidence.
+- Removed three unused functions flagged by golangci-lint.
 - **Deleting a local account now ends its sessions.** A deleted user's
   JWT/HMAC session kept working with its original role until expiry (up to
   24 h), because a subject missing from the store looked like an SSO user.

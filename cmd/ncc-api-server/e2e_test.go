@@ -156,7 +156,7 @@ func TestEndToEndFirstRunAdminFlow(t *testing.T) {
 	}
 
 	// 9. Admin creates an operator account (with CSRF).
-	code, env = do(http.MethodPost, "/api/v1/settings/users", `{"username":"bob","password":"bob-strong-password","role":"operator"}`)
+	code, env = do(http.MethodPost, "/api/v1/settings/users", `{"username":"bob","password":"maple-river-lantern-42","role":"operator"}`)
 	if code != http.StatusOK {
 		t.Fatalf("create user: %d (%+v)", code, env)
 	}
@@ -299,7 +299,7 @@ func TestEndToEndAdminForgotPasswordSelfReset(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("login: %d", code)
 	}
-	const settledPW = "settled-admin-password"
+	const settledPW = "settled-orbit-canyon-key"
 	code, _ = do(http.MethodPost, "/api/v1/auth/change-password", `{"current_password":"`+bootstrapPW+`","new_password":"`+settledPW+`"}`)
 	if code != http.StatusOK {
 		t.Fatalf("change-password: %d", code)

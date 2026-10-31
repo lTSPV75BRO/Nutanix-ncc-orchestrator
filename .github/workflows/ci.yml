@@ -102,11 +102,15 @@ jobs:
         run: npm ci
       - name: npm audit (production)
         run: npm audit --omit=dev
-      - name: npm audit (all, advisory)
+      - name: npm audit (dev tooling, high+)
         # Build/test tooling (vite, vitest, undici via jsdom) runs on developer
-        # machines and CI runners; report its advisories without blocking.
-        continue-on-error: true
+        # machines and CI runners, so high/critical advisories there block too
+        # (vulnerability SLA in docs/compliance/RISK_REGISTER.md). Moderate
+        # and low ones are reported below without blocking.
         run: npm audit --audit-level=high
+      - name: npm audit (all, advisory)
+        continue-on-error: true
+        run: npm audit
       - name: npm test
         run: npm test
       - name: npm run build

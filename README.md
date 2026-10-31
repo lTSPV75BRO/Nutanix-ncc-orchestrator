@@ -382,7 +382,8 @@ Before upgrading, configure a backup key: backups are now **encrypted by default
 | Prometheus | [`docs/PROMETHEUS.md`](docs/PROMETHEUS.md) |
 | Security, trust, and binary verification | [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md), [`docs/RELEASE_CHECKSUMS.md`](docs/RELEASE_CHECKSUMS.md) |
 | Security assessment (October 2026) | [`docs/security/security-assessment-2026-10.md`](docs/security/security-assessment-2026-10.md) |
-| NIST CSF 2.0 baseline and evidence | [`docs/NIST_CSF_BASELINE.md`](docs/NIST_CSF_BASELINE.md), [`docs/NIST_CSF_EVIDENCE_MANIFEST.json`](docs/NIST_CSF_EVIDENCE_MANIFEST.json) |
+| Compliance: NIST CSF 2.0 profile, SSDF (SP 800-218), risk register, incident response | [`docs/compliance/`](docs/compliance/README.md) |
+| Reporting a vulnerability | [`.github/SECURITY.md`](.github/SECURITY.md) |
 | Kubernetes and Helm | [`k8s/README.md`](k8s/README.md), [`helm/ncc-orchestrator/README.md`](helm/ncc-orchestrator/README.md) |
 | VM provisioning (cloud-init, Windows Sysprep) | [`deploy/README.md`](deploy/README.md) |
 | MCP server for AI assistants | [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md) |

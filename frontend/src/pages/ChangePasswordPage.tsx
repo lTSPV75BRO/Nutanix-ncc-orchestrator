@@ -7,8 +7,9 @@ import { RestoreBackupDialog } from "../features/backup/RestoreBackupDialog";
 
 const { Title, Text } = Typography;
 
-// Mirrors minPasswordLen in cmd/ncc-api-server/usersapi.go.
-const MIN_PASSWORD_LEN = 8;
+// Mirrors minPasswordLen in cmd/ncc-api-server/passwordpolicy.go (NIST SP 800-63B);
+// the server also rejects common, repeated and username-based passwords.
+const MIN_PASSWORD_LEN = 15;
 
 type ChangePasswordFormProps = {
   submitLabel?: string;

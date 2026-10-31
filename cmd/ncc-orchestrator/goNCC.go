@@ -7063,11 +7063,6 @@ func sanitizeSummary(s string) string {
 	return strings.ReplaceAll(s, "\\n", "\n")
 }
 
-func writeSummary(fs FS, folder, cluster, summary string) (string, error) {
-	outPath, _, err := writeSummaryText(fs, folder, cluster, summary)
-	return outPath, err
-}
-
 // writeSummaryText saves the raw NCC summary and also returns the exact text
 // written (sanitized), so callers can parse it without reading the file back.
 func writeSummaryText(fs FS, folder, cluster, summary string) (string, string, error) {
@@ -7119,24 +7114,6 @@ func filterBlocksFromText(fs FS, text, sourceLabel, outputPath string) ([]Parsed
 	}
 	log.Debug().Str("path", outputPath).Int("bytes", len(b.String())).Msg("wrote filtered")
 	return blocks, nil
-}
-
-func runClusterWithBars(
-	ctx context.Context,
-	cfg Config,
-	fs FS,
-	httpc HTTPClient,
-	cluster string,
-	username string,
-	password string,
-	onPct func(int),
-	setPhase func(string),
-) (ClusterRunOutput, error) {
-	fetched, err := fetchClusterSummary(ctx, cfg, httpc, cluster, username, password, onPct, setPhase)
-	if err != nil {
-		return ClusterRunOutput{}, err
-	}
-	return processClusterSummary(ctx, cfg, fs, httpc, cluster, fetched, setPhase)
 }
 
 // clusterFetch is what a cluster hands back once its NCC run finished.

@@ -218,10 +218,10 @@ func TestUserCRUDAndLastAdminProtection(t *testing.T) {
 		s.handleUsers(rr, httptest.NewRequest(http.MethodPost, "/api/v1/settings/users", strings.NewReader(payload)))
 		return rr.Code
 	}
-	if code := create(`{"username":"bob","password":"bob-password-123","role":"operator"}`); code != http.StatusOK {
+	if code := create(`{"username":"bob","password":"maple-river-lantern-42","role":"operator"}`); code != http.StatusOK {
 		t.Fatalf("create bob: %d", code)
 	}
-	if code := create(`{"username":"bob","password":"bob-password-123","role":"operator"}`); code != http.StatusConflict {
+	if code := create(`{"username":"bob","password":"maple-river-lantern-42","role":"operator"}`); code != http.StatusConflict {
 		t.Fatalf("duplicate create: want 409, got %d", code)
 	}
 	if code := create(`{"username":"weak","password":"short","role":"viewer"}`); code != http.StatusBadRequest {

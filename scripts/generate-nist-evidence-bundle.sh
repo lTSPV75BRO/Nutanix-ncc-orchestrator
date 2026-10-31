@@ -3,20 +3,21 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Generate a NIST CSF evidence bundle from docs/NIST_CSF_EVIDENCE_MANIFEST.json.
+Generate a NIST CSF evidence bundle from docs/compliance/NIST_CSF_EVIDENCE_MANIFEST.json.
+Fails when a cited evidence file is missing.
 
 Usage:
   scripts/generate-nist-evidence-bundle.sh [--manifest PATH] [--out-dir PATH] [--dry-run]
 
 Options:
-  --manifest PATH  Manifest JSON path (default: docs/NIST_CSF_EVIDENCE_MANIFEST.json)
+  --manifest PATH  Manifest JSON path (default: docs/compliance/NIST_CSF_EVIDENCE_MANIFEST.json)
   --out-dir PATH   Output directory (default: dist/compliance)
   --dry-run        Validate manifest and print evidence stats without writing bundle
 EOF
 }
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-MANIFEST="docs/NIST_CSF_EVIDENCE_MANIFEST.json"
+MANIFEST="docs/compliance/NIST_CSF_EVIDENCE_MANIFEST.json"
 OUT_DIR="dist/compliance"
 DRY_RUN=0
 
@@ -69,6 +70,9 @@ out_list = pathlib.Path(sys.argv[3])
 obj = json.loads(manifest_path.read_text())
 controls = obj.get("controls", [])
 paths = set()
+for doc in [obj.get("profile_doc", "")] + list(obj.get("related", [])):
+    if doc:
+        paths.add(pathlib.Path(doc).as_posix())
 for c in controls:
     for ev in c.get("evidence", []):
         if not ev:
@@ -79,11 +83,11 @@ for c in controls:
         paths.add(p.as_posix())
 paths = sorted(paths)
 out_list.write_text("\n".join(paths) + ("\n" if paths else ""))
-existing = 0
-for p in paths:
-    if (root / p).exists():
-        existing += 1
-print(f"controls={len(controls)} evidence_paths={len(paths)} existing_paths={existing}")
+missing = [p for p in paths if not (root / p).exists()]
+print(f"controls={len(controls)} evidence_paths={len(paths)} missing_paths={len(missing)}")
+for p in missing:
+    print(f"missing evidence: {p}", file=sys.stderr)
+sys.exit(1 if missing else 0)
 PY
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -105,7 +109,6 @@ while IFS= read -r rel; do
 done < "$TMP_LIST"
 
 cp -a "$MANIFEST" "$BUNDLE_DIR/manifest.json"
-cp -a "docs/NIST_CSF_BASELINE.md" "$BUNDLE_DIR/NIST_CSF_BASELINE.md"
 
 python3 - "$BUNDLE_DIR/metadata.json" "$STAMP" "$GIT_REV" "$MANIFEST" "$TMP_LIST" <<'PY'
 import json

@@ -1,0 +1,288 @@
+{
+  "schema_version": "2.0",
+  "framework": "NIST CSF 2.0",
+  "profile": "Current Profile, NCC Orchestrator v2.3.0",
+  "profile_doc": "docs/compliance/NIST_CSF_PROFILE.md",
+  "related": [
+    "docs/compliance/SSDF_PRACTICES.md",
+    "docs/compliance/RISK_REGISTER.md",
+    "docs/compliance/INCIDENT_RESPONSE.md",
+    "docs/compliance/CONTROL_OWNERSHIP.md",
+    ".github/SECURITY.md"
+  ],
+  "controls": [
+    {
+      "id": "GV.OC-03",
+      "function": "GV",
+      "capability": "Legal, regulatory and licensing obligations recorded (MIT license, third-party licenses in SBOM)",
+      "status": "Implemented",
+      "evidence": ["LICENSE", "scripts/binaryGO.txt", "frontend/src/components/AboutDialog.tsx"]
+    },
+    {
+      "id": "GV.RM-01",
+      "function": "GV",
+      "capability": "Risk management objectives, appetite and vulnerability SLAs",
+      "status": "Implemented",
+      "evidence": ["docs/compliance/RISK_REGISTER.md"]
+    },
+    {
+      "id": "GV.RR-02",
+      "function": "GV",
+      "capability": "Roles, responsibilities and review cadence for each control area",
+      "status": "Implemented",
+      "evidence": ["docs/compliance/CONTROL_OWNERSHIP.md"]
+    },
+    {
+      "id": "GV.PO-01",
+      "function": "GV",
+      "capability": "Security policy published (disclosure, secure-development and contribution rules)",
+      "status": "Implemented",
+      "evidence": [".github/SECURITY.md", "CONTRIBUTING.md", "docs/compliance/SSDF_PRACTICES.md"]
+    },
+    {
+      "id": "GV.OV-01",
+      "function": "GV",
+      "capability": "Profile reviewed each release; evidence paths enforced by an automated test",
+      "status": "Implemented",
+      "evidence": ["docs/compliance/NIST_CSF_PROFILE.md", "cmd/ncc-orchestrator/compliance_manifest_test.go"]
+    },
+    {
+      "id": "GV.SC-04",
+      "function": "GV",
+      "capability": "Suppliers and dependencies inventoried and prioritised (Go modules, npm, base images, CI actions)",
+      "status": "Implemented",
+      "evidence": ["go.mod", "frontend/package-lock.json", ".github/dependabot.yml", "build/docker/Dockerfile.api"]
+    },
+    {
+      "id": "GV.SC-07",
+      "function": "GV",
+      "capability": "Supplier risk monitored: dependency, image and action pinning; Dependabot; scans in CI",
+      "status": "Partial",
+      "evidence": [".github/workflows/ci.yml", ".github/dependabot.yml", "docs/compliance/RISK_REGISTER.md"]
+    },
+    {
+      "id": "ID.AM-02",
+      "function": "ID",
+      "capability": "Software inventory: CycloneDX SBOM per binary in every release",
+      "status": "Implemented",
+      "evidence": ["scripts/binaryGO.txt", ".github/workflows/release.yml"]
+    },
+    {
+      "id": "ID.AM-07",
+      "function": "ID",
+      "capability": "Data inventory: what the product stores, where, and how it is protected",
+      "status": "Implemented",
+      "evidence": ["docs/SECURITY_AND_TRUST.md", "internal/v2layout/layout.go"]
+    },
+    {
+      "id": "ID.RA-01",
+      "function": "ID",
+      "capability": "Vulnerabilities identified: govulncheck, npm audit, Trivy, CodeQL, Dependabot",
+      "status": "Implemented",
+      "evidence": [".github/workflows/ci.yml", ".github/workflows/codeql.yml", ".github/codeql/codeql-config.yml", ".github/dependabot.yml"]
+    },
+    {
+      "id": "ID.RA-05",
+      "function": "ID",
+      "capability": "Risks prioritised by likelihood and impact in a maintained register",
+      "status": "Implemented",
+      "evidence": ["docs/compliance/RISK_REGISTER.md"]
+    },
+    {
+      "id": "ID.RA-08",
+      "function": "ID",
+      "capability": "Vulnerability disclosure intake and response process",
+      "status": "Implemented",
+      "evidence": [".github/SECURITY.md", "docs/compliance/INCIDENT_RESPONSE.md"]
+    },
+    {
+      "id": "ID.RA-09",
+      "function": "ID",
+      "capability": "Authenticity and integrity of released software verifiable (SHA-256 checksums, Ed25519 signature, verify command)",
+      "status": "Implemented",
+      "evidence": ["cmd/ncc-orchestrator/releasesign.go", "cmd/ncc-orchestrator/releasesign_test.go", "docs/RELEASE_CHECKSUMS.md"]
+    },
+    {
+      "id": "ID.IM-04",
+      "function": "ID",
+      "capability": "Incident response and recovery plans established and maintained",
+      "status": "Implemented",
+      "evidence": ["docs/compliance/INCIDENT_RESPONSE.md", "docs/TROUBLESHOOTING.md"]
+    },
+    {
+      "id": "PR.AA-01",
+      "function": "PR",
+      "capability": "Identities and credentials managed: local accounts, PATs, SAML, LDAP",
+      "status": "Implemented",
+      "evidence": ["cmd/ncc-api-server/users.go", "cmd/ncc-api-server/usersapi.go", "cmd/ncc-api-server/tokens.go", "internal/auth/pat.go"]
+    },
+    {
+      "id": "PR.AA-03",
+      "function": "PR",
+      "capability": "Users authenticated: SP 800-63B password policy (15+ characters, blocklist), bcrypt, login throttling and lockout",
+      "status": "Implemented",
+      "evidence": ["cmd/ncc-api-server/passwordpolicy.go", "cmd/ncc-api-server/passwordpolicy_test.go", "cmd/ncc-api-server/loginguard.go", "cmd/ncc-api-server/loginguard_test.go"]
+    },
+    {
+      "id": "PR.AA-04",
+      "function": "PR",
+      "capability": "Identity assertions protected: signed JWT sessions, SAML signature checks, CSRF on cookie sessions",
+      "status": "Implemented",
+      "evidence": ["internal/auth/jwt.go", "cmd/ncc-api-server/saml.go", "cmd/ncc-api-server/auth.go", "cmd/ncc-api-server/auth_test.go"]
+    },
+    {
+      "id": "PR.AA-05",
+      "function": "PR",
+      "capability": "Least-privilege access: viewer / operator / admin roles enforced per route",
+      "status": "Implemented",
+      "evidence": ["internal/auth/middleware.go", "internal/auth/middleware_test.go", "frontend/src/features/settings/AccessSection.tsx"]
+    },
+    {
+      "id": "PR.DS-01",
+      "function": "PR",
+      "capability": "Data at rest: AES-256-GCM encrypted backups and optional encrypted user store",
+      "status": "Implemented",
+      "evidence": ["cmd/ncc-orchestrator/backupcrypt.go", "cmd/ncc-orchestrator/backupcrypt_test.go", "cmd/ncc-api-server/secretsenc.go", "cmd/ncc-api-server/secretsenc_test.go"]
+    },
+    {
+      "id": "PR.DS-02",
+      "function": "PR",
+      "capability": "Data in transit: TLS 1.2+ for UI, API and Prism; certificate management",
+      "status": "Implemented",
+      "evidence": ["cmd/ncc-api-server/tls.go", "cmd/ncc-ui-server/main.go", "cmd/ncc-orchestrator/supervise_ui_tls_test.go"]
+    },
+    {
+      "id": "PR.DS-11",
+      "function": "PR",
+      "capability": "Backups created, protected, scheduled and tested",
+      "status": "Implemented",
+      "evidence": ["cmd/ncc-api-server/backups.go", "cmd/ncc-api-server/backupschedule.go", "cmd/ncc-api-server/backups_test.go"]
+    },
+    {
+      "id": "PR.PS-01",
+      "function": "PR",
+      "capability": "Secure configuration: hardened defaults, request validation, path confinement, security headers",
+      "status": "Implemented",
+      "evidence": ["cmd/ncc-api-server/hardening.go", "cmd/ncc-api-server/hardening_test.go", "cmd/ncc-api-server/server_hardening_test.go"]
+    },
+    {
+      "id": "PR.PS-02",
+      "function": "PR",
+      "capability": "Software maintained: weekly Dependabot updates, vulnerability SLA, in-app update check",
+      "status": "Implemented",
+      "evidence": [".github/dependabot.yml", "docs/compliance/RISK_REGISTER.md", "cmd/ncc-api-server/update.go"]
+    },
+    {
+      "id": "PR.PS-04",
+      "function": "PR",
+      "capability": "Log records generated: audit log of every mutation and sign-in, filterable, SIEM/syslog forwarding",
+      "status": "Implemented",
+      "evidence": ["cmd/ncc-api-server/hardening.go", "cmd/ncc-api-server/auditforward.go", "cmd/ncc-api-server/audit_filter_test.go", "frontend/src/features/settings/AuditLogSection.tsx"]
+    },
+    {
+      "id": "PR.PS-06",
+      "function": "PR",
+      "capability": "Secure software development practices (NIST SP 800-218 SSDF)",
+      "status": "Implemented",
+      "evidence": ["docs/compliance/SSDF_PRACTICES.md", ".github/workflows/ci.yml", ".github/workflows/codeql.yml", ".golangci.yml"]
+    },
+    {
+      "id": "PR.IR-01",
+      "function": "PR",
+      "capability": "Networks protected: Kubernetes default-deny NetworkPolicies, loopback-only API in Compose, non-root containers",
+      "status": "Implemented",
+      "evidence": ["k8s/networkpolicy-default-deny-ingress.yaml", "k8s/networkpolicy-api-ingress.yaml", "k8s/networkpolicy-egress.yaml", "k8s/api-deployment.yaml", "docker-compose.yml"]
+    },
+    {
+      "id": "PR.IR-03",
+      "function": "PR",
+      "capability": "Resilience: rate limiting, replicas with PodDisruptionBudget, supervisor self-heal",
+      "status": "Implemented",
+      "evidence": ["cmd/ncc-api-server/main.go", "k8s/pdb.yaml", "cmd/ncc-orchestrator/supervise.go", "cmd/ncc-orchestrator/selfheal.go"]
+    },
+    {
+      "id": "DE.CM-01",
+      "function": "DE",
+      "capability": "Service health monitored: readiness probes, diagnostics, Prometheus metrics",
+      "status": "Implemented",
+      "evidence": ["cmd/ncc-api-server/readiness.go", "cmd/ncc-api-server/diagnostics.go", "docs/PROMETHEUS.md"]
+    },
+    {
+      "id": "DE.CM-03",
+      "function": "DE",
+      "capability": "Personnel activity monitored: audited sign-ins, failed logins and lockouts",
+      "status": "Implemented",
+      "evidence": ["cmd/ncc-api-server/loginguard.go", "cmd/ncc-api-server/loginguard_hardening_test.go", "cmd/ncc-api-server/auditforward.go"]
+    },
+    {
+      "id": "DE.CM-09",
+      "function": "DE",
+      "capability": "Software integrity monitored: self-verify of the running binary, self-heal checks",
+      "status": "Implemented",
+      "evidence": ["cmd/ncc-orchestrator/selfheal.go", "cmd/ncc-orchestrator/selfheal_test.go", "frontend/src/features/settings/SystemHealthSection.tsx"]
+    },
+    {
+      "id": "DE.AE-06",
+      "function": "DE",
+      "capability": "Adverse-event information provided to authorised staff and tools (SIEM forwarding, alerts API)",
+      "status": "Implemented",
+      "evidence": ["cmd/ncc-api-server/auditforward.go", "docs/integrations/third-party-alert-integrations.md"]
+    },
+    {
+      "id": "RS.MA-01",
+      "function": "RS",
+      "capability": "Incident response plan executed with suppliers and maintainers when an incident is declared",
+      "status": "Implemented",
+      "evidence": ["docs/compliance/INCIDENT_RESPONSE.md"]
+    },
+    {
+      "id": "RS.MA-02",
+      "function": "RS",
+      "capability": "Incident reports triaged and validated (severity matrix, CVSS)",
+      "status": "Implemented",
+      "evidence": ["docs/compliance/INCIDENT_RESPONSE.md", ".github/SECURITY.md"]
+    },
+    {
+      "id": "RS.MI-01",
+      "function": "RS",
+      "capability": "Incidents contained: session revocation, token revocation, admin reset, feature switches",
+      "status": "Implemented",
+      "evidence": ["cmd/ncc-api-server/usersapi.go", "cmd/ncc-api-server/tokens.go", "cmd/ncc-api-server/features.go", "docs/compliance/INCIDENT_RESPONSE.md"]
+    },
+    {
+      "id": "RS.CO-02",
+      "function": "RS",
+      "capability": "Internal and external stakeholders notified (advisories, release notes)",
+      "status": "Implemented",
+      "evidence": ["docs/compliance/INCIDENT_RESPONSE.md", "docs/releases/README.md"]
+    },
+    {
+      "id": "RC.RP-01",
+      "function": "RC",
+      "capability": "Recovery plan executed: restore from backup, rollback to the previous release",
+      "status": "Implemented",
+      "evidence": ["cmd/ncc-api-server/maintenance.go", "cmd/ncc-orchestrator/restore_txn_test.go", "docs/compliance/INCIDENT_RESPONSE.md"]
+    },
+    {
+      "id": "RC.RP-03",
+      "function": "RC",
+      "capability": "Integrity of backups verified before use (authenticated encryption, manifest checks)",
+      "status": "Implemented",
+      "evidence": ["cmd/ncc-orchestrator/backupcrypt.go", "cmd/ncc-orchestrator/restore_txn_test.go"]
+    },
+    {
+      "id": "RC.RP-05",
+      "function": "RC",
+      "capability": "Integrity of restored assets verified (post-restore self-heal and health checks)",
+      "status": "Implemented",
+      "evidence": ["cmd/ncc-api-server/maintenance_restore_selfheal_test.go", "cmd/ncc-api-server/authheal.go"]
+    },
+    {
+      "id": "RC.CO-03",
+      "function": "RC",
+      "capability": "Recovery progress communicated to stakeholders",
+      "status": "Partial",
+      "evidence": ["docs/compliance/INCIDENT_RESPONSE.md"]
+    }
+  ]
+}

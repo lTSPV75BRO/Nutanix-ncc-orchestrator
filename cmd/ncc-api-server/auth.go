@@ -706,8 +706,8 @@ func (s *apiServer) handleChangePassword(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "invalid JSON body"})
 		return
 	}
-	if len(body.NewPassword) < minPasswordLen {
-		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: fmt.Sprintf("new password must be at least %d characters", minPasswordLen)})
+	if msg := validatePassword(p.subject, body.NewPassword); msg != "" {
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "new " + msg})
 		return
 	}
 	if _, ok, _ := s.users.verify(p.subject, body.CurrentPassword); !ok {

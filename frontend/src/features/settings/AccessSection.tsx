@@ -310,7 +310,7 @@ function UsersCard() {
             label="Temporary password"
             rules={[
               { required: true },
-              { min: 8, message: "Use at least 8 characters" },
+              { min: 15, message: "Use at least 15 characters" },
             ]}
             extra="The user will be required to change this on first login."
           >
@@ -351,7 +351,7 @@ function UsersCard() {
             <Form.Item
               name="password"
               label="New temporary password"
-              rules={[{ required: true }, { min: 8, message: "Use at least 8 characters" }]}
+              rules={[{ required: true }, { min: 15, message: "Use at least 15 characters" }]}
               extra="The user must change it on next login."
             >
               <Input.Password autoComplete="new-password" />
@@ -481,7 +481,7 @@ function PasswordResetRequestsCard() {
           <Form.Item
             name="password"
             label="New temporary password"
-            rules={[{ required: true }, { min: 8, message: "Use at least 8 characters" }]}
+            rules={[{ required: true }, { min: 15, message: "Use at least 15 characters" }]}
             extra="The user must change it on next login."
           >
             <Input.Password autoComplete="new-password" />

@@ -268,6 +268,18 @@ the run starts.
 
 ## Security
 
+- **Passwords follow NIST SP 800-63B:** at least 15 characters (spaces
+  welcome; a few unrelated words work well), and common, repeated, sequential
+  or username-based passwords are refused. Existing passwords keep working
+  until they are next changed.
+- **Dependency vulnerabilities fixed:** vite, vitest, undici and
+  source-map-js (build and test tooling; nothing in the shipped binaries or
+  images was affected) and golang.org/x/net. Scanners report no open fixable
+  vulnerabilities.
+- **Compliance documentation:** NIST CSF 2.0 profile, SSDF (SP 800-218)
+  mapping, risk register, incident response plan and a vulnerability
+  reporting policy, in `docs/compliance/` and `.github/SECURITY.md`. NIST does
+  not certify products; these are an evidence-backed self-assessment.
 - Anonymous admin self-reset off by default (`--allow-admin-self-reset` to
   opt in).
 - Sessions with an unknown or empty role are rejected (were treated as admin).
@@ -300,7 +312,10 @@ the run starts.
    now return 400 with a hint.
 4. The user store gains an optional `deleted_accounts` field; older versions
    ignore it.
-5. **Building from source:** the repository root was tidied. The runner is
+5. **Password policy:** passwords set from now on need 15+ characters and
+   must not be common or contain the username. Scripts that create users
+   through the API with shorter passwords must be updated.
+6. **Building from source:** the repository root was tidied. The runner is
    built with `go build ./cmd/ncc-orchestrator` (was `go build .`), the
    release build is `bash scripts/binaryGO.txt` (Windows:
    `scriptsinaryGO.cmd`), the reference config is
