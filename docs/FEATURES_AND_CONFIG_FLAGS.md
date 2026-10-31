@@ -449,6 +449,13 @@ A caller's role can come from a static token or an interactive login:
   `ttl_sec:0` reverts to the `--session-ttl` server default. `GET /api/v1/auth/me`
   reports `session_ttl_sec`, `expires_at`, and `expires_in_sec` so the UI can
   keep the session fresh and return to the login screen when it lapses.
+- **OpenID Connect SSO** — runtime config in Settings → Access
+  (`GET/PUT /api/v1/settings/oidc`, discovery check `POST /api/v1/settings/oidc/test`):
+  issuer URL, client ID/secret (write-only), dashboard URL, groups claim, role
+  map, default role (`none` refuses unmapped users) and button name. Endpoints
+  `/api/v1/auth/oidc/login` and `/api/v1/auth/oidc/callback` (register the
+  latter as the redirect URI). Authorization code + PKCE; see
+  [`SECURITY_AND_TRUST.md`](SECURITY_AND_TRUST.md#openid-connect-oidc-sso).
 - **SAML SSO** — either startup flags (`--saml-root-url`, `--saml-idp-metadata`,
   `--saml-cert`, `--saml-key`; read-only at runtime) **or** runtime config in
   Settings → Access (`/api/v1/settings/sso`), persisted in the user database and

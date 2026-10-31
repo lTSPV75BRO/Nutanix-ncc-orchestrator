@@ -45,6 +45,8 @@ import type {
   ComponentsData,
   DirectoryEntry,
   LDAPConfig,
+  OIDCConfig,
+  OIDCTestResult,
   PasswordResetRequest,
   PersonalToken,
   SessionPolicy,
@@ -1813,12 +1815,212 @@ function LDAPCard({ embedded }: { embedded?: boolean }) {
   );
 }
 
+const OIDC_DEFAULT_ROLE_OPTIONS = [
+  ...ROLE_OPTIONS,
+  { value: "none", label: "none — refuse users who match no mapping" },
+];
+
+/**
+ * OpenID Connect sign-in (Entra ID, Okta, Google, Keycloak, …). The client
+ * secret is write-only: the server reports has_client_secret and keeps the
+ * stored value when the field is left blank.
+ */
+function OIDCCard({ embedded = false }: { embedded?: boolean }) {
+  const qc = useQueryClient();
+  const oidcQuery = useQuery({ queryKey: ["settings", "oidc"], queryFn: api.getOIDC });
+  const cfg = oidcQuery.data as OIDCConfig | undefined;
+  const [form] = Form.useForm();
+  const [testResult, setTestResult] = useState<OIDCTestResult | null>(null);
+  const rootURL = Form.useWatch("root_url", form) as string | undefined;
+  const redirectURL = rootURL
+    ? `${rootURL.trim().replace(/\/+$/, "")}/api/v1/auth/oidc/callback`
+    : cfg?.redirect_url ?? "";
+
+  useEffect(() => {
+    if (!cfg) return;
+    form.setFieldsValue({
+      enabled: cfg.enabled ?? false,
+      issuer_url: cfg.issuer_url ?? "",
+      client_id: cfg.client_id ?? "",
+      root_url: cfg.root_url || window.location.origin,
+      scopes: cfg.scopes ?? "",
+      username_claim: cfg.username_claim ?? "",
+      groups_claim: cfg.groups_claim || "groups",
+      role_map: cfg.role_map ?? "",
+      default_role: cfg.default_role || "viewer",
+      button_label: cfg.button_label ?? "",
+    });
+  }, [cfg, form]);
+
+  const saveMut = useMutation({
+    mutationFn: (v: Record<string, unknown>) =>
+      api.updateOIDC({
+        enabled: Boolean(v.enabled),
+        issuer_url: String(v.issuer_url ?? ""),
+        client_id: String(v.client_id ?? ""),
+        client_secret: String(v.client_secret ?? ""),
+        root_url: String(v.root_url ?? ""),
+        scopes: String(v.scopes ?? ""),
+        username_claim: String(v.username_claim ?? ""),
+        groups_claim: String(v.groups_claim ?? ""),
+        role_map: String(v.role_map ?? ""),
+        default_role: String(v.default_role ?? "viewer"),
+        button_label: String(v.button_label ?? ""),
+      }),
+    onSuccess: () => {
+      notify.success("OpenID Connect configuration saved.");
+      form.setFieldValue("client_secret", "");
+      void qc.invalidateQueries({ queryKey: ["settings", "oidc"] });
+      void qc.invalidateQueries({ queryKey: ["me"] });
+      void qc.invalidateQueries({ queryKey: ["health"] });
+    },
+    onError: (e) => notifyError(e, "Could not save OpenID Connect configuration"),
+  });
+
+  const testMut = useMutation({
+    mutationFn: () => api.testOIDC(String(form.getFieldValue("issuer_url") ?? "")),
+    onSuccess: (res) => setTestResult(res),
+    onError: (e) => {
+      setTestResult(null);
+      notifyError(e, "Discovery failed");
+    },
+  });
+
+  const body = (
+    <>
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        title="Register NCC Orchestrator as a web application with your identity provider"
+        description={
+          <>
+            Use the authorization-code flow; PKCE is always used. Add this redirect URI:{" "}
+            {redirectURL ? (
+              <Typography.Text copyable code>
+                {redirectURL}
+              </Typography.Text>
+            ) : (
+              "set the dashboard URL below first"
+            )}
+            . For role mapping, have the provider include a groups claim in the ID token.
+          </>
+        }
+      />
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={{ enabled: false, groups_claim: "groups", default_role: "viewer", root_url: window.location.origin }}
+        onFinish={(v) => saveMut.mutate(v)}
+      >
+        <Form.Item name="enabled" label="Enable OpenID Connect sign-in" valuePropName="checked">
+          <Switch />
+        </Form.Item>
+        <Form.Item
+          name="issuer_url"
+          label="Issuer URL"
+          extra="Entra ID: https://login.microsoftonline.com/<tenant-id>/v2.0 · Okta: https://<org>.okta.com · Google: https://accounts.google.com · Keycloak: https://<host>/realms/<realm>"
+          rules={[{ required: true }]}
+        >
+          <Input
+            placeholder="https://login.microsoftonline.com/<tenant-id>/v2.0"
+            addonAfter={
+              <Button type="link" size="small" loading={testMut.isPending} onClick={() => testMut.mutate()} style={{ padding: 0, height: "auto" }}>
+                Test discovery
+              </Button>
+            }
+          />
+        </Form.Item>
+        {testResult ? (
+          <Alert
+            type={testResult.pkce_s256 ? "success" : "warning"}
+            showIcon
+            style={{ marginBottom: 16 }}
+            title={testResult.pkce_s256 ? "Discovery succeeded" : "Discovery succeeded, but the provider does not advertise PKCE (S256)"}
+            description={
+              <>
+                Authorization: <Typography.Text code>{testResult.authorization_endpoint}</Typography.Text>
+                <br />
+                Token: <Typography.Text code>{testResult.token_endpoint}</Typography.Text>
+                {testResult.claims_supported?.length ? (
+                  <>
+                    <br />
+                    Claims: {testResult.claims_supported.slice(0, 20).join(", ")}
+                  </>
+                ) : null}
+              </>
+            }
+          />
+        ) : null}
+        <Form.Item name="client_id" label="Client ID" rules={[{ required: true }]}>
+          <Input autoComplete="off" />
+        </Form.Item>
+        <Form.Item
+          name="client_secret"
+          label="Client secret"
+          extra={
+            cfg?.has_client_secret
+              ? "A secret is stored; leave blank to keep it."
+              : "Leave blank for a public client (PKCE only), if your provider allows it."
+          }
+        >
+          <Input.Password autoComplete="new-password" />
+        </Form.Item>
+        <Form.Item
+          name="root_url"
+          label="Dashboard URL"
+          extra="The address users open NCC Orchestrator at; the redirect URI is built from it."
+          rules={[{ required: true }]}
+        >
+          <Input placeholder="https://ncc.example.com" />
+        </Form.Item>
+        <Form.Item name="groups_claim" label="Groups claim">
+          <Input placeholder="groups" />
+        </Form.Item>
+        <Form.Item name="role_map" label="Role mapping" extra="group=role, comma-separated, e.g. ncc-admins=admin,ncc-ops=operator. Entra ID sends group object IDs.">
+          <Input placeholder="ncc-admins=admin,ncc-ops=operator" />
+        </Form.Item>
+        <Form.Item name="default_role" label="Role when no group matches">
+          <Select options={OIDC_DEFAULT_ROLE_OPTIONS} />
+        </Form.Item>
+        <Form.Item name="button_label" label="Sign-in button name" extra='Shown as "Sign in with …" on the sign-in page.'>
+          <Input placeholder="Microsoft" />
+        </Form.Item>
+        <Form.Item name="username_claim" label="Username claim (optional)">
+          <Input placeholder="(defaults to preferred_username, then email)" />
+        </Form.Item>
+        <Form.Item name="scopes" label="Extra scopes (optional)" extra="openid, profile and email are always requested.">
+          <Input placeholder="groups" />
+        </Form.Item>
+        <Form.Item>
+          <Button type="primary" htmlType="submit" loading={saveMut.isPending}>
+            Save OpenID Connect configuration
+          </Button>
+        </Form.Item>
+      </Form>
+    </>
+  );
+  if (embedded) return body;
+  return (
+    <Card
+      className="page-card"
+      title="OpenID Connect"
+      extra={<Tag color={cfg?.enabled ? "green" : "default"}>{cfg?.enabled ? "enabled" : "disabled"}</Tag>}
+      loading={oidcQuery.isLoading}
+    >
+      {body}
+    </Card>
+  );
+}
+
 function ExternalAuthCard() {
   const ssoQuery = useQuery({ queryKey: ["settings", "sso"], queryFn: api.getSSO });
   const ldapQuery = useQuery({ queryKey: ["settings", "ldap"], queryFn: api.getLDAP });
+  const oidcQuery = useQuery({ queryKey: ["settings", "oidc"], queryFn: api.getOIDC });
   const samlOn = Boolean((ssoQuery.data as SSOConfig | undefined)?.enabled);
   const ldapOn = Boolean((ldapQuery.data as LDAPConfig | undefined)?.enabled);
-  const [provider, setProvider] = useState<"saml" | "ldap">("saml");
+  const oidcOn = Boolean((oidcQuery.data as OIDCConfig | undefined)?.enabled);
+  const [provider, setProvider] = useState<"oidc" | "saml" | "ldap">("oidc");
 
   return (
     <Card className="page-card" id="settings-ldap" title="External authentication">
@@ -1828,21 +2030,26 @@ function ExternalAuthCard() {
             <Typography.Text strong>Provider</Typography.Text>
             <Select
               value={provider}
-              onChange={(v) => setProvider(v as "saml" | "ldap")}
+              onChange={(v) => setProvider(v as "oidc" | "saml" | "ldap")}
               style={{ minWidth: 320 }}
               options={[
+                { value: "oidc", label: "OpenID Connect (Entra ID, Okta, Google, Keycloak)" },
                 { value: "saml", label: "SAML single sign-on" },
                 { value: "ldap", label: "LDAP / Active Directory" },
               ]}
             />
+            <Tag color={oidcOn ? "green" : "default"}>OIDC {oidcOn ? "on" : "off"}</Tag>
             <Tag color={samlOn ? "green" : "default"}>SAML {samlOn ? "on" : "off"}</Tag>
             <Tag color={ldapOn ? "green" : "default"}>LDAP {ldapOn ? "on" : "off"}</Tag>
           </Space>
           <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
-            Configure each provider independently — both can be enabled at the same time. The dropdown
+            Configure each provider independently — any of them can be enabled at the same time. The dropdown
             only changes which one you're editing; saving one does not disable the other. At login, local
             accounts are checked first, then any enabled directory provider.
           </Typography.Paragraph>
+        </div>
+        <div style={{ display: provider === "oidc" ? "block" : "none" }}>
+          <OIDCCard embedded />
         </div>
         <div style={{ display: provider === "saml" ? "block" : "none" }}>
           <SSOCard embedded />

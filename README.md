@@ -37,7 +37,7 @@ Run **Nutanix Cluster Check (NCC)** across many clusters in parallel, collect th
 - **Web dashboard** with FAIL/WARN/ERR/INFO triage, Prism Central alerts, run history, trends, regressions, and flaky-check detection.
 - **Alert lifecycle**: acknowledge, resolve, and reopen NCC findings; every alert instance gets a UUID and an append-only history, and the dashboard shows how long it has been open and whether it keeps coming back.
 - **Integrations**: REST API with an OpenAPI 3 spec, personal access tokens, an incremental event feed for ticketing tools, Prometheus `/metrics`, email/webhook/Slack notifications, and an MCP server for AI assistants.
-- **Secure by default**: HTTPS UI, role-based access (viewer / operator / admin), local accounts, LDAP/AD, SAML SSO, encrypted backups, rate limiting, and strict security headers.
+- **Secure by default**: HTTPS UI, role-based access (viewer / operator / admin), local accounts, LDAP/AD, OpenID Connect and SAML SSO, encrypted backups, rate limiting, and strict security headers.
 - **Runs anywhere**: single binaries for Linux, macOS, and Windows; a self-healing supervisor; Docker Compose; Kubernetes (kustomize or Helm).
 - **CI-friendly**: policy gates turn run results into exit codes.
 
@@ -222,7 +222,7 @@ Metrics: `new-fails`, `resolved-fails`, `fail-rate`, `clusters-failed`, `regress
 - **Dashboard** — latest run at a glance, an alerts table for **NCC** findings or **PC · Beta** (live Prism Central alerts), filters kept in the URL (**Copy link** shares the exact view). Clicking an NCC alert opens a panel to acknowledge, resolve, or reopen it, with its **Lifecycle**: how long it has been open, when a run last reported it, how many times it came back after being resolved (and who resolved it last), and severity changes.
 - **Runs** — start a run, follow its output, cancel a stuck run, and browse past runs with status, duration, and cluster counts.
 - **Insights** — trends, regressions, flaky checks, run-to-run diffs, the NCC triage queue, and **Alert aging and recurrence**: open alerts by age per cluster, median time to acknowledge and resolve, findings that keep coming back, and open alerts that runs no longer report (resolvable in place).
-- **Settings** — config (form or YAML editor), schedule, notifications, users and access (local, LDAP/AD, SAML), HTTPS certificate, software updates, backups, audit log, feature switches, and system health. Operators see only Connection, Schedule, Runs, Logs, and Audit. **Ctrl+K / ⌘K** jumps to any setting.
+- **Settings** — config (form or YAML editor), schedule, notifications, users and access (local, LDAP/AD, OIDC, SAML), HTTPS certificate, software updates, backups, audit log, feature switches, and system health. Operators see only Connection, Schedule, Runs, Logs, and Audit. **Ctrl+K / ⌘K** jumps to any setting.
 
 Light, Dark, IT Professional, or follow the system theme; keyboard friendly; strict Content Security Policy (`script-src 'self'`). Optional views (Insights, Prism Central alerts, run comparison, flaky checks, SLO, NCC log index) can be turned off by an admin in **Settings → Features**.
 
@@ -284,7 +284,7 @@ Extra run arguments (`extra_args`) are checked against a server-side allow-list.
 
 | Area | Default behavior |
 | --- | --- |
-| Sign-in | Local accounts (bcrypt), LDAP / Active Directory, and SAML SSO; first-run admin with a forced password change; offline recovery with `v2-reset-password` |
+| Sign-in | Local accounts (bcrypt, NIST SP 800-63B policy), LDAP / Active Directory, OpenID Connect (Entra ID, Okta, Google, Keycloak, …) and SAML SSO; first-run admin with a forced password change; offline recovery with `v2-reset-password` |
 | Sessions | httpOnly session cookies, `Secure` when served over HTTPS, CSRF protection on changes; `NCC_JWT_SECRET` shares sessions across API replicas |
 | Login protection | Rate limits per account, per source, and per account+source; progressive lockout; `X-Forwarded-For` honored only from `--trusted-proxy-cidrs` |
 | Transport | UI is HTTPS by default (self-signed or your own certificate, managed in **Settings → Access → HTTPS / TLS**); optional API TLS and mTLS |

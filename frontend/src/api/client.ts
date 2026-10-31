@@ -29,6 +29,9 @@ import type {
   UserRole,
   SSOConfig,
   SSOConfigInput,
+  OIDCConfig,
+  OIDCConfigInput,
+  OIDCTestResult,
   ClusterGroup,
   DirectorySearchResult,
   PCDiscoverResult,
@@ -500,6 +503,14 @@ export const api = {
   getSSO: () => callApi<SSOConfig>("/api/v1/settings/sso"),
   updateSSO: (payload: SSOConfigInput) =>
     callApi<unknown>("/api/v1/settings/sso", { method: "PUT", body: JSON.stringify(payload) }),
+  getOIDC: () => callApi<OIDCConfig>("/api/v1/settings/oidc"),
+  updateOIDC: (payload: OIDCConfigInput) =>
+    callApi<{ redirect_url?: string }>("/api/v1/settings/oidc", { method: "PUT", body: JSON.stringify(payload) }),
+  testOIDC: (issuerURL: string) =>
+    callApi<OIDCTestResult>("/api/v1/settings/oidc/test", {
+      method: "POST",
+      body: JSON.stringify({ issuer_url: issuerURL }),
+    }),
   getLDAP: () => callApi<LDAPConfig>("/api/v1/settings/ldap"),
   updateLDAP: (payload: LDAPConfigInput) =>
     callApi<unknown>("/api/v1/settings/ldap", { method: "PUT", body: JSON.stringify(payload) }),

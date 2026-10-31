@@ -238,6 +238,17 @@ the run starts.
 - **Graceful shutdown:** the API and UI servers drain in-flight requests for
   up to 20 s on SIGTERM/SIGINT.
 
+### Sign in with OpenID Connect
+
+Settings → Access → Sign-in now offers **OpenID Connect** next to SAML and
+LDAP: enter your provider's issuer URL, the client ID and secret, and register
+the redirect URI it shows. Works with Microsoft Entra ID, Okta, Google
+Workspace, Keycloak and other standard providers. Groups from the provider map
+to roles, and you can refuse anyone outside the mapped groups. The sign-in page
+gets a "Sign in with <provider>" button, and MFA or conditional access set at
+the provider apply automatically. Setup notes per provider are in
+`docs/SECURITY_AND_TRUST.md`.
+
 ## Bug fixes
 
 - **User-store changes could be lost with several API replicas** (Helm default

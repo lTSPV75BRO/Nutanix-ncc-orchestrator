@@ -45,6 +45,9 @@ export type HealthData = {
   login_enabled?: boolean;
   local_login?: boolean;
   saml_enabled?: boolean;
+  /** OpenID Connect sign-in is configured; oidc_label names the provider. */
+  oidc_enabled?: boolean;
+  oidc_label?: string;
   ldap_enabled?: boolean;
   /** Settings → Features "Opening title"; public so the sign-in page can honour it. */
   intro_title?: boolean;
@@ -59,6 +62,8 @@ export type MeData = {
   login_enabled: boolean;
   local_enabled: boolean;
   saml_enabled: boolean;
+  oidc_enabled?: boolean;
+  oidc_label?: string;
   ldap_enabled?: boolean;
   auth_mode?: string;
   /** True while the built-in admin still has its initial bootstrap password (unchanged). */
@@ -345,6 +350,46 @@ export type SSOConfigInput = {
   role_map?: string;
   default_role?: string;
   allow_idp_initiated?: boolean;
+};
+
+export type OIDCConfig = {
+  enabled: boolean;
+  issuer_url?: string;
+  client_id?: string;
+  has_client_secret?: boolean;
+  root_url?: string;
+  /** Callback URL to register with the provider (root URL + /api/v1/auth/oidc/callback). */
+  redirect_url?: string;
+  scopes?: string;
+  username_claim?: string;
+  groups_claim?: string;
+  role_map?: string;
+  default_role?: string;
+  button_label?: string;
+};
+
+export type OIDCConfigInput = {
+  enabled: boolean;
+  issuer_url: string;
+  client_id: string;
+  /** Write-only; empty keeps the stored secret. */
+  client_secret?: string;
+  root_url: string;
+  scopes?: string;
+  username_claim?: string;
+  groups_claim?: string;
+  role_map?: string;
+  default_role?: string;
+  button_label?: string;
+};
+
+export type OIDCTestResult = {
+  authorization_endpoint: string;
+  token_endpoint: string;
+  scopes_supported?: string[];
+  claims_supported?: string[];
+  pkce_s256: boolean;
+  signing_algs?: string[];
 };
 
 export type LDAPConfig = {

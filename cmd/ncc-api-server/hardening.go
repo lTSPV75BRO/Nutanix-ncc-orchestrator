@@ -791,6 +791,8 @@ func (s *apiServer) withRateLimit(next http.Handler) http.Handler {
 	limitedPaths := map[string]bool{
 		"/api/v1/auth/session":                true,
 		"/api/v1/auth/login":                  true,
+		oidcLoginPath:                         true,
+		oidcCallbackPath:                      true,
 		"/api/v1/auth/rotate":                 true,
 		"/api/v1/auth/change-password":        true,
 		"/api/v1/auth/forgot-password":        true,

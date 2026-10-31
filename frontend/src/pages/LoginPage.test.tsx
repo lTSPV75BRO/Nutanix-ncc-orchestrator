@@ -55,6 +55,19 @@ describe("LoginPage", () => {
     expect(screen.getByText(/Directory users/)).toBeInTheDocument();
   });
 
+  it("offers OpenID Connect sign-in with the provider's name", () => {
+    renderLogin({ localEnabled: false, oidcEnabled: true, oidcLabel: "Microsoft" });
+    expect(screen.getByRole("button", { name: /Sign in with Microsoft/ })).toBeInTheDocument();
+    expect(screen.queryByText("No sign-in method is configured")).not.toBeInTheDocument();
+  });
+
+  it("explains a failed single sign-on and clears it from the address bar", () => {
+    window.history.replaceState(null, "", "/?sso_error=no_role");
+    renderLogin({ oidcEnabled: true });
+    expect(screen.getByText(/not in a group that has access/)).toBeInTheDocument();
+    expect(window.location.search).toBe("");
+  });
+
   it("warns when Caps Lock is on", () => {
     renderLogin();
     const pw = screen.getByLabelText("Password");

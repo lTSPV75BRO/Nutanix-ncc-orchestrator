@@ -557,6 +557,8 @@ export default function App() {
         login_enabled: previous?.login_enabled ?? true,
         local_enabled: previous?.local_enabled ?? true,
         saml_enabled: previous?.saml_enabled ?? false,
+        oidc_enabled: previous?.oidc_enabled,
+        oidc_label: previous?.oidc_label,
         ldap_enabled: previous?.ldap_enabled,
       });
       void queryClient.cancelQueries();
@@ -640,6 +642,8 @@ export default function App() {
         localEnabled={me?.local_enabled ?? true}
         ldapEnabled={Boolean(me?.ldap_enabled)}
         samlEnabled={Boolean(me?.saml_enabled)}
+        oidcEnabled={Boolean(me?.oidc_enabled)}
+        oidcLabel={me?.oidc_label}
         bootstrapPending={Boolean(me?.bootstrap_pending)}
         apiUnreachable={meQuery.isError}
         onRetryBootstrap={() => {

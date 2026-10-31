@@ -113,7 +113,7 @@ func (s *apiServer) loginEnabled() bool {
 	if s.users != nil && s.users.count() > 0 {
 		return true
 	}
-	if s.samlIsEnabled() {
+	if s.samlIsEnabled() || s.oidcIsEnabled() {
 		return true
 	}
 	return s.ldapIsEnabled()
@@ -954,6 +954,8 @@ func (s *apiServer) handleMe(w http.ResponseWriter, r *http.Request) {
 		"login_enabled": s.loginEnabled(),
 		"local_enabled": s.users != nil && s.users.count() > 0,
 		"saml_enabled":  s.samlIsEnabled(),
+		"oidc_enabled":  s.oidcIsEnabled(),
+		"oidc_label":    s.oidcLabel(),
 		"ldap_enabled":  s.ldapIsEnabled(),
 		"auth_mode":     s.authMode,
 	}

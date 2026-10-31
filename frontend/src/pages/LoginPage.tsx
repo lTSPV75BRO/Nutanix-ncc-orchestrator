@@ -33,6 +33,32 @@ export function setLoginNotice(notice: LoginNotice): void {
   }
 }
 
+/** Messages for ?sso_error=<code>, set by the OIDC callback on failure. */
+const SSO_ERRORS: Record<string, string> = {
+  idp_denied: "The identity provider did not sign you in. Try again, or ask an administrator to check your access to this app.",
+  flow_expired: "The sign-in took too long or was started in another tab. Start again.",
+  state_mismatch: "The sign-in response did not match this browser's request. Start again.",
+  token_exchange: "The server could not complete sign-in with the identity provider. Ask an administrator to check the client ID and secret.",
+  token_invalid: "The identity provider's response failed verification. Ask an administrator to check the issuer URL and client ID.",
+  no_role: "You signed in, but your account is not in a group that has access to NCC Orchestrator.",
+  username_conflict: "Your single sign-on username matches a local account here. Ask an administrator to rename the local account.",
+  oidc_unavailable: "Single sign-on is not available right now. Try again, or sign in another way.",
+};
+
+/** Reads and clears ?sso_error from the address bar. */
+function takeSSOError(): string | null {
+  try {
+    const url = new URL(window.location.href);
+    const code = url.searchParams.get("sso_error");
+    if (!code) return null;
+    url.searchParams.delete("sso_error");
+    window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+    return SSO_ERRORS[code] ?? "Single sign-on failed. Try again.";
+  } catch {
+    return null;
+  }
+}
+
 function takeLoginNotice(): LoginNotice | null {
   try {
     const raw = window.sessionStorage.getItem(LOGIN_NOTICE_KEY);
@@ -50,6 +76,9 @@ type LoginPageProps = {
   /** Active Directory / LDAP sign-in is configured (works without local accounts). */
   ldapEnabled?: boolean;
   samlEnabled: boolean;
+  /** OpenID Connect sign-in is configured; oidcLabel names the provider. */
+  oidcEnabled?: boolean;
+  oidcLabel?: string;
   /** When true, the built-in admin still has its initial bootstrap password. */
   bootstrapPending: boolean;
   onSuccess: () => void;
@@ -153,6 +182,8 @@ export function LoginPage({
   localEnabled,
   ldapEnabled,
   samlEnabled,
+  oidcEnabled,
+  oidcLabel,
   bootstrapPending,
   onSuccess,
   onBootstrapReset,
@@ -162,6 +193,7 @@ export function LoginPage({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<{ text: string; throttled: boolean } | null>(null);
   const [notice] = useState<LoginNotice | null>(() => takeLoginNotice());
+  const [ssoError] = useState<string | null>(() => takeSSOError());
   const [capsLock, setCapsLock] = useState(false);
   const [forgotOpen, setForgotOpen] = useState(false);
   const [forgotSubmitting, setForgotSubmitting] = useState(false);
@@ -235,6 +267,7 @@ export function LoginPage({
 
       <div className="auth-alerts" aria-live="polite">
         {notice ? <Alert type={notice.type} showIcon title={notice.text} /> : null}
+        {ssoError ? <Alert type="error" showIcon title={ssoError} /> : null}
         {apiUnreachable ? (
           <Alert
             type="warning"
@@ -319,23 +352,38 @@ export function LoginPage({
         </Form>
       ) : null}
 
-      {passwordLogin && samlEnabled ? <Divider plain>or</Divider> : null}
+      {passwordLogin && (samlEnabled || oidcEnabled) ? <Divider plain>or</Divider> : null}
 
-      {samlEnabled ? (
+      {oidcEnabled ? (
         <Button
           block
           size="large"
           type={passwordLogin ? "default" : "primary"}
           icon={<SafetyOutlined />}
           onClick={() => {
-            window.location.href = "/saml/login";
+            window.location.href = "/api/v1/auth/oidc/login";
           }}
         >
-          Sign in with single sign-on
+          Sign in with {oidcLabel || "single sign-on"}
         </Button>
       ) : null}
 
-      {!passwordLogin && !samlEnabled ? (
+      {samlEnabled ? (
+        <Button
+          block
+          size="large"
+          type={passwordLogin || oidcEnabled ? "default" : "primary"}
+          icon={<SafetyOutlined />}
+          style={oidcEnabled ? { marginTop: 8 } : undefined}
+          onClick={() => {
+            window.location.href = "/saml/login";
+          }}
+        >
+          {oidcEnabled ? "Sign in with SAML" : "Sign in with single sign-on"}
+        </Button>
+      ) : null}
+
+      {!passwordLogin && !samlEnabled && !oidcEnabled ? (
         <Alert
           type="info"
           showIcon

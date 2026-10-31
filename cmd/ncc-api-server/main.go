@@ -164,6 +164,8 @@ type apiServer struct {
 	samlFromFlags         bool // SAML came from startup flags (not runtime-editable)
 	samlMu                sync.RWMutex
 	saml                  *samlProvider
+	oidcMu                sync.RWMutex
+	oidc                  *oidcProvider // built lazily from the stored config
 	ldapEnabled           bool
 	ldapFromFlags         bool // LDAP came from startup flags (not runtime-editable)
 	ldapMu                sync.RWMutex
@@ -990,6 +992,7 @@ func (s *apiServer) isPublicAuthPath(r *http.Request) bool {
 		r.URL.Path == "/api/v1/auth/me" ||
 		r.URL.Path == "/api/v1/auth/change-password" ||
 		r.URL.Path == "/api/v1/auth/forgot-password" ||
+		r.URL.Path == oidcLoginPath || r.URL.Path == oidcCallbackPath ||
 		strings.HasPrefix(r.URL.Path, "/saml/") {
 		return true
 	}
@@ -1168,6 +1171,8 @@ func (s *apiServer) healthPayload(p *principal) map[string]interface{} {
 		"login_enabled": s.loginEnabled(),
 		"local_login":   s.users != nil && s.users.count() > 0,
 		"saml_enabled":  s.samlEnabled,
+		"oidc_enabled":  s.oidcIsEnabled(),
+		"oidc_label":    s.oidcLabel(),
 		"ldap_enabled":  s.ldapIsEnabled(),
 		"cookie_secure": s.cookieSecure(),
 		"detail_level":  "public",
@@ -4277,6 +4282,8 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/settings/users", Methods: []string{http.MethodGet, http.MethodPost}, Description: "Admin-only: list local accounts / create one (last-admin + reserved-admin protection)", SampleBody: "{\n  \"username\": \"alice\",\n  \"password\": \"\",\n  \"role\": \"operator\",\n  \"must_change_password\": true\n}"},
 		{Path: "/api/v1/settings/users/{name}", Methods: []string{http.MethodPut, http.MethodDelete}, Description: "Admin-only: update role / reset password / set must-change, or delete an account", SampleBody: "{\n  \"role\": \"viewer\",\n  \"password\": \"\",\n  \"must_change_password\": true\n}"},
 		{Path: "/api/v1/settings/sso", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/update the runtime SAML SSO configuration (read-only when configured via startup flags)", SampleBody: "{\n  \"enabled\": true,\n  \"root_url\": \"https://ncc.example.com\",\n  \"idp_metadata_url\": \"https://idp.example.com/metadata\",\n  \"role_attribute\": \"groups\",\n  \"role_map\": \"ncc-admins=admin,ncc-ops=operator\",\n  \"default_role\": \"viewer\"\n}"},
+		{Path: "/api/v1/settings/oidc", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/update the OpenID Connect sign-in configuration (client secret is write-only; discovery is checked before saving)", SampleBody: "{\n  \"enabled\": true,\n  \"issuer_url\": \"https://login.microsoftonline.com/<tenant-id>/v2.0\",\n  \"client_id\": \"<application-id>\",\n  \"client_secret\": \"<client-secret>\",\n  \"root_url\": \"https://ncc.example.com\",\n  \"groups_claim\": \"groups\",\n  \"role_map\": \"ncc-admins=admin,ncc-ops=operator\",\n  \"default_role\": \"viewer\",\n  \"button_label\": \"Microsoft\"\n}"},
+		{Path: "/api/v1/settings/oidc/test", Methods: []string{http.MethodPost}, Description: "Admin-only: run OIDC discovery against an issuer without saving (returns endpoints, scopes, claims, PKCE support)", SampleBody: "{\n  \"issuer_url\": \"https://accounts.google.com\"\n}"},
 		{Path: "/api/v1/settings/ldap", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/update the runtime LDAP/Active Directory configuration (bind password is write-only; read-only when configured via startup flags)", SampleBody: "{\n  \"enabled\": true,\n  \"url\": \"ldaps://dc1.corp.example.com:636\",\n  \"bind_dn\": \"CN=ncc-svc,OU=Service Accounts,DC=corp,DC=example,DC=com\",\n  \"bind_password\": \"service-account-secret\",\n  \"base_dn\": \"DC=corp,DC=example,DC=com\",\n  \"role_map\": \"CN=NCC-Admins,OU=Groups,DC=corp,DC=example,DC=com=admin\",\n  \"default_role\": \"viewer\"\n}"},
 		{Path: "/api/v1/settings/ldap/test", Methods: []string{http.MethodPost}, Description: "Admin-only: validate an LDAP/AD configuration by authenticating sample credentials, without saving it", SampleBody: "{\n  \"url\": \"ldaps://dc1.corp.example.com:636\",\n  \"base_dn\": \"DC=corp,DC=example,DC=com\",\n  \"bind_dn\": \"CN=ncc-svc,DC=corp,DC=example,DC=com\",\n  \"bind_password\": \"service-account-secret\",\n  \"role_map\": \"CN=NCC-Admins,OU=Groups,DC=corp,DC=example,DC=com=admin\",\n  \"test_username\": \"jdoe\",\n  \"test_password\": \"users-password\"\n}"},
 		{Path: "/api/v1/settings/ldap/search", Methods: []string{http.MethodGet}, Description: "Admin-only: live AD/LDAP type-ahead search for groups and users (?q=<term>&type=group|user|all&limit=<n>) to assign to cluster groups"},
@@ -5768,12 +5775,18 @@ func (s *apiServer) buildHandler() http.Handler {
 	if s.samlEnabled || s.users.writable() {
 		s.registerSAML(mux)
 	}
+	// OIDC sign-in; handlers send the browser back to the login page with an
+	// error code when OIDC is not configured.
+	mux.HandleFunc(oidcLoginPath, s.handleOIDCLogin)
+	mux.HandleFunc(oidcCallbackPath, s.handleOIDCCallback)
 	// Admin-only account and SSO management (under /api/v1/settings/*). Only
 	// meaningful when the store can persist changes.
 	if s.users.writable() {
 		mux.HandleFunc("/api/v1/settings/users", s.handleUsers)
 		mux.HandleFunc("/api/v1/settings/users/", s.handleUserByName)
 		mux.HandleFunc("/api/v1/settings/sso", s.handleSSO)
+		mux.HandleFunc("/api/v1/settings/oidc", s.handleOIDCSettings)
+		mux.HandleFunc("/api/v1/settings/oidc/test", s.handleOIDCTest)
 		mux.HandleFunc("/api/v1/settings/ldap", s.handleLDAP)
 		mux.HandleFunc("/api/v1/settings/ldap/test", s.handleLDAPTest)
 		mux.HandleFunc("/api/v1/settings/ldap/search", s.handleLDAPSearch)

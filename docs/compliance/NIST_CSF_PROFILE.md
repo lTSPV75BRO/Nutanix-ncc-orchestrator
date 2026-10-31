@@ -48,9 +48,9 @@ identity provider, physical security, staff training) are out of scope.
 | ID.RA-08 | Vulnerability disclosure process | Implemented | [`SECURITY.md`](../../.github/SECURITY.md) |
 | ID.RA-09 | Release authenticity verifiable | Implemented | `releasesign.go`, [`RELEASE_CHECKSUMS.md`](../RELEASE_CHECKSUMS.md) |
 | ID.IM-04 | Incident response and recovery plans | Implemented | [`INCIDENT_RESPONSE.md`](INCIDENT_RESPONSE.md) |
-| PR.AA-01 | Identities and credentials managed (local, PAT, SAML, LDAP) | Implemented | `users.go`, `tokens.go`, `internal/auth/pat.go` |
+| PR.AA-01 | Identities and credentials managed (local, PAT, OIDC, SAML, LDAP) | Implemented | `users.go`, `tokens.go`, `internal/auth/pat.go`, `oidc.go` |
 | PR.AA-03 | Users authenticated: SP 800-63B passwords, bcrypt, throttling and lockout | Implemented | `passwordpolicy.go`, `loginguard.go` |
-| PR.AA-04 | Identity assertions protected (signed JWT, SAML signatures, CSRF) | Implemented | `internal/auth/jwt.go`, `saml.go` |
+| PR.AA-04 | Identity assertions protected (signed JWT, OIDC ID-token verification with PKCE/state/nonce, SAML signatures, CSRF) | Implemented | `internal/auth/jwt.go`, `oidc.go`, `saml.go` |
 | PR.AA-05 | Least privilege (viewer / operator / admin) | Implemented | `internal/auth/middleware.go` |
 | PR.DS-01 | Data at rest: AES-256-GCM backups and user store | Implemented | `backupcrypt.go`, `secretsenc.go` |
 | PR.DS-02 | Data in transit: TLS 1.2+ everywhere | Implemented | `tls.go`, `ncc-ui-server/main.go` |
@@ -82,6 +82,8 @@ identity provider, physical security, staff training) are out of scope.
 - Local passwords follow SP 800-63B rev. 4 (15+ characters, blocklist,
   no composition rules or forced rotation).
 - Dev-tooling `npm audit` at high severity now fails CI.
+- OpenID Connect sign-in (authorization code + PKCE), so organisations can
+  enforce MFA and conditional access through their identity provider.
 - Evidence manifest validated by a Go test; the bundle script fails on
   missing evidence.
 
@@ -90,7 +92,7 @@ identity provider, physical security, staff training) are out of scope.
 | Gap | Target |
 | --- | --- |
 | Pin GitHub-owned actions by commit SHA (GV.SC-07, EX-03) | Before 2027-01-31 |
-| Optional TOTP/WebAuthn second factor for local accounts (multi-factor today only through SAML) | Roadmap |
+| Optional TOTP/WebAuthn second factor for local accounts (multi-factor today through an OIDC or SAML provider) | Roadmap |
 | Tamper-evident (hash-chained) audit log | Roadmap |
 | Independent third-party assessment of this profile | When a customer requires it |
 

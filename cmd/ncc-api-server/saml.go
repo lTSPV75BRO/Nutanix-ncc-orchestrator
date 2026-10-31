@@ -105,11 +105,11 @@ func parseRoleMap(raw string) (map[string]Role, error) {
 		}
 		kv := strings.SplitN(pair, "=", 2)
 		if len(kv) != 2 {
-			return nil, fmt.Errorf("invalid saml role mapping %q (want value=role)", pair)
+			return nil, fmt.Errorf("invalid role mapping %q (want value=role)", pair)
 		}
 		role, ok := parseRole(kv[1])
 		if !ok {
-			return nil, fmt.Errorf("invalid role %q in saml role mapping", kv[1])
+			return nil, fmt.Errorf("invalid role %q in role mapping", kv[1])
 		}
 		m[strings.TrimSpace(kv[0])] = role
 	}

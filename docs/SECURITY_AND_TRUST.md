@@ -880,8 +880,8 @@ self-service change):
 - no forced periodic rotation. Existing shorter passwords keep working until
   the next change; an admin can force a reset per user.
 
-For multi-factor sign-in, use SAML SSO with an identity provider that enforces
-MFA.
+For multi-factor sign-in, use OIDC or SAML SSO with an identity provider that
+enforces MFA.
 
 #### Brute-force lockout and session revocation
 
@@ -935,6 +935,55 @@ or `https://<host>:8080`). Because the IdP returns its assertion as a top-level
 assertion plus the relay-state cookie are the security boundary there). SAML
 therefore requires the UI to be served over TLS at the external root URL — which
 is the default (self-signed HTTPS).
+
+#### OpenID Connect (OIDC) SSO
+
+OIDC sign-in works with any standards-compliant provider (Microsoft Entra ID,
+Okta, Google Workspace, Keycloak, Auth0, Ping, ADFS 2019+). Configure it in
+**Settings → Access → Sign-in → External authentication → OpenID Connect**, or
+with `GET/PUT /api/v1/settings/oidc`. The config is stored in the user database
+(encrypted with the master key when one is set, and included in encrypted
+backups); every API replica picks up changes on the next sign-in.
+
+| Field | Notes |
+| --- | --- |
+| Issuer URL | Must be `https` (plain `http` only for `localhost`). **Test discovery** checks it without saving. |
+| Client ID / secret | From the app registration. The secret is write-only; leave it blank to keep the stored one, or for a public client (PKCE only) if the provider allows it. |
+| Dashboard URL | The browser-facing address; the redirect URI is `<dashboard URL>/api/v1/auth/oidc/callback`. Register exactly that with the provider. |
+| Groups claim / role mapping | `group=role` pairs, e.g. `ncc-admins=admin,ncc-ops=operator`. Groups are also used for cluster-group membership. |
+| Role when no group matches | `viewer` by default; `none` refuses users outside the mapped groups (least privilege). |
+| Sign-in button name | Shown as "Sign in with …" on the login page. |
+
+**Provider notes.**
+
+- **Microsoft Entra ID:** issuer `https://login.microsoftonline.com/<tenant-id>/v2.0`.
+  Register a *Web* platform redirect URI, create a client secret, and under
+  *Token configuration* add the **groups** claim. Entra sends group **object
+  IDs**, so map those (`<object-id>=admin`). Conditional Access and MFA apply
+  as usual.
+- **Okta:** issuer `https://<org>.okta.com` (or a custom authorization server).
+  Add a *Groups claim* to the ID token (filter e.g. *Starts with* `ncc-`).
+- **Google Workspace:** issuer `https://accounts.google.com`. Google does not
+  send groups, so set a default role (or `none` plus local/LDAP for admins).
+- **Keycloak:** issuer `https://<host>/realms/<realm>`; add a *Group
+  Membership* mapper with claim name `groups` (turn off *Full group path* for
+  plain names).
+
+**How it is secured.** Authorization-code flow with **PKCE (S256)** always,
+plus `state` and `nonce`; those three travel in a 10-minute, single-use,
+HMAC-signed `HttpOnly; SameSite=Lax` cookie, so no server-side session store is
+needed. The ID token's signature (provider JWKS), issuer, audience, expiry and
+nonce are verified; the provider's tokens are then discarded and the user gets
+the same signed, role-bearing session as any other sign-in (session TTL,
+revocation and audit apply). Sign-ins and failures are audited as
+`auth.oidc.login` with a reason code; a user is refused when their username
+matches a local account (so a directory identity can never act as a local one)
+or, with default role `none`, when no group matches. Because the provider
+enforces its own policies, **OIDC with an MFA-enforcing provider is the way to
+get multi-factor sign-in.**
+
+For local testing without a real provider, `go run ./tools/fakeoidc` starts a
+throwaway IdP on `http://127.0.0.1:9800` with three test users.
 
 #### LDAP / Active Directory
 

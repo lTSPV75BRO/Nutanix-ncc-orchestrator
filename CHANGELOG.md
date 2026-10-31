@@ -55,6 +55,16 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 
 ### Added
 
+- **OpenID Connect sign-in.** Microsoft Entra ID, Okta, Google Workspace,
+  Keycloak, Auth0 and other OIDC providers, configured in Settings → Access →
+  Sign-in (or `/api/v1/settings/oidc`, with a discovery check at
+  `/api/v1/settings/oidc/test`). Authorization code flow with PKCE, state and
+  nonce in a signed single-use cookie (works across API replicas); ID tokens
+  are verified against the provider's keys, then groups map to roles (default
+  role `none` refuses unmapped users). Client secret is write-only. The sign-in
+  page shows "Sign in with <provider>" and explains failures. Dev IdP for local
+  testing: `go run ./tools/fakeoidc`.
+
 - **Setup checklist replaces the first-time setup modal.** The old modal kept
   its progress in each browser (so every new browser saw "New install
   detected"), showed to viewers who cannot open Settings, used manual "mark as

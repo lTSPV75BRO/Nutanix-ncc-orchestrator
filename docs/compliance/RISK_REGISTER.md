@@ -27,7 +27,7 @@ in time goes in the exceptions table below with an expiry date.
 | ID | Risk | L | I | Score | Mitigation | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | R-01 | Theft of the Prism credentials the runner uses | 2 | 3 | 6 | Secrets via env, files or `secret://` providers, never in config; encrypted user store; least-privilege Prism account recommended | Mitigated |
-| R-02 | Brute force or credential stuffing on local accounts | 2 | 3 | 6 | SP 800-63B policy (15+ chars, blocklist), bcrypt, per-user and per-IP throttling with lockout, SSO option | Mitigated |
+| R-02 | Brute force or credential stuffing on local accounts | 2 | 3 | 6 | SP 800-63B policy (15+ chars, blocklist), bcrypt, per-user and per-IP throttling with lockout; OIDC/SAML SSO lets the organisation enforce MFA | Mitigated |
 | R-03 | Stolen session or API token | 2 | 2 | 4 | Short-lived signed sessions, CSRF on cookie sessions, PATs stored as SHA-256 hashes, admin can revoke sessions and tokens | Mitigated |
 | R-04 | Tampered release binary or image | 1 | 3 | 3 | SHA-256 checksums, Ed25519 signature, `verify` command, SBOMs, images built in CI | Mitigated |
 | R-05 | Vulnerable dependency (runtime) | 2 | 3 | 6 | SLA above, govulncheck/Trivy/CodeQL gates, Dependabot | Mitigated |

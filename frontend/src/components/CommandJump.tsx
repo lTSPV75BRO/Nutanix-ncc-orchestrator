@@ -18,7 +18,7 @@ export const JUMP_ITEMS: JumpItem[] = [
   { id: "insights", title: "Insights", keywords: "kb compare trends knowledge", to: "/insights", hint: "Reports" },
   { id: "tls", title: "HTTPS / TLS", keywords: "tls cert certificate https ssl trust fingerprint", to: sectionHref("access", { focus: "tls" }), hint: "Access" },
   { id: "users", title: "Users & roles", keywords: "users accounts rbac admin password access", to: sectionHref("access", { focus: "users" }), hint: "Access" },
-  { id: "ldap", title: "LDAP / SSO", keywords: "ldap ad saml sso directory authentication access", to: sectionHref("access", { focus: "ldap" }), hint: "Access" },
+  { id: "ldap", title: "LDAP / SSO", keywords: "ldap ad saml oidc openid entra okta sso directory authentication access", to: sectionHref("access", { focus: "ldap" }), hint: "Access" },
   { id: "backup", title: "Backups", keywords: "backup restore snapshot maintenance", to: sectionHref("maintenance", { focus: "backup" }), hint: "Maintenance" },
   { id: "health", title: "System health", keywords: "health diagnostics doctor", to: sectionHref("health", { focus: "health" }), hint: "System" },
   { id: "config", title: "Clusters & config", keywords: "clusters prism pc yaml config", to: sectionHref("config"), hint: "Settings" },

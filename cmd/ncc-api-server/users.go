@@ -124,6 +124,7 @@ type personalToken struct {
 type usersDBFile struct {
 	Users         []account              `json:"users"`
 	SAML          *samlPersisted         `json:"saml,omitempty"`
+	OIDC          *oidcPersisted         `json:"oidc,omitempty"`
 	LDAP          *ldapPersisted         `json:"ldap,omitempty"`
 	Session       *sessionPolicy         `json:"session,omitempty"`
 	TLS           *tlsPolicy             `json:"tls,omitempty"`
@@ -187,6 +188,7 @@ type userDB struct {
 	backend       userStoreBackend
 	accounts      map[string]*account
 	saml          *samlPersisted
+	oidc          *oidcPersisted
 	ldapCfg       *ldapPersisted
 	session       *sessionPolicy
 	tls           *tlsPolicy
@@ -252,6 +254,7 @@ func (db *userDB) applyDocument(f usersDBFile) error {
 	coerceReservedAdminRole(accounts)
 	db.accounts = accounts
 	db.saml = f.SAML
+	db.oidc = f.OIDC
 	db.ldapCfg = f.LDAP
 	db.session = f.Session
 	db.tls = f.TLS
@@ -425,7 +428,7 @@ func (db *userDB) saveLocked() error {
 	if db.backend == nil {
 		return nil // in-memory store
 	}
-	out := usersDBFile{SAML: db.saml, LDAP: db.ldapCfg, Session: db.session, TLS: db.tls, Resets: db.resets, ClusterGroups: db.clusterGroups, Tokens: db.tokens}
+	out := usersDBFile{SAML: db.saml, OIDC: db.oidc, LDAP: db.ldapCfg, Session: db.session, TLS: db.tls, Resets: db.resets, ClusterGroups: db.clusterGroups, Tokens: db.tokens}
 	keys := make([]string, 0, len(db.accounts))
 	for k := range db.accounts {
 		keys = append(keys, k)
@@ -945,6 +948,29 @@ func (db *userDB) setSAML(cfg *samlPersisted) error {
 	defer db.mu.Unlock()
 	defer db.beginWriteLocked()()
 	db.saml = cfg
+	return db.saveLocked()
+}
+
+// getOIDC returns a copy of the persisted OIDC config (or nil).
+func (db *userDB) getOIDC() *oidcPersisted {
+	if db == nil {
+		return nil
+	}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	if db.oidc == nil {
+		return nil
+	}
+	c := *db.oidc
+	return &c
+}
+
+// setOIDC persists the OIDC config.
+func (db *userDB) setOIDC(cfg *oidcPersisted) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
+	db.oidc = cfg
 	return db.saveLocked()
 }
 

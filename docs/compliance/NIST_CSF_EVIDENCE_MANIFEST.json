@@ -112,9 +112,9 @@
     {
       "id": "PR.AA-01",
       "function": "PR",
-      "capability": "Identities and credentials managed: local accounts, PATs, SAML, LDAP",
+      "capability": "Identities and credentials managed: local accounts, PATs, OIDC, SAML, LDAP",
       "status": "Implemented",
-      "evidence": ["cmd/ncc-api-server/users.go", "cmd/ncc-api-server/usersapi.go", "cmd/ncc-api-server/tokens.go", "internal/auth/pat.go"]
+      "evidence": ["cmd/ncc-api-server/users.go", "cmd/ncc-api-server/usersapi.go", "cmd/ncc-api-server/tokens.go", "internal/auth/pat.go", "cmd/ncc-api-server/oidc.go"]
     },
     {
       "id": "PR.AA-03",
@@ -126,9 +126,9 @@
     {
       "id": "PR.AA-04",
       "function": "PR",
-      "capability": "Identity assertions protected: signed JWT sessions, SAML signature checks, CSRF on cookie sessions",
+      "capability": "Identity assertions protected: signed JWT sessions, OIDC ID-token verification with PKCE/state/nonce, SAML signature checks, CSRF on cookie sessions",
       "status": "Implemented",
-      "evidence": ["internal/auth/jwt.go", "cmd/ncc-api-server/saml.go", "cmd/ncc-api-server/auth.go", "cmd/ncc-api-server/auth_test.go"]
+      "evidence": ["internal/auth/jwt.go", "cmd/ncc-api-server/oidc.go", "cmd/ncc-api-server/oidc_test.go", "cmd/ncc-api-server/saml.go", "cmd/ncc-api-server/auth.go", "cmd/ncc-api-server/auth_test.go"]
     },
     {
       "id": "PR.AA-05",
