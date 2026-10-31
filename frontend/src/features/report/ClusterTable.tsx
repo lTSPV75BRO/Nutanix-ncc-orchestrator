@@ -439,7 +439,7 @@ function displayPCStatus(raw: Record<string, unknown>): string {
  * with the full text on hover.
  */
 function ClusterCell({ row, url, subtitle }: { row: RowRecord; url?: string; subtitle?: string }) {
-  const meta = [subtitle, row.clusterVersion, row.nccVersion ? `NCC ${row.nccVersion}` : ""].filter(Boolean).join(" · ");
+  const sub = subtitle && subtitle !== row.clusterName ? subtitle : "";
   return (
     <div className="alerts-cluster-cell">
       {url ? (
@@ -458,12 +458,31 @@ function ClusterCell({ row, url, subtitle }: { row: RowRecord; url?: string; sub
           {row.clusterName}
         </span>
       )}
-      {meta ? (
-        <span className="alerts-cluster-meta" title={meta}>
-          {meta}
+      {sub ? (
+        <span className="alerts-cluster-meta" title={sub}>
+          {sub}
         </span>
       ) : null}
     </div>
+  );
+}
+
+/** AOS and NCC versions stacked as labelled lines, so neither is truncated into the other. */
+function VersionsCell({ row }: { row: RowRecord }) {
+  if (!row.clusterVersion && !row.nccVersion) {
+    return <Typography.Text type="secondary">—</Typography.Text>;
+  }
+  return (
+    <dl className="alerts-versions">
+      <div>
+        <dt>AOS</dt>
+        <dd title={row.clusterVersion || undefined}>{row.clusterVersion || "—"}</dd>
+      </div>
+      <div>
+        <dt>NCC</dt>
+        <dd title={row.nccVersion || undefined}>{row.nccVersion || "—"}</dd>
+      </div>
+    </dl>
   );
 }
 
@@ -1012,7 +1031,7 @@ export function ClusterTable({
     title: "Alert",
     dataIndex: "alert",
     key: "alert",
-    width: 260,
+    width: 240,
     sorter: (a: RowRecord, b: RowRecord) => a.alert.localeCompare(b.alert),
     render: (value: string, row: RowRecord) => (
       <Space orientation="vertical" size={2} style={{ width: "100%" }}>
@@ -1067,17 +1086,26 @@ export function ClusterTable({
       title: "Cluster",
       dataIndex: "clusterName",
       key: "clusterName",
-      width: 210,
+      width: 180,
       sorter: (a, b) => a.clusterName.localeCompare(b.clusterName),
       render: (_, row) => (
         <ClusterCell row={row} url={clusterPrismURL(row.cluster, clusterNameMap)} subtitle={row.cluster} />
       ),
     },
+    {
+      title: "Versions",
+      key: "versions",
+      width: 130,
+      sorter: (a, b) =>
+        a.clusterVersion.localeCompare(b.clusterVersion, undefined, { numeric: true }) ||
+        a.nccVersion.localeCompare(b.nccVersion, undefined, { numeric: true }),
+      render: (_, row) => <VersionsCell row={row} />,
+    },
     titleColumn,
     {
       title: "KB",
       key: "kb",
-      width: 100,
+      width: 90,
       render: (_, row) => kbOf(row) ? (
         <a href={kbOf(row)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
           <Tag color="processing" icon={<LinkOutlined />} style={{ margin: 0 }}>{kbLabel(kbOf(row))}</Tag>
@@ -1097,7 +1125,7 @@ export function ClusterTable({
     {
       title: "Handling",
       key: "handling",
-      width: 120,
+      width: 110,
       render: (_, row) => {
         const mark = markFor(row);
         if (mark?.status === "acknowledged") {

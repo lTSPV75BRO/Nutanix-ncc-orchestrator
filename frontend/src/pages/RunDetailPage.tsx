@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Segmented, Skeleton, Table, Tabs, Tooltip } from "antd";
+import { Alert, Button, Segmented, Skeleton, Table, Tabs, Tooltip, Typography } from "antd";
 import { ArrowLeftOutlined, DownloadOutlined, FileTextOutlined } from "@ant-design/icons";
 import { api, ApiError } from "../api/client";
 import { sectionHref } from "../navigation";
@@ -100,7 +100,9 @@ export function RunDetailPage() {
         const k = asRecord(raw);
         const severity = String(k.severity || "").toUpperCase();
         if (severity === "PASS") return;
-        rows.push({ key: `${c.address}:${i}`, cluster: String(c.address || "—"), severity, check: String(k.check_name || "—"), detail: String(k.detail || "") });
+        // NCC names each block "Detailed information for <check>:".
+        const check = String(k.check_name || "—").replace(/^detailed information for\s*/i, "").replace(/:$/, "").trim();
+        rows.push({ key: `${c.address}:${i}`, cluster: String(c.address || "—"), severity, check, detail: String(k.detail || "").trim() });
       });
     }
     return rows.sort((a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9) || a.cluster.localeCompare(b.cluster));
@@ -264,7 +266,19 @@ export function RunDetailPage() {
                     { title: "Severity", dataIndex: "severity", key: "severity", width: 110, render: (v: string) => <StatusBadge tone={toneFor(v)}>{v}</StatusBadge> },
                     { title: "Cluster", dataIndex: "cluster", key: "cluster", width: 160, render: (v: string) => <span className="mono">{v}</span> },
                     { title: "Check", dataIndex: "check", key: "check", width: 260 },
-                    { title: "Detail", dataIndex: "detail", key: "detail", render: (v: string) => v || "—" },
+                    {
+                      title: "Detail",
+                      dataIndex: "detail",
+                      key: "detail",
+                      render: (v: string) =>
+                        v ? (
+                          <Typography.Paragraph className="run-check-detail" ellipsis={{ rows: 2, expandable: "collapsible" }}>
+                            {v}
+                          </Typography.Paragraph>
+                        ) : (
+                          <span className="run-check-detail-empty">Not recorded for this run</span>
+                        ),
+                    },
                   ]}
                 />
               </Panel>

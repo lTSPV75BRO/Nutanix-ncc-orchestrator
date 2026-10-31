@@ -176,3 +176,47 @@ func TestAlertStoreCacheFollowsExternalWrites(t *testing.T) {
 		t.Fatal("hasIngested disagrees with the store")
 	}
 }
+
+// The run's Checks tab showed "—" for every detail: checks-snapshot.json does
+// not carry it, so the run endpoint joins it from the run's aggregated rows.
+func TestRunByIDFillsCheckDetails(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "outputfiles")
+	run := filepath.Join(out, "runs", "20261031T000000Z")
+	writeTestFile(t, filepath.Join(run, "checks-snapshot.json"),
+		`{"timestamp":"x","clusters":[{"address":"10.0.0.1","checks":[`+
+			`{"check_name":"disk_usage_check","severity":"WARN"},`+
+			`{"check_name":"disk_usage_check","severity":"FAIL"},`+
+			`{"check_name":"cluster run failed","severity":"UNKNOWN","detail":"kept as is"}]}]}`)
+	writeTestFile(t, filepath.Join(run, "index.html"),
+		`const AGG = [{"cluster":"10.0.0.1","check":"disk_usage_check","severity":"FAIL","detail":"disk 95% on node 1"},`+
+			`{"cluster":"10.0.0.1","check":"disk_usage_check","severity":"WARN","detail":"disk 82% on node 2"}];`+"\n")
+	writeTestFile(t, filepath.Join(run, "run-summary.json"), `{"timestamp":"x"}`)
+
+	s := &apiServer{repoRoot: dir, outputDir: out}
+	rec := httptest.NewRecorder()
+	s.handleRunByID(rec, httptest.NewRequest(http.MethodGet, "/api/v1/runs/20261031T000000Z", nil), "20261031T000000Z")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
+	}
+	var env struct {
+		Data struct {
+			Artifacts map[string]struct {
+				Clusters []struct {
+					Checks []struct {
+						Detail string `json:"detail"`
+					} `json:"checks"`
+				} `json:"clusters"`
+			} `json:"artifacts"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	checks := env.Data.Artifacts["checks-snapshot.json"].Clusters[0].Checks
+	got := []string{checks[0].Detail, checks[1].Detail, checks[2].Detail}
+	want := []string{"disk 82% on node 2", "disk 95% on node 1", "kept as is"} // matched by severity, not order
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("details = %q, want %q", got, want)
+	}
+}

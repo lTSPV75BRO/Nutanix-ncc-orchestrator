@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -272,6 +273,98 @@ func slimChecksSnapshotCached(outDir string) interface{} {
 		return v
 	}
 	return map[string]interface{}{}
+}
+
+// withCheckDetails returns a copy of a checks snapshot ({clusters: [{address,
+// checks: [{check_name, severity}]}]}) with each check's detail filled in from
+// the run's aggregated rows, matched by cluster and check name (in order when
+// a check appears more than once). Checks that already carry a detail — the
+// runner writes one for clusters that could not be checked — keep it. The
+// inputs are shared cache values and are not modified.
+func withCheckDetails(snapshot interface{}, aggRows []interface{}) interface{} {
+	snap, ok := snapshot.(map[string]interface{})
+	if !ok || len(aggRows) == 0 {
+		return snapshot
+	}
+	clusters, ok := snap["clusters"].([]interface{})
+	if !ok {
+		return snapshot
+	}
+	key := func(cluster, check, severity string) string {
+		return strings.ToLower(strings.TrimSpace(cluster)) + "\x00" + strings.ToLower(strings.TrimSpace(check)) +
+			"\x00" + strings.ToUpper(strings.TrimSpace(severity))
+	}
+	// A check can appear several times for one cluster (one block per node,
+	// at different severities), and the snapshot is sorted differently from
+	// the rows, so match on severity too; fall back to the name alone.
+	details := map[string][]string{}
+	for _, raw := range aggRows {
+		row, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		cluster, _ := row["cluster"].(string)
+		check, _ := row["check"].(string)
+		detail, _ := row["detail"].(string)
+		severity, _ := row["severity"].(string)
+		if cluster == "" || check == "" || detail == "" {
+			continue
+		}
+		for _, k := range []string{key(cluster, check, severity), key(cluster, check, "")} {
+			details[k] = append(details[k], detail)
+		}
+	}
+	outClusters := make([]interface{}, 0, len(clusters))
+	for _, rawCluster := range clusters {
+		c, ok := rawCluster.(map[string]interface{})
+		if !ok {
+			outClusters = append(outClusters, rawCluster)
+			continue
+		}
+		address, _ := c["address"].(string)
+		checks, _ := c["checks"].([]interface{})
+		cc := make(map[string]interface{}, len(c))
+		for k, v := range c {
+			cc[k] = v
+		}
+		outChecks := make([]interface{}, 0, len(checks))
+		for _, rawCheck := range checks {
+			chk, ok := rawCheck.(map[string]interface{})
+			if !ok {
+				outChecks = append(outChecks, rawCheck)
+				continue
+			}
+			if d, _ := chk["detail"].(string); d != "" {
+				outChecks = append(outChecks, chk)
+				continue
+			}
+			name, _ := chk["check_name"].(string)
+			sev, _ := chk["severity"].(string)
+			k := key(address, name, sev)
+			if len(details[k]) == 0 {
+				k = key(address, name, "")
+			}
+			if queue := details[k]; len(queue) > 0 {
+				cp := make(map[string]interface{}, len(chk)+1)
+				for kk, v := range chk {
+					cp[kk] = v
+				}
+				cp["detail"] = queue[0]
+				details[k] = queue[1:]
+				outChecks = append(outChecks, cp)
+				continue
+			}
+			outChecks = append(outChecks, chk)
+		}
+		cc["checks"] = outChecks
+		outClusters = append(outClusters, cc)
+	}
+	out := make(map[string]interface{}, len(snap))
+	for k, v := range snap {
+		out[k] = v
+	}
+	out["clusters"] = outClusters
+	return out
 }
 
 // reportStampSources are the files whose change marks a new report in outDir.

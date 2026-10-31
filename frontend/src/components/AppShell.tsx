@@ -33,12 +33,19 @@ function selectedKey(pathname: string): string {
   return p.startsWith("/runs/") ? "/runs" : p;
 }
 
+/**
+ * Product name and version, linking to the Overview. Name and version are
+ * stacked so the version is never clipped where the name renders wider
+ * (macOS fonts, Windows display scaling).
+ */
 function Brand({ brand, onNavigate }: { brand?: ReactNode; onNavigate?: () => void }) {
   return (
     <Link to="/" className="ui-sidebar-brand" aria-label="NCC Orchestrator home" onClick={onNavigate}>
       <img src="/logo.svg" alt="" />
-      <span className="ui-sidebar-brand-name">NCC Orchestrator</span>
-      {brand}
+      <span className="ui-sidebar-brand-text">
+        <span className="ui-sidebar-brand-name">NCC Orchestrator</span>
+        {brand}
+      </span>
     </Link>
   );
 }

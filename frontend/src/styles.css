@@ -1987,17 +1987,33 @@ html[data-theme="it-pro"] {
   width: var(--ui-sidebar-w-collapsed);
 }
 
+/* Product name: a button that opens About (AppShell Brand). */
 .ui-sidebar-brand {
   display: flex;
   align-items: center;
   gap: var(--ui-space-3);
+  flex-shrink: 0;
+  width: 100%;
   height: var(--ui-topbar-h);
   padding: 0 var(--ui-space-4);
+  border: 0;
   border-bottom: 1px solid var(--ui-border);
+  background: transparent;
   color: inherit;
+  font: inherit;
+  text-align: left;
   text-decoration: none;
+  cursor: pointer;
   overflow: hidden;
-  white-space: nowrap;
+}
+
+.ui-sidebar-brand:hover .ui-sidebar-brand-name {
+  color: var(--ui-accent);
+}
+
+.ui-sidebar-brand:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: -2px;
 }
 
 .ui-sidebar-brand img {
@@ -2006,14 +2022,32 @@ html[data-theme="it-pro"] {
   height: 28px;
 }
 
+/* Name above version, so the version never competes with the name for width
+   (it was clipped where fonts render wider: macOS, Windows display scaling). */
+.ui-sidebar-brand-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+
 .ui-sidebar-brand-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: var(--ui-text-md);
   font-weight: 600;
+  line-height: 1.2;
   letter-spacing: -0.01em;
+  transition: color 0.15s ease;
 }
 
 .ui-sidebar-brand .brand-version {
-  margin-left: auto;
+  flex-shrink: 0;
+  white-space: nowrap;
+  line-height: 14px;
 }
 
 .ui-sidebar.is-collapsed .ui-sidebar-brand {
@@ -2021,9 +2055,50 @@ html[data-theme="it-pro"] {
   padding: 0;
 }
 
-.ui-sidebar.is-collapsed .ui-sidebar-brand-name,
-.ui-sidebar.is-collapsed .ui-sidebar-brand .brand-version {
+.ui-sidebar.is-collapsed .ui-sidebar-brand-text {
   display: none;
+}
+
+/* Collapsed sidebar: each icon sits in a pill that shows on hover and marks
+   the current page. antd sizes the collapsed menu at 80px; fit it to the
+   64px rail so the pills are centred. */
+.ui-sidebar.is-collapsed .ui-sidebar-nav .ant-menu-inline-collapsed {
+  width: 100%;
+}
+
+.ui-sidebar.is-collapsed .ui-sidebar-nav .ant-menu-inline-collapsed .ant-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 36px;
+  margin-inline: auto;
+  padding-inline: 0 !important;
+  border-radius: 999px;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.ui-sidebar.is-collapsed .ui-sidebar-nav .ant-menu-inline-collapsed .ant-menu-item .ant-menu-item-icon {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.ui-sidebar.is-collapsed .ui-sidebar-nav .ant-menu-inline-collapsed .ant-menu-item .ant-menu-title-content {
+  display: none;
+}
+
+.ui-sidebar.is-collapsed .ui-sidebar-nav .ant-menu-inline-collapsed .ant-menu-item:not(.ant-menu-item-selected):hover {
+  /* A tint of the text colour, so the pill reads on every theme. */
+  background: color-mix(in srgb, var(--ui-text) 10%, transparent);
+  color: var(--ui-text);
+}
+
+.ui-sidebar.is-collapsed .ui-sidebar-nav .ant-menu-inline-collapsed .ant-menu-item-selected {
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent);
 }
 
 .ui-sidebar-nav {
@@ -2128,6 +2203,107 @@ html[data-theme="it-pro"] {
   max-width: 1600px;
   margin: 0 auto;
   padding: var(--ui-space-5);
+}
+
+/* About dialog (components/AboutDialog.tsx). */
+.about-head {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-3);
+  margin-bottom: var(--ui-space-4);
+}
+
+.about-logo {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+}
+
+.about-title {
+  margin: 0;
+  font-size: var(--ui-text-lg, 18px);
+  font-weight: 600;
+  color: var(--ui-text);
+}
+
+.about-subtitle {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ui-space-2);
+  margin: 2px 0 0;
+  font-size: var(--ui-text-sm);
+  color: var(--ui-text-secondary);
+}
+
+.about-text {
+  margin: 0 0 var(--ui-space-3);
+  font-size: var(--ui-text-sm);
+  line-height: 1.55;
+  color: var(--ui-text-secondary);
+}
+
+.about-section {
+  margin-top: var(--ui-space-4);
+  padding-top: var(--ui-space-3);
+  border-top: 1px solid var(--ui-border);
+}
+
+.about-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ui-space-2);
+  margin-bottom: var(--ui-space-2);
+}
+
+.about-section-head h3 {
+  margin: 0;
+  font-size: var(--ui-text-sm);
+  font-weight: 600;
+  color: var(--ui-text);
+}
+
+.about-license {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  padding: var(--ui-space-3);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-hover);
+  font-size: var(--ui-text-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  color: var(--ui-text-secondary);
+}
+
+.about-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ui-space-2);
+  margin-top: var(--ui-space-4);
+  padding-top: var(--ui-space-3);
+  border-top: 1px solid var(--ui-border);
+}
+
+.about-fineprint {
+  margin: var(--ui-space-3) 0 0;
+  font-size: var(--ui-text-xs);
+  color: var(--ui-text-tertiary);
+}
+
+/* Run details → Checks: NCC detail text, two lines until expanded. */
+.run-check-detail.ant-typography {
+  margin: 0;
+  font-size: var(--ui-text-sm);
+  white-space: pre-line;
+  color: var(--ui-text-secondary);
+}
+
+.run-check-detail-empty {
+  font-size: var(--ui-text-sm);
+  color: var(--ui-text-tertiary);
 }
 
 .ui-error-detail {
@@ -3728,4 +3904,33 @@ html[data-theme="light"] .site-intro-skip {
     opacity: 1;
     transform: none;
   }
+}
+
+/* Findings: AOS / NCC versions as two labelled lines. */
+.alerts-versions {
+  margin: 0;
+  display: grid;
+  gap: 2px;
+  font-size: var(--ui-text-xs);
+  line-height: 1.35;
+}
+
+.alerts-versions > div {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: baseline;
+}
+
+.alerts-versions dt {
+  color: var(--ui-text-secondary);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.alerts-versions dd {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

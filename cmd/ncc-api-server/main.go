@@ -3435,7 +3435,13 @@ func (s *apiServer) handleRunByID(w http.ResponseWriter, r *http.Request, id str
 	// Embed the artifacts we can find — keeps the UI from making N follow-up
 	// requests for a single drill-down.
 	artifacts := map[string]interface{}{}
-	for _, name := range []string{"run-summary.json", "ncc-run-record.json", "regression-summary.json", "checks-snapshot.json", "run-meta.json"} {
+	// checks-snapshot.json lists each check without its detail text (that
+	// lives once, in the run's aggregated rows); join it back so the run's
+	// Checks tab can show what each finding says.
+	if snap := readJSONArtifactCached(filepath.Join(runPath, "checks-snapshot.json"), nil); snap != nil {
+		artifacts["checks-snapshot.json"] = withCheckDetails(snap, readAggRowsCached(runPath))
+	}
+	for _, name := range []string{"run-summary.json", "ncc-run-record.json", "regression-summary.json", "run-meta.json"} {
 		if b, rerr := os.ReadFile(filepath.Join(runPath, name)); rerr == nil {
 			var v interface{}
 			if json.Unmarshal(b, &v) == nil {

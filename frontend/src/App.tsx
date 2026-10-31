@@ -3,9 +3,11 @@ import { useRunsActive, useRunsActivePoller } from "./hooks/useRunsActive";
 import {
   BgColorsOutlined,
   CheckOutlined,
+  InfoCircleOutlined,
   KeyOutlined,
   LockOutlined,
   LogoutOutlined,
+  MoreOutlined,
   PlayCircleOutlined,
   ThunderboltOutlined,
   UserOutlined,
@@ -15,6 +17,7 @@ import { Alert, Button, Dropdown, Spin, Tag, Tooltip } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, Route, Routes, useLocation } from "react-router";
 import { AppShell } from "./components/AppShell";
+import { AboutDialog } from "./components/AboutDialog";
 import {
   canOpenSection,
   findingsRedirect,
@@ -414,6 +417,7 @@ function HeaderUserMenu({
   onManageTokens,
   onLogout,
   onLogoutEverywhere,
+  onAbout,
 }: {
   username: string;
   role: UserRole;
@@ -424,6 +428,7 @@ function HeaderUserMenu({
   onManageTokens: () => void;
   onLogout: () => void;
   onLogoutEverywhere: () => void;
+  onAbout: () => void;
 }) {
   const roleColor = role === "admin" ? "gold" : role === "operator" ? "blue" : "default";
   const items = [
@@ -442,6 +447,8 @@ function HeaderUserMenu({
     ...(canChangePassword
       ? [{ key: "change-password", icon: <LockOutlined />, label: "Change password" }]
       : []),
+    { key: "about", icon: <InfoCircleOutlined />, label: "About NCC Orchestrator" },
+    { type: "divider" as const },
     { key: "logout", icon: <LogoutOutlined />, label: "Sign out" },
     ...(canChangePassword
       ? [{ key: "logout-all", icon: <LogoutOutlined />, label: "Sign out everywhere", danger: true }]
@@ -459,6 +466,7 @@ function HeaderUserMenu({
           else if (key === "logout-all") onLogoutEverywhere();
           else if (key === "change-password") onChangePassword();
           else if (key === "tokens") onManageTokens();
+          else if (key === "about") onAbout();
         },
       }}
     >
@@ -593,6 +601,7 @@ export default function App() {
   // The single /runs/active poller for the whole UI (see hooks/useRunsActive).
   const runActiveQuery = useRunsActivePoller(appReady);
   const runActive = Boolean((runActiveQuery.data as RunActiveData | undefined)?.active);
+  const [aboutOpen, setAboutOpen] = useState(false);
 
   const healthRecord = healthQuery.data as
     | {
@@ -701,23 +710,26 @@ export default function App() {
               onManageTokens={() => setTokensOpen(true)}
               onLogout={handleLogout}
               onLogoutEverywhere={handleLogoutEverywhere}
+              onAbout={() => setAboutOpen(true)}
             />
           ) : (
-            // No user menu without sign-in, so the theme picker stands alone.
+            // No user menu without sign-in: theme and About get a small menu.
             <Dropdown
               placement="bottomRight"
               trigger={["click"]}
               menu={{
-                items: themeMenuItems(selectedTheme),
-                onClick: ({ key }) => setTheme(key.slice("theme:".length) as AppThemeSelection),
+                items: [
+                  { key: "theme", icon: <BgColorsOutlined />, label: `Theme: ${themeLabel}`, children: themeMenuItems(selectedTheme) },
+                  { type: "divider" as const },
+                  { key: "about", icon: <InfoCircleOutlined />, label: "About NCC Orchestrator" },
+                ],
+                onClick: ({ key }) => {
+                  if (key === "about") setAboutOpen(true);
+                  else if (key.startsWith("theme:")) setTheme(key.slice("theme:".length) as AppThemeSelection);
+                },
               }}
             >
-              <Button
-                aria-label="Theme menu"
-                title={`Theme: ${themeLabel}`}
-                icon={<BgColorsOutlined />}
-                className="header-icon-btn"
-              />
+              <Button aria-label="More options" title="More options" icon={<MoreOutlined />} className="header-icon-btn" />
             </Dropdown>
           )}
         </>
@@ -758,6 +770,18 @@ export default function App() {
           onStayLoggedIn={() => void meQuery.refetch()}
         />
       ) : null}
+      <AboutDialog
+        open={aboutOpen}
+        onClose={() => setAboutOpen(false)}
+        build={{
+          version: healthRecord?.version,
+          buildDate: healthRecord?.build_date,
+          stream: healthRecord?.stream,
+          goVersion: healthRecord?.go_version,
+          os: healthRecord?.os,
+          arch: healthRecord?.arch,
+        }}
+      />
     </AppShell>
     </AuthContext.Provider>
   );

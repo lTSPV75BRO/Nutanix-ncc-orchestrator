@@ -129,6 +129,19 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
     sites.
   - **Opening title** (`intro_title`): off skips the intro for everyone; it
     is exposed on the public `/health` so the sign-in page can honour it.
+- **Run details show each check's detail.** The Checks tab showed "—" because
+  `checks-snapshot.json` stores checks without their text; the run endpoint now
+  joins it from the run's aggregated rows (matched by cluster, check and
+  severity), and long text is shown two lines at a time with Expand.
+- **Sidebar.** Collapsed icons sit in a centred pill on hover and for the
+  current page. The version sits under the product name, so it is no longer
+  cut off where the name renders wider (macOS, Windows display scaling).
+- **About** is in the user menu (or **More options** when sign-in is off): what
+  the product does, the running build (with a copy button for support), the
+  MIT license and project links.
+- **Findings: clearer cluster column.** The cluster cell shows the name with
+  its address underneath; AOS and NCC versions moved to their own labelled
+  **Versions** column (sortable) instead of one truncated line.
 - **Faster, sturdier runs across thousands of clusters.** See the engine
   section of [`docs/SCALING.md`](docs/SCALING.md).
   - `max-parallel` defaults to `0` (auto: one per cluster, up to 500); 7,000
