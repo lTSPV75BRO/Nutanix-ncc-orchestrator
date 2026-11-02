@@ -2867,6 +2867,8 @@ type JSONSummary struct {
 
 // RunSummaryJSON is the machine-readable run result written to run-summary.json.
 type RunSummaryJSON struct {
+	SchemaVersion  string              `json:"schema_version"`
+	RunID          string              `json:"run_id,omitempty"`
 	Timestamp      string              `json:"timestamp"`
 	DurationS      float64             `json:"duration_s"`
 	ClustersOK     int                 `json:"clusters_ok"`
@@ -2918,9 +2920,15 @@ type RunClusterSummary struct {
 }
 
 type CheckSnapshotEntry struct {
+	FindingID string `json:"finding_id,omitempty"`
 	CheckName string `json:"check_name"`
 	Severity  string `json:"severity"`
 	Detail    string `json:"detail,omitempty"`
+}
+
+func stableFindingID(cluster, check string) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(cluster)) + "\x00" + strings.ToLower(strings.TrimSpace(check))))
+	return "finding-" + hex.EncodeToString(sum[:8])
 }
 
 type ClusterChecksSnapshot struct {
@@ -3260,6 +3268,7 @@ func buildClusterChecksSnapshotFromResult(r ClusterResult) ClusterChecksSnapshot
 	cluster := ClusterChecksSnapshot{Address: r.Cluster}
 	if r.Err != nil {
 		cluster.Checks = []CheckSnapshotEntry{{
+			FindingID: stableFindingID(r.Cluster, clusterRunFailedCheckName),
 			CheckName: clusterRunFailedCheckName,
 			Severity:  "UNKNOWN",
 			Detail:    r.Err.Error() + " — " + runFailedRemediation(r.Err, r.ErrorClass),
@@ -3280,6 +3289,7 @@ func buildClusterChecksSnapshotFromResult(r ClusterResult) ClusterChecksSnapshot
 		}
 		counts[sev]++
 		cluster.Checks = append(cluster.Checks, CheckSnapshotEntry{
+			FindingID: stableFindingID(r.Cluster, strings.TrimSpace(b.CheckName)),
 			CheckName: strings.TrimSpace(b.CheckName),
 			Severity:  sev,
 		})
@@ -4286,6 +4296,7 @@ func generateTestAgg(n int, outDir string) error {
 				NCCVersion:     nccVersion,
 			})
 			clusterChecks = append(clusterChecks, CheckSnapshotEntry{
+				FindingID: stableFindingID(cluster, check),
 				CheckName: check,
 				Severity:  sev,
 			})
@@ -4388,6 +4399,7 @@ func generateTestAgg(n int, outDir string) error {
 		}
 		if idx%4 == 0 {
 			cp.Checks = append(cp.Checks, CheckSnapshotEntry{
+				FindingID: stableFindingID(cp.Address, "Legacy replication guard"),
 				CheckName: "Legacy replication guard",
 				Severity:  "FAIL",
 			})
@@ -16818,6 +16830,8 @@ Run 'ncc-orchestrator --help' for a full list of options.
 			}
 
 			runSummary := RunSummaryJSON{
+				SchemaVersion:  "3.0",
+				RunID:          strings.TrimSpace(os.Getenv("NCC_RUN_ID")),
 				Timestamp:      time.Now().UTC().Format(time.RFC3339),
 				DurationS:      runDuration.Seconds(),
 				ClustersOK:     len(clusterFiles),

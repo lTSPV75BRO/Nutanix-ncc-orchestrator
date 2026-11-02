@@ -426,6 +426,11 @@ func routeMinRoleFor(p string, isRead bool) Role {
 		return RoleAdmin
 	case p == "/api/v1/components":
 		return RoleViewer
+	case strings.HasPrefix(p, "/api/v1/jobs/"):
+		if isRead {
+			return RoleViewer
+		}
+		return RoleOperator
 	case p == "/api/v1/runs/config-preference":
 		// Any authenticated caller may store their own default run config.
 		return RoleViewer

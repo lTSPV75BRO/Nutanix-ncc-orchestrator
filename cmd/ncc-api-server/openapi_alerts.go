@@ -1,5 +1,7 @@
 package main
 
+import "goncc/internal/ai"
+
 // Typed OpenAPI schemas for the NCC alert lifecycle API (/api/v1/alerts/ncc,
 // /events and /{id}). These endpoints are the integration surface for
 // third-party tools (ServiceNow, SIEMs, client generators), so unlike most
@@ -25,10 +27,11 @@ func oaEnum(desc string, values ...string) oaObj {
 func oaEnvelope(data oaObj) oaObj {
 	return oaObj{
 		"type":     "object",
-		"required": []string{"success", "data"},
+		"required": []string{"schema_version", "success", "data"},
 		"properties": oaObj{
-			"success": oaObj{"type": "boolean", "enum": []bool{true}},
-			"data":    data,
+			"schema_version": oaObj{"type": "string", "const": ai.SchemaVersion},
+			"success":        oaObj{"type": "boolean", "enum": []bool{true}},
+			"data":           data,
 		},
 	}
 }
@@ -45,11 +48,12 @@ func nccAlertOpenAPISchemas() oaObj {
 	return oaObj{
 		"Error": oaObj{
 			"type":     "object",
-			"required": []string{"success", "error"},
+			"required": []string{"schema_version", "success", "error"},
 			"properties": oaObj{
-				"success":    oaObj{"type": "boolean", "enum": []bool{false}},
-				"error":      oaStr("Human-readable error message."),
-				"error_code": oaStr("Stable machine-readable code, when one applies (e.g. NCC_API_RATE_LIMITED)."),
+				"schema_version": oaObj{"type": "string", "const": ai.SchemaVersion},
+				"success":        oaObj{"type": "boolean", "enum": []bool{false}},
+				"error":          oaStr("Human-readable error message."),
+				"error_code":     oaStr("Stable machine-readable code, when one applies (e.g. NCC_API_RATE_LIMITED)."),
 			},
 		},
 		"NCCAlert": oaObj{
@@ -160,6 +164,67 @@ func nccAlertOpenAPISchemas() oaObj {
 				"alert":     oaRef("NCCAlert"),
 				"events":    oaObj{"type": "array", "items": oaRef("NCCAlertEvent")},
 				"instances": oaObj{"type": "array", "items": oaRef("NCCAlertInstanceLink")},
+			},
+		},
+		"AIError": oaObj{
+			"type":     "object",
+			"required": []string{"schema_version", "status", "code", "category", "message"},
+			"properties": oaObj{
+				"schema_version": oaObj{"type": "string", "const": ai.SchemaVersion},
+				"status":         oaObj{"type": "string", "const": "error"},
+				"code":           oaStr("Stable machine-readable error code."),
+				"category":       oaStr("validation, authorization, upstream, execution, or internal."),
+				"message":        oaStr("Safe human-readable error message."),
+				"retryable":      oaObj{"type": "boolean"},
+				"remediation":    oaStr("Actionable remediation guidance."),
+			},
+		},
+		"AIFinding": oaObj{
+			"type":     "object",
+			"required": []string{"id", "cluster", "check", "severity"},
+			"properties": oaObj{
+				"id":          oaStr("Stable finding identity."),
+				"run_id":      oaStr("Canonical run that produced the finding."),
+				"cluster":     oaStr("Cluster address or stable cluster name."),
+				"check":       oaStr("NCC check name."),
+				"severity":    oaEnum("Finding severity.", "FAIL", "WARN", "ERR", "INFO"),
+				"title":       oaStr("Short finding title."),
+				"detail":      oaStr("Evidence and observed detail."),
+				"remediation": oaStr("Suggested operator remediation."),
+				"report_ref":  oaStr("Relative report artifact reference."),
+				"observed_at": oaTime("When the finding was observed."),
+			},
+		},
+		"AIJob": oaObj{
+			"type":     "object",
+			"required": []string{"job_id", "kind", "state", "created_at", "updated_at"},
+			"properties": oaObj{
+				"job_id":      oaStr("Stable job identifier."),
+				"kind":        oaStr("Operation kind."),
+				"state":       oaEnum("queued, running, succeeded, failed, cancelled."),
+				"phase":       oaStr("Current operation phase."),
+				"progress":    oaObj{"type": "number", "minimum": 0, "maximum": 1},
+				"created_at":  oaTime("Creation time."),
+				"started_at":  oaTime("Start time."),
+				"updated_at":  oaTime("Last update time."),
+				"finished_at": oaTime("Completion time."),
+				"result_url":  oaStr("URL for the completed result."),
+				"request_id":  oaStr("Request that created the job."),
+				"error":       oaRef("AIError"),
+			},
+		},
+		"AIEnvelope": oaObj{
+			"type":     "object",
+			"required": []string{"schema_version", "status"},
+			"properties": oaObj{
+				"schema_version": oaObj{"type": "string", "const": ai.SchemaVersion},
+				"status":         oaEnum("Operation outcome.", "success", "partial", "error"),
+				"summary":        oaStr("Short explanation suitable for an assistant."),
+				"data":           oaObj{"type": "object"},
+				"error":          oaRef("AIError"),
+				"request_id":     oaStr("Request correlation ID."),
+				"run_id":         oaStr("Related NCC run ID."),
+				"job_id":         oaStr("Related asynchronous job ID."),
 			},
 		},
 	}

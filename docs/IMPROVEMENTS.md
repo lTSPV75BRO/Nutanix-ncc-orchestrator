@@ -2,11 +2,69 @@
 
 A project-wide list of improvements and new features for the NCC Orchestrator: application, scripts, Kubernetes, CI/CD, and documentation. Use as a backlog; prioritize by impact and effort.
 
-For the latest completed release summary, see [RELEASE_NOTES_v2.2.1.md](releases/RELEASE_NOTES_v2.2.1.md) and [CHANGELOG.md](../CHANGELOG.md).
+For the current release summary, see [RELEASE_NOTES_v2.3.0.md](releases/RELEASE_NOTES_v2.3.0.md) and [CHANGELOG.md](../CHANGELOG.md).
 
 ---
 
-## 2.2.x polish pack (next implementation)
+## 2.3.x follow-up backlog
+
+The following items remain after the 2.3.0 work and the Kubernetes/NFS
+investigation on 2026-11-02. Prioritize P0/P1 items before adding larger
+features.
+
+### P0 — reliability and performance
+
+| Priority | Item | Description | Size |
+|----------|------|-------------|------|
+| P0 | **Report-cache correctness and observability** | Add a `report_cache` status to `/report/data` and metrics for cold, warm, refreshing, stale, and failed cache states. Ensure the UI refetches when an asynchronous summary refresh completes. | M |
+| P0 | **Report payload pagination** | Build only the requested `checks_snapshot`/`agg_rows` page instead of loading and filtering the full report before slicing. | M |
+| P0 | **API endpoint latency metrics** | Add Prometheus histograms for route latency, response size, cache misses, NFS refresh duration, and in-flight requests. | M |
+| P0 | **Runner/API version-skew detection** | Surface a health warning and block incompatible deployments when API, UI, and runner image tags differ. | S–M |
+| P0 | **Kubernetes HA integration test** | Test two API replicas, shared PVC access, CronJob execution, schedule updates, and pod rescheduling on separate nodes. | L |
+| P0 | **NFS report retention** | Add configurable retention/pruning for raw logs, report history, and per-run artifacts, with a dry-run preview. | M |
+
+### P1 — security and operations
+
+| Priority | Item | Description | Size |
+|----------|------|-------------|------|
+| P1 | **Narrow Kubernetes RBAC** | Split user-store and CronJob permissions, remove unnecessary Job create/delete access, and use a dedicated scheduler permission boundary. | M |
+| P1 | **Optimistic CronJob updates** | Send and verify `resourceVersion` when the UI updates a CronJob so concurrent administrators cannot overwrite each other. | S |
+| P1 | **Secret rotation workflow** | Add documented and UI-assisted rotation for API tokens, JWT secrets, backup keys, and Prism credentials, with safe replica restart guidance. | M |
+| P1 | **Outbound URL policy** | Add an explicit allowlist or administrator-visible policy for Prism Central, LDAP, OIDC, SMTP, webhook, and update-server destinations to reduce SSRF risk. | M |
+| P1 | **Signed image and SBOM verification** | Publish Cosign signatures/SBOMs and optionally verify image provenance during deployment. | M |
+| P1 | **Dependency security gates** | Run `govulncheck`, OSV scanning, `npm audit`, container scanning, and license checks as required release gates. | S–M |
+| P1 | **Kubernetes failure alerts** | Ship PrometheusRule examples for failed CronJobs, stale reports, API unavailable replicas, PVC pressure, and component version skew. | S |
+| P1 | **Backup restore verification** | Add an isolated restore/test mode that validates archive contents, secrets, report paths, and version compatibility without changing the live install. | M |
+
+### P1 — user experience
+
+| Priority | Item | Description | Size |
+|----------|------|-------------|------|
+| P1 | **Schedule pause/resume and next-run preview** | Add timezone selection, explicit pause/resume, CronJob next-run preview, and a clear distinction between wall-clock cron and interval presets. | M |
+| P1 | **First-run setup wizard** | Guide users through credentials, cluster validation, first run, recurring schedule, notifications, and backup configuration with actionable error messages. | M |
+| P1 | **Notification delivery history** | Show redacted channel status, last attempt, retry count, dead-letter state, and administrator-only delivery diagnostics. | M |
+| P1 | **Slow-request fallback UX** | Show when stale report data is being served, when a refresh is in progress, and when the UI has fallen back to a previous report. | S–M |
+| P1 | **Operator-safe empty states** | Provide direct actions for missing config, missing clusters, failed first run, no schedule, and insufficient cluster-group access. | S |
+
+### P2 — testing and maintainability
+
+| Priority | Item | Description | Size |
+|----------|------|-------------|------|
+| P2 | **Kubernetes API contract tests** | Fake the Kubernetes API and cover CronJob get/patch errors, missing RBAC, suspended schedules, invalid cron, and concurrent updates. | M |
+| P2 | **Frontend test environment repair** | Fix jsdom `localStorage`/`sessionStorage` setup so the existing AppShell and SiteIntro suites run reliably in CI. | S |
+| P2 | **Race and load testing** | Run `go test -race ./...` plus concurrent report, alert, login, and schedule requests against a representative large report. | M |
+| P2 | **Report renderer extraction** | Move the remaining report renderers out of `goNCC.go` into an `internal/report` package with focused interfaces and benchmarks. | L |
+| P2 | **Runbook automation** | Add a support bundle command that collects redacted health, events, component versions, CronJob status, PVC status, and recent logs. | M |
+
+### Recently implemented
+
+- ✅ Kubernetes Schedule settings can update the authoritative `ncc-v2-runner` CronJob.
+- ✅ Large NCC log summaries refresh asynchronously instead of blocking every report request.
+- ✅ API replicas use stricter hostname spreading in Kustomize and Helm.
+
+---
+
+## Historical 2.2.x polish pack
 
 Operator mount-time admin `/api/v1/settings/*` calls are already gone (Schedule uses `/runs/configs`; Settings `destroyOnHidden`). The leftover work is honest rollback, JWT expiry, click-through 403s, and a few security/QOL gaps. Items below are the mixed pack unless marked *later*.
 
@@ -434,4 +492,6 @@ These rows in the sections below are now **done** and kept only for history:
 
 ---
 
-*Last updated: 2026-10-07. 2.2.x polish pack, new-feature research, and performance research added at the top. The `goNCC.go` report-renderer extraction remains the headline structural item — see "Top of backlog (structural)".*
+*Last updated: 2026-11-02. The 2.3.x follow-up backlog reflects the Kubernetes/NFS
+investigation and the recently implemented schedule, report-cache, and
+replica-spreading changes. Historical 2.2.x items remain below for context.*

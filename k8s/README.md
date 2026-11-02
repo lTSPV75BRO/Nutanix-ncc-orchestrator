@@ -143,7 +143,7 @@ Applying `k8s/` creates:
 
 ## Deployment steps
 
-1. Set image tags in `k8s/kustomization.yaml` if they are not already `2.2.1`.
+1. Set image tags in `k8s/kustomization.yaml` if they are not already `2.3.0`.
 2. Put Prism credentials and `jwt-secret` in `ncc-v2-secrets` (see `k8s/secret.yaml`).
 3. Apply:
 
@@ -288,7 +288,9 @@ Use a temporary debug pod mounting `ncc-v2-data`, or expose via API/UI artifact 
 
 ### 4) No scheduled runs happening
 
-- Check cron expression in `k8s/runner-cronjob.yaml`
+- Check the cron expression in `k8s/runner-cronjob.yaml`, or view and update it
+  from Settings → Schedule in the UI (Kubernetes mode patches the
+  `ncc-v2-runner` CronJob).
 - Confirm cronjob exists and is not suspended:
 
   ```bash

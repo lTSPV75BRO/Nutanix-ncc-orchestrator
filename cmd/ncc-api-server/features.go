@@ -213,6 +213,9 @@ func nccLogsForReport(s *apiServer, flags featureFlags, outDir string) []map[str
 		return logs
 	})
 	logs, _ := v.([]map[string]string)
+	if logs == nil {
+		return []map[string]string{}
+	}
 	return logs
 }
 
@@ -223,6 +226,9 @@ func nccSummaryForReport(s *apiServer, flags featureFlags, outDir string) map[st
 	logDir := s.absPath(s.logDir)
 	v := cachedLogDirValue("counts", logDir, outDir, func() interface{} { return parseNCCSummaryCounts(logDir) })
 	counts, _ := v.(map[string]int)
+	if counts == nil {
+		return map[string]int{}
+	}
 	return counts
 }
 
@@ -232,6 +238,9 @@ func nccClusterSummaryForReport(s *apiServer, flags featureFlags, access cluster
 	}
 	logDir := s.absPath(s.logDir)
 	v := cachedLogDirValue("clusters", logDir, outDir, func() interface{} { return parseNCCClusterSummary(logDir) })
+	if v == nil {
+		return []interface{}{}
+	}
 	return deepFilterClusters(v, access)
 }
 

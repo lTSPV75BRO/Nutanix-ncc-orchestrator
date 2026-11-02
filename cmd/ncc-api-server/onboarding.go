@@ -171,7 +171,8 @@ func (s *apiServer) onboardingScheduleStep() onboardingStep {
 		ActionLabel: "Open schedule",
 	}
 	st, err := s.loadSchedule()
-	if err == nil && st.Action == "create" && (strings.TrimSpace(st.Cron) != "" || strings.TrimSpace(st.Every) != "") {
+	userConfigured := strings.TrimSpace(st.UpdatedAt) != ""
+	if err == nil && st.Action == "create" && (strings.TrimSpace(st.Cron) != "" || strings.TrimSpace(st.Every) != "") && (!s.capabilities.Kubernetes || userConfigured) {
 		step.Done = true
 		when := strings.TrimSpace(st.Every)
 		if when != "" {

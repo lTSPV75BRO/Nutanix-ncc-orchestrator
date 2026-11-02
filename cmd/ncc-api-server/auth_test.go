@@ -28,6 +28,8 @@ func TestRouteMinRole(t *testing.T) {
 		{http.MethodPost, "/api/v1/runs/preflight", RoleOperator},
 		{http.MethodDelete, "/api/v1/runs/active", RoleOperator},
 		{http.MethodDelete, "/api/v1/runs/abc123", RoleOperator},
+		{http.MethodGet, "/api/v1/jobs/abc123", RoleViewer},
+		{http.MethodDelete, "/api/v1/jobs/abc123", RoleOperator},
 		// Operator-accessible operational endpoints (expanded scope).
 		{http.MethodGet, "/api/v1/schedule", RoleViewer},
 		{http.MethodPut, "/api/v1/schedule", RoleOperator},

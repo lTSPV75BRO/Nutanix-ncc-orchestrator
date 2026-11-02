@@ -3,7 +3,9 @@
 This chart renders the Kubernetes-native NCC v2 stack: API and UI
 Deployments, internal Services, optional Ingress (TLS passthrough to the
 UI certificate), RBAC, and the authoritative runner CronJob. Kubernetes
-controllers own scheduling, restarts, and image rollouts. Default replica
+controllers own scheduling, restarts, and image rollouts; the recurring
+CronJob schedule can also be viewed and updated from Settings → Schedule.
+Default replica
 counts are **2** for both API and UI.
 
 Prerequisites are a ConfigMap named by `configMapName`, a PVC named by
@@ -16,9 +18,9 @@ HTTPS; Settings → Access can replace it with a BYO PEM pair.
 ```bash
 helm install ncc-orchestrator ./helm/ncc-orchestrator \
   --namespace ncc-orchestrator-v2 --create-namespace \
-  --set images.runner.tag=2.2.1 \
-  --set images.api.tag=2.2.1 \
-  --set images.ui.tag=2.2.1
+  --set images.runner.tag=2.3.0 \
+  --set images.api.tag=2.3.0 \
+  --set images.ui.tag=2.3.0
 ```
 
 Set `ui.origin`, `ingress.host`, `ingress.tlsSecret`, storage names, and

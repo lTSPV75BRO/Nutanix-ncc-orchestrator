@@ -154,8 +154,8 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
       log_path: logPath.trim(),
       with_lock: withLock,
       task_name: taskName.trim(),
-      print_only: printOnly,
-      apply,
+      print_only: isKubernetes ? false : printOnly,
+      apply: isKubernetes ? true : apply,
     };
   }, [mode, type, action, cron, everyValue, everyUnit, config, logPath, withLock, taskName, printOnly, apply]);
 
@@ -195,7 +195,13 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
       setEveryValue(Number(m[1]));
       setEveryUnit(m[2]);
     }
-    setMode((s.type !== "auto" || s.action !== "create" || (s.cron || "").trim()) ? "advanced" : "simple");
+    if (isKubernetes) {
+      setMode("simple");
+      setType("auto");
+      setAction("create");
+    } else {
+      setMode((s.type !== "auto" || s.action !== "create" || (s.cron || "").trim()) ? "advanced" : "simple");
+    }
     setBaseline(baselineFor(s));
   };
 
@@ -263,7 +269,11 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
     setSaving(true);
     try {
       await api.saveSchedule(payload);
-      setBaseline(scheduleKey(payload));
+      if (isKubernetes) {
+        applySaved(await api.loadSchedule());
+      } else {
+        setBaseline(scheduleKey(payload));
+      }
       notify.success(apply ? "Schedule saved and applied." : "Schedule saved.");
     } catch (e) {
       onError(e);
@@ -320,19 +330,16 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
     [configOptions],
   );
 
-  if (isKubernetes) {
-    return (
-      <Alert
-        type="info"
-        showIcon
-        message="Scheduling is managed by Kubernetes"
-        description="The ncc-v2-runner CronJob is authoritative. Configure its schedule in Helm or Kustomize; host cron, systemd timers, and Windows Scheduled Tasks are not used."
-      />
-    );
-  }
-
   return (
     <Space orientation="vertical" size={16} style={{ width: "100%" }}>
+      {isKubernetes ? (
+        <Alert
+          type="info"
+          showIcon
+          message="Kubernetes schedule"
+          description="Changes are applied to the ncc-v2-runner CronJob. The runner image, config, and workload remain managed by Kubernetes."
+        />
+      ) : null}
       <Card className="page-card">
         <Typography.Title level={4} className="section-title">
           Recurring run
@@ -432,7 +439,7 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
           {mode === "advanced" ? (
             <>
               <Row gutter={16}>
-                <Col xs={24} md={8}>
+                {!isKubernetes ? <Col xs={24} md={8}>
                   <Form.Item label="Scheduler type" htmlFor="sched-type">
                     <Select
                       id="sched-type"
@@ -447,8 +454,8 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
                       style={{ width: "100%" }}
                     />
                   </Form.Item>
-                </Col>
-                <Col xs={24} md={8}>
+                </Col> : null}
+                {!isKubernetes ? <Col xs={24} md={8}>
                   <Form.Item label="Action" htmlFor="sched-action">
                     <Select
                       id="sched-action"
@@ -463,8 +470,8 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
                       style={{ width: "100%" }}
                     />
                   </Form.Item>
-                </Col>
-                <Col xs={24} md={8}>
+                </Col> : null}
+                <Col xs={24} md={isKubernetes ? 24 : 8}>
                   <Form.Item label="Custom cron expression" tooltip="5-field cron, leave empty to derive from interval. Day-of-week is not supported for systemd timers." htmlFor="sched-cron">
                     <Input id="sched-cron" name="cron" value={cron} onChange={(e) => setCron(e.target.value)} placeholder="e.g. 15 */4 * * *" autoComplete="off" />
                   </Form.Item>
@@ -495,19 +502,19 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
           ) : null}
 
           <Space size={24} wrap style={{ marginTop: 4, marginBottom: 12 }}>
-            <Space size={8}>
+            {!isKubernetes ? <Space size={8}>
               <Switch id="sched-print-only" aria-label="Preview only (no system changes)" checked={printOnly} onChange={setPrintOnly} />
               <Typography.Text>
                 <label htmlFor="sched-print-only">Preview only (no system changes)</label>
               </Typography.Text>
-            </Space>
-            <Space size={8}>
+            </Space> : null}
+            {!isKubernetes ? <Space size={8}>
               <Switch id="sched-apply" aria-label="Apply changes immediately" checked={apply} onChange={setApply} />
               <Typography.Text>
                 <label htmlFor="sched-apply">Apply changes immediately</label>
               </Typography.Text>
-            </Space>
-            <Space size={8}>
+            </Space> : null}
+            {!isKubernetes ? <Space size={8}>
               <Tooltip title={lockManagedBySystemd ? "systemd prevents overlapping runs natively — a second activation won't start while one is still running, so the file lock is not needed." : undefined}>
                 <Switch
                   id="sched-with-lock"
@@ -522,7 +529,7 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
                   Prevent overlapping runs {lockManagedBySystemd ? "(native via systemd)" : "(file lock)"}
                 </label>
               </Typography.Text>
-            </Space>
+            </Space> : null}
           </Space>
 
           <Space size={8} wrap>
@@ -538,8 +545,8 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
           Scheduler health
         </Typography.Title>
         <Typography.Text type="secondary" className="section-subtitle">
-          Authoritative status from the host scheduler ({health?.detector || "crontab"}). Saved means the UI has stored
-          a configuration; Installed means the host scheduler actually has a matching entry.
+          Authoritative status from {health?.detector || "the scheduler"}. Saved means the UI has stored
+          a configuration; Installed means the scheduler has a matching entry.
         </Typography.Text>
         {health ? (
           <>
@@ -601,6 +608,16 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
                     Install now
                   </Button>
                 }
+              />
+            ) : null}
+
+            {isKubernetes && !health.configured ? (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 12 }}
+                title="Choose the recurring run interval"
+                description="The Kubernetes CronJob exists, but its schedule has not been configured from NCC yet. Choose an interval above and click Save schedule."
               />
             ) : null}
 

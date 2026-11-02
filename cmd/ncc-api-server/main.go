@@ -34,6 +34,7 @@ import (
 	"time"
 
 	yaml "go.yaml.in/yaml/v3"
+	"goncc/internal/ai"
 	"goncc/internal/auth"
 	"goncc/internal/graceful"
 	"goncc/internal/promtext"
@@ -302,14 +303,18 @@ type apiServer struct {
 }
 
 type envelope struct {
-	Success   bool        `json:"success"`
-	Message   string      `json:"message,omitempty"`
-	Data      interface{} `json:"data,omitempty"`
-	Error     string      `json:"error,omitempty"`
-	ErrorCode string      `json:"error_code,omitempty"`
+	SchemaVersion string      `json:"schema_version,omitempty"`
+	Success       bool        `json:"success"`
+	Message       string      `json:"message,omitempty"`
+	Data          interface{} `json:"data,omitempty"`
+	Error         string      `json:"error,omitempty"`
+	ErrorCode     string      `json:"error_code,omitempty"`
 	// RequestID is set on errors so a user can quote it and an operator can
 	// find the matching audit/log line.
-	RequestID string `json:"request_id,omitempty"`
+	RequestID   string                 `json:"request_id,omitempty"`
+	Retryable   bool                   `json:"retryable,omitempty"`
+	Remediation string                 `json:"remediation,omitempty"`
+	Details     map[string]interface{} `json:"details,omitempty"`
 }
 
 type routeMeta struct {
@@ -891,6 +896,10 @@ func main() {
 	s.startNotificationDigestLoop(context.Background())
 	s.startUserDBReloadLoop(context.Background())
 	s.startAlertLifecycleSyncLoop(context.Background())
+	// Prime report artifacts without delaying API startup. Expensive log
+	// summaries are refreshed asynchronously and served from the previous
+	// value while a shared/NFS-backed directory is being scanned.
+	go s.warmReportCache()
 
 	handler := s.buildHandler()
 	srv := &http.Server{
@@ -2832,6 +2841,24 @@ func (s *apiServer) handleSchedule(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 			return
 		}
+		if s.capabilities.Kubernetes {
+			result, updateErr := s.updateKubernetesSchedule(st)
+			s.audit(r, "schedule.update", updateErr == nil, map[string]interface{}{
+				"applied": true, "controller": "CronJob", "action": st.Action,
+			})
+			if updateErr != nil {
+				writeJSON(w, http.StatusBadGateway, envelope{Success: false, Error: updateErr.Error()})
+				return
+			}
+			st.Cron, _ = result["schedule"].(string)
+			st.PrintOnly = false
+			st.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+			writeJSON(w, http.StatusOK, envelope{
+				Success: true, Message: "Kubernetes schedule updated",
+				Data: map[string]interface{}{"schedule": st, "applied": true, "controller": "CronJob"},
+			})
+			return
+		}
 		// Anchor config + log paths to absolute, install-root paths before we
 		// persist or apply them. Otherwise the orchestrator's create-schedule
 		// resolves a relative path against ITS OWN working directory (e.g.
@@ -2938,11 +2965,19 @@ func (s *apiServer) handleScheduleHealth(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if s.capabilities.Kubernetes {
+		st, err := s.loadKubernetesSchedule()
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, envelope{Success: false, Error: err.Error()})
+			return
+		}
+		configured := st.Action == "create" && strings.TrimSpace(st.Cron) != "" && strings.TrimSpace(st.UpdatedAt) != ""
 		writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
-			"configured": true, "saved": true, "installed": true,
+			"configured": configured, "saved": configured, "installed": true,
 			"controller_managed": true, "controller": "CronJob",
 			"detector": "Kubernetes CronJob",
-			"message":  "Scheduling is managed by the ncc-v2-runner CronJob.",
+			"type":     st.Type, "action": st.Action, "cron": st.Cron, "every": st.Every,
+			"config": st.Config, "last_updated_at": st.UpdatedAt,
+			"message": "Scheduling is managed by the ncc-v2-runner CronJob.",
 		}})
 		return
 	}
@@ -3975,6 +4010,14 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 		rawChecks = readJSONArtifactCached(filepath.Join(outDir, "checks-snapshot.json"), []interface{}{})
 	}
 	checksSnapshot := deepFilterClusters(rawChecks, access)
+	filters, filterErr := parseReportFindingFilters(r)
+	if filterErr != nil {
+		writeJSON(w, http.StatusBadRequest, envelope{
+			Success: false, Error: filterErr.Error(), ErrorCode: ai.CodeInvalidArgument,
+		})
+		return
+	}
+	checksSnapshot = filterReportRows(checksSnapshot, filters)
 	var drilldownDiff interface{} = map[string]interface{}{}
 	var regressionSummary interface{} = map[string]interface{}{}
 	if flags.RunComparison {
@@ -4003,6 +4046,7 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 	// Large runs keep the rows in aggregated-data.json rather than index.html;
 	// reading only index.html showed no findings above 20,000 rows.
 	aggRows := deepFilterClusters(allAggRows, access)
+	aggRows = filterReportRows(aggRows, filters)
 	if rows, ok := checksSnapshot.([]interface{}); ok && pg.enabled() {
 		pageRows, meta := paginateAnySlice(rows, pg)
 		checksSnapshot = pageRows
@@ -4037,12 +4081,77 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 }
 
 type reportDataPagination struct {
-	Limit  int
-	Offset int
+	Limit        int
+	Offset       int
+	CursorOffset int
+	HasCursor    bool
+}
+
+type reportFindingFilters struct {
+	Cluster  string
+	Check    string
+	Severity string
+}
+
+func parseReportFindingFilters(r *http.Request) (reportFindingFilters, error) {
+	q := r.URL.Query()
+	out := reportFindingFilters{
+		Cluster:  strings.TrimSpace(q.Get("cluster")),
+		Check:    strings.TrimSpace(q.Get("check")),
+		Severity: strings.ToUpper(strings.TrimSpace(q.Get("severity"))),
+	}
+	if out.Severity != "" {
+		switch out.Severity {
+		case "FAIL", "WARN", "ERR", "INFO":
+		default:
+			return out, errors.New("severity must be one of FAIL, WARN, ERR, INFO")
+		}
+	}
+	return out, nil
+}
+
+func filterReportRows(value interface{}, filters reportFindingFilters) interface{} {
+	if filters.Cluster == "" && filters.Check == "" && filters.Severity == "" {
+		return value
+	}
+	rows, ok := value.([]interface{})
+	if !ok {
+		return value
+	}
+	out := make([]interface{}, 0, len(rows))
+	for _, row := range rows {
+		m, ok := row.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		cluster := strings.ToLower(fmt.Sprint(firstMapValue(m, "cluster", "address", "cluster_name")))
+		check := strings.ToLower(fmt.Sprint(firstMapValue(m, "check", "check_name", "name")))
+		severity := strings.ToUpper(fmt.Sprint(firstMapValue(m, "severity", "status")))
+		if filters.Cluster != "" && !strings.Contains(cluster, strings.ToLower(filters.Cluster)) {
+			continue
+		}
+		if filters.Check != "" && !strings.Contains(check, strings.ToLower(filters.Check)) {
+			continue
+		}
+		if filters.Severity != "" && severity != filters.Severity {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+func firstMapValue(m map[string]interface{}, keys ...string) interface{} {
+	for _, key := range keys {
+		if value, ok := m[key]; ok {
+			return value
+		}
+	}
+	return ""
 }
 
 func (p reportDataPagination) enabled() bool {
-	return p.Limit > 0 || p.Offset > 0
+	return p.Limit > 0 || p.Offset > 0 || p.HasCursor
 }
 
 func parseReportDataPagination(r *http.Request) (reportDataPagination, error) {
@@ -4067,12 +4176,27 @@ func parseReportDataPagination(r *http.Request) (reportDataPagination, error) {
 		}
 		out.Offset = v
 	}
+	cursorRaw := strings.TrimSpace(r.URL.Query().Get("cursor"))
+	if cursorRaw != "" {
+		if out.Offset > 0 {
+			return out, errors.New("cursor and offset cannot be used together")
+		}
+		v, err := strconv.Atoi(cursorRaw)
+		if err != nil || v < 0 {
+			return out, errors.New("cursor must be a non-negative opaque offset")
+		}
+		out.CursorOffset = v
+		out.HasCursor = true
+	}
 	return out, nil
 }
 
 func paginateAnySlice(items []interface{}, p reportDataPagination) ([]interface{}, map[string]interface{}) {
 	total := len(items)
 	start := p.Offset
+	if p.HasCursor {
+		start = p.CursorOffset
+	}
 	if start > total {
 		start = total
 	}
@@ -4087,6 +4211,12 @@ func paginateAnySlice(items []interface{}, p reportDataPagination) ([]interface{
 		"limit":    p.Limit,
 		"count":    len(out),
 		"has_more": end < total,
+	}
+	if p.HasCursor {
+		meta["cursor"] = strconv.Itoa(p.CursorOffset)
+	}
+	if end < total {
+		meta["next_cursor"] = strconv.Itoa(end)
 	}
 	return out, meta
 }
@@ -4323,6 +4453,7 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/runs/preflight", Methods: []string{http.MethodPost}, Description: "Run preflight checks (config/secrets/path permissions)", SampleBody: "{\n  \"config_path\": \"config.yaml\"\n}"},
 		{Path: "/api/v1/runs/extra-args", Methods: []string{http.MethodGet}, Description: "Run options accepted in extra_args by POST /runs/trigger, with labels, allowed values and examples (generated from the server allowlist)."},
 		{Path: "/api/v1/runs/trigger", Methods: []string{http.MethodPost}, Description: "Trigger an orchestrator run. Concurrent runs are allowed; clusters already being refreshed by another active run are skipped (reported in skipped_clusters) and the run executes only the remainder. When all concurrency slots are busy the run is queued and starts automatically.", SampleBody: "{\n  \"config_path\": \"config.yaml\",\n  \"password\": \"\",\n  \"group\": \"\",\n  \"clusters\": [],\n  \"extra_args\": [\"--outputs\", \"csv,json\"]\n}"},
+		{Path: "/api/v1/jobs/{id}", Methods: []string{http.MethodGet, http.MethodDelete}, Description: "Read or cancel an asynchronous NCC job. GET returns phase, progress, result linkage, and stable error information; DELETE requests cancellation."},
 		{Path: "/api/v1/report/data", Methods: []string{http.MethodGet}, Description: "Aggregated report payload (supports optional limit/offset pagination for large arrays)"},
 		{Path: "/api/v1/report/trends", Methods: []string{http.MethodGet}, Description: "Historical trends from run summaries"},
 		{Path: "/api/v1/logs/runner", Methods: []string{http.MethodGet}, Description: "Read tail of runner log"},
@@ -4898,7 +5029,30 @@ func (s *apiServer) buildOpenAPISpecBase() map[string]interface{} {
 					"parameters": []map[string]interface{}{
 						{"name": "limit", "in": "query", "required": false, "schema": map[string]interface{}{"type": "integer", "minimum": 0, "maximum": 5000}},
 						{"name": "offset", "in": "query", "required": false, "schema": map[string]interface{}{"type": "integer", "minimum": 0}},
+						{"name": "cursor", "in": "query", "required": false, "description": "Opaque next_cursor returned in pagination metadata; cannot be combined with offset.", "schema": map[string]interface{}{"type": "string"}},
+						{"name": "cluster", "in": "query", "required": false, "description": "Filter findings by cluster address or name.", "schema": map[string]interface{}{"type": "string"}},
+						{"name": "check", "in": "query", "required": false, "description": "Case-insensitive substring filter for the check name.", "schema": map[string]interface{}{"type": "string"}},
+						{"name": "severity", "in": "query", "required": false, "description": "Filter findings by severity.", "schema": map[string]interface{}{"type": "string", "enum": []string{"FAIL", "WARN", "ERR", "INFO"}}},
 					},
+				},
+			},
+			"/api/v1/jobs/{id}": map[string]interface{}{
+				"get": map[string]interface{}{
+					"summary": "Read asynchronous job state",
+					"parameters": []map[string]interface{}{{
+						"name": "id", "in": "path", "required": true,
+						"schema": map[string]interface{}{"type": "string"},
+					}},
+					"responses": map[string]interface{}{
+						"200": map[string]interface{}{"description": "Job state", "content": map[string]interface{}{"application/json": map[string]interface{}{"schema": map[string]interface{}{"$ref": "#/components/schemas/AIEnvelope"}}}},
+					},
+				},
+				"delete": map[string]interface{}{
+					"summary": "Request asynchronous job cancellation",
+					"parameters": []map[string]interface{}{{
+						"name": "id", "in": "path", "required": true,
+						"schema": map[string]interface{}{"type": "string"},
+					}},
 				},
 			},
 			"/api/v1/report/trends": map[string]interface{}{
@@ -4956,6 +5110,9 @@ func (s *apiServer) runOrchestratorEnv(args []string, timeout time.Duration, ext
 }
 
 func (s *apiServer) loadSchedule() (scheduleState, error) {
+	if s.capabilities.Kubernetes {
+		return s.loadKubernetesSchedule()
+	}
 	path := s.absPath(s.scheduleStatePath)
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -5005,6 +5162,9 @@ func (s *apiServer) absPath(p string) string {
 }
 
 func writeJSON(w http.ResponseWriter, status int, v envelope) {
+	if v.SchemaVersion == "" {
+		v.SchemaVersion = ai.SchemaVersion
+	}
 	if !v.Success && strings.TrimSpace(v.Error) != "" && strings.TrimSpace(v.ErrorCode) == "" {
 		v.ErrorCode = defaultAPIErrorCode(status)
 	}
@@ -5827,6 +5987,7 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/api/v1/artifacts/", s.handleArtifactByName)
 	mux.HandleFunc("/api/v1/runs", s.handleRuns)
 	mux.HandleFunc("/api/v1/runs/", s.handleRunsRouter)
+	mux.HandleFunc("/api/v1/jobs/", s.handleJobs)
 	mux.HandleFunc("/api/v1/runs/summary", s.handleRunSummary)
 	mux.HandleFunc("/api/v1/runs/active", s.handleRunActive)
 	mux.HandleFunc("/api/v1/runs/config-preference", s.handleRunConfigPreference)

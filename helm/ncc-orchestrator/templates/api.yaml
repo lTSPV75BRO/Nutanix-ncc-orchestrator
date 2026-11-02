@@ -13,6 +13,14 @@ spec:
       labels: { app: ncc-orchestrator-v2, component: api }
     spec:
       serviceAccountName: ncc-v2-api
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: ncc-orchestrator-v2
+              component: api
       initContainers:
         - name: seed-config
           image: busybox:1.37

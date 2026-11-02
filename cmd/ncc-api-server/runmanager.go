@@ -230,6 +230,7 @@ func (s *apiServer) submitRun(p runStartParams) runSubmitResult {
 		}
 		s.refreshLegacyRunStateLocked()
 		res.started = true
+		s.persistJob(rec)
 		s.mu.Unlock()
 		go s.launchRun(rec)
 		return res
@@ -238,6 +239,7 @@ func (s *apiServer) submitRun(p runStartParams) runSubmitResult {
 	s.runQueue = append(s.runQueue, id)
 	res.queued = true
 	res.queuePos = len(s.runQueue)
+	s.persistJob(rec)
 	s.mu.Unlock()
 	return res
 }
@@ -304,8 +306,11 @@ func (s *apiServer) launchRun(rec *runRecord) {
 	cmd := s.makeOrchestratorCommand(ctx, args...)
 	cmd.Dir = s.absPath(s.repoRoot)
 	injectedEnv := map[string]string{}
+	cmd.Env = append(childEnv(), "NCC_RUN_ID="+rec.id, "NCC_RUN_SOURCE=api")
+	injectedEnv["NCC_RUN_ID"] = rec.id
+	injectedEnv["NCC_RUN_SOURCE"] = "api"
 	if strings.TrimSpace(rec.password) != "" {
-		cmd.Env = append(childEnv(), "NCC_PASSWORD="+rec.password)
+		cmd.Env = append(cmd.Env, "NCC_PASSWORD="+rec.password)
 		injectedEnv["NCC_PASSWORD"] = "***"
 	}
 	fullCmd := append(s.orchestratorBaseCommand(), redactedArgs(args)...)
@@ -320,6 +325,7 @@ func (s *apiServer) launchRun(rec *runRecord) {
 	rec.env = injectedEnv
 	rec.cancel = cancel
 	s.mu.Unlock()
+	s.persistJob(rec)
 
 	if err := cmd.Start(); err != nil {
 		cancel()
@@ -364,7 +370,7 @@ func (s *apiServer) finishRun(rec *runRecord, runErr error, output string) {
 		}
 		mergeRunLogs(rec.logDir, s.absPath(s.logDir))
 		s.mergeMu.Unlock()
-		s.archiveRunDir(rec.outDir, rec.startedAt, runErr)
+		s.archiveRunDir(rec.outDir, rec.id, rec.startedAt, runErr)
 		_ = os.RemoveAll(filepath.Dir(rec.outDir)) // .runs-live/<id>
 	}
 
@@ -396,6 +402,7 @@ func (s *apiServer) finishRun(rec *runRecord, runErr error, output string) {
 			rec.errStr = runErr.Error()
 		}
 	}
+	s.persistJob(rec)
 	// Release cluster ownership held by this run.
 	for n, owner := range s.clusterOwners {
 		if owner == rec.id {
@@ -939,9 +946,12 @@ func mergeRunLogs(perRunLogs, canonicalLogs string) {
 
 // archiveRunDir archives a single run's per-run artifacts under
 // outputDir/runs/<id> so the Runs history lists each concurrent run separately.
-func (s *apiServer) archiveRunDir(perRunDir string, startedAt time.Time, runErr error) {
+func (s *apiServer) archiveRunDir(perRunDir, runID string, startedAt time.Time, runErr error) {
 	canonicalOut := s.absPath(s.outputDir)
-	id := startedAt.UTC().Format("20060102T150405Z")
+	id := strings.TrimSpace(runID)
+	if id == "" {
+		id = startedAt.UTC().Format("20060102T150405Z")
+	}
 	exitCode := 0
 	if runErr != nil {
 		exitCode = -1
@@ -953,7 +963,7 @@ func (s *apiServer) archiveRunDir(perRunDir string, startedAt time.Time, runErr 
 			ExitCode  *int   `json:"exit_code"`
 		}
 		if json.Unmarshal(sumBytes, &probe) == nil {
-			if strings.TrimSpace(probe.Timestamp) != "" {
+			if strings.TrimSpace(probe.Timestamp) != "" && strings.TrimSpace(runID) == "" {
 				if t, err := time.Parse(time.RFC3339, probe.Timestamp); err == nil {
 					id = t.UTC().Format("20060102T150405Z")
 				}
@@ -972,6 +982,7 @@ func (s *apiServer) archiveRunDir(perRunDir string, startedAt time.Time, runErr 
 		copyIfExistsFile(filepath.Join(perRunDir, name), filepath.Join(target, name))
 	}
 	meta := map[string]interface{}{
+		"run_id":      id,
 		"started_at":  startedAt.UTC().Format(time.RFC3339),
 		"finished_at": time.Now().UTC().Format(time.RFC3339),
 		"duration_s":  time.Since(startedAt).Seconds(),
