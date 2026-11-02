@@ -45,6 +45,7 @@ type artifactEntry struct {
 	// expires bounds staleness for values derived from many files (see
 	// derived); zero means "valid while the stamp matches".
 	expires time.Time
+	loading bool
 	elem    *list.Element
 }
 
@@ -164,6 +165,42 @@ func (c *artifactCache) derived(key string, sources []string, ttl time.Duration,
 	e.stamp, e.value, e.loaded, e.expires = sig, v, true, now.Add(ttl)
 	c.setWeight(e, weight)
 	return v
+}
+
+// derivedAsync returns the previous value immediately and refreshes an
+// expired/missing derived value in the background. This keeps report requests
+// responsive while large log directories on shared storage are parsed.
+func (c *artifactCache) derivedAsync(key string, sources []string, ttl time.Duration, weight int64, compute func() interface{}) interface{} {
+	var sig fileStamp
+	for _, p := range sources {
+		if info, err := os.Stat(p); err == nil {
+			sig.size = sig.size*31 + info.Size()
+			sig.mod = sig.mod*31 + info.ModTime().UnixNano()
+		}
+	}
+	e := c.entry(key)
+	e.mu.Lock()
+	if e.loaded && e.stamp == sig && time.Now().Before(e.expires) {
+		v := e.value
+		e.mu.Unlock()
+		return v
+	}
+	stale := e.value
+	if e.loading {
+		e.mu.Unlock()
+		return stale
+	}
+	e.loading = true
+	e.mu.Unlock()
+
+	go func() {
+		v := compute()
+		e.mu.Lock()
+		e.stamp, e.value, e.loaded, e.expires, e.loading = sig, v, true, time.Now().Add(ttl), false
+		e.mu.Unlock()
+		c.setWeight(e, weight)
+	}()
+	return stale
 }
 
 func parseJSONValue(b []byte) (interface{}, bool) {
@@ -397,5 +434,5 @@ func (s *apiServer) warmReportCache() {
 // minute, whichever comes first.
 func cachedLogDirValue(kind, logDir, outDir string, compute func() interface{}) interface{} {
 	sources := append(reportStampSources(outDir), logDir)
-	return reportArtifacts.derived("logs:"+kind+":"+logDir, sources, time.Minute, 1<<20, compute)
+	return reportArtifacts.derivedAsync("logs:"+kind+":"+logDir, sources, time.Minute, 1<<20, compute)
 }

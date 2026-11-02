@@ -53,7 +53,7 @@ See **`outputfiles/run-summary.json`** for `exit_code` and per-cluster `clusters
 ### Alerts pager does not change the rows
 
 - **Cause:** Older UI builds showed pagination outside the table but still passed every row to the virtual table, so page 2 looked identical to page 1.
-- **Fix:** Upgrade to v2.2.0. The table now receives only the current page slice; changing page or page size replaces the visible alerts.
+- **Fix:** Upgrade to v2.3.0. The table now receives only the current page slice; changing page or page size replaces the visible alerts.
 
 ### SAML SSO returns `origin not allowed` (`NCC_API_FORBIDDEN`)
 
@@ -63,12 +63,12 @@ See **`outputfiles/run-summary.json`** for `exit_code` and per-cluster `clusters
 ### Operator Settings toasts “this action requires the admin role” without a click
 
 - **Cause:** Older UIs loaded Schedule’s config picker from admin-only `GET /api/v1/settings/configs`, and Settings kept hidden tabs mounted so that call ran on Connection/Runs/Logs/Audit as well.
-- **Fix:** Upgrade to the current v2.2.0 build. Schedule uses `GET /api/v1/runs/configs` (operator+). Hidden Settings tabs unmount.
+- **Fix:** Upgrade to the current v2.3.0 build. Schedule uses `GET /api/v1/runs/configs` (operator+). Hidden Settings tabs unmount.
 
 ### In-app update from 2.1.0 copies files but the old version keeps serving
 
 - **Cause:** 2.1.0’s detached restart script joined `if`/`then` with `; `, producing invalid `then;` so `systemctl restart` never ran. The new binaries sat on disk under the still-running old API.
-- **Fix:** Current v2.2.0 joins that script with newlines and installs `ncc-orchestrator-apply-update.path` (`v2-install-update-watcher`) so a binary replace restarts the supervisor even when the running API cannot. After the first upgrade to this build (one manual `systemctl restart` if the watcher was not already present), later in-app updates restart on their own. Rollback last update restores binaries only when the pre-update snapshot was taken with `--include-stack`.
+- **Fix:** Current v2.3.0 joins that script with newlines and installs `ncc-orchestrator-apply-update.path` (`v2-install-update-watcher`) so a binary replace restarts the supervisor even when the running API cannot. After the first upgrade to this build (one manual `systemctl restart` if the watcher was not already present), later in-app updates restart on their own. Rollback last update restores binaries only when the pre-update snapshot was taken with `--include-stack`.
 
 ### A viewer/operator can't see any alerts
 
@@ -116,7 +116,7 @@ See **`outputfiles/run-summary.json`** for `exit_code` and per-cluster `clusters
 - **Cause:** An older API catalog or UI bundle is still running, so
   `/api/v1/features` and `/api/v1/alerts/ncc-dispositions` are not listed
   on the backend page (`GET /api/v1/meta/routes`) or in the UI explorer.
-- **Fix:** Deploy the current v2.2.0 API and UI together, then refresh
+- **Fix:** Deploy the current v2.3.0 API and UI together, then refresh
   the route list. The live mux, OpenAPI, and explorer presets all include
   those paths.
 
@@ -139,7 +139,7 @@ See **`outputfiles/run-summary.json`** for `exit_code` and per-cluster `clusters
 - **Cause:** Prism Central often identifies the cluster by `clusterUUID` when
   `clusterName` is empty. Older builds displayed that UUID as the cluster
   column.
-- **Fix:** Upgrade to the current v2.2.0 API/UI. Discovery now maps `ext_id`
+- **Fix:** Upgrade to the current v2.3.0 API/UI. Discovery now maps `ext_id`
   to name and IP (`cluster_map` on `GET /api/v1/alerts`). Confirm
   `discover-clusters` can list the Prism Central, then Refresh the PC source.
 

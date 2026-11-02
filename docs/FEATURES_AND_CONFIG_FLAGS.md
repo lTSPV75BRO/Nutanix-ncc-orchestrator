@@ -1,4 +1,4 @@
-# Features and Config Flags (v2.2.1)
+# Features and Config Flags (v2.3.0)
 
 Comprehensive reference for NCC Orchestrator features, configuration keys, and CLI flags.
 
@@ -8,7 +8,7 @@ Comprehensive reference for NCC Orchestrator features, configuration keys, and C
 
 `ncc-orchestrator` runs Nutanix NCC checks across one or more clusters, collects and parses results, and generates automation-friendly artifacts plus human-readable reports.
 
-The v2.2.0 dashboard can also fetch Prism Central serviceability alerts on
+The v2.3.0 dashboard can also fetch Prism Central serviceability alerts on
 demand from configured `pcs` or `prism-central-url` targets. The API/UI source
 selector keeps these live PC · Beta alerts separate from persisted NCC findings.
 Unresolved alerts are fetched first for fast initial rendering; the complete
@@ -1304,7 +1304,7 @@ ncc-orchestrator v2-start \
   --wait-ready --ready-timeout 45s
 ```
 
-When `--api-only` is enabled, open `http://localhost:8081/` for backend status and API docs links (`openapi.json`, `meta/routes`). Those pages list every catalog route, including the v2.2.0 additions below.
+When `--api-only` is enabled, open `http://localhost:8081/` for backend status and API docs links (`openapi.json`, `meta/routes`). Those pages list every catalog route, including the v2.3.0 additions below.
 
 Optional views and NCC handling:
 

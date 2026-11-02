@@ -31,7 +31,7 @@ promfiles/
 /ncc-ui-server.exe
 /goncc
 /goncc.exe
-ncc-mcp-server
+/ncc-mcp-server
 
 # Frontend dependencies/cache
 frontend/node_modules/
