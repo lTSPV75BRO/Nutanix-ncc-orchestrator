@@ -6,6 +6,7 @@ import {
   Button,
   Card,
   Col,
+  Collapse,
   Empty,
   Form,
   Input,
@@ -14,6 +15,7 @@ import {
   Modal,
   Radio,
   Row,
+  Segmented,
   Select,
   Space,
   Switch,
@@ -23,20 +25,24 @@ import {
 } from "antd";
 import {
   ApartmentOutlined,
+  ApiOutlined,
   BellOutlined,
   CloudServerOutlined,
+  DeleteOutlined,
   EyeInvisibleOutlined,
   EyeOutlined,
   FileTextOutlined,
   KeyOutlined,
+  PlusOutlined,
   ReloadOutlined,
   RocketOutlined,
   SafetyCertificateOutlined,
   SaveOutlined,
+  SearchOutlined,
   SettingOutlined,
   ThunderboltOutlined,
+  UndoOutlined,
   WarningOutlined,
-  DeleteOutlined,
 } from "@ant-design/icons";
 import type { ReactNode } from "react";
 import { Document, parseDocument } from "yaml";
@@ -47,14 +53,37 @@ import { PolicyGateBuilderSection } from "./PolicyGateBuilderSection";
 import { SecretsMigrationModal } from "./SecretsMigrationModal";
 import { notify } from "../../notify";
 import { SaveBar, middleEllipsis } from "../../ui";
-import { SECTIONS, KNOWN_KEYS, type FieldDef, type SectionDef } from "./configSchema";
-import defaultConfigTemplate from "../../../../examples/example_config.yaml?raw";
+import {
+  ALL_FIELDS,
+  SECTIONS,
+  fieldError,
+  groupFields,
+  matchesQuery,
+  type FieldDef,
+  type SectionDef,
+  type SectionIcon,
+} from "./configSchema";
+import {
+  changedKeys,
+  differsFromDefault,
+  isNested,
+  locate,
+  otherEntries,
+  readBool,
+  readList,
+  readMap,
+  readNumber,
+  readText,
+  writeValue,
+} from "./configDoc";
+import defaultConfigTemplate from "./exampleConfig";
 
 type Props = {
   onError: (e: unknown) => void;
 };
 
 type Mode = "form" | "yaml";
+type Show = "all" | "changed" | "set";
 
 // Runtime-safe defaults used when strict validation rejects the richer example
 // template (for example due unresolved secret:// placeholders).
@@ -65,8 +94,9 @@ outputs: "html,csv"
 insecure-skip-verify: false
 `;
 
-const SECTION_ICONS: Record<SectionDef["icon"], ReactNode> = {
+const SECTION_ICONS: Record<SectionIcon, ReactNode> = {
   cluster: <CloudServerOutlined />,
+  connection: <ApiOutlined />,
   perf: <ThunderboltOutlined />,
   outputs: <ApartmentOutlined />,
   policy: <SafetyCertificateOutlined />,
@@ -74,118 +104,6 @@ const SECTION_ICONS: Record<SectionDef["icon"], ReactNode> = {
   notify: <BellOutlined />,
   secrets: <KeyOutlined />,
 };
-
-function applyPolicyGatesToConfigContent(content: string, gatesCsv: string): string {
-  const parsed = safeParse(content);
-  if (!parsed.error && canonicalDocument(parsed.doc)) {
-    parsed.doc.setIn(["runner", "filtering", "policy-gates"], gatesCsv);
-    return parsed.doc.toString();
-  }
-  const line = `policy-gates: "${gatesCsv}"`;
-  const pattern = /^\s*policy-gates:\s*.*$/m;
-  if (pattern.test(content)) {
-    return content.replace(pattern, line);
-  }
-  const trimmed = content.trimEnd();
-  if (!trimmed) return `${line}\n`;
-  return `${trimmed}\n${line}\n`;
-}
-
-const CANONICAL_PATHS: Record<string, string[]> = {
-  "cluster-source-mode": ["runner", "targets", "mode"],
-  clusters: ["runner", "targets", "clusters"],
-  "clusters-file": ["runner", "targets", "clusters-file"],
-  pcs: ["runner", "targets", "pcs"],
-  "pcs-file": ["runner", "targets", "pcs-file"],
-  "prism-central-url": ["runner", "targets", "prism-central-url"],
-  username: ["runner", "credentials", "username"],
-  password: ["runner", "credentials", "password"],
-  timeout: ["runner", "execution", "timeout"],
-  "request-timeout": ["runner", "execution", "request-timeout"],
-  "max-parallel": ["runner", "execution", "max-parallel"],
-  "dry-run": ["runner", "execution", "dry-run"],
-  "skip-preflight-check": ["runner", "execution", "skip-preflight-check"],
-  replay: ["runner", "execution", "replay"],
-  "gen-test-agg": ["runner", "outputs", "gen-test-agg"],
-  "discover-api-version": ["runner", "targets", "discover-api-version"],
-  "poll-interval": ["runner", "execution", "poll-interval"],
-  "poll-jitter": ["runner", "execution", "poll-jitter"],
-  "retry-max-attempts": ["runner", "retry", "max-attempts"],
-  "retry-base-delay": ["runner", "retry", "base-delay"],
-  "retry-max-delay": ["runner", "retry", "max-delay"],
-  "retry-circuit-breaker": ["runner", "retry", "circuit-breaker"],
-  "policy-gates": ["runner", "filtering", "policy-gates"],
-  "severity-filter": ["runner", "filtering", "severity"],
-  "exclude-alert-titles": ["runner", "filtering", "exclude-alert-titles"],
-  "flaky-lookback-runs": ["runner", "filtering", "flaky-lookback-runs"],
-  "flaky-min-transitions": ["runner", "filtering", "flaky-min-transitions"],
-  "output-dir-filtered": ["storage", "output-dir"],
-  "output-dir-logs": ["storage", "logs-dir"],
-  "run-history-dir": ["storage", "run-history-dir"],
-  "prom-dir": ["storage", "prom-dir"],
-  "email-enabled": ["notifications", "email-enabled"],
-  "smtp-server": ["notifications", "smtp-server"],
-  "smtp-port": ["notifications", "smtp-port"],
-  "webhook-url": ["notifications", "webhook-url"],
-  "pc-alerts-cache-ttl": ["api", "cache", "pc-alerts-cache-ttl"],
-};
-const CANONICAL_ARRAY_KEYS = new Set(["clusters", "pcs", "severity-filter", "exclude-alert-titles"]);
-
-function canonicalDocument(doc: Document): boolean {
-  return doc.get("schema-version") !== null && doc.get("schema-version") !== undefined;
-}
-
-function configValue(doc: Document, key: string): unknown {
-  const path = CANONICAL_PATHS[key];
-  if (canonicalDocument(doc) && path) {
-    const nested = doc.getIn(path);
-    if (nested !== null && nested !== undefined) return nested;
-  }
-  return doc.get(key);
-}
-
-/** Tolerantly read a key from a YAML document as a string for form display. */
-function readString(doc: Document, key: string): string {
-  const v = configValue(doc, key);
-  if (v === null || v === undefined) return "";
-  if (typeof v === "boolean") return v ? "true" : "false";
-  return String(v);
-}
-
-function readBoolean(doc: Document, key: string): boolean {
-  const v = configValue(doc, key);
-  if (typeof v === "boolean") return v;
-  if (typeof v === "string") return v.trim().toLowerCase() === "true";
-  return Boolean(v);
-}
-
-function readNumber(doc: Document, key: string): number | null {
-  const v = configValue(doc, key);
-  if (v === null || v === undefined || v === "") return null;
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-
-function writeKey(doc: Document, key: string, value: unknown): void {
-  const path = CANONICAL_PATHS[key];
-  if (canonicalDocument(doc) && path) {
-    if (value === null || value === undefined) doc.deleteIn(path);
-    else if (CANONICAL_ARRAY_KEYS.has(key) && typeof value === "string") {
-      doc.setIn(path, value.split(",").map((item) => item.trim()).filter(Boolean));
-    } else doc.setIn(path, value);
-    return;
-  }
-  if (value === null || value === undefined) {
-    doc.delete(key);
-    return;
-  }
-  doc.set(key, value);
-}
-
-function ensureString(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  return String(value);
-}
 
 /** Parse YAML, returning a fresh empty Document on error. */
 function safeParse(yaml: string): { doc: Document; error: string | null } {
@@ -233,11 +151,11 @@ function SecretInput({
       {isWeakPlaintext ? (
         <Space size={8} align="center" wrap style={{ marginTop: 2 }}>
           <Typography.Text type="warning" style={{ fontSize: 12 }}>
-            <WarningOutlined /> Stored as plaintext in the config file.
+            <WarningOutlined /> Stored as plain text in the config file.
           </Typography.Text>
           {onMigrate ? (
             <Button size="small" type="link" onClick={onMigrate} style={{ padding: 0 }}>
-              Migrate to a secret reference →
+              Use a secret reference instead
             </Button>
           ) : null}
         </Space>
@@ -246,43 +164,87 @@ function SecretInput({
   );
 }
 
-/** Stable DOM id for a config field — used to wire the Form.Item label's
- *  htmlFor to the actual input id and to give the input a name= attribute
- *  for browser autofill heuristics. */
+type KvRow = { id: number; name: string; value: string };
+let rowSeq = 0;
+
+/** Name/value rows for a string map. Rows without a name are not saved. */
+function KeyValueEditor({ id, value, onChange }: { id: string; value: [string, string][]; onChange: (next: Record<string, string> | undefined) => void }) {
+  const [rows, setRows] = useState<KvRow[]>(() => value.map(([name, v]) => ({ id: ++rowSeq, name, value: v })));
+  const fromRows = (list: KvRow[]) => list.filter((r) => r.name.trim()).map((r) => [r.name.trim(), r.value] as [string, string]);
+  // Pick up changes made elsewhere (YAML mode, reload) without fighting typing.
+  useEffect(() => {
+    if (JSON.stringify(fromRows(rows)) !== JSON.stringify(value)) {
+      setRows(value.map(([name, v]) => ({ id: ++rowSeq, name, value: v })));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(value)]);
+  const commit = (next: KvRow[]) => {
+    setRows(next);
+    const entries = fromRows(next);
+    onChange(entries.length ? Object.fromEntries(entries) : undefined);
+  };
+  return (
+    <div className="config-kv" id={id}>
+      {rows.map((r, i) => (
+        <Space.Compact key={r.id} style={{ width: "100%" }}>
+          <Input
+            aria-label={`Header ${i + 1} name`}
+            placeholder="Header"
+            value={r.name}
+            style={{ width: "40%" }}
+            autoComplete="off"
+            onChange={(e) => commit(rows.map((x) => (x.id === r.id ? { ...x, name: e.target.value } : x)))}
+          />
+          <Input.Password
+            aria-label={`Header ${i + 1} value`}
+            placeholder="Value"
+            value={r.value}
+            autoComplete="new-password"
+            onChange={(e) => commit(rows.map((x) => (x.id === r.id ? { ...x, value: e.target.value } : x)))}
+          />
+          <Button aria-label={`Remove header ${i + 1}`} icon={<DeleteOutlined />} onClick={() => commit(rows.filter((x) => x.id !== r.id))} />
+        </Space.Compact>
+      ))}
+      <Button size="small" icon={<PlusOutlined />} onClick={() => setRows([...rows, { id: ++rowSeq, name: "", value: "" }])}>
+        Add header
+      </Button>
+    </div>
+  );
+}
+
+/** Stable DOM id for a config field, so its label can point at the input. */
 function fieldDomId(key: string) {
   return `cfg-${key}`;
+}
+
+function defaultLabel(field: FieldDef): string | null {
+  if (field.defaultValue === undefined) return null;
+  if (field.type === "boolean") return field.defaultValue === "true" ? "On" : "Off";
+  const opt = field.options?.find((o) => o.value === field.defaultValue);
+  if (opt) return opt.label;
+  if (field.type === "multiselect") return field.defaultValue.split(",").map((v) => field.options?.find((o) => o.value === v)?.label ?? v).join(", ");
+  return field.defaultValue;
 }
 
 function FieldControl({
   field,
   doc,
-  onChange,
+  edit,
+  error,
   onMigrateSecret,
 }: {
   field: FieldDef;
   doc: Document;
-  onChange: () => void;
+  edit: (key: string, value: unknown) => void;
+  error: string | null;
   onMigrateSecret?: () => void;
 }) {
-  // Stable id/name on every control so:
-  //   1) The wrapping <label> can be linked via htmlFor (a11y + autofill UX).
-  //   2) Browser DevTools stops reporting "form field has neither id nor
-  //      name attribute".
   const id = fieldDomId(field.key);
+  const fallback = defaultLabel(field);
+  const placeholder = field.placeholder ?? (fallback !== null ? fallback : undefined);
   switch (field.type) {
-    case "boolean": {
-      const v = readBoolean(doc, field.key);
-      return (
-        <Switch
-          id={id}
-          checked={v}
-          onChange={(checked) => {
-            writeKey(doc, field.key, checked);
-            onChange();
-          }}
-        />
-      );
-    }
+    case "boolean":
+      return <Switch id={id} checked={readBool(doc, field.key)} onChange={(checked) => edit(field.key, checked)} />;
     case "int": {
       const v = readNumber(doc, field.key);
       return (
@@ -292,113 +254,183 @@ function FieldControl({
           value={v ?? undefined}
           min={field.min}
           max={field.max}
-          step={field.step ?? 1}
-          placeholder={field.placeholder}
+          placeholder={placeholder}
           style={{ width: "100%" }}
-          onChange={(next) => {
-            writeKey(doc, field.key, next ?? null);
-            onChange();
-          }}
+          onChange={(next) => edit(field.key, next ?? undefined)}
         />
       );
     }
     case "select": {
-      const v = readString(doc, field.key);
+      const v = readText(doc, field.key);
       return (
         <Select
           id={id}
-          value={v}
+          value={v || undefined}
+          placeholder={placeholder}
+          allowClear
           options={field.options ?? []}
           style={{ width: "100%" }}
-          onChange={(next) => {
-            writeKey(doc, field.key, next === "" ? "" : next);
-            onChange();
-          }}
+          onChange={(next?: string) => edit(field.key, next ?? undefined)}
         />
       );
     }
+    case "multiselect":
+    case "list": {
+      const v = readList(doc, field.key);
+      return (
+        <Select
+          id={id}
+          mode={field.type === "list" ? "tags" : "multiple"}
+          value={v}
+          placeholder={placeholder ?? (field.type === "list" ? "Type a value and press Enter" : undefined)}
+          options={field.options}
+          tokenSeparators={[","]}
+          notFoundContent={null}
+          allowClear
+          style={{ width: "100%" }}
+          onChange={(next: string[]) => edit(field.key, next)}
+        />
+      );
+    }
+    case "keyvalue":
+      return <KeyValueEditor id={id} value={readMap(doc, field.key)} onChange={(next) => edit(field.key, next)} />;
     case "password": {
-      const v = readString(doc, field.key);
-      const looksLikeSecretRef = v.trim().toLowerCase().startsWith("secret://");
-      const isPlaintextPassword = field.key === "password" && v.trim().length > 0 && !looksLikeSecretRef;
+      const v = readText(doc, field.key);
+      const isPlaintextPassword = field.key === "password" && v.trim().length > 0 && !v.trim().toLowerCase().startsWith("secret://");
       return (
         <SecretInput
           id={id}
           name={field.key}
           value={v}
-          placeholder={field.placeholder}
-          onChange={(next) => {
-            writeKey(doc, field.key, next);
-            onChange();
-          }}
+          placeholder={placeholder}
+          onChange={(next) => edit(field.key, next)}
           isWeakPlaintext={isPlaintextPassword}
           onMigrate={isPlaintextPassword ? onMigrateSecret : undefined}
         />
       );
     }
-    case "textarea": {
-      const v = readString(doc, field.key);
+    case "textarea":
       return (
         <Input.TextArea
           id={id}
           name={field.key}
-          value={v}
-          placeholder={field.placeholder}
-          autoSize={{ minRows: 2, maxRows: 6 }}
-          autoComplete={field.autoComplete ?? "off"}
-          onChange={(e) => {
-            writeKey(doc, field.key, e.target.value);
-            onChange();
-          }}
+          value={readText(doc, field.key)}
+          placeholder={placeholder}
+          autoSize={{ minRows: 2, maxRows: 8 }}
+          autoComplete="off"
+          className="config-mono"
+          onChange={(e) => edit(field.key, e.target.value)}
         />
       );
-    }
     case "duration":
     case "string":
-    case "list-csv":
-    default: {
-      const v = readString(doc, field.key);
+    default:
       return (
         <Input
           id={id}
           name={field.key}
-          value={v}
-          placeholder={field.placeholder}
-          // Default to "off" so browsers don't try to autofill emails/usernames
-          // into config text inputs (e.g. "PC IP", "Webhook URL"). Explicit
-          // `autoComplete` on the FieldDef wins (e.g. "username" for the
-          // Username field).
+          value={readText(doc, field.key)}
+          placeholder={placeholder}
+          status={error ? "error" : undefined}
+          // "off" keeps browsers from filling an email into fields like PC IP.
           autoComplete={field.autoComplete ?? "off"}
-          onChange={(e) => {
-            writeKey(doc, field.key, e.target.value);
-            onChange();
-          }}
+          onChange={(e) => edit(field.key, e.target.value)}
         />
       );
-    }
   }
+}
+
+function FieldItem({
+  field,
+  doc,
+  nested,
+  edit,
+  changed,
+  warn,
+  error,
+  onMigrateSecret,
+}: {
+  field: FieldDef;
+  doc: Document;
+  nested: boolean;
+  edit: (key: string, value: unknown) => void;
+  changed: boolean;
+  warn: boolean;
+  error: string | null;
+  onMigrateSecret?: () => void;
+}) {
+  const where = locate(doc, field);
+  const keyText = (where ?? (nested ? field.path : [field.key])).join(".");
+  const set = where !== null;
+  const custom = differsFromDefault(doc, field.key);
+  const fallback = defaultLabel(field);
+  const wide = field.wide || field.type === "textarea" || field.type === "keyvalue";
+  return (
+    <Col xs={24} md={wide ? 24 : 12}>
+      <Form.Item
+        htmlFor={fieldDomId(field.key)}
+        className="config-field"
+        validateStatus={error ? "error" : undefined}
+        help={error ?? undefined}
+        label={
+          <div className="config-field-label">
+            <span className="config-field-name">{field.label}</span>
+            {field.required ? <Tag color="warning">Required</Tag> : null}
+            {warn ? <Tag color="warning">Check</Tag> : null}
+            {changed ? <Tag color="processing">Changed</Tag> : null}
+            <Tooltip title={set ? "Key in this file" : "Key this setting is saved under"}>
+              <code className="config-field-key">{keyText}</code>
+            </Tooltip>
+            {custom && fallback !== null ? (
+              <Tooltip title={`Remove from the file; the runner then uses ${fallback}`}>
+                <Button type="link" size="small" className="config-field-reset" icon={<UndoOutlined />} onClick={() => edit(field.key, undefined)}>
+                  Use default
+                </Button>
+              </Tooltip>
+            ) : null}
+          </div>
+        }
+        extra={
+          field.help || (!set && fallback !== null) ? (
+            <span className="config-field-help">
+              {field.help}
+              {!set && fallback !== null ? <span className="config-field-default">{field.help ? " " : ""}Default: {fallback}.</span> : null}
+            </span>
+          ) : null
+        }
+      >
+        <FieldControl field={field} doc={doc} edit={edit} error={error} onMigrateSecret={onMigrateSecret} />
+      </Form.Item>
+    </Col>
+  );
 }
 
 function SectionForm({
   section,
+  fields,
   doc,
-  onChange,
-  fieldStatuses,
+  nested,
+  edit,
+  changed,
+  warnings,
+  errors,
   onMigrateSecret,
+  extra,
 }: {
   section: SectionDef;
+  fields: FieldDef[];
   doc: Document;
-  onChange: () => void;
-  fieldStatuses: Record<string, "warn" | "info" | undefined>;
+  nested: boolean;
+  edit: (key: string, value: unknown) => void;
+  changed: Set<string>;
+  warnings: Set<string>;
+  errors: Record<string, string>;
   onMigrateSecret?: () => void;
+  extra?: ReactNode;
 }) {
   return (
-    <Card
-      id={`config-section-${section.id}`}
-      className="page-card config-section-card"
-      styles={{ body: { paddingTop: 18 } }}
-    >
-      <Space size={12} align="center" style={{ marginBottom: 8 }}>
+    <Card id={`config-section-${section.id}`} className="page-card config-section-card">
+      <div className="config-section-head">
         <span className="config-section-icon">{SECTION_ICONS[section.icon]}</span>
         <div>
           <Typography.Title level={4} style={{ margin: 0 }}>
@@ -408,89 +440,32 @@ function SectionForm({
             {section.description}
           </Typography.Text>
         </div>
-      </Space>
-
-      {/*
-        Each section renders its own <form> on purpose so:
-          1) The contained Input.Password fields have a form ancestor (Chrome
-             warns "Password field is not contained in a form" otherwise and
-             downgrades autofill/security UX).
-          2) Browsers can scope autofill correctly per section.
-
-        `onSubmitCapture` swallows accidental Enter-key submits — there is no
-        explicit Save button per section; saving is handled by the page-level
-        toolbar — but the form element itself still needs to exist for the
-        password-autofill heuristics above. Chrome's softer "Multiple forms
-        should be contained in their own form elements" recommendation is a
-        hint, not an error, and is the correct trade-off here.
-      */}
-      <Form
-        layout="vertical"
-        colon={false}
-        style={{ marginTop: 16 }}
-        onSubmitCapture={(e) => e.preventDefault()}
-      >
-        <Row gutter={[20, 4]}>
-          {section.fields.map((field) => {
-            const help = field.help ? (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {field.help}
-              </Typography.Text>
-            ) : null;
-            const isWide =
-              field.type === "textarea" ||
-              field.type === "list-csv" ||
-              field.key === "policy-gates" ||
-              field.key === "webhook-url" ||
-              field.key === "smtp-server" ||
-              field.key === "log-file" ||
-              field.key === "clusters-file" ||
-              field.key === "exclude-alert-titles-file" ||
-              field.key === "secrets-file" ||
-              field.key === "run-history-dir" ||
-              field.key === "output-dir-filtered" ||
-              field.key === "output-dir-logs" ||
-              field.key === "email-to" ||
-              field.key === "prism-central-url";
-            const colProps = isWide ? { xs: 24 } : { xs: 24, sm: 12 };
-            const status = fieldStatuses[field.key];
-            return (
-              <Col {...colProps} key={field.key}>
-                <Form.Item
-                  // htmlFor links the rendered <label> to the FieldControl's
-                  // input id (set in fieldDomId(field.key)), so a11y tools and
-                  // browser autofill can associate them. Without this, Chrome
-                  // emits "No label associated with a form field" for every
-                  // field on the page.
-                  htmlFor={fieldDomId(field.key)}
-                  label={
-                    <Space size={6}>
-                      <span>{field.label}</span>
-                      <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                        <Tooltip title={`YAML key: ${field.key}`}>
-                          <code className="config-field-key">{field.key}</code>
-                        </Tooltip>
-                      </Typography.Text>
-                      {field.required ? <Tag color="warning">required</Tag> : null}
-                      {status === "warn" ? <Tag color="warning">attention</Tag> : null}
-                      {status === "info" ? <Tag color="processing">change</Tag> : null}
-                    </Space>
-                  }
-                  extra={help}
-                  style={{ marginBottom: 12 }}
-                >
-                  <FieldControl
-                    field={field}
-                    doc={doc}
-                    onChange={onChange}
-                    onMigrateSecret={onMigrateSecret}
-                  />
-                </Form.Item>
-              </Col>
-            );
-          })}
-        </Row>
+      </div>
+      {/* One <form> per section so password fields have a form ancestor;
+          Enter is swallowed because saving happens from the page toolbar. */}
+      <Form layout="vertical" colon={false} requiredMark={false} onSubmitCapture={(e) => e.preventDefault()}>
+        {groupFields(fields).map(({ group, fields: groupItems }) => (
+          <section key={group} className="config-group" aria-label={`${section.title}: ${group}`}>
+            <Typography.Text className="config-group-title">{group}</Typography.Text>
+            <Row gutter={[20, 0]}>
+              {groupItems.map((field) => (
+                <FieldItem
+                  key={field.key}
+                  field={field}
+                  doc={doc}
+                  nested={nested}
+                  edit={edit}
+                  changed={changed.has(field.key)}
+                  warn={warnings.has(field.key)}
+                  error={errors[field.key] ?? null}
+                  onMigrateSecret={onMigrateSecret}
+                />
+              ))}
+            </Row>
+          </section>
+        ))}
       </Form>
+      {extra}
     </Card>
   );
 }
@@ -499,6 +474,7 @@ export function ConfigSection({ onError }: Props) {
   const [mode, setMode] = useState<Mode>("form");
   const [content, setContent] = useState("");
   const [originalContent, setOriginalContent] = useState("");
+  const [loaded, setLoaded] = useState(false);
   const [configPath, setConfigPath] = useState("");
   const [configItems, setConfigItems] = useState<ConfigListItem[]>([]);
   const [configDialogOpen, setConfigDialogOpen] = useState(false);
@@ -509,40 +485,28 @@ export function ConfigSection({ onError }: Props) {
   const [bulkAddPaths, setBulkAddPaths] = useState("");
   const [bulkAddContent, setBulkAddContent] = useState("");
   const [bulkRemovePaths, setBulkRemovePaths] = useState<string[]>([]);
-  const [parseError, setParseError] = useState<string | null>(null);
   const [secretsModalOpen, setSecretsModalOpen] = useState(false);
-  const [, forceTick] = useState(0);
-  const docRef = useRef<Document>(new Document({}));
+  const [query, setQuery] = useState("");
+  const [show, setShow] = useState<Show>("all");
 
   const dirty = content !== originalContent;
-  const dirtyFile = false; // related file dirty state handled separately below
 
-  // Parse content into a Document whenever the YAML text changes externally.
-  // Form-mode edits mutate docRef and call refreshFromDoc to keep content in
-  // sync, so we only re-parse when content changed externally.
-  const lastSyncedContentRef = useRef("");
-  useEffect(() => {
-    if (content === lastSyncedContentRef.current) return;
-    const { doc, error } = safeParse(content);
-    docRef.current = doc;
-    setParseError(error);
-    lastSyncedContentRef.current = content;
-    forceTick((n) => n + 1);
-  }, [content]);
+  // The form always renders from the current text, so YAML-mode edits, reloads
+  // and form edits can never disagree.
+  const parsed = useMemo(() => safeParse(content), [content]);
+  const original = useMemo(() => safeParse(originalContent).doc, [originalContent]);
+  const doc = parsed.doc;
+  const parseError = parsed.error;
+  const nested = isNested(doc);
 
-  /**
-   * Called by FieldControl when the user mutates a field. Stringify the
-   * underlying Document back into YAML text and update content. We update
-   * lastSyncedContentRef so the parsing effect doesn't redundantly reparse
-   * what we just emitted.
-   */
-  const refreshFromDoc = useCallback(() => {
-    const next = docRef.current.toString();
-    lastSyncedContentRef.current = next;
-    setContent(next);
-    setParseError(null);
-    forceTick((n) => n + 1);
-  }, []);
+  const edit = useCallback(
+    (key: string, value: unknown) => {
+      const next = doc.clone();
+      writeValue(next, key, value);
+      setContent(next.toString());
+    },
+    [doc],
+  );
 
   const refreshConfigOptions = useCallback(async () => {
     const resp = await api.listConfigs();
@@ -578,6 +542,7 @@ export function ConfigSection({ onError }: Props) {
       setContent(text);
       setOriginalContent(text);
       setConfigPath(cfg.path ?? "");
+      setLoaded(true);
       await refreshConfigOptions();
       await refreshConfigFiles();
       if (!silent) notify.success("Config loaded.");
@@ -605,7 +570,6 @@ export function ConfigSection({ onError }: Props) {
   }, [load]);
 
   // Keyboard shortcuts: Cmd/Ctrl+S to save, Cmd/Ctrl+Shift+Z to revert.
-  // We use refs in the closure to avoid re-binding on every render.
   const saveRef = useRef<() => void>(() => {});
   const revertRef = useRef<() => void>(() => {});
   useEffect(() => {
@@ -625,9 +589,49 @@ export function ConfigSection({ onError }: Props) {
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
+  const changed = useMemo(() => new Set(changedKeys(original, doc)), [original, doc]);
+
+  const errors = useMemo(() => {
+    const out: Record<string, string> = {};
+    if (parseError) return out;
+    for (const f of ALL_FIELDS) {
+      const msg = fieldError(f, readText(doc, f.key));
+      if (msg) out[f.key] = msg;
+    }
+    return out;
+  }, [doc, parseError]);
+  const errorCount = Object.keys(errors).length;
+
+  const warnings = useMemo(() => {
+    const out = new Set<string>();
+    const pw = readText(doc, "password").trim();
+    if (pw && !pw.toLowerCase().startsWith("secret://")) out.add("password");
+    if (readBool(doc, "insecure-skip-verify")) out.add("insecure-skip-verify");
+    if (readBool(doc, "skip-preflight-check")) out.add("skip-preflight-check");
+    if (readNumber(doc, "gen-test-agg")) out.add("gen-test-agg");
+    if (readBool(doc, "replay")) out.add("replay");
+    return out;
+  }, [doc]);
+
+  const visibleFields = useCallback(
+    (section: SectionDef) =>
+      section.fields.filter(
+        (f) =>
+          matchesQuery(f, query) &&
+          (show === "all" || (show === "changed" ? changed.has(f.key) : differsFromDefault(doc, f.key))),
+      ),
+    [query, show, changed, doc],
+  );
+
+  const others = useMemo(() => (parseError ? [] : otherEntries(doc)), [doc, parseError]);
+
   const save = async () => {
     if (parseError) {
       notify.warning({ message: "Cannot save", description: `YAML is invalid: ${parseError}` });
+      return;
+    }
+    if (errorCount > 0) {
+      notify.warning({ message: "Cannot save", description: `${errorCount} setting${errorCount === 1 ? " needs" : "s need"} fixing first.` });
       return;
     }
     if (content === originalContent) {
@@ -654,7 +658,6 @@ export function ConfigSection({ onError }: Props) {
     notify.info("Reverted to last loaded config.");
   };
 
-  // Keep keyboard-shortcut refs current.
   saveRef.current = () => void save();
   revertRef.current = revert;
 
@@ -799,64 +802,37 @@ export function ConfigSection({ onError }: Props) {
     await runBatchFileOps(operations, "Bulk remove complete");
   };
 
-  const applyPolicyGates = (csv: string) => {
-    setContent((prev) => applyPolicyGatesToConfigContent(prev, csv));
-  };
-
-  // Pre-compute per-field statuses based on whether they differ from the
-  // original (info chip) or trigger a known-bad combination (warn chip).
-  const fieldStatuses: Record<string, "warn" | "info" | undefined> = useMemo(() => {
-    const map: Record<string, "warn" | "info" | undefined> = {};
-    const { doc: origDoc } = safeParse(originalContent);
-    const currDoc = docRef.current;
-    for (const k of KNOWN_KEYS) {
-      const a = ensureString(configValue(origDoc, k));
-      const b = ensureString(configValue(currDoc, k));
-      if (a !== b) map[k] = "info";
-    }
-    if (readString(currDoc, "password").trim()) {
-      map["password"] = "warn";
-    }
-    if (readBoolean(currDoc, "insecure-skip-verify")) {
-      map["insecure-skip-verify"] = "warn";
-    }
-    return map;
-  }, [originalContent, content]);
-
-  // Keys present in YAML but unknown to our schema — surfaced in "Other".
-  const otherKeys: string[] = useMemo(() => {
-    const out: string[] = [];
-    const contents = docRef.current.contents;
-    if (contents && typeof contents === "object" && "items" in contents) {
-      const items = (contents as { items?: { key?: { value?: string } }[] }).items ?? [];
-      for (const it of items) {
-        const k = it.key?.value;
-        if (typeof k === "string" && !KNOWN_KEYS.includes(k)) {
-          out.push(k);
-        }
-      }
-    }
-    return out;
-  }, [content]);
-
-  const dirtyCount = useMemo(() => {
-    if (!dirty) return 0;
-    return Object.values(fieldStatuses).filter((v) => v === "info").length;
-  }, [dirty, fieldStatuses]);
+  const dirtyCount = dirty ? changed.size : 0;
+  const sectionsShown = SECTIONS.map((s) => ({ section: s, fields: visibleFields(s) })).filter((s) => s.fields.length > 0);
 
   return (
-    <Space orientation="vertical" size={16} style={{ width: "100%" }}>
+    // A plain flex column, not <Space>: Space wraps each child in its own box,
+    // which stops the toolbar and section list from staying pinned.
+    <div className="config-page">
       {/* Toolbar */}
       <Card className="page-card config-toolbar-card">
         <Row gutter={[16, 12]} align="middle">
-          <Col xs={24} md={12}>
+          <Col xs={24} lg={11}>
             <Space size={10} align="center">
               <SettingOutlined className="section-header-icon lg" />
               <div>
-                <Typography.Title level={4} style={{ margin: 0 }}>
-                  Application config
-                </Typography.Title>
-                <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                <Space size={8} wrap>
+                  <Typography.Title level={4} style={{ margin: 0 }}>
+                    Runner config
+                  </Typography.Title>
+                  {loaded && !parseError ? (
+                    <Tooltip
+                      title={
+                        nested
+                          ? "This file uses the nested layout (schema-version: 1). New settings are saved under runner:, storage:, notifications: and so on."
+                          : "This file uses flat keys. New settings are saved as top-level keys."
+                      }
+                    >
+                      <Tag>{nested ? "Nested layout" : "Flat layout"}</Tag>
+                    </Tooltip>
+                  ) : null}
+                </Space>
+                <Typography.Text type="secondary" style={{ fontSize: 13, display: "block" }}>
                   {configPath ? (
                     <>
                       Editing{" "}
@@ -873,7 +849,7 @@ export function ConfigSection({ onError }: Props) {
               </div>
             </Space>
           </Col>
-          <Col xs={24} md={12}>
+          <Col xs={24} lg={13}>
             <Space size={8} wrap style={{ display: "flex", justifyContent: "flex-end" }}>
               <Radio.Group
                 id="config-edit-mode"
@@ -906,7 +882,7 @@ export function ConfigSection({ onError }: Props) {
               </Tooltip>
               <Tooltip title="Save config (⌘S / Ctrl+S)">
                 <Badge count={dirtyCount} offset={[-2, 4]} size="small">
-                  <Button type="primary" icon={<SaveOutlined />} onClick={save} disabled={!dirty || Boolean(parseError)}>
+                  <Button type="primary" icon={<SaveOutlined />} onClick={save} disabled={!dirty || Boolean(parseError) || errorCount > 0}>
                     Save
                   </Button>
                 </Badge>
@@ -923,169 +899,210 @@ export function ConfigSection({ onError }: Props) {
             description={parseError}
           />
         ) : null}
-        {/* Unsaved changes are shown by the SaveBar at the bottom of the page. */}
       </Card>
 
-      {/* Mode body */}
       {mode === "form" ? (
-        <Row gutter={[16, 16]}>
-          <Col xs={24} md={6} lg={5}>
-            <Card className="page-card config-anchor-card">
-              <Typography.Text strong style={{ display: "block", marginBottom: 8 }}>
-                Sections
-              </Typography.Text>
-              <Anchor
-                affix={false}
-                getContainer={() => window}
-                items={SECTIONS.map((s) => ({
-                  key: s.id,
-                  href: `#config-section-${s.id}`,
-                  title: (
-                    <Space size={6}>
-                      <span>{SECTION_ICONS[s.icon]}</span>
-                      <span>{s.title}</span>
-                    </Space>
-                  ),
-                }))}
-              />
-            </Card>
-          </Col>
-          <Col xs={24} md={18} lg={19}>
-            <Space orientation="vertical" size={16} style={{ width: "100%" }}>
-              {SECTIONS.map((section) => (
-                <SectionForm
-                  key={section.id}
-                  section={section}
-                  doc={docRef.current}
-                  onChange={refreshFromDoc}
-                  fieldStatuses={fieldStatuses}
-                  onMigrateSecret={() => setSecretsModalOpen(true)}
+        parseError ? (
+          <Alert
+            type="warning"
+            showIcon
+            title="The form is unavailable while the YAML has an error"
+            description="Switch to YAML to fix it, or Revert to the saved file."
+          />
+        ) : (
+          <Row gutter={[16, 16]}>
+            <Col xs={24} md={8} lg={7} xl={6}>
+              <Card className="page-card config-anchor-card">
+                <Input
+                  allowClear
+                  prefix={<SearchOutlined />}
+                  placeholder="Find a setting"
+                  aria-label="Find a setting"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
                 />
-              ))}
-
-              {otherKeys.length > 0 ? (
-                <Card className="page-card" id="config-section-other">
-                  <Typography.Title level={4} style={{ margin: 0 }}>
-                    Other settings
-                  </Typography.Title>
-                  <Typography.Text type="secondary" className="section-subtitle">
-                    Keys present in your YAML that aren't covered by the form. Switch to YAML mode to edit.
-                  </Typography.Text>
-                  <List
-                    style={{ marginTop: 10 }}
-                    bordered
-                    size="small"
-                    dataSource={otherKeys}
-                    renderItem={(k) => (
-                      <List.Item>
-                        <Typography.Text code>{k}</Typography.Text>
-                        <Typography.Text type="secondary" style={{ marginLeft: 12 }}>
-                          {ensureString(docRef.current.get(k))}
-                        </Typography.Text>
-                      </List.Item>
-                    )}
+                <Segmented<Show>
+                  block
+                  size="small"
+                  className="config-show-filter"
+                  value={show}
+                  onChange={setShow}
+                  options={[
+                    { value: "all", label: "All" },
+                    { value: "changed", label: "Changed" },
+                    { value: "set", label: "Custom" },
+                  ]}
+                />
+                <Anchor
+                  affix={false}
+                  targetOffset={184}
+                  getContainer={() => window}
+                  items={sectionsShown.map(({ section, fields }) => {
+                    const n = section.fields.filter((f) => changed.has(f.key)).length;
+                    const bad = section.fields.some((f) => errors[f.key]);
+                    return {
+                      key: section.id,
+                      href: `#config-section-${section.id}`,
+                      title: (
+                        <span className="config-anchor-item">
+                          <span className="config-anchor-icon">{SECTION_ICONS[section.icon]}</span>
+                          <span className="config-anchor-text">{section.title}</span>
+                          {bad ? (
+                            <Tooltip title="Has a setting to fix">
+                              <WarningOutlined className="config-anchor-warn" />
+                            </Tooltip>
+                          ) : n > 0 ? (
+                            <Tooltip title={`${n} changed`}>
+                              <span className="config-anchor-count">{n}</span>
+                            </Tooltip>
+                          ) : query || show !== "all" ? (
+                            <span className="config-anchor-muted">{fields.length}</span>
+                          ) : null}
+                        </span>
+                      ),
+                    };
+                  })}
+                />
+              </Card>
+            </Col>
+            <Col xs={24} md={16} lg={17} xl={18}>
+              <Space orientation="vertical" size={16} style={{ width: "100%" }}>
+                {sectionsShown.length === 0 ? (
+                  <Card className="page-card">
+                    <Empty
+                      description={
+                        show === "changed" && !query
+                          ? "No unsaved changes."
+                          : show === "set" && !query
+                            ? "Every setting uses its default."
+                            : "No settings match."
+                      }
+                    >
+                      {query || show !== "all" ? (
+                        <Button
+                          onClick={() => {
+                            setQuery("");
+                            setShow("all");
+                          }}
+                        >
+                          Show all settings
+                        </Button>
+                      ) : null}
+                    </Empty>
+                  </Card>
+                ) : null}
+                {sectionsShown.map(({ section, fields }) => (
+                  <SectionForm
+                    key={section.id}
+                    section={section}
+                    fields={fields}
+                    doc={doc}
+                    nested={nested}
+                    edit={edit}
+                    changed={changed}
+                    warnings={warnings}
+                    errors={errors}
+                    onMigrateSecret={() => setSecretsModalOpen(true)}
+                    extra={
+                      section.id === "filtering" && show === "all" && !query ? (
+                        <Card size="small" className="config-subcard">
+                          <PolicyGateBuilderSection
+                            gates={readText(doc, "policy-gates")}
+                            ready={loaded}
+                            onApplyPolicyGates={(csv) => edit("policy-gates", csv)}
+                          />
+                        </Card>
+                      ) : null
+                    }
                   />
-                </Card>
-              ) : null}
-            </Space>
-          </Col>
-        </Row>
+                ))}
+
+                {others.length > 0 && show === "all" && !query ? (
+                  <Card className="page-card" id="config-section-other">
+                    <Typography.Title level={4} style={{ margin: 0 }}>
+                      Other keys in this file
+                    </Typography.Title>
+                    <Typography.Text type="secondary" className="section-subtitle">
+                      The form does not edit these. Server notes (api, ui, deployment) are read by the API and UI servers or are documentation only;
+                      the runner ignores them. Use YAML mode to change them.
+                    </Typography.Text>
+                    <List
+                      style={{ marginTop: 10 }}
+                      bordered
+                      size="small"
+                      dataSource={others}
+                      renderItem={(o) => (
+                        <List.Item>
+                          <Space size={8} wrap>
+                            <Typography.Text code>{o.path}</Typography.Text>
+                            {o.stack ? <Tag>Server note</Tag> : <Tag color="warning">Unknown to the runner</Tag>}
+                          </Space>
+                          <Typography.Text type="secondary" ellipsis style={{ maxWidth: "45%" }}>
+                            {o.value || "—"}
+                          </Typography.Text>
+                        </List.Item>
+                      )}
+                    />
+                  </Card>
+                ) : null}
+              </Space>
+            </Col>
+          </Row>
+        )
       ) : (
         <Card className="page-card">
-          <CodeEditor value={content} onChange={setContent} language="yaml" height={520} />
+          <CodeEditor value={content} onChange={setContent} language="yaml" height={560} />
         </Card>
       )}
 
-      {/* Policy gates builder */}
-      <Card className="page-card">
-        <PolicyGateBuilderSection configContent={content} onApplyPolicyGates={applyPolicyGates} />
-      </Card>
-
       {/* Linked files */}
       <Card className="page-card">
-        <Typography.Title level={4} className="section-title">
-          Linked files
-        </Typography.Title>
-        <Typography.Text type="secondary" className="section-subtitle">
-          Files referenced by the active config. Edit them in place without leaving Settings.
-        </Typography.Text>
-        <Space size={8} style={{ marginTop: 12, marginBottom: 12 }}>
+        <Space style={{ width: "100%", justifyContent: "space-between" }} align="start" wrap>
+          <div>
+            <Typography.Title level={4} className="section-title">
+              Linked files
+            </Typography.Title>
+            <Typography.Text type="secondary" className="section-subtitle">
+              Files this config points to, such as a clusters list or secrets file. Open one to edit it here.
+            </Typography.Text>
+          </div>
           <Button size="small" icon={<ReloadOutlined />} onClick={() => refreshConfigFiles(activeFile)}>
             Refresh
           </Button>
         </Space>
-        <Card size="small" style={{ marginBottom: 12 }}>
-          <Space orientation="vertical" size={10} style={{ width: "100%" }}>
-            <Typography.Text strong>Bulk add/update files</Typography.Text>
-            <Typography.Text type="secondary">
-              Enter one referenced config file path per line and apply the same content to all.
-            </Typography.Text>
-            <Input.TextArea
-              value={bulkAddPaths}
-              onChange={(e) => setBulkAddPaths(e.target.value)}
-              rows={3}
-              placeholder={"clusters.txt\nexclude.txt\nsecrets.yaml"}
+        <div style={{ marginTop: 12 }}>
+          {files.length === 0 ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="This config does not point to any files" />
+          ) : (
+            <List
+              bordered
+              size="small"
+              dataSource={files}
+              renderItem={(item) => (
+                <List.Item
+                  actions={[
+                    <Button key="use" size="small" onClick={() => loadRelatedFile(item.path)}>
+                      Open
+                    </Button>,
+                  ]}
+                >
+                  <Space orientation="vertical" size={0}>
+                    <Space size={8}>
+                      <Typography.Text code>{item.key}</Typography.Text>
+                      <Tag color={item.exists ? "success" : "default"}>{item.exists ? "Exists" : "Missing"}</Tag>
+                    </Space>
+                    <Typography.Text>{item.path}</Typography.Text>
+                    {item.resolved_path ? (
+                      <Typography.Text type="secondary">{item.resolved_path}</Typography.Text>
+                    ) : (
+                      <Typography.Text type="warning">Path is outside the app folder</Typography.Text>
+                    )}
+                  </Space>
+                </List.Item>
+              )}
             />
-            <CodeEditor
-              value={bulkAddContent}
-              onChange={setBulkAddContent}
-              language={inferEditorLanguage((bulkAddPaths.split("\n")[0] || "").trim() || "txt")}
-              height={160}
-            />
-            <Button type="primary" onClick={() => void bulkAddOrUpdateFiles()}>
-              Add or update files
-            </Button>
-          </Space>
-        </Card>
-        <Card size="small" style={{ marginBottom: 12 }}>
-          <Space orientation="vertical" size={10} style={{ width: "100%" }}>
-            <Typography.Text strong>Bulk remove files</Typography.Text>
-            <Typography.Text type="secondary">
-              Select one or more referenced files to delete from disk.
-            </Typography.Text>
-            <Select
-              mode="multiple"
-              allowClear
-              style={{ width: "100%" }}
-              value={bulkRemovePaths}
-              onChange={(vals) => setBulkRemovePaths(vals)}
-              options={files.map((f) => ({ label: `${f.key}: ${f.path}`, value: f.path }))}
-              placeholder="Select files to remove"
-            />
-            <Button danger onClick={() => void bulkRemoveFiles()}>
-              Remove selected files
-            </Button>
-          </Space>
-        </Card>
-        {files.length === 0 ? (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No related files detected in config yet" />
-        ) : (
-          <List
-            bordered
-            size="small"
-            dataSource={files}
-            renderItem={(item) => (
-              <List.Item
-                actions={[
-                  <Button key="use" size="small" onClick={() => loadRelatedFile(item.path)}>
-                    Open
-                  </Button>,
-                ]}
-              >
-                <Space orientation="vertical" size={0}>
-                  <Typography.Text code>{item.key}</Typography.Text>
-                  <Typography.Text>{item.path}</Typography.Text>
-                  {item.resolved_path ? (
-                    <Typography.Text type="secondary">{item.resolved_path}</Typography.Text>
-                  ) : (
-                    <Typography.Text type="warning">Path escapes repo root</Typography.Text>
-                  )}
-                </Space>
-                <Tag color={item.exists ? "success" : "default"}>{item.exists ? "exists" : "missing"}</Tag>
-              </List.Item>
-            )}
-          />
-        )}
+          )}
+        </div>
         {activeFile ? (
           <div style={{ marginTop: 16 }}>
             <Space size={8} style={{ marginBottom: 8 }}>
@@ -1093,7 +1110,7 @@ export function ConfigSection({ onError }: Props) {
               <Button size="small" icon={<ReloadOutlined />} onClick={() => loadRelatedFile(activeFile)}>
                 Reload
               </Button>
-              <Button size="small" type="primary" icon={<SaveOutlined />} onClick={saveRelatedFile} disabled={dirtyFile}>
+              <Button size="small" type="primary" icon={<SaveOutlined />} onClick={saveRelatedFile}>
                 Save file
               </Button>
             </Space>
@@ -1105,16 +1122,75 @@ export function ConfigSection({ onError }: Props) {
             />
           </div>
         ) : null}
+        <Collapse
+          ghost
+          style={{ marginTop: 12 }}
+          items={[
+            {
+              key: "bulk",
+              label: "Bulk changes",
+              children: (
+                <Space orientation="vertical" size={16} style={{ width: "100%" }}>
+                  <Space orientation="vertical" size={10} style={{ width: "100%" }}>
+                    <Typography.Text strong>Add or update several files</Typography.Text>
+                    <Typography.Text type="secondary">
+                      One path per line; every file gets the same content.
+                    </Typography.Text>
+                    <Input.TextArea
+                      aria-label="Paths to add or update"
+                      value={bulkAddPaths}
+                      onChange={(e) => setBulkAddPaths(e.target.value)}
+                      rows={3}
+                      placeholder={"clusters.txt\nexclude.txt\nsecrets.yaml"}
+                    />
+                    <CodeEditor
+                      value={bulkAddContent}
+                      onChange={setBulkAddContent}
+                      language={inferEditorLanguage((bulkAddPaths.split("\n")[0] || "").trim() || "txt")}
+                      height={160}
+                    />
+                    <Button type="primary" onClick={() => void bulkAddOrUpdateFiles()}>
+                      Add or update files
+                    </Button>
+                  </Space>
+                  <Space orientation="vertical" size={10} style={{ width: "100%" }}>
+                    <Typography.Text strong>Remove files</Typography.Text>
+                    <Typography.Text type="secondary">Deletes the selected files from disk.</Typography.Text>
+                    <Select
+                      mode="multiple"
+                      allowClear
+                      aria-label="Files to remove"
+                      style={{ width: "100%" }}
+                      value={bulkRemovePaths}
+                      onChange={(vals) => setBulkRemovePaths(vals)}
+                      options={files.map((f) => ({ label: `${f.key}: ${f.path}`, value: f.path }))}
+                      placeholder="Select files to remove"
+                    />
+                    <Button danger disabled={bulkRemovePaths.length === 0} onClick={() => void bulkRemoveFiles()}>
+                      Remove selected files
+                    </Button>
+                  </Space>
+                </Space>
+              ),
+            },
+          ]}
+        />
       </Card>
       <SecretsMigrationModal
         open={secretsModalOpen}
-        passwordValue={readString(docRef.current, "password")}
-        hasProvider={Boolean(readString(docRef.current, "secrets-provider").trim())}
-        getDoc={() => docRef.current}
-        onApply={() => {
-          refreshFromDoc();
-          setSecretsModalOpen(false);
-        }}
+        passwordValue={readText(doc, "password")}
+        hasProvider={Boolean(readText(doc, "secrets-provider").trim())}
+        readSetting={(key) => readText(doc, key)}
+        writeSetting={(() => {
+          // The modal sets several keys in a row; apply them to one copy.
+          let working: Document | null = null;
+          return (key: string, value: string | undefined) => {
+            working = working ?? doc.clone();
+            writeValue(working, key, value);
+            setContent(working.toString());
+          };
+        })()}
+        onApply={() => setSecretsModalOpen(false)}
         onClose={() => setSecretsModalOpen(false)}
       />
       <Modal
@@ -1126,13 +1202,14 @@ export function ConfigSection({ onError }: Props) {
       >
         <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <Typography.Text type="secondary">
-            Add/remove additional `config.yaml` files and open one for full Form/YAML editing.
+            Add or remove config files, and open one to edit it here.
           </Typography.Text>
           <Space.Compact style={{ width: "100%" }}>
             <Input
               value={newConfigPath}
               onChange={(e) => setNewConfigPath(e.target.value)}
               placeholder="configs/cluster-a.yaml"
+              aria-label="New config file path"
             />
             <Button type="primary" onClick={() => void addConfigFile()}>
               Add
@@ -1166,8 +1243,8 @@ export function ConfigSection({ onError }: Props) {
                   <Typography.Text type="secondary">{item.resolved}</Typography.Text>
                 </Space>
                 <Space>
-                  <Tag color={item.exists ? "success" : "default"}>{item.exists ? "exists" : "missing"}</Tag>
-                  {item.is_active ? <Tag color="processing">active</Tag> : null}
+                  <Tag color={item.exists ? "success" : "default"}>{item.exists ? "Exists" : "Missing"}</Tag>
+                  {item.is_active ? <Tag color="processing">Active</Tag> : null}
                 </Space>
               </List.Item>
             )}
@@ -1178,14 +1255,16 @@ export function ConfigSection({ onError }: Props) {
         dirty={dirty}
         onSave={() => void save()}
         onDiscard={revert}
-        saveDisabled={Boolean(parseError)}
+        saveDisabled={Boolean(parseError) || errorCount > 0}
         message={
           parseError
             ? "The YAML has an error; fix it before saving."
-            : `${dirtyCount > 0 ? `${dirtyCount} field${dirtyCount === 1 ? "" : "s"} changed` : "Unsaved changes"} · Ctrl/⌘+S to save`
+            : errorCount > 0
+              ? `${errorCount} setting${errorCount === 1 ? " needs" : "s need"} fixing before you can save.`
+              : `${dirtyCount > 0 ? `${dirtyCount} setting${dirtyCount === 1 ? "" : "s"} changed` : "Unsaved changes"} · Ctrl/⌘+S to save`
         }
         saveLabel="Save config"
       />
-    </Space>
+    </div>
   );
 }

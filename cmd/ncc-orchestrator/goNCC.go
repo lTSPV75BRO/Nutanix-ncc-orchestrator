@@ -1737,7 +1737,8 @@ func validateConfigFileRawTypes() error {
 		"schema-version": true,
 		"runner":         true, "storage": true, "api": true, "ui": true, "deployment": true, "notifications": true, "logging": true, "prometheus": true, "secrets": true,
 		"skip-preflight-check": true,
-		"clusters":             true, "clusters-file": true, "cluster-source-mode": true, "pcs": true, "pcs-file": true, "prism-central-url": true, "discover-api-version": true,
+		"auto":                 true, "automation-level": true,
+		"clusters": true, "clusters-file": true, "cluster-source-mode": true, "pcs": true, "pcs-file": true, "prism-central-url": true, "discover-api-version": true,
 		"username": true, "password": true, "ncc-api-version": true, "nutanix-v4-api-version": true, "pc-alerts-cache-ttl": true,
 		"insecure-skip-verify": true, "ca-bundle": true, "pin-sha256": true, "timeout": true, "request-timeout": true, "poll-interval": true, "poll-jitter": true,
 		"max-parallel": true, "outputs": true, "output-dir-logs": true, "output-dir-filtered": true,
@@ -1781,6 +1782,7 @@ func validateConfigFileRawTypes() error {
 		"smtp-server", "smtp-user", "smtp-password", "email-from", "email-to",
 		"email-subject-template", "email-body-template",
 		"webhook-url", "webhook-template", "webhook-secret", "notification-deadletter-dir", "slack-webhook-url", "slack-channel", "secrets-provider", "secrets-file",
+		"automation-level",
 	}
 	for _, key := range stringKeys {
 		if !viper.InConfig(key) {
@@ -1793,7 +1795,7 @@ func validateConfigFileRawTypes() error {
 
 	boolKeys := []string{
 		"update",
-		"skip-preflight-check",
+		"skip-preflight-check", "auto",
 		"insecure-skip-verify", "dry-run", "replay", "log-http",
 		"prom-enabled",
 		"run-history", "single-report", "notify-on-regression", "adaptive-parallelism", "resume",
@@ -1846,6 +1848,14 @@ func validateConfigFileRawTypes() error {
 	if viper.InConfig("log-level") {
 		if err := validateLogLevelStrict(viper.GetString("log-level")); err != nil {
 			return err
+		}
+	}
+	// Checked in both spellings: a bad level otherwise surfaces only when a run starts.
+	for _, key := range []string{"automation-level", "runner.automation.level"} {
+		if viper.InConfig(key) {
+			if _, err := parseAutomationLevel(viper.GetString(key)); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -1920,6 +1930,8 @@ func normalizeCanonicalConfig() {
 		"runner.execution.dry-run":                   "dry-run",
 		"runner.execution.skip-preflight-check":      "skip-preflight-check",
 		"runner.execution.replay":                    "replay",
+		"runner.automation.enabled":                  "auto",
+		"runner.automation.level":                    "automation-level",
 		"runner.retry.max-attempts":                  "retry-max-attempts",
 		"runner.retry.base-delay":                    "retry-base-delay",
 		"runner.retry.max-delay":                     "retry-max-delay",
@@ -15968,8 +15980,10 @@ Run 'ncc-orchestrator --help' for a full list of options.
 			if err != nil {
 				return exitConfig(fmt.Errorf("configuration: %w", err))
 			}
-			autoMode, _ := cmd.Flags().GetBool("auto")
-			autoLevelRaw, _ := cmd.Flags().GetString("automation-level")
+			// viper, not cmd.Flags(): the flag still wins, but config.yaml and
+			// NCC_AUTO / NCC_AUTOMATION_LEVEL now apply too.
+			autoMode := viper.GetBool("auto")
+			autoLevelRaw := viper.GetString("automation-level")
 			autoLevel, err := parseAutomationLevel(autoLevelRaw)
 			if err != nil {
 				return exitConfig(err)

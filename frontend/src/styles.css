@@ -885,6 +885,13 @@ a {
 }
 
 
+.config-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+}
+
 .config-toolbar-card {
   position: sticky;
   top: 80px;
@@ -895,6 +902,65 @@ a {
 .config-anchor-card {
   position: sticky;
   top: 168px;
+  max-height: calc(100dvh - 184px);
+  overflow-y: auto;
+}
+
+.config-anchor-card .ant-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.config-show-filter {
+  margin-bottom: 4px;
+}
+
+.config-anchor-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.config-anchor-icon {
+  color: var(--ui-text-secondary);
+  flex-shrink: 0;
+}
+
+.config-anchor-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-anchor-count,
+.config-anchor-muted {
+  flex-shrink: 0;
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.config-anchor-count {
+  background: color-mix(in srgb, var(--menu-selected-border) 22%, transparent);
+  color: var(--menu-selected-border);
+}
+
+.config-anchor-muted {
+  color: var(--ui-text-secondary);
+}
+
+.config-anchor-warn {
+  flex-shrink: 0;
+  color: var(--ant-color-error, #ef4444);
 }
 
 .config-anchor-card .ant-anchor {
@@ -922,6 +988,115 @@ a {
 
 .config-section-card {
   scroll-margin-top: 168px;
+}
+
+.config-section-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+/* A section is a set of titled groups; the rule separates them quietly. */
+.config-group {
+  padding-top: 16px;
+  margin-top: 16px;
+  border-top: 1px solid var(--table-cell-border);
+}
+
+.config-group-title.ant-typography {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ui-text-secondary);
+}
+
+.config-field.ant-form-item {
+  margin-bottom: 18px;
+}
+
+.config-field .ant-form-item-label {
+  padding-bottom: 6px;
+}
+
+.config-field .ant-form-item-label > label {
+  width: 100%;
+  height: auto;
+}
+
+.config-field-label {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.config-field-name {
+  font-weight: 600;
+}
+
+.config-field-label .ant-tag {
+  margin: 0;
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.config-field-label .config-field-key {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-field-reset.ant-btn {
+  height: 20px;
+  padding: 0 2px;
+  margin-left: auto;
+  font-size: 12px;
+}
+
+.config-field-help {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--ui-text-secondary);
+}
+
+.config-field-default {
+  color: var(--ui-text-secondary);
+  font-style: italic;
+}
+
+.config-mono textarea,
+textarea.config-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.config-kv {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.config-subcard.ant-card {
+  margin-top: 8px;
+  background: color-mix(in srgb, var(--control-bg) 55%, transparent);
+}
+
+@media (max-width: 767px) {
+  /* On a phone the pinned toolbar would cover a third of the form. */
+  .config-toolbar-card,
+  .config-anchor-card {
+    position: static;
+    max-height: none;
+  }
 }
 
 .page-card[id^="settings-"] {

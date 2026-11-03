@@ -11,7 +11,10 @@ import {
 import { notify } from "../../notify";
 
 type Props = {
-  configContent: string;
+  /** policy-gates as the config currently has it (flat or nested). */
+  gates: string;
+  /** True once the config has loaded, so the rules are read from it once. */
+  ready: boolean;
   onApplyPolicyGates: (csv: string) => void;
 };
 
@@ -59,14 +62,6 @@ function metricMeta(key: string): MetricMeta | undefined {
   return METRICS.find((m) => m.key === key);
 }
 
-function parsePolicyGatesLine(content: string): string {
-  const match = content.match(/^\s*policy-gates:\s*(.+?)\s*$/m);
-  if (!match) return "";
-  let raw = match[1].trim();
-  raw = raw.replace(/^['"]|['"]$/g, "").trim();
-  return raw;
-}
-
 function ruleToToken(rule: Rule): string {
   return `${rule.metric}${rule.op}${rule.value}`;
 }
@@ -78,7 +73,7 @@ function describeRule(rule: Rule): string {
   return `${m?.label ?? rule.metric} ${opLabel} ${rule.value}${unit}`;
 }
 
-export function PolicyGateBuilderSection({ configContent, onApplyPolicyGates }: Props) {
+export function PolicyGateBuilderSection({ gates, ready, onApplyPolicyGates }: Props) {
   const [metric, setMetric] = useState<string>(METRICS[0].key);
   const [op, setOp] = useState<string>(OPERATORS[0].value);
   const [value, setValue] = useState<number>(1);
@@ -87,13 +82,13 @@ export function PolicyGateBuilderSection({ configContent, onApplyPolicyGates }: 
 
   // Auto-load from config the first time we have content.
   useEffect(() => {
-    if (loadedFromConfig || !configContent) return;
+    if (loadedFromConfig || !ready) return;
     loadFromConfigSilent();
     setLoadedFromConfig(true);
-  }, [configContent, loadedFromConfig]);
+  }, [ready, loadedFromConfig]);
 
   const csv = useMemo(() => rules.map(ruleToToken).join(","), [rules]);
-  const configCsv = useMemo(() => parsePolicyGatesLine(configContent), [configContent]);
+  const configCsv = gates.trim();
   const dirty = csv !== configCsv;
 
   const addRule = () => {
@@ -105,7 +100,7 @@ export function PolicyGateBuilderSection({ configContent, onApplyPolicyGates }: 
   };
 
   const loadFromConfigSilent = () => {
-    const raw = parsePolicyGatesLine(configContent);
+    const raw = gates.trim();
     if (!raw) {
       setRules([]);
       return;
@@ -136,20 +131,13 @@ export function PolicyGateBuilderSection({ configContent, onApplyPolicyGates }: 
 
   return (
     <div>
-      <Space size={10} align="center" style={{ marginBottom: 6 }}>
-        <span className="config-section-icon">
-          <SafetyCertificateOutlined />
-        </span>
-        <div>
-          <Typography.Title level={4} style={{ margin: 0 }}>
-            Policy gates
-          </Typography.Title>
-          <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-            Compose conditions that fail the run when thresholds are exceeded. The rules are serialized into the{" "}
-            <Typography.Text code>policy-gates</Typography.Text> config key.
-          </Typography.Text>
-        </div>
+      <Space size={8} align="center" style={{ marginBottom: 2 }}>
+        <SafetyCertificateOutlined />
+        <Typography.Text strong>Gate builder</Typography.Text>
       </Space>
+      <Typography.Text type="secondary" style={{ display: "block", fontSize: 13 }}>
+        Add conditions that fail the run, then apply them to Policy gates above.
+      </Typography.Text>
 
       <Form layout="vertical" style={{ marginTop: 16 }} onSubmitCapture={(e) => e.preventDefault()}>
         <Space size={8} wrap align="end" style={{ width: "100%" }}>

@@ -46,6 +46,9 @@ runner:
     dry-run: false                  # --dry-run / NCC_DRY_RUN
     skip-preflight-check: false     # --skip-preflight-check / NCC_SKIP_PREFLIGHT_CHECK
     replay: false                   # --replay / NCC_REPLAY
+  automation:
+    enabled: false                  # --auto / NCC_AUTO  apply fixes when the connection check fails, then retry
+    level: safe-fix                 # --automation-level / NCC_AUTOMATION_LEVEL  advisory | safe-fix | full-auto
   outputs:
     formats: [html, csv]            # --outputs / NCC_OUTPUTS  html,csv,json,markdown,sarif
     single-report: false            # --single-report / NCC_SINGLE_REPORT

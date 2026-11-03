@@ -80,6 +80,28 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   reopened from the user menu → *Setup checklist*. `PUT /api/v1/onboarding`
   takes `skip_step`, `unskip_step` and `finished`, and every change is
   audited.
+- **Redesigned Settings → Clusters & config.** Every setting config.yaml
+  accepts now has a field, in eight sections (Clusters, Sign-in & connection,
+  Run behavior, Reports & history, Filtering & policy, Notifications, Logging,
+  Secrets) split into titled groups. New: **Self-healing** (`auto`,
+  `automation-level`) and webhook **Extra headers** (`webhook-headers`) as
+  name/value rows. Search finds a setting by name or YAML key; **Changed** and
+  **Custom** show only edited settings or ones that differ from the default.
+  Each field shows the runner default when the file does not set it, the key
+  it is stored under, and **Use default** to remove an override. Lists
+  (clusters, Prism Centrals, recipients, exclusions) are chips; report formats
+  and severities are pick lists. Durations, URLs and quiet hours are checked
+  as you type, and saving waits until they are valid. The policy gate builder
+  moved into Filtering & policy, bulk file operations under **Bulk changes**,
+  and the toolbar and section list stay in view while scrolling. Keys the
+  form does not edit are listed with their full path, and the api, ui and
+  deployment notes are labelled as server notes the runner ignores.
+- **`auto` and `automation-level` work from config.yaml and the environment.**
+  They were read from the command line only: config.yaml rejected them as
+  unknown keys, and `NCC_AUTO` / `NCC_AUTOMATION_LEVEL` (listed by `env-info`)
+  were ignored. They are now accepted flat or as `runner.automation.enabled`
+  and `runner.automation.level`, and `validate-config` rejects an unknown
+  level. A command-line flag still wins.
 - **Tidier Findings alert table.** Column headers are small uppercase
   labels; every cell is centred vertically; handling (Open, Acknowledged,
   Resolved, Returned) is a coloured dot and label in every row instead of tags
@@ -326,6 +348,20 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   schedule now reports as configured, health shows its last scheduled run
   and outcome, invalid input answers 400 rather than 502, and a missing
   CronJob or RBAC rule gives an error that names the fix.
+- **Clusters & config showed wrong values for nested config files.** The
+  form knew 37 of the runner's nested (`schema-version: 1`) paths, so with the
+  shipped example config, settings such as run history, retention, certificate
+  checks and most email, webhook and Slack fields showed their defaults, and
+  editing one added a duplicate top-level key. It now reads and writes all of
+  them in the file's own layout. Lists showed as raw JSON (`["10.0.0.1"]`),
+  and some fields were marked as changed right after loading.
+- **PC discovery API "Legacy" broke the config.** The runner accepts only v3
+  or v4 for `discover-api-version`; the option is now v3. The request timeout
+  and Prometheus folder hints showed the wrong defaults (30s, outputfiles/prom
+  instead of 20s and promfiles).
+- **The policy gate builder started empty for nested config files.** It looked
+  for a top-level `policy-gates:` line and missed `runner.policy.gates`. The
+  password-to-secret helper wrote top-level keys into nested files.
 - **Full-page alert table had no pager.** It rendered every matching alert
   and replaced the pager with a count. It now keeps the pager (and page size)
   pinned under the rows.

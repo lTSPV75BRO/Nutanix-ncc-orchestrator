@@ -10,7 +10,6 @@ import {
   Typography,
 } from "antd";
 import { CheckCircleOutlined, KeyOutlined } from "@ant-design/icons";
-import type { Document } from "yaml";
 import { notify } from "../../notify";
 
 type Mode = "env" | "file";
@@ -21,10 +20,11 @@ type Props = {
   passwordValue: string;
   /** Whether the doc currently has secrets-provider already set. */
   hasProvider: boolean;
-  /** YAML doc accessor — used to mutate keys when the user confirms. */
-  getDoc: () => Document;
-  /** Called after the modal mutates the YAML doc so the parent can
-   *  re-emit content + flag dirty state. */
+  /** Reads a setting by its flat key, wherever the file keeps it. */
+  readSetting: (key: string) => string;
+  /** Sets a setting by its flat key; undefined removes it. */
+  writeSetting: (key: string, value: string | undefined) => void;
+  /** Called after the settings are written so the parent can re-emit the YAML. */
   onApply: () => void;
   onClose: () => void;
 };
@@ -61,7 +61,8 @@ export function SecretsMigrationModal({
   open,
   passwordValue,
   hasProvider,
-  getDoc,
+  readSetting,
+  writeSetting,
   onApply,
   onClose,
 }: Props) {
@@ -78,19 +79,15 @@ export function SecretsMigrationModal({
   );
 
   const handleConfirm = () => {
-    const doc = getDoc();
     if (mode === "env") {
-      doc.set("password", `secret://${SECRET_NAME}`);
-      doc.set("secrets-provider", "env");
+      writeSetting("password", `secret://${SECRET_NAME}`);
+      writeSetting("secrets-provider", "env");
       // Make sure secrets-file isn't lying around half-set.
-      if (doc.has("secrets-file") && String(doc.get("secrets-file") ?? "").trim() === "") {
-        doc.delete("secrets-file");
-      }
+      if (readSetting("secrets-file").trim() === "") writeSetting("secrets-file", undefined);
     } else {
-      doc.set("password", `secret://${FILE_KEY}`);
-      doc.set("secrets-provider", "file");
-      const existing = String(doc.get("secrets-file") ?? "").trim();
-      if (!existing) doc.set("secrets-file", "secrets.yaml");
+      writeSetting("password", `secret://${FILE_KEY}`);
+      writeSetting("secrets-provider", "file");
+      if (!readSetting("secrets-file").trim()) writeSetting("secrets-file", "secrets.yaml");
     }
     onApply();
     notify.success({
