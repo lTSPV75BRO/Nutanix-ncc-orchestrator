@@ -25,6 +25,7 @@ import {
   legacySettingsTarget,
   pageTitle,
   sectionByPath,
+  aliasRedirect,
   settingsLanding,
   type Viewer,
 } from "./navigation";
@@ -52,6 +53,8 @@ const NotFoundPage = lazy(() => import("./pages/NotFoundPage").then((m) => ({ de
 /** A Settings/System section route; sends viewers who may not open it to their landing. */
 function SectionRoute({ viewer }: { viewer: Viewer }) {
   const location = useLocation();
+  const moved = aliasRedirect(location.pathname, location.search);
+  if (moved) return <Navigate to={moved} replace />;
   const s = sectionByPath(location.pathname);
   if (!s || !canOpenSection(s, viewer)) {
     const landing = settingsLanding(viewer);

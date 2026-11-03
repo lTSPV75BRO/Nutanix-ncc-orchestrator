@@ -218,6 +218,100 @@ adds `schema-version: 1` without changing credentials. Unsupported schema
 versions fail closed. Kubernetes deployments skip host-only PID, scheduler,
 supervisor, and SELinux remediations because controllers own those concerns.
 
+More checks, each fixed by `doctor --fix` (or **Heal** in the UI):
+
+| Check | Finds | Fix |
+|---|---|---|
+| `config-layout` | A setting spelled twice (flat and nested, or two nested spellings); only one is used | Keeps the value in use, removes the other spelling; original kept as `.bak` |
+| `temp-files` | Leftovers of interrupted backups, restores and updates older than 6 hours (system temp, install dir, logs, output dir) | Deletes them. Never touches a `ncc-backup-*.tar.gz` file |
+| `output-retention` | Report files and run snapshots past `artifact-retain-*` / `retain-*`; unbounded growth when no retention is set | Applies your retention now (runs do the same when they finish) |
+| `runtime-tuning` | Settings that slow runs or fail them early: request timeout not below the cluster timeout, very short polling, inverted retry backoff, one connection per host, HTTP or debug logging | None: reports the current and a suggested value |
+| `supervisor-health` | A server in cooldown (down after too many quick restarts), restarting, restarted twice or more recently, or answering health probes slowly; quotes the panic or error line from its log. Also a state file left by a supervisor that is gone | Asks the supervisor to start a cooled-down server now; removes a stale state file |
+| `service-config` | The boot service lacks this release's settings. Linux: `StartLimitIntervalSec=0`, `Restart=always`, `LimitNOFILE`. Windows: the 72-hour task time limit, no restart on failure, battery stop. macOS: `KeepAlive`, file limit. Fails when the service starts a binary that no longer exists. Services of another install are ignored | Linux: adds the missing lines (others kept) and reloads systemd. Windows: re-registers the task (needs Administrator). macOS: reports the command to run |
+| `platform-arch` | The binary runs under CPU emulation (Rosetta 2, Windows x64-on-ARM, WOW64, a 32-bit build on a 64-bit kernel) | None: names the native package to install |
+| `os-limits` | Open-file hard limit below 8192 (Linux, macOS) | None: says where to raise it |
+| `time-sync` | System clock not synchronised (Linux `timedatectl`, Windows `w32tm`); TLS checks, schedules and sessions depend on it | None: says how to enable sync |
+| `inodes` | Less than 10% of inodes free (fails below 2%) on the install filesystem | None: points at retention and temp-file cleanup |
+| `memory-pressure` | Less than 10% of memory available, or a container using 90% of its memory limit | None |
+| `binary-quarantine` | Download mark on the stack's binaries (macOS `com.apple.quarantine`, Windows `Zone.Identifier`) that makes Gatekeeper or SmartScreen block or prompt | Removes the mark |
+| `cgroup-limits` | Container memory limit below 512 MiB, less than one CPU, or OOM kills | None |
+
+Every fix is re-checked read-only straight away; a fix whose check still fails
+is reported as not resolved. A check that panics fails on its own instead of
+stopping the run. Fixes are appended to `<install-dir>/logs/selfheal-history.jsonl`,
+and a check fixed three times in 24 hours is flagged as recurring (something
+keeps undoing it).
+
+`migrate-config` converts a flat config to the nested layout:
+
+```bash
+ncc-orchestrator migrate-config --config config.yaml --dry-run
+ncc-orchestrator migrate-config --config config.yaml
+```
+
+Flat keys move to their nested paths, duplicate spellings collapse to the value
+the runner uses, and keys with no nested spelling stay at the top level. The
+settings the runner reads are compared before and after; if any would change,
+nothing is written. The original is kept as `config.yaml.pre-migrate-<UTC>.bak`.
+In the UI this is **Updates & backups → Migrations**.
+
+**Supervisor.** `v2-supervise` (the process the boot service runs) publishes
+its state to `<install-dir>/run/v2-supervisor-state.json`: each server's
+state, PID, uptime, restarts, last health probe and its duration, and the
+last exit with its reason (`crashed`, `unhealthy`, `requested`,
+`port-in-use`, `start-failed`) and the last 20 lines of the server's log,
+plus the policy and the last 50 events. A server that ran for 2 minutes
+counts as stable and gets its restart budget back; failed probes in the first
+30 seconds after a start are ignored. Creating
+`run/v2-supervisor-restart-<api|ui>.request` restarts that server gracefully
+outside the restart budget, and also ends a backoff or cooldown wait. In the
+UI: **Status → Supervisor** (state, last crash with log, events,
+Restart / Start now).
+
+**Supervised upgrades.** The supervisor's state file lists the features it
+supports (`features: ["restart", "upgrade"]`) and its version. When it
+supports `upgrade`, `POST /api/v1/settings/update/apply` takes the pre-update
+backup and then writes `run/v2-supervisor-upgrade.request` instead of
+installing itself; the job's phase becomes `supervised`. The supervisor then
+runs the upgrade in steps, recorded in `run/v2-upgrade-state.json` (and in
+the `upgrade` field of `GET /api/v1/settings/update` and
+`GET /api/v1/health/supervisor`):
+
+| Phase | What happens |
+|-------|--------------|
+| `preflight` | Free disk space for a copy of the current version and the download. |
+| `snapshot` | Copies `bin/`, `frontend-dist/` and the orchestrator binary to `run/upgrade-rollback`. |
+| `installing` | `ncc-orchestrator update [--target-version]` (checksum-verified, 12 minute limit). "Already on the latest version" ends the job as done. |
+| `restarting` | Restarts the API, then the UI. Each must start, pass a health probe and stay up for 45 s (or the probe interval + 15 s); a cooldown or two unrequested exits fail it. |
+| `verifying` | Every binary reports the same version, then `doctor --json --fix --no-disruptive`. |
+| `done` / `rolled_back` / `failed` | On a failure after the install the copy is put back and the servers restarted (`rolled_back`); a failure before it leaves the old version running (`failed`). |
+
+If the supervisor stops mid-upgrade it resumes on start: before the install
+the job fails, during a rollback it redoes the rollback, otherwise it
+restarts and verifies the servers. The supervisor's own process keeps running
+the old binary until the next service restart
+(`supervisor_restart_pending`). On Linux `ncc-orchestrator-apply-update.path`
+is stopped during the upgrade so the old watcher does not install twice.
+Updates are refused (409) while a run or an upgrade is in progress. Without
+the supervisor, updates work as before. In the UI: **Updates & backups →
+Updates**.
+
+`v2-install-service` now installs: on Linux `StartLimitIntervalSec=0`,
+`LimitNOFILE=65536`, `OOMScoreAdjust=-500`; on Windows a Task Scheduler
+definition with no time limit (the default stopped the supervisor after 72
+hours), restart on failure every minute, and no battery stop; on macOS
+`ThrottleInterval` and a 65536 open-file limit. Existing installs get these
+from `service-config` (`doctor --fix`) or by re-running `v2-install-service`.
+
+**Runtime tuning.** In a container with a memory limit, the API, UI and
+runner set the Go soft memory limit to 90% of it at start (unless
+`GOMEMLIMIT` is set), so the garbage collector works harder before the
+kernel's OOM killer would stop the process. **Status → Platform**
+shows the host (OS, build and native architecture, CPUs, memory, container
+limits, what keeps the stack running) and the API process (uptime,
+goroutines, heap, memory limit, open files). The `api-runtime` check warns
+on a goroutine leak, a heap near its limit, or open files near the limit.
+
 ### 2.4 Replay mode
 
 Regenerate reports/artifacts from existing logs without invoking NCC APIs:

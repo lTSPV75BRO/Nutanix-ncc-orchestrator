@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"unicode/utf16"
 
 	"goncc/internal/runtimecaps"
 )
@@ -66,6 +67,9 @@ func systemdSupervisorUnit(o installServiceOptions) string {
 		"Documentation=https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator",
 		"After=network-online.target",
 		"Wants=network-online.target",
+		"# Never stop restarting: the default gives up after 5 quick failures,",
+		"# leaving the stack down until someone notices.",
+		"StartLimitIntervalSec=0",
 		"",
 		"[Service]",
 		"# A single long-lived native supervisor owns the api + ui children and",
@@ -79,6 +83,11 @@ func systemdSupervisorUnit(o installServiceOptions) string {
 		"RestartSec=3",
 		"TimeoutStopSec=30",
 		"KillMode=control-group",
+		"# Enough file descriptors for many parallel cluster connections.",
+		"LimitNOFILE=65536",
+		"# The supervisor is what restarts everything else; under memory pressure",
+		"# the kernel should pick something else first.",
+		"OOMScoreAdjust=-500",
 		"",
 		"[Install]",
 		"WantedBy=multi-user.target",
@@ -343,25 +352,88 @@ func windowsSupervisorTaskCmd(o installServiceOptions) string {
 	return fmt.Sprintf("\"%s\" v2-supervise --install-dir \"%s\"", o.OrchestratorBin, o.InstallDir)
 }
 
-func installSupervisorWindows(o installServiceOptions) error {
-	tr := windowsSupervisorTaskCmd(o)
-	args := []string{
-		"/Create",
-		"/TN", o.ServiceName,
-		"/TR", tr,
-		"/SC", "ONSTART",
-		"/RU", "SYSTEM",
-		"/RL", "HIGHEST",
-		"/F",
+// windowsSupervisorTaskXML is the Task Scheduler definition for the
+// supervisor. Plain `schtasks /SC ONSTART` leaves the defaults, which stop the
+// task after 72 hours, never restart it when it dies, and stop it on battery.
+func windowsSupervisorTaskXML(o installServiceOptions) string {
+	esc := func(s string) string {
+		r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;")
+		return r.Replace(s)
 	}
-	if o.PrintOnly {
-		fmt.Printf("Would run:\n  schtasks %s\n", strings.Join(args, " "))
-		return nil
+	return strings.Join([]string{
+		`<?xml version="1.0" encoding="UTF-16"?>`,
+		`<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">`,
+		`  <RegistrationInfo><Description>NCC Orchestrator v2 stack supervisor (API + UI)</Description></RegistrationInfo>`,
+		`  <Triggers><BootTrigger><Enabled>true</Enabled></BootTrigger></Triggers>`,
+		`  <Principals><Principal id="Author"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>`,
+		`  <Settings>`,
+		`    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>`,
+		`    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>`,
+		`    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>`,
+		`    <AllowHardTerminate>true</AllowHardTerminate>`,
+		`    <StartWhenAvailable>true</StartWhenAvailable>`,
+		`    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>`,
+		`    <IdleSettings><StopOnIdleEnd>false</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle></IdleSettings>`,
+		`    <AllowStartOnDemand>true</AllowStartOnDemand>`,
+		`    <Enabled>true</Enabled>`,
+		`    <Hidden>false</Hidden>`,
+		`    <RunOnlyIfIdle>false</RunOnlyIfIdle>`,
+		`    <WakeToRun>false</WakeToRun>`,
+		`    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>`,
+		`    <Priority>5</Priority>`,
+		`    <RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure>`,
+		`  </Settings>`,
+		`  <Actions Context="Author"><Exec>`,
+		`    <Command>` + esc(o.OrchestratorBin) + `</Command>`,
+		`    <Arguments>v2-supervise --install-dir "` + esc(o.InstallDir) + `"</Arguments>`,
+		`    <WorkingDirectory>` + esc(o.InstallDir) + `</WorkingDirectory>`,
+		`  </Exec></Actions>`,
+		`</Task>`,
+		``,
+	}, "\r\n")
+}
+
+// utf16LEWithBOM encodes s the way schtasks /XML expects.
+func utf16LEWithBOM(s string) []byte {
+	out := []byte{0xFF, 0xFE}
+	for _, r := range utf16.Encode([]rune(s)) {
+		out = append(out, byte(r), byte(r>>8))
 	}
-	if out, err := exec.Command("schtasks", args...).CombinedOutput(); err != nil {
+	return out
+}
+
+// registerWindowsSupervisorTask writes the task XML to a temp file and
+// (re)registers it, replacing an existing definition.
+func registerWindowsSupervisorTask(o installServiceOptions) error {
+	f, err := os.CreateTemp("", "ncc-supervisor-task-*.xml")
+	if err != nil {
+		return err
+	}
+	name := f.Name()
+	defer os.Remove(name)
+	if _, err := f.Write(utf16LEWithBOM(windowsSupervisorTaskXML(o))); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if out, err := exec.Command("schtasks", "/Create", "/TN", o.ServiceName, "/XML", name, "/F").CombinedOutput(); err != nil {
 		return fmt.Errorf("create scheduled task: %v (%s)", err, strings.TrimSpace(string(out)))
 	}
-	fmt.Printf("Created Windows Scheduled Task %q (trigger: at system startup, run as SYSTEM)\n", o.ServiceName)
+	return nil
+}
+
+func installSupervisorWindows(o installServiceOptions) error {
+	tr := windowsSupervisorTaskCmd(o)
+	if o.PrintOnly {
+		fmt.Printf("Would register scheduled task %q from this definition (schtasks /Create /XML /F):\n\n%s\n", o.ServiceName, windowsSupervisorTaskXML(o))
+		return nil
+	}
+	if err := registerWindowsSupervisorTask(o); err != nil {
+		return err
+	}
+	fmt.Printf("Created Windows Scheduled Task %q (trigger: at system startup, run as SYSTEM, no time limit, restarts on failure)\n", o.ServiceName)
 	fmt.Printf("Command: %s\n", tr)
 	if o.Now {
 		if out, err := exec.Command("schtasks", "/Run", "/TN", o.ServiceName).CombinedOutput(); err != nil {
@@ -417,6 +489,12 @@ func launchdSupervisorPlist(o installServiceOptions) string {
 		`  <true/>`,
 		`  <key>KeepAlive</key>`,
 		`  <true/>`,
+		`  <key>ThrottleInterval</key>`,
+		`  <integer>10</integer>`,
+		`  <key>SoftResourceLimits</key>`,
+		`  <dict><key>NumberOfFiles</key><integer>65536</integer></dict>`,
+		`  <key>HardResourceLimits</key>`,
+		`  <dict><key>NumberOfFiles</key><integer>65536</integer></dict>`,
 		`  <key>StandardOutPath</key>`,
 		`  <string>` + filepath.Join(logDir, "v2-supervisor.out.log") + `</string>`,
 		`  <key>StandardErrorPath</key>`,

@@ -810,6 +810,8 @@ func (s *apiServer) withRateLimit(next http.Handler) http.Handler {
 		"/api/v1/settings/restore":                  true,
 		"/api/v1/settings/update/apply":             true,
 		"/api/v1/health/diagnostics/support-bundle": true,
+		"/api/v1/health/migrations/config":          true,
+		"/api/v1/health/supervisor/restart":         true,
 	}
 	// Mutations of alert state are rate limited per client too (bulk calls
 	// carry up to 200 alerts, so the per-request cost is bounded separately).

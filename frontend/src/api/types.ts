@@ -187,7 +187,8 @@ export type UpdatePhase =
   | "updating"
   | "restarting"
   | "done"
-  | "error";
+  | "error"
+  | "supervised";
 
 /** Live status of an in-app software update job. */
 export type UpdateJob = {
@@ -215,6 +216,42 @@ export type UpdateStatus = {
   disabled?: boolean;
   raw?: string;
   job: UpdateJob;
+  /** The running supervisor carries out upgrades (health checks, automatic rollback). */
+  supervised_upgrades?: boolean;
+  /** The supervisor's current or last upgrade (run/v2-upgrade-state.json). */
+  upgrade?: UpgradeJob;
+};
+
+export type UpgradePhase =
+  | "preflight"
+  | "snapshot"
+  | "installing"
+  | "restarting"
+  | "verifying"
+  | "done"
+  | "rolling_back"
+  | "rolled_back"
+  | "failed";
+
+export type UpgradeJob = {
+  id: string;
+  phase: UpgradePhase;
+  message: string;
+  error?: string;
+  target_version?: string;
+  from_version?: string;
+  to_version?: string;
+  backup_path?: string;
+  requested_by?: string;
+  requested_at?: string;
+  started_at: string;
+  updated_at: string;
+  finished_at?: string;
+  resumed?: boolean;
+  stale?: boolean;
+  steps: { at: string; phase: UpgradePhase; message: string }[] | null;
+  doctor?: { summary?: Record<string, number>; fixed?: string[]; failing?: string[]; error?: string };
+  supervisor_restart_pending?: boolean;
 };
 
 /** One archive in the server-side backups directory. */
@@ -621,6 +658,13 @@ export type DiagnosticCheck = {
   fix_message?: string;
   source: "orchestrator" | "api";
   disruptive?: boolean;
+  duration_ms?: number;
+  /** After a fix: whether the runner's read-only re-check passed. */
+  verified?: boolean;
+  /** Fixes of this check in the last 24 hours, this one included. */
+  fixes_24h?: number;
+  /** Fixed often enough that something keeps undoing the repair. */
+  recurring?: boolean;
 };
 
 export type DiagnosticsData = {
@@ -644,12 +688,133 @@ export type DiagnosticsData = {
   };
   verification_runs?: number;
   verified_stable?: boolean;
+  /** Fixed checks that did not stay healthy on the last re-scan. */
+  unresolved_ids?: string[];
   actionable?: {
     count?: number;
     auto_fixable?: number;
     manual_action?: number;
     disruptive_skipped?: number;
   };
+};
+
+export type HealHistoryEntry = {
+  at: string;
+  id: string;
+  title: string;
+  category: string;
+  fix_message: string;
+  verified?: boolean;
+  status: string;
+};
+
+export type HealHistoryData = {
+  entries: HealHistoryEntry[];
+  total: number;
+  by_check: { id: string; title: string; fixes_24h: number; fixes_7d: number; last: string; recurring: boolean }[];
+  unverified_7d: number;
+  recurring_after: number;
+};
+
+export type SupervisedChild = {
+  name: string;
+  state: "starting" | "running" | "backoff" | "cooldown" | "stopped";
+  pid?: number;
+  started_at?: string;
+  restarts_total: number;
+  restarts_in_window: number;
+  next_start_at?: string;
+  probe_failures: number;
+  last_probe_at?: string;
+  last_probe_ms?: number;
+  last_probe_ok?: boolean;
+  last_exit_at?: string;
+  last_exit_reason?: "crashed" | "unhealthy" | "requested" | "port-in-use" | "start-failed";
+  last_exit_detail?: string;
+  last_exit_log_tail?: string[];
+  probed: boolean;
+};
+
+export type SupervisorEvent = { at: string; child: string; event: string; detail?: string };
+
+export type SupervisorState = {
+  pid: number;
+  version?: string;
+  features?: string[];
+  started_at: string;
+  updated_at: string;
+  policy: Record<string, string | number>;
+  children: Record<string, SupervisedChild>;
+  events: SupervisorEvent[] | null;
+};
+
+export type SupervisorData = {
+  mode: "supervised" | "manual" | "kubernetes";
+  running: boolean;
+  pid?: number;
+  message?: string;
+  state?: SupervisorState;
+  upgrade?: UpgradeJob;
+};
+
+export type PlatformData = {
+  host: {
+    os: string;
+    arch: { binary: string; native?: string; emulated: boolean; known: boolean };
+    cpus: number;
+    gomaxprocs: number;
+    go_version: string;
+    memory: { total_bytes?: number; available_bytes?: number };
+    cgroup: { cgroup_version?: number; memory_limit_bytes?: number; memory_usage_bytes?: number; cpu_limit?: number; oom_kills?: number };
+    kubernetes: boolean;
+    service_manager: string;
+  };
+  api_process: {
+    pid: number;
+    uptime_seconds: number;
+    goroutines: number;
+    heap_alloc_bytes: number;
+    sys_bytes: number;
+    gc_cycles: number;
+    memory_limit: number;
+    tuning: { memory_limit_bytes?: number; memory_limit_source: "GOMEMLIMIT" | "cgroup" | "none"; gomaxprocs: number };
+    open_files?: number;
+    file_limit_soft?: number;
+    file_limit_hard?: number;
+  };
+};
+
+export type AutoHealer = {
+  id: string;
+  title: string;
+  description: string;
+  state: "on" | "off" | "partial";
+  detail?: string;
+  how_to_change?: string;
+  stats?: Record<string, unknown>;
+};
+
+export type ConfigDuplicate = {
+  flat: string;
+  paths: string[];
+  winner: string;
+  value: string;
+  shadowed_values?: string[];
+  differs: boolean;
+};
+
+export type ConfigMigrationResult = {
+  config_path: string;
+  layout: "empty" | "flat" | "nested" | "mixed";
+  changed: boolean;
+  applied: boolean;
+  moved?: { from: string; to: string }[];
+  duplicates?: ConfigDuplicate[];
+  removed?: string[];
+  kept_flat?: string[];
+  backup?: string;
+  content?: string;
+  message: string;
 };
 
 export type ScheduleHealthData = {

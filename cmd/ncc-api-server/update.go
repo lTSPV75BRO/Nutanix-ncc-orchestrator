@@ -25,6 +25,10 @@ const (
 	updPhaseRestart   = "restarting"
 	updPhaseDone      = "done"
 	updPhaseError     = "error"
+	// updPhaseSupervised: the backup is done and the supervisor carries out
+	// the rest (install, restart, health checks, automatic rollback); its
+	// progress is in run/v2-upgrade-state.json, reported as "upgrade".
+	updPhaseSupervised = "supervised"
 )
 
 // updateJobState tracks a single in-flight in-app update across requests. The
@@ -144,14 +148,21 @@ func (s *apiServer) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		supported = false
 	}
 	data := map[string]interface{}{
-		"current_version": Version,
-		"supported":       supported,
-		"job":             updateJob.snapshot(),
+		"current_version":     Version,
+		"supported":           supported,
+		"job":                 updateJob.snapshot(),
+		"supervised_upgrades": s.supervisorSupports("upgrade"),
+	}
+	if up := s.readUpgradeJob(); up != nil {
+		data["upgrade"] = up
 	}
 
 	updateJob.mu.Lock()
 	busy := updateJob.inProgress
 	updateJob.mu.Unlock()
+	if up := s.readUpgradeJob(); up != nil && upgradeJobActive(up) {
+		busy = true
+	}
 
 	// The networked release check only runs when explicitly requested
 	// (?check=1) and no update is in progress. Plain GETs are a cheap status
@@ -322,27 +333,43 @@ func (s *apiServer) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Restarting the API ends the runs it is driving.
+	if s.hasInFlightRuns() {
+		writeJSON(w, http.StatusConflict, envelope{Success: false, Error: "a run is in progress; update when it finishes"})
+		return
+	}
+	if up := s.readUpgradeJob(); up != nil && upgradeJobActive(up) {
+		writeJSON(w, http.StatusConflict, envelope{Success: false, Error: "the supervisor is still carrying out an upgrade (" + up.Phase + ")"})
+		return
+	}
+
 	if !updateJob.tryBegin(req.TargetVersion) {
 		writeJSON(w, http.StatusConflict, envelope{Success: false, Error: "an update is already in progress", Data: updateJob.snapshot()})
 		return
 	}
 
+	supervised := s.supervisorSupports("upgrade")
+	requestedBy := ""
+	if p, ok := principalFromContext(r.Context()); ok {
+		requestedBy = p.subject
+	}
 	s.audit(r, "settings.update", true, map[string]interface{}{
 		"target_version": req.TargetVersion,
+		"supervised":     supervised,
 	})
 
-	go s.runUpdateJob(req)
+	go s.runUpdateJob(req, supervised, requestedBy)
 
-	writeJSON(w, http.StatusAccepted, envelope{
-		Success: true,
-		Message: "Update started: taking a backup, applying the update, then restarting the stack. This page will reconnect when the new version is live.",
-		Data:    updateJob.snapshot(),
-	})
+	msg := "Update started: taking a backup, applying the update, then restarting the stack. This page will reconnect when the new version is live."
+	if supervised {
+		msg = "Update started: taking a backup, then the supervisor installs the update, restarts each server and checks it is healthy. If a server does not come back, the previous version is put back automatically."
+	}
+	writeJSON(w, http.StatusAccepted, envelope{Success: true, Message: msg, Data: updateJob.snapshot()})
 }
 
 // runUpdateJob performs backup -> update -> detached restart, advancing the
 // shared job state through each phase. It is launched in its own goroutine.
-func (s *apiServer) runUpdateJob(req updateApplyRequest) {
+func (s *apiServer) runUpdateJob(req updateApplyRequest, supervised bool, requestedBy string) {
 	installDir := s.maintenanceInstallDir()
 
 	// 1. Pre-update backup. We refuse to apply the update if the backup fails,
@@ -386,6 +413,28 @@ func (s *apiServer) runUpdateJob(req updateApplyRequest) {
 	updateJob.mu.Lock()
 	updateJob.backupPath = backupPath
 	updateJob.mu.Unlock()
+
+	if supervised {
+		// 2'. Hand over to the supervisor, which outlives the restarts.
+		if err := s.requestSupervisedUpgrade(upgradeRequest{
+			ID:            stamp,
+			TargetVersion: req.TargetVersion,
+			BackupPath:    backupPath,
+			RequestedBy:   requestedBy,
+			RequestedAt:   time.Now().UTC().Format(time.RFC3339),
+		}); err != nil {
+			s.updateFailedTotal.Add(1)
+			updateJob.fail("could not hand the update to the supervisor (a pre-update backup was saved as " + filepath.Base(backupPath) + "): " + err.Error())
+			return
+		}
+		updateJob.mu.Lock()
+		updateJob.inProgress = false
+		updateJob.phase = updPhaseSupervised
+		updateJob.message = "Backup saved. The supervisor is installing the update."
+		updateJob.finishedAt = time.Now()
+		updateJob.mu.Unlock()
+		return
+	}
 
 	// 2. Apply the package update (downloads, checksum-verifies, installs all
 	//    stack binaries + frontend, and self-replaces the orchestrator).

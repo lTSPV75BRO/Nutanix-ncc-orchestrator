@@ -99,7 +99,7 @@ func (s *apiServer) sendDigestOnce(st notificationState) {
 		cur = st
 	}
 	cur.Digest.LastSentAt = time.Now().UTC().Format(time.RFC3339)
-	if saveErr := s.saveNotifications(cur); saveErr != nil {
+	if saveErr := s.saveNotificationStatus(cur); saveErr != nil {
 		// Non-fatal: a failed persist just means the next tick may re-send.
 		return
 	}

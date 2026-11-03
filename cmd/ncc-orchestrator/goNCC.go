@@ -48,6 +48,7 @@ import (
 	"goncc/internal/promtext"
 	"goncc/internal/retryutil"
 	"goncc/internal/runtimecaps"
+	"goncc/internal/runtimetune"
 	"goncc/internal/selfsigned"
 	"goncc/internal/trace"
 	"goncc/internal/v2layout"
@@ -1904,7 +1905,44 @@ func normalizeCanonicalConfig() {
 	if version := viper.GetInt("schema-version"); version != 0 && version != 1 {
 		return
 	}
-	mappings := map[string]string{
+	// A flat key with two nested spellings takes the preferred one when the
+	// file sets both (map order used to pick at random).
+	for flat, paths := range configNestedPathsByFlat() {
+		nested := ""
+		for _, p := range paths {
+			if viper.IsSet(p) {
+				nested = p
+				break
+			}
+		}
+		if nested == "" || viper.InConfig(flat) {
+			continue
+		}
+		if _, ok := os.LookupEnv("NCC_" + strings.ToUpper(strings.ReplaceAll(flat, "-", "_"))); ok {
+			continue
+		}
+		// Legacy flags represent list-valued settings as comma-separated
+		// strings, while the canonical YAML schema represents them as arrays.
+		// Normalize arrays before the strict legacy type validation runs.
+		value := viper.Get(nested)
+		switch values := value.(type) {
+		case []string:
+			value = strings.Join(values, ",")
+		case []interface{}:
+			items := make([]string, 0, len(values))
+			for _, item := range values {
+				items = append(items, fmt.Sprint(item))
+			}
+			value = strings.Join(items, ",")
+		}
+		viper.Set(flat, value)
+	}
+}
+
+// canonicalConfigMappings maps each nested (schema-version: 1) path to the
+// flat key the runner reads. Some flat keys have two nested spellings.
+func canonicalConfigMappings() map[string]string {
+	return map[string]string{
 		"runner.targets.mode":                        "cluster-source-mode",
 		"runner.targets.clusters":                    "clusters",
 		"runner.targets.clusters-file":               "clusters-file",
@@ -1999,29 +2037,6 @@ func normalizeCanonicalConfig() {
 		"secrets.provider":                           "secrets-provider",
 		"secrets.file":                               "secrets-file",
 		"api.cache.pc-alerts-cache-ttl":              "pc-alerts-cache-ttl",
-	}
-	for nested, flat := range mappings {
-		if !viper.IsSet(nested) || viper.InConfig(flat) {
-			continue
-		}
-		if _, ok := os.LookupEnv("NCC_" + strings.ToUpper(strings.ReplaceAll(flat, "-", "_"))); ok {
-			continue
-		}
-		// Legacy flags represent list-valued settings as comma-separated
-		// strings, while the canonical YAML schema represents them as arrays.
-		// Normalize arrays before the strict legacy type validation runs.
-		value := viper.Get(nested)
-		switch values := value.(type) {
-		case []string:
-			value = strings.Join(values, ",")
-		case []interface{}:
-			items := make([]string, 0, len(values))
-			for _, item := range values {
-				items = append(items, fmt.Sprint(item))
-			}
-			value = strings.Join(items, ",")
-		}
-		viper.Set(flat, value)
 	}
 }
 
@@ -3682,42 +3697,67 @@ func listHistoryRunDirs(historyDir string) ([]string, error) {
 }
 
 func applyRunHistoryRetention(historyDir string, retainLast, retainDays int, now time.Time) error {
-	dirs, err := listHistoryRunDirs(historyDir)
+	dirs, err := historyRetentionCandidates(historyDir, retainLast, retainDays, now)
 	if err != nil {
 		return err
 	}
-	for i, d := range dirs {
-		remove := false
-		if retainLast > 0 && i >= retainLast {
-			remove = true
-		}
-		if retainDays > 0 {
-			if ts, ok := historyDirTime(d); ok {
-				ageDays := int(now.UTC().Sub(ts).Hours() / 24)
-				if ageDays >= retainDays {
-					remove = true
-				}
-			}
-		}
-		if remove {
-			if err := os.RemoveAll(filepath.Join(historyDir, d)); err != nil {
-				return err
-			}
+	for _, d := range dirs {
+		if err := os.RemoveAll(filepath.Join(historyDir, d)); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
+// historyRetentionCandidates lists the run snapshots retain-last/retain-days
+// would delete, without deleting them.
+func historyRetentionCandidates(historyDir string, retainLast, retainDays int, now time.Time) ([]string, error) {
+	dirs, err := listHistoryRunDirs(historyDir)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for i, d := range dirs {
+		remove := retainLast > 0 && i >= retainLast
+		if retainDays > 0 {
+			if ts, ok := historyDirTime(d); ok && int(now.UTC().Sub(ts).Hours()/24) >= retainDays {
+				remove = true
+			}
+		}
+		if remove {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
 func applyArtifactRetentionPolicies(outputDir string, retainDays, retainMaxFiles int, now time.Time) (int, error) {
+	paths, err := artifactRetentionCandidates(outputDir, retainDays, retainMaxFiles, now)
+	if err != nil {
+		return 0, err
+	}
+	deleted := 0
+	for _, p := range paths {
+		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return deleted, err
+		}
+		deleted++
+	}
+	return deleted, nil
+}
+
+// artifactRetentionCandidates lists the report files the retention policies
+// would delete, without deleting them.
+func artifactRetentionCandidates(outputDir string, retainDays, retainMaxFiles int, now time.Time) ([]string, error) {
 	if retainDays <= 0 && retainMaxFiles <= 0 {
-		return 0, nil
+		return nil, nil
 	}
 	entries, err := os.ReadDir(outputDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return 0, nil
+			return nil, nil
 		}
-		return 0, err
+		return nil, err
 	}
 	protected := map[string]bool{
 		"index.html":              true,
@@ -3765,25 +3805,14 @@ func applyArtifactRetentionPolicies(outputDir string, retainDays, retainMaxFiles
 		})
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].mod.After(files[j].mod) })
-	deleted := 0
+	var out []string
 	retainDuration := time.Duration(retainDays) * 24 * time.Hour
 	for i, f := range files {
-		remove := false
-		if retainDays > 0 && now.Sub(f.mod) >= retainDuration {
-			remove = true
+		if (retainDays > 0 && now.Sub(f.mod) >= retainDuration) || (retainMaxFiles > 0 && i >= retainMaxFiles) {
+			out = append(out, f.path)
 		}
-		if retainMaxFiles > 0 && i >= retainMaxFiles {
-			remove = true
-		}
-		if !remove {
-			continue
-		}
-		if err := os.Remove(f.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return deleted, err
-		}
-		deleted++
 	}
-	return deleted, nil
+	return out, nil
 }
 
 func writeRunHistorySnapshot(cfg Config) (string, error) {
@@ -18083,6 +18112,63 @@ replaced by ***REDACTED***.`,
 	v2DoctorCmd.Flags().Bool("no-disruptive", false, "Skip disruptive checks/fixes (e.g. service restarts)")
 	cmd.AddCommand(v2DoctorCmd)
 
+	migrateConfigCmd := &cobra.Command{
+		Use:   "migrate-config",
+		Short: "Convert config.yaml to the nested schema-version: 1 layout",
+		Long: `migrate-config moves flat (legacy) keys to their nested schema-version: 1
+paths and removes settings spelled twice, keeping the value the runner uses
+now. Keys with no nested spelling stay at the top level.
+
+The settings the runner reads must be identical before and after, or nothing
+is written. The original file is kept as <config>.pre-migrate-<UTC>.bak.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			installDir, _ := cmd.Flags().GetString("install-dir")
+			configPath, _ := cmd.Flags().GetString("config")
+			dryRun, _ := cmd.Flags().GetBool("dry-run")
+			jsonOut, _ := cmd.Flags().GetBool("json")
+			if strings.TrimSpace(configPath) == "" {
+				if strings.TrimSpace(installDir) == "" {
+					installDir = defaultV2InstallDir()
+				}
+				configPath = resolveDoctorConfigPath(installDir)
+			}
+			res, err := migrateConfigFile(configPath, dryRun)
+			if jsonOut {
+				payload := map[string]interface{}{"result": res}
+				if err != nil {
+					payload["error"] = err.Error()
+				}
+				b, _ := json.MarshalIndent(payload, "", "  ")
+				fmt.Println(string(b))
+				return err
+			}
+			if err != nil {
+				return fmt.Errorf("migrate-config: %w", err)
+			}
+			fmt.Printf("%s: %s layout\n", res.ConfigPath, res.Layout)
+			for _, m := range res.Moved {
+				fmt.Printf("  move    %s → %s\n", m.From, m.To)
+			}
+			for _, p := range res.Removed {
+				fmt.Printf("  remove  %s (duplicate)\n", p)
+			}
+			switch {
+			case !res.Changed:
+				fmt.Println(res.Message)
+			case dryRun:
+				fmt.Printf("%s (dry run; nothing written)\n", res.Message)
+			default:
+				fmt.Printf("%s; original saved as %s\n", res.Message, res.Backup)
+			}
+			return nil
+		},
+	}
+	migrateConfigCmd.Flags().String("config", "", "Config file to migrate (default <install-dir>/config.yaml)")
+	migrateConfigCmd.Flags().String("install-dir", "", "Installation directory used to find config.yaml")
+	migrateConfigCmd.Flags().Bool("dry-run", false, "Show what would change without writing")
+	migrateConfigCmd.Flags().Bool("json", false, "Print the result as JSON (includes the new file content)")
+	cmd.AddCommand(migrateConfigCmd)
+
 	genTestAggCmd := &cobra.Command{
 		Use:   "gen-test-agg",
 		Short: "Generate synthetic aggregated index.html for load testing",
@@ -18394,6 +18480,8 @@ Examples:
 }
 
 func main() {
+	// Size the Go heap to the container's memory limit (no-op on hosts).
+	runtimetune.Apply()
 	// Ensure logs are flushed on exit
 	defer func() {
 		// Give logger time to flush

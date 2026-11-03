@@ -19,8 +19,12 @@ export const JUMP_ITEMS: JumpItem[] = [
   { id: "tls", title: "HTTPS / TLS", keywords: "tls cert certificate https ssl trust fingerprint", to: sectionHref("access", { focus: "tls" }), hint: "Access" },
   { id: "users", title: "Users & roles", keywords: "users accounts rbac admin password access", to: sectionHref("access", { focus: "users" }), hint: "Access" },
   { id: "ldap", title: "LDAP / SSO", keywords: "ldap ad saml oidc openid entra okta sso directory authentication access", to: sectionHref("access", { focus: "ldap" }), hint: "Access" },
-  { id: "backup", title: "Backups", keywords: "backup restore snapshot maintenance", to: sectionHref("maintenance", { focus: "backup" }), hint: "Maintenance" },
-  { id: "health", title: "System health", keywords: "health diagnostics doctor", to: sectionHref("health", { focus: "health" }), hint: "System" },
+  { id: "backup", title: "Backups", keywords: "backup restore snapshot maintenance", to: sectionHref("updates", { tab: "backups" }), hint: "Updates & backups" },
+  { id: "health", title: "Health & repair", keywords: "health diagnostics doctor self-heal heal repair fix", to: sectionHref("health"), hint: "System" },
+  { id: "migrations", title: "Migrations", keywords: "migrate config flat nested layout secrets", to: sectionHref("updates", { tab: "migrations" }), hint: "Updates & backups" },
+  { id: "autoheal", title: "Automatic healing", keywords: "auto heal self-heal retry automation", to: sectionHref("health", { tab: "automatic" }), hint: "Health & repair" },
+  { id: "supervisor", title: "Supervisor", keywords: "supervisor restart crash cooldown service process uptime", to: sectionHref("connection", { tab: "supervisor" }), hint: "Status" },
+  { id: "platform", title: "Platform", keywords: "platform os arch cpu emulation rosetta memory container cgroup limits", to: sectionHref("connection", { tab: "platform" }), hint: "Status" },
   { id: "config", title: "Clusters & config", keywords: "clusters prism pc yaml config", to: sectionHref("config"), hint: "Settings" },
   { id: "schedule", title: "Schedule", keywords: "cron job recurring", to: sectionHref("schedule"), hint: "Settings" },
   { id: "runs", title: "Runs", keywords: "trigger history run start", to: sectionHref("runs"), hint: "Runs" },
@@ -28,7 +32,7 @@ export const JUMP_ITEMS: JumpItem[] = [
   { id: "audit", title: "Audit log", keywords: "audit who changed history", to: sectionHref("audit"), hint: "System" },
   { id: "notifications", title: "Notifications", keywords: "email slack webhook", to: sectionHref("notifications"), hint: "Settings" },
   { id: "access", title: "Access", keywords: "login session cookies", to: sectionHref("access"), hint: "Settings" },
-  { id: "maintenance", title: "Maintenance", keywords: "update upgrade", to: sectionHref("maintenance"), hint: "System" },
+  { id: "maintenance", title: "Updates", keywords: "update upgrade rollback maintenance", to: sectionHref("updates", { tab: "updates" }), hint: "Updates & backups" },
 ];
 
 export function matchJumpItems(query: string, items: JumpItem[] = JUMP_ITEMS): JumpItem[] {

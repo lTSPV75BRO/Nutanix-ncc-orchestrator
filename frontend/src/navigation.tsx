@@ -9,6 +9,7 @@ import {
   BarChartOutlined,
   BellOutlined,
   CalendarOutlined,
+  CloudSyncOutlined,
   CodeOutlined,
   ControlOutlined,
   DashboardOutlined,
@@ -17,7 +18,6 @@ import {
   SettingOutlined,
   TeamOutlined,
   ThunderboltOutlined,
-  ToolOutlined,
 } from "@ant-design/icons";
 
 /** Keys of the sections SettingsPage can render (the former Settings tabs). */
@@ -30,9 +30,9 @@ export type SectionKey =
   | "audit"
   | "notifications"
   | "health"
+  | "updates"
   | "features"
   | "access"
-  | "maintenance"
   | "developer";
 
 /** viewer: anyone signed in (read-only for viewers); operator; admin. */
@@ -62,11 +62,11 @@ export const SECTIONS: SectionDef[] = [
   { key: "notifications", path: "/settings/notifications", label: "Notifications", title: "Notifications", description: "Who hears about runs and failures, and how.", icon: <BellOutlined />, group: "settings", access: "admin" },
   { key: "access", path: "/settings/access", label: "Access", title: "Access", description: "Accounts, sign-in methods, cluster groups, API tokens and HTTPS.", icon: <TeamOutlined />, group: "settings", access: "admin", needsLogin: true },
   { key: "features", path: "/settings/features", label: "Features", title: "Features", description: "Turn optional parts of the app on or off for everyone.", icon: <ControlOutlined />, group: "settings", access: "admin" },
-  { key: "connection", path: "/system/status", label: "Status", title: "System status", description: "Whether the API server is up, what it is running, and where it keeps its files.", icon: <ApiOutlined />, group: "system", access: "operator" },
-  { key: "health", path: "/system/health", label: "Health", title: "System health", description: "Self-checks for this installation, with safe fixes you can apply.", icon: <HeartOutlined />, group: "system", access: "admin" },
+  { key: "connection", path: "/system/status", label: "Status", title: "System status", description: "Whether the API server is up, what it is running and on what, and what the supervisor is doing.", icon: <ApiOutlined />, group: "system", access: "operator" },
+  { key: "health", path: "/system/health", label: "Health & repair", title: "Health & repair", description: "Checks of this installation, what heals automatically, and the history of repairs.", icon: <HeartOutlined />, group: "system", access: "admin" },
+  { key: "updates", path: "/system/updates", label: "Updates & backups", title: "Updates & backups", description: "Update the software (checked, with automatic rollback), back up and restore, and migrate the config.", icon: <CloudSyncOutlined />, group: "system", access: "admin" },
   { key: "logs", path: "/system/logs", label: "Logs", title: "Logs", description: "Live output from the runner and the servers.", icon: <FileTextOutlined />, group: "system", access: "operator" },
   { key: "audit", path: "/system/audit", label: "Audit log", title: "Audit log", description: "Who did what, and when.", icon: <AuditOutlined />, group: "system", access: "operator" },
-  { key: "maintenance", path: "/system/maintenance", label: "Maintenance", title: "Maintenance", description: "Updates, backups and restore.", icon: <ToolOutlined />, group: "system", access: "admin" },
   { key: "developer", path: "/system/developer", label: "Developer", title: "Developer tools", description: "The API explorer, saved reports and raw run files.", icon: <CodeOutlined />, group: "system", access: "admin" },
 ];
 
@@ -91,8 +91,56 @@ export function findingsRedirect(search: string): string | null {
 
 const BY_KEY = new Map(SECTIONS.map((s) => [s.key, s]));
 
+/**
+ * Sections that were merged into another one, and the tab they open there.
+ * Maintenance (updates, backups) is part of Updates & backups.
+ */
+const SECTION_ALIASES: Record<string, { key: SectionKey; tab: string; path: string }> = {
+  maintenance: { key: "updates", tab: "updates", path: "/system/maintenance" },
+};
+
+/**
+ * Tabs that moved to another section: Health & repair used to hold updates,
+ * backups and migrations (now Updates & backups) and the supervisor and
+ * platform (now Status).
+ */
+const MOVED_TABS: Partial<Record<SectionKey, Record<string, SectionKey>>> = {
+  health: { updates: "updates", backups: "updates", migrations: "updates", supervisor: "connection", platform: "connection" },
+};
+
+/** The section key and extra query an old key or tab such as `maintenance` maps to. */
+function resolveAlias(key: string, params: Record<string, string | undefined> = {}): [string, Record<string, string | undefined>] {
+  const alias = SECTION_ALIASES[key];
+  if (alias) {
+    const { focus, ...rest } = params;
+    return [alias.key, { tab: focus === "backup" ? "backups" : alias.tab, ...rest }];
+  }
+  const moved = MOVED_TABS[key as SectionKey];
+  if (moved) {
+    const { focus, ...rest } = params;
+    if (focus === "backup") return ["updates", { ...rest, tab: "backups" }];
+    const to = params.tab ? moved[params.tab] : undefined;
+    if (to) return [to, params];
+  }
+  return [key, params];
+}
+
 export function sectionByKey(key: string): SectionDef | undefined {
-  return BY_KEY.get(key as SectionKey);
+  return BY_KEY.get(resolveAlias(key)[0] as SectionKey);
+}
+
+/**
+ * Where an old section URL (e.g. /system/maintenance?focus=backup, or
+ * /system/health?tab=backups) now lives.
+ */
+export function aliasRedirect(pathname: string, search: string): string | null {
+  const p = pathname.replace(/\/+$/, "");
+  const params = Object.fromEntries(new URLSearchParams(search));
+  const entry = Object.entries(SECTION_ALIASES).find(([, a]) => a.path === p);
+  if (entry) return sectionHref(entry[0], params);
+  const s = sectionByPath(p);
+  if (s && MOVED_TABS[s.key] && resolveAlias(s.key, params)[0] !== s.key) return sectionHref(s.key, params);
+  return null;
 }
 
 export function sectionByPath(pathname: string): SectionDef | undefined {
@@ -113,13 +161,14 @@ export function visibleSections(v: Viewer): SectionDef[] {
 }
 
 /**
- * Link to a section, e.g. `sectionHref("maintenance", { focus: "backup" })`.
+ * Link to a section, e.g. `sectionHref("health", { tab: "backups" })`.
  * Unknown keys fall back to the Settings landing so a stale key never 404s.
  */
 export function sectionHref(key: string, params?: Record<string, string | undefined>): string {
-  const base = sectionByKey(key)?.path ?? "/settings";
+  const [resolved, query] = resolveAlias(key, params);
+  const base = sectionByKey(resolved)?.path ?? "/settings";
   const qs = new URLSearchParams();
-  for (const [k, v] of Object.entries(params ?? {})) {
+  for (const [k, v] of Object.entries(query ?? {})) {
     if (v) qs.set(k, v);
   }
   const s = qs.toString();
@@ -145,6 +194,9 @@ export function legacySettingsTarget(search: string, v: Viewer): string {
   const tab = (params.get("tab") || "").trim();
   params.delete("tab");
   const s = sectionByKey(tab);
+  if (s && canOpenSection(s, v) && (SECTION_ALIASES[tab] || MOVED_TABS[s.key])) {
+    return sectionHref(tab, Object.fromEntries(params));
+  }
   const base = s && canOpenSection(s, v) ? s.path : settingsLanding(v);
   const rest = params.toString();
   return rest ? `${base}?${rest}` : base;

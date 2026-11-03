@@ -304,6 +304,40 @@ h3 {
   background: color-mix(in srgb, var(--card-bg) 92%, transparent);
 }
 
+/* Health & repair (features/health/HealthRepairPage.tsx) */
+.repair-tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.repair-tabs > .ant-tabs-nav {
+  margin-bottom: 16px;
+}
+
+.repair-healer-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.repair-moves code {
+  overflow-wrap: anywhere;
+}
+
+.repair-preview {
+  max-height: 360px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--code-bg, color-mix(in srgb, var(--card-bg) 85%, #000 4%));
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  white-space: pre;
+}
+
 .health-check-row {
   border: 1px solid var(--table-cell-border);
   border-radius: 10px;

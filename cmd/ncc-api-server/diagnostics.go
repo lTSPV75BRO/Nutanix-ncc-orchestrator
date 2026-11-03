@@ -28,6 +28,11 @@ type unifiedCheck struct {
 	FixMsg     string `json:"fix_message,omitempty"`
 	Source     string `json:"source"`
 	Disruptive bool   `json:"disruptive,omitempty"`
+	DurationMS int64  `json:"duration_ms,omitempty"`
+	// Verified: after a fix, whether the runner's read-only re-check passed.
+	Verified  *bool `json:"verified,omitempty"`
+	Fixes24h  int   `json:"fixes_24h,omitempty"`
+	Recurring bool  `json:"recurring,omitempty"`
 }
 
 // handleHealthDiagnostics powers the Settings → System Health view (admin-only).
@@ -144,6 +149,16 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, req
 			if d, ok := raw["disruptive"].(bool); ok {
 				c.Disruptive = d
 			}
+			if ms, ok := raw["duration_ms"].(float64); ok {
+				c.DurationMS = int64(ms)
+			}
+			if v, ok := raw["verified"].(bool); ok {
+				c.Verified = &v
+			}
+			if n, ok := raw["fixes_24h"].(float64); ok {
+				c.Fixes24h = int(n)
+			}
+			c.Recurring, _ = raw["recurring"].(bool)
 			checks = append(checks, c)
 			tally(c.Status)
 			if c.Fixed {
@@ -162,7 +177,7 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, req
 		})
 		tally(string(d.Status))
 	}
-	for _, d := range s.k8sRuntimeDiagnostics() {
+	for _, d := range append(s.k8sRuntimeDiagnostics(), s.apiRuntimeDiagnostic()) {
 		checks = append(checks, unifiedCheck{
 			ID: d.ID, Title: d.Title, Category: d.Category,
 			Status: string(d.Status), Message: d.Message, Hint: d.Hint,
@@ -212,8 +227,16 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, req
 
 	verificationRuns := 0
 	verifiedStable := false
+	// unresolved: fixed checks that did not stay healthy on the last re-scan.
+	unresolved := []string{}
 	if req.Fix && req.VerifyAfterFix && (!s.capabilities.Kubernetes || len(doctorIDs) > 0) {
-		// Re-scan briefly to ensure post-fix state remains stable.
+		// Re-scan a few times: a fix counts as stable only when every fixed
+		// check stays ok and nothing new fails (a restart, say, can take a
+		// moment to settle).
+		verifyIDs := doctorIDs
+		if len(verifyIDs) == 0 && len(fixedIDs) > 0 {
+			verifyIDs = fixedIDs
+		}
 		stablePasses := 0
 		for i := 0; i < 3; i++ {
 			verificationRuns++
@@ -230,10 +253,14 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, req
 			}
 			rep2, err2 := s.runSelfHealOnceWithOptions(ctx, selfHealRunOptions{
 				Fix:          false,
-				CheckIDs:     doctorIDs,
+				CheckIDs:     verifyIDs,
 				NoDisruptive: noDisruptive,
 			})
-			if err2 == nil && rep2 != nil && rep2.Summary["fail"] == 0 {
+			if err2 != nil || rep2 == nil {
+				continue
+			}
+			unresolved = unresolvedFixes(rep2, fixedIDs)
+			if len(unresolved) == 0 && rep2.Summary["fail"] == 0 {
 				stablePasses++
 			}
 		}
@@ -266,6 +293,7 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, req
 		},
 		"verification_runs": verificationRuns,
 		"verified_stable":   verifiedStable,
+		"unresolved_ids":    unresolved,
 		"actionable": map[string]interface{}{
 			"count":              actionableCount,
 			"auto_fixable":       autoFixableCount,
@@ -279,9 +307,27 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, req
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: data})
 }
 
+// unresolvedFixes lists fixed check IDs that are not ok in rep.
+func unresolvedFixes(rep *selfHealReport, fixedIDs []string) []string {
+	status := map[string]string{}
+	for _, r := range rep.Results {
+		id, _ := r["id"].(string)
+		st, _ := r["status"].(string)
+		status[id] = st
+	}
+	out := []string{}
+	for _, id := range fixedIDs {
+		if st, ok := status[id]; ok && st != "ok" {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // k8sDoctorCheckIDs are PVC-safe orchestrator doctor checks. Host supervisor,
-// PID, SELinux, and in-process TLS-file checks do not apply when Kubernetes
-// controllers own process lifecycle and Ingress terminates TLS.
+// PID, SELinux, boot-service, clock and in-process TLS-file checks do not
+// apply when Kubernetes controllers own process lifecycle, the node keeps
+// time and Ingress terminates TLS.
 var k8sDoctorCheckIDs = []string{
 	"config-schema",
 	"config-valid",
@@ -294,6 +340,15 @@ var k8sDoctorCheckIDs = []string{
 	"recent-run-health",
 	"run-output-freshness",
 	"log-sizes",
+	"config-layout",
+	"temp-files",
+	"output-retention",
+	"runtime-tuning",
+	"platform-arch",
+	"os-limits",
+	"inodes",
+	"memory-pressure",
+	"cgroup-limits",
 }
 
 func (s *apiServer) doctorCheckIDs(requested []string) []string {

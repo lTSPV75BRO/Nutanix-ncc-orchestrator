@@ -39,6 +39,7 @@ import (
 	"goncc/internal/graceful"
 	"goncc/internal/promtext"
 	"goncc/internal/runtimecaps"
+	"goncc/internal/runtimetune"
 	"goncc/internal/v2layout"
 )
 
@@ -532,6 +533,8 @@ func (t *tailBuffer) String() string {
 }
 
 func main() {
+	// Size the Go heap to the container's memory limit (no-op on hosts).
+	runtimetune.Apply()
 	var s apiServer
 	s.capabilities = runtimecaps.Detect()
 	var listen string
@@ -4382,6 +4385,12 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/metrics", Methods: []string{http.MethodGet}, Description: "Prometheus exposition (run/auth/update counters, build info, self-heal, backup inventory gauges, update-availability, audit-forward drops)"},
 		{Path: "/api/v1/health/diagnostics", Methods: []string{http.MethodGet, http.MethodPost}, Description: "Admin-only: GET runs a read-only self-heal scan (doctor checks + live LDAP/SAML/clock probes) returning a ranked diagnostics list with an overall status; POST supports targeted fixes (check_ids), guardrails (no_disruptive), and post-fix verification."},
 		{Path: "/api/v1/health/diagnostics/support-bundle", Methods: []string{http.MethodPost}, Description: "Admin-only: generate a redacted doctor support bundle and return its path on disk."},
+		{Path: "/api/v1/health/history", Methods: []string{http.MethodGet}, Description: "Admin-only: fixes applied by self-heal (background loop, Heal now, CLI doctor --fix), newest first, with per-check 24h/7d counts and recurring flags. ?limit=1..1000 (default 100)."},
+		{Path: "/api/v1/health/autoheal", Methods: []string{http.MethodGet}, Description: "Admin-only: the automatic healing mechanisms (background checks, run auto-retry, runner automation, heal actions, repair after restore), whether each is on, and its counters."},
+		{Path: "/api/v1/health/supervisor", Methods: []string{http.MethodGet}, Description: "Admin-only: the native supervisor's published state: each server's state, uptime, restarts, last exit reason with the end of its log, probe timings, policy and recent events; mode is supervised, manual or kubernetes."},
+		{Path: "/api/v1/health/supervisor/restart", Methods: []string{http.MethodPost}, Description: "Admin-only: {\"child\":\"api\"|\"ui\"} asks the supervisor to restart that server gracefully, outside its restart budget (also ends a cooldown). 409 when no supervisor publishes state, or for api while a run is in progress."},
+		{Path: "/api/v1/health/platform", Methods: []string{http.MethodGet}, Description: "Admin-only: host and runtime facts: OS, build and native CPU architecture (emulation), CPUs, GOMAXPROCS, memory, container limits, service manager, and this API process's goroutines, heap, memory limit and open files."},
+		{Path: "/api/v1/health/migrations/config", Methods: []string{http.MethodGet, http.MethodPost}, Description: "Admin-only: GET previews converting the active config.yaml to the nested schema-version: 1 layout (moves, duplicate spellings, new content); POST applies it, keeping the original as a .bak. Refused while a run is in progress. Runner settings are verified identical before anything is written."},
 		{Path: "/api/v1/auth/session", Methods: []string{http.MethodPost}, Description: "Issue short-lived session token"},
 		{Path: "/api/v1/auth/rotate", Methods: []string{http.MethodPost}, Description: "Rotate API token"},
 		{Path: "/api/v1/auth/login", Methods: []string{http.MethodPost}, Description: "Local-account login; sets the httpOnly session + CSRF cookies and reports role/must-change", SampleBody: "{\n  \"username\": \"admin\",\n  \"password\": \"\"\n}"},
@@ -4421,7 +4430,7 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/settings/backups/delete", Methods: []string{http.MethodPost}, Description: "Admin-only: delete a server-side backup by name", SampleBody: "{\n  \"name\": \"manual-20260610T120000Z.tar.gz\"\n}"},
 		{Path: "/api/v1/settings/backups/download", Methods: []string{http.MethodGet}, Description: "Admin-only: download a server-side backup by name (?name=...). Encrypted snapshots stream as the opaque .tar.gz.enc envelope (decrypt with v2-restore + the passphrase)."},
 		{Path: "/api/v1/settings/update", Methods: []string{http.MethodGet}, Description: "Admin-only: check for a newer release (current/latest version, update_available) and report any in-progress in-app update job/phase"},
-		{Path: "/api/v1/settings/update/apply", Methods: []string{http.MethodPost}, Description: "Admin-only: apply an in-app update — takes a pre-update backup of configuration and the current software version (binaries + frontend), installs the latest stack (checksum-verified against the release checksums.txt), then restarts the stack. Roll back last update restores that snapshot including the previous version. Runs in the background; poll GET /api/v1/settings/update for progress.", SampleBody: "{\n  \"target_version\": \"\"\n}"},
+		{Path: "/api/v1/settings/update/apply", Methods: []string{http.MethodPost}, Description: "Admin-only: apply an in-app update — takes a pre-update backup of configuration and the current software version (binaries + frontend), installs the latest stack (checksum-verified against the release checksums.txt), then restarts the stack. Under the native supervisor (v2-supervise) the supervisor carries out the install: it restarts the API and then the UI, checks each comes back healthy on the same version, and rolls back automatically if not; progress is in the upgrade field of GET /api/v1/settings/update. Roll back last update restores that snapshot including the previous version. Runs in the background; poll GET /api/v1/settings/update for progress.", SampleBody: "{\n  \"target_version\": \"\"\n}"},
 		{Path: "/api/v1/settings/config", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write runtime config", SampleBody: "{\n  \"content\": \"clusters: \\\"10.0.0.1\\\"\\nusername: \\\"admin\\\"\\n\"\n}"},
 		{Path: "/api/v1/settings/config/batch", Methods: []string{http.MethodPost}, Description: "Bulk add/update/remove YAML config files", SampleBody: "{\n  \"operations\": [\n    {\"action\": \"add\", \"path\": \"configs/dev-a.yaml\", \"content\": \"clusters: \\\"10.0.0.1\\\"\\nusername: \\\"admin\\\"\\n\"},\n    {\"action\": \"remove\", \"path\": \"configs/old.yaml\"}\n  ]\n}"},
 		{Path: "/api/v1/settings/config-files", Methods: []string{http.MethodGet}, Description: "List config-referenced files (clusters, exclusions, secrets)"},
@@ -4818,6 +4827,25 @@ func (s *apiServer) buildOpenAPISpecBase() map[string]interface{} {
 			},
 			"/api/v1/health/diagnostics/support-bundle": map[string]interface{}{
 				"post": map[string]interface{}{"summary": "Admin-only: generate a redacted doctor support bundle and return the bundle path."},
+			},
+			"/api/v1/health/history": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Admin-only: self-heal fix history, newest first, with per-check counts and recurring flags."},
+			},
+			"/api/v1/health/autoheal": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Admin-only: automatic healing mechanisms and whether each is on."},
+			},
+			"/api/v1/health/supervisor": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Admin-only: native supervisor state, restarts, last exits and events."},
+			},
+			"/api/v1/health/supervisor/restart": map[string]interface{}{
+				"post": map[string]interface{}{"summary": "Admin-only: ask the supervisor to restart the api or ui server."},
+			},
+			"/api/v1/health/platform": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Admin-only: host, architecture, container limits and API process runtime facts."},
+			},
+			"/api/v1/health/migrations/config": map[string]interface{}{
+				"get":  map[string]interface{}{"summary": "Admin-only: preview converting config.yaml to the nested layout."},
+				"post": map[string]interface{}{"summary": "Admin-only: convert config.yaml to the nested layout (original kept as .bak)."},
 			},
 			"/api/v1/settings/config": map[string]interface{}{
 				"get": map[string]interface{}{"summary": "Read runtime config"},
@@ -5970,6 +5998,12 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/api/v1/schedule/health", s.handleScheduleHealth)
 	mux.HandleFunc("/api/v1/health/diagnostics", s.handleHealthDiagnostics)
 	mux.HandleFunc("/api/v1/health/diagnostics/support-bundle", s.handleHealthSupportBundle)
+	mux.HandleFunc("/api/v1/health/history", s.handleHealHistory)
+	mux.HandleFunc("/api/v1/health/autoheal", s.handleAutoHeal)
+	mux.HandleFunc("/api/v1/health/supervisor", s.handleSupervisor)
+	mux.HandleFunc("/api/v1/health/supervisor/restart", s.handleSupervisorRestart)
+	mux.HandleFunc("/api/v1/health/platform", s.handlePlatform)
+	mux.HandleFunc("/api/v1/health/migrations/config", s.handleConfigMigration)
 	mux.HandleFunc("/api/v1/artifacts", s.handleArtifacts)
 	mux.HandleFunc("/api/v1/artifacts/", s.handleArtifactByName)
 	mux.HandleFunc("/api/v1/runs", s.handleRuns)

@@ -48,6 +48,13 @@ type healResult struct {
 	Fixed      bool       `json:"fixed,omitempty"`
 	FixMsg     string     `json:"fix_message,omitempty"`
 	Disruptive bool       `json:"disruptive,omitempty"`
+	DurationMS int64      `json:"duration_ms"`
+	// Verified is set after a fix: whether a read-only re-check now passes.
+	Verified *bool `json:"verified,omitempty"`
+	// Fixes24h counts fixes of this check in the last 24 hours, this one
+	// included; Recurring is set at recurringFixThreshold.
+	Fixes24h  int  `json:"fixes_24h,omitempty"`
+	Recurring bool `json:"recurring,omitempty"`
 }
 
 // healContext carries shared, lazily-resolved state into each check.
@@ -117,6 +124,19 @@ func selfHealChecks() []healCheck {
 		{ID: "scheduler-integrity", Title: "Scheduler integrity", Category: "process", Run: checkSchedulerIntegrity},
 		{ID: "selinux-exec-context", Title: "SELinux executable context", Category: "process", Run: checkSELinuxExecContext},
 		{ID: "log-sizes", Title: "Log file sizes", Category: "storage", Run: checkLogSizes},
+		{ID: "config-layout", Title: "Settings spelled once", Category: "config", Run: checkConfigLayout},
+		{ID: "temp-files", Title: "Leftover temporary files", Category: "storage", Run: checkTempFiles},
+		{ID: "output-retention", Title: "Report and history growth", Category: "storage", Run: checkOutputRetention},
+		{ID: "runtime-tuning", Title: "Run performance settings", Category: "performance", Run: checkRuntimeTuning},
+		{ID: "supervisor-health", Title: "Supervisor health", Category: "process", Run: checkSupervisorHealth},
+		{ID: "service-config", Title: "Boot service definition", Category: "platform", Run: checkServiceConfig},
+		{ID: "platform-arch", Title: "Native CPU architecture", Category: "performance", Run: checkPlatformArch},
+		{ID: "os-limits", Title: "Open-file limit", Category: "performance", Run: checkOSLimits},
+		{ID: "time-sync", Title: "Clock synchronisation", Category: "platform", Run: checkTimeSync},
+		{ID: "inodes", Title: "Free inodes", Category: "storage", Run: checkInodes},
+		{ID: "memory-pressure", Title: "Memory headroom", Category: "performance", Run: checkMemoryPressure},
+		{ID: "binary-quarantine", Title: "Download quarantine on binaries", Category: "platform", Run: checkBinaryQuarantine},
+		{ID: "cgroup-limits", Title: "Container resource limits", Category: "performance", Run: checkCgroupLimits},
 	}
 }
 
@@ -909,7 +929,10 @@ func runSelfHealWithOptions(installDir, configPath string, opts healRunOptions) 
 		if !shouldRunHealCheck(c, opts) {
 			continue
 		}
-		res := c.Run(hc)
+		res := runHealCheckSafely(c, hc)
+		if hc.Fix {
+			res = verifyHealFix(c, hc, res)
+		}
 		if res.ID == "" {
 			res.ID = c.ID
 		}
@@ -922,6 +945,10 @@ func runSelfHealWithOptions(installDir, configPath string, opts healRunOptions) 
 		res.Disruptive = c.Disruptive
 		report.Summary[string(res.Status)]++
 		report.Results = append(report.Results, res)
+	}
+	if opts.Fix {
+		markRecurringFixes(installDir, report.Results)
+		appendHealHistory(installDir, historyEntriesFor(report.Results))
 	}
 	return report
 }
@@ -1192,7 +1219,7 @@ func checkBackupStaleness(hc *healContext) healResult {
 		}
 		res.Status = healWarn
 		res.Message = "no backups found under " + dir
-		res.Hint = "Re-run with --fix to take one now, or create from Settings → Maintenance."
+		res.Hint = "Re-run with --fix to take one now, or create one under Updates & backups → Backups."
 		return res
 	}
 	var newest time.Time

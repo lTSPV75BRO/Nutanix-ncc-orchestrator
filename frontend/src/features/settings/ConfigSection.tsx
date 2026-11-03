@@ -485,7 +485,10 @@ export function ConfigSection({ onError }: Props) {
   const [bulkAddPaths, setBulkAddPaths] = useState("");
   const [bulkAddContent, setBulkAddContent] = useState("");
   const [bulkRemovePaths, setBulkRemovePaths] = useState<string[]>([]);
-  const [secretsModalOpen, setSecretsModalOpen] = useState(false);
+  // Updates & backups → Migrations links here with ?open=secrets.
+  const [secretsModalOpen, setSecretsModalOpen] = useState(
+    () => new URLSearchParams(window.location.search).get("open") === "secrets",
+  );
   const [query, setQuery] = useState("");
   const [show, setShow] = useState<Show>("all");
 

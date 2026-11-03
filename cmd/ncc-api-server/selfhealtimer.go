@@ -76,7 +76,9 @@ func (s *apiServer) runSelfHealOnce(ctx context.Context, fix bool) (*selfHealRep
 }
 
 func (s *apiServer) runSelfHealOnceWithOptions(ctx context.Context, opts selfHealRunOptions) (*selfHealReport, error) {
-	if !s.selfHealRunMu.TryLock() {
+	// Wait briefly for a cycle already in flight (the background loop, or a
+	// second admin) instead of failing straight away.
+	if !s.lockSelfHealRun(ctx, 45*time.Second) {
 		return nil, fmt.Errorf("self-heal is already running; try again shortly")
 	}
 	defer s.selfHealRunMu.Unlock()
@@ -169,6 +171,29 @@ func (s *apiServer) runSelfHealOnceWithOptions(ctx context.Context, opts selfHea
 		})
 	}
 	return &rep, nil
+}
+
+// lockSelfHealRun takes selfHealRunMu, waiting up to wait (or until ctx ends).
+func (s *apiServer) lockSelfHealRun(ctx context.Context, wait time.Duration) bool {
+	if s.selfHealRunMu.TryLock() {
+		return true
+	}
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-deadline.C:
+			return false
+		case <-tick.C:
+			if s.selfHealRunMu.TryLock() {
+				return true
+			}
+		}
+	}
 }
 
 // cachedSelfHeal returns the most recent self-heal report, if any.

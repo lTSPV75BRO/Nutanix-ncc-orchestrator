@@ -38,6 +38,7 @@ import {
   UploadOutlined,
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { UPGRADE_QUERY_KEY, UpgradeProgress, upgradeActive } from "../updates/UpgradeProgress";
 import { api } from "../../api/client";
 import type {
   BackupEntry,
@@ -778,7 +779,7 @@ function passphraseIssue(pass: string, confirm: string, required = false): strin
   return null;
 }
 
-function BackupRestoreCard() {
+export function BackupRestoreCard() {
   const qc = useQueryClient();
   const backupsQuery = useQuery({ queryKey: ["settings", "backups"], queryFn: api.listBackups });
   const [downloading, setDownloading] = useState(false);
@@ -1410,7 +1411,7 @@ const BACKUP_EVERY_OPTIONS = [
   { value: "30d", label: "Every month" },
 ];
 
-function ScheduledBackupCard() {
+export function ScheduledBackupCard() {
   const qc = useQueryClient();
   const query = useQuery({
     queryKey: ["settings", "backup-schedule"],
@@ -2896,6 +2897,7 @@ const UPDATE_PHASE_LABEL: Record<string, string> = {
   backing_up: "Backing up",
   updating: "Downloading & installing",
   restarting: "Restarting",
+  supervised: "Handed to the supervisor",
   done: "Done",
   error: "Failed",
 };
@@ -2904,18 +2906,22 @@ const UPDATE_PHASE_LABEL: Record<string, string> = {
 // backend takes a pre-update backup, installs the new stack (orchestrator + api
 // + ui + frontend, checksum-verified), then restarts the stack; this card polls
 // the job phase and reconnects the page once the restarted stack is healthy.
-function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
+export function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [components, setComponents] = useState<ComponentsData["components"] | null>(null);
   const [checking, setChecking] = useState(false);
   const [applying, setApplying] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const qc = useQueryClient();
+  const upgrade = useQuery({ queryKey: UPGRADE_QUERY_KEY, queryFn: () => api.updateStatus(), retry: false });
+  const supervisorBusy = upgradeActive(upgrade.data?.upgrade);
+  const supervisedUpgrades = (status ?? upgrade.data)?.supervised_upgrades === true;
 
   const job = status?.job;
   const phase = job?.phase ?? "idle";
   const inProgress = job?.in_progress ?? false;
-  const busy = checking || applying || inProgress || restarting;
+  const busy = checking || applying || inProgress || restarting || supervisorBusy;
 
   const stopPolling = () => {
     if (pollRef.current) {
@@ -2949,7 +2955,12 @@ function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
         const s = await api.updateStatus();
         setStatus((prev) => ({ ...(prev ?? {}), ...s }) as UpdateStatus);
         const p = s.job?.phase;
-        if (p === "restarting") {
+        if (p === "supervised") {
+          // The supervisor carries on; UpgradeProgress follows it.
+          stopPolling();
+          setApplying(false);
+          void qc.invalidateQueries({ queryKey: UPGRADE_QUERY_KEY });
+        } else if (p === "restarting") {
           stopPolling();
           void waitForRestartAndReload();
         } else if (p === "done") {
@@ -3043,9 +3054,16 @@ function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
               install the new orchestrator, API, UI, and frontend components (checksum-verified),
               then
             </li>
-            <li>
-              <b>restart the stack automatically</b> to activate the new version.
-            </li>
+            {supervisedUpgrades ? (
+              <li>
+                <b>restart the API and then the web UI</b>, checking that each comes back healthy. If one does
+                not, the previous version is <b>put back automatically</b>.
+              </li>
+            ) : (
+              <li>
+                <b>restart the stack automatically</b> to activate the new version.
+              </li>
+            )}
           </ol>
           <Typography.Paragraph style={{ marginBottom: 0 }}>
             This page will reconnect automatically once the restarted stack is healthy. You may be
@@ -3191,6 +3209,8 @@ function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
         {!inProgress && !restarting && phase === "error" && job?.error ? (
           <Alert type="error" showIcon title="Last update failed" description={job.error} />
         ) : null}
+
+        {!isKubernetes ? <UpgradeProgress /> : null}
       </Space>
     </Card>
   );
@@ -3237,15 +3257,5 @@ export function AccessSection({ isKubernetes = false }: { isKubernetes?: boolean
   );
 }
 
-// MaintenanceSection groups the lifecycle/operations tooling — in-place software
-// updates and full backup/restore of the installation — into a dedicated tab,
-// separate from access control.
-export function MaintenanceSection({ isKubernetes = false }: { isKubernetes?: boolean }) {
-  return (
-    <Space orientation="vertical" size={16} style={{ width: "100%" }}>
-      <UpdatesCard isKubernetes={isKubernetes} />
-      <BackupRestoreCard />
-      <ScheduledBackupCard />
-    </Space>
-  );
-}
+// UpdatesCard, BackupRestoreCard and ScheduledBackupCard are the Updates and
+// Backups tabs of Updates & backups (features/updates/UpdatesBackupsPage.tsx).

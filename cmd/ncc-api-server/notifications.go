@@ -435,8 +435,15 @@ func (s *apiServer) saveNotifications(st notificationState) error {
 	if err := s.saveNotificationsToConfig(st); err != nil {
 		return err
 	}
-	// Keep API-local metadata in the legacy sidecar file so delivery/test status
-	// and non-runtime controls survive restarts without polluting config.yaml.
+	return s.saveNotificationStatus(st)
+}
+
+// saveNotificationStatus keeps API-local metadata in the legacy sidecar file
+// so delivery/test status and non-runtime controls survive restarts without
+// touching config.yaml. Sending a notification records its delivery here
+// only: rewriting config.yaml on every alert reformatted it and dropped the
+// operator's comments.
+func (s *apiServer) saveNotificationStatus(st notificationState) error {
 	path := s.absPath(s.notificationStatePath)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
@@ -1086,7 +1093,7 @@ func (s *apiServer) dispatchNotifications(st *notificationState, event, title st
 			failed = append(failed, "email: "+err.Error())
 		}
 	}
-	if err := s.saveNotifications(*st); err != nil {
+	if err := s.saveNotificationStatus(*st); err != nil {
 		log.Printf("notifications status save error: %v", err)
 	}
 	if len(failed) > 0 {

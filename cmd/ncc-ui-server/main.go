@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"goncc/internal/graceful"
+	"goncc/internal/runtimetune"
 	"goncc/internal/selfsigned"
 	"goncc/internal/v2layout"
 )
@@ -402,6 +403,8 @@ func inferRequestOrigin(r *http.Request) string {
 }
 
 func main() {
+	// Size the Go heap to the container's memory limit (no-op on hosts).
+	runtimetune.Apply()
 	var listen string
 	var dir string
 	var backendURL string

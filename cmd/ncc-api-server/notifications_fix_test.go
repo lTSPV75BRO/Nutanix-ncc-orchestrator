@@ -250,3 +250,24 @@ func TestNotificationTestAllUsesEnabledChannels(t *testing.T) {
 		t.Fatalf("bad kind: got %d", rec.Code)
 	}
 }
+
+// Regression: every alert sent (run results, self-heal) saved its delivery
+// status by rewriting config.yaml, which reformatted it and dropped comments.
+func TestDispatchLeavesConfigFileAlone(t *testing.T) {
+	cfg := "# operator notes: keep this\nschema-version: 1\nrunner:\n  targets:\n    clusters: 10.0.0.1 # lab\n"
+	s := newNotifServer(t, cfg)
+	if err := os.WriteFile(filepath.Join(s.repoRoot, ".ncc-api-notifications.json"), []byte(`{"enabled":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := s.loadNotifications()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := readConfigDoc(t, s)
+	if err := s.dispatchNotifications(&st, "selfheal", "Self-heal", map[string]interface{}{"failing": 1}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := readConfigDoc(t, s); after != before {
+		t.Fatalf("dispatch rewrote config.yaml:\n%s", after)
+	}
+}

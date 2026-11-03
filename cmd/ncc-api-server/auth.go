@@ -387,7 +387,10 @@ func routeMinRoleFor(p string, isRead bool) Role {
 	switch {
 	// System Health diagnostics + on-demand heal are admin-only: probes touch
 	// directory/SSO connectivity and POST applies remediations.
-	case strings.HasPrefix(p, "/api/v1/health/diagnostics"):
+	case strings.HasPrefix(p, "/api/v1/health/diagnostics"),
+		p == "/api/v1/health/history", p == "/api/v1/health/autoheal",
+		strings.HasPrefix(p, "/api/v1/health/supervisor"), p == "/api/v1/health/platform",
+		strings.HasPrefix(p, "/api/v1/health/migrations"):
 		return RoleAdmin
 	// Personal access tokens are self-service: any authenticated user (viewer
 	// included) may list, create, and revoke their OWN tokens. The handlers

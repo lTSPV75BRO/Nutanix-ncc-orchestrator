@@ -56,6 +56,8 @@ function CategoryLabel({ value }: { value: string }) {
     sso: "SSO (SAML)",
     tls: "TLS",
     process: "Processes",
+    performance: "Performance",
+    platform: "Platform",
     runtime: "Runtime",
     kubernetes: "Kubernetes",
   };
@@ -79,9 +81,18 @@ function CheckRow({ check }: { check: DiagnosticCheck }) {
             </Tag>
           </Tooltip>
           {check.fixed ? (
-            <Tag color="success" bordered={false}>
-              auto-fixed
-            </Tag>
+            <Tooltip title={check.verified === false ? "The check still reported a problem right after the fix." : undefined}>
+              <Tag color={check.verified === false ? "warning" : "success"} bordered={false}>
+                {check.verified === false ? "fixed, not resolved" : check.verified ? "fixed and re-checked" : "fixed"}
+              </Tag>
+            </Tooltip>
+          ) : null}
+          {check.recurring ? (
+            <Tooltip title="Fixed several times in 24 hours: something keeps undoing it.">
+              <Tag color="error" bordered={false}>
+                keeps coming back ({check.fixes_24h}×)
+              </Tag>
+            </Tooltip>
           ) : null}
           {check.source === "api" ? <Tag bordered={false}>probe-only</Tag> : null}
           {check.disruptive ? <Tag color="warning" bordered={false}>may restart services</Tag> : null}
@@ -192,7 +203,9 @@ export function SystemHealthSection() {
 
   const remediationTarget = (category: string): string => {
     if (category === "config") return sectionHref("config");
-    if (category === "backups") return sectionHref("maintenance", { focus: "backup" });
+    if (category === "backups") return sectionHref("updates", { tab: "backups" });
+    if (category === "performance") return sectionHref("config");
+    if (category === "platform") return sectionHref("connection", { tab: "platform" });
     if (category === "runs") return sectionHref("runs");
     if (category === "process") return sectionHref("connection");
     if (category === "directory" || category === "sso") return sectionHref("access");
@@ -278,7 +291,7 @@ export function SystemHealthSection() {
         details: processSnapshot,
       },
       { key: "schedule", label: "Schedule configured", ok: scheduleOk, fix: sectionHref("schedule") },
-      { key: "backups", label: "Backups available", ok: hasBackup, fix: sectionHref("maintenance", { focus: "backup" }) },
+      { key: "backups", label: "Backups available", ok: hasBackup, fix: sectionHref("updates", { tab: "backups" }) },
       { key: "runs", label: "No active long-running run", ok: noActiveRun, fix: sectionHref("runs") },
     ];
   }, [
@@ -363,7 +376,7 @@ export function SystemHealthSection() {
               <Typography.Text type="secondary">
                 {isKubernetes
                   ? "Kubernetes-aware checks across configuration, shared storage, secrets, backups, runs, directory/SSO, UI HTTPS, and replica-safe runtime. Host supervisor checks are omitted because controllers own those."
-                  : `Self-heal checks across configuration, storage, secrets, backups, runs, directory/SSO, TLS, and processes.${
+                  : `Self-heal checks across configuration, storage, secrets, backups, runs, performance, directory/SSO, TLS, and processes. Every fix is re-checked.${
                       healOn ? " Safe remediations can be applied with one click." : ""
                     }`}
               </Typography.Text>
@@ -396,7 +409,7 @@ export function SystemHealthSection() {
               <>
             <Popconfirm
               title="Apply safe remediations?"
-              description="Runs non-disruptive self-heal fixers (no restart/stop actions): anchor relative output paths, create missing dirs, tighten secret-file perms, repair config, renew the self-signed TLS cert, rotate oversized logs, and verify/auto-take a backup."
+              description="Runs non-disruptive self-heal fixers (no restart/stop actions): anchor relative output paths, create missing dirs, tighten secret-file perms, repair config, renew the self-signed TLS cert, rotate oversized logs, verify/auto-take a backup, remove leftovers of interrupted backups and updates, apply your report retention, and remove settings spelled twice (keeping the value in use)."
               okText="Heal now"
               onConfirm={() => heal.mutate({ verify_after_fix: true, no_disruptive: true })}
             >

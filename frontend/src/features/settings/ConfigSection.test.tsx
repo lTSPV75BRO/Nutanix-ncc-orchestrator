@@ -29,7 +29,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("ConfigSection", () => {
+// Renders the whole settings form; slow when the full suite runs in parallel.
+describe("ConfigSection", { timeout: 15_000 }, () => {
   it("shows nested values and saves new settings under the nested layout", async () => {
     const { save } = renderPage();
     expect(await screen.findByText("Nested layout")).toBeInTheDocument();

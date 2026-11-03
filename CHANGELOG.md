@@ -80,6 +80,77 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   reopened from the user menu → *Setup checklist*. `PUT /api/v1/onboarding`
   takes `skip_step`, `unskip_step` and `finished`, and every change is
   audited.
+- **Health & repair.** One page (System → Health & repair) for keeping the
+  installation healthy, in tabs: **Checks** (the doctor checks and Heal),
+  **Automatic healing** (background checks, service supervisor, run
+  auto-retry, connection self-healing in runs, heal buttons, repair after
+  restore, each with its state and how to change it) and **History**. It
+  replaces System health.
+- **Updates & backups.** A new System page for changing what is installed:
+  **Updates**, **Backups** and **Migrations**. It replaces Maintenance. The
+  supervisor and platform details are tabs of **Status** (Overview ·
+  Supervisor · Platform; the last two for admins). Old Maintenance and
+  Health & repair links (`?tab=updates|backups|migrations|supervisor|platform`,
+  `?focus=backup`) open the new place.
+- **Supervised upgrades.** When the stack runs under the native supervisor,
+  "Back up and update" hands the upgrade to the supervisor after the
+  pre-update backup. It checks free space, keeps a copy of the current
+  binaries and web UI, installs the update, restarts the API and then the web
+  UI, and checks that each comes back, stays up and reports the new version,
+  then runs `doctor --fix --no-disruptive`. If a server does not come back
+  healthy it puts the previous version back on its own. The Updates tab shows
+  each step live, including through the API restart, and the job survives a
+  supervisor restart (it resumes where it was). Updates are refused while a
+  run is in progress. On Linux the apply-update path watcher is paused during
+  the upgrade.
+- **Config migration to the nested layout.** `ncc-orchestrator migrate-config`
+  and Updates & backups → Migrations convert a flat config.yaml to the nested
+  `schema-version: 1` layout, with a preview of every move. Settings spelled
+  twice collapse to the value the runner uses (conflicts are shown first).
+  Nothing is written unless the settings the runner reads stay identical, and
+  the original is kept as a `.bak`. Migrations also lists secrets stored as
+  plain text.
+- **Four new self-heal checks.** `config-layout` (settings spelled twice),
+  `temp-files` (leftovers of interrupted backups, restores and updates),
+  `output-retention` (reports and run history past your retention, or growing
+  without a limit) and `runtime-tuning` (settings that slow runs down). See
+  docs/FEATURES_AND_CONFIG_FLAGS.md §1.2.
+- **Supervisor in Status.** The native supervisor now publishes each
+  server's state, uptime, restarts, probe timings and last exit (crash,
+  failed health probes, port in use, …) with the end of the server's log.
+  Status → Supervisor shows it with recent events and a Restart /
+  Start now button per server (`GET /api/v1/health/supervisor`,
+  `POST /api/v1/health/supervisor/restart`, admin-only, refused for the API
+  while a run is in progress).
+- **Smarter supervisor recovery.** A server that ran 2 minutes gets its
+  restart budget back, so occasional crashes days apart no longer add up to
+  a cooldown; failed probes in the first 30 seconds after a start do not
+  count; a restart request ends a backoff or cooldown wait at once.
+- **Sturdier boot services.** Linux: systemd never gives up restarting
+  (`StartLimitIntervalSec=0`), 65536 open files, and the OOM killer prefers
+  other processes. Windows: the scheduled task has no 72-hour time limit
+  (the default stopped the supervisor after three days), restarts on
+  failure, and does not stop on battery. macOS: restart throttling and a
+  65536 open-file limit.
+- **Platform self-heal checks.** `supervisor-health`, `service-config`
+  (brings an existing boot service up to the settings above),
+  `platform-arch` (Rosetta 2 / x64-on-ARM / WOW64 emulation),
+  `os-limits`, `time-sync`, `inodes`, `memory-pressure`,
+  `binary-quarantine` (macOS quarantine attribute, Windows Zone.Identifier;
+  removed by Heal), `cgroup-limits` (container limits and OOM kills), and the
+  API-side `api-runtime` (goroutines, heap, open files). See
+  docs/FEATURES_AND_CONFIG_FLAGS.md §1.2.
+- **Container-aware memory limit.** The API, UI and runner size the Go
+  memory limit to 90% of the container's limit unless `GOMEMLIMIT` is set.
+  Status → Platform shows the host and API process details
+  (`GET /api/v1/health/platform`).
+- **Self-heal is more precise.** Each fix is re-checked at once and reported
+  as resolved or not; Heal's follow-up re-scans now check that every fixed
+  check stays healthy, not only that nothing fails. A crashing check fails on
+  its own instead of ending the scan. Fixes are recorded in
+  `logs/selfheal-history.jsonl` (Health & repair → History), and a check fixed
+  three times in a day is flagged as recurring. Heal waits for a background
+  cycle already running instead of failing with "already running".
 - **Redesigned Settings → Clusters & config.** Every setting config.yaml
   accepts now has a field, in eight sections (Clusters, Sign-in & connection,
   Run behavior, Reports & history, Filtering & policy, Notifications, Logging,
@@ -333,6 +404,11 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 
 ### Fixed
 
+- **Sending a notification no longer rewrites config.yaml.** Every alert
+  (run results, self-heal, digest) saved its delivery status by rewriting
+  config.yaml, which reformatted it and dropped comments, even with no
+  channel enabled. Delivery status now goes only to the notifications status
+  file.
 - **Kubernetes schedule from Settings → Schedule.** On Helm installs it
   could not work at all: the API looked for the `ncc-v2-runner` CronJob (the
   chart names it `ncc-orchestrator`) and the chart's Role had no CronJob
@@ -348,6 +424,11 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   schedule now reports as configured, health shows its last scheduled run
   and outcome, invalid input answers 400 rather than 502, and a missing
   CronJob or RBAC rule gives an error that names the fix.
+- **Two nested spellings of one setting gave a random result.** When a config
+  set both `runner.policy.flaky-lookback-runs` and
+  `runner.filtering.flaky-lookback-runs` (likewise the policy gates), which
+  value the runner used changed from run to run. The `runner.policy` spelling
+  now always wins, and `config-layout` reports the duplicate.
 - **Clusters & config showed wrong values for nested config files.** The
   form knew 37 of the runner's nested (`schema-version: 1`) paths, so with the
   shipped example config, settings such as run history, retention, certificate

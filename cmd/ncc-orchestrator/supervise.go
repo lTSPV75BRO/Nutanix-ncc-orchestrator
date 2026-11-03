@@ -57,6 +57,15 @@ type superviseConfig struct {
 	initialBackoff     time.Duration // first restart delay; doubles up to backoffCap
 	backoffCap         time.Duration // ceiling for exponential restart backoff
 	stopGrace          time.Duration // SIGTERM->SIGKILL grace per child on shutdown
+	// startGrace: probes do not count against a child this soon after it
+	// starts, so a slow start (migrations, a cold disk) is not killed.
+	startGrace time.Duration
+	// stableAfter: a child that ran this long before exiting starts again with
+	// a fresh budget and backoff; one crash after days of uptime is not a loop.
+	stableAfter time.Duration
+	// requestPoll: how often to look for a restart request file.
+	requestPoll time.Duration
+	state       *superviseStateWriter
 }
 
 func (c *superviseConfig) applyDefaults() {
@@ -82,6 +91,15 @@ func (c *superviseConfig) applyDefaults() {
 		// Kept below v2-stop's default 5s timeout so a manual `v2-stop` that
 		// targets the supervisor sees it exit cleanly before force-killing it.
 		c.stopGrace = 3 * time.Second
+	}
+	if c.startGrace <= 0 {
+		c.startGrace = 30 * time.Second
+	}
+	if c.stableAfter <= 0 {
+		c.stableAfter = 2 * time.Minute
+	}
+	if c.requestPoll <= 0 {
+		c.requestPoll = 2 * time.Second
 	}
 }
 
@@ -160,8 +178,15 @@ func runV2Supervise(cfg superviseConfig) error {
 		cancel()
 	}()
 
-	logf("starting (install-dir=%s, max-restarts=%d/%s, probe-every=%s after %d failures, cooldown-and-resume)",
-		cfg.installDir, cfg.maxRestarts, cfg.window, cfg.probeInterval, cfg.unhealthyThreshold)
+	cfg.state = newSuperviseStateWriter(supervisorStatePath(cfg.installDir), &cfg)
+	defer cfg.state.remove()
+	for _, c := range cfg.children {
+		// A request left over from before this start is stale.
+		_ = os.Remove(supervisorRestartRequestPath(cfg.installDir, c.name))
+	}
+
+	logf("starting (install-dir=%s, max-restarts=%d/%s, probe-every=%s after %d failures, start-grace=%s, stable-after=%s, cooldown-and-resume)",
+		cfg.installDir, cfg.maxRestarts, cfg.window, cfg.probeInterval, cfg.unhealthyThreshold, cfg.startGrace, cfg.stableAfter)
 
 	superviseRun(ctx, &cfg, logf)
 	logf("stopped")
@@ -178,6 +203,14 @@ func superviseRun(ctx context.Context, cfg *superviseConfig, logf func(string, .
 		wg.Add(1)
 		go superviseChildLoop(ctx, &wg, cfg, child, logf)
 	}
+	if cfg.state != nil {
+		// Upgrades handed over by the API server (supervise_upgrade.go).
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			newUpgrader(cfg, logf).loop(ctx)
+		}()
+	}
 	wg.Wait()
 	// Best-effort: drop the children's pid files now that they are stopped so a
 	// later `v2-status` does not report stale PIDs.
@@ -193,6 +226,7 @@ const (
 	childExited    childStopReason = iota // process exited on its own (crash or clean)
 	childUnhealthy                        // health probe tripped; we killed it
 	childShutdown                         // ctx cancelled (supervisor is stopping)
+	childRequested                        // an admin asked for a restart
 )
 
 func superviseChildLoop(ctx context.Context, wg *sync.WaitGroup, cfg *superviseConfig, c *superviseChild, logf func(string, ...any)) {
@@ -216,30 +250,52 @@ func superviseChildLoop(ctx context.Context, wg *sync.WaitGroup, cfg *superviseC
 	backoff := cfg.initialBackoff
 
 	for ctx.Err() == nil {
+		started := time.Now()
 		reason := runChildOnce(ctx, cfg, c, logf)
 		if reason == childShutdown {
+			cfg.state.update(c.name, func(s *superviseChildState) { s.State = "stopped"; s.PID = 0 })
 			return
+		}
+		if reason == childRequested {
+			// Requested restarts are not failures: no budget, no backoff.
+			cfg.state.update(c.name, func(s *superviseChildState) { s.RestartsTotal++ })
+			if !sleepCtx(ctx, 500*time.Millisecond) {
+				return
+			}
+			continue
 		}
 
 		now := time.Now()
-		if now.Sub(windowStart) > cfg.window {
+		if now.Sub(windowStart) > cfg.window || now.Sub(started) >= cfg.stableAfter {
+			// Budget window over, or the child had been stable: start fresh.
 			windowStart = now
 			restarts = 0
 			backoff = cfg.initialBackoff
 		}
 		restarts++
+		inWindow := restarts
+		cfg.state.update(c.name, func(s *superviseChildState) {
+			s.RestartsTotal++
+			s.RestartsInWindow = inWindow
+		})
 		if restarts > cfg.maxRestarts {
 			logf("%s exhausted restarts (%d within %s); cooling down %s before resuming",
 				c.name, cfg.maxRestarts, cfg.window, cfg.window)
-			if !sleepCtx(ctx, cfg.window) {
+			cfg.state.event(c.name, "cooldown", fmt.Sprintf("%d restarts within %s", cfg.maxRestarts, cfg.window))
+			next := time.Now().Add(cfg.window).UTC().Format(time.RFC3339)
+			cfg.state.update(c.name, func(s *superviseChildState) { s.State = "cooldown"; s.PID = 0; s.NextStartAt = next })
+			if !waitOrRestartRequest(ctx, cfg, c, cfg.window) {
 				return
 			}
+			cfg.state.update(c.name, func(s *superviseChildState) { s.RestartsInWindow = 0 })
 			windowStart = time.Now()
 			restarts = 0
 			backoff = cfg.initialBackoff
 			continue
 		}
-		if !sleepCtx(ctx, backoff) {
+		next := time.Now().Add(backoff).UTC().Format(time.RFC3339)
+		cfg.state.update(c.name, func(s *superviseChildState) { s.State = "backoff"; s.PID = 0; s.NextStartAt = next })
+		if !waitOrRestartRequest(ctx, cfg, c, backoff) {
 			return
 		}
 		backoff *= 2
@@ -267,6 +323,7 @@ func runChildOnce(ctx context.Context, cfg *superviseConfig, c *superviseChild, 
 	if strings.TrimSpace(c.listen) != "" {
 		if err := canBindListenAddress(c.listen); err != nil {
 			logf("%s: listen address %s unavailable: %v; refusing to spawn duplicate listener", c.name, c.listen, err)
+			recordChildExit(cfg, c, "port-in-use", fmt.Sprintf("%s is in use by another process: %v", c.listen, err), false)
 			return childExited
 		}
 	}
@@ -279,31 +336,32 @@ func runChildOnce(ctx context.Context, cfg *superviseConfig, c *superviseChild, 
 		if ctx.Err() != nil {
 			return childShutdown
 		}
+		recordChildExit(cfg, c, "start-failed", err.Error(), false)
 		return childExited
 	}
 	pid := cmd.Process.Pid
+	startedAt := time.Now()
 	_ = os.WriteFile(c.pidPath, []byte(fmt.Sprintf("%d\n", pid)), 0o644)
 	logf("%s started pid=%d", c.name, pid)
+	cfg.state.update(c.name, func(s *superviseChildState) {
+		s.State, s.PID, s.StartedAt, s.NextStartAt, s.ProbeFailures = "running", pid, startedAt.UTC().Format(time.RFC3339), "", 0
+	})
+	cfg.state.event(c.name, "started", fmt.Sprintf("pid %d", pid))
 
 	waitCh := make(chan error, 1)
 	go func() { waitCh <- cmd.Wait() }()
 
-	// Liveness-only child: just wait for exit or shutdown.
-	if len(c.healthArgs) == 0 {
-		select {
-		case <-ctx.Done():
-			_ = stopChild(cmd, waitCh, cfg.stopGrace)
-			return childShutdown
-		case err := <-waitCh:
-			logf("%s exited pid=%d (%s)", c.name, pid, exitDesc(err))
-			return childExited
-		}
+	// Probes run only for health-probed children; restart requests are
+	// checked for every child.
+	var probeC <-chan time.Time
+	if len(c.healthArgs) > 0 {
+		ticker := time.NewTicker(cfg.probeInterval)
+		defer ticker.Stop()
+		probeC = ticker.C
 	}
-
-	// Health-probed child: poll the built-in --health-check while alive so a
-	// hung-but-alive process (deadlock, stuck handler) is restarted too.
-	ticker := time.NewTicker(cfg.probeInterval)
-	defer ticker.Stop()
+	reqTicker := time.NewTicker(cfg.requestPoll)
+	defer reqTicker.Stop()
+	requestPath := supervisorRestartRequestPath(cfg.installDir, c.name)
 	unhealthy := 0
 	for {
 		select {
@@ -312,21 +370,61 @@ func runChildOnce(ctx context.Context, cfg *superviseConfig, c *superviseChild, 
 			return childShutdown
 		case err := <-waitCh:
 			logf("%s exited pid=%d (%s)", c.name, pid, exitDesc(err))
+			recordChildExit(cfg, c, "crashed", exitDesc(err), true)
 			return childExited
-		case <-ticker.C:
-			if runHealthProbe(ctx, c.healthArgs, cfg.probeInterval) {
-				unhealthy = 0
+		case <-reqTicker.C:
+			if _, err := os.Stat(requestPath); err != nil {
 				continue
 			}
-			unhealthy++
+			_ = os.Remove(requestPath)
+			logf("%s restart requested; stopping pid=%d gracefully", c.name, pid)
+			_ = stopChild(cmd, waitCh, cfg.stopGrace)
+			recordChildExit(cfg, c, "requested", "restart requested from Status → Supervisor", false)
+			return childRequested
+		case <-probeC:
+			// Hung-but-alive process (deadlock, stuck handler): restart it too.
+			probeStart := time.Now()
+			ok := runHealthProbe(ctx, c.healthArgs, cfg.probeInterval)
+			took := time.Since(probeStart).Milliseconds()
+			if !ok && time.Since(startedAt) < cfg.startGrace {
+				// Still starting up; a failed probe does not count yet.
+				continue
+			}
+			if ok {
+				unhealthy = 0
+			} else {
+				unhealthy++
+			}
+			failures := unhealthy
+			cfg.state.update(c.name, func(s *superviseChildState) {
+				s.LastProbeAt, s.LastProbeMS, s.LastProbeOK, s.ProbeFailures = nowRFC3339(), took, &ok, failures
+			})
+			if ok {
+				continue
+			}
 			logf("%s health probe failed (%d/%d) pid=%d", c.name, unhealthy, cfg.unhealthyThreshold, pid)
 			if unhealthy >= cfg.unhealthyThreshold {
 				logf("%s unhealthy threshold reached; restarting pid=%d", c.name, pid)
 				_ = stopChild(cmd, waitCh, cfg.stopGrace)
+				recordChildExit(cfg, c, "unhealthy", fmt.Sprintf("%d health probes in a row failed", unhealthy), true)
 				return childUnhealthy
 			}
 		}
 	}
+}
+
+// recordChildExit publishes why a child stopped; withLog adds the tail of
+// its log, which usually holds the panic or fatal error.
+func recordChildExit(cfg *superviseConfig, c *superviseChild, reason, detail string, withLog bool) {
+	var tail []string
+	if withLog {
+		tail = tailLines(c.logPath, exitLogTailLines)
+	}
+	cfg.state.update(c.name, func(s *superviseChildState) {
+		s.State, s.PID = "stopped", 0
+		s.LastExitAt, s.LastExitReason, s.LastExitDetail, s.LastExitLogTail = nowRFC3339(), reason, detail, tail
+	})
+	cfg.state.event(c.name, reason, detail)
 }
 
 // stopChild sends SIGTERM, waits up to grace for a clean exit, then SIGKILLs.
@@ -362,6 +460,31 @@ func runHealthProbe(ctx context.Context, args []string, timeout time.Duration) b
 }
 
 // sleepCtx sleeps for d, returning false if the context is cancelled first.
+// waitOrRestartRequest waits like sleepCtx but ends early when a restart of
+// the child is requested, so an operator (or doctor) can end a cooldown
+// without restarting the whole service.
+func waitOrRestartRequest(ctx context.Context, cfg *superviseConfig, c *superviseChild, d time.Duration) bool {
+	requestPath := supervisorRestartRequestPath(cfg.installDir, c.name)
+	deadline := time.Now().Add(d)
+	for {
+		if _, err := os.Stat(requestPath); err == nil {
+			_ = os.Remove(requestPath)
+			cfg.state.event(c.name, "restart-requested", "starting now instead of waiting")
+			return ctx.Err() == nil
+		}
+		left := time.Until(deadline)
+		if left <= 0 {
+			return ctx.Err() == nil
+		}
+		if left > cfg.requestPoll {
+			left = cfg.requestPoll
+		}
+		if !sleepCtx(ctx, left) {
+			return false
+		}
+	}
+}
+
 func sleepCtx(ctx context.Context, d time.Duration) bool {
 	if d <= 0 {
 		return ctx.Err() == nil

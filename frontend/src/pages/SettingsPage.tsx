@@ -9,12 +9,12 @@ import {
   CalendarOutlined,
   ControlOutlined,
   FileTextOutlined,
+  CloudSyncOutlined,
   HeartOutlined,
   LinkOutlined,
   ReloadOutlined,
   SettingOutlined,
   TeamOutlined,
-  ToolOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -24,6 +24,7 @@ import { notify, notifyError } from "../notify";
 import { localDateKey as localDayKey, relativeTime } from "../utils/datetime";
 import { sectionByKey } from "../navigation";
 import { RunActivityChart } from "../features/status/RunActivity";
+import { StatusTabs } from "../features/status/StatusTabs";
 import { KeyValueList, middleEllipsis, Panel, StatTile, StatusBadge, type KeyValueItem } from "../ui";
 
 const FeaturesSection = lazy(() =>
@@ -53,14 +54,14 @@ const AuditLogSection = lazy(() =>
 const AccessSection = lazy(() =>
   import("../features/settings/AccessSection").then(({ AccessSection: Component }) => ({ default: Component })),
 );
-const MaintenanceSection = lazy(() =>
-  import("../features/settings/AccessSection").then(({ MaintenanceSection: Component }) => ({ default: Component })),
-);
 const NotificationsSection = lazy(() =>
   import("../features/settings/NotificationsSection").then(({ NotificationsSection: Component }) => ({ default: Component })),
 );
-const SystemHealthSection = lazy(() =>
-  import("../features/settings/SystemHealthSection").then(({ SystemHealthSection: Component }) => ({ default: Component })),
+const HealthRepairPage = lazy(() =>
+  import("../features/health/HealthRepairPage").then(({ HealthRepairPage: Component }) => ({ default: Component })),
+);
+const UpdatesBackupsPage = lazy(() =>
+  import("../features/updates/UpdatesBackupsPage").then(({ UpdatesBackupsPage: Component }) => ({ default: Component })),
 );
 
 function lazySection(children: ReactNode) {
@@ -275,7 +276,12 @@ export function SettingsPage({ isAdmin = true, section }: { isAdmin?: boolean; s
         {
           key: "connection",
           label: tabLabel(<ApiOutlined />, "Connection", apiOk ? "#22c55e" : "#ef4444"),
-          children: <ConnectionTab health={health} report={report} backendConfigPath={backendConfigPath} />,
+          children: (
+            <StatusTabs
+              isAdmin={isAdmin}
+              overview={<ConnectionTab health={health} report={report} backendConfigPath={backendConfigPath} />}
+            />
+          ),
         },
         {
           key: "config",
@@ -311,18 +317,18 @@ export function SettingsPage({ isAdmin = true, section }: { isAdmin?: boolean; s
         },
         {
           key: "health",
-          label: tabLabel(<HeartOutlined />, "System health"),
-          children: lazySection(<SystemHealthSection />),
+          label: tabLabel(<HeartOutlined />, "Health & repair"),
+          children: lazySection(<HealthRepairPage />),
+        },
+        {
+          key: "updates",
+          label: tabLabel(<CloudSyncOutlined />, "Updates & backups"),
+          children: lazySection(<UpdatesBackupsPage isKubernetes={isKubernetes} />),
         },
         {
           key: "features",
           label: tabLabel(<ControlOutlined />, "Features"),
           children: lazySection(<FeaturesSection />),
-        },
-        {
-          key: "maintenance",
-          label: tabLabel(<ToolOutlined />, "Maintenance"),
-          children: lazySection(<MaintenanceSection isKubernetes={isKubernetes} />),
         },
         {
           key: "developer",
@@ -331,10 +337,10 @@ export function SettingsPage({ isAdmin = true, section }: { isAdmin?: boolean; s
         },
   ];
   if (loginEnabled) {
-    // Insert Access just before Maintenance so the trailing admin tabs read
-    // Access → Maintenance → Developer.
-    const maintenanceIdx = items.findIndex((it) => it.key === "maintenance");
-    const insertAt = maintenanceIdx >= 0 ? maintenanceIdx : items.length - 1;
+    // Insert Access just before Developer so the admin tabs end
+    // Access → Developer.
+    const developerIdx = items.findIndex((it) => it.key === "developer");
+    const insertAt = developerIdx >= 0 ? developerIdx : items.length;
     items.splice(insertAt, 0, {
       key: "access",
       label: tabLabel(<TeamOutlined />, "Access"),

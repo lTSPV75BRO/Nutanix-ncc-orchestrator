@@ -23,6 +23,11 @@ import type {
   ScheduleState,
   ScheduleHealthData,
   DiagnosticsData,
+  AutoHealer,
+  PlatformData,
+  SupervisorData,
+  ConfigMigrationResult,
+  HealHistoryData,
   TriggerRunData,
   MeData,
   LoginData,
@@ -358,6 +363,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ check_ids: checkIds, verify_after_fix: verifyAfterFix }),
     }),
+  healHistory: (limit = 100) => callApi<HealHistoryData>(`/api/v1/health/history?limit=${limit}`),
+  autoHeal: () => callApi<{ healers: AutoHealer[] }>("/api/v1/health/autoheal"),
+  supervisor: () => callApi<SupervisorData>("/api/v1/health/supervisor"),
+  restartSupervisedChild: (child: "api" | "ui") =>
+    callApi<{ child: string }>("/api/v1/health/supervisor/restart", { method: "POST", body: JSON.stringify({ child }) }),
+  platform: () => callApi<PlatformData>("/api/v1/health/platform"),
+  previewConfigMigration: () =>
+    callApi<{ result: ConfigMigrationResult; error?: string }>("/api/v1/health/migrations/config"),
+  applyConfigMigration: () =>
+    callApi<{ result: ConfigMigrationResult }>("/api/v1/health/migrations/config", { method: "POST" }),
   createDiagnosticsSupportBundle: () =>
     callApi<{ path: string }>(
       "/api/v1/health/diagnostics/support-bundle",

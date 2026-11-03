@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  aliasRedirect,
   findingsRedirect,
   legacySettingsTarget,
   pageTitle,
@@ -29,8 +30,32 @@ describe("navigation", () => {
 
   it("builds section links with query parameters", () => {
     expect(sectionHref("runs")).toBe("/runs");
-    expect(sectionHref("maintenance", { focus: "backup" })).toBe("/system/maintenance?focus=backup");
+    expect(sectionHref("health", { tab: "history" })).toBe("/system/health?tab=history");
     expect(sectionHref("audit", { action: undefined })).toBe("/system/audit");
+  });
+
+  it("sends Maintenance links to Updates & backups", () => {
+    expect(visibleSections(admin).map((s) => s.key)).not.toContain("maintenance");
+    expect(sectionHref("maintenance")).toBe("/system/updates?tab=updates");
+    expect(sectionHref("maintenance", { focus: "backup" })).toBe("/system/updates?tab=backups");
+    expect(aliasRedirect("/system/maintenance", "?focus=backup")).toBe("/system/updates?tab=backups");
+    expect(aliasRedirect("/system/maintenance/", "")).toBe("/system/updates?tab=updates");
+    expect(legacySettingsTarget("?tab=maintenance&focus=backup", admin)).toBe("/system/updates?tab=backups");
+    expect(pageTitle("/system/updates")).toBe("Updates & backups");
+  });
+
+  it("redirects tabs that left Health & repair", () => {
+    expect(aliasRedirect("/system/health", "")).toBeNull();
+    expect(aliasRedirect("/system/health", "?tab=history")).toBeNull();
+    expect(aliasRedirect("/system/health", "?tab=backups")).toBe("/system/updates?tab=backups");
+    expect(aliasRedirect("/system/health", "?tab=migrations")).toBe("/system/updates?tab=migrations");
+    expect(aliasRedirect("/system/health/", "?tab=updates")).toBe("/system/updates?tab=updates");
+    expect(aliasRedirect("/system/health", "?focus=backup")).toBe("/system/updates?tab=backups");
+    expect(aliasRedirect("/system/health", "?tab=supervisor")).toBe("/system/status?tab=supervisor");
+    expect(aliasRedirect("/system/health", "?tab=platform")).toBe("/system/status?tab=platform");
+    expect(sectionHref("health", { tab: "backups" })).toBe("/system/updates?tab=backups");
+    expect(legacySettingsTarget("?tab=health&focus=backup", admin)).toBe("/system/updates?tab=backups");
+    expect(pageTitle("/system/health")).toBe("Health & repair");
   });
 
   it("redirects old /settings?tab= links and keeps other parameters", () => {
