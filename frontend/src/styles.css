@@ -1380,8 +1380,9 @@ html.alerts-expanded .alerts-table-host {
   min-height: 0;
 }
 
-html.alerts-expanded .alerts-expanded-count {
-  flex-shrink: 0;
+/* The pager stays pinned under the rows; the table body scrolls instead. */
+html.alerts-expanded .alerts-pagination {
+  flex: 0 0 auto;
   margin-top: 8px;
 }
 
@@ -4429,4 +4430,151 @@ html[data-theme="light"] .site-intro-skip {
   .notif-summary-actions {
     margin-left: 0;
   }
+}
+
+/* Alerts table: quiet uppercase headers, cells centred vertically, one
+   typographic scale, and states as dot + label instead of mixed tags/text. */
+.alerts-table .ant-table-thead > tr > th,
+.alerts-table .ant-table-thead > tr > td {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--ui-text-secondary) !important;
+}
+
+.alerts-table .ant-table-thead > tr > th::before {
+  display: none;
+}
+
+.alerts-table .ant-table-tbody .ant-table-cell,
+.alerts-table .ant-table-tbody-virtual .ant-table-cell {
+  vertical-align: middle;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.alerts-title-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.alerts-title {
+  font-weight: 600;
+  color: var(--ui-text, inherit);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.alerts-title-flags {
+  display: flex;
+  gap: 4px;
+}
+
+.alerts-title-flags .ant-tag {
+  margin: 0;
+  font-size: 11px;
+  line-height: 18px;
+  padding-inline: 6px;
+}
+
+.alerts-detail {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  color: var(--ui-text-secondary);
+}
+
+.alerts-detail-1 {
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+}
+
+.alerts-detail-2 {
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.alerts-table a.alerts-kb-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--ui-text-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--link-color);
+}
+
+.alerts-table a.alerts-kb-link:hover,
+.alerts-table a.alerts-kb-link:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.alerts-empty-cell,
+.alerts-time {
+  color: var(--ui-text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.alerts-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--ui-text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  --alerts-status-color: #94a3b8;
+}
+
+.alerts-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--alerts-status-color);
+}
+
+.alerts-status-open {
+  color: var(--ui-text-secondary);
+}
+
+.alerts-status-ack {
+  --alerts-status-color: #f59e0b;
+  color: #d97706;
+}
+
+.alerts-status-resolved {
+  --alerts-status-color: #22c55e;
+  color: #16a34a;
+}
+
+.alerts-status-returned {
+  --alerts-status-color: #ec4899;
+  color: #db2777;
+}
+
+html[data-theme="dark"] .alerts-status-ack,
+html[data-theme="it-pro"] .alerts-status-ack {
+  color: #fbbf24;
+}
+
+html[data-theme="dark"] .alerts-status-resolved,
+html[data-theme="it-pro"] .alerts-status-resolved {
+  color: #4ade80;
+}
+
+html[data-theme="dark"] .alerts-status-returned,
+html[data-theme="it-pro"] .alerts-status-returned {
+  color: #f472b6;
 }

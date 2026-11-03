@@ -80,6 +80,13 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   reopened from the user menu → *Setup checklist*. `PUT /api/v1/onboarding`
   takes `skip_step`, `unskip_step` and `finished`, and every change is
   audited.
+- **Tidier Findings alert table.** Column headers are small uppercase
+  labels; every cell is centred vertically; handling (Open, Acknowledged,
+  Resolved, Returned) is a coloured dot and label in every row instead of tags
+  on some rows and plain text on others; KB links are plain links; the Detail
+  preview drops the FAIL:/WARN: prefix the Severity column already shows, and
+  long alert names and details show in full on hover. Column widths were
+  tightened so the NCC table fits a 1440 px window without scrolling sideways.
 - **Redesigned Settings → Notifications.** A summary says what is sent and
   where; each channel (email, Slack, webhook) is a card with its own switch,
   inline field checks, the latest delivery result (a failure after an older
@@ -319,6 +326,21 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   schedule now reports as configured, health shows its last scheduled run
   and outcome, invalid input answers 400 rather than 502, and a missing
   CronJob or RBAC rule gives an error that names the fix.
+- **Full-page alert table had no pager.** It rendered every matching alert
+  and replaced the pager with a count. It now keeps the pager (and page size)
+  pinned under the rows.
+- **macOS-built release archives carried Mac metadata.** `binaryGO.txt`
+  passed `--no-mac-metadata`, which stops `._*` files but not extended
+  attributes (`com.apple.provenance`, `com.apple.quarantine`). bsdtar stored
+  those as `LIBARCHIVE.xattr.*` headers, so GNU tar warned on every file. The
+  script now packs with `--no-xattrs --no-acls --no-fflags`, removes
+  `.DS_Store`, `._*` and `__MACOSX` from the staged tree, clears extended
+  attributes before packing, and builds zips with `zip -X` (no extra file
+  attributes). The fallback without `--no-mac-metadata` that dropped all of
+  this on older tar versions is gone: options are picked for bsdtar or GNU tar.
+- **Release script on Windows without `zip`:** the Python fallback picked the
+  Microsoft Store `python3` stub, so building the Windows stack zip failed. It
+  now uses the first Python that actually runs.
 - **Viewers saw Acknowledge, Resolve and Reopen** on Findings alerts (and
   Resolve under Insights → Alert aging) although the API refuses them with
   403. They now see the handling history with a note that an operator can

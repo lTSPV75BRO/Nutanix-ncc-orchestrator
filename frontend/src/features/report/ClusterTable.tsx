@@ -286,6 +286,7 @@ function previewDetail(detail: string): string {
   return detail
     .replace(/\s+/g, " ")
     .replace(/^node\s+\S+:\s*/i, "")
+    .replace(/^(FAIL|WARN|WARNING|ERR|ERROR|INFO)\s*:\s*/i, "")
     .trim()
     .slice(0, 220);
 }
@@ -472,6 +473,16 @@ function ClusterCell({ row, url, subtitle }: { row: RowRecord; url?: string; sub
   );
 }
 
+/** A dot and a label, so open and handled rows read as one column of states. */
+function HandlingStatus({ tone, label }: { tone: "open" | "ack" | "resolved" | "returned"; label: string }) {
+  return (
+    <span className={`alerts-status alerts-status-${tone}`}>
+      <span className="alerts-status-dot" aria-hidden />
+      {label}
+    </span>
+  );
+}
+
 /** AOS and NCC versions stacked as labelled lines, so neither is truncated into the other. */
 function VersionsCell({ row }: { row: RowRecord }) {
   if (!row.clusterVersion && !row.nccVersion) {
@@ -492,7 +503,7 @@ function VersionsCell({ row }: { row: RowRecord }) {
 }
 
 const SELECTION_COLUMN_WIDTH = 42;
-const DETAIL_MIN_WIDTH = 260;
+const DETAIL_MIN_WIDTH = 220;
 const PC_WIDE_ONLY_COLUMNS = new Set(["entityType", "impactType"]);
 
 const ALERTS_TABLE_MIN_Y = 240;
@@ -1039,27 +1050,27 @@ export function ClusterTable({
     title: "Alert",
     dataIndex: "alert",
     key: "alert",
-    width: 240,
+    width: 210,
     sorter: (a: RowRecord, b: RowRecord) => a.alert.localeCompare(b.alert),
     render: (value: string, row: RowRecord) => (
-      <Space orientation="vertical" size={2} style={{ width: "100%" }}>
-        <Typography.Text strong style={{ wordBreak: "break-word" }}>
+      <div className="alerts-title-cell">
+        <span className="alerts-title" title={value}>
           {value}
-        </Typography.Text>
+        </span>
         {row.isChanged || row.isFlaky ? (
-          <Space size={4} wrap>
-            {row.isChanged ? <Tag color="gold" style={{ margin: 0 }}>changed</Tag> : null}
-            {row.isFlaky ? <Tag color="purple" style={{ margin: 0 }}>flaky</Tag> : null}
-          </Space>
+          <span className="alerts-title-flags">
+            {row.isChanged ? <Tag color="gold" bordered={false}>changed</Tag> : null}
+            {row.isFlaky ? <Tag color="purple" bordered={false}>flaky</Tag> : null}
+          </span>
         ) : null}
-      </Space>
+      </div>
     ),
   };
   const severityColumn = {
     title: "Severity",
     dataIndex: "severity",
     key: "severity",
-    width: 96,
+    width: 92,
     sorter: (a: RowRecord, b: RowRecord) => severityRank[a.severity] - severityRank[b.severity],
     defaultSortOrder: "descend" as const,
     render: (value: Severity, row: RowRecord) => {
@@ -1094,7 +1105,7 @@ export function ClusterTable({
       title: "Cluster",
       dataIndex: "clusterName",
       key: "clusterName",
-      width: 180,
+      width: 170,
       sorter: (a, b) => a.clusterName.localeCompare(b.clusterName),
       render: (_, row) => (
         <ClusterCell row={row} url={clusterPrismURL(row.cluster, clusterNameMap)} subtitle={row.cluster} />
@@ -1103,7 +1114,7 @@ export function ClusterTable({
     {
       title: "Versions",
       key: "versions",
-      width: 130,
+      width: 116,
       sorter: (a, b) =>
         a.clusterVersion.localeCompare(b.clusterVersion, undefined, { numeric: true }) ||
         a.nccVersion.localeCompare(b.nccVersion, undefined, { numeric: true }),
@@ -1113,43 +1124,54 @@ export function ClusterTable({
     {
       title: "KB",
       key: "kb",
-      width: 90,
+      width: 92,
       render: (_, row) => kbOf(row) ? (
-        <a href={kbOf(row)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
-          <Tag color="processing" icon={<LinkOutlined />} style={{ margin: 0 }}>{kbLabel(kbOf(row))}</Tag>
+        <a
+          className="alerts-kb-link"
+          href={kbOf(row)}
+          target="_blank"
+          rel="noreferrer"
+          title="Open the Nutanix KB article"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <LinkOutlined aria-hidden />
+          {kbLabel(kbOf(row))}
         </a>
-      ) : <Typography.Text type="secondary">—</Typography.Text>,
+      ) : <span className="alerts-empty-cell">—</span>,
     },
     {
       title: "Detail",
       dataIndex: "detail",
       key: "detail",
-      render: (value: string) => (
-        <Typography.Paragraph type="secondary" ellipsis={{ rows: density === "compact" ? 1 : 2, tooltip: false }} style={{ margin: 0 }}>
-          {previewDetail(value)}
-        </Typography.Paragraph>
-      ),
+      render: (value: string) => {
+        const text = previewDetail(value);
+        return (
+          <span className={`alerts-detail alerts-detail-${density === "compact" ? "1" : "2"}`} title={text === "—" ? undefined : text}>
+            {text}
+          </span>
+        );
+      },
     },
     {
       title: "Handling",
       key: "handling",
-      width: 110,
+      width: 120,
       render: (_, row) => {
         const mark = markFor(row);
         if (mark?.status === "acknowledged") {
-          return <Tag color="gold">Acknowledged</Tag>;
+          return <HandlingStatus tone="ack" label="Acknowledged" />;
         }
         if (mark?.status === "resolved") {
-          return <Tag color="green">Resolved</Tag>;
+          return <HandlingStatus tone="resolved" label="Resolved" />;
         }
         if (mark?.status === "reopened") {
           return (
             <Tooltip title={mark.reason || "This alert was resolved, then found again on a later run."}>
-              <Tag color="magenta">Returned</Tag>
+              <HandlingStatus tone="returned" label="Returned" />
             </Tooltip>
           );
         }
-        return <Typography.Text type="secondary">Open</Typography.Text>;
+        return <HandlingStatus tone="open" label="Open" />;
       },
     },
     actionColumn,
@@ -1197,7 +1219,7 @@ export function ClusterTable({
       key: "lastOccurred",
       width: 170,
       sorter: (a, b) => a.lastOccurredTime - b.lastOccurredTime,
-      render: (value: string) => (value === "—" ? value : formatDateTime(value)),
+      render: (value: string) => <span className="alerts-time">{value === "—" ? value : formatDateTime(value)}</span>,
     },
     {
       title: "Status",
@@ -1210,7 +1232,7 @@ export function ClusterTable({
       dataIndex: "resolved",
       key: "resolved",
       width: 96,
-      render: (value: string) => <Tag color={value === "Yes" ? "green" : "blue"}>{value}</Tag>,
+      render: (value: string) => <HandlingStatus tone={value === "Yes" ? "resolved" : "open"} label={value} />,
     },
     {
       title: "Impact type",
@@ -1390,7 +1412,7 @@ export function ClusterTable({
               tableLayout="fixed"
               rowKey="key"
               columns={columns}
-              dataSource={expanded ? shownRows : pagedRows}
+              dataSource={pagedRows}
               rowClassName={(_, index) => (index % 2 === 0 ? "alerts-row-even" : "alerts-row-odd")}
               onRow={(row) => ({
                 onClick: (event) => {
@@ -1415,25 +1437,19 @@ export function ClusterTable({
               scroll={{ x: scrollX, y: tableY }}
             />
           </div>
-          {expanded ? (
-            <Typography.Text type="secondary" className="alerts-expanded-count">
-              Showing all {shownRows.length.toLocaleString()} {shownRows.length === 1 ? "alert" : "alerts"}
-            </Typography.Text>
-          ) : (
-            <Pagination
-              className="alerts-pagination"
-              current={currentPage}
-              pageSize={pageSize}
-              total={shownRows.length}
-              showSizeChanger
-              pageSizeOptions={[50, 100, 200, 500]}
-              showTotal={(total, range) => `${range[0]}–${range[1]} of ${total}`}
-              onChange={(nextPage, nextPageSize) => {
-                setPage(nextPage);
-                if (nextPageSize && nextPageSize !== rowsPerPage) setRowsPerPage(nextPageSize);
-              }}
-            />
-          )}
+          <Pagination
+            className="alerts-pagination"
+            current={currentPage}
+            pageSize={pageSize}
+            total={shownRows.length}
+            showSizeChanger
+            pageSizeOptions={[50, 100, 200, 500]}
+            showTotal={(total, range) => `${range[0].toLocaleString()}–${range[1].toLocaleString()} of ${total.toLocaleString()}`}
+            onChange={(nextPage, nextPageSize) => {
+              setPage(nextPage);
+              if (nextPageSize && nextPageSize !== rowsPerPage) setRowsPerPage(nextPageSize);
+            }}
+          />
         </>
       )}
 

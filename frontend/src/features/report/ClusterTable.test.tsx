@@ -188,7 +188,7 @@ describe("ClusterTable alert sources", () => {
     expect(document.documentElement.classList.contains("alerts-expanded")).toBe(false);
   });
 
-  it("shows every matching alert in full page instead of a paged slice", () => {
+  it("keeps the pager in full page", () => {
     render(
       <ClusterTable
         {...baseProps}
@@ -203,8 +203,8 @@ describe("ClusterTable alert sources", () => {
 
     expect(screen.queryByText("NCC finding 100")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Expand alerts" }));
-    expect(screen.getByText(/Showing all 120 alerts/)).toBeInTheDocument();
-    expect(document.querySelector(".alerts-pagination")).toBeNull();
+    expect(document.querySelector(".alerts-pagination")).not.toBeNull();
+    expect(screen.getByText("1–100 of 120")).toBeInTheDocument();
   });
 
   it("filters NCC rows by handling and opens a tidy details panel", () => {

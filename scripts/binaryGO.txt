@@ -153,15 +153,20 @@ csv_count() {
 }
 
 run_python() {
-  if command -v python3 >/dev/null 2>&1; then
-    python3 "$@"
-  elif command -v python >/dev/null 2>&1; then
-    python "$@"
-  elif command -v py >/dev/null 2>&1; then
+  local py
+  # On Windows, python3 on PATH can be the Microsoft Store stub, which only
+  # prints an install hint. Use the first interpreter that actually runs.
+  for py in python3 python; do
+    if command -v "$py" >/dev/null 2>&1 && "$py" -c 'import sys' </dev/null >/dev/null 2>&1; then
+      "$py" "$@"
+      return
+    fi
+  done
+  if command -v py >/dev/null 2>&1 && py -3 -c 'import sys' </dev/null >/dev/null 2>&1; then
     py -3 "$@"
-  else
-    return 127
+    return
   fi
+  return 127
 }
 
 run_npm() {
@@ -256,11 +261,39 @@ link_or_copy() {
   cp -f "$src" "$dst"
 }
 
+# macOS adds Finder files (.DS_Store), AppleDouble sidecars (._*), and
+# extended attributes (com.apple.provenance, com.apple.quarantine) to files it
+# copies. Remove them from a staged tree so no archive carries them.
+strip_mac_metadata() {
+  local root="$1"
+  find "$root" \( -name .DS_Store -o -name '._*' -o -name __MACOSX \) -exec rm -rf {} + 2>/dev/null || true
+  if [ "$HOST_KERNEL" = "darwin" ] && command -v xattr >/dev/null 2>&1; then
+    xattr -rc "$root" 2>/dev/null || true
+  fi
+}
+
+# Without --no-xattrs, bsdtar on macOS stores extended attributes as
+# LIBARCHIVE.xattr.* pax headers; GNU tar then warns about unknown keywords on
+# every file. COPYFILE_DISABLE stops the ._* sidecars. GNU tar has no
+# --no-mac-metadata, so it gets only the options it knows.
+pack_tar() {
+  local root="$1" dest="$2"
+  shift 2
+  local opts=(--exclude=.DS_Store '--exclude=._*' --exclude=__MACOSX)
+  if tar --version 2>/dev/null | grep -qi bsdtar; then
+    opts+=(--no-mac-metadata --no-xattrs --no-acls --no-fflags)
+  elif tar --version 2>/dev/null | grep -qi 'gnu tar'; then
+    opts+=(--no-xattrs --no-acls --no-selinux)
+  fi
+  (cd "$root" && COPYFILE_DISABLE=1 tar "${opts[@]}" -czf "$dest" "$@")
+}
+
 pack_zip() {
   local root="$1" dest="$2"
   shift 2
   if command -v zip >/dev/null 2>&1; then
-    (cd "$root" && zip -qr "$dest" "$@")
+    # -X leaves out extra file attributes (uid/gid, Mac resource info).
+    (cd "$root" && zip -qrX "$dest" "$@" -x '*.DS_Store' '*/._*' '._*' '__MACOSX/*')
     return
   fi
   if run_python -c 'import zipfile' >/dev/null 2>&1; then
@@ -268,13 +301,18 @@ pack_zip() {
       cd "$root" && run_python - "$dest" "$@" <<'PY'
 import os, sys, zipfile
 dest, items = sys.argv[1], sys.argv[2:]
+def skip(name):
+    return name == ".DS_Store" or name.startswith("._")
 with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_DEFLATED) as zf:
     for item in items:
         if os.path.isfile(item):
             zf.write(item, item.replace("\\", "/"))
             continue
-        for dirpath, _, files in os.walk(item):
+        for dirpath, dirs, files in os.walk(item):
+            dirs[:] = [d for d in dirs if d != "__MACOSX"]
             for name in files:
+                if skip(name):
+                    continue
                 full = os.path.join(dirpath, name)
                 zf.write(full, full.replace("\\", "/"))
 PY
@@ -780,7 +818,7 @@ sign_binaries() {
     done
     if [ -n "${NCC_MACOS_NOTARY_PROFILE:-}" ] && command -v xcrun >/dev/null 2>&1; then
       for f in dist/ncc-orchestrator-darwin-* dist/ncc-api-server-darwin-* dist/ncc-ui-server-darwin-*; do
-        ditto -c -k --keepParent "$f" "$f.zip"
+        ditto -c -k --norsrc --noextattr --noqtn --keepParent "$f" "$f.zip"
         xcrun notarytool submit "$f.zip" --keychain-profile "$NCC_MACOS_NOTARY_PROFILE" --wait
         rm -f "$f.zip"
       done
@@ -863,6 +901,7 @@ if [ "$NO_STACKS" != 1 ]; then
       if [ -f dist/example_config.yaml ]; then
         cp dist/example_config.yaml "$root/"
       fi
+      strip_mac_metadata "$root"
       if [ "$goos" = "windows" ]; then
         if [ -f "$root/example_config.yaml" ]; then
           pack_zip "$root" "../../ncc-v2-stack-${goos}-${goarch}.zip" bin frontend-dist example_config.yaml
@@ -874,9 +913,8 @@ if [ "$NO_STACKS" != 1 ]; then
         if [ -f "$root/example_config.yaml" ]; then
           extra="example_config.yaml"
         fi
-        if ! (cd "$root" && COPYFILE_DISABLE=1 tar --no-mac-metadata -czf "../../ncc-v2-stack-${goos}-${goarch}.tar.gz" bin frontend-dist $extra); then
-          (cd "$root" && COPYFILE_DISABLE=1 tar -czf "../../ncc-v2-stack-${goos}-${goarch}.tar.gz" bin frontend-dist $extra)
-        fi
+        # shellcheck disable=SC2086
+        pack_tar "$root" "../../ncc-v2-stack-${goos}-${goarch}.tar.gz" bin frontend-dist $extra
       fi
       echo "stack ncc-v2-stack-${goos}-${goarch}"
     done
