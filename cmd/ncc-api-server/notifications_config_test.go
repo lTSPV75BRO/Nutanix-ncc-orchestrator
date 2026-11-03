@@ -63,7 +63,12 @@ func TestLoadNotificationsReadsConfigYAMLAndLegacyMetadata(t *testing.T) {
 	if len(st.Maintenance) != 1 {
 		t.Fatalf("maintenance windows not loaded: %+v", st.Maintenance)
 	}
-	if !st.Digest.Enabled || st.Digest.LastSentAt == "" {
+	// notify-digest is the runner's one-message-per-run switch; the scheduled
+	// digest is API-local and stays off unless the sidecar turns it on.
+	if !st.RunReports.PerRun {
+		t.Fatalf("notify-digest should map to run_reports.per_run: %+v", st.RunReports)
+	}
+	if st.Digest.Enabled || st.Digest.LastSentAt == "" {
 		t.Fatalf("digest settings not merged correctly: %+v", st.Digest)
 	}
 	if st.Enabled {
@@ -100,6 +105,7 @@ func TestSaveNotificationsPersistsRuntimeFieldsToConfigYAML(t *testing.T) {
 	st.Quiet = quietHoursConfig{Enabled: true, Start: "21:00", End: "06:00", Timezone: "UTC"}
 	st.Maintenance = []maintenanceWindow{{Start: "2026-06-01T10:00:00Z", End: "2026-06-01T12:00:00Z"}}
 	st.Digest = digestConfig{Enabled: true, Every: "24h", LastSentAt: "2026-06-01T00:00:00Z"}
+	st.RunReports = runReportsConfig{PerRun: true, OnlyOnRegression: true}
 	st.LastDelivery = map[string]notificationDeliveryStatus{"email": {Success: true}}
 
 	if err := s.saveNotifications(st); err != nil {
@@ -126,6 +132,7 @@ func TestSaveNotificationsPersistsRuntimeFieldsToConfigYAML(t *testing.T) {
 		"quiet-hours: 21:00-06:00",
 		"maintenance-windows: 2026-06-01T10:00:00Z/2026-06-01T12:00:00Z",
 		"notify-digest: true",
+		"notify-on-regression: true",
 	} {
 		if !strings.Contains(cfgText, want) {
 			t.Fatalf("config missing %q\n%s", want, cfgText)
@@ -187,11 +194,17 @@ func TestLoadNotificationsMigratesLegacyRuntimeSettingsIntoConfigYAML(t *testing
 		"slack-enabled: true",
 		"slack-webhook-url: https://hooks.slack.com/services/L/E/G",
 		"slack-channel: '#legacy'",
-		"notify-digest: true",
 		"quiet-hours: 23:00-06:00",
 	} {
 		if !strings.Contains(cfgText, want) {
 			t.Fatalf("config missing %q after migration:\n%s", want, cfgText)
 		}
+	}
+	// The scheduled digest is not the runner's notify-digest.
+	if strings.Contains(cfgText, "notify-digest: true") {
+		t.Fatalf("scheduled digest must not turn on the runner's notify-digest:\n%s", cfgText)
+	}
+	if !st.Digest.Enabled || st.Digest.Every != "24h" {
+		t.Fatalf("legacy digest should load with a default interval: %+v", st.Digest)
 	}
 }

@@ -3617,6 +3617,22 @@ func runHistoryTimestamp(now time.Time) string {
 	return now.UTC().Format("20060102T150405Z")
 }
 
+// historyDirTime parses a run-history directory name. The engine names them
+// by timestamp; the API names archived runs by run ID, which is the timestamp
+// plus a sequence suffix (20260102T150405Z-001). Both must count for
+// retention, or API runs are never pruned.
+func historyDirTime(name string) (time.Time, bool) {
+	const layout = "20060102T150405Z"
+	if len(name) > len(layout) && name[len(layout)] == '-' {
+		if _, err := strconv.Atoi(name[len(layout)+1:]); err != nil {
+			return time.Time{}, false
+		}
+		name = name[:len(layout)]
+	}
+	ts, err := time.Parse(layout, name)
+	return ts, err == nil
+}
+
 func listHistoryRunDirs(historyDir string) ([]string, error) {
 	ents, err := os.ReadDir(historyDir)
 	if err != nil {
@@ -3634,13 +3650,18 @@ func listHistoryRunDirs(historyDir string) ([]string, error) {
 		if !e.IsDir() {
 			continue
 		}
-		ts, err := time.Parse("20060102T150405Z", e.Name())
-		if err != nil {
+		ts, ok := historyDirTime(e.Name())
+		if !ok {
 			continue
 		}
 		items = append(items, item{name: e.Name(), t: ts})
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].t.After(items[j].t) })
+	sort.Slice(items, func(i, j int) bool {
+		if !items[i].t.Equal(items[j].t) {
+			return items[i].t.After(items[j].t)
+		}
+		return items[i].name > items[j].name // same second: higher sequence is newer
+	})
 	out := make([]string, 0, len(items))
 	for _, it := range items {
 		out = append(out, it.name)
@@ -3659,8 +3680,7 @@ func applyRunHistoryRetention(historyDir string, retainLast, retainDays int, now
 			remove = true
 		}
 		if retainDays > 0 {
-			ts, err := time.Parse("20060102T150405Z", d)
-			if err == nil {
+			if ts, ok := historyDirTime(d); ok {
 				ageDays := int(now.UTC().Sub(ts).Hours() / 24)
 				if ageDays >= retainDays {
 					remove = true
@@ -13988,6 +14008,11 @@ func runCreateSchedule(cmd *cobra.Command, args []string) error {
 		case "create":
 		default:
 			return exitConfig(fmt.Errorf("action must be create, list, remove, or run-now (got %q)", action))
+		}
+		// schtasks repeats on a fixed interval; a cron expression used to be
+		// ignored silently, installing the --every interval instead.
+		if c, _ := cmd.Flags().GetString("cron"); strings.TrimSpace(c) != "" {
+			return exitConfig(errors.New("cron expressions are not supported by Windows Scheduled Tasks, which run on an interval; clear --cron and set --every"))
 		}
 		if printOnly {
 			if every <= 0 {

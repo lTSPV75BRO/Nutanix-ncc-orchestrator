@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OnboardingStatus } from "../../api/types";
 import { AuthContext, type AuthValue } from "../../auth/AuthContext";
-import { SetupChecklistCard } from "./SetupChecklist";
+import { SetupBanner, SetupChecklistCard } from "./SetupChecklist";
 
 vi.mock("../../notify", () => ({
   notify: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
@@ -86,5 +86,76 @@ describe("SetupChecklistCard", () => {
     const second = renderCard({ ...baseStatus, dismissed: true });
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
     expect(second.container.querySelector(".setup-card")).toBeNull();
+  });
+});
+
+/** Fetch mock that applies onboarding PUTs and records them. */
+function mockOnboardingApi(initial: OnboardingStatus) {
+  let status = initial;
+  const puts: Record<string, unknown>[] = [];
+  globalThis.fetch = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "PUT") {
+      const body = JSON.parse(String(init.body));
+      puts.push(body);
+      const steps = status.steps.map((s) =>
+        s.id === body.skip_step ? { ...s, skipped: true } : s.id === body.unskip_step ? { ...s, skipped: false } : s,
+      );
+      const done = steps.filter((s) => !s.optional && (s.done || s.skipped)).length;
+      const finished = body.finished ?? status.finished;
+      status = { ...status, steps, required_done: done, finished, completed: done === status.required_total || Boolean(finished) };
+    }
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => ({ success: true, data: status }),
+    };
+  }) as unknown as typeof fetch;
+  return puts;
+}
+
+function renderWith(node: React.ReactNode, isAdmin = true) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <AuthContext.Provider value={auth(isAdmin)}>
+        <MemoryRouter initialEntries={["/"]}>{node}</MemoryRouter>
+      </AuthContext.Provider>
+    </QueryClientProvider>,
+  );
+}
+
+describe("skipping and finishing setup", () => {
+  it("lets an admin skip a step and undo it", async () => {
+    const puts = mockOnboardingApi(baseStatus);
+    renderWith(<SetupChecklistCard />);
+    fireEvent.click(await screen.findByRole("button", { name: "Skip: Protect your setup with backups" }));
+    await waitFor(() => expect(puts).toContainEqual({ skip_step: "backups" }));
+    expect(await screen.findByText("2 of 3 required steps done")).toBeInTheDocument();
+    expect(screen.getByText("Skipped")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Undo skip/ }));
+    await waitFor(() => expect(puts).toContainEqual({ unskip_step: "backups" }));
+    expect(await screen.findByText("1 of 3 required steps done")).toBeInTheDocument();
+  });
+
+  it("does not offer skip or finish to operators", async () => {
+    mockOnboardingApi(baseStatus);
+    renderWith(<SetupBanner />, false);
+    await screen.findByText(/Next: Run NCC for the first time/);
+    expect(screen.queryByRole("button", { name: "Skip step" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Finish setup/ })).toBeNull();
+  });
+
+  it("finishes setup from the Overview banner after confirming", async () => {
+    const puts = mockOnboardingApi(baseStatus);
+    const { container } = renderWith(<SetupBanner />);
+    fireEvent.click(await screen.findByRole("button", { name: "Skip step" }));
+    await waitFor(() => expect(puts).toContainEqual({ skip_step: "first_run" }));
+    await screen.findByText(/Next: Protect your setup with backups/);
+    fireEvent.click(screen.getByRole("button", { name: /Finish setup/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Finish setup", hidden: false }));
+    await waitFor(() => expect(puts).toContainEqual({ finished: true }));
+    await waitFor(() => expect(container.querySelector(".setup-banner")).toBeNull());
   });
 });

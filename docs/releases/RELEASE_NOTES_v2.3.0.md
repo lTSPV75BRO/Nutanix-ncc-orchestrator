@@ -34,7 +34,10 @@ the install's real state and ticks itself off:
 
 It shows as a Dashboard card and a **Setup n/m** header button with a drawer.
 Each step links to its Settings tab; operators see "Ask an administrator" for
-admin-only steps. An admin's **Hide** applies to the whole install.
+admin-only steps. An admin's **Hide** applies to the whole install. Admins can
+**Skip** a step that does not apply (undoable) or **Finish setup** to retire
+the checklist with steps left; reopen it from the user menu → *Setup
+checklist*.
 
 ### Redesigned sign-in and first-password screens
 

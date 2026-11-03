@@ -27,6 +27,8 @@ type SMTPMessage struct {
 	Body []byte // full RFC 5322 message (headers + body)
 	// TLS overrides the STARTTLS config (default: verify against the host).
 	TLS *tls.Config
+	// ImplicitTLS dials straight into TLS (SMTPS). Port 465 always does.
+	ImplicitTLS bool
 	// RequireTLS fails instead of sending in plaintext when the server does
 	// not offer STARTTLS.
 	RequireTLS bool
@@ -49,11 +51,23 @@ func SendMail(msg SMTPMessage) error {
 			return err
 		}
 	}
-	host, _, err := net.SplitHostPort(msg.Addr)
+	host, port, err := net.SplitHostPort(msg.Addr)
 	if err != nil {
 		return fmt.Errorf("smtp: invalid address %q: %w", msg.Addr, err)
 	}
-	conn, err := net.DialTimeout("tcp", msg.Addr, timeout)
+	tlsCfg := msg.TLS
+	if tlsCfg == nil {
+		tlsCfg = &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
+	}
+	// Port 465 (SMTPS) speaks TLS from the first byte; a plain dial there
+	// waited for a greeting that never comes until the deadline expired.
+	implicitTLS := msg.ImplicitTLS || port == "465"
+	var conn net.Conn
+	if implicitTLS {
+		conn, err = tls.DialWithDialer(&net.Dialer{Timeout: timeout}, "tcp", msg.Addr, tlsCfg)
+	} else {
+		conn, err = net.DialTimeout("tcp", msg.Addr, timeout)
+	}
 	if err != nil {
 		return err
 	}
@@ -67,12 +81,10 @@ func SendMail(msg SMTPMessage) error {
 		return err
 	}
 	defer c.Close()
-	if ok, _ := c.Extension("STARTTLS"); ok {
-		cfg := msg.TLS
-		if cfg == nil {
-			cfg = &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
-		}
-		if err := c.StartTLS(cfg); err != nil {
+	if implicitTLS {
+		// Already encrypted.
+	} else if ok, _ := c.Extension("STARTTLS"); ok {
+		if err := c.StartTLS(tlsCfg); err != nil {
 			return err
 		}
 	} else if msg.RequireTLS {

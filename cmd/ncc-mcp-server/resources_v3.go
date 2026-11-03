@@ -65,8 +65,14 @@ func handleArchivedRunResource(ctx context.Context, req *mcp.ReadResourceRequest
 	if u.Host != "runs" || len(parts) < 2 || parts[0] == "" {
 		return nil, mcp.ResourceNotFoundError(req.Params.URI)
 	}
+	// The run ID must name a directory inside runs/: ".." (or, on Windows, a
+	// backslash path) would otherwise move runDir, and the report path check
+	// below only confines files to runDir.
 	runID := parts[0]
-	runDir := filepath.Join(defaultOutputDir, "runs", runID)
+	runDir, err := safeJoin(filepath.Join(defaultOutputDir, "runs"), runID)
+	if err != nil || runID == "." || strings.ContainsAny(runID, `\/`) {
+		return nil, mcp.ResourceNotFoundError(req.Params.URI)
+	}
 	var file string
 	switch {
 	case len(parts) == 2 && parts[1] == "summary":

@@ -21,6 +21,10 @@ import (
 // now derived on the server from the install's actual state, so it is the same
 // for everyone, completes itself as the work gets done, and an admin's "hide"
 // applies to the whole install.
+//
+// An admin can also skip a step that does not apply to this install (it then
+// counts toward progress) or finish setup outright; both are install-wide and
+// reversible.
 
 // onboardingStep is one checklist item. Action names the Settings tab where
 // the step is done; AdminOnly marks steps operators cannot complete themselves.
@@ -29,6 +33,7 @@ type onboardingStep struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	Done        bool   `json:"done"`
+	Skipped     bool   `json:"skipped,omitempty"`
 	Optional    bool   `json:"optional,omitempty"`
 	Detail      string `json:"detail,omitempty"`
 	Tab         string `json:"tab"`
@@ -41,16 +46,24 @@ type onboardingStatus struct {
 	RequiredDone  int              `json:"required_done"`
 	RequiredTotal int              `json:"required_total"`
 	Completed     bool             `json:"completed"`
-	Dismissed     bool             `json:"dismissed"`
-	DismissedAt   string           `json:"dismissed_at,omitempty"`
-	DismissedBy   string           `json:"dismissed_by,omitempty"`
-}
-
-// onboardingState is the persisted part: only the admin's dismissal.
-type onboardingState struct {
+	// Finished is true when an admin marked setup complete with steps left.
+	Finished    bool   `json:"finished"`
+	FinishedAt  string `json:"finished_at,omitempty"`
+	FinishedBy  string `json:"finished_by,omitempty"`
 	Dismissed   bool   `json:"dismissed"`
 	DismissedAt string `json:"dismissed_at,omitempty"`
 	DismissedBy string `json:"dismissed_by,omitempty"`
+}
+
+// onboardingState is the persisted part: the admin's choices.
+type onboardingState struct {
+	Dismissed   bool     `json:"dismissed"`
+	DismissedAt string   `json:"dismissed_at,omitempty"`
+	DismissedBy string   `json:"dismissed_by,omitempty"`
+	Skipped     []string `json:"skipped,omitempty"`
+	Finished    bool     `json:"finished,omitempty"`
+	FinishedAt  string   `json:"finished_at,omitempty"`
+	FinishedBy  string   `json:"finished_by,omitempty"`
 }
 
 func (s *apiServer) onboardingStatePath() string {
@@ -170,9 +183,10 @@ func (s *apiServer) onboardingScheduleStep() onboardingStep {
 		Tab:         "schedule",
 		ActionLabel: "Open schedule",
 	}
+	// On Kubernetes this is the live CronJob: one deployed with a schedule and
+	// not paused already runs NCC, whether or not it was saved from the UI.
 	st, err := s.loadSchedule()
-	userConfigured := strings.TrimSpace(st.UpdatedAt) != ""
-	if err == nil && st.Action == "create" && (strings.TrimSpace(st.Cron) != "" || strings.TrimSpace(st.Every) != "") && (!s.capabilities.Kubernetes || userConfigured) {
+	if err == nil && st.Action == "create" && (strings.TrimSpace(st.Cron) != "" || strings.TrimSpace(st.Every) != "") {
 		step.Done = true
 		when := strings.TrimSpace(st.Every)
 		if when != "" {
@@ -287,25 +301,86 @@ func (s *apiServer) onboardingStatus() onboardingStatus {
 		s.onboardingNotificationStep(),
 		s.onboardingAccessStep(),
 	}
+	persisted := s.loadOnboardingState()
+	skipped := map[string]bool{}
+	for _, id := range persisted.Skipped {
+		skipped[id] = true
+	}
+	for i := range steps {
+		// A step that got done anyway is shown as done, not skipped.
+		steps[i].Skipped = skipped[steps[i].ID] && !steps[i].Done
+	}
 	out := onboardingStatus{Steps: steps}
 	for _, st := range steps {
 		if st.Optional {
 			continue
 		}
 		out.RequiredTotal++
-		if st.Done {
+		if st.Done || st.Skipped {
 			out.RequiredDone++
 		}
 	}
-	out.Completed = out.RequiredDone == out.RequiredTotal
-	persisted := s.loadOnboardingState()
+	out.Finished = persisted.Finished
+	out.FinishedAt = persisted.FinishedAt
+	out.FinishedBy = persisted.FinishedBy
+	out.Completed = out.RequiredDone == out.RequiredTotal || out.Finished
 	out.Dismissed = persisted.Dismissed
 	out.DismissedAt = persisted.DismissedAt
 	out.DismissedBy = persisted.DismissedBy
 	return out
 }
 
-// handleOnboarding serves GET (operator+) and PUT {"dismissed": bool} (admin).
+var onboardingStepIDs = map[string]bool{
+	"clusters": true, "first_run": true, "schedule": true,
+	"backups": true, "notifications": true, "access": true,
+}
+
+// onboardingUpdate is the PUT body; every field is optional but one is required.
+type onboardingUpdate struct {
+	Dismissed  *bool  `json:"dismissed"`
+	Finished   *bool  `json:"finished"`
+	SkipStep   string `json:"skip_step"`
+	UnskipStep string `json:"unskip_step"`
+}
+
+func (s *apiServer) applyOnboardingUpdate(st onboardingState, u onboardingUpdate, who string) (onboardingState, error) {
+	if u.Dismissed == nil && u.Finished == nil && u.SkipStep == "" && u.UnskipStep == "" {
+		return st, errors.New(`send one of {"dismissed": bool}, {"finished": bool}, {"skip_step": id} or {"unskip_step": id}`)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if u.Dismissed != nil {
+		st.Dismissed, st.DismissedAt, st.DismissedBy = *u.Dismissed, "", ""
+		if st.Dismissed {
+			st.DismissedAt, st.DismissedBy = now, who
+		}
+	}
+	if u.Finished != nil {
+		st.Finished, st.FinishedAt, st.FinishedBy = *u.Finished, "", ""
+		if st.Finished {
+			st.FinishedAt, st.FinishedBy = now, who
+		}
+	}
+	for _, id := range []string{u.SkipStep, u.UnskipStep} {
+		if id != "" && !onboardingStepIDs[id] {
+			return st, fmt.Errorf("unknown setup step %q", id)
+		}
+	}
+	kept := st.Skipped[:0:0]
+	for _, id := range st.Skipped {
+		if id != u.UnskipStep && id != u.SkipStep {
+			kept = append(kept, id)
+		}
+	}
+	if u.SkipStep != "" {
+		kept = append(kept, u.SkipStep)
+	}
+	st.Skipped = kept
+	return st, nil
+}
+
+// handleOnboarding serves GET (operator+) and PUT (admin): {"dismissed": bool}
+// hides the Overview banner, {"skip_step"/"unskip_step": id} marks a step as
+// not applicable, and {"finished": bool} completes setup with steps left.
 func (s *apiServer) handleOnboarding(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -315,29 +390,30 @@ func (s *apiServer) handleOnboarding(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusUnsupportedMediaType, envelope{Success: false, Error: err.Error()})
 			return
 		}
-		var body struct {
-			Dismissed *bool `json:"dismissed"`
-		}
+		var body onboardingUpdate
 		if err := decodeJSON(http.MaxBytesReader(w, r.Body, 4096), &body); err != nil {
 			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 			return
 		}
-		if body.Dismissed == nil {
-			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: errors.New(`send {"dismissed": true} or {"dismissed": false}`).Error()})
-			return
+		who := ""
+		if p, ok := principalFromContext(r.Context()); ok {
+			who = p.subject
 		}
-		st := onboardingState{Dismissed: *body.Dismissed}
-		if st.Dismissed {
-			st.DismissedAt = time.Now().UTC().Format(time.RFC3339)
-			if p, ok := principalFromContext(r.Context()); ok {
-				st.DismissedBy = p.subject
-			}
+		s.onboardingMu.Lock()
+		defer s.onboardingMu.Unlock()
+		st, err := s.applyOnboardingUpdate(s.loadOnboardingState(), body, who)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
+			return
 		}
 		if err := s.saveOnboardingState(st); err != nil {
 			writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not save the setup checklist state: " + redactPaths(err.Error())})
 			return
 		}
-		s.audit(r, "onboarding.update", true, map[string]interface{}{"dismissed": st.Dismissed})
+		s.audit(r, "onboarding.update", true, map[string]interface{}{
+			"dismissed": st.Dismissed, "finished": st.Finished,
+			"skip_step": body.SkipStep, "unskip_step": body.UnskipStep,
+		})
 		writeJSON(w, http.StatusOK, envelope{Success: true, Data: s.onboardingStatus()})
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})

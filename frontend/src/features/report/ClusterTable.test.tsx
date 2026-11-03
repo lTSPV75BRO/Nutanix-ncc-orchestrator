@@ -255,4 +255,21 @@ describe("ClusterTable alert sources", () => {
     expect(screen.queryByPlaceholderText("Optional note")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Resolve" })).not.toBeInTheDocument();
   });
+
+  it("explains why a viewer cannot change handling", () => {
+    render(
+      <ClusterTable
+        {...baseProps}
+        alertSource="NCC"
+        readOnlyReason="Your role can view handling but not change it."
+        aggRows={[{ cluster: "ncc-a", check: "Open check", severity: "FAIL", detail: "disk detail" }]}
+      />,
+    );
+    expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+    fireEvent.click(screen.getByText("Open check"));
+    expect(screen.getByText("Your role can view handling but not change it.")).toBeInTheDocument();
+    expect(screen.queryByText(/Settings → Features/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Acknowledge" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Resolve" })).not.toBeInTheDocument();
+  });
 });

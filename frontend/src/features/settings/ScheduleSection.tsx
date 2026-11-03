@@ -1,12 +1,44 @@
-import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Col, Descriptions, Form, Input, InputNumber, Radio, Row, Select, Space, Switch, Tag, Tooltip, Typography } from "antd";
-import { ReloadOutlined, SaveOutlined, HeartOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  Alert,
+  AutoComplete,
+  Button,
+  Card,
+  Col,
+  Collapse,
+  Descriptions,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Popconfirm,
+  Row,
+  Segmented,
+  Select,
+  Space,
+  Switch,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
+import {
+  CheckCircleFilled,
+  ClockCircleOutlined,
+  DeleteOutlined,
+  ExclamationCircleFilled,
+  EyeOutlined,
+  MinusCircleFilled,
+  PauseCircleFilled,
+  ReloadOutlined,
+  SaveOutlined,
+} from "@ant-design/icons";
 import { api } from "../../api/client";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { notify } from "../../notify";
-import { formatDateTime as formatTime, formatDateTime, relativeTime } from "../../utils/datetime";
-import type { ConfigListItem, ScheduleState } from "../../api/types";
+import { formatDateTime, relativeTime } from "../../utils/datetime";
+import type { ConfigListItem, ScheduleSaveResult, ScheduleState } from "../../api/types";
 import { SaveBar } from "../../ui";
+import { describeCron, describeEvery, kubernetesCronFor, nextCronRuns, parseCron } from "./cron";
 
 type Props = {
   backendConfigPath: string;
@@ -14,6 +46,7 @@ type Props = {
   isKubernetes?: boolean;
 };
 
+/** "simple" edits an interval, "advanced" a custom cron expression. */
 type Mode = "simple" | "advanced";
 
 type ScheduleHealth = {
@@ -39,7 +72,25 @@ type ScheduleHealth = {
   log_mod_time?: string;
   detector?: string;
   install_check_error?: string;
+  // Kubernetes CronJob status.
+  suspended?: boolean;
+  managed_by_ncc?: boolean;
+  last_schedule_time?: string;
+  last_successful_time?: string;
+  time_zone?: string;
+  active_jobs?: number;
 };
+
+type Outcome = "succeeded" | "running" | "failed" | null;
+
+/** Outcome of the CronJob's latest Job, from its schedule/success times. */
+function cronJobOutcome(h: ScheduleHealth): Outcome {
+  if (!h.last_schedule_time) return null;
+  if ((h.active_jobs ?? 0) > 0) return "running";
+  const scheduled = Date.parse(h.last_schedule_time);
+  const succeeded = h.last_successful_time ? Date.parse(h.last_successful_time) : NaN;
+  return !Number.isNaN(succeeded) && succeeded >= scheduled ? "succeeded" : "failed";
+}
 
 function formatBytes(bytes?: number): string {
   if (!bytes || bytes <= 0) return "0 B";
@@ -47,19 +98,6 @@ function formatBytes(bytes?: number): string {
   const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
   const value = bytes / Math.pow(1024, i);
   return `${value.toFixed(value >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
-}
-
-/** Human-readable summary of the effective schedule (cron takes precedence). */
-function describeSchedule(every?: string, cron?: string): string {
-  const c = (cron || "").trim();
-  if (c) return `Cron: ${c}`;
-  const m = (every || "").trim().match(/^(\d+)([mhd])$/);
-  if (m) {
-    const n = Number(m[1]);
-    const unit = m[2] === "m" ? "minute" : m[2] === "h" ? "hour" : "day";
-    return `Every ${n} ${unit}${n === 1 ? "" : "s"}`;
-  }
-  return "—";
 }
 
 /** Friendly backend label for a saved scheduler type. */
@@ -73,30 +111,36 @@ function friendlyBackend(type?: string): string {
       return "Windows Scheduled Task";
     case "auto":
       return "auto-detect";
+    case "kubernetes":
+      return "Kubernetes CronJob";
     default:
       return type || "—";
   }
 }
 
+/** Plain-English summary of a saved schedule (cron takes precedence). */
+function describeSchedule(every?: string, cron?: string): string {
+  const c = (cron || "").trim();
+  if (c) return describeCron(c);
+  return (every || "").trim() ? describeEvery(every || "") : "—";
+}
+
 /**
- * Approximate the next run for an interval schedule, anchored on the last time
- * the scheduler log was written (a good proxy for the last run). Returns null
- * for cron expressions (where slot math is non-trivial) — the UI labels the
- * result "approx" since systemd/cron wall-clock alignment may differ slightly.
+ * Approximate the next run for a host interval schedule, anchored on the last
+ * time the scheduler log was written (a good proxy for the last run).
  */
-function approxNextRun(every?: string, cron?: string, lastModIso?: string): Date | null {
-  if ((cron || "").trim()) return null;
+function approxNextRun(every?: string, lastModIso?: string): Date | null {
   const m = (every || "").trim().match(/^(\d+)([mhd])$/);
   if (!m) return null;
-  const n = Number(m[1]);
-  const ms = n * (m[2] === "m" ? 60_000 : m[2] === "h" ? 3_600_000 : 86_400_000);
+  const ms = Number(m[1]) * (m[2] === "m" ? 60_000 : m[2] === "h" ? 3_600_000 : 86_400_000);
   if (ms <= 0) return null;
   const base = lastModIso ? new Date(lastModIso).getTime() : Date.now();
   if (Number.isNaN(base)) return null;
-  const now = Date.now();
-  const k = Math.max(1, Math.ceil((now - base) / ms));
+  const k = Math.max(1, Math.ceil((Date.now() - base) / ms));
   return new Date(base + k * ms);
 }
+
+const isUTCZone = (tz?: string) => !tz || ["UTC", "Etc/UTC", "Etc/GMT", "GMT"].includes(tz);
 
 type SchedulePayload = {
   type: string;
@@ -107,7 +151,6 @@ type SchedulePayload = {
   log_path: string;
   with_lock: boolean;
   task_name: string;
-  print_only: boolean;
 };
 
 /**
@@ -115,13 +158,50 @@ type SchedulePayload = {
  * ignored when a cron expression is set, since cron wins.
  */
 function scheduleKey(p: SchedulePayload): string {
-  return JSON.stringify([p.type, p.action, p.cron, p.cron ? "" : p.every, p.config, p.log_path, p.with_lock, p.task_name, p.print_only]);
+  return JSON.stringify([p.type, p.action, p.cron, p.cron ? "" : p.every, p.config, p.log_path, p.with_lock, p.task_name]);
+}
+
+const INTERVAL_PRESETS = [
+  { label: "Every 15m", value: 15, unit: "m" },
+  { label: "Hourly", value: 1, unit: "h" },
+  { label: "Every 4h", value: 4, unit: "h" },
+  { label: "Every 12h", value: 12, unit: "h" },
+  { label: "Daily", value: 24, unit: "h" },
+];
+
+const CRON_EXAMPLES = [
+  { label: "Every 4h at :15", cron: "15 */4 * * *" },
+  { label: "Weekdays 02:00", cron: "0 2 * * 1-5" },
+  { label: "Daily 03:30", cron: "30 3 * * *" },
+  { label: "Sundays 00:00", cron: "0 0 * * 0" },
+];
+
+function formatRun(d: Date, utc: boolean): string {
+  return d.toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    ...(utc ? { timeZone: "UTC" } : {}),
+  });
+}
+
+/** One labelled figure in the status summary. */
+function StatusStat({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="schedule-stat">
+      <Typography.Text type="secondary" className="schedule-stat-label">
+        {label}
+      </Typography.Text>
+      <div className="schedule-stat-value">{children}</div>
+    </div>
+  );
 }
 
 export function ScheduleSection({ backendConfigPath, onError, isKubernetes = false }: Props) {
   const [mode, setMode] = useLocalStorageState<Mode>("settings.schedule.mode", "simple");
   const [type, setType] = useLocalStorageState("settings.schedule.type", "auto");
-  const [action, setAction] = useLocalStorageState("settings.schedule.action", "create");
   const [cron, setCron] = useLocalStorageState("settings.schedule.cron", "");
   const [everyValue, setEveryValue] = useLocalStorageState("settings.schedule.everyValue", 4);
   const [everyUnit, setEveryUnit] = useLocalStorageState("settings.schedule.everyUnit", "h");
@@ -129,35 +209,53 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
   const [taskName, setTaskName] = useLocalStorageState("settings.schedule.taskName", "ncc-orchestrator");
   const [logPath, setLogPath] = useLocalStorageState("settings.schedule.logPath", "logs/ncc-scheduler.log");
   const [withLock, setWithLock] = useLocalStorageState("settings.schedule.withLock", true);
-  const [printOnly, setPrintOnly] = useLocalStorageState("settings.schedule.printOnly", true);
-  const [apply, setApply] = useLocalStorageState("settings.schedule.apply", false);
   const [health, setHealth] = useState<ScheduleHealth | null>(null);
+  const [healthLoading, setHealthLoading] = useState(false);
+  // Kubernetes only: the CronJob's spec.suspend. Not kept in local storage;
+  // the CronJob is the source of truth.
+  const [paused, setPaused] = useState(false);
   const [configOptions, setConfigOptions] = useState<ConfigListItem[]>([]);
+  const [preview, setPreview] = useState<ScheduleSaveResult | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [removing, setRemoving] = useState(false);
 
   // systemd timers gate overlapping activations themselves, so the file lock is
   // redundant (and the toggle is shown disabled/forced-on for that backend).
-  const lockManagedBySystemd = mode === "advanced" && type === "systemd";
+  const lockManagedBySystemd = !isKubernetes && type === "systemd";
+  const every = everyValue > 0 ? `${everyValue}${everyUnit}` : "";
+  const cronText = mode === "advanced" ? cron.trim() : "";
 
-  const nextRun = useMemo(
-    () => (health ? approxNextRun(health.every, health.cron, health.log_mod_time) : null),
-    [health],
-  );
-
-  const payload = useMemo(() => {
-    const every = everyValue > 0 ? `${everyValue}${everyUnit}` : "";
-    return {
-      type: mode === "advanced" ? type : "auto",
-      action: mode === "advanced" ? action : "create",
-      cron: mode === "advanced" ? cron.trim() : "",
+  const payload = useMemo(
+    () => ({
+      type: isKubernetes ? "auto" : type,
+      action: isKubernetes && paused ? "remove" : "create",
+      cron: cronText,
       every,
       config: config.trim(),
       log_path: logPath.trim(),
       with_lock: withLock,
       task_name: taskName.trim(),
-      print_only: isKubernetes ? false : printOnly,
-      apply: isKubernetes ? true : apply,
-    };
-  }, [mode, type, action, cron, everyValue, everyUnit, config, logPath, withLock, taskName, printOnly, apply]);
+    }),
+    [isKubernetes, type, paused, cronText, every, config, logPath, withLock, taskName],
+  );
+
+  // Validation the server would otherwise answer with a 400.
+  const cronError = cronText ? (typeof parseCron(cronText) === "string" ? (parseCron(cronText) as string) : null) : null;
+  const k8sInterval = isKubernetes && !cronText ? kubernetesCronFor(every) : null;
+  const intervalError = k8sInterval && "error" in k8sInterval ? k8sInterval.error : null;
+  // schtasks repeats on an interval only; the engine refuses a cron there.
+  const windowsHost = !isKubernetes && (type === "windows" || (type === "auto" && /schtasks/i.test(health?.detector || "")));
+  const windowsCronError = windowsHost && cronText ? "Windows Scheduled Tasks run on an interval. Clear the cron expression and use Interval instead." : null;
+  const formError = cronError || intervalError || windowsCronError;
+
+  // What the form would schedule, as a cron when one is known, for the preview.
+  const effectiveCron = cronText || (k8sInterval && "cron" in k8sInterval ? k8sInterval.cron : "");
+  const previewUTC = isKubernetes && isUTCZone(health?.time_zone);
+  const canPreviewTimes = Boolean(effectiveCron) && !formError && (!isKubernetes || previewUTC);
+  const upcoming = useMemo(
+    () => (canPreviewTimes ? nextCronRuns(effectiveCron, new Date(), 3, previewUTC) : []),
+    [canPreviewTimes, effectiveCron, previewUTC],
+  );
 
   // The saved schedule, as a scheduleKey; null until one is fetched (or none is saved).
   const [baseline, setBaseline] = useState<string | null>(null);
@@ -168,50 +266,43 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
   const savedKey = (s: ScheduleState) =>
     scheduleKey({
       type: s.type || "auto",
-      action: s.action || "create",
-      cron: (s.cron || "").trim(),
+      action: isKubernetes ? s.action || "create" : "create",
+      // On Kubernetes an interval schedule comes back with its derived cron;
+      // the form sends the interval alone for it.
+      cron: isKubernetes && s.every ? "" : (s.cron || "").trim(),
       every: s.every || "",
       config: s.config || backendConfigPath || "config.yaml",
       log_path: s.log_path || "logs/ncc-scheduler.log",
       with_lock: Boolean(s.with_lock ?? true),
       task_name: s.task_name || "ncc-orchestrator",
-      print_only: Boolean(s.print_only),
     });
 
   // Without updated_at the server is returning defaults: nothing is saved yet.
-  const baselineFor = (s: ScheduleState) => (s.updated_at ? savedKey(s) : null);
+  // A CronJob always has a live schedule, so on Kubernetes it is the baseline.
+  const baselineFor = (s: ScheduleState) => (isKubernetes || s.updated_at ? savedKey(s) : null);
 
   const applySaved = (s: ScheduleState) => {
     setType(s.type || "auto");
-    setAction(s.action || "create");
     setCron(s.cron || "");
     setConfig(s.config || backendConfigPath || "config.yaml");
     setLogPath(s.log_path || "logs/ncc-scheduler.log");
     setWithLock(Boolean(s.with_lock ?? true));
     setTaskName(s.task_name || "ncc-orchestrator");
-    setPrintOnly(Boolean(s.print_only));
     const m = String(s.every || "").match(/^(\d+)([mhd])$/);
     if (m) {
       setEveryValue(Number(m[1]));
       setEveryUnit(m[2]);
     }
     if (isKubernetes) {
-      setMode("simple");
+      // A schedule set with kubectl or Helm that is not a plain interval
+      // stays a custom cron instead of being replaced on the next save.
+      setMode(s.every ? "simple" : "advanced");
       setType("auto");
-      setAction("create");
+      setPaused(s.action === "remove");
     } else {
-      setMode((s.type !== "auto" || s.action !== "create" || (s.cron || "").trim()) ? "advanced" : "simple");
+      setMode((s.cron || "").trim() ? "advanced" : "simple");
     }
     setBaseline(baselineFor(s));
-  };
-
-  const load = async () => {
-    try {
-      applySaved(await api.loadSchedule());
-      notify.success("Schedule loaded.");
-    } catch (e) {
-      onError(e);
-    }
   };
 
   /** Discard: put the saved schedule back in the form. */
@@ -224,7 +315,8 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
   };
 
   // The form keeps its draft across visits, so only the baseline is fetched
-  // on mount. When nothing is saved yet there is no bar; Install now covers it.
+  // on mount. When nothing is saved yet there is no bar; the status card's
+  // Install now covers it.
   const loadBaseline = async () => {
     try {
       setBaseline(baselineFor(await api.loadSchedule()));
@@ -240,10 +332,8 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
       const resp = await api.runConfigs();
       const items = resp.items ?? [];
       setConfigOptions(items);
-      const current = config.trim();
-      if (!current) {
-        const fallback = resp.default_path || items.find((it) => it.is_active)?.path || backendConfigPath || "config.yaml";
-        setConfig(fallback);
+      if (!config.trim()) {
+        setConfig(resp.default_path || items.find((it) => it.is_active)?.path || backendConfigPath || "config.yaml");
       }
       if (!silent) notify.success("Config file options refreshed.");
     } catch (e) {
@@ -251,30 +341,39 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
     }
   };
 
-  const loadHealth = async (silent = false) => {
+  const loadHealth = async (silent = true) => {
+    setHealthLoading(true);
     try {
-      const h = await api.scheduleHealth();
-      setHealth(h as ScheduleHealth);
-      if (!silent) notify.success("Scheduler health refreshed.");
+      setHealth((await api.scheduleHealth()) as ScheduleHealth);
+      if (!silent) notify.success("Status refreshed.");
     } catch (e) {
       onError(e);
+    } finally {
+      setHealthLoading(false);
     }
   };
 
+  /** Save, and on a host install it in the scheduler. */
   const save = async () => {
+    if (formError) {
+      notify.warning(formError);
+      return;
+    }
     if (!payload.config) {
-      notify.warning("Config path is required.");
+      notify.warning("Choose the config file for scheduled runs.");
       return;
     }
     setSaving(true);
     try {
-      await api.saveSchedule(payload);
+      await api.saveSchedule({ ...payload, print_only: false, apply: true });
       if (isKubernetes) {
         applySaved(await api.loadSchedule());
+        notify.success(paused ? "Scheduled runs paused." : "Schedule applied to the CronJob.");
       } else {
         setBaseline(scheduleKey(payload));
+        notify.success("Schedule saved and installed.");
       }
-      notify.success(apply ? "Schedule saved and applied." : "Schedule saved.");
+      void loadHealth(true);
     } catch (e) {
       onError(e);
     } finally {
@@ -282,43 +381,46 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
     }
   };
 
-  /**
-   * One-click install: forces apply=true and print_only=false so the schedule
-   * is actually installed on the host scheduler. Used by the "Not installed"
-   * alert in the Scheduler health card.
-   */
-  const installNow = async () => {
-    if (!payload.config) {
-      notify.warning("Config path is required.");
+  /** Host only: show the scheduler command without saving or installing it. */
+  const showPreview = async () => {
+    if (formError) {
+      notify.warning(formError);
       return;
     }
-    notify.loading({
-      key: "ncc-schedule-install",
-      message: "Installing schedule…",
-      description: `Adding entry to ${health?.detector || "the host scheduler"}.`,
-    });
+    setPreviewing(true);
     try {
-      await api.saveSchedule({ ...payload, apply: true, print_only: false });
-      // Persist apply=on / print_only=off so subsequent saves stay sticky.
-      setApply(true);
-      setPrintOnly(false);
-      setBaseline(scheduleKey({ ...payload, print_only: false }));
-      notify.close("ncc-schedule-install");
-      notify.success({
-        message: "Schedule installed",
-        description: `Task '${payload.task_name}' is now scheduled to run every ${payload.every || "configured interval"}.`,
-      });
+      setPreview(await api.saveSchedule({ ...payload, print_only: true, apply: true }));
+    } catch (e) {
+      onError(e);
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
+  /** Host only: take the entry out of the scheduler. */
+  const removeSchedule = async () => {
+    setRemoving(true);
+    try {
+      await api.saveSchedule({ ...payload, action: "remove", print_only: false, apply: true });
+      notify.success("Schedule removed from the host scheduler.");
+      await loadBaseline();
       await loadHealth(true);
     } catch (e) {
-      notify.close("ncc-schedule-install");
       onError(e);
+    } finally {
+      setRemoving(false);
     }
   };
 
   useEffect(() => {
     void loadHealth(true);
-    void loadConfigOptions(true);
-    void loadBaseline();
+    if (isKubernetes) {
+      // The form shows the live CronJob, not a draft from an earlier visit.
+      void discard();
+    } else {
+      void loadConfigOptions(true);
+      void loadBaseline();
+    }
   }, []);
 
   const configSelectOptions = useMemo(
@@ -330,116 +432,379 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
     [configOptions],
   );
 
+  const presetActive = (p: (typeof INTERVAL_PRESETS)[number]) => everyValue === p.value && everyUnit === p.unit;
+
+  // ---- Status summary --------------------------------------------------
+  const status = (() => {
+    if (!health) return null;
+    if (isKubernetes) {
+      return health.suspended
+        ? { label: "Paused", tone: "warning", icon: <PauseCircleFilled /> }
+        : { label: "Active", tone: "success", icon: <CheckCircleFilled /> };
+    }
+    if (health.installed) return { label: "Active", tone: "success", icon: <CheckCircleFilled /> };
+    if (health.saved) return { label: "Not installed", tone: "warning", icon: <ExclamationCircleFilled /> };
+    return { label: "Not scheduled", tone: "default", icon: <MinusCircleFilled /> };
+  })();
+
+  const healthUTC = isKubernetes && isUTCZone(health?.time_zone);
+  const healthNext = (() => {
+    if (!health || (isKubernetes && health.suspended) || (!isKubernetes && !health.installed)) return null;
+    const c = (health.cron || "").trim();
+    if (c) {
+      if (isKubernetes && !healthUTC) return null;
+      return nextCronRuns(c, new Date(), 1, healthUTC)[0] ?? null;
+    }
+    return approxNextRun(health.every, health.log_mod_time);
+  })();
+  const lastRunAt = isKubernetes ? health?.last_schedule_time : health?.log_exists ? health?.log_mod_time : undefined;
+  const outcome: Outcome = !health
+    ? null
+    : isKubernetes
+      ? cronJobOutcome(health)
+      : health.last_error
+        ? "failed"
+        : health.last_success
+          ? "succeeded"
+          : null;
+  const outcomeTag =
+    outcome === "succeeded" ? (
+      <Tag color="green">Succeeded</Tag>
+    ) : outcome === "running" ? (
+      <Tag color="blue">Running</Tag>
+    ) : outcome === "failed" ? (
+      <Tooltip title={isKubernetes ? "The last scheduled Job has not completed successfully. Check it with kubectl get jobs." : health?.last_error}>
+        <Tag color="red">Failed</Tag>
+      </Tooltip>
+    ) : (
+      <Typography.Text type="secondary">—</Typography.Text>
+    );
+
+  const details = health ? (
+    <Descriptions size="small" column={1} bordered>
+      <Descriptions.Item label={isKubernetes ? "CronJob" : "Task name"}>
+        <Typography.Text code>{health.task_name || "—"}</Typography.Text>
+      </Descriptions.Item>
+      <Descriptions.Item label="Cron expression">
+        <Typography.Text code>{health.cron || "—"}</Typography.Text>
+      </Descriptions.Item>
+      <Descriptions.Item label="Backend">
+        {friendlyBackend(health.type)}
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          {" "}
+          · via {health.detector || "—"}
+        </Typography.Text>
+      </Descriptions.Item>
+      {isKubernetes ? (
+        <Descriptions.Item label="Time zone">{health.time_zone || "Controller default (usually UTC)"}</Descriptions.Item>
+      ) : null}
+      <Descriptions.Item label="Config file">
+        <Typography.Text className="mono" copyable={health.config ? { text: health.config } : false}>
+          {health.config || "—"}
+        </Typography.Text>
+      </Descriptions.Item>
+      <Descriptions.Item label={isKubernetes ? "Last changed from NCC" : "State updated"}>
+        {health.last_updated_at ? formatDateTime(health.last_updated_at) : "—"}
+      </Descriptions.Item>
+      {!isKubernetes ? (
+        <Descriptions.Item label="Log file">
+          <Space orientation="vertical" size={2}>
+            <Typography.Text className="mono" copyable={health.log_path ? { text: health.log_path } : false}>
+              {health.log_path || "—"}
+            </Typography.Text>
+            {health.log_exists ? (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {formatBytes(health.log_size)} · modified {relativeTime(health.log_mod_time)}
+              </Typography.Text>
+            ) : null}
+            {health.last_run ? (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }} ellipsis={{ tooltip: health.last_run }}>
+                Last line: {health.last_run}
+              </Typography.Text>
+            ) : null}
+          </Space>
+        </Descriptions.Item>
+      ) : null}
+      {!isKubernetes ? (
+        <Descriptions.Item label="Lock file">
+          <Typography.Text className="mono" copyable={health.lock_path ? { text: health.lock_path } : false}>
+            {health.lock_path || (health.with_lock ? "—" : "Off")}
+          </Typography.Text>
+        </Descriptions.Item>
+      ) : null}
+    </Descriptions>
+  ) : null;
+
   return (
     <Space orientation="vertical" size={16} style={{ width: "100%" }}>
-      {isKubernetes ? (
-        <Alert
-          type="info"
-          showIcon
-          message="Kubernetes schedule"
-          description="Changes are applied to the ncc-v2-runner CronJob. The runner image, config, and workload remain managed by Kubernetes."
-        />
-      ) : null}
-      <Card className="page-card">
-        <Typography.Title level={4} className="section-title">
-          Recurring run
-        </Typography.Title>
-        <Typography.Text type="secondary" className="section-subtitle">
-          Define a recurring NCC run. Use Simple mode for typical intervals, or Advanced for custom cron and platform options.
-        </Typography.Text>
-
-        <div style={{ marginTop: 16, marginBottom: 16 }}>
-          <Radio.Group
-            id="sched-mode"
-            name="sched-mode"
-            aria-label="Schedule editor mode"
-            value={mode}
-            onChange={(e) => setMode(e.target.value)}
-          >
-            <Radio.Button value="simple">Simple</Radio.Button>
-            <Radio.Button value="advanced">Advanced</Radio.Button>
-          </Radio.Group>
+      {/* Status: what is scheduled right now, from the scheduler itself. */}
+      <Card className="page-card schedule-status-card" aria-label="Schedule status">
+        <div className="schedule-status-head">
+          <div className="schedule-status-title">
+            {status ? (
+              <span className={`schedule-status-icon is-${status.tone}`} aria-hidden="true">
+                {status.icon}
+              </span>
+            ) : (
+              <ClockCircleOutlined className="schedule-status-icon" aria-hidden="true" />
+            )}
+            <div>
+              <Typography.Title level={4} className="section-title" style={{ margin: 0 }}>
+                {!health
+                  ? "Recurring runs"
+                  : !isKubernetes && !health.installed && !health.saved
+                    ? "No schedule yet"
+                    : describeSchedule(health.every, health.cron)}
+              </Typography.Title>
+              <Typography.Text type="secondary">
+                {status ? <Tag color={status.tone === "default" ? undefined : status.tone}>{status.label}</Tag> : null}
+                {isKubernetes ? `Kubernetes CronJob ${health?.task_name || ""}` : `Host scheduler${health?.detector ? ` (${health.detector})` : ""}`}
+              </Typography.Text>
+            </div>
+          </div>
+          <Space size={8} wrap>
+            {!isKubernetes && health?.installed ? (
+              <Popconfirm
+                title="Remove the schedule?"
+                description="Scheduled runs stop until you save a schedule again."
+                okText="Remove"
+                okButtonProps={{ danger: true }}
+                onConfirm={() => void removeSchedule()}
+              >
+                <Button danger icon={<DeleteOutlined />} loading={removing}>
+                  Remove
+                </Button>
+              </Popconfirm>
+            ) : null}
+            <Button icon={<ReloadOutlined />} loading={healthLoading} onClick={() => void loadHealth(false)} aria-label="Refresh status">
+              Refresh
+            </Button>
+          </Space>
         </div>
 
-        <Form layout="vertical" onSubmitCapture={(e) => e.preventDefault()}>
-          <Row gutter={16}>
-            <Col xs={12} md={6}>
-              <Form.Item label="Run every" htmlFor="sched-every-value">
-                <InputNumber id="sched-every-value" name="every-value" min={1} value={everyValue} onChange={(v) => setEveryValue(Number(v || 1))} style={{ width: "100%" }} />
-              </Form.Item>
-            </Col>
-            <Col xs={12} md={6}>
-              <Form.Item label="Unit" htmlFor="sched-every-unit">
-                <Select
-                  id="sched-every-unit"
-                  value={everyUnit}
-                  onChange={setEveryUnit}
-                  options={[
-                    { value: "m", label: "minutes" },
-                    { value: "h", label: "hours" },
-                    { value: "d", label: "days" },
-                  ]}
-                  style={{ width: "100%" }}
-                />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={12}>
-              <Form.Item
-                label="Config file"
-                tooltip="Select an available config file for scheduled runs. You can still type a custom path if needed."
-                htmlFor="sched-config-select"
-              >
-                <Space.Compact style={{ width: "100%" }}>
-                  <Select
-                    id="sched-config-select"
-                    showSearch
-                    allowClear
-                    value={config || undefined}
-                    placeholder="Select config.yaml"
-                    options={configSelectOptions}
-                    optionFilterProp="label"
-                    onChange={(value) => setConfig(String(value || ""))}
-                    style={{ width: "100%" }}
-                  />
-                  <Button
-                    icon={<ReloadOutlined />}
-                    onClick={() => void loadConfigOptions(false)}
-                    aria-label="Refresh config options"
-                  />
-                </Space.Compact>
-              </Form.Item>
-              <Form.Item label="Custom config path (optional)" htmlFor="sched-config-custom">
-                <Input
-                  id="sched-config-custom"
-                  name="config-path"
-                  value={config}
-                  onChange={(e) => setConfig(e.target.value)}
-                  placeholder="config.yaml"
-                  autoComplete="off"
-                />
-              </Form.Item>
-            </Col>
-          </Row>
+        {health ? (
+          <div className="schedule-stats">
+            <StatusStat label="Next run">
+              {healthNext ? (
+                <Tooltip title={formatDateTime(healthNext.toISOString())}>{relativeTime(healthNext.toISOString())}</Tooltip>
+              ) : (
+                <Typography.Text type="secondary">{status?.label === "Active" ? "—" : "Not scheduled"}</Typography.Text>
+              )}
+            </StatusStat>
+            <StatusStat label="Last run">
+              {lastRunAt ? (
+                <Tooltip title={formatDateTime(lastRunAt)}>{relativeTime(lastRunAt)}</Tooltip>
+              ) : (
+                <Typography.Text type="secondary">Not yet</Typography.Text>
+              )}
+            </StatusStat>
+            <StatusStat label="Last outcome">{outcomeTag}</StatusStat>
+          </div>
+        ) : (
+          <Typography.Text type="secondary">Loading status…</Typography.Text>
+        )}
 
-          <Space size={8} wrap style={{ marginBottom: 12 }}>
-            <Typography.Text type="secondary">Quick presets:</Typography.Text>
-            <Button size="small" onClick={() => { setEveryValue(15); setEveryUnit("m"); }}>Every 15m</Button>
-            <Button size="small" onClick={() => { setEveryValue(1); setEveryUnit("h"); }}>Hourly</Button>
-            <Button size="small" onClick={() => { setEveryValue(4); setEveryUnit("h"); }}>Every 4h</Button>
-            <Button size="small" onClick={() => { setEveryValue(24); setEveryUnit("h"); }}>Daily</Button>
-          </Space>
+        {isKubernetes && health?.suspended ? (
+          <Alert
+            type="warning"
+            showIcon
+            className="schedule-status-alert"
+            title="Scheduled runs are paused"
+            description="The CronJob is suspended, so no runs start on schedule. Turn off Pause scheduled runs below and save to resume."
+          />
+        ) : null}
+        {!isKubernetes && health && !health.installed ? (
+          <Alert
+            type={health.saved ? "warning" : "info"}
+            showIcon
+            className="schedule-status-alert"
+            title={health.saved ? "Saved, but not installed on this host" : "No recurring runs yet"}
+            description={
+              health.saved
+                ? `A schedule is saved, but ${health.detector || "the host scheduler"} has no matching entry. Save the schedule below to install it.`
+                : "Pick when to run below (every 4 hours works well for most fleets) and click Save schedule."
+            }
+          />
+        ) : null}
+        {health?.install_check_error ? (
+          <Alert type="warning" showIcon className="schedule-status-alert" title="Could not check the host scheduler" description={health.install_check_error} />
+        ) : null}
+        {!isKubernetes && health?.last_error ? (
+          <Alert
+            type="error"
+            showIcon
+            className="schedule-status-alert"
+            title="Last scheduled run failed"
+            description={<Typography.Text code>{health.last_error}</Typography.Text>}
+          />
+        ) : null}
 
-          <div style={{ marginBottom: 12 }}>
-            <Typography.Text type="secondary">
-              Effective schedule:{" "}
-              <Typography.Text strong>{describeSchedule(payload.every, payload.cron)}</Typography.Text>
-            </Typography.Text>
+        {details ? (
+          <Collapse
+            ghost
+            size="small"
+            className="schedule-details"
+            items={[{ key: "details", label: "Technical details", children: details }]}
+          />
+        ) : null}
+      </Card>
+
+      {/* Editor */}
+      <Card className="page-card">
+        <Typography.Title level={4} className="section-title">
+          When to run
+        </Typography.Title>
+        <Typography.Text type="secondary" className="section-subtitle">
+          {isKubernetes
+            ? `Changes go to the ${health?.task_name || "runner"} CronJob. Re-applying the Helm or Kustomize manifests resets it to their schedule.`
+            : "Pick an interval, or use a cron expression for exact times."}
+        </Typography.Text>
+
+        <Form layout="vertical" onSubmitCapture={(e) => e.preventDefault()} style={{ marginTop: 16 }}>
+          <div style={{ marginBottom: 16 }}>
+            <Segmented
+              aria-label="Schedule editor mode"
+              value={mode}
+              onChange={(v) => setMode(v as Mode)}
+              options={[
+                { label: "Interval", value: "simple" },
+                { label: "Custom cron", value: "advanced" },
+              ]}
+            />
           </div>
 
-          {mode === "advanced" ? (
+          {mode === "simple" ? (
             <>
-              <Row gutter={16}>
-                {!isKubernetes ? <Col xs={24} md={8}>
+              <Space size={8} wrap className="schedule-presets" aria-label="Interval presets">
+                {INTERVAL_PRESETS.map((p) => (
+                  <Button
+                    key={p.label}
+                    size="small"
+                    type={presetActive(p) ? "primary" : "default"}
+                    aria-pressed={presetActive(p)}
+                    onClick={() => {
+                      setEveryValue(p.value);
+                      setEveryUnit(p.unit);
+                    }}
+                  >
+                    {p.label}
+                  </Button>
+                ))}
+              </Space>
+              <Row gutter={12} align="bottom">
+                <Col xs={12} sm={6}>
+                  <Form.Item label="Run every" htmlFor="sched-every-value" style={{ marginBottom: 0 }}>
+                    <InputNumber
+                      id="sched-every-value"
+                      name="every-value"
+                      min={1}
+                      value={everyValue}
+                      onChange={(v) => setEveryValue(Number(v || 1))}
+                      style={{ width: "100%" }}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col xs={12} sm={6}>
+                  <Form.Item label="Unit" htmlFor="sched-every-unit" style={{ marginBottom: 0 }}>
+                    <Select
+                      id="sched-every-unit"
+                      value={everyUnit}
+                      onChange={setEveryUnit}
+                      options={[
+                        { value: "m", label: "minutes" },
+                        { value: "h", label: "hours" },
+                        { value: "d", label: "days" },
+                      ]}
+                      style={{ width: "100%" }}
+                    />
+                  </Form.Item>
+                </Col>
+              </Row>
+              {intervalError ? <Alert type="error" showIcon style={{ marginTop: 12 }} title={intervalError} /> : null}
+            </>
+          ) : (
+            <>
+              <Form.Item
+                label="Custom cron expression"
+                htmlFor="sched-cron"
+                validateStatus={cronError || windowsCronError ? "error" : undefined}
+                help={
+                  cronError ||
+                  windowsCronError ||
+                  (cronText
+                    ? undefined
+                    :`Leave empty to use the interval (${describeEvery(every).toLowerCase()}). Five fields: minute hour day-of-month month day-of-week${isKubernetes ? ", or a macro such as @daily" : ""}.`)
+                }
+              >
+                <Input
+                  id="sched-cron"
+                  name="cron"
+                  value={cron}
+                  onChange={(e) => setCron(e.target.value)}
+                  placeholder="e.g. 15 */4 * * *"
+                  autoComplete="off"
+                  className="mono"
+                />
+              </Form.Item>
+              <Space size={8} wrap className="schedule-presets" aria-label="Cron examples">
+                <Typography.Text type="secondary">Examples:</Typography.Text>
+                {CRON_EXAMPLES.map((ex) => (
+                  <Button key={ex.cron} size="small" type={cronText === ex.cron ? "primary" : "default"} onClick={() => setCron(ex.cron)}>
+                    {ex.label}
+                  </Button>
+                ))}
+              </Space>
+            </>
+          )}
+
+          <div className="schedule-preview" aria-live="polite">
+            <Typography.Text strong>
+              {formError ? "Fix the schedule above" : cronText ? describeCron(cronText) : describeEvery(every)}
+            </Typography.Text>
+            {upcoming.length > 0 ? (
+              <Typography.Text type="secondary">
+                Next runs{previewUTC ? " (UTC)" : ""}: {upcoming.map((d) => formatRun(d, previewUTC)).join(" · ")}
+              </Typography.Text>
+            ) : !formError && !isKubernetes && !cronText ? (
+              <Typography.Text type="secondary">Counted from when the schedule is installed.</Typography.Text>
+            ) : isKubernetes && !previewUTC && !formError ? (
+              <Typography.Text type="secondary">Times follow the CronJob's time zone ({health?.time_zone}).</Typography.Text>
+            ) : null}
+          </div>
+
+          {isKubernetes ? (
+            <Space size={8} style={{ marginTop: 16 }}>
+              <Switch id="sched-paused" aria-label="Pause scheduled runs" checked={paused} onChange={setPaused} />
+              <Typography.Text>
+                <label htmlFor="sched-paused">Pause scheduled runs (suspend the CronJob)</label>
+              </Typography.Text>
+            </Space>
+          ) : (
+            <>
+              <Row gutter={16} style={{ marginTop: 16 }}>
+                <Col xs={24} md={14}>
+                  <Form.Item
+                    label="Config file"
+                    htmlFor="sched-config"
+                    tooltip="The configuration scheduled runs use. Pick one from the list or type a path."
+                    validateStatus={payload.config ? undefined : "error"}
+                    help={payload.config ? undefined : "Required"}
+                  >
+                    <Space.Compact style={{ width: "100%" }}>
+                      <AutoComplete
+                        id="sched-config"
+                        value={config}
+                        options={configSelectOptions}
+                        onChange={(v) => setConfig(String(v ?? ""))}
+                        placeholder="config.yaml"
+                        style={{ width: "100%" }}
+                        filterOption={(input, option) => String(option?.value ?? "").toLowerCase().includes(input.toLowerCase())}
+                      />
+                      <Button icon={<ReloadOutlined />} onClick={() => void loadConfigOptions(false)} aria-label="Refresh config options" />
+                    </Space.Compact>
+                  </Form.Item>
+                </Col>
+                <Col xs={24} md={10}>
                   <Form.Item label="Scheduler type" htmlFor="sched-type">
                     <Select
                       id="sched-type"
@@ -454,27 +819,6 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
                       style={{ width: "100%" }}
                     />
                   </Form.Item>
-                </Col> : null}
-                {!isKubernetes ? <Col xs={24} md={8}>
-                  <Form.Item label="Action" htmlFor="sched-action">
-                    <Select
-                      id="sched-action"
-                      value={action}
-                      onChange={setAction}
-                      options={[
-                        { value: "create", label: "Create / update" },
-                        { value: "list", label: "List existing" },
-                        { value: "remove", label: "Remove" },
-                        { value: "run-now", label: "Run now" },
-                      ]}
-                      style={{ width: "100%" }}
-                    />
-                  </Form.Item>
-                </Col> : null}
-                <Col xs={24} md={isKubernetes ? 24 : 8}>
-                  <Form.Item label="Custom cron expression" tooltip="5-field cron, leave empty to derive from interval. Day-of-week is not supported for systemd timers." htmlFor="sched-cron">
-                    <Input id="sched-cron" name="cron" value={cron} onChange={(e) => setCron(e.target.value)} placeholder="e.g. 15 */4 * * *" autoComplete="off" />
-                  </Form.Item>
                 </Col>
               </Row>
               {type === "systemd" ? (
@@ -482,250 +826,79 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
                   type="info"
                   showIcon
                   style={{ marginBottom: 12 }}
-                  title="systemd timer backend"
-                  description="Installs a systemd .timer + oneshot .service under /etc/systemd/system (requires root). Overlapping runs are prevented automatically (the file lock is not needed), missed runs replay on boot (Persistent=true), and the run uses the config file's directory as its working directory. Day-of-week cron fields are not supported — use an interval or a cron without a DOW field."
+                  title="systemd timer"
+                  description="Installs a .timer and oneshot .service under /etc/systemd/system (needs root). Overlapping runs are prevented, missed runs replay on boot, and day-of-week cron fields are not supported."
                 />
               ) : null}
-              <Row gutter={16}>
-                <Col xs={24} md={12}>
-                  <Form.Item label="Task name" htmlFor="sched-task-name">
-                    <Input id="sched-task-name" name="task-name" value={taskName} onChange={(e) => setTaskName(e.target.value)} autoComplete="off" />
-                  </Form.Item>
-                </Col>
-                <Col xs={24} md={12}>
-                  <Form.Item label="Scheduler log file" htmlFor="sched-log-path">
-                    <Input id="sched-log-path" name="log-path" value={logPath} onChange={(e) => setLogPath(e.target.value)} autoComplete="off" />
-                  </Form.Item>
-                </Col>
-              </Row>
+              <Space size={8}>
+                <Tooltip title={lockManagedBySystemd ? "systemd never starts a second run while one is still going, so the file lock is not needed." : undefined}>
+                  <Switch
+                    id="sched-with-lock"
+                    aria-label="Prevent overlapping runs"
+                    checked={lockManagedBySystemd ? true : withLock}
+                    disabled={lockManagedBySystemd}
+                    onChange={setWithLock}
+                  />
+                </Tooltip>
+                <Typography.Text>
+                  <label htmlFor="sched-with-lock">Skip a run if the previous one is still going{lockManagedBySystemd ? " (built into systemd)" : ""}</label>
+                </Typography.Text>
+              </Space>
+              <Collapse
+                ghost
+                size="small"
+                className="schedule-details"
+                items={[
+                  {
+                    key: "more",
+                    label: "More options",
+                    children: (
+                      <Row gutter={16}>
+                        <Col xs={24} md={12}>
+                          <Form.Item label="Task name" htmlFor="sched-task-name" tooltip="Name of the cron entry, timer or scheduled task.">
+                            <Input id="sched-task-name" name="task-name" value={taskName} onChange={(e) => setTaskName(e.target.value)} autoComplete="off" />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} md={12}>
+                          <Form.Item label="Scheduler log file" htmlFor="sched-log-path">
+                            <Input id="sched-log-path" name="log-path" value={logPath} onChange={(e) => setLogPath(e.target.value)} autoComplete="off" />
+                          </Form.Item>
+                        </Col>
+                      </Row>
+                    ),
+                  },
+                ]}
+              />
             </>
-          ) : null}
+          )}
 
-          <Space size={24} wrap style={{ marginTop: 4, marginBottom: 12 }}>
-            {!isKubernetes ? <Space size={8}>
-              <Switch id="sched-print-only" aria-label="Preview only (no system changes)" checked={printOnly} onChange={setPrintOnly} />
-              <Typography.Text>
-                <label htmlFor="sched-print-only">Preview only (no system changes)</label>
-              </Typography.Text>
-            </Space> : null}
-            {!isKubernetes ? <Space size={8}>
-              <Switch id="sched-apply" aria-label="Apply changes immediately" checked={apply} onChange={setApply} />
-              <Typography.Text>
-                <label htmlFor="sched-apply">Apply changes immediately</label>
-              </Typography.Text>
-            </Space> : null}
-            {!isKubernetes ? <Space size={8}>
-              <Tooltip title={lockManagedBySystemd ? "systemd prevents overlapping runs natively — a second activation won't start while one is still running, so the file lock is not needed." : undefined}>
-                <Switch
-                  id="sched-with-lock"
-                  aria-label="Prevent overlapping runs"
-                  checked={lockManagedBySystemd ? true : withLock}
-                  disabled={lockManagedBySystemd}
-                  onChange={setWithLock}
-                />
+          <Space size={8} wrap style={{ marginTop: 16 }}>
+            <Button type="primary" icon={<SaveOutlined />} onClick={() => void save()} loading={saving} disabled={Boolean(formError)}>
+              Save schedule
+            </Button>
+            {!isKubernetes ? (
+              <Tooltip title="Show the scheduler entry that would be installed, without changing anything.">
+                <Button icon={<EyeOutlined />} onClick={() => void showPreview()} loading={previewing} disabled={Boolean(formError)}>
+                  Preview
+                </Button>
               </Tooltip>
-              <Typography.Text>
-                <label htmlFor="sched-with-lock">
-                  Prevent overlapping runs {lockManagedBySystemd ? "(native via systemd)" : "(file lock)"}
-                </label>
-              </Typography.Text>
-            </Space> : null}
-          </Space>
-
-          <Space size={8} wrap>
-            <Button icon={<ReloadOutlined />} onClick={load}>Load saved</Button>
-            <Button type="primary" icon={<SaveOutlined />} onClick={save} loading={saving}>Save schedule</Button>
-            <Button icon={<HeartOutlined />} onClick={() => loadHealth(false)}>Refresh health</Button>
+            ) : null}
           </Space>
         </Form>
       </Card>
 
-      <Card className="page-card">
-        <Typography.Title level={4} className="section-title">
-          Scheduler health
-        </Typography.Title>
-        <Typography.Text type="secondary" className="section-subtitle">
-          Authoritative status from {health?.detector || "the scheduler"}. Saved means the UI has stored
-          a configuration; Installed means the scheduler has a matching entry.
-        </Typography.Text>
-        {health ? (
-          <>
-            <Space size={[8, 8]} wrap style={{ marginTop: 12, marginBottom: 16 }}>
-              <Tooltip title={health.installed ? `Detected via ${health.detector || "crontab"}` : "No matching entry found in host scheduler"}>
-                <Tag color={health.installed ? "success" : "error"} style={{ fontSize: 13, padding: "2px 10px" }}>
-                  {health.installed ? "Installed" : "Not installed"}
-                </Tag>
-              </Tooltip>
-              <Tooltip title={health.saved ? "Schedule state has been saved at least once" : "Schedule state has never been saved"}>
-                <Tag color={health.saved ? "processing" : "default"} style={{ fontSize: 13, padding: "2px 10px" }}>
-                  {health.saved ? "Saved" : "Not saved"}
-                </Tag>
-              </Tooltip>
-              {health.with_lock ? <Tag color="cyan">Overlap lock</Tag> : null}
-              {typeof health.log_exists === "boolean" ? (
-                <Tag color={health.log_exists ? "success" : "default"}>
-                  {health.log_exists ? "Log present" : "No log yet"}
-                </Tag>
-              ) : null}
-            </Space>
+      <Modal
+        title="Scheduler entry preview"
+        open={preview !== null}
+        onCancel={() => setPreview(null)}
+        footer={<Button onClick={() => setPreview(null)}>Close</Button>}
+        width={720}
+      >
+        <Typography.Paragraph type="secondary">Nothing was saved or installed. Save schedule installs this entry.</Typography.Paragraph>
+        {preview?.apply_error ? <Alert type="error" showIcon title={preview.apply_error} style={{ marginBottom: 12 }} /> : null}
+        <pre className="schedule-preview-output">{preview?.output || "(no output)"}</pre>
+      </Modal>
 
-            {!health.installed && health.saved ? (
-              <Alert
-                type="warning"
-                showIcon
-                style={{ marginBottom: 12 }}
-                title="Schedule saved but not installed"
-                description={
-                  <>
-                    A schedule configuration is stored in the API state file but no matching entry was found in{" "}
-                    <Typography.Text code>{health.detector || "the host scheduler"}</Typography.Text>. Click{" "}
-                    <Typography.Text strong>Install now</Typography.Text> to add the cron entry on this host.
-                  </>
-                }
-                action={
-                  <Button size="small" type="primary" onClick={installNow}>
-                    Install now
-                  </Button>
-                }
-              />
-            ) : null}
-
-            {!health.installed && !health.saved ? (
-              <Alert
-                type="info"
-                showIcon
-                icon={<InfoCircleOutlined />}
-                style={{ marginBottom: 12 }}
-                title="No schedule configured"
-                description={
-                  <>
-                    Pick an interval above (default <Typography.Text code>4h</Typography.Text> works well) and click{" "}
-                    <Typography.Text strong>Install now</Typography.Text> to schedule it on this host.
-                  </>
-                }
-                action={
-                  <Button size="small" type="primary" onClick={installNow}>
-                    Install now
-                  </Button>
-                }
-              />
-            ) : null}
-
-            {isKubernetes && !health.configured ? (
-              <Alert
-                type="info"
-                showIcon
-                style={{ marginBottom: 12 }}
-                title="Choose the recurring run interval"
-                description="The Kubernetes CronJob exists, but its schedule has not been configured from NCC yet. Choose an interval above and click Save schedule."
-              />
-            ) : null}
-
-            {health.last_error ? (
-              <Alert
-                type="error"
-                showIcon
-                style={{ marginBottom: 12 }}
-                title="Last scheduled run failed"
-                description={<Typography.Text code>{health.last_error}</Typography.Text>}
-              />
-            ) : null}
-
-            <Descriptions size="small" column={1} bordered>
-              <Descriptions.Item label="Task name">
-                <Typography.Text code>{health.task_name || "—"}</Typography.Text>
-              </Descriptions.Item>
-              <Descriptions.Item label="Schedule">
-                <Typography.Text strong>{describeSchedule(health.every, health.cron)}</Typography.Text>
-              </Descriptions.Item>
-              <Descriptions.Item label="Backend">
-                <Space size={6}>
-                  <Tag color={(health.type || "").toLowerCase() === "systemd" ? "geekblue" : "default"}>
-                    {friendlyBackend(health.type)}
-                  </Tag>
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    via {health.detector || "—"}
-                  </Typography.Text>
-                </Space>
-              </Descriptions.Item>
-              <Descriptions.Item label="Config file">
-                <Typography.Text className="mono" copyable={health.config ? { text: health.config } : false}>
-                  {health.config || "—"}
-                </Typography.Text>
-              </Descriptions.Item>
-              <Descriptions.Item label="Last run">
-                {health.log_exists && health.log_mod_time ? (
-                  <Space orientation="vertical" size={0}>
-                    <Tooltip title={formatDateTime(health.log_mod_time)}>
-                      {relativeTime(health.log_mod_time)}
-                    </Tooltip>
-                    {health.last_run ? (
-                      <Typography.Text
-                        type="secondary"
-                        style={{ fontSize: 12 }}
-                        ellipsis={{ tooltip: health.last_run }}
-                      >
-                        {health.last_run}
-                      </Typography.Text>
-                    ) : null}
-                  </Space>
-                ) : (
-                  "—"
-                )}
-              </Descriptions.Item>
-              <Descriptions.Item label="Last outcome">
-                {health.last_error ? (
-                  <Tag color="red">failed</Tag>
-                ) : health.last_success ? (
-                  <Space orientation="vertical" size={0}>
-                    <Tag color="green">succeeded</Tag>
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontSize: 12 }}
-                      ellipsis={{ tooltip: health.last_success }}
-                    >
-                      {health.last_success}
-                    </Typography.Text>
-                  </Space>
-                ) : (
-                  <Typography.Text type="secondary">—</Typography.Text>
-                )}
-              </Descriptions.Item>
-              <Descriptions.Item label="Next run (approx)">
-                {nextRun ? (
-                  <Tooltip title={formatDateTime(nextRun.toISOString())}>
-                    {relativeTime(nextRun.toISOString())}
-                  </Tooltip>
-                ) : (
-                  <Typography.Text type="secondary">
-                    {health.installed ? "—" : "not scheduled"}
-                  </Typography.Text>
-                )}
-              </Descriptions.Item>
-              <Descriptions.Item label="State updated">{formatTime(health.last_updated_at)}</Descriptions.Item>
-              <Descriptions.Item label="Log file">
-                <Space orientation="vertical" size={2}>
-                  <Typography.Text className="mono" copyable={{ text: health.log_path }}>
-                    {health.log_path || "—"}
-                  </Typography.Text>
-                  {health.log_exists ? (
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {formatBytes(health.log_size)} · modified {relativeTime(health.log_mod_time)}
-                    </Typography.Text>
-                  ) : null}
-                </Space>
-              </Descriptions.Item>
-              <Descriptions.Item label="Lock file">
-                <Typography.Text className="mono" copyable={{ text: health.lock_path }}>
-                  {health.lock_path || "—"}
-                </Typography.Text>
-              </Descriptions.Item>
-            </Descriptions>
-          </>
-        ) : (
-          <Typography.Text type="secondary">Click "Refresh health" to load scheduler status.</Typography.Text>
-        )}
-      </Card>
       <SaveBar
         dirty={dirty}
         saving={saving}
@@ -733,6 +906,7 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
         onDiscard={() => void discard()}
         message="The schedule differs from the saved one."
         saveLabel="Save schedule"
+        saveDisabled={Boolean(formError)}
       />
     </Space>
   );

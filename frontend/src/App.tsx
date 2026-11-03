@@ -9,6 +9,7 @@ import {
   LogoutOutlined,
   MoreOutlined,
   PlayCircleOutlined,
+  RocketOutlined,
   ThunderboltOutlined,
   UserOutlined,
   WifiOutlined,
@@ -36,7 +37,7 @@ import { LoginPage, setLoginNotice } from "./pages/LoginPage";
 import { ChangePasswordPage, ChangePasswordModal } from "./pages/ChangePasswordPage";
 import { PersonalTokensModal } from "./features/tokens/PersonalTokensModal";
 import { SessionIdleGuard } from "./components/SessionIdleGuard";
-import { SetupHeaderButton } from "./features/onboarding/SetupChecklist";
+import { openSetupChecklist, SetupHeaderButton } from "./features/onboarding/SetupChecklist";
 import { CommandJump } from "./components/CommandJump";
 import { formatDateTime, formatTime, localDateKey, parseInstant } from "./utils/datetime";
 
@@ -418,6 +419,7 @@ function HeaderUserMenu({
   onLogout,
   onLogoutEverywhere,
   onAbout,
+  canSeeSetup,
 }: {
   username: string;
   role: UserRole;
@@ -429,6 +431,7 @@ function HeaderUserMenu({
   onLogout: () => void;
   onLogoutEverywhere: () => void;
   onAbout: () => void;
+  canSeeSetup?: boolean;
 }) {
   const roleColor = role === "admin" ? "gold" : role === "operator" ? "blue" : "default";
   const items = [
@@ -447,6 +450,7 @@ function HeaderUserMenu({
     ...(canChangePassword
       ? [{ key: "change-password", icon: <LockOutlined />, label: "Change password" }]
       : []),
+    ...(canSeeSetup ? [{ key: "setup", icon: <RocketOutlined />, label: "Setup checklist" }] : []),
     { key: "about", icon: <InfoCircleOutlined />, label: "About NCC Orchestrator" },
     { type: "divider" as const },
     { key: "logout", icon: <LogoutOutlined />, label: "Sign out" },
@@ -467,6 +471,7 @@ function HeaderUserMenu({
           else if (key === "change-password") onChangePassword();
           else if (key === "tokens") onManageTokens();
           else if (key === "about") onAbout();
+          else if (key === "setup") openSetupChecklist();
         },
       }}
     >
@@ -715,6 +720,7 @@ export default function App() {
               onLogout={handleLogout}
               onLogoutEverywhere={handleLogoutEverywhere}
               onAbout={() => setAboutOpen(true)}
+              canSeeSetup={appReady && canSeeSettings}
             />
           ) : (
             // No user menu without sign-in: theme and About get a small menu.
@@ -725,10 +731,12 @@ export default function App() {
                 items: [
                   { key: "theme", icon: <BgColorsOutlined />, label: `Theme: ${themeLabel}`, children: themeMenuItems(selectedTheme) },
                   { type: "divider" as const },
+                  ...(appReady && canSeeSettings ? [{ key: "setup", icon: <RocketOutlined />, label: "Setup checklist" }] : []),
                   { key: "about", icon: <InfoCircleOutlined />, label: "About NCC Orchestrator" },
                 ],
                 onClick: ({ key }) => {
                   if (key === "about") setAboutOpen(true);
+                  else if (key === "setup") openSetupChecklist();
                   else if (key.startsWith("theme:")) setTheme(key.slice("theme:".length) as AppThemeSelection);
                 },
               }}

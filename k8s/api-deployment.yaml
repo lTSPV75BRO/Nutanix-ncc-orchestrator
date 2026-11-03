@@ -20,6 +20,9 @@ spec:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
           whenUnsatisfiable: DoNotSchedule
+          # Without this a tainted control-plane node counts as an empty
+          # domain, so the rollout's surge pod can never schedule.
+          nodeTaintsPolicy: Honor
           labelSelector:
             matchLabels:
               app: ncc-orchestrator-v2

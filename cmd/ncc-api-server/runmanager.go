@@ -324,8 +324,8 @@ func (s *apiServer) launchRun(rec *runRecord) {
 	rec.cwd = cmd.Dir
 	rec.env = injectedEnv
 	rec.cancel = cancel
-	s.mu.Unlock()
 	s.persistJob(rec)
+	s.mu.Unlock()
 
 	if err := cmd.Start(); err != nil {
 		cancel()
@@ -517,8 +517,10 @@ func (s *apiServer) cancelRunByID(id string) (*runRecord, bool) {
 	}
 	// Queued: drop it and release its reserved clusters.
 	rec.status = "done"
+	rec.cancelled = true
 	rec.finished = time.Now().UTC()
 	rec.errStr = "run cancelled before start"
+	s.persistJob(rec)
 	for n, owner := range s.clusterOwners {
 		if owner == id {
 			delete(s.clusterOwners, n)

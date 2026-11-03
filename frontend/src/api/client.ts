@@ -19,6 +19,7 @@ import type {
   RunActiveData,
   RunnerLogData,
   RunInfo,
+  ScheduleSaveResult,
   ScheduleState,
   ScheduleHealthData,
   DiagnosticsData,
@@ -62,6 +63,7 @@ import type {
   FeatureFlags,
   ComponentsData,
   OnboardingStatus,
+  OnboardingUpdate,
   ExtraArgOption,
 } from "./types";
 
@@ -340,7 +342,7 @@ export const api = {
     }),
   loadSchedule: () => callApi<ScheduleState>("/api/v1/schedule"),
   saveSchedule: (payload: Partial<ScheduleState> & { apply: boolean }) =>
-    callApi("/api/v1/schedule", {
+    callApi<ScheduleSaveResult>("/api/v1/schedule", {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
@@ -623,10 +625,11 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(state),
     }),
-  testNotification: (channel: string) =>
+  /** Sends a test message (or, with kind "digest", the health digest) using the saved settings. */
+  testNotification: (channel: string, kind: "test" | "digest" = "test") =>
     callApiEnvelope<{ channel: string; last_delivery?: Record<string, unknown> }>(
       "/api/v1/settings/notifications/test",
-      { method: "POST", body: JSON.stringify({ channel }) },
+      { method: "POST", body: JSON.stringify(kind === "digest" ? { channel, kind } : { channel }) },
     ),
   getBackupSchedule: () => callApi<BackupScheduleResponse>("/api/v1/settings/backups/schedule"),
   updateBackupSchedule: (payload: {
@@ -672,6 +675,8 @@ export const api = {
   onboarding: () => callApi<OnboardingStatus>("/api/v1/onboarding"),
   setOnboardingDismissed: (dismissed: boolean) =>
     callApi<OnboardingStatus>("/api/v1/onboarding", { method: "PUT", body: JSON.stringify({ dismissed }) }),
+  updateOnboarding: (update: OnboardingUpdate) =>
+    callApi<OnboardingStatus>("/api/v1/onboarding", { method: "PUT", body: JSON.stringify(update) }),
   updateFeatureFlags: (patch: Partial<FeatureFlags>) =>
     callApi<FeatureFlags>("/api/v1/features", {
       method: "PUT",

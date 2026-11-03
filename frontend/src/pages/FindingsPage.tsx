@@ -35,6 +35,7 @@ import {
 } from "@ant-design/icons";
 import type { AlertSource, MeData } from "../api/types";
 import { api } from "../api/client";
+import { useAuth } from "../auth/AuthContext";
 import { NCC_ALERTS_QUERY_KEY } from "../utils/alertLifecycle";
 import { notify, notifyError } from "../notify";
 import { FeatureDisabled } from "../features/features/FeatureDisabled";
@@ -223,6 +224,8 @@ export function FindingsPage() {
   });
 
   const features = useFeatureFlags();
+  // Viewers see handling marks but cannot change them (the API answers 403).
+  const { canOperate } = useAuth();
   const pcAlertsOn = !features.isSuccess || features.data.pc_alerts !== false;
   const pcBlocked = alertSource === "PC" && features.data?.pc_alerts === false;
   const pcUnresolvedAlertsQuery = useQuery({
@@ -830,7 +833,14 @@ export function FindingsPage() {
           dispositionPending={setNCCDisposition.isPending}
           runAt={runTimestamp}
           onDisposition={
-            features.data?.alert_handling === false ? undefined : (input) => setNCCDisposition.mutate(input)
+            features.data?.alert_handling === false || !canOperate
+              ? undefined
+              : (input) => setNCCDisposition.mutate(input)
+          }
+          readOnlyReason={
+            features.data?.alert_handling !== false && !canOperate
+              ? "Your role can view handling but not change it. Ask an operator or administrator to acknowledge or resolve this alert."
+              : undefined
           }
         />
       )}

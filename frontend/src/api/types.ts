@@ -319,6 +319,8 @@ export type NotificationState = {
   maintenance?: MaintenanceWindow[];
   throttle?: NotificationThrottle;
   digest?: DigestConfig;
+  /** How the runner reports each run (config.yaml notify-digest / notify-on-regression). */
+  run_reports?: { per_run?: boolean; only_on_regression?: boolean };
   last_delivery?: Record<string, NotificationDeliveryStatus>;
   updated_at?: string;
 };
@@ -596,6 +598,16 @@ export type ScheduleState = {
   task_name?: string;
   print_only: boolean;
   updated_at: string;
+};
+
+/** PUT /api/v1/schedule result (host scheduler fields absent on Kubernetes). */
+export type ScheduleSaveResult = {
+  schedule?: ScheduleState;
+  applied?: boolean;
+  preview?: boolean;
+  command?: string[];
+  output?: string;
+  apply_error?: string;
 };
 
 export type DiagnosticCheck = {
@@ -1032,6 +1044,8 @@ export type OnboardingStep = {
   title: string;
   description: string;
   done: boolean;
+  /** An admin marked the step as not applicable; it counts toward progress. */
+  skipped?: boolean;
   optional?: boolean;
   detail?: string;
   /** Settings tab where the step is completed. */
@@ -1045,10 +1059,22 @@ export type OnboardingStatus = {
   steps: OnboardingStep[];
   required_done: number;
   required_total: number;
+  /** Required steps done or skipped, or an admin finished setup. */
   completed: boolean;
+  /** An admin marked setup complete with steps left. */
+  finished?: boolean;
+  finished_at?: string;
+  finished_by?: string;
   dismissed: boolean;
   dismissed_at?: string;
   dismissed_by?: string;
+};
+
+export type OnboardingUpdate = {
+  dismissed?: boolean;
+  finished?: boolean;
+  skip_step?: string;
+  unskip_step?: string;
 };
 
 /** One run option accepted in extra_args (GET /api/v1/runs/extra-args). */

@@ -290,7 +290,11 @@ Use a temporary debug pod mounting `ncc-v2-data`, or expose via API/UI artifact 
 
 - Check the cron expression in `k8s/runner-cronjob.yaml`, or view and update it
   from Settings → Schedule in the UI (Kubernetes mode patches the
-  `ncc-v2-runner` CronJob).
+  `ncc-v2-runner` CronJob; **Pause scheduled runs** sets `spec.suspend`).
+  The API needs `get` and `patch` on that CronJob (`k8s/rbac.yaml`); for a
+  different name set `NCC_RUNNER_CRONJOB` on the API Deployment. Re-applying
+  `k8s/` resets the schedule to the manifest's value, so copy a schedule you
+  want to keep into `k8s/runner-cronjob.yaml`.
 - Confirm cronjob exists and is not suspended:
 
   ```bash

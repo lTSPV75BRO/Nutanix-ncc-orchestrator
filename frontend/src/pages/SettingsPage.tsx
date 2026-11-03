@@ -23,6 +23,7 @@ import { ErrorStateCard, LoadingStateCard } from "../components/UxStates";
 import { notify, notifyError } from "../notify";
 import { localDateKey as localDayKey, relativeTime } from "../utils/datetime";
 import { sectionByKey } from "../navigation";
+import { RunActivityChart } from "../features/status/RunActivity";
 import { KeyValueList, middleEllipsis, Panel, StatTile, StatusBadge, type KeyValueItem } from "../ui";
 
 const FeaturesSection = lazy(() =>
@@ -87,121 +88,6 @@ function lazySection(children: ReactNode) {
  * but the post-processing here also tolerates "summary" so the in-flight
  * latest run shows up before the orchestrator archives it.
  */
-function RecentRunsSparkline({ days = 7 }: { days?: number }) {
-  // Pull only sources that correspond to real runs. The backend supports
-  // ?source= filtering; "history" is the archived (most authoritative) feed.
-  // We also fetch unfiltered and post-filter so a brand-new run that's still
-  // sitting at outputDir/run-summary.json (source="summary") shows up before
-  // it's archived. Fetching unfiltered is cheap and yields fresher results.
-  const runsQuery = useQuery({
-    queryKey: ["runs", "sparkline", days],
-    queryFn: () => api.runs({ limit: 200 }),
-    staleTime: 30_000,
-  });
-
-  // Local-day key (YYYY-MM-DD in the user's timezone). We *deliberately* don't
-  // use toISOString().slice(0,10) here — that returns the UTC date, which can
-  // be off-by-one for users in IST/PST/etc. when local midnight straddles a
-  // UTC boundary. Bucketing must be in the user's local TZ so a run that
-  // happened "today afternoon" actually lands in the "today" bar.
-  const localDateKey = (d: Date) => {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const dd = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${dd}`;
-  };
-
-  const buckets: { key: string; label: string; count: number }[] = [];
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  for (let i = days - 1; i >= 0; i -= 1) {
-    const d = new Date(today.getTime() - i * 24 * 3600 * 1000);
-    buckets.push({
-      key: localDateKey(d),
-      label: d.toLocaleDateString(undefined, { weekday: "short" }),
-      count: 0,
-    });
-  }
-  const windowStart = today.getTime() - (days - 1) * 24 * 3600 * 1000;
-  const cutoff = today.getTime() + 24 * 3600 * 1000;
-
-  const list = (runsQuery.data ?? []) as Array<{
-    mod_time?: string;
-    timestamp?: string;
-    source?: string;
-    success?: boolean;
-  }>;
-  // history wins when the same minute also has a summary entry pointing to
-  // the same run on disk.
-  const ordered = [...list].sort((a, b) => {
-    const rank: Record<string, number> = { history: 2, summary: 1 };
-    return (rank[b.source ?? ""] ?? 0) - (rank[a.source ?? ""] ?? 0);
-  });
-  const seenMinute = new Set<string>();
-  for (const r of ordered) {
-    // Hard filter: triggers are not runs. Anything else with no recognizable
-    // source (e.g. future API additions) is also ignored to avoid surprises.
-    if (r.source !== "history" && r.source !== "summary") continue;
-    const iso = r.timestamp || r.mod_time;
-    if (!iso) continue;
-    const ts = new Date(iso);
-    const t = ts.getTime();
-    if (Number.isNaN(t)) continue;
-    if (t < windowStart || t > cutoff) continue;
-    const minuteKey = ts.toISOString().slice(0, 16);
-    if (seenMinute.has(minuteKey)) continue;
-    seenMinute.add(minuteKey);
-    const dayKey = localDateKey(ts);
-    const bucket = buckets.find((b) => b.key === dayKey);
-    if (bucket) bucket.count += 1;
-  }
-
-  const total = buckets.reduce((acc, b) => acc + b.count, 0);
-  const isLoading = runsQuery.isLoading;
-  const max = Math.max(1, ...buckets.map((b) => b.count));
-  const width = 220;
-  const height = 48;
-  const gap = 4;
-  const barW = (width - gap * (buckets.length - 1)) / buckets.length;
-
-  return (
-    <div className="recent-runs-spark">
-      <div className="recent-runs-meta">
-        <Typography.Text strong>Recent runs</Typography.Text>
-        <Typography.Text type="secondary" style={{ marginLeft: 8 }}>
-          {isLoading ? "loading…" : `${total} run${total === 1 ? "" : "s"} · last ${days} days`}
-        </Typography.Text>
-      </div>
-      <svg width={width} height={height} role="img" aria-label={`Run frequency over the last ${days} days`}>
-        {buckets.map((b, i) => {
-          const h = b.count > 0 ? Math.max(2, (b.count / max) * (height - 4)) : 2;
-          const x = i * (barW + gap);
-          const y = height - h;
-          return (
-            <g key={b.key}>
-              <title>{`${b.label} (${b.key}): ${b.count} run${b.count === 1 ? "" : "s"}`}</title>
-              <rect
-                x={x}
-                y={y}
-                width={barW}
-                height={h}
-                rx={2}
-                fill={b.count > 0 ? "var(--menu-selected-border, #1677ff)" : "var(--control-border, #d9d9d9)"}
-                opacity={b.count > 0 ? 0.9 : 0.4}
-              />
-            </g>
-          );
-        })}
-      </svg>
-      <div className="recent-runs-axis">
-        {buckets.map((b) => (
-          <span key={b.key}>{b.label.charAt(0)}</span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 /** A server path row: truncated on one line, full path on hover, copy button. */
 function pathItem(label: string, value: string, hint: string): KeyValueItem {
   const missing = !value || value === "-";
@@ -287,7 +173,7 @@ function ConnectionTab({
           hint={[buildLabel && `Built ${buildLabel}`, stream].filter(Boolean).join(" · ") || undefined}
         />
         <StatTile label="Authentication" value={authMode} hint={tokenSource !== "-" ? `Token from ${tokenSource}` : undefined} />
-        <StatTile label="Platform" value={[osName, arch].filter(Boolean).join("/") || "—"} hint={goVersion ? `Go ${goVersion}` : undefined} />
+        <StatTile label="Platform" value={[osName, arch].filter(Boolean).join("/") || "—"} hint={goVersion ? `Go ${goVersion.replace(/^go/, "")}` : undefined} />
       </div>
 
       <div className="insights-grid">
@@ -302,8 +188,8 @@ function ConnectionTab({
             ]}
           />
         </Panel>
-        <Panel title="Run activity">
-          <RecentRunsSparkline />
+        <Panel title="Run activity" description="Runs per day over the last 7 days, by outcome.">
+          <RunActivityChart />
         </Panel>
       </div>
     </div>

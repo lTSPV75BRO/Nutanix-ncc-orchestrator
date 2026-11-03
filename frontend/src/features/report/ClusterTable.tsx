@@ -50,7 +50,10 @@ type Props = {
   pcResolvedFilter: "all" | "No" | "Yes";
   compareMode: "all" | "changed" | "flaky";
   dispositions?: NCCDisposition[];
-  /** Left out when alert handling is turned off: no checkboxes, bulk bar or handling buttons. */
+  /**
+   * Left out when alert handling is turned off or the user cannot change
+   * marks (viewer): no checkboxes, bulk bar or handling buttons.
+   */
   onDisposition?: (input: {
     action: "acknowledge" | "resolve" | "reopen";
     note?: string;
@@ -60,6 +63,8 @@ type Props = {
     items?: Array<{ cluster: string; check: string }>;
   }) => void;
   dispositionPending?: boolean;
+  /** Why marks are read-only when onDisposition is left out. */
+  readOnlyReason?: string;
   runAt?: string;
   onSummaryChange?: (summary: {
     total: number;
@@ -546,14 +551,16 @@ function NCCAlertInspector({
   onNote,
   pending,
   onAction,
+  readOnlyReason,
 }: {
   row: RowRecord;
   mark?: NCCDisposition;
   note: string;
   onNote: (value: string) => void;
   pending?: boolean;
-  /** Absent when alert handling is turned off: marks are shown read-only. */
+  /** Absent when marks are read-only (handling off, or a viewer). */
   onAction?: (action: "acknowledge" | "resolve" | "reopen") => void;
+  readOnlyReason?: string;
 }) {
   const current = handlingLabel(mark?.status || "");
   const history = [...(mark?.history || [])].reverse();
@@ -615,7 +622,7 @@ function NCCAlertInspector({
           </>
         ) : (
           <Typography.Paragraph type="secondary" className="ncc-handling-hint">
-            Alert handling is turned off under Settings → Features, so marks are read-only.
+            {readOnlyReason || "Alert handling is turned off under Settings → Features, so marks are read-only."}
           </Typography.Paragraph>
         )}
       </Card>
@@ -713,6 +720,7 @@ export function ClusterTable({
   dispositions,
   onDisposition,
   dispositionPending,
+  readOnlyReason,
   runAt,
   onSummaryChange,
 }: Props) {
@@ -1495,6 +1503,7 @@ export function ClusterTable({
               note={handlingNote}
               onNote={setHandlingNote}
               pending={dispositionPending}
+              readOnlyReason={readOnlyReason}
               onAction={
                 onDisposition
                   ? (action) =>

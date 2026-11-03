@@ -17,6 +17,9 @@ spec:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
           whenUnsatisfiable: DoNotSchedule
+          # Without this a tainted control-plane node counts as an empty
+          # domain, so the rollout's surge pod can never schedule.
+          nodeTaintsPolicy: Honor
           labelSelector:
             matchLabels:
               app: ncc-orchestrator-v2
@@ -36,6 +39,9 @@ spec:
           env:
             - name: NCC_RUNTIME_MODE
               value: kubernetes
+            # Settings > Schedule edits this chart's CronJob (cronjob.yaml).
+            - name: NCC_RUNNER_CRONJOB
+              value: ncc-orchestrator
             {{- if .Values.apiGoMemLimit }}
             - name: GOMEMLIMIT
               value: {{ .Values.apiGoMemLimit | quote }}

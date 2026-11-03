@@ -2,6 +2,8 @@ import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, Card, Col, Empty, Row, Skeleton, Statistic, Table, Tag, Typography } from "antd";
 import { api } from "../../api/client";
+import { useAuth } from "../../auth/AuthContext";
+import { useFeatureFlags } from "../features/useFeatureFlags";
 import { formatDateTime } from "../../utils/datetime";
 import { notify, notifyError } from "../../notify";
 import { AGE_BUCKETS, buildLifecycleInsights, formatSpan, NCC_ALERTS_QUERY_KEY } from "../../utils/alertLifecycle";
@@ -20,6 +22,11 @@ export function LifecycleInsightsCard({ enabled }: { enabled: boolean }) {
   });
   const insights = useMemo(() => buildLifecycleInsights(alerts.data ?? []), [alerts.data]);
   const queryClient = useQueryClient();
+  // Viewers, and installs with alert handling off, see the list without a
+  // Resolve button (the API refuses both).
+  const { canOperate } = useAuth();
+  const features = useFeatureFlags();
+  const canResolve = canOperate && features.data?.alert_handling !== false;
   // These alerts are not in the latest run, so the Dashboard table cannot show
   // them; resolve them here instead.
   const resolve = useMutation({
@@ -149,7 +156,9 @@ export function LifecycleInsightsCard({ enabled }: { enabled: boolean }) {
                 Open but no longer reported
               </Typography.Title>
               <Typography.Text type="secondary">
-                The latest runs no longer find these checks. Resolve them if the issue is fixed.
+                {canResolve
+                  ? "The latest runs no longer find these checks. Resolve them if the issue is fixed."
+                  : "The latest runs no longer find these checks. An operator can resolve them if the issue is fixed."}
               </Typography.Text>
               <Table
                 style={{ marginTop: 8 }}
@@ -167,21 +176,25 @@ export function LifecycleInsightsCard({ enabled }: { enabled: boolean }) {
                     width: 200,
                     render: (_: unknown, a) => (a.not_detected_since_run ? formatDateTime(a.not_detected_since_run) : "—"),
                   },
-                  {
-                    title: "",
-                    key: "action",
-                    width: 100,
-                    render: (_: unknown, a) => (
-                      <Button
-                        size="small"
-                        loading={resolve.isPending && resolve.variables === a.id}
-                        disabled={resolve.isPending}
-                        onClick={() => resolve.mutate(a.id)}
-                      >
-                        Resolve
-                      </Button>
-                    ),
-                  },
+                  ...(canResolve
+                    ? [
+                        {
+                          title: "",
+                          key: "action",
+                          width: 100,
+                          render: (_: unknown, a: (typeof insights.looksFixed)[number]) => (
+                            <Button
+                              size="small"
+                              loading={resolve.isPending && resolve.variables === a.id}
+                              disabled={resolve.isPending}
+                              onClick={() => resolve.mutate(a.id)}
+                            >
+                              Resolve
+                            </Button>
+                          ),
+                        },
+                      ]
+                    : []),
                 ]}
               />
             </>

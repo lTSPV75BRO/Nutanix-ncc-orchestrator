@@ -24,6 +24,11 @@ rules:
     resources: ["secrets"]
     resourceNames: ["ncc-v2-users"]
     verbs: ["get", "update", "patch"]
+  # Settings > Schedule reads and patches the runner CronJob (cronjob.yaml).
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    resourceNames: ["ncc-orchestrator"]
+    verbs: ["get", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

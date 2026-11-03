@@ -190,6 +190,12 @@ func (c *artifactCache) derivedAsync(key string, sources []string, ttl time.Dura
 		e.mu.Unlock()
 		return stale
 	}
+	if !e.loaded {
+		// Nothing to serve yet: compute now rather than answer with nil,
+		// which the report showed as "no logs" until the next request.
+		e.mu.Unlock()
+		return c.derived(key, sources, ttl, weight, compute)
+	}
 	e.loading = true
 	e.mu.Unlock()
 

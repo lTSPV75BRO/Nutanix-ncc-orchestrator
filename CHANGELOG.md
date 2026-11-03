@@ -74,7 +74,34 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   run that reached at least one cluster, a recurring schedule, scheduled
   backups, plus optional notifications and team access. It ticks itself off,
   shows as a Dashboard card and a "Setup n/m" header button with a drawer, and
-  an admin's "hide" applies to everyone.
+  an admin's "hide" applies to everyone. Admins can **Skip** a step that does
+  not apply (it counts toward progress and can be undone) or **Finish setup**
+  to retire the checklist for everyone even with steps left; it can be
+  reopened from the user menu → *Setup checklist*. `PUT /api/v1/onboarding`
+  takes `skip_step`, `unskip_step` and `finished`, and every change is
+  audited.
+- **Redesigned Settings → Notifications.** A summary says what is sent and
+  where; each channel (email, Slack, webhook) is a card with its own switch,
+  inline field checks, the latest delivery result (a failure after an older
+  success is now shown as a failure) and **Send test**. **Test all channels**
+  and **Send digest now** (`POST /api/v1/settings/notifications/test` with
+  `kind: "digest"`) are new; tests are disabled until changes are saved,
+  because they use the saved settings. Quiet hours and maintenance windows use
+  time and date pickers instead of typed HH:MM and RFC 3339 text. A new **Run
+  reports** group exposes the runner's `notify-digest` (one message per run
+  instead of per cluster) and `notify-on-regression` (`run_reports` in the
+  API).
+- **Status → Run activity** is a full-width chart: runs per day for the last
+  week, stacked by outcome, with totals, last run and a link to all runs. It
+  replaces a fixed 220 px sparkline that sat in the corner of its panel.
+- **Redesigned Settings → Schedule.** A status card says in plain words what
+  runs and when (Active / Paused / Not installed), with next run, last run and
+  last outcome; the form offers one-click presets and cron examples, an
+  Interval / Custom cron switch, inline cron validation, and a preview of the
+  next three run times (UTC on Kubernetes). Save always installs the schedule;
+  **Preview** shows the exact scheduler entry in a dialog without saving.
+  Rarely used fields (task name, log path, raw health) sit under collapsible
+  sections.
 - **Redesigned sign-in and first-password screens** (shared two-pane layout,
   responsive, minimal, in the selected app theme's colours): a product pane
   ("Automate Nutanix cluster health checks", three feature highlights,
@@ -277,6 +304,66 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 
 ### Fixed
 
+- **Kubernetes schedule from Settings → Schedule.** On Helm installs it
+  could not work at all: the API looked for the `ncc-v2-runner` CronJob (the
+  chart names it `ncc-orchestrator`) and the chart's Role had no CronJob
+  permission. The CronJob name is now `--runner-cronjob` /
+  `NCC_RUNNER_CRONJOB` (set by the chart) and both Roles grant only `get` and
+  `patch` on that one CronJob (the Kustomize Role previously allowed
+  create/delete on every CronJob and Job). The form no longer replaces a
+  custom cron set with kubectl or Helm by the default interval, a custom cron
+  clears the stale interval annotation, intervals that would fire unevenly
+  (45m, 5h, 2d) are refused instead of rounded, and a new **Pause scheduled
+  runs** switch suspends the CronJob (removing a schedule used to send an
+  empty schedule, which the API server rejects). A CronJob deployed with a
+  schedule now reports as configured, health shows its last scheduled run
+  and outcome, invalid input answers 400 rather than 502, and a missing
+  CronJob or RBAC rule gives an error that names the fix.
+- **Viewers saw Acknowledge, Resolve and Reopen** on Findings alerts (and
+  Resolve under Insights → Alert aging) although the API refuses them with
+  403. They now see the handling history with a note that an operator can
+  change it.
+- **Notification settings could corrupt a nested config.yaml.** Opening the
+  Notifications page rewrote the file, and saving copied every nested setting
+  (credentials, clusters, …) to a top-level key. Top-level keys win, so later
+  edits on the Clusters page were silently ignored, and the password was
+  stored twice. Settings are now written where the file keeps them, reading
+  never writes, and identical top-level copies left by the bug are removed on
+  the next save (copies that differ are kept, since the runner used them).
+- **The scheduled health digest never sent.** Its interval was dropped when
+  settings were reloaded, so it was never due (and re-saving failed with
+  "digest interval"). Its switch also turned on the runner's unrelated
+  `notify-digest` (one report per run); the two are now separate settings.
+- **Notifications:** "test all" demanded that email, Slack and webhook were
+  all turned on, and now tests the channels that are on; Slack and email
+  messages were the raw JSON payload and are now readable text; this server's
+  webhook calls now send `webhook-secret` (`X-NCC-Signature`) and
+  `webhook-headers` like the runner's; email honours `email-use-tls` and
+  `smtp-insecure-skip-verify`, and port 465 (implicit TLS) works for both the
+  server and the runner instead of timing out; webhook URLs must be http(s);
+  maintenance-window notes are kept; turning on the digest or quiet hours
+  without touching the frequency or time zone no longer fails to save.
+- **Schedule preview no longer saves.** A host `PUT /api/v1/schedule` with
+  `print_only` stored the previewed values as the saved schedule although
+  nothing was installed; previews now return `preview: true` and leave the
+  stored schedule alone.
+- **Windows: a cron expression is refused instead of ignored.** Windows
+  Scheduled Tasks only run on an interval, so `create-schedule --cron` (and
+  the UI) silently installed the interval instead. It now fails with a clear
+  message, and the Schedule page blocks saving a cron on a Windows host.
+- **`/api/v1/jobs/{id}`.** DELETE on a queued job only set a flag, so the run
+  still started later; it now uses the same cancel path as the Runs page and
+  is audited. Job IDs are validated before they are used as file names
+  (a backslash ID could read JSON files outside `outputfiles/jobs` on
+  Windows), and finished runs report `succeeded` instead of `done`.
+- **MCP `ncc://runs/{id}/…` resources** could read files outside
+  `outputfiles/runs` with a `..` run ID.
+- **Run-history retention skipped API runs.** Archived runs are now named by
+  run ID (`20261103T081500Z-001`), which `retain-last` / `retain-days` did not
+  recognise, so they were never pruned.
+- **API rollouts could stall** with the new `DoNotSchedule` spread rule: a
+  tainted control-plane node counted as an empty zone, so the surge pod never
+  scheduled. The rule now sets `nodeTaintsPolicy: Honor`.
 - **Windows: process liveness always reported "dead".** `Process.Signal(0)` is
   unsupported on Windows, so restore could overwrite a running stack, a second
   supervisor could start, `v2-stop` always waited the full timeout and then

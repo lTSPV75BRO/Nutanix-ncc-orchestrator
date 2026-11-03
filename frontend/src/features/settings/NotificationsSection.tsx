@@ -1,52 +1,119 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import {
   Alert,
   Button,
   Card,
-  Divider,
+  Collapse,
+  DatePicker,
   Form,
   Input,
   InputNumber,
+  Segmented,
   Select,
   Space,
   Switch,
   Tag,
+  TimePicker,
   Tooltip,
   Typography,
 } from "antd";
 import {
+  ApiOutlined,
   BellOutlined,
+  CheckCircleFilled,
   ClockCircleOutlined,
+  CloseCircleFilled,
   DeleteOutlined,
+  MailOutlined,
   PlusOutlined,
   SendOutlined,
-  ToolOutlined,
+  SlackOutlined,
 } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import dayjs, { type Dayjs } from "dayjs";
 import { api } from "../../api/client";
-import type { MaintenanceWindow, NotificationState } from "../../api/types";
+import type { NotificationState } from "../../api/types";
 import { notify, notifyError } from "../../notify";
-import { formatDateTime } from "../../utils/datetime";
+import { formatDateTime, relativeTime } from "../../utils/datetime";
 import { SaveBar } from "../../ui";
+import {
+  alertSummary,
+  channelErrors,
+  deliveryView,
+  DIGEST_EVERY_OPTIONS,
+  digestLabel,
+  enabledChannelCount,
+  validateNotifications,
+  withDefaults,
+  type ChannelKey,
+} from "./notificationsModel";
 
-const DIGEST_EVERY_OPTIONS = [
-  { value: "6h", label: "Every 6 hours" },
-  { value: "12h", label: "Every 12 hours" },
-  { value: "24h", label: "Daily" },
-  { value: "7d", label: "Weekly" },
-];
+const BROWSER_TZ = (() => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+})();
 
-// A representative subset of IANA zones; "Other" lets the user type one.
-const TZ_OPTIONS = [
-  "UTC",
-  "America/Los_Angeles",
-  "America/New_York",
-  "Europe/London",
-  "Europe/Berlin",
-  "Asia/Kolkata",
-  "Asia/Singapore",
-  "Australia/Sydney",
-].map((z) => ({ value: z, label: z }));
+const TZ_OPTIONS = Array.from(
+  new Set([
+    "UTC",
+    BROWSER_TZ,
+    "America/Los_Angeles",
+    "America/New_York",
+    "Europe/London",
+    "Europe/Berlin",
+    "Asia/Kolkata",
+    "Asia/Singapore",
+    "Australia/Sydney",
+  ]),
+).map((z) => ({ value: z, label: z === BROWSER_TZ && z !== "UTC" ? `${z} (this browser)` : z }));
+
+const toTime = (hhmm?: string): Dayjs | null => {
+  const m = /^(\d{2}):(\d{2})$/.exec(hhmm ?? "");
+  return m ? dayjs().hour(Number(m[1])).minute(Number(m[2])).second(0) : null;
+};
+// UTC RFC 3339 without milliseconds, as the server stores and matches it.
+const toRFC3339 = (d: Dayjs) => d.second(0).millisecond(0).toISOString().replace(/\.\d{3}Z$/, "Z");
+
+function SectionTitle({ icon, children }: { icon: ReactNode; children: ReactNode }) {
+  return (
+    <Space size={8}>
+      {icon}
+      {children}
+    </Space>
+  );
+}
+
+/** A toggle row: label and help on the left, the switch on the right. */
+function ToggleRow({
+  label,
+  help,
+  checked,
+  disabled,
+  onChange,
+  children,
+}: {
+  label: ReactNode;
+  help?: ReactNode;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (v: boolean) => void;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="notif-toggle">
+      <div className="notif-toggle-text">
+        <span className="notif-toggle-label">{label}</span>
+        {help ? <span className="notif-toggle-help">{help}</span> : null}
+        {children}
+      </div>
+      <Switch checked={checked} disabled={disabled} onChange={onChange} aria-label={typeof label === "string" ? label : undefined} />
+    </div>
+  );
+}
 
 export function NotificationsSection() {
   const qc = useQueryClient();
@@ -70,511 +137,466 @@ export function NotificationsSection() {
     onError: (e) => notifyError(e, "Could not save notification settings"),
   });
 
-  const [testing, setTesting] = useState<string | null>(null);
+  const testMut = useMutation({
+    mutationFn: ({ channel, kind }: { channel: string; kind?: "test" | "digest" }) => api.testNotification(channel, kind),
+    onSuccess: (_d, { channel, kind }) => {
+      const where = channel === "all" ? "every channel that is on" : channel === "email" ? "email" : channel === "slack" ? "Slack" : "the webhook";
+      notify.success(kind === "digest" ? `Health digest sent to ${where}.` : `Test message sent to ${where}.`);
+    },
+    onError: (e) => notifyError(e, "Sending failed"),
+    // Refresh the delivery status either way.
+    onSettled: () => void qc.invalidateQueries({ queryKey: ["settings", "notifications"] }),
+  });
+
   const isDirty = JSON.stringify(state) !== JSON.stringify(baseline ?? {});
-  const channelStatus = (channel: string) => state.last_delivery?.[channel];
-  const fmtDelivery = (channel: string) => {
-    const d = channelStatus(channel);
-    if (!d) return "No delivery history yet.";
-    if (d.last_success_at) return `Last success: ${formatDateTime(d.last_success_at)}`;
-    if (d.last_attempt_at && d.last_error) return `Last failure: ${formatDateTime(d.last_attempt_at)} (${d.last_error})`;
-    return "No delivery history yet.";
-  };
-
-  const validHHMM = (v?: string) => !v || /^([01]\d|2[0-3]):([0-5]\d)$/.test(v.trim());
-  const validRFC3339 = (v: string) => {
-    if (!v.trim()) return false;
-    const t = Date.parse(v);
-    return Number.isFinite(t);
-  };
-
-  const validateState = (next: NotificationState): string | null => {
-    if (next.quiet?.enabled) {
-      if (!validHHMM(next.quiet.start) || !validHHMM(next.quiet.end)) {
-        return "Quiet hours must use HH:MM format (24-hour), e.g. 22:00.";
-      }
-      if (!next.quiet.timezone?.trim()) {
-        return "Quiet-hours timezone is required when quiet hours are enabled.";
-      }
-    }
-    for (const [i, w] of (next.maintenance ?? []).entries()) {
-      if (!validRFC3339(w.start) || !validRFC3339(w.end)) {
-        return `Maintenance window #${i + 1} must use RFC3339 timestamps.`;
-      }
-      if (Date.parse(w.start) >= Date.parse(w.end)) {
-        return `Maintenance window #${i + 1} start must be before end.`;
-      }
-    }
-    if ((next.throttle?.dedup_window_sec ?? 0) < 0 || (next.throttle?.min_interval_sec ?? 0) < 0) {
-      return "Throttle values cannot be negative.";
-    }
-    return null;
-  };
-
-  const canTestSlack = Boolean(state.slack?.enabled && state.slack?.webhook_url?.trim());
-  const canTestWebhook = Boolean(state.webhook?.enabled && state.webhook?.url?.trim());
-  const canTestEmail = Boolean(state.email?.enabled && state.email?.smtp_host?.trim() && state.email?.to?.trim());
-
-  const sendTest = async (channel: string) => {
-    setTesting(channel);
-    try {
-      await api.testNotification(channel);
-      notify.success(`Test notification sent (${channel}).`);
-    } catch (e) {
-      notifyError(e, "Test notification failed");
-    } finally {
-      setTesting(null);
-    }
-  };
+  const formError = useMemo(() => validateNotifications(withDefaults(state)), [state]);
+  const savedChannels = baseline ? enabledChannelCount(baseline) : 0;
 
   const onSave = () => {
-    const err = validateState(state);
+    const next = withDefaults(state);
+    const err = validateNotifications(next);
     if (err) {
       notify.warning(err);
       return;
     }
-    saveMut.mutate(state);
+    saveMut.mutate(next);
+  };
+  const discard = () => {
+    if (baseline) setState(baseline);
   };
 
-  // Shallow-merge helpers keep the controlled-state updates terse.
   const patch = (p: Partial<NotificationState>) => setState((s) => ({ ...s, ...p }));
-  const patchEvents = (p: Partial<NonNullable<NotificationState["events"]>>) =>
-    setState((s) => ({ ...s, events: { ...s.events, ...p } }));
-  const patchSlack = (p: Partial<NonNullable<NotificationState["slack"]>>) =>
-    setState((s) => ({ ...s, slack: { ...s.slack, ...p } }));
-  const patchWebhook = (p: Partial<NonNullable<NotificationState["webhook"]>>) =>
-    setState((s) => ({ ...s, webhook: { ...s.webhook, ...p } }));
-  const patchEmail = (p: Partial<NonNullable<NotificationState["email"]>>) =>
-    setState((s) => ({ ...s, email: { ...s.email, ...p } }));
-  const patchQuiet = (p: Partial<NonNullable<NotificationState["quiet"]>>) =>
-    setState((s) => ({ ...s, quiet: { ...s.quiet, ...p } }));
-  const patchThrottle = (p: Partial<NonNullable<NotificationState["throttle"]>>) =>
-    setState((s) => ({ ...s, throttle: { ...s.throttle, ...p } }));
-  const patchDigest = (p: Partial<NonNullable<NotificationState["digest"]>>) =>
-    setState((s) => ({ ...s, digest: { ...s.digest, ...p } }));
+  const patchIn = <K extends keyof NotificationState>(key: K, p: Partial<NonNullable<NotificationState[K]>>) =>
+    setState((s) => ({ ...s, [key]: { ...(s[key] as object | undefined), ...p } }));
+
+  // Tests use the saved settings, so they wait for a save.
+  const testBlockedReason = (channel: ChannelKey | "all"): string | null => {
+    if (isDirty) return "Save your changes first: tests use the saved settings.";
+    if (channel === "all") return savedChannels === 0 ? "Turn on a channel first." : null;
+    return baseline?.[channel]?.enabled ? null : "Turn this channel on and save first.";
+  };
+  const testButton = (channel: ChannelKey | "all", label = "Send test", kind: "test" | "digest" = "test") => {
+    const reason = testBlockedReason(channel);
+    const pending = testMut.isPending && testMut.variables?.channel === channel && (testMut.variables?.kind ?? "test") === kind;
+    return (
+      <Tooltip title={reason}>
+        <Button
+          icon={<SendOutlined />}
+          disabled={Boolean(reason) || testMut.isPending}
+          loading={pending}
+          onClick={() => testMut.mutate({ channel, kind })}
+        >
+          {label}
+        </Button>
+      </Tooltip>
+    );
+  };
+
+  if (query.isLoading) return <Card className="page-card" loading title="Notifications" />;
+  if (query.isError) {
+    return <Alert type="error" showIcon title="Could not load notification settings" description={String(query.error)} />;
+  }
+
+  const channelCard = (
+    key: ChannelKey,
+    title: string,
+    icon: ReactNode,
+    blurb: string,
+    fields: (errors: Record<string, string>) => ReactNode,
+  ) => {
+    const on = Boolean(state[key]?.enabled);
+    const errors = channelErrors(state, key);
+    const delivery = deliveryView(state.last_delivery?.[key]);
+    return (
+      <section className={`notif-channel${on ? " is-on" : ""}`} aria-label={title}>
+        <header className="notif-channel-head">
+          <span className="notif-channel-icon" aria-hidden="true">
+            {icon}
+          </span>
+          <div className="notif-channel-title">
+            <span className="notif-channel-name">{title}</span>
+            <span className="notif-channel-blurb">{blurb}</span>
+          </div>
+          <Switch
+            checked={on}
+            onChange={(v) => patchIn(key, { enabled: v })}
+            aria-label={`Send to ${title}`}
+          />
+        </header>
+        {on ? (
+          <>
+            <Form layout="vertical" className="notif-channel-form" component="div">
+              {fields(errors)}
+            </Form>
+            <footer className="notif-channel-foot">
+              <span className={`notif-delivery is-${delivery.tone}`}>
+                {delivery.tone === "ok" ? <CheckCircleFilled /> : delivery.tone === "fail" ? <CloseCircleFilled /> : null}
+                {delivery.text}
+                {delivery.at ? (
+                  <Tooltip title={formatDateTime(delivery.at)}>
+                    <span> {relativeTime(delivery.at)}</span>
+                  </Tooltip>
+                ) : null}
+                {delivery.error ? <span className="notif-delivery-error">— {delivery.error}</span> : null}
+              </span>
+              {testButton(key)}
+            </footer>
+          </>
+        ) : null}
+      </section>
+    );
+  };
+
+  const field = (label: string, error: string | undefined, input: ReactNode, extra?: ReactNode) => (
+    <Form.Item label={label} validateStatus={error ? "error" : undefined} help={error} extra={extra}>
+      {input}
+    </Form.Item>
+  );
 
   const windows = state.maintenance ?? [];
-  const setWindow = (i: number, p: Partial<MaintenanceWindow>) =>
+  const setWindow = (i: number, p: Partial<NonNullable<NotificationState["maintenance"]>[number]>) =>
     setState((s) => {
       const next = [...(s.maintenance ?? [])];
       next[i] = { ...next[i], ...p };
       return { ...s, maintenance: next };
     });
-  const addWindow = () =>
-    setState((s) => ({ ...s, maintenance: [...(s.maintenance ?? []), { start: "", end: "", note: "" }] }));
-  const removeWindow = (i: number) =>
-    setState((s) => ({ ...s, maintenance: (s.maintenance ?? []).filter((_, j) => j !== i) }));
+  const now = Date.now();
+  const activeWindow = (baseline?.maintenance ?? []).find((w) => Date.parse(w.start) <= now && now < Date.parse(w.end));
 
-  if (query.isLoading) {
-    return (
-      <Card className="page-card" loading title="Notifications" />
-    );
-  }
+  const masterOn = Boolean(state.enabled);
+  const channelsOn = enabledChannelCount(state);
 
   return (
-    <Space orientation="vertical" size={16} style={{ width: "100%" }}>
-      <Card
-        className="page-card"
-        title={
-          <Space>
+    <Space orientation="vertical" size={16} style={{ width: "100%" }} className="notif-page">
+      <Card className="page-card">
+        <div className="notif-summary">
+          <span className={`notif-summary-icon${masterOn && channelsOn ? " is-on" : ""}`} aria-hidden="true">
             <BellOutlined />
-            When to notify
+          </span>
+          <div className="notif-summary-text">
+            <Typography.Title level={4} className="notif-summary-title">
+              {!masterOn ? "Alerts are paused" : channelsOn === 0 ? "No channel is set up yet" : `Sending to ${channelsOn} channel${channelsOn === 1 ? "" : "s"}`}
+            </Typography.Title>
+            <Typography.Text type="secondary">
+              {masterOn
+                ? `${alertSummary(state)}${state.digest?.enabled ? ` · ${digestLabel(state.digest.every).toLowerCase()} health digest` : ""}${state.quiet?.enabled ? ` · quiet ${state.quiet.start}–${state.quiet.end}` : ""}`
+                : "Nothing is sent from this server until you turn alerts back on. Run reports from the runner still go out."}
+            </Typography.Text>
+          </div>
+          <Space wrap className="notif-summary-actions">
+            {testButton("all", "Test all channels")}
+            <Switch
+              checked={masterOn}
+              onChange={(v) => patch({ enabled: v })}
+              checkedChildren="On"
+              unCheckedChildren="Paused"
+              aria-label="Send alerts"
+            />
           </Space>
-        }
-        extra={
-          <Space>
-            <Button
-              disabled={!isDirty || saveMut.isPending}
-              onClick={() => {
-                if (baseline) setState(baseline);
-              }}
-            >
-              Reset
-            </Button>
-            <Button type="primary" loading={saveMut.isPending} disabled={!isDirty} onClick={onSave}>
-              Save
-            </Button>
-          </Space>
-        }
-      >
-        <Typography.Paragraph type="secondary" style={{ marginTop: -4 }}>
-          Alerts for run failures, backup failures, and self-heal events, plus a scheduled health
-          digest — delivered to Slack, a generic webhook, and/or email. Failures reuse the{" "}
-          <b>run failure</b> toggle.
-        </Typography.Paragraph>
-
-        <Form layout="vertical">
-          <Form.Item label="Enable notifications" style={{ marginBottom: 12 }}>
-            <Switch checked={Boolean(state.enabled)} onChange={(v) => patch({ enabled: v })} />
-          </Form.Item>
-          <Space size={24} wrap>
-            <Form.Item label="On run failure" style={{ marginBottom: 8 }}>
-              <Switch
-                checked={Boolean(state.events?.run_failure)}
-                onChange={(v) => patchEvents({ run_failure: v })}
-              />
-              <Tooltip title="Also covers backup failures and self-heal failing checks.">
-                <Typography.Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>
-                  incl. backup / self-heal
-                </Typography.Text>
-              </Tooltip>
-            </Form.Item>
-            <Form.Item label="On run success" style={{ marginBottom: 8 }}>
-              <Switch
-                checked={Boolean(state.events?.run_success)}
-                onChange={(v) => patchEvents({ run_success: v })}
-              />
-            </Form.Item>
-            <Form.Item label="On policy violations" style={{ marginBottom: 8 }}>
-              <Switch
-                checked={Boolean(state.events?.policy_violations)}
-                onChange={(v) => patchEvents({ policy_violations: v })}
-              />
-            </Form.Item>
-          </Space>
-        </Form>
+        </div>
+        {activeWindow ? (
+          <Alert
+            className="notif-summary-alert"
+            type="warning"
+            showIcon
+            title={`Muted by a maintenance window until ${formatDateTime(activeWindow.end)}`}
+            description={activeWindow.note || undefined}
+          />
+        ) : null}
       </Card>
 
-      {/* Channels */}
-      <Card className="page-card" title="Channels">
-        <Form layout="vertical">
-          <Divider titlePlacement="start" style={{ marginTop: 0 }}>
-            Slack
-            <Button
-              size="small"
-              icon={<SendOutlined />}
-              style={{ marginLeft: 12 }}
-              loading={testing === "slack"}
-              disabled={!canTestSlack}
-              onClick={() => sendTest("slack")}
-            >
-              Test
-            </Button>
-          </Divider>
-          <Space size={16} wrap align="end">
-            <Form.Item label="Enabled" style={{ marginBottom: 8 }}>
-              <Switch checked={Boolean(state.slack?.enabled)} onChange={(v) => patchSlack({ enabled: v })} />
-            </Form.Item>
-            <Form.Item label="Webhook URL" style={{ marginBottom: 8 }}>
-              <Input.Password
-                style={{ width: 360 }}
-                placeholder="https://hooks.slack.com/services/…"
-                value={state.slack?.webhook_url ?? ""}
-                onChange={(e) => patchSlack({ webhook_url: e.target.value })}
-              />
-            </Form.Item>
-            <Form.Item label="Channel" style={{ marginBottom: 8 }}>
-              <Input
-                style={{ width: 160 }}
-                placeholder="#sre-alerts"
-                value={state.slack?.channel ?? ""}
-                onChange={(e) => patchSlack({ channel: e.target.value })}
-              />
-            </Form.Item>
-          </Space>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {fmtDelivery("slack")}
-          </Typography.Text>
-
-          <Divider titlePlacement="start">
-            Webhook
-            <Button
-              size="small"
-              icon={<SendOutlined />}
-              style={{ marginLeft: 12 }}
-              loading={testing === "webhook"}
-              disabled={!canTestWebhook}
-              onClick={() => sendTest("webhook")}
-            >
-              Test
-            </Button>
-          </Divider>
-          <Space size={16} wrap align="end">
-            <Form.Item label="Enabled" style={{ marginBottom: 8 }}>
-              <Switch checked={Boolean(state.webhook?.enabled)} onChange={(v) => patchWebhook({ enabled: v })} />
-            </Form.Item>
-            <Form.Item label="URL" style={{ marginBottom: 8 }}>
-              <Input
-                style={{ width: 420 }}
-                placeholder="https://example.com/ncc-events"
-                value={state.webhook?.url ?? ""}
-                onChange={(e) => patchWebhook({ url: e.target.value })}
-              />
-            </Form.Item>
-          </Space>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {fmtDelivery("webhook")}
-          </Typography.Text>
-
-          <Divider titlePlacement="start">
-            Email
-            <Button
-              size="small"
-              icon={<SendOutlined />}
-              style={{ marginLeft: 12 }}
-              loading={testing === "email"}
-              disabled={!canTestEmail}
-              onClick={() => sendTest("email")}
-            >
-              Test
-            </Button>
-          </Divider>
-          <Space size={16} wrap align="end">
-            <Form.Item label="Enabled" style={{ marginBottom: 8 }}>
-              <Switch checked={Boolean(state.email?.enabled)} onChange={(v) => patchEmail({ enabled: v })} />
-            </Form.Item>
-            <Form.Item label="SMTP host" style={{ marginBottom: 8 }}>
-              <Input
-                style={{ width: 220 }}
-                placeholder="smtp.example.com"
-                value={state.email?.smtp_host ?? ""}
-                onChange={(e) => patchEmail({ smtp_host: e.target.value })}
-              />
-            </Form.Item>
-            <Form.Item label="Port" style={{ marginBottom: 8 }}>
-              <InputNumber
-                min={1}
-                max={65535}
-                value={state.email?.smtp_port ?? 587}
-                onChange={(v) => patchEmail({ smtp_port: typeof v === "number" ? v : undefined })}
-              />
-            </Form.Item>
-          </Space>
-          <Space size={16} wrap align="end">
-            <Form.Item label="Username" style={{ marginBottom: 8 }}>
-              <Input
-                style={{ width: 220 }}
-                autoComplete="off"
-                value={state.email?.username ?? ""}
-                onChange={(e) => patchEmail({ username: e.target.value })}
-              />
-            </Form.Item>
-            <Form.Item label="Password" style={{ marginBottom: 8 }}>
-              <Input.Password
-                style={{ width: 220 }}
-                placeholder="(unchanged)"
-                value={state.email?.password ?? ""}
-                onChange={(e) => patchEmail({ password: e.target.value })}
-              />
-            </Form.Item>
-            <Form.Item label="From" style={{ marginBottom: 8 }}>
-              <Input
-                style={{ width: 220 }}
-                placeholder="ncc@example.com"
-                value={state.email?.from ?? ""}
-                onChange={(e) => patchEmail({ from: e.target.value })}
-              />
-            </Form.Item>
-            <Form.Item label="To" style={{ marginBottom: 8 }}>
-              <Input
-                style={{ width: 260 }}
-                placeholder="sre@example.com"
-                value={state.email?.to ?? ""}
-                onChange={(e) => patchEmail({ to: e.target.value })}
-              />
-            </Form.Item>
-          </Space>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Leave the email password blank to keep the stored one. It is never returned to the
-            browser.
-          </Typography.Text>
-          <br />
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {fmtDelivery("email")}
-          </Typography.Text>
-        </Form>
+      <Card className="page-card" title={<SectionTitle icon={<SendOutlined />}>Where to send</SectionTitle>}>
+        <div className="notif-channels">
+          {channelCard("email", "Email", <MailOutlined />, "Through your SMTP server", (e) => (
+            <div className="notif-grid">
+              {field("Mail server", e.smtp_host, (
+                <Input placeholder="smtp.example.com" value={state.email?.smtp_host ?? ""} onChange={(ev) => patchIn("email", { smtp_host: ev.target.value })} />
+              ))}
+              {field("Port", e.smtp_port, (
+                <InputNumber
+                  min={1}
+                  max={65535}
+                  style={{ width: "100%" }}
+                  value={state.email?.smtp_port ?? 587}
+                  onChange={(v) => patchIn("email", { smtp_port: typeof v === "number" ? v : undefined })}
+                />
+              ), "587 uses STARTTLS, 465 uses TLS.")}
+              {field("Sender", e.from, (
+                <Input placeholder="ncc@example.com" value={state.email?.from ?? ""} onChange={(ev) => patchIn("email", { from: ev.target.value })} />
+              ))}
+              {field("Recipients", e.to, (
+                <Input placeholder="sre@example.com, oncall@example.com" value={state.email?.to ?? ""} onChange={(ev) => patchIn("email", { to: ev.target.value })} />
+              ))}
+              {field("Username", undefined, (
+                <Input autoComplete="off" placeholder="Leave empty for no sign-in" value={state.email?.username ?? ""} onChange={(ev) => patchIn("email", { username: ev.target.value })} />
+              ))}
+              {field("Password", undefined, (
+                <Input.Password
+                  autoComplete="new-password"
+                  placeholder="Unchanged"
+                  value={state.email?.password ?? ""}
+                  onChange={(ev) => patchIn("email", { password: ev.target.value })}
+                />
+              ), "Stored on the server and never shown again.")}
+            </div>
+          ))}
+          {channelCard("slack", "Slack", <SlackOutlined />, "Posts to a channel through an incoming webhook", (e) => (
+            <div className="notif-grid">
+              {field("Webhook URL", e.webhook_url, (
+                <Input.Password
+                  placeholder="https://hooks.slack.com/services/…"
+                  value={state.slack?.webhook_url ?? ""}
+                  onChange={(ev) => patchIn("slack", { webhook_url: ev.target.value })}
+                />
+              ), "Treat it like a password: anyone with it can post.")}
+              {field("Channel", undefined, (
+                <Input placeholder="#sre-alerts" value={state.slack?.channel ?? ""} onChange={(ev) => patchIn("slack", { channel: ev.target.value })} />
+              ), "Optional. Defaults to the webhook's channel.")}
+            </div>
+          ))}
+          {channelCard("webhook", "Webhook", <ApiOutlined />, "Posts JSON events to your own endpoint", (e) => (
+            <div className="notif-grid notif-grid-wide">
+              {field("URL", e.url, (
+                <Input placeholder="https://example.com/ncc-events" value={state.webhook?.url ?? ""} onChange={(ev) => patchIn("webhook", { url: ev.target.value })} />
+              ), (
+                <>
+                  Requests are signed with <code>X-NCC-Signature</code> when <code>webhook-secret</code> is set in the config file.
+                </>
+              ))}
+            </div>
+          ))}
+        </div>
       </Card>
 
-      {/* Delivery controls */}
-      <Card
-        className="page-card"
-        title={
-          <Space>
-            <ClockCircleOutlined />
-            Delivery controls
-          </Space>
-        }
-      >
-        <Typography.Paragraph type="secondary" style={{ marginTop: -4 }}>
-          Quiet hours and throttling prevent alert fatigue; maintenance windows mute everything
-          during planned work.
-        </Typography.Paragraph>
-        <Form layout="vertical">
-          <Divider titlePlacement="start" style={{ marginTop: 0 }}>
-            Quiet hours
-          </Divider>
-          <Space size={8} wrap style={{ marginBottom: 8 }}>
-            <Typography.Text type="secondary">Quick presets:</Typography.Text>
-            <Button size="small" onClick={() => patchQuiet({ enabled: true, start: "22:00", end: "07:00" })}>Night (22:00-07:00)</Button>
-            <Button size="small" onClick={() => patchQuiet({ enabled: true, start: "00:00", end: "06:00" })}>Midnight (00:00-06:00)</Button>
-          </Space>
-          <Space size={16} wrap align="end">
-            <Form.Item label="Enabled" style={{ marginBottom: 8 }}>
-              <Switch checked={Boolean(state.quiet?.enabled)} onChange={(v) => patchQuiet({ enabled: v })} />
-            </Form.Item>
-            <Form.Item label="Start (HH:MM)" style={{ marginBottom: 8 }}>
-              <Input
-                style={{ width: 110 }}
-                placeholder="22:00"
-                disabled={!state.quiet?.enabled}
-                value={state.quiet?.start ?? ""}
-                onChange={(e) => patchQuiet({ start: e.target.value })}
-              />
-            </Form.Item>
-            <Form.Item label="End (HH:MM)" style={{ marginBottom: 8 }}>
-              <Input
-                style={{ width: 110 }}
-                placeholder="07:00"
-                disabled={!state.quiet?.enabled}
-                value={state.quiet?.end ?? ""}
-                onChange={(e) => patchQuiet({ end: e.target.value })}
-              />
-            </Form.Item>
-            <Form.Item label="Timezone" style={{ marginBottom: 8 }}>
+      <Card className="page-card" title={<SectionTitle icon={<BellOutlined />}>What to send</SectionTitle>}>
+        <div className="notif-groups">
+          <div className="notif-group">
+            <Typography.Title level={5} className="notif-group-title">Alerts</Typography.Title>
+            <Typography.Text type="secondary" className="notif-group-desc">
+              Sent by this server when something happens.
+            </Typography.Text>
+            <ToggleRow
+              label="Run failures"
+              help="Also failed backups and failing self-heal checks."
+              checked={Boolean(state.events?.run_failure)}
+              disabled={!masterOn}
+              onChange={(v) => patchIn("events", { run_failure: v })}
+            />
+            <ToggleRow
+              label="Policy violations"
+              help="When a run breaks a policy gate."
+              checked={Boolean(state.events?.policy_violations)}
+              disabled={!masterOn}
+              onChange={(v) => patchIn("events", { policy_violations: v })}
+            />
+            <ToggleRow
+              label="Successful runs"
+              help="A message after every run that finishes. Can be noisy."
+              checked={Boolean(state.events?.run_success)}
+              disabled={!masterOn}
+              onChange={(v) => patchIn("events", { run_success: v })}
+            />
+          </div>
+
+          <div className="notif-group">
+            <Typography.Title level={5} className="notif-group-title">Health digest</Typography.Title>
+            <Typography.Text type="secondary" className="notif-group-desc">
+              A summary of the latest run: clusters, FAIL and WARN totals, top policy violations.
+            </Typography.Text>
+            <ToggleRow
+              label="Send a digest"
+              checked={Boolean(state.digest?.enabled)}
+              disabled={!masterOn}
+              onChange={(v) => patchIn("digest", { enabled: v, every: state.digest?.every || "24h" })}
+            >
+              {state.digest?.last_sent_at ? (
+                <span className="notif-toggle-help">Last sent {relativeTime(state.digest.last_sent_at)}</span>
+              ) : null}
+            </ToggleRow>
+            <div className="notif-inline">
               <Select
-                style={{ width: 200 }}
+                aria-label="Digest frequency"
+                style={{ width: 180 }}
+                disabled={!masterOn || !state.digest?.enabled}
+                value={state.digest?.every || "24h"}
+                options={DIGEST_EVERY_OPTIONS}
+                onChange={(v) => patchIn("digest", { every: v })}
+              />
+              {testButton("all", "Send digest now", "digest")}
+            </div>
+          </div>
+
+          <div className="notif-group">
+            <Typography.Title level={5} className="notif-group-title">Run reports</Typography.Title>
+            <Typography.Text type="secondary" className="notif-group-desc">
+              Sent by the runner itself after each run, to every channel that is on (pausing alerts does not stop them).
+            </Typography.Text>
+            <div className="notif-inline">
+              <Segmented
+                aria-label="Run report grouping"
+                value={state.run_reports?.per_run ? "run" : "cluster"}
+                options={[
+                  { value: "cluster", label: "One per cluster" },
+                  { value: "run", label: "One per run" },
+                ]}
+                onChange={(v) => patchIn("run_reports", { per_run: v === "run" })}
+              />
+            </div>
+            <ToggleRow
+              label="Only when failures increase"
+              help="Skip a cluster's report unless it has more FAILs than last time."
+              checked={Boolean(state.run_reports?.only_on_regression)}
+              onChange={(v) => patchIn("run_reports", { only_on_regression: v })}
+            />
+          </div>
+        </div>
+      </Card>
+
+      <Card className="page-card" title={<SectionTitle icon={<ClockCircleOutlined />}>Quiet times</SectionTitle>}>
+        <div className="notif-groups">
+          <div className="notif-group">
+            <Typography.Title level={5} className="notif-group-title">Quiet hours</Typography.Title>
+            <Typography.Text type="secondary" className="notif-group-desc">Hold alerts every day during these hours.</Typography.Text>
+            <ToggleRow
+              label="Use quiet hours"
+              checked={Boolean(state.quiet?.enabled)}
+              onChange={(v) =>
+                patchIn("quiet", {
+                  enabled: v,
+                  start: state.quiet?.start || "22:00",
+                  end: state.quiet?.end || "07:00",
+                  timezone: state.quiet?.timezone || BROWSER_TZ,
+                })
+              }
+            />
+            <div className="notif-inline">
+              <TimePicker.RangePicker
+                aria-label="Quiet hours"
+                format="HH:mm"
+                minuteStep={5}
+                order={false}
+                allowClear={false}
+                disabled={!state.quiet?.enabled}
+                value={[toTime(state.quiet?.start), toTime(state.quiet?.end)]}
+                onChange={(v) => {
+                  if (v?.[0] && v?.[1]) patchIn("quiet", { start: v[0].format("HH:mm"), end: v[1].format("HH:mm") });
+                }}
+              />
+              <Select
+                aria-label="Quiet hours time zone"
+                style={{ width: 230 }}
                 showSearch
                 disabled={!state.quiet?.enabled}
                 value={state.quiet?.timezone || "UTC"}
                 options={TZ_OPTIONS}
-                onChange={(v) => patchQuiet({ timezone: v })}
+                onChange={(v) => patchIn("quiet", { timezone: v })}
               />
-            </Form.Item>
-            <Form.Item label="Failures bypass" style={{ marginBottom: 8 }}>
-              <Tooltip title="When on, failure alerts are still delivered during quiet hours.">
-                <Switch
-                  checked={Boolean(state.quiet?.allow_failures)}
-                  disabled={!state.quiet?.enabled}
-                  onChange={(v) => patchQuiet({ allow_failures: v })}
-                />
-              </Tooltip>
-            </Form.Item>
-          </Space>
+            </div>
+            {state.quiet?.enabled ? (
+              <Typography.Text type="secondary" className="notif-toggle-help">
+                Run reports from the runner use the server's own clock, not this time zone.
+              </Typography.Text>
+            ) : null}
+            <ToggleRow
+              label="Let failures through"
+              help="Failure alerts are still sent during quiet hours."
+              checked={Boolean(state.quiet?.allow_failures)}
+              disabled={!state.quiet?.enabled}
+              onChange={(v) => patchIn("quiet", { allow_failures: v })}
+            />
+          </div>
 
-          <Divider titlePlacement="start">Throttle</Divider>
-          <Space size={16} wrap align="end">
-            <Form.Item
-              label="Dedup window (sec)"
-              style={{ marginBottom: 8 }}
-              tooltip="Collapse repeats of the same event within this many seconds. 0 = off."
-            >
-              <InputNumber
-                min={0}
-                value={state.throttle?.dedup_window_sec ?? 0}
-                onChange={(v) => patchThrottle({ dedup_window_sec: typeof v === "number" ? v : 0 })}
-              />
-            </Form.Item>
-            <Form.Item
-              label="Min interval (sec)"
-              style={{ marginBottom: 8 }}
-              tooltip="Minimum spacing between any two notifications. 0 = off."
-            >
-              <InputNumber
-                min={0}
-                value={state.throttle?.min_interval_sec ?? 0}
-                onChange={(v) => patchThrottle({ min_interval_sec: typeof v === "number" ? v : 0 })}
-              />
-            </Form.Item>
-          </Space>
-
-          <Divider titlePlacement="start">
-            <Space>
-              <ToolOutlined />
-              Maintenance windows
-            </Space>
-          </Divider>
-          <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
-            During an active window, all notifications (and the scheduled digest) are muted. Use
-            RFC3339 timestamps, e.g. <code>2026-07-01T01:00:00Z</code>.
-          </Typography.Paragraph>
-          {windows.length === 0 ? (
-            <Typography.Text type="secondary">No maintenance windows.</Typography.Text>
-          ) : (
-            <Space orientation="vertical" size={8} style={{ width: "100%" }}>
-              {windows.map((w, i) => (
-                <Space key={i} size={8} wrap align="center">
-                  <Input
-                    style={{ width: 210 }}
-                    placeholder="start (RFC3339)"
-                    value={w.start}
-                    onChange={(e) => setWindow(i, { start: e.target.value })}
-                  />
-                  <span>→</span>
-                  <Input
-                    style={{ width: 210 }}
-                    placeholder="end (RFC3339)"
-                    value={w.end}
-                    onChange={(e) => setWindow(i, { end: e.target.value })}
+          <div className="notif-group">
+            <Typography.Title level={5} className="notif-group-title">Maintenance windows</Typography.Title>
+            <Typography.Text type="secondary" className="notif-group-desc">
+              Mute every alert and the digest during planned work. Times are in this browser's time zone.
+            </Typography.Text>
+            {windows.length === 0 ? <Typography.Text type="secondary">No maintenance windows.</Typography.Text> : null}
+            {windows.map((w, i) => {
+              const end = Date.parse(w.end);
+              const start = Date.parse(w.start);
+              const status = !Number.isFinite(end) ? null : end <= now ? "Ended" : start <= now ? "Active" : "Upcoming";
+              return (
+                <div className="notif-window" key={i}>
+                  <DatePicker.RangePicker
+                    aria-label={`Maintenance window ${i + 1}`}
+                    showTime={{ format: "HH:mm", minuteStep: 5 }}
+                    format="YYYY-MM-DD HH:mm"
+                    value={[w.start ? dayjs(w.start) : null, w.end ? dayjs(w.end) : null]}
+                    onChange={(v) => setWindow(i, { start: v?.[0] ? toRFC3339(v[0]) : "", end: v?.[1] ? toRFC3339(v[1]) : "" })}
                   />
                   <Input
-                    style={{ width: 200 }}
-                    placeholder="note (optional)"
+                    aria-label={`Maintenance window ${i + 1} note`}
+                    placeholder="Note, e.g. AOS upgrade"
                     value={w.note ?? ""}
                     onChange={(e) => setWindow(i, { note: e.target.value })}
                   />
-                  <Button danger size="small" icon={<DeleteOutlined />} onClick={() => removeWindow(i)} />
-                </Space>
-              ))}
-            </Space>
-          )}
-          <div style={{ marginTop: 8 }}>
-            <Button size="small" icon={<PlusOutlined />} onClick={addWindow}>
-              Add window
-            </Button>
+                  {status ? <Tag color={status === "Active" ? "orange" : status === "Upcoming" ? "blue" : undefined}>{status}</Tag> : null}
+                  <Button
+                    aria-label={`Remove maintenance window ${i + 1}`}
+                    icon={<DeleteOutlined />}
+                    onClick={() => setState((s) => ({ ...s, maintenance: (s.maintenance ?? []).filter((_, j) => j !== i) }))}
+                  />
+                </div>
+              );
+            })}
+            <div>
+              <Button
+                icon={<PlusOutlined />}
+                onClick={() => setState((s) => ({ ...s, maintenance: [...(s.maintenance ?? []), { start: "", end: "", note: "" }] }))}
+              >
+                Add window
+              </Button>
+            </div>
           </div>
-        </Form>
-      </Card>
+        </div>
 
-      {/* Digest */}
-      <Card className="page-card" title="Scheduled health digest">
-        <Typography.Paragraph type="secondary" style={{ marginTop: -4 }}>
-          A recurring summary of the latest run (cluster ok/failed counts, FAIL/WARN totals, top
-          policy violations), delivered over the channels above.
-        </Typography.Paragraph>
-        <Form layout="vertical">
-          <Space size={16} wrap align="end">
-            <Form.Item label="Enabled" style={{ marginBottom: 8 }}>
-              <Switch checked={Boolean(state.digest?.enabled)} onChange={(v) => patchDigest({ enabled: v })} />
-            </Form.Item>
-            <Form.Item label="Frequency" style={{ marginBottom: 8 }}>
-              <Select
-                style={{ width: 200 }}
-                disabled={!state.digest?.enabled}
-                value={state.digest?.every || "24h"}
-                options={DIGEST_EVERY_OPTIONS}
-                onChange={(v) => patchDigest({ every: v })}
-              />
-            </Form.Item>
-          </Space>
-          {state.digest?.last_sent_at ? (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              Last digest sent: {formatDateTime(state.digest.last_sent_at)}
-            </Typography.Text>
-          ) : null}
-        </Form>
-      </Card>
-
-      {!state.enabled ? (
-        <Alert
-          type="info"
-          showIcon
-          title="Notifications are disabled"
-          description="Enable notifications above for channels, alerts, and the digest to be delivered."
+        <Collapse
+          ghost
+          className="notif-advanced"
+          items={[
+            {
+              key: "throttle",
+              label: "Throttling",
+              children: (
+                <Form layout="vertical" component="div" className="notif-grid">
+                  <Form.Item label="Ignore repeats of the same alert for" extra="0 turns it off.">
+                    <InputNumber
+                      min={0}
+                      addonAfter="seconds"
+                      style={{ width: "100%" }}
+                      value={state.throttle?.dedup_window_sec ?? 0}
+                      onChange={(v) => patchIn("throttle", { dedup_window_sec: typeof v === "number" ? v : 0 })}
+                    />
+                  </Form.Item>
+                  <Form.Item label="Leave at least this long between alerts" extra="0 turns it off.">
+                    <InputNumber
+                      min={0}
+                      addonAfter="seconds"
+                      style={{ width: "100%" }}
+                      value={state.throttle?.min_interval_sec ?? 0}
+                      onChange={(v) => patchIn("throttle", { min_interval_sec: typeof v === "number" ? v : 0 })}
+                    />
+                  </Form.Item>
+                </Form>
+              ),
+            },
+          ]}
         />
-      ) : null}
+      </Card>
+
       {state.updated_at ? (
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          <Tag>saved</Tag> last updated {formatDateTime(state.updated_at)}
+        <Typography.Text type="secondary" className="notif-updated">
+          Last saved {formatDateTime(state.updated_at)}
         </Typography.Text>
       ) : null}
       <SaveBar
         dirty={isDirty}
         saving={saveMut.isPending}
         onSave={onSave}
-        onDiscard={() => {
-          if (baseline) setState(baseline);
-        }}
-        message="Notification settings have unsaved changes."
+        onDiscard={discard}
+        saveDisabled={Boolean(formError)}
+        message={formError ?? "Notification settings have unsaved changes."}
       />
     </Space>
   );

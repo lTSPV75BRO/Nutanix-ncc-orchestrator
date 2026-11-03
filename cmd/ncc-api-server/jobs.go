@@ -5,12 +5,20 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"goncc/internal/ai"
 )
 
+// reJobID matches run IDs (20260102T150405Z-001) and archived run directory
+// names. The ID becomes a file name under outputfiles, so separators and dot
+// segments must never get through (on Windows a backslash is a separator).
+var reJobID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
+
+// persistJob writes the job record next to the run archive so GET /jobs/{id}
+// still answers after the run leaves the active registry. Callers hold s.mu.
 func (s *apiServer) persistJob(rec *runRecord) {
 	if rec == nil || strings.TrimSpace(rec.id) == "" {
 		return
@@ -43,35 +51,51 @@ func (s *apiServer) handleJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !reJobID.MatchString(id) {
+		writeJSON(w, http.StatusBadRequest, envelope{
+			Success: false, Error: "invalid job id", ErrorCode: ai.CodeInvalidArgument,
+		})
+		return
+	}
+
+	if r.Method == http.MethodDelete {
+		// Same path as the Runs page cancel: a queued run leaves the queue and
+		// frees its clusters; a running one is signalled to stop.
+		rec, ok := s.cancelRunByID(id)
+		if !ok {
+			status, msg, code := http.StatusNotFound, "job not found", ai.CodeNotFound
+			if _, archived := s.archivedJob(id); archived {
+				status, msg, code = http.StatusConflict, "job has already finished", ai.CodeConflict
+			}
+			writeJSON(w, status, envelope{Success: false, Error: msg, ErrorCode: code})
+			return
+		}
+		s.audit(r, "runs.cancel", true, map[string]interface{}{"run_id": id, "via": "jobs"})
+		s.mu.Lock()
+		job := jobFromRunRecord(rec)
+		s.mu.Unlock()
+		writeJSON(w, http.StatusAccepted, envelope{
+			Success: true, Message: "job cancellation requested", Data: job,
+		})
+		return
+	}
+
 	s.mu.Lock()
 	rec := s.runs[id]
-	if rec != nil && r.Method == http.MethodDelete && (rec.status == "queued" || rec.status == "running") {
-		rec.cancelled = true
-		if rec.cancel != nil {
-			rec.cancel()
-		}
-	}
 	var job ai.Job
 	if rec != nil {
 		job = jobFromRunRecord(rec)
 	}
 	s.mu.Unlock()
 	if rec == nil {
-		job, ok := s.archivedJob(id)
-		if ok {
-			writeJSON(w, http.StatusOK, envelope{Success: true, Data: job})
+		archived, ok := s.archivedJob(id)
+		if !ok {
+			writeJSON(w, http.StatusNotFound, envelope{
+				Success: false, Error: "job not found", ErrorCode: ai.CodeNotFound,
+			})
 			return
 		}
-		writeJSON(w, http.StatusNotFound, envelope{
-			Success: false, Error: "job not found", ErrorCode: ai.CodeNotFound,
-		})
-		return
-	}
-	if r.Method == http.MethodDelete {
-		writeJSON(w, http.StatusAccepted, envelope{
-			Success: true, Message: "job cancellation requested", Data: job,
-		})
-		return
+		job = archived
 	}
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: job})
 }
@@ -151,15 +175,19 @@ func jobFromRunRecord(rec *runRecord) ai.Job {
 		job.FinishedAt = &finished
 		job.UpdatedAt = finished
 	}
-	if rec.status == "running" {
+	switch rec.status {
+	case "running":
 		progress := 0.5
 		job.Progress = &progress
 		job.Phase = "running_checks"
-	} else if rec.status == "done" {
+	case "done":
 		progress := 1.0
 		job.Progress = &progress
 		job.Phase = "completed"
-	} else {
+		// The run manager says "done" for every finished run; the job
+		// contract distinguishes how it ended (below).
+		job.State = "succeeded"
+	default:
 		progress := 0.0
 		job.Progress = &progress
 		job.Phase = "queued"

@@ -2,7 +2,11 @@ package main
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,7 +19,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -73,6 +79,7 @@ type notificationState struct {
 	Maintenance  []maintenanceWindow                   `json:"maintenance,omitempty"`
 	Throttle     notificationThrottle                  `json:"throttle,omitempty"`
 	Digest       digestConfig                          `json:"digest,omitempty"`
+	RunReports   runReportsConfig                      `json:"run_reports"`
 	LastDelivery map[string]notificationDeliveryStatus `json:"last_delivery,omitempty"`
 	UpdatedAt    string                                `json:"updated_at"`
 }
@@ -102,7 +109,16 @@ type notificationThrottle struct {
 	MinIntervalSec int `json:"min_interval_sec"`
 }
 
+// runReportsConfig shapes the result messages the runner itself sends after
+// each run (config.yaml notify-digest / notify-on-regression), as opposed to
+// the alerts and the scheduled digest this server sends.
+type runReportsConfig struct {
+	PerRun           bool `json:"per_run"`            // one message per run instead of one per cluster
+	OnlyOnRegression bool `json:"only_on_regression"` // only when a cluster's FAIL count went up
+}
+
 // digestConfig drives the scheduled summary email of the latest run's health.
+// It is API-local state (the sidecar file), not the runner's notify-digest.
 type digestConfig struct {
 	Enabled    bool   `json:"enabled"`
 	Every      string `json:"every"` // 6h / 24h / 7d (see parseEveryDuration)
@@ -121,6 +137,8 @@ type notificationDeliveryStatus struct {
 
 type notificationTestRequest struct {
 	Channel string `json:"channel,omitempty"`
+	// Kind "digest" sends the scheduled health digest now instead of a test message.
+	Kind string `json:"kind,omitempty"`
 }
 
 func defaultNotificationState() notificationState {
@@ -209,20 +227,41 @@ func (s *apiServer) handleNotificationsTest(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: err.Error()})
 		return
 	}
+	kind := strings.ToLower(strings.TrimSpace(req.Kind))
+	if kind != "" && kind != "test" && kind != "digest" {
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "kind must be test or digest"})
+		return
+	}
 	target, err := requestedChannels(channel)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 		return
 	}
+	if channel == "" || channel == "all" {
+		// "All" means every channel that is turned on; it used to demand
+		// that Slack, webhook and email were all enabled.
+		target = enabledChannels(st)
+		if len(target) == 0 {
+			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "no notification channel is turned on"})
+			return
+		}
+	}
 	if err := validateNotificationStateForChannels(st, target); err != nil {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 		return
 	}
+	event, title := "manual_test", "NCC notifications test"
 	details := map[string]interface{}{
 		"manual_test": true,
 		"channel":     defaultIfEmpty(channel, "all"),
 	}
-	if err := s.dispatchNotifications(&st, "manual_test", "NCC notifications test", details, target); err != nil {
+	if kind == "digest" {
+		event = "digest"
+		var body string
+		title, body = s.buildDigest()
+		details = map[string]interface{}{"summary": body, "generated": time.Now().UTC().Format(time.RFC3339)}
+	}
+	if err := s.dispatchNotifications(&st, event, title, details, target); err != nil {
 		// Operators (not just admins) may send a test notification, but the
 		// underlying transport error can embed the configured webhook/SMTP URL
 		// (a bearer secret for Slack/webhook). Redact URLs from the response;
@@ -232,7 +271,7 @@ func (s *apiServer) handleNotificationsTest(w http.ResponseWriter, r *http.Reque
 		}})
 		return
 	}
-	s.audit(r, "settings.notifications.test", true, map[string]interface{}{"channel": defaultIfEmpty(channel, "all")})
+	s.audit(r, "settings.notifications.test", true, map[string]interface{}{"channel": defaultIfEmpty(channel, "all"), "kind": defaultIfEmpty(kind, "test")})
 	st.Email.Password = ""
 	writeJSON(w, http.StatusOK, envelope{Success: true, Message: "test notification sent", Data: map[string]interface{}{
 		"channel":       defaultIfEmpty(channel, "all"),
@@ -240,21 +279,46 @@ func (s *apiServer) handleNotificationsTest(w http.ResponseWriter, r *http.Reque
 	}})
 }
 
+// validHTTPURL accepts absolute http(s) URLs with a host. url.ParseRequestURI
+// alone let "/hooks" or "mailto:x" through, which then failed on every send.
+func validHTTPURL(raw string) bool {
+	u, err := url.ParseRequestURI(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return u.Scheme == "http" || u.Scheme == "https"
+}
+
+// enabledChannels lists the channels that are turned on.
+func enabledChannels(st notificationState) map[string]bool {
+	out := map[string]bool{}
+	if st.Slack.Enabled {
+		out["slack"] = true
+	}
+	if st.Webhook.Enabled {
+		out["webhook"] = true
+	}
+	if st.Email.Enabled {
+		out["email"] = true
+	}
+	return out
+}
+
 func validateNotificationState(st notificationState) error {
 	if st.Slack.Enabled {
 		if strings.TrimSpace(st.Slack.WebhookURL) == "" {
 			return errors.New("slack webhook_url is required when slack is enabled")
 		}
-		if _, err := url.ParseRequestURI(strings.TrimSpace(st.Slack.WebhookURL)); err != nil {
-			return errors.New("invalid slack webhook_url")
+		if !validHTTPURL(st.Slack.WebhookURL) {
+			return errors.New("invalid slack webhook_url: use an http(s) URL")
 		}
 	}
 	if st.Webhook.Enabled {
 		if strings.TrimSpace(st.Webhook.URL) == "" {
 			return errors.New("webhook url is required when webhook is enabled")
 		}
-		if _, err := url.ParseRequestURI(strings.TrimSpace(st.Webhook.URL)); err != nil {
-			return errors.New("invalid webhook url")
+		if !validHTTPURL(st.Webhook.URL) {
+			return errors.New("invalid webhook url: use an http(s) URL")
 		}
 	}
 	if st.Email.Enabled {
@@ -276,8 +340,8 @@ func validateNotificationStateForChannels(st notificationState, channels map[str
 		if strings.TrimSpace(st.Slack.WebhookURL) == "" {
 			return errors.New("slack webhook_url is required when slack is enabled")
 		}
-		if _, err := url.ParseRequestURI(strings.TrimSpace(st.Slack.WebhookURL)); err != nil {
-			return errors.New("invalid slack webhook_url")
+		if !validHTTPURL(st.Slack.WebhookURL) {
+			return errors.New("invalid slack webhook_url: use an http(s) URL")
 		}
 	}
 	if channels["webhook"] && !st.Webhook.Enabled {
@@ -287,8 +351,8 @@ func validateNotificationStateForChannels(st notificationState, channels map[str
 		if strings.TrimSpace(st.Webhook.URL) == "" {
 			return errors.New("webhook url is required when webhook is enabled")
 		}
-		if _, err := url.ParseRequestURI(strings.TrimSpace(st.Webhook.URL)); err != nil {
-			return errors.New("invalid webhook url")
+		if !validHTTPURL(st.Webhook.URL) {
+			return errors.New("invalid webhook url: use an http(s) URL")
 		}
 	}
 	if channels["email"] && !st.Email.Enabled {
@@ -314,10 +378,14 @@ func (s *apiServer) loadNotifications() (notificationState, error) {
 	if err != nil {
 		return notificationState{}, err
 	}
-	if migrated, migrateErr := s.migrateLegacyNotificationRuntimeFields(&st, legacy); migrateErr != nil {
-		log.Printf("notifications migration warning: unable to migrate legacy runtime settings to config.yaml: %v", migrateErr)
-	} else if migrated {
-		log.Printf("notifications migration: copied legacy runtime settings into config.yaml")
+	// Only an existing sidecar has anything to migrate; without one the
+	// defaults (port 587, ...) made every read rewrite config.yaml.
+	if _, statErr := os.Stat(s.absPath(s.notificationStatePath)); statErr == nil {
+		if migrated, migrateErr := s.migrateLegacyNotificationRuntimeFields(&st, legacy); migrateErr != nil {
+			log.Printf("notifications migration warning: unable to migrate legacy runtime settings to config.yaml: %v", migrateErr)
+		} else if migrated {
+			log.Printf("notifications migration: copied legacy runtime settings into config.yaml")
+		}
 	}
 	// Legacy state keeps API-local metadata and controls that do not have
 	// direct config.yaml equivalents yet.
@@ -331,7 +399,22 @@ func (s *apiServer) loadNotifications() (notificationState, error) {
 		st.Quiet.Timezone = legacy.Quiet.Timezone
 	}
 	st.Quiet.AllowFailures = legacy.Quiet.AllowFailures
-	st.Digest.LastSentAt = legacy.Digest.LastSentAt
+	// The scheduled digest lives only in the sidecar. It was read from the
+	// runner's notify-digest key with its interval dropped, so it never sent.
+	st.Digest = legacy.Digest
+	if st.Digest.Enabled && strings.TrimSpace(st.Digest.Every) == "" {
+		st.Digest.Every = "24h"
+	}
+	// config.yaml keeps only start/end of a maintenance window; the notes
+	// live in the sidecar.
+	for i, w := range st.Maintenance {
+		for _, lw := range legacy.Maintenance {
+			if strings.TrimSpace(lw.Start) == w.Start && strings.TrimSpace(lw.End) == w.End {
+				st.Maintenance[i].Note = lw.Note
+				break
+			}
+		}
+	}
 	if legacy.LastDelivery != nil {
 		st.LastDelivery = legacy.LastDelivery
 	}
@@ -405,7 +488,8 @@ func (s *apiServer) loadNotificationsFromConfig() (notificationState, error) {
 	st.Slack.WebhookURL = readMapString(cfg, "slack-webhook-url", st.Slack.WebhookURL)
 	st.Slack.Channel = readMapString(cfg, "slack-channel", st.Slack.Channel)
 
-	st.Digest.Enabled = readMapBool(cfg, "notify-digest", st.Digest.Enabled)
+	st.RunReports.PerRun = readMapBool(cfg, "notify-digest", false)
+	st.RunReports.OnlyOnRegression = readMapBool(cfg, "notify-on-regression", false)
 	st.Quiet = quietHoursFromConfig(cfg, st.Quiet)
 	st.Maintenance = maintenanceFromConfig(cfg)
 	return st, nil
@@ -419,34 +503,131 @@ func (s *apiServer) saveNotificationsToConfig(st notificationState) error {
 	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
 		return err
 	}
-	cfg, err := s.loadRawConfigMap()
+	// Edit the document as written. Saving the flattened view copied every
+	// nested setting (credentials, clusters, ...) to a top-level key, and a
+	// top-level key wins over its nested form, so later edits to the nested
+	// value were silently ignored.
+	doc, err := s.loadConfigDocument()
 	if err != nil {
 		return err
 	}
-	cfg["email-enabled"] = st.Email.Enabled
-	cfg["smtp-server"] = strings.TrimSpace(st.Email.SMTPHost)
-	cfg["smtp-port"] = st.Email.SMTPPort
-	cfg["smtp-user"] = strings.TrimSpace(st.Email.Username)
-	cfg["smtp-password"] = st.Email.Password
-	cfg["email-from"] = strings.TrimSpace(st.Email.From)
-	cfg["email-to"] = strings.TrimSpace(st.Email.To)
+	set := func(key string, value interface{}) { setConfigValue(doc, key, value) }
+	set("email-enabled", st.Email.Enabled)
+	set("smtp-server", strings.TrimSpace(st.Email.SMTPHost))
+	set("smtp-port", st.Email.SMTPPort)
+	set("smtp-user", strings.TrimSpace(st.Email.Username))
+	set("smtp-password", st.Email.Password)
+	set("email-from", strings.TrimSpace(st.Email.From))
+	set("email-to", strings.TrimSpace(st.Email.To))
 
-	cfg["webhook-enabled"] = st.Webhook.Enabled
-	cfg["webhook-url"] = strings.TrimSpace(st.Webhook.URL)
+	set("webhook-enabled", st.Webhook.Enabled)
+	set("webhook-url", strings.TrimSpace(st.Webhook.URL))
 
-	cfg["slack-enabled"] = st.Slack.Enabled
-	cfg["slack-webhook-url"] = strings.TrimSpace(st.Slack.WebhookURL)
-	cfg["slack-channel"] = strings.TrimSpace(st.Slack.Channel)
+	set("slack-enabled", st.Slack.Enabled)
+	set("slack-webhook-url", strings.TrimSpace(st.Slack.WebhookURL))
+	set("slack-channel", strings.TrimSpace(st.Slack.Channel))
 
-	cfg["notify-digest"] = st.Digest.Enabled
-	cfg["quiet-hours"] = quietHoursToConfig(st.Quiet)
-	cfg["maintenance-windows"] = maintenanceToConfig(st.Maintenance)
+	set("notify-digest", st.RunReports.PerRun)
+	set("notify-on-regression", st.RunReports.OnlyOnRegression)
+	set("quiet-hours", quietHoursToConfig(st.Quiet))
+	set("maintenance-windows", maintenanceToConfig(st.Maintenance))
+	dropShadowedFlatKeys(doc)
 
-	out, err := yaml.Marshal(cfg)
+	out, err := yaml.Marshal(doc)
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(cfgPath, out, 0o600)
+}
+
+// loadConfigDocument reads config.yaml as written (nested keys stay nested).
+func (s *apiServer) loadConfigDocument() (map[string]interface{}, error) {
+	cfgPath, err := s.validateConfigPath(s.configPath)
+	if err != nil {
+		return nil, err
+	}
+	b, err := os.ReadFile(cfgPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return map[string]interface{}{}, nil
+		}
+		return nil, err
+	}
+	out := map[string]interface{}{}
+	if len(strings.TrimSpace(string(b))) == 0 {
+		return out, nil
+	}
+	if err := yaml.Unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = map[string]interface{}{}
+	}
+	return out, nil
+}
+
+// isCanonicalConfig reports whether config.yaml uses the nested layout.
+func isCanonicalConfig(doc map[string]interface{}) bool {
+	for _, k := range []string{"schema-version", "runner", "notifications"} {
+		if _, ok := doc[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// setConfigValue writes a flat-named setting where the document keeps it: the
+// flat key when it is present or the file is flat, otherwise its nested path.
+func setConfigValue(doc map[string]interface{}, key string, value interface{}) {
+	path, nested := canonicalConfigPaths[key]
+	if _, flat := doc[key]; flat || !nested || !isCanonicalConfig(doc) {
+		doc[key] = value
+		return
+	}
+	m := doc
+	for _, part := range path[:len(path)-1] {
+		next, ok := m[part].(map[string]interface{})
+		if !ok {
+			next = map[string]interface{}{}
+			m[part] = next
+		}
+		m = next
+	}
+	m[path[len(path)-1]] = value
+}
+
+// nestedConfigValue returns the value at a nested path, if present.
+func nestedConfigValue(doc map[string]interface{}, path []string) (interface{}, bool) {
+	var current interface{} = doc
+	for _, part := range path {
+		m, ok := current.(map[string]interface{})
+		if !ok {
+			return nil, false
+		}
+		if current, ok = m[part]; !ok {
+			return nil, false
+		}
+	}
+	return current, true
+}
+
+// dropShadowedFlatKeys removes top-level copies of nested settings that hold
+// the same value (left behind by earlier notification saves), so the nested
+// value is the one that counts again. Copies that differ are kept: the flat
+// value is what the runner has been using.
+func dropShadowedFlatKeys(doc map[string]interface{}) {
+	if !isCanonicalConfig(doc) {
+		return
+	}
+	for flat, path := range canonicalConfigPaths {
+		fv, ok := doc[flat]
+		if !ok {
+			continue
+		}
+		if nv, ok := nestedConfigValue(doc, path); ok && reflect.DeepEqual(fv, nv) {
+			delete(doc, flat)
+		}
+	}
 }
 
 func (s *apiServer) loadRawConfigMap() (map[string]interface{}, error) {
@@ -472,66 +653,70 @@ func (s *apiServer) loadRawConfigMap() (map[string]interface{}, error) {
 	return out, nil
 }
 
+// canonicalConfigPaths maps flat config keys to their nested (schema-version 1)
+// location.
+var canonicalConfigPaths = map[string][]string{
+	"cluster-source-mode":         {"runner", "targets", "mode"},
+	"clusters":                    {"runner", "targets", "clusters"},
+	"clusters-file":               {"runner", "targets", "clusters-file"},
+	"pcs":                         {"runner", "targets", "pcs"},
+	"pcs-file":                    {"runner", "targets", "pcs-file"},
+	"prism-central-url":           {"runner", "targets", "prism-central-url"},
+	"discover-api-version":        {"runner", "targets", "discover-api-version"},
+	"username":                    {"runner", "credentials", "username"},
+	"password":                    {"runner", "credentials", "password"},
+	"insecure-skip-verify":        {"runner", "connection", "insecure-skip-verify"},
+	"ca-bundle":                   {"runner", "connection", "ca-bundle"},
+	"pin-sha256":                  {"runner", "connection", "pin-sha256"},
+	"ncc-api-version":             {"runner", "connection", "ncc-api-version"},
+	"nutanix-v4-api-version":      {"runner", "connection", "nutanix-v4-api-version"},
+	"timeout":                     {"runner", "execution", "timeout"},
+	"request-timeout":             {"runner", "execution", "request-timeout"},
+	"max-parallel":                {"runner", "execution", "max-parallel"},
+	"poll-interval":               {"runner", "execution", "poll-interval"},
+	"poll-jitter":                 {"runner", "execution", "poll-jitter"},
+	"adaptive-parallelism":        {"runner", "execution", "adaptive-parallelism"},
+	"retry-failed-clusters":       {"runner", "execution", "retry-failed-clusters"},
+	"resume":                      {"runner", "execution", "resume"},
+	"dry-run":                     {"runner", "execution", "dry-run"},
+	"skip-preflight-check":        {"runner", "execution", "skip-preflight-check"},
+	"replay":                      {"runner", "execution", "replay"},
+	"log-http":                    {"logging", "http"},
+	"log-file":                    {"logging", "file"},
+	"log-level":                   {"logging", "level"},
+	"pc-alerts-cache-ttl":         {"api", "cache", "pc-alerts-cache-ttl"},
+	"email-enabled":               {"notifications", "email", "enabled"},
+	"email-attach-html":           {"notifications", "email", "attach-html"},
+	"notify-digest":               {"notifications", "email", "digest"},
+	"smtp-server":                 {"notifications", "email", "smtp-server"},
+	"smtp-port":                   {"notifications", "email", "smtp-port"},
+	"smtp-user":                   {"notifications", "email", "smtp-user"},
+	"smtp-password":               {"notifications", "email", "smtp-password"},
+	"email-from":                  {"notifications", "email", "from"},
+	"email-to":                    {"notifications", "email", "to"},
+	"email-use-tls":               {"notifications", "email", "use-tls"},
+	"smtp-insecure-skip-verify":   {"notifications", "email", "insecure-skip-verify"},
+	"email-subject-template":      {"notifications", "email", "subject-template"},
+	"email-body-template":         {"notifications", "email", "body-template"},
+	"webhook-enabled":             {"notifications", "webhook", "enabled"},
+	"webhook-include-html":        {"notifications", "webhook", "include-html"},
+	"webhook-url":                 {"notifications", "webhook", "url"},
+	"webhook-headers":             {"notifications", "webhook", "headers"},
+	"webhook-template":            {"notifications", "webhook", "template"},
+	"webhook-secret":              {"notifications", "webhook", "secret"},
+	"slack-enabled":               {"notifications", "slack", "enabled"},
+	"slack-webhook-url":           {"notifications", "slack", "webhook-url"},
+	"slack-channel":               {"notifications", "slack", "channel"},
+	"quiet-hours":                 {"notifications", "quiet-hours"},
+	"maintenance-windows":         {"notifications", "maintenance-windows"},
+	"notification-deadletter-dir": {"storage", "notification-deadletter-dir"},
+	"secrets-provider":            {"secrets", "provider"},
+	"secrets-file":                {"secrets", "file"},
+	"notify-on-regression":        {"runner", "policy", "notify-on-regression"},
+}
+
 func flattenCanonicalConfigMap(cfg map[string]interface{}) {
-	paths := map[string][]string{
-		"cluster-source-mode":         {"runner", "targets", "mode"},
-		"clusters":                    {"runner", "targets", "clusters"},
-		"clusters-file":               {"runner", "targets", "clusters-file"},
-		"pcs":                         {"runner", "targets", "pcs"},
-		"pcs-file":                    {"runner", "targets", "pcs-file"},
-		"prism-central-url":           {"runner", "targets", "prism-central-url"},
-		"discover-api-version":        {"runner", "targets", "discover-api-version"},
-		"username":                    {"runner", "credentials", "username"},
-		"password":                    {"runner", "credentials", "password"},
-		"insecure-skip-verify":        {"runner", "connection", "insecure-skip-verify"},
-		"ca-bundle":                   {"runner", "connection", "ca-bundle"},
-		"pin-sha256":                  {"runner", "connection", "pin-sha256"},
-		"ncc-api-version":             {"runner", "connection", "ncc-api-version"},
-		"nutanix-v4-api-version":      {"runner", "connection", "nutanix-v4-api-version"},
-		"timeout":                     {"runner", "execution", "timeout"},
-		"request-timeout":             {"runner", "execution", "request-timeout"},
-		"max-parallel":                {"runner", "execution", "max-parallel"},
-		"poll-interval":               {"runner", "execution", "poll-interval"},
-		"poll-jitter":                 {"runner", "execution", "poll-jitter"},
-		"adaptive-parallelism":        {"runner", "execution", "adaptive-parallelism"},
-		"retry-failed-clusters":       {"runner", "execution", "retry-failed-clusters"},
-		"resume":                      {"runner", "execution", "resume"},
-		"dry-run":                     {"runner", "execution", "dry-run"},
-		"skip-preflight-check":        {"runner", "execution", "skip-preflight-check"},
-		"replay":                      {"runner", "execution", "replay"},
-		"log-http":                    {"logging", "http"},
-		"log-file":                    {"logging", "file"},
-		"log-level":                   {"logging", "level"},
-		"pc-alerts-cache-ttl":         {"api", "cache", "pc-alerts-cache-ttl"},
-		"email-enabled":               {"notifications", "email", "enabled"},
-		"email-attach-html":           {"notifications", "email", "attach-html"},
-		"notify-digest":               {"notifications", "email", "digest"},
-		"smtp-server":                 {"notifications", "email", "smtp-server"},
-		"smtp-port":                   {"notifications", "email", "smtp-port"},
-		"smtp-user":                   {"notifications", "email", "smtp-user"},
-		"smtp-password":               {"notifications", "email", "smtp-password"},
-		"email-from":                  {"notifications", "email", "from"},
-		"email-to":                    {"notifications", "email", "to"},
-		"email-use-tls":               {"notifications", "email", "use-tls"},
-		"smtp-insecure-skip-verify":   {"notifications", "email", "insecure-skip-verify"},
-		"email-subject-template":      {"notifications", "email", "subject-template"},
-		"email-body-template":         {"notifications", "email", "body-template"},
-		"webhook-enabled":             {"notifications", "webhook", "enabled"},
-		"webhook-include-html":        {"notifications", "webhook", "include-html"},
-		"webhook-url":                 {"notifications", "webhook", "url"},
-		"webhook-headers":             {"notifications", "webhook", "headers"},
-		"webhook-template":            {"notifications", "webhook", "template"},
-		"webhook-secret":              {"notifications", "webhook", "secret"},
-		"slack-enabled":               {"notifications", "slack", "enabled"},
-		"slack-webhook-url":           {"notifications", "slack", "webhook-url"},
-		"slack-channel":               {"notifications", "slack", "channel"},
-		"quiet-hours":                 {"notifications", "quiet-hours"},
-		"maintenance-windows":         {"notifications", "maintenance-windows"},
-		"notification-deadletter-dir": {"storage", "notification-deadletter-dir"},
-		"secrets-provider":            {"secrets", "provider"},
-		"secrets-file":                {"secrets", "file"},
-	}
-	for flat, path := range paths {
+	for flat, path := range canonicalConfigPaths {
 		if _, exists := cfg[flat]; exists {
 			continue
 		}
@@ -556,8 +741,10 @@ func (s *apiServer) migrateLegacyNotificationRuntimeFields(st *notificationState
 		return false, err
 	}
 	changed := false
+	// Only values that were actually set are adopted: adopting "false" for
+	// every missing key made each GET rewrite config.yaml.
 	adoptBool := func(key string, src bool, dst *bool) {
-		if _, ok := cfg[key]; ok {
+		if _, ok := cfg[key]; ok || !src {
 			return
 		}
 		*dst = src
@@ -600,7 +787,6 @@ func (s *apiServer) migrateLegacyNotificationRuntimeFields(st *notificationState
 	adoptString("slack-webhook-url", legacy.Slack.WebhookURL, &st.Slack.WebhookURL)
 	adoptString("slack-channel", legacy.Slack.Channel, &st.Slack.Channel)
 
-	adoptBool("notify-digest", legacy.Digest.Enabled, &st.Digest.Enabled)
 	if _, ok := cfg["quiet-hours"]; !ok {
 		qh := quietHoursToConfig(legacy.Quiet)
 		if qh != "" {
@@ -870,14 +1056,14 @@ func (s *apiServer) dispatchNotifications(st *notificationState, event, title st
 		"repo_root": s.absPath(s.repoRoot),
 		"details":   details,
 	}
-	b, _ := json.Marshal(payload)
-	msgBody := string(b)
+	text := notificationText(event, details)
+	transport := s.notificationTransport()
 	if channels == nil {
 		channels = map[string]bool{"slack": true, "webhook": true, "email": true}
 	}
 	var failed []string
 	if channels["webhook"] && st.Webhook.Enabled {
-		err := sendWebhookJSON(st.Webhook.URL, payload)
+		err := sendWebhookJSONWith(st.Webhook.URL, payload, transport.webhookSecret, transport.webhookHeaders)
 		s.recordDelivery(st, "webhook", event, err)
 		if err != nil {
 			log.Printf("notifications webhook error: %v", err)
@@ -885,7 +1071,7 @@ func (s *apiServer) dispatchNotifications(st *notificationState, event, title st
 		}
 	}
 	if channels["slack"] && st.Slack.Enabled {
-		err := sendSlackWebhook(st.Slack, title, msgBody)
+		err := sendSlackWebhook(st.Slack, title, text)
 		s.recordDelivery(st, "slack", event, err)
 		if err != nil {
 			log.Printf("notifications slack error: %v", err)
@@ -893,7 +1079,7 @@ func (s *apiServer) dispatchNotifications(st *notificationState, event, title st
 		}
 	}
 	if channels["email"] && st.Email.Enabled {
-		err := sendSMTPMail(st.Email, title, msgBody)
+		err := sendSMTPMailWith(st.Email, title, text, transport.requireTLS, transport.insecureTLS)
 		s.recordDelivery(st, "email", event, err)
 		if err != nil {
 			log.Printf("notifications email error: %v", err)
@@ -945,7 +1131,106 @@ func requestedChannels(channel string) (map[string]bool, error) {
 	}
 }
 
+// notificationTransportConfig holds config.yaml delivery options the runner
+// already honours, so this server's alerts are signed and sent the same way.
+type notificationTransportConfig struct {
+	webhookSecret  string
+	webhookHeaders map[string]string
+	requireTLS     bool
+	insecureTLS    bool
+}
+
+func (s *apiServer) notificationTransport() notificationTransportConfig {
+	var out notificationTransportConfig
+	cfg, err := s.loadRawConfigMap()
+	if err != nil {
+		return out
+	}
+	out.webhookSecret = readMapString(cfg, "webhook-secret", "")
+	if hdrs, ok := cfg["webhook-headers"].(map[string]interface{}); ok {
+		out.webhookHeaders = map[string]string{}
+		for k, v := range hdrs {
+			out.webhookHeaders[k] = fmt.Sprint(v)
+		}
+	}
+	out.requireTLS = readMapBool(cfg, "email-use-tls", false)
+	out.insecureTLS = readMapBool(cfg, "smtp-insecure-skip-verify", false)
+	return out
+}
+
+// notificationText renders an event as plain text for Slack and email (they
+// used to receive the raw JSON payload).
+func notificationText(event string, details map[string]interface{}) string {
+	var lines []string
+	add := func(label string, v interface{}) {
+		if s := strings.TrimSpace(fmt.Sprint(v)); s != "" && v != nil {
+			lines = append(lines, label+": "+s)
+		}
+	}
+	rest := map[string]interface{}{}
+	for k, v := range details {
+		rest[k] = v
+	}
+	take := func(k string) (interface{}, bool) {
+		v, ok := rest[k]
+		delete(rest, k)
+		return v, ok
+	}
+	if event == "manual_test" {
+		lines = append(lines, "This is a test message from NCC Orchestrator. If you can read it, this channel works.")
+		take("manual_test")
+		take("channel")
+	}
+	if v, ok := take("summary"); ok {
+		lines = append(lines, fmt.Sprint(v))
+	}
+	take("generated")
+	if v, ok := take("error"); ok {
+		add("Error", v)
+	}
+	if v, ok := take("started_at"); ok {
+		add("Started", v)
+	}
+	if v, ok := take("violations"); ok {
+		if list, ok := v.([]string); ok && len(list) > 0 {
+			lines = append(lines, "", fmt.Sprintf("Policy violations (%d):", len(list)))
+			for i, item := range list {
+				if i == 10 {
+					lines = append(lines, fmt.Sprintf("  … and %d more", len(list)-10))
+					break
+				}
+				lines = append(lines, "  - "+item)
+			}
+		}
+	}
+	lastOut, hasOut := take("last_output")
+	keys := make([]string, 0, len(rest))
+	for k := range rest {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		add(strings.ReplaceAll(k, "_", " "), rest[k])
+	}
+	if hasOut {
+		out := strings.TrimSpace(fmt.Sprint(lastOut))
+		if len(out) > 1500 {
+			out = "…" + out[len(out)-1500:]
+		}
+		if out != "" {
+			lines = append(lines, "", "Last output:", out)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 func sendWebhookJSON(endpoint string, payload map[string]interface{}) error {
+	return sendWebhookJSONWith(endpoint, payload, "", nil)
+}
+
+// sendWebhookJSONWith posts payload, signing it with secret (the runner's
+// X-NCC-Signature) and adding headers, as the runner's webhook does.
+func sendWebhookJSONWith(endpoint string, payload map[string]interface{}, secret string, headers map[string]string) error {
 	b, _ := json.Marshal(payload)
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(b))
 	if err != nil {
@@ -953,6 +1238,14 @@ func sendWebhookJSON(endpoint string, payload map[string]interface{}) error {
 		return fmt.Errorf("webhook request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if secret = strings.TrimSpace(secret); secret != "" {
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write(b)
+		req.Header.Set("X-NCC-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 	cli := &http.Client{Timeout: 10 * time.Second}
 	resp, err := cli.Do(req)
 	if err != nil {
@@ -979,6 +1272,13 @@ func sendSlackWebhook(cfg slackNotificationConfig, title, text string) error {
 }
 
 func sendSMTPMail(cfg emailNotificationConfig, subject, body string) error {
+	return sendSMTPMailWith(cfg, subject, body, false, false)
+}
+
+// sendSMTPMailWith sends one plain-text mail. requireTLS refuses a relay
+// without STARTTLS (config email-use-tls); insecureTLS skips certificate checks
+// (smtp-insecure-skip-verify). Port 465 uses implicit TLS.
+func sendSMTPMailWith(cfg emailNotificationConfig, subject, body string, requireTLS, insecureTLS bool) error {
 	addr := net.JoinHostPort(strings.TrimSpace(cfg.SMTPHost), strconv.Itoa(cfg.SMTPPort))
 	host := strings.TrimSpace(cfg.SMTPHost)
 	var auth smtp.Auth
@@ -1022,7 +1322,11 @@ func sendSMTPMail(cfg emailNotificationConfig, subject, body string) error {
 	// notify.SendMail is smtp.SendMail under a deadline: without one, a relay
 	// that accepted the connection and stalled hung the test-notification
 	// request and every run-finished notification indefinitely.
-	return notify.SendMail(notify.SMTPMessage{Addr: addr, Auth: auth, From: from.Address, To: recipients, Body: []byte(msg)})
+	return notify.SendMail(notify.SMTPMessage{
+		Addr: addr, Auth: auth, From: from.Address, To: recipients, Body: []byte(msg),
+		RequireTLS: requireTLS,
+		TLS:        &tls.Config{ServerName: host, InsecureSkipVerify: insecureTLS, MinVersion: tls.VersionTLS12}, //nolint:gosec // opt-in via smtp-insecure-skip-verify
+	})
 }
 
 // stripCRLF flattens line breaks so a value can sit on a single header line.

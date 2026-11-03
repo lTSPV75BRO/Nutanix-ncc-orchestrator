@@ -1410,6 +1410,7 @@ ncc-orchestrator env-info
 | `NCC_USERS_DB` | Path to the writable JSON user database file (enables login, first-run admin bootstrap, and runtime user/SSO management). Equivalent to `--users-db`. Defaults to `<root>/.ncc-api-users.json` inside a v2 stack. |
 | `NCC_USERS_DB_SECRET` | Kubernetes Secret name to store the user database in (encrypted at rest by etcd). Equivalent to `--users-db-secret`. Mutually exclusive with `NCC_USERS_DB`. Requires in-cluster execution + RBAC (`k8s/rbac.yaml`). |
 | `NCC_USERS_DB_SECRET_NAMESPACE` | Namespace of the Kubernetes Secret store (defaults to the pod's own namespace). Equivalent to `--users-db-secret-namespace`. |
+| `NCC_RUNNER_CRONJOB` | Kubernetes: name of the runner CronJob that Settings → Schedule reads, changes and pauses (default `ncc-v2-runner`; the Helm chart sets `ncc-orchestrator`). Equivalent to `--runner-cronjob`. |
 | `NCC_MASTER_KEY` | 32-byte master key (base64 std/raw/url or hex) to envelope-encrypt the file-backed user store at rest with AES-256-GCM. Takes precedence over `--users-db-key-file`/`NCC_MASTER_KEY_FILE`. Unset → plaintext (default). |
 | `NCC_MASTER_KEY_FILE` | Path to a file holding the 32-byte master key (base64/hex, or 32 raw bytes). Equivalent to `--users-db-key-file`. Keep it off the protected disk/backup. |
 | `NCC_USERS_FILE` | Path to an optional read-only YAML seed of local accounts, imported once into the database when empty. Equivalent to `--users-file`. |

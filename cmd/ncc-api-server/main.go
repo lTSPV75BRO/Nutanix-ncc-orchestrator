@@ -136,6 +136,14 @@ type apiServer struct {
 	usersDBSecret    string // Kubernetes Secret name backing the store (--users-db-secret)
 	usersDBSecretKey string // data key inside that Secret (--users-db-secret-key)
 	usersDBSecretNS  string // namespace override (--users-db-secret-namespace)
+	// runnerCronJob names the Kubernetes CronJob that Settings > Schedule
+	// reads and patches (--runner-cronjob, NCC_RUNNER_CRONJOB).
+	runnerCronJob string
+	// onboardingMu serializes read-modify-write of the setup checklist state.
+	onboardingMu sync.Mutex
+	// scheduleK8sClient builds the Kubernetes API client for the schedule;
+	// nil means in-cluster credentials. Tests point it at a fake API server.
+	scheduleK8sClient func() (*k8sSecretClient, error)
 	// usersDBKeyFile points at a file holding a 32-byte master key (base64/hex)
 	// used to envelope-encrypt the user store at rest. The NCC_MASTER_KEY env
 	// takes precedence. Empty (and env unset) => plaintext store (default).
@@ -580,6 +588,7 @@ func main() {
 	flag.StringVar(&s.usersDBSecret, "users-db-secret", "", "Kubernetes Secret name to store the user database in (encrypted at rest by etcd); mutually exclusive with --users-db. Requires in-cluster execution + RBAC to get/create/patch the Secret")
 	flag.StringVar(&s.usersDBSecretKey, "users-db-secret-key", "users.json", "Data key inside the Kubernetes Secret that holds the user-database JSON")
 	flag.StringVar(&s.usersDBSecretNS, "users-db-secret-namespace", "", "Namespace of the Kubernetes Secret (defaults to the pod's own namespace)")
+	flag.StringVar(&s.runnerCronJob, "runner-cronjob", defaultIfEmpty(os.Getenv("NCC_RUNNER_CRONJOB"), kubernetesRunnerCronJob), "Kubernetes only: name of the runner CronJob that Settings > Schedule reads and updates (the Helm chart sets ncc-orchestrator)")
 	flag.BoolVar(&s.requireEncryptedUserStore, "require-encrypted-user-store", envBool("NCC_REQUIRE_ENCRYPTED_USER_STORE"), "Refuse to start unless the user store (password/PAT hashes, SAML SP key, LDAP bind password) is envelope-encrypted with a master key (NCC_MASTER_KEY / --users-db-key-file). Also via NCC_REQUIRE_ENCRYPTED_USER_STORE=true")
 	flag.StringVar(&s.usersDBKeyFile, "users-db-key-file", "", "Path to a file holding a 32-byte master key (base64 or hex) to envelope-encrypt the user store at rest with AES-256-GCM. NCC_MASTER_KEY env takes precedence. Unset => plaintext (default). Keep this key off the protected disk/backup.")
 	flag.BoolVar(&s.disableLocalAccounts, "disable-local-accounts", false, "Opt out of the default-on user database (no first-run admin bootstrap, login disabled). Use for pure token-only automation")
@@ -2842,21 +2851,7 @@ func (s *apiServer) handleSchedule(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if s.capabilities.Kubernetes {
-			result, updateErr := s.updateKubernetesSchedule(st)
-			s.audit(r, "schedule.update", updateErr == nil, map[string]interface{}{
-				"applied": true, "controller": "CronJob", "action": st.Action,
-			})
-			if updateErr != nil {
-				writeJSON(w, http.StatusBadGateway, envelope{Success: false, Error: updateErr.Error()})
-				return
-			}
-			st.Cron, _ = result["schedule"].(string)
-			st.PrintOnly = false
-			st.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-			writeJSON(w, http.StatusOK, envelope{
-				Success: true, Message: "Kubernetes schedule updated",
-				Data: map[string]interface{}{"schedule": st, "applied": true, "controller": "CronJob"},
-			})
+			s.handleKubernetesScheduleUpdate(w, r, st)
 			return
 		}
 		// Anchor config + log paths to absolute, install-root paths before we
@@ -2875,11 +2870,16 @@ func (s *apiServer) handleSchedule(w http.ResponseWriter, r *http.Request) {
 		if st.LogPath != "" {
 			st.LogPath = s.absPath(st.LogPath)
 		}
-		if err := s.saveSchedule(st); err != nil {
-			writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: err.Error()})
-			return
+		// apply + print_only is a preview of the scheduler command: it must not
+		// replace the saved (and possibly installed) schedule.
+		preview := req.Apply && st.PrintOnly
+		if !preview {
+			if err := s.saveSchedule(st); err != nil {
+				writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: err.Error()})
+				return
+			}
 		}
-		resp := map[string]interface{}{"schedule": st, "applied": false}
+		resp := map[string]interface{}{"schedule": st, "applied": false, "preview": preview}
 		applyErr := error(nil)
 		if req.Apply {
 			args := []string{"create-schedule", "--type", st.Type, "--action", st.Action, "--config", st.Config, "--print-only=" + fmt.Sprintf("%t", st.PrintOnly)}
@@ -2965,20 +2965,7 @@ func (s *apiServer) handleScheduleHealth(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if s.capabilities.Kubernetes {
-		st, err := s.loadKubernetesSchedule()
-		if err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, envelope{Success: false, Error: err.Error()})
-			return
-		}
-		configured := st.Action == "create" && strings.TrimSpace(st.Cron) != "" && strings.TrimSpace(st.UpdatedAt) != ""
-		writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
-			"configured": configured, "saved": configured, "installed": true,
-			"controller_managed": true, "controller": "CronJob",
-			"detector": "Kubernetes CronJob",
-			"type":     st.Type, "action": st.Action, "cron": st.Cron, "every": st.Every,
-			"config": st.Config, "last_updated_at": st.UpdatedAt,
-			"message": "Scheduling is managed by the ncc-v2-runner CronJob.",
-		}})
+		s.handleKubernetesScheduleHealth(w)
 		return
 	}
 	// loadSchedule returns a default state when no file is present, so we
@@ -4388,7 +4375,7 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/alerts/ncc/events", Methods: []string{http.MethodGet}, Description: "Viewer+: append-only NCC alert lifecycle events (detected, redetected, not_detected, severity_changed, acknowledged, resolved, reopened, recurred, closed) ordered by seq. Incremental sync: pass next_cursor back as cursor. Optional alert_id filter. Cluster-group scoped."},
 		{Path: "/api/v1/alerts/ncc/{id}", Methods: []string{http.MethodGet}, Description: "Viewer+: one NCC alert instance with its full event history and the other instances (earlier/later episodes) of the same finding"},
 		{Path: "/api/v1/alerts/ncc/{id}/{action}", Methods: []string{http.MethodPost}, Description: "Operator+: action is acknowledge, resolve, or reopen. Optional JSON body {\"note\": \"...\"} (max 500 chars). Idempotent: repeating the current state with the same note records nothing new.", SampleBody: "{\n  \"note\": \"Vendor case 12345 opened\"\n}"},
-		{Path: "/api/v1/onboarding", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET operator+: the setup checklist, derived from the install's real state (clusters configured, first successful run, schedule, backups, notifications, team access). PUT admin-only: hide or show the checklist for everyone.", SampleBody: "{\n  \"dismissed\": true\n}"},
+		{Path: "/api/v1/onboarding", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET operator+: the setup checklist, derived from the install's real state (clusters configured, first successful run, schedule, backups, notifications, team access). PUT admin-only: dismissed hides or shows the Overview banner, skip_step/unskip_step marks a step as not applicable (it counts as done), finished completes setup with steps left.", SampleBody: "{\n  \"skip_step\": \"notifications\"\n}"},
 		{Path: "/api/v1/features", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET viewer+: which optional views are on. PUT admin-only: turn Insights, Prism Central alerts, discovery, comparison, flaky checks, SLO, or the log index on or off.", SampleBody: "{\n  \"insights\": false,\n  \"pc_alerts\": false\n}"},
 		{Path: "/api/v1/audit", Methods: []string{http.MethodGet}, Description: "Read recent audit log entries (limit, action, failures filters)"},
 		{Path: "/api/v1/metrics/rate-limit", Methods: []string{http.MethodGet}, Description: "Rate limiter configuration and counters"},
@@ -4440,8 +4427,8 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/settings/config-files", Methods: []string{http.MethodGet}, Description: "List config-referenced files (clusters, exclusions, secrets)"},
 		{Path: "/api/v1/settings/config-file", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Read/write one config-referenced file", SampleBody: "{\n  \"path\": \"alerts-exclude.txt\",\n  \"content\": \"AHV_MemoryUsage\\n\"\n}"},
 		{Path: "/api/v1/settings/config-files/batch", Methods: []string{http.MethodPost}, Description: "Bulk add/update/remove config-referenced files", SampleBody: "{\n  \"operations\": [\n    {\"action\": \"add\", \"path\": \"clusters.txt\", \"content\": \"10.0.0.1\\n\"},\n    {\"action\": \"remove\", \"path\": \"exclude.txt\"}\n  ]\n}"},
-		{Path: "/api/v1/settings/notifications", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/write notification channels (slack/webhook/email), events, and delivery controls — quiet hours, maintenance windows, dedup/rate-limit throttle, and the scheduled health digest. Failures (run/backup/self-heal) reuse the run_failure toggle.", SampleBody: "{\n  \"enabled\": true,\n  \"events\": {\"run_failure\": true, \"run_success\": false, \"policy_violations\": true},\n  \"email\": {\"enabled\": true, \"smtp_host\": \"smtp.example.com\", \"smtp_port\": 587, \"from\": \"ncc@example.com\", \"to\": \"sre@example.com\"},\n  \"quiet\": {\"enabled\": true, \"start\": \"22:00\", \"end\": \"07:00\", \"timezone\": \"UTC\", \"allow_failures\": true},\n  \"maintenance\": [{\"start\": \"2026-07-01T01:00:00Z\", \"end\": \"2026-07-01T03:00:00Z\", \"note\": \"patching\"}],\n  \"throttle\": {\"dedup_window_sec\": 300, \"min_interval_sec\": 30},\n  \"digest\": {\"enabled\": true, \"every\": \"24h\"}\n}"},
-		{Path: "/api/v1/settings/notifications/test", Methods: []string{http.MethodPost}, Description: "Operator+: send test notification(s) (delivery errors are URL-redacted)", SampleBody: "{\n  \"channel\": \"all\"\n}"},
+		{Path: "/api/v1/settings/notifications", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/write notification channels (slack/webhook/email), events, and delivery controls — quiet hours, maintenance windows, dedup/rate-limit throttle, the scheduled health digest, and run_reports (per_run, only_on_regression: how the runner reports each run, config.yaml notify-digest / notify-on-regression). Failures (run/backup/self-heal) reuse the run_failure toggle.", SampleBody: "{\n  \"enabled\": true,\n  \"events\": {\"run_failure\": true, \"run_success\": false, \"policy_violations\": true},\n  \"email\": {\"enabled\": true, \"smtp_host\": \"smtp.example.com\", \"smtp_port\": 587, \"from\": \"ncc@example.com\", \"to\": \"sre@example.com\"},\n  \"quiet\": {\"enabled\": true, \"start\": \"22:00\", \"end\": \"07:00\", \"timezone\": \"UTC\", \"allow_failures\": true},\n  \"maintenance\": [{\"start\": \"2026-07-01T01:00:00Z\", \"end\": \"2026-07-01T03:00:00Z\", \"note\": \"patching\"}],\n  \"throttle\": {\"dedup_window_sec\": 300, \"min_interval_sec\": 30},\n  \"digest\": {\"enabled\": true, \"every\": \"24h\"}\n}"},
+		{Path: "/api/v1/settings/notifications/test", Methods: []string{http.MethodPost}, Description: "Operator+: send a test message to one channel, or to every enabled channel (all); kind digest sends the health digest now. Uses the saved settings; delivery errors are URL-redacted.", SampleBody: "{\n  \"channel\": \"all\"\n}"},
 		{Path: "/api/v1/schedule", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET viewer+: read scheduler state; PUT operator+: create/update/apply a recurring run", SampleBody: "{\n  \"type\": \"cron\",\n  \"action\": \"create\",\n  \"cron\": \"15 */4 * * *\",\n  \"config\": \"config.yaml\",\n  \"print_only\": true,\n  \"apply\": false\n}"},
 		{Path: "/api/v1/schedule/health", Methods: []string{http.MethodGet}, Description: "Scheduler health snapshot (last run/success/error hints)"},
 		{Path: "/api/v1/artifacts", Methods: []string{http.MethodGet}, Description: "List available artifacts"},

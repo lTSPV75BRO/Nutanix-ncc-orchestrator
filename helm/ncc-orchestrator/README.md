@@ -4,8 +4,10 @@ This chart renders the Kubernetes-native NCC v2 stack: API and UI
 Deployments, internal Services, optional Ingress (TLS passthrough to the
 UI certificate), RBAC, and the authoritative runner CronJob. Kubernetes
 controllers own scheduling, restarts, and image rollouts; the recurring
-CronJob schedule can also be viewed and updated from Settings → Schedule.
-Default replica
+CronJob schedule can also be viewed, changed and paused from Settings →
+Schedule (the chart sets `NCC_RUNNER_CRONJOB=ncc-orchestrator` and grants the
+API `get`/`patch` on that CronJob). `helm upgrade` puts `cronjob.schedule`
+back, so set a schedule you want to keep in your values file. Default replica
 counts are **2** for both API and UI.
 
 Prerequisites are a ConfigMap named by `configMapName`, a PVC named by

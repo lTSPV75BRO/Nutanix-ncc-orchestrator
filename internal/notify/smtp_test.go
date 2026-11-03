@@ -19,6 +19,12 @@ func fakeSMTP(t *testing.T) (addr string, got <-chan string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return fakeSMTPOn(t, ln)
+}
+
+// fakeSMTPOn serves the fake SMTP dialogue on ln (plain or TLS).
+func fakeSMTPOn(t *testing.T, ln net.Listener) (addr string, got <-chan string) {
+	t.Helper()
 	t.Cleanup(func() { _ = ln.Close() })
 	out := make(chan string, 1)
 	go func() {
