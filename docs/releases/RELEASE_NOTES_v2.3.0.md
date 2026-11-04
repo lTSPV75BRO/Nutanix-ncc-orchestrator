@@ -344,10 +344,26 @@ images/binaries. The user store and state files stay compatible.
 
 ## Known issues and residual risks
 
-- Frontend build tooling has 12 advisories (vite 8.3.1, undici, source-map-js,
-  @vitest/mocker); production dependencies are clean. Update with npm before
-  tagging (commands in [`docs/audit/dependency-health.md`](../audit/dependency-health.md)).
 - Restored stack binaries are not yet checked against signed release
   checksums (SEC-07).
-- Not yet exercised in this cycle: the new Windows CI job on GitHub-hosted
-  runners, `go test -race`, and real multi-replica Kubernetes deployments.
+- Not exercised locally in this cycle: the Windows CI job on GitHub-hosted
+  runners and a real multi-replica Kubernetes deployment. The repository
+  includes Windows `go vet`/`go test` CI coverage and the Helm chart passes
+  `helm lint`; these gates still require their target environments before a
+  stable release.
+
+## Readiness validation
+
+The local v2.3.0 readiness pass completed successfully for:
+
+- `go vet ./...`
+- `go test -race -count=1 ./...`
+- `go build ./...`
+- frontend `npm test` (209 tests)
+- frontend `npm run build`
+- `npm audit` (0 advisories)
+- `helm lint helm/ncc-orchestrator`
+
+The release remains a release candidate until the Windows CI job and a
+multi-replica Kubernetes smoke deployment are exercised. No tag or release
+publication is implied by this document.
