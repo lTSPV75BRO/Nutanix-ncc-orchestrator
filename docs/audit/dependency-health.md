@@ -18,10 +18,10 @@ deprecated on its registry. Lockfiles were not regenerated.
 
 | Module | Installed | Latest | Action |
 | --- | --- | --- | --- |
-| golang.org/x/crypto | 0.57.0 | 0.58.0 | **Upgraded** (bcrypt/scrypt users; minor, API-compatible) |
-| golang.org/x/sys | 0.48.0 | 0.49.0 | **Upgraded** |
-| golang.org/x/term | 0.46.0 | 0.47.0 | **Upgraded** (pulled x/text 0.43.0, x/sync 0.24.0) |
-| github.com/go-ldap/ldap/v3 | 3.4.14 | 3.4.15 | **Upgraded** (patch) |
+| golang.org/x/crypto | 0.58.0 | 0.58.0 | Current (bcrypt/scrypt users) |
+| golang.org/x/sys | 0.49.0 | 0.49.0 | Current |
+| golang.org/x/term | 0.47.0 | 0.47.0 | Current |
+| github.com/go-ldap/ldap/v3 | 3.4.15 | 3.4.15 | Current |
 | go.opentelemetry.io/otel/* | 1.46.0 | 1.47.0 | Leave to Dependabot (minor; pulls grpc/genproto churn) |
 | github.com/golang-jwt/jwt/v5 | 5.3.1 | 5.3.1 | Current |
 | github.com/crewjam/saml | 0.5.1 | 0.5.1 | Current; low release cadence — watch advisories (XML signature handling via goxmldsig 1.6.1) |
@@ -36,8 +36,10 @@ module does not need that package.
 ## npm (frontend)
 
 Production dependencies: no advisories (`osv-scanner`; CI also runs
-`npm audit --omit=dev`). Minor updates available: react 19.3.0→19.3.1, antd
-6.6.5→6.6.8, @tanstack/react-query 5.104.0→5.104.5, react-router 8.4.0→8.5.0.
+`npm audit --omit=dev`). React, React Router, TanStack Query, GSAP, and their
+compatible transitive dependencies were updated to their current tested
+releases. Ant Design 6.7.0 is available but deferred because it breaks the
+cluster-alert pagination behavior; the application remains on tested 6.6.5.
 
 **Status: clean as of 2026-11-04.** `npm audit` reports zero advisories across
 the 256 installed dependencies, including development/build tooling. Production
