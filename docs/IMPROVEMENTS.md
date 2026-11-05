@@ -1,497 +1,98 @@
-# Improvements and new feature suggestions
-
-A project-wide list of improvements and new features for the NCC Orchestrator: application, scripts, Kubernetes, CI/CD, and documentation. Use as a backlog; prioritize by impact and effort.
-
-For the current release summary, see [RELEASE_NOTES_v2.3.0.md](releases/RELEASE_NOTES_v2.3.0.md) and [CHANGELOG.md](../CHANGELOG.md).
-
----
-
-## 2.3.x follow-up backlog
-
-The following items remain after the 2.3.0 work and the Kubernetes/NFS
-investigation on 2026-11-02. Prioritize P0/P1 items before adding larger
-features.
-
-### P0 — reliability and performance
-
-| Priority | Item | Description | Size |
-|----------|------|-------------|------|
-| P0 | **Report-cache correctness and observability** | Add a `report_cache` status to `/report/data` and metrics for cold, warm, refreshing, stale, and failed cache states. Ensure the UI refetches when an asynchronous summary refresh completes. | M |
-| P0 | **Report payload pagination** | Build only the requested `checks_snapshot`/`agg_rows` page instead of loading and filtering the full report before slicing. | M |
-| P0 | **API endpoint latency metrics** | Add Prometheus histograms for route latency, response size, cache misses, NFS refresh duration, and in-flight requests. | M |
-| P0 | **Runner/API version-skew detection** | Surface a health warning and block incompatible deployments when API, UI, and runner image tags differ. | S–M |
-| P0 | **Kubernetes HA integration test** | Test two API replicas, shared PVC access, CronJob execution, schedule updates, and pod rescheduling on separate nodes. | L |
-| P0 | **NFS report retention** | Add configurable retention/pruning for raw logs, report history, and per-run artifacts, with a dry-run preview. | M |
-
-### P1 — security and operations
-
-| Priority | Item | Description | Size |
-|----------|------|-------------|------|
-| P1 | **Narrow Kubernetes RBAC** | Split user-store and CronJob permissions, remove unnecessary Job create/delete access, and use a dedicated scheduler permission boundary. | M |
-| P1 | **Optimistic CronJob updates** | Send and verify `resourceVersion` when the UI updates a CronJob so concurrent administrators cannot overwrite each other. | S |
-| P1 | **Secret rotation workflow** | Add documented and UI-assisted rotation for API tokens, JWT secrets, backup keys, and Prism credentials, with safe replica restart guidance. | M |
-| P1 | **Outbound URL policy** | Add an explicit allowlist or administrator-visible policy for Prism Central, LDAP, OIDC, SMTP, webhook, and update-server destinations to reduce SSRF risk. | M |
-| P1 | **Signed image and SBOM verification** | Publish Cosign signatures/SBOMs and optionally verify image provenance during deployment. | M |
-| P1 | **Dependency security gates** | Run `govulncheck`, OSV scanning, `npm audit`, container scanning, and license checks as required release gates. | S–M |
-| P1 | **Kubernetes failure alerts** | Ship PrometheusRule examples for failed CronJobs, stale reports, API unavailable replicas, PVC pressure, and component version skew. | S |
-| P1 | **Backup restore verification** | Add an isolated restore/test mode that validates archive contents, secrets, report paths, and version compatibility without changing the live install. | M |
-
-### P1 — user experience
-
-| Priority | Item | Description | Size |
-|----------|------|-------------|------|
-| P1 | **Schedule pause/resume and next-run preview** | Add timezone selection, explicit pause/resume, CronJob next-run preview, and a clear distinction between wall-clock cron and interval presets. | M |
-| P1 | **First-run setup wizard** | Guide users through credentials, cluster validation, first run, recurring schedule, notifications, and backup configuration with actionable error messages. | M |
-| P1 | **Notification delivery history** | Show redacted channel status, last attempt, retry count, dead-letter state, and administrator-only delivery diagnostics. | M |
-| P1 | **Slow-request fallback UX** | Show when stale report data is being served, when a refresh is in progress, and when the UI has fallen back to a previous report. | S–M |
-| P1 | **Operator-safe empty states** | Provide direct actions for missing config, missing clusters, failed first run, no schedule, and insufficient cluster-group access. | S |
-
-### P2 — testing and maintainability
-
-| Priority | Item | Description | Size |
-|----------|------|-------------|------|
-| P2 | **Kubernetes API contract tests** | Fake the Kubernetes API and cover CronJob get/patch errors, missing RBAC, suspended schedules, invalid cron, and concurrent updates. | M |
-| P2 | **Frontend test environment repair** | Fix jsdom `localStorage`/`sessionStorage` setup so the existing AppShell and SiteIntro suites run reliably in CI. | S |
-| P2 | **Race and load testing** | Run `go test -race ./...` plus concurrent report, alert, login, and schedule requests against a representative large report. | M |
-| P2 | **Report renderer extraction** | Move the remaining report renderers out of `goNCC.go` into an `internal/report` package with focused interfaces and benchmarks. | L |
-| P2 | **Runbook automation** | Add a support bundle command that collects redacted health, events, component versions, CronJob status, PVC status, and recent logs. | M |
-
-### Recently implemented
-
-- ✅ Kubernetes Schedule settings can update the authoritative `ncc-v2-runner` CronJob.
-- ✅ Large NCC log summaries refresh asynchronously instead of blocking every report request.
-- ✅ API replicas use stricter hostname spreading in Kustomize and Helm.
-
----
-
-## Historical 2.2.x polish pack
-
-Operator mount-time admin `/api/v1/settings/*` calls are already gone (Schedule uses `/runs/configs`; Settings `destroyOnHidden`). The leftover work is honest rollback, JWT expiry, click-through 403s, and a few security/QOL gaps. Items below are the mixed pack unless marked *later*.
-
-### Fixes
-
-| Item | Description | Files | Size |
-|------|-------------|-------|------|
-| **Encrypted rollback tells the truth** | `backupArchiveIncludesStack` skips `.tar.gz.enc`, so the UI says software will stay as-is even when a 2.2.0 pre-update snapshot has a stack. Peek after decrypt, or treat updater `pre-update-*.enc` as stack-bearing. Failed apply already has `backupPath` — add **Roll back now**. | `cmd/ncc-api-server/backups.go`, `frontend/src/features/settings/AccessSection.tsx` | M |
-| **JWT sessions report expiry** | HMAC sets `expiresAt`; JWT `principalFromIdentity` does not. `/auth/me` omits `expires_in_sec` on the 2.2.0 cookie path. Idle guard is hardcoded to 60 minutes. | `cmd/ncc-api-server/auth.go`, `internal/auth`, `frontend/src/components/SessionIdleGuard.tsx` | S–M |
-| **systemd exit 3 is success** | Partial success (exit 3) fails the timer. Add `SuccessExitStatus=0 3`. | `schedule_systemd.go` | S |
-| **Forgot-password rate limit** | Docs say the global limiter applies; `withRateLimit` misses `/api/v1/auth/forgot-password`. | `cmd/ncc-api-server/hardening.go` | S |
-
-### QOL / operator dead-ends
-
-| Item | Description | Files | Size |
-|------|-------------|-------|------|
-| **Role-aware ⌘K** | Filter destinations by role; add Connection/Logs/Audit; do not steal Ctrl+K from Monaco. | `frontend/src/components/CommandJump.tsx` | S |
-| **First-time setup** | Skip on already-configured installs. Operators: Connection → Schedule → First run. Use `navigate`, not full reload. | `FirstTimeSetupModal.tsx`, `App.tsx` | M |
-| **Session remaining** | User menu shows `expires_in_sec` once JWT expiry is fixed. | `frontend/src/App.tsx` | S |
-| **Admin-tab remapping** | Banner “This area is admin-only” instead of silent remap; operator Settings banner. | `SettingsPage.tsx` | S |
-| **Dashboard empty state** | Operators do not get **Open Config**. | `DashboardPage.tsx` | S |
-| **Restricted Runs** | Disable Trigger/Preflight when no groups; hide extra flags that 403; artifacts copy says admin-only. | `RunsSection.tsx` | S |
-| **Feature / Audit copy** | “Ask an administrator to turn this on”; empty audit talks runs/schedule, not config saves. Hide or relabel Connection token-file for non-admins. | `FeatureDisabled.tsx`, `AuditLogSection.tsx`, `SettingsPage.tsx` | S |
-| **Login lockout + toast titles** | 429 / `NCC_API_ACCOUNT_LOCKED` countdown; `notifyError` title from `error_code`. | `LoginPage.tsx`, `notify.tsx` | S |
-
-### New feature in this pack
-
-| Item | Description | Files | Size |
-|------|-------------|-------|------|
-| **Muted-notification banner** | Secret-free `GET /health` field `notifications: { delivery_paused, reason }`. Header banner for everyone; Notifications link only if admin. | `cmd/ncc-api-server/main.go`, `notifications_controls.go`, `App.tsx` | S–M |
-
-### Later (not this pack)
-
-| Item | Why later |
-|------|-----------|
-| CSRF cookie on split UI/API origins (`ncc_csrf` SameSite=Strict vs `auth_token` Lax) | Cookie Domain / SameSite change; easy to get wrong |
-| Optional “include software” on manual snapshots | Copy + backup flag; not required for updater path |
-| GitHub 429 copy on the update card | Admin-only Maintenance |
-| Auth-gate OpenAPI / meta/routes when login is on | Breaks unauthenticated `/docs` |
-| Insights fleet-wide vs scoped Dashboard numbers | Needs API filters on trends / summary / logs |
-| Operator notification-test card | Needs a redacted GET (secrets stay admin) |
-| Unrestricted operator cluster picker | `GET /settings/clusters` already allowed |
-
----
-
-## New features (research)
-
-Ideas beyond the polish pack. Several older rows in §6 are already shipped (PC alerts, web UI, host scheduler, audit log).
-
-| Feature | Description | Effort |
-|---------|-------------|--------|
-| **Live run log stream** | SSE or chunked GET for runner logs so Settings → Runs does not poll every 3s. Reuse `handleRunnerLogs` tail. | M |
-| **Saved dashboard views** | Named filter sets (severity, clusters, source, handling) in `localStorage` or per-user prefs; share via URL (already has query params). | S |
-| **Alert snooze** | Disposition `snooze_until` so ACK expires back to Needs attention. Extends `ncc-alert-dispositions.json`. | M |
-| **Redacted notification status for operators** | GET without SMTP/webhook secrets: channels on/off, last delivery, **Send test** (POST already operator+). | M |
-| **Scoped Insights** | Apply cluster-group filter to trends, policy lines, NCC logs, and hero counts so Insights matches the Dashboard banner. | M |
-| **What’s New drawer** | Client-only bullets keyed by `health.version`; open once after upgrade. | S |
-| **gzip / `Accept-Encoding` on large GETs** | Compress `/report/data`, `/alerts`, `/audit` when the client asks. Big win on VPN. | S |
-| **Check allow/deny lists** | Config to skip or keep NCC checks by name/regex (still listed in §6). | M |
-| **Interactive Slack/Teams** | “View dashboard” button with ingress URL (still listed in §6). | M |
-| **Profiles / multi-team outputs** | Separate config+output roots per team (still listed in §6). | L |
-
----
-
-## Performance (research)
-
-v2.2.0 already shipped PC alert cache TTL, the alert pager, and dashboard preview `limit`/`offset`. Remaining cost is leftover work *around* those.
-
-| Item | Problem | User-visible | Effort |
-|------|---------|--------------|--------|
-| **`/report/data` builds full then slices** | `limit`/`offset` trim `checks_snapshot` / `agg_rows` after every artifact and `index.html` scrape. | First dashboard paint still waits on a large JSON body. | M |
-| **Preview + full follow-up** | After `has_more`, Dashboard fetches unpaginated `/report/data`. Insights/Settings use other query keys and do not reuse preview. | Table appears, then the page stalls. | S–M |
-| **PC alerts: one cache slot, no singleflight** | Cache keyed only by `resolvedFilter`; Dashboard fires `No` and `all`. Concurrent misses all hit Prism. No server pager. | PC · Beta / Refresh waits on Prism; toggling Resolved feels cold. | M |
-| **Trends re-walk every `run-summary.json`** | `collectTrendPoints` lists `runs/*` (capped 365). `/report/data` embeds 30 points; Insights walks again. | Insights/dashboard slow as history grows. | S–M |
-| **Insights loads the fat report** | Unpaginated `reportData` + `reportTrends(24)` then aggregates every `agg_row` on the main thread. | Slowest page after a large run. | M |
-| **Settings Connection fetches full report** | Sparkline needs `/runs?limit=200`; Connection also pulls `/report/data`. Access/Maintenance fan out 8–12 GETs. | Settings feels heavy on open. | S–M |
-| **ClusterTable maps every row before paging** | Builds `RowRecord`s for the full set, then slices. Rebuilds on each filter keystroke. | Search/severity jank on large reports. | M |
-| **HTML/CSV still embed full check detail** | Combined `index.html` inlines AGG until 20k rows; `MarshalIndent` on snapshots. | Longer runs; multi-MB `index.html`; API scrape stays large. | L |
-| **Backup list opens every archive** | Walks tar members for `includes_stack`. System Health lists backups on open. Update always `--include-stack`. | Maintenance/Health hang; Apply update sits on backup. | M |
-| **Audit `ReadFile`s the whole JSONL under a lock** | Newest-first unmarshal; `/runs` pulls 500 trigger lines the same way. | Audit tab and sparkline slow on long-lived installs. | M |
-| **`/runs` walks history for a 7-day sparkline** | Stats every `runs/<id>/`, reads summaries, merges audit. Filter after the walk. | Connection waits on run history. | S |
-| **`interface{}` JSON + no gzip** | Decode to maps → `deepFilterClusters` → encode. Sidecar `checks-snapshot.json` ignored in favor of HTML scrape. | Same data, more wait/memory over VPN. | M |
-
-**Suggested performance order:** report build+slice + stop the full follow-up (dashboard TTFB) → Insights slim payload → PC singleflight + multi-slot cache → gzip → audit tail / sparkline cheap path. Do not redo preview pagination, the alert pager, or the 5-minute PC TTL.
-
----
-
-## Top of backlog (structural)
-
-**Extract `goNCC.go` into `internal/` packages (first wave done, v2.1.0).**
-`goNCC.go` is ~15.5k lines. The first wave of six leaf packages landed in
-v2.1.0. Each step kept behavior identical, moved the matching tests, and left
-`go test -race ./...` green before the next.
-
-1. ✅ **`internal/model` (done, v2.1.0).** The foundational shared types
-   (`Config`, `ClusterCredential`, `NotificationSummary`, `ParsedBlock`, `FS`,
-   `HTTPClient`, `ClusterHealthScore`) live in a leaf package with only
-   stdlib imports, re-exported from `main` via type aliases (`type Config =
-   model.Config`) so existing references compile unchanged.
-2. ✅ **`internal/promtext` (done, v2.1.0).** The Prometheus textfile writers
-   (`WritePrometheusFile`, `WriteNotificationMetricsFile`, `SanitizeLabel`)
-   moved out, depending only on `internal/model`. `main` keeps thin aliases.
-3. ✅ **`internal/retryutil` (done, v2.1.0).** The shared retry helpers
-   (`JitteredBackoff`, `IsRetryableStatus`, `RetryAfterDelay`) moved into a
-   stdlib-only leaf so both `main` and `internal/notify` reuse them without an
-   import cycle; aliased in `main`.
-4. ✅ **`internal/notify` (done, v2.1.0).** The email/webhook/Slack senders,
-   retry wrappers, `text/template` overrides, and the notification-metrics
-   accumulator moved out (depends on `internal/model` + `internal/retryutil`).
-   The run-level counters are read via `notify.ResetMetrics` /
-   `notify.SnapshotMetrics`.
-5. ✅ **`internal/nccparse` (done, v2.1.0).** The NCC summary parser
-   (`SplitLines`, `ParseSummary`, `ValidateParsedAlertsAgainstPluginResults` →
-   `model.ParsedBlock`) moved out, aliased in `main`.
-6. ✅ **`internal/httpclient` (done, v2.1.0).** The `*http.Client` builder
-   (`New`, aliased `NewHTTPClient`) — connection pooling, TLS policy, and the
-   redacting `LoggingTransport` — moved out (depends on `internal/model`). The
-   os-backed `OSFS` moved next to the `FS` interface in `internal/model`.
-
-**Next wave (not started — intentionally held).** `goNCC.go` is still large;
-the report renderers (`generateHTML` / `generateCSV` / `generateMarkdown` /
-`generateJSON` / `generateSARIF`) are the next candidate, but they are coupled
-to the combined-HTML and drilldown report code (~1k interleaved lines) and need
-a coordinated move into an `internal/report` package — more involved than the
-leaf extractions above, so it was deferred. It can follow the same
-alias-backed, behavior-preserving pattern.
-
-### Hardening / observability / RBAC (done, v2.1.0)
-
-Beyond the extraction, v2.1.0 also shipped:
-
-- ✅ **TLS trust options** — `ca-bundle` (custom CA PEM) and `pin-sha256`
-  (certificate pinning) as safer alternatives to `insecure-skip-verify`.
-- ✅ **`smtp-insecure-skip-verify`** — SMTP STARTTLS verification decoupled from
-  the Prism flag.
-- ✅ **Webhook HMAC signing** (`webhook-secret` → `X-NCC-Signature`).
-- ✅ **Notification dead-lettering** (`notification-deadletter-dir`).
-- ✅ **Self-heal supervisor** shell-injection hardening (shell-quoted service
-  name).
-- ✅ **NCC run metrics on the api-server `/metrics`** endpoint
-  (`promtext.RenderRunSummaryMetrics` from the latest `run-summary.json`) so
-  Prometheus can scrape directly instead of via a textfile collector.
-- ✅ **Minimal opt-in RBAC** — `NCC_API_VIEWER_TOKEN` grants a read-only role;
-  settings + mutating endpoints require the admin token/session.
-- ✅ **Opt-in OpenTelemetry tracing** (`internal/trace`, per-cluster spans).
-- ✅ **Fuzz tests** (`FuzzParseSummary`, `FuzzRedactJSONPasswordValue` — the
-  latter found and fixed a real panic) and **mock-Prism integration tests**.
-- ✅ **CI gates** (`.github/workflows/ci.yml`): build/vet/gofmt/`-race`,
-  golangci-lint, govulncheck, Trivy.
-
----
-
-## Shipped through v1.1.0 (not exhaustive)
-
-The following backlog themes were partially or fully addressed by **v1.0.0** and **v1.1.0**; see [CHANGELOG.md](../CHANGELOG.md), [RELEASE_NOTES_v1.0.0.md](releases/RELEASE_NOTES_v1.0.0.md), and [RELEASE_NOTES_v1.1.0.md](releases/RELEASE_NOTES_v1.1.0.md) for the canonical list.
-
-| Theme | What shipped |
-|--------|----------------|
-| v4 APIs + PC | Default v4 cluster match, CVM `nodeIps`, Prism task polling |
-| `--update` | Semver comparison (Masterminds/semver); `GITHUB_TOKEN` documented |
-| Exit codes | **0 / 1 / 2 / 3** documented; **3** = partial success |
-| run-summary.json + ncc-run-record.json | `clusters[]`, `exit_code`, per-cluster severity counts; versioned `ncc-run-record.json` |
-| Viper / flags | Root `--insecure-skip-verify` no longer overwritten by discover subcommand binds |
-| Rate limits | 429 logging + `Retry-After` cap; `X-RateLimit-*` headers logged |
-| discover-clusters | `--format lines|table|json` |
-| MCP / Cursor | `get_report` on `*.log` adds markdown KB links (`internal/kblinks`) |
-| Tests | Golden CSV + per-cluster HTML, httptest 429 retry |
-| Helm / Kustomize | `helm/ncc-orchestrator`, `kubectl apply -k k8s/` |
-| Docs | [docs/TROUBLESHOOTING.md](TROUBLESHOOTING.md) |
-
-**Remaining** items in the sections below are still valid backlog (resume/checkpoint, cluster subset, templates, etc.).
-
-### Also shipped in v2.0.x – v2.1.0
-
-These rows in the sections below are now **done** and kept only for history:
-
-| Theme | Shipped in |
-|-------|-----------|
-| Checksum verification for `update` (single-binary, stack, `--binary-url`) | v2.0.x |
-| Checksum verification for `v2-bootstrap` + `--skip-checksum-verify` escape | **v2.1.0** |
-| Download size cap + timeout for updates | v2.0.x |
-| Windows-friendly self-update (`.new.exe`) → now an automated `apply-ncc-update.cmd` swap helper | v2.0.x → **v2.1.0** |
-| Semver comparison + `GITHUB_TOKEN` for updates | v1.x / v2.0.x |
-| Helm chart + Kustomize (`helm/ncc-orchestrator`, `k8s/`) | v1.1.0 / v2.0.x |
-| CI test/vet job, multi-platform release asset upload, version-from-tag | v2.0.x |
-| SHA-256 `checksums.txt`, CycloneDX SBOM, SLSA provenance, `release-attestation.json` | v2.0.2 |
-| Windows VERSIONINFO + optional self-signed code-signing hooks | v2.0.2 |
-
----
-
-## 1. Application (Go binary)
-
-### 1.1 Configuration and input
-
-| Suggestion | Description |
-|------------|-------------|
-| **Clusters from file** | Support `clusters-file: path/to/list.txt` (one cluster per line) in addition to `clusters: "ip1,ip2"` for large or dynamic cluster lists. |
-| **Config schema / validation docs** | In README, mark which options are required always vs required when a feature is on (e.g. “Required if email-enabled”). Optional: ship a JSON Schema for config.yaml. |
-| **Config file permissions check** | If config file is world-readable and contains `password` or `smtp-password`, log a warning or refuse to start to avoid leaking secrets on shared systems. |
-| **Multiple config files** | Allow `--config a.yaml,b.yaml` or a `config-dir` that merges/overrides (e.g. base + env-specific). |
-
-### 1.2 Run behaviour and reliability
-
-| Suggestion | Description |
-|------------|-------------|
-| **Resume / checkpoint** | Option to skip clusters that already have a successful run in this “session” (e.g. same day) or to resume from a list of remaining clusters after a crash. |
-| **Cluster subset / filter** | `--clusters-only 10.0.1.1,10.0.1.2` or `--exclude-clusters 10.0.1.3` to run a subset without editing config. |
-| **Exit codes** | Document and use consistent exit codes: 0 = success, 1 = run/validation error, 2 = config not found / bad config. Use in code so scripts can branch. |
-| **Run summary JSON file** | Write `outputfiles/run-summary.json` (or configurable path) with clusters_ok, clusters_failed, duration_s, index_html, timestamp so other tools can consume it without parsing logs. |
-| **Stricter timeouts** | Optional max total run time (e.g. “abort all after 2h”) in addition to per-cluster timeout. |
-
-### 1.3 Notifications and reporting
-
-| Suggestion | Description |
-|------------|-------------|
-| **Notification failure metrics** | Prometheus counters for email_send_failures, webhook_send_failures, slack_send_failures so monitoring can alert on notification issues. |
-| **Slack retries** | Apply the same retry wrapper used for email/webhook to Slack so transient failures are retried. |
-| **Custom notification templates** | Allow override of email subject/body (and maybe webhook JSON) via template file or configurable format string. |
-| **Notify only on regression** | Option to send notifications only when FAIL count increased vs last run (compare with previous run summary or stored baseline). |
-| **Report retention** | Optional `--retain-last N` to keep only the last N runs’ output (or last N days) to avoid filling disk. |
-
-### 1.4 Outputs and formats
-
-| Suggestion | Description |
-|------------|-------------|
-| **Single-file report** | Option to emit one combined HTML (or PDF) for the whole run instead of only index + per-cluster pages. |
-| **Diff vs previous run** | Optional “diff” output (e.g. new FAILs, resolved FAILs) compared to previous run’s stored summary. |
-| **JSON run summary** | Machine-readable run result (clusters, status, counts, paths) in JSON for automation. |
-| **Markdown report** | Optional Markdown output for easy paste into wikis or tickets. |
-
-### 1.4.1 HTML report UX improvements (v1.1.0+)
-
-| Suggestion | Description |
-|------------|-------------|
-| **Delta badges** | Show `+new FAIL` and `-resolved FAIL` per cluster/check using `drilldown-diff.json` so operators can focus on changes. |
-| **Health score widget** | Display per-cluster health score (`0-100`) with trend sparkline from run history. |
-| **Flaky check marker** | Highlight checks detected in `flaky-checks.json` to reduce noise and false urgency. |
-| **Policy gate panel** | Add a summary card in report header showing gate pass/fail and violated rules (`policy-gates.txt`). |
-| **Run comparison mode** | Add “current vs previous” view with filter for changed checks only. |
-| **Cluster status heatmap** | Add an at-a-glance matrix (cluster x severity counts) before detailed tables. |
-| **Artifact quick links** | Add in-report download links for `run-summary.json`, `drilldown-diff.json`, `flaky-checks.json`, and `slo-dashboard.json`. |
-| **Advanced search tokens** | Support query tokens such as `sev:FAIL`, `cluster:<id>`, `changed:true`, `flaky:true`. |
-| **Accessibility pass** | Improve contrast, keyboard navigation, and ARIA labels for filters, tables, and controls. |
-
-### 1.5 Security and safety
-
-| Suggestion | Description |
-|------------|-------------|
-| **Secrets from env only** | Option to ignore password/smtp-password from config file and require them from env only (e.g. `NCC_PASSWORD`), reducing risk of committing secrets. |
-| **Redact more in log-http** | Extend redaction to other common secret headers (e.g. X-API-Key, custom auth headers) via config or pattern list. |
-| **Download limit for --update** | Cap download size (e.g. 150 MiB) and enforce timeout when fetching the update binary to avoid abuse or malicious release assets. |
-| **Checksum verification for --update** | Verify SHA256 of downloaded binary (from release checksums file or asset metadata) before replacing the executable. |
-
-### 1.6 Update and versioning
-
-| Suggestion | Description |
-|------------|-------------|
-| **GITHUB_TOKEN for --update** | Support `GITHUB_TOKEN` env for authenticated API calls (higher rate limit); on 403 rate limit, print clear message. |
-| **Semver for --update** | Use proper semver comparison (e.g. Masterminds/semver) so 0.1.13 is correctly “newer” than 0.1.12. |
-| **Windows-friendly replace** | On Windows, write to `ncc-orchestrator.new.exe` and instruct user to replace after exit, instead of failing replace-in-place. |
-
-### 1.7 Code and structure
-
-| Suggestion | Description |
-|------------|-------------|
-| **Split packages** | First wave **done in v2.1.0** (`internal/model`, `internal/promtext`, `internal/retryutil`, `internal/notify`, `internal/nccparse`, `internal/httpclient`). See **Top of backlog** above for the next wave (report renderers → `internal/report`). |
-| **HTTP dump allocation** | In redactHTTPDump, reduce allocations when truncating (e.g. single pass or buffer reuse). |
-
----
-
-## 2. Scripts (Bash)
-
-### 2.1 Uninstall script (`uninstall-ncc-orchestrator.sh`)
-
-| Suggestion | Description |
-|------------|-------------|
-| **Idempotent / no error on missing** | Already exits 0 when namespace does not exist; document that and ensure no noisy errors when resources are already gone. |
-| **Backup before delete** | Optional `--backup-dir ./backup` to dump ConfigMap, Secret (redacted), and PVC list before deleting namespace. |
-| **KUBECONFIG check** | Fail fast with a clear message if `kubectl cluster-info` fails (e.g. KUBECONFIG not set or invalid). |
-| **Version / image** | Print image tag in use (e.g. from CronJob) before asking for confirmation so user knows what will be removed. |
-
-### 2.2 Prune script (`prune-ncc-images-workers.sh`)
-
-| Suggestion | Description |
-|------------|-------------|
-| **Image name from cluster** | Option to read image name from the running CronJob or Deployment in the namespace instead of hardcoding `NCC_IMAGE_NAME`. |
-| **Parallel SSH** | Run SSH prune in parallel (e.g. xargs -P) to speed up when there are many nodes. |
-| **Timeout per node** | Add a timeout per node so one stuck SSH does not block the whole script. |
-| **Dry-run output** | In --dry-run, print the exact crictl/docker commands that would run on each node. |
-
-### 2.3 New scripts
-
-| Suggestion | Description |
-|------------|-------------|
-| **Install script** | `scripts/install-ncc-orchestrator.sh` that applies k8s manifests in order, prompts for secret, and optionally runs a one-off job to verify. |
-| **Backup report script** | Script to tar/gzip outputfiles + nccfiles (and optionally run-summary) for archival or move to another host. |
-| **Cluster list from Prism** | Optional script or subcommand that uses Prism Central API (if available) to discover clusters and output a list for `clusters` or clusters-file. |
-
----
-
-## 3. Kubernetes
-
-### 3.1 Manifests and deployment
-
-| Suggestion | Description |
-|------------|-------------|
-| **Kustomize or Helm** | Offer a Kustomize overlay or a small Helm chart so users can override namespace, image tag, schedule, and resource limits without editing many YAML files. |
-| **Resource limits** | Set requests/limits on CronJob and Deployment so the scheduler and cluster autoscaler behave predictably. |
-| **PodDisruptionBudget** | If the nginx Deployment is critical, add a PDB (minAvailable: 1) so evictions are controlled. |
-| **Multi-arch image** | Build and push amd64 and arm64 images (e.g. with buildx) and use image digest or multi-arch manifest so ARM nodes can run the CronJob. |
-| **ConfigMap from file** | Document or script generating ConfigMap from a local config.yaml so users don’t paste large YAML into k8s/configmap.yaml. |
-
-### 3.2 Operational improvements
-
-| Suggestion | Description |
-|------------|-------------|
-| **Alerting example** | In k8s/README or docs/PROMETHEUS.md, add a sample PrometheusRule/Alertmanager config to alert on CronJob failure or NCC FAIL count. |
-| **ScheduledJob backoff** | Document or tune CronJob backoffLimit and restartPolicy so repeated failures don’t spawn too many jobs. |
-| **Readiness for nginx** | Add a readinessProbe for the nginx Deployment (e.g. GET /) so the Service doesn’t send traffic until the server is up. |
-| **SecurityContext** | Set runAsNonRoot and readOnlyRootFilesystem where possible; document any required capabilities. |
-
-### 3.3 Documentation
-
-| Suggestion | Description |
-|------------|-------------|
-| **Runbook** | Already added; keep it updated with “what to do when report is empty”, “when to use job-debug”, and “how to change schedule”. |
-| **Troubleshooting table** | Table mapping symptom → cause → action (e.g. “Permission denied” → NFS/fsGroup → adjust fsGroup or NFS export). |
-| **Minimal install** | “Minimal install” path: single cluster, no MetalLB, use NodePort or port-forward for the report UI. |
-
----
-
-## 4. CI/CD and release
-
-### 4.1 GitHub Actions
-
-| Suggestion | Description |
-|------------|-------------|
-| **Test job** | Job that runs `go test ./...` and `go vet ./...` on push/PR (and optionally staticcheck) so regressions are caught early. |
-| **Upload release assets** | On release, upload Linux/Darwin/Windows binaries (amd64, and darwin/linux arm64) to the GitHub release so `ncc-orchestrator -u` can update all platforms. |
-| **Version from tag** | Use the release tag (e.g. v0.1.12) as the single source of version for both the binary and the Docker image. |
-| **Build matrix** | Build and test on Go 1.22 and 1.23 (or go.mod version) to catch compatibility issues. |
-
-### 4.2 Release and versioning
-
-| Suggestion | Description |
-|------------|-------------|
-| **Changelog enforcement** | In PR template or CI, remind to update CHANGELOG.md (or check that Unreleased section exists). |
-| **Checksums file** | Generate and upload SHA256SUMS (or similar) with release assets so --update and users can verify downloads. |
-| **Release checklist** | Keep a short RELEASE_CHECKLIST.md (tag, push, create release, verify image, verify -u). |
-
----
-
-## 5. Documentation
-
-### 5.1 User docs
-
-| Suggestion | Description |
-|------------|-------------|
-| **Quick start** | One-page “Quick start” (install binary → minimal config → run once → view report) at the top of README or in QUICKSTART.md. |
-| **Example configs** | Add example configs: minimal, with email, with webhook, digest-only, replay-only, and reference to dist/example_config.yaml. |
-| **Architecture diagram** | Simple diagram: Prism clusters → NCC Orchestrator → outputs (files, email, webhook, Slack, Prometheus). |
-| **Glossary** | Short glossary: NCC, Prism, severity (FAIL/WARN/ERR/INFO), replay, digest, etc. |
-
-### 5.2 Operator and runbooks
-
-| Suggestion | Description |
-|------------|-------------|
-| **Runbook index** | In k8s/README, list runbook scenarios with links (CronJob failed, report empty, permissions, prune images). |
-| **Prometheus runbook** | In docs/PROMETHEUS.md, add “What to do when metrics disappear” (e.g. CronJob not running, textfile dir not updated). |
-| **Notification runbook** | “Notifications not received” → check SMTP/webhook URL, log level, retries, firewall. |
-
-### 5.3 Developer and contributing
-
-| Suggestion | Description |
-|------------|-------------|
-| **Build from source** | In CONTRIBUTING or README, document exact go build command and ldflags for a versioned binary. |
-| **Testing** | How to run tests, run a single test, and (if added) run tests in Docker. |
-| **Code layout** | Short “Code layout” section in CONTRIBUTING or README: main flow, config, NCC client, notifications, outputs. |
-
----
-
-## 6. New features (larger scope)
-
-| Feature | Description |
-|---------|-------------|
-| **Prism Central integration** | If Prism Central is in use, discover clusters from PC and optionally run NCC per cluster from a single job. |
-| **Slack / Teams interactive messages** | Rich message with “View report” button linking to index.html (e.g. via ingress URL). |
-| **Web UI for history** | Optional minimal web UI (or static page generator) that lists past runs (from run-summary.json or directory listing) and links to index.html per run. |
-| **NCC check blacklist/allowlist** | Config to run only certain checks or exclude certain checks by name/regex (if NCC API supports it). |
-| **Scheduling without CronJob** | Optional built-in scheduler (e.g. run every N hours in a loop) for running outside Kubernetes. |
-| **Audit log** | Optional audit log (who ran what, when, which clusters) for compliance. |
-| **Multi-tenant / per-team config** | Support multiple config files or “profiles” (e.g. team-a.yaml, team-b.yaml) and run each with separate outputs. |
-
----
-
-## 7. Summary by priority (suggested)
-
-**High impact, lower effort**  
-- Run tests in CI.  
-- Upload release assets and document `-u`.  
-- Run summary JSON file.  
-- README: required vs optional config.  
-- Exit codes documented and consistent.  
-
-**High impact, medium effort**  
-- Clusters from file.  
-- Install script for k8s.  
-- GITHUB_TOKEN + rate-limit message for --update.  
-- Notification failure metrics (Prometheus).  
-- Kustomize or Helm for k8s.  
-
-**Medium impact**  
-- Config file permissions check.  
-- Slack retries.  
-- Backup before uninstall (script).  
-- Checksum verification for --update.  
-- Alerting example for Prometheus.  
-
-**Nice to have**  
-- Resume/checkpoint, cluster subset filter.  
-- Custom notification templates.  
-- Multi-arch Docker image.  
-- Quick start page, architecture diagram.  
-- Prism Central discovery (new feature).  
-
----
-
-*Last updated: 2026-11-02. The 2.3.x follow-up backlog reflects the Kubernetes/NFS
-investigation and the recently implemented schedule, report-cache, and
-replica-spreading changes. Historical 2.2.x items remain below for context.*
+# Improvements backlog
+
+This is the active backlog for NCC Orchestrator. It contains proposed work that
+is not already shipped in v2.3.x. Completed work belongs in
+[`CHANGELOG.md`](../CHANGELOG.md) and the release notes
+([`v2.3.0`](releases/RELEASE_NOTES_v2.3.0.md)).
+
+Priorities are operational: P0 blocks scale or reliability, P1 improves
+security or operator experience, and P2 improves maintainability. Size is a
+rough estimate: S, M, or L.
+
+## P0 — reliability and scale
+
+| Item | Scope | Size |
+| --- | --- | --- |
+| Report-cache observability | Expose cache state (`cold`, `warm`, `refreshing`, `stale`, `failed`) in `/report/data` and Prometheus; refetch when async refresh completes. | M |
+| Server-side report pagination | Build only the requested `checks_snapshot`/`agg_rows` page instead of loading and filtering the complete report before slicing. | M |
+| Version-skew protection | Detect mismatched API, UI, runner, and image versions; warn or block incompatible deployments. | S–M |
+| Kubernetes HA integration test | Exercise two API replicas, shared PVC access, CronJob execution, schedule updates, and pod rescheduling on separate nodes. | L |
+| Report retention | Add configurable retention and pruning for raw logs, report history, and per-run artifacts, with a dry-run preview. | M |
+
+## P1 — security and operations
+
+| Item | Scope | Size |
+| --- | --- | --- |
+| Narrow Kubernetes RBAC | Split user-store and CronJob permissions; remove unnecessary Job access and use a dedicated scheduler boundary. | M |
+| Optimistic CronJob updates | Send and verify `resourceVersion` so concurrent administrators cannot overwrite schedule changes. | S |
+| Secret rotation workflow | Document and optionally guide rotation of API tokens, JWT secrets, backup keys, and Prism credentials across replicas. | M |
+| Outbound URL policy | Provide an administrator-visible allowlist/policy for Prism Central, LDAP, OIDC, SMTP, webhook, and update-server destinations. | M |
+| Signed image and SBOM verification | Publish Cosign signatures/SBOMs and optionally verify image provenance during deployment. | M |
+| Kubernetes failure alerts | Provide PrometheusRule examples for failed CronJobs, stale reports, unavailable API replicas, PVC pressure, and version skew. | S |
+| Isolated backup verification | Validate archive contents, secrets, report paths, and version compatibility without changing the live install. | M |
+
+## P1 — operator experience
+
+| Item | Scope | Size |
+| --- | --- | --- |
+| Stale-report UX | Clearly show when stale data is being served, a refresh is in progress, or the UI has fallen back to a previous report. | S–M |
+| Notification delivery history | Show redacted channel status, last attempt, retry count, and dead-letter state; keep diagnostics administrator-only. | M |
+| Operator-safe empty states | Give direct actions for missing config, missing clusters, failed first runs, missing schedules, and restricted cluster groups. | S |
+| Role-aware command search | Filter destinations by role and preserve Ctrl/⌘+K for Monaco when the editor has focus. | S |
+| Session and lockout clarity | Show remaining session time and actionable account-lockout countdowns without exposing sensitive details. | S–M |
+
+## P2 — engineering and test coverage
+
+| Item | Scope | Size |
+| --- | --- | --- |
+| Kubernetes API contract tests | Fake Kubernetes API errors, missing RBAC, suspended schedules, invalid cron, and concurrent updates. | M |
+| Race and load test profile | Run race tests plus concurrent report, alert, login, and schedule requests against a representative large report. | M |
+| Report package extraction | Move the remaining renderers from `goNCC.go` into focused `internal/report` packages with benchmarks. | L |
+| Support-bundle automation | Collect redacted health, events, component versions, CronJob/PVC state, and recent logs. | M |
+| Dependency major-upgrade track | Evaluate Ant Design 6.7+ and Vitest 5 in an isolated change with migration tests; retain the currently tested versions until then. | M |
+
+## Performance sequence
+
+Work in this order when performance is the goal:
+
+1. Server-side report pagination and remove the dashboard's full-report follow-up.
+2. Add a slim Insights payload and avoid rebuilding the same trend data.
+3. Add single-flight, multi-slot Prism alert caching.
+4. Add gzip/`Accept-Encoding` for large report, alert, and audit responses.
+5. Optimize audit tailing and run-history sparkline reads.
+
+Do not redo the existing preview pagination, alert pager, or five-minute Prism
+alert cache; those are already implemented.
+
+## Deferred ideas
+
+These ideas remain valid but are intentionally below the active priorities:
+
+- Resumable/checkpointed runs and cluster-subset filters.
+- Custom notification templates and Slack/Teams interactive messages.
+- Multi-team profiles with separate configuration and output roots.
+- A lightweight history UI for browsing archived reports.
+- A built-in scheduler for installations outside Kubernetes or the host service
+  manager.
+- A minimal-install guide, architecture diagram, and operator glossary.
+
+## Current baseline
+
+Already covered by v2.3.x and therefore tracked elsewhere:
+
+- Setup checklist, redesigned sign-in, OIDC, RBAC, alert lifecycle, and audit
+  logging.
+- Host and Kubernetes scheduling, readiness/liveness, graceful shutdown, and
+  supervised updates.
+- Report preview pagination, asynchronous large-report refresh, and the current
+  Prism alert cache.
+- Dependency security gates, SBOM/provenance release tooling, and cross-platform
+  CI coverage.
+
+See [`docs/FEATURES_AND_CONFIG_FLAGS.md`](FEATURES_AND_CONFIG_FLAGS.md),
+[`docs/SECURITY_AND_TRUST.md`](SECURITY_AND_TRUST.md),
+[`docs/SCALING.md`](SCALING.md), and
+[`docs/THIRD_PARTY_DEPENDENCIES.md`](THIRD_PARTY_DEPENDENCIES.md) for the
+canonical operational and security details.
+
+_Last reviewed: 2026-11-05._
