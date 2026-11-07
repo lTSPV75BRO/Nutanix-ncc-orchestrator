@@ -5082,3 +5082,18 @@ h5.ant-typography {
 .audit-action {
   font-size: var(--ui-text-xs);
 }
+
+/* Every antd Empty uses the shared empty icon (set in theme.tsx). */
+.ant-empty .ant-empty-image {
+  height: auto;
+  margin-bottom: var(--ui-space-2);
+}
+.ant-empty .ant-empty-description {
+  color: var(--ui-text-secondary);
+  font-size: var(--ui-text-sm);
+}
+
+.repair-healer-meta {
+  display: block;
+  font-size: var(--ui-text-xs);
+}

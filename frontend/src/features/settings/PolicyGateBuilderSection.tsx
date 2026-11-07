@@ -184,7 +184,7 @@ export function PolicyGateBuilderSection({ gates, ready, onApplyPolicyGates }: P
 
       <div style={{ marginTop: 16 }}>
         {rules.length === 0 ? (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No rules yet — add one above" />
+          <Empty description="No rules yet — add one above" />
         ) : (
           <Space size={[8, 8]} wrap>
             {rules.map((rule, idx) => (

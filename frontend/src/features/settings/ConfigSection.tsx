@@ -1061,7 +1061,7 @@ export function ConfigSection({ onError }: Props) {
         </Space>
         <div style={{ marginTop: 12 }}>
           {files.length === 0 ? (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="This config does not point to any files" />
+            <Empty description="This config does not point to any files" />
           ) : (
             <ItemList
               bordered

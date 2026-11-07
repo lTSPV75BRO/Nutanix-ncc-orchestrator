@@ -1,10 +1,11 @@
-import { Alert, Badge, Card, Empty, Skeleton, Space, Table, Tabs, Tag, Typography } from "antd";
+import { Alert, Badge, Card, Skeleton, Space, Table, Tabs, Tag, Typography } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router";
 import { api } from "../../api/client";
 import type { AutoHealer, HealHistoryEntry } from "../../api/types";
 import { formatTime } from "../../utils/datetime";
 import { SystemHealthSection } from "../settings/SystemHealthSection";
+import { EmptyState, ItemList, Panel, StatusBadge, type Tone } from "../../ui";
 
 /**
  * Tabs of Health & repair, in order. Updates, backups and migrations moved to
@@ -20,10 +21,10 @@ export function healthTabFrom(params: URLSearchParams): HealthTab {
   return "checks";
 }
 
-const STATE_TAG: Record<AutoHealer["state"], { color: string; label: string }> = {
-  on: { color: "success", label: "On" },
-  partial: { color: "processing", label: "Report only" },
-  off: { color: "default", label: "Off" },
+const STATE_TAG: Record<AutoHealer["state"], { tone: Tone; label: string }> = {
+  on: { tone: "ok", label: "On" },
+  partial: { tone: "info", label: "Report only" },
+  off: { tone: "neutral", label: "Off" },
 };
 
 function statText(key: string, value: unknown): string | null {
@@ -43,59 +44,64 @@ function statText(key: string, value: unknown): string | null {
 export function AutoHealPanel() {
   const q = useQuery({ queryKey: ["health", "autoheal"], queryFn: api.autoHeal, staleTime: 30_000 });
   if (q.isLoading) return <Card className="page-card"><Skeleton active /></Card>;
-  if (q.isError) return <Alert type="error" showIcon title="Could not load automatic healing" description={String((q.error as Error)?.message ?? "")} />;
+  if (q.isError) return <Alert type="error" showIcon title="Couldn't load automatic healing" description={String((q.error as Error)?.message ?? "")} />;
   const healers = q.data?.healers ?? [];
   return (
-    <Space orientation="vertical" size={12} style={{ width: "100%" }}>
-      <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
-        What repairs itself without anyone clicking Heal. Server flags are set when the API server starts; the others
-        are settings you can change here.
-      </Typography.Paragraph>
-      {healers.map((h) => {
-        const tag = STATE_TAG[h.state] ?? STATE_TAG.off;
-        const stats = Object.entries(h.stats ?? {})
-          .map(([k, v]) => statText(k, v))
-          .filter((s): s is string => Boolean(s));
-        return (
-          <Card key={h.id} size="small" className="page-card repair-healer" data-healer={h.id}>
-            <div className="repair-healer-head">
+    <Panel
+      title="Automatic healing"
+      description="What repairs itself without anyone clicking Fix. Server flags are set when the API server starts; the rest are settings."
+      flush
+    >
+      <ItemList
+        items={healers}
+        itemKey={(h) => h.id}
+        render={(h) => {
+          const stats = Object.entries(h.stats ?? {})
+            .map(([k, v]) => statText(k, v))
+            .filter((x): x is string => Boolean(x));
+          return (
+            <div className="repair-healer" data-healer={h.id}>
               <Typography.Text strong>{h.title}</Typography.Text>
-              <Tag color={tag.color}>{tag.label}</Tag>
-            </div>
-            <Typography.Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
-              {h.description}
-            </Typography.Paragraph>
-            {h.detail ? <Typography.Paragraph style={{ margin: "4px 0 0" }}>{h.detail}</Typography.Paragraph> : null}
-            {stats.length ? (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                Since the server started: {stats.join(" · ")}
-              </Typography.Text>
-            ) : null}
-            {h.how_to_change ? (
-              <div style={{ marginTop: 4 }}>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              <Typography.Paragraph type="secondary" className="health-check-text">
+                {h.description}
+                {h.detail ? ` ${h.detail}` : ""}
+              </Typography.Paragraph>
+              {stats.length ? (
+                <Typography.Text type="secondary" className="repair-healer-meta">
+                  Since the server started: {stats.join(" · ")}
+                </Typography.Text>
+              ) : null}
+              {h.how_to_change ? (
+                <Typography.Text type="secondary" className="repair-healer-meta">
                   To change: {h.how_to_change}
                 </Typography.Text>
-              </div>
-            ) : null}
-          </Card>
-        );
-      })}
-    </Space>
+              ) : null}
+            </div>
+          );
+        }}
+        actions={(h) => {
+          const tag = STATE_TAG[h.state] ?? STATE_TAG.off;
+          return <StatusBadge tone={tag.tone}>{tag.label}</StatusBadge>;
+        }}
+      />
+    </Panel>
   );
 }
 
 export function HealHistoryPanel() {
   const q = useQuery({ queryKey: ["health", "history"], queryFn: () => api.healHistory(200), staleTime: 15_000 });
   if (q.isLoading) return <Card className="page-card"><Skeleton active /></Card>;
-  if (q.isError) return <Alert type="error" showIcon title="Could not load the repair history" description={String((q.error as Error)?.message ?? "")} />;
+  if (q.isError) return <Alert type="error" showIcon title="Couldn't load the repair history" description={String((q.error as Error)?.message ?? "")} />;
   const data = q.data;
   const recurring = (data?.by_check ?? []).filter((c) => c.recurring);
   if (!data?.entries.length) {
     return (
-      <Card className="page-card">
-        <Empty description="Nothing has been repaired yet. Fixes from Heal, the background checks and doctor --fix show up here." />
-      </Card>
+      <Panel>
+        <EmptyState
+          title="Nothing repaired yet"
+          description="Fixes from this page, the background checks and doctor --fix show up here."
+        />
+      </Panel>
     );
   }
   return (
@@ -105,11 +111,11 @@ export function HealHistoryPanel() {
           type="warning"
           showIcon
           title="Repairs that keep coming back"
-          description={`${recurring.map((c) => `${c.title} (${c.fixes_24h}× in 24h)`).join(", ")}. Something outside self-heal keeps undoing these; look for a script, another install or a permissions change.`}
+          description={`${recurring.map((c) => `${c.title} (${c.fixes_24h}× in 24h)`).join(", ")}. Something keeps undoing these: look for a script, another install or a permissions change.`}
         />
       ) : null}
       {data.unverified_7d > 0 ? (
-        <Alert type="info" showIcon title={`${data.unverified_7d} fix${data.unverified_7d === 1 ? "" : "es"} this week did not pass the re-check`} description="The check still reported a problem right after its fix. Open Checks for what is left." />
+        <Alert type="info" showIcon title={`${data.unverified_7d} fix${data.unverified_7d === 1 ? "" : "es"} this week did not pass the re-check`} description="The check still failed right after its fix. Open Checks for what is left." />
       ) : null}
       <Card className="page-card" size="small" title={`Repairs (${data.total})`}>
         <Table<HealHistoryEntry>

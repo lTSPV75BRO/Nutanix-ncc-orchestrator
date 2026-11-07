@@ -4,6 +4,7 @@ import type { ThemeConfig } from "antd";
 import { useLocalStorageState } from "./hooks/useLocalStorageState";
 import { NotifyBridge } from "./notify";
 import { ArcSpinner, BarsLoader } from "./components/Loaders";
+import { InboxOutlined } from "@ant-design/icons";
 
 export type AppThemeKey = "dark" | "light" | "it-pro";
 export type AppThemeSelection = AppThemeKey | "auto";
@@ -186,6 +187,7 @@ export function AppThemeProvider({ children }: { children: ReactNode }) {
         theme={toAntThemeConfig(theme)}
         spin={{ indicator: <BarsLoader /> }}
         button={{ loadingIcon: <ArcSpinner /> }}
+        empty={{ image: <span className="ui-empty-icon"><InboxOutlined /></span> }}
       >
         <AntApp notification={{ placement: "topRight", duration: 4.5 }} component={false}>
           <NotifyBridge />

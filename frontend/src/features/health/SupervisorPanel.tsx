@@ -221,7 +221,7 @@ export function SupervisorPanel() {
             ]}
           />
         ) : (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No events yet" />
+          <Empty description="No events yet" />
         )}
       </Card>
     </Space>

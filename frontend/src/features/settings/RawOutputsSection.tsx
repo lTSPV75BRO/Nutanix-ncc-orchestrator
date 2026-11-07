@@ -153,7 +153,7 @@ export function RawOutputsSection({ onError }: Props) {
               description="This server is not set up to list run files."
             />
           ) : filtered.length === 0 ? (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No files" />
+            <Empty description="No files" />
           ) : (
             <List
               size="small"
