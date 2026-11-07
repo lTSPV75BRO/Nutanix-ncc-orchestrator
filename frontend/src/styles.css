@@ -993,10 +993,12 @@ a {
 }
 
 .config-section-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 4px;
+  margin-bottom: var(--ui-space-1);
+}
+
+.config-toolbar-path {
+  display: block;
+  font-size: var(--ui-text-sm);
 }
 
 /* A section is a set of titled groups; the rule separates them quietly. */
@@ -5038,4 +5040,40 @@ h5.ant-typography {
 }
 .ant-tag .anticon {
   color: inherit;
+}
+
+/* Panel titles are text only, like src/ui/Panel; icons in older card titles
+   are hidden rather than styled. */
+.ant-card-head-title .anticon,
+.ant-card-head-title .section-title-icon {
+  display: none;
+}
+
+/* Health & repair → Checks (features/settings/SystemHealthSection.tsx) */
+.health-checks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-4);
+}
+.health-check-text.ant-typography {
+  margin: var(--ui-space-1) 0 0;
+}
+.health-check-search {
+  width: 220px;
+}
+
+/* A list straight inside a flush panel lines up with the panel's title. */
+.ui-panel-body.is-flush > .ui-item-list > .ui-item-list-row,
+.ui-panel-body.is-flush > .ui-item-list-empty {
+  padding: var(--ui-space-3) var(--ui-space-5);
+}
+
+/* Vertical stack of panels with the standard gap. */
+.ui-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-4);
+}
+.feature-flag-text.ant-typography {
+  margin: 2px 0 0;
 }

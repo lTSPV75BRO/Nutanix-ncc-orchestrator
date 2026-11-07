@@ -1,10 +1,12 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Alert, Card, Space, Switch, Tag, Typography } from "antd";
+import { Alert, Space, Switch, Tag, Typography } from "antd";
 import { api } from "../../api/client";
 import { notifyError } from "../../notify";
+import { ItemList, Panel } from "../../ui";
 import { FEATURE_CATALOG, FEATURE_GROUPS, type FeatureFlags, type FeatureKey } from "../features/featureCatalog";
 import { useFeatureFlags } from "../features/useFeatureFlags";
 
+/** Settings → Features: one panel per group, one switch per feature. */
 export function FeaturesSection() {
   const queryClient = useQueryClient();
   const flags = useFeatureFlags();
@@ -13,7 +15,7 @@ export function FeaturesSection() {
     onSuccess: async (next) => {
       queryClient.setQueryData(["feature-flags"], next);
     },
-    onError: (err) => notifyError(err, "Could not save feature settings"),
+    onError: (err) => notifyError(err, "Couldn't save the change"),
   });
 
   const current = flags.data;
@@ -22,49 +24,37 @@ export function FeaturesSection() {
   };
 
   return (
-    <Card className="page-card">
-      <Typography.Title level={4} className="tile-title">
-        Features
-      </Typography.Title>
-      <Typography.Paragraph type="secondary">
-        Turn optional parts of the app on or off. Changes apply for everyone right away, and the server enforces them.
-      </Typography.Paragraph>
+    <div className="ui-stack">
       {flags.isError ? (
-        <Alert type="error" showIcon title="Could not load feature settings" description={String((flags.error as Error)?.message || "Unknown error")} />
+        <Alert type="error" showIcon title="Couldn't load the features" description={String((flags.error as Error)?.message || "")} />
       ) : null}
       {FEATURE_GROUPS.map((group) => (
-        <section key={group.key} className="feature-group" aria-labelledby={`feature-group-${group.key}`}>
-          <Typography.Title level={5} id={`feature-group-${group.key}`} className="feature-group-title">
-            {group.title}
-          </Typography.Title>
-          <Typography.Text type="secondary" className="feature-group-description">
-            {group.description}
-          </Typography.Text>
-          {FEATURE_CATALOG.filter((spec) => (spec.group ?? "views") === group.key).map((spec) => {
-            const on = current ? current[spec.key] !== false : true;
-            return (
-              <div key={spec.key} className="feature-flag-row">
-                <div>
-                  <Space size={8} wrap>
-                    <Typography.Text strong>{spec.title}</Typography.Text>
-                    {spec.beta ? <Tag color="gold">Beta</Tag> : null}
-                    <Tag color={on ? "green" : "default"}>{on ? "On" : "Off"}</Tag>
-                  </Space>
-                  <Typography.Paragraph type="secondary" style={{ margin: "4px 0 0" }}>
-                    {spec.saves}
-                  </Typography.Paragraph>
-                </div>
-                <Switch
-                  aria-label={spec.title}
-                  checked={on}
-                  loading={flags.isLoading || update.isPending}
-                  onChange={(checked) => setFlag(spec.key, checked)}
-                />
+        <Panel key={group.key} title={group.title} description={group.description} flush>
+          <ItemList
+            items={FEATURE_CATALOG.filter((spec) => (spec.group ?? "views") === group.key)}
+            itemKey={(spec) => spec.key}
+            render={(spec) => (
+              <div>
+                <Space size={8} wrap>
+                  <Typography.Text strong>{spec.title}</Typography.Text>
+                  {spec.beta ? <Tag color="gold">Beta</Tag> : null}
+                </Space>
+                <Typography.Paragraph type="secondary" className="feature-flag-text">
+                  Off: {spec.saves.charAt(0).toLowerCase() + spec.saves.slice(1)}
+                </Typography.Paragraph>
               </div>
-            );
-          })}
-        </section>
+            )}
+            actions={(spec) => (
+              <Switch
+                aria-label={spec.title}
+                checked={current ? current[spec.key] !== false : true}
+                loading={flags.isLoading || update.isPending}
+                onChange={(checked) => setFlag(spec.key, checked)}
+              />
+            )}
+          />
+        </Panel>
       ))}
-    </Card>
+    </div>
   );
 }

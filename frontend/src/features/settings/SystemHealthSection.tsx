@@ -1,32 +1,8 @@
 import { useMemo, useState } from "react";
 import { useRunsActive } from "../../hooks/useRunsActive";
-import {
-  Alert,
-  Button,
-  Card,
-  Empty,
-  Input,
-  Popconfirm,
-  Progress,
-  Row,
-  Skeleton,
-  Segmented,
-  Space,
-  Statistic,
-  Tag,
-  Tooltip,
-  Typography,
-  Col,
-  Switch,
-} from "antd";
-import {
-  CheckCircleOutlined,
-  CloseCircleOutlined,
-  ExclamationCircleOutlined,
-  SearchOutlined,
-  ReloadOutlined,
-  ThunderboltOutlined,
-} from "@ant-design/icons";
+import { Alert, App as AntApp, Button, Dropdown, Input, Popconfirm, Segmented, Space, Tag, Tooltip, Typography } from "antd";
+import type { MenuProps } from "antd";
+import { DownOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router";
 import { sectionHref } from "../../navigation";
@@ -35,14 +11,13 @@ import type { DiagnosticCheck, DiagnosticsData } from "../../api/types";
 import { notify, notifyError } from "../../notify";
 import { formatTime } from "../../utils/datetime";
 import { useFeatureFlags } from "../features/useFeatureFlags";
+import { ItemList, Panel, StatTile, StatusBadge, toneFor } from "../../ui";
+import { ErrorStateCard, LoadingStateCard } from "../../components/UxStates";
 
-const STATUS_META: Record<
-  DiagnosticCheck["status"],
-  { color: string; icon: React.ReactNode; label: string }
-> = {
-  ok: { color: "success", icon: <CheckCircleOutlined />, label: "OK" },
-  warn: { color: "warning", icon: <ExclamationCircleOutlined />, label: "Warning" },
-  fail: { color: "error", icon: <CloseCircleOutlined />, label: "Failing" },
+const STATUS_META: Record<DiagnosticCheck["status"], { label: string }> = {
+  ok: { label: "Passing" },
+  warn: { label: "Warning" },
+  fail: { label: "Failing" },
 };
 
 function CategoryLabel({ value }: { value: string }) {
@@ -52,76 +27,26 @@ function CategoryLabel({ value }: { value: string }) {
     encryption: "Secrets",
     backups: "Backups",
     runs: "Runs",
-    directory: "Directory (AD/LDAP)",
-    sso: "SSO (SAML)",
-    tls: "TLS",
+    directory: "Directory",
+    sso: "Single sign-on",
+    tls: "HTTPS",
     process: "Processes",
     performance: "Performance",
     platform: "Platform",
     runtime: "Runtime",
     kubernetes: "Kubernetes",
+    security: "Security",
+    schedule: "Schedule",
   };
-  return <>{pretty[value] ?? value}</>;
-}
-
-function CheckRow({ check }: { check: DiagnosticCheck }) {
-  const meta = STATUS_META[check.status] ?? STATUS_META.warn;
-  return (
-    <div className={`health-check-row health-check-${check.status}`}>
-      <div className="health-check-head">
-        <Space size={8} align="center">
-          <span className={`health-check-icon ${check.status}`}>{meta.icon}</span>
-          <Typography.Text strong>{check.title}</Typography.Text>
-          <Tag bordered={false}>
-            <CategoryLabel value={check.category} />
-          </Tag>
-          <Tooltip title={check.source === "api" ? "Live probe by the API server" : "Checked by the orchestrator doctor"}>
-            <Tag bordered={false} color={check.source === "api" ? "geekblue" : "default"}>
-              {check.source}
-            </Tag>
-          </Tooltip>
-          {check.fixed ? (
-            <Tooltip title={check.verified === false ? "The check still reported a problem right after the fix." : undefined}>
-              <Tag color={check.verified === false ? "warning" : "success"} bordered={false}>
-                {check.verified === false ? "fixed, not resolved" : check.verified ? "fixed and re-checked" : "fixed"}
-              </Tag>
-            </Tooltip>
-          ) : null}
-          {check.recurring ? (
-            <Tooltip title="Fixed several times in 24 hours: something keeps undoing it.">
-              <Tag color="error" bordered={false}>
-                keeps coming back ({check.fixes_24h}×)
-              </Tag>
-            </Tooltip>
-          ) : null}
-          {check.source === "api" ? <Tag bordered={false}>probe-only</Tag> : null}
-          {check.disruptive ? <Tag color="warning" bordered={false}>may restart services</Tag> : null}
-        </Space>
-        <Tag color={meta.color}>{meta.label}</Tag>
-      </div>
-      <Typography.Paragraph type="secondary" style={{ margin: "4px 0 0 28px" }}>
-        {check.message}
-      </Typography.Paragraph>
-      {check.fixed && check.fix_message ? (
-        <Typography.Paragraph style={{ margin: "0 0 0 28px", color: "var(--menu-selected-border, #1677ff)" }}>
-          Fixed: {check.fix_message}
-        </Typography.Paragraph>
-      ) : null}
-      {!check.fixed && check.hint ? (
-        <Typography.Paragraph type="secondary" style={{ margin: "0 0 0 28px", fontStyle: "italic" }}>
-          {check.hint}
-        </Typography.Paragraph>
-      ) : null}
-    </div>
-  );
+  return <>{pretty[value] ?? value.charAt(0).toUpperCase() + value.slice(1)}</>;
 }
 
 export function SystemHealthSection() {
   const navigate = useNavigate();
+  const { modal } = AntApp.useApp();
   // Lightweight local filter state without introducing additional persisted prefs.
-  const [severityFilter, setSeverityFilter] = useState<"fail_warn" | "fail" | "all">("all");
+  const [severityFilter, setSeverityFilter] = useState<"fail_warn" | "fail" | "all">("fail_warn");
   const [searchText, setSearchText] = useState("");
-  const [hideHealthy, setHideHealthy] = useState(true);
   const health = useQuery({
     queryKey: ["health"],
     queryFn: api.health,
@@ -158,48 +83,37 @@ export function SystemHealthSection() {
     onSuccess: (data: DiagnosticsData) => {
       const fixed = data.checks.filter((c) => c.fixed).length;
       diag.refetch();
-      if (fixed > 0) notify.success(`Applied ${fixed} safe remediation${fixed === 1 ? "" : "s"}.`);
-      else notify.info("Self-heal ran; nothing needed fixing.");
+      if (fixed > 0) notify.success(`Fixed ${fixed} check${fixed === 1 ? "" : "s"}.`);
+      else notify.info("Nothing needed fixing.");
     },
-    onError: (e) => notifyError(e, "Self-heal failed"),
+    onError: (e) => notifyError(e, "The fix didn't complete"),
   });
   const bundle = useMutation({
     mutationFn: api.createDiagnosticsSupportBundle,
-    onSuccess: (d) => notify.success(`Support bundle generated: ${d.path}`),
-    onError: (e) => notifyError(e, "Support bundle generation failed"),
+    onSuccess: (d) => notify.success(`Support bundle saved to ${d.path}`),
+    onError: (e) => notifyError(e, "Couldn't create the support bundle"),
   });
 
   const data = diag.data;
   const overall = data?.overall ?? "ok";
-  const overallMeta = STATUS_META[overall] ?? STATUS_META.ok;
   const diagErrorMessage =
     diag.error && typeof diag.error === "object" && "message" in diag.error
-      ? String(diag.error.message || "Could not load diagnostics")
-      : "Could not load diagnostics";
-
-  const grouped = useMemo(() => {
-    const out: Record<string, DiagnosticCheck[]> = {};
-    for (const c of data?.checks ?? []) {
-      (out[c.category] ??= []).push(c);
-    }
-    return out;
-  }, [data]);
+      ? String(diag.error.message || "The server didn't answer.")
+      : "The server didn't answer.";
 
   const filteredChecks = useMemo(() => {
     const checks = data?.checks ?? [];
     const search = searchText.trim().toLowerCase();
     return checks.filter((c) => {
-      if (hideHealthy && c.status === "ok") return false;
       if (severityFilter === "fail" && c.status !== "fail") return false;
       if (severityFilter === "fail_warn" && !(c.status === "fail" || c.status === "warn")) return false;
       if (!search) return true;
       const haystack = `${c.id} ${c.title} ${c.category} ${c.message} ${c.hint ?? ""}`.toLowerCase();
       return haystack.includes(search);
     });
-  }, [data?.checks, severityFilter, searchText, hideHealthy]);
+  }, [data?.checks, severityFilter, searchText]);
 
   const actionableSummary = data?.actionable;
-  const actionableCount = actionableSummary?.count ?? (data?.summary.warn ?? 0) + (data?.summary.fail ?? 0);
 
   const remediationTarget = (category: string): string => {
     if (category === "config") return sectionHref("config");
@@ -213,11 +127,11 @@ export function SystemHealthSection() {
   };
 
   const readinessFixLabel = (key: string): string => {
-    if (!healsInline && (key === "api" || key === "supervisor" || key === "runs")) return "Open details";
-    if (key === "api" || key === "supervisor" || key === "runs") return "Heal now";
-    if (key === "schedule") return "Open Schedule";
-    if (key === "backups") return "Open Backups";
-    return "Open fix";
+    if (!healsInline && (key === "api" || key === "supervisor" || key === "runs")) return "Open";
+    if (key === "api" || key === "supervisor" || key === "runs") return "Fix";
+    if (key === "schedule") return "Set up";
+    if (key === "backups") return "Back up";
+    return "Open";
   };
 
   const runReadinessFix = (key: string, path: string) => {
@@ -240,11 +154,11 @@ export function SystemHealthSection() {
 
   const healSingleCheck = (check: DiagnosticCheck, allowDisruptive = false) => {
     if (check.status === "ok") {
-      notify.info("This check is already healthy.");
+      notify.info("This check is already passing.");
       return;
     }
     if (check.source !== "orchestrator") {
-      notify.info("This check is probe-only and cannot be auto-fixed.");
+      notify.info("This check can't be fixed automatically.");
       return;
     }
     heal.mutate({
@@ -268,21 +182,21 @@ export function SystemHealthSection() {
       ? apiOk
       : hasProcessChecks && processFailures === 0 && processWarns === 0;
     const supervisorLabel = isKubernetes
-      ? "Kubernetes controllers manage process lifecycle"
+      ? "Kubernetes manages the processes"
       : !hasProcessChecks
-        ? "Supervisor/service status unavailable"
+        ? "Supervisor status unknown"
         : processFailures > 0
-          ? `Supervisor/process checks failing (${processFailures})`
+          ? `Supervisor: ${processFailures} failing`
           : processWarns > 0
-            ? `Supervisor/process checks warning (${processWarns})`
-            : "Supervisor and managed services healthy";
+            ? `Supervisor: ${processWarns} warning${processWarns === 1 ? "" : "s"}`
+            : "Supervisor and services running";
     const processSnapshot = processChecks.map((c) => ({
       title: c.title,
       status: c.status,
       message: c.message,
     }));
     return [
-      { key: "api", label: "API health", ok: apiOk, fix: sectionHref("connection") },
+      { key: "api", label: "API server answering", ok: apiOk, fix: sectionHref("connection") },
       {
         key: "supervisor",
         label: supervisorLabel,
@@ -290,9 +204,9 @@ export function SystemHealthSection() {
         fix: sectionHref("health"),
         details: processSnapshot,
       },
-      { key: "schedule", label: "Schedule configured", ok: scheduleOk, fix: sectionHref("schedule") },
-      { key: "backups", label: "Backups available", ok: hasBackup, fix: sectionHref("updates", { tab: "backups" }) },
-      { key: "runs", label: "No active long-running run", ok: noActiveRun, fix: sectionHref("runs") },
+      { key: "schedule", label: "Runs are scheduled", ok: scheduleOk, fix: sectionHref("schedule") },
+      { key: "backups", label: "A backup exists", ok: hasBackup, fix: sectionHref("updates", { tab: "backups" }) },
+      { key: "runs", label: "No run stuck in progress", ok: noActiveRun, fix: sectionHref("runs") },
     ];
   }, [
     backups.data?.backups?.length,
@@ -304,15 +218,6 @@ export function SystemHealthSection() {
     data?.checks,
     isKubernetes,
   ]);
-  const readinessPass = readinessChecks.filter((c) => c.ok).length;
-  const readinessPct = Math.round((readinessPass / Math.max(1, readinessChecks.length)) * 100);
-  const confidenceScore = useMemo(() => {
-    const checks = data?.checks ?? [];
-    if (!checks.length) return 100;
-    const w = (s: DiagnosticCheck["status"]) => (s === "ok" ? 1 : s === "warn" ? 0.5 : 0);
-    const score = checks.reduce((acc, c) => acc + w(c.status), 0);
-    return Math.round((score / checks.length) * 100);
-  }, [data?.checks]);
 
   const healableCheckIDs = useMemo(
     () =>
@@ -332,9 +237,7 @@ export function SystemHealthSection() {
   if (diag.isLoading && !data) {
     return (
       <div id="settings-health">
-      <Card className="page-card">
-        <Skeleton active paragraph={{ rows: 8 }} />
-      </Card>
+        <LoadingStateCard rows={8} />
       </div>
     );
   }
@@ -342,371 +245,238 @@ export function SystemHealthSection() {
   if (diag.isError && !data) {
     return (
       <div id="settings-health">
-      <Card className="page-card">
-        <Space orientation="vertical" size={12} style={{ width: "100%" }}>
-          <Alert
-            type="error"
-            showIcon
-            title="Unable to load system health diagnostics"
-            description={diagErrorMessage}
-          />
-          <Space>
-            <Button icon={<ReloadOutlined />} onClick={() => diag.refetch()} loading={diag.isFetching}>
-              Retry
-            </Button>
-            <Button href="/login">Re-login</Button>
-          </Space>
-        </Space>
-      </Card>
+        <ErrorStateCard title="Couldn't load the health checks" error={diagErrorMessage} onRetry={() => diag.refetch()} />
       </div>
     );
   }
 
+  const problems = (data?.summary.fail ?? 0) + (data?.summary.warn ?? 0);
+  const overallTone = (data?.summary.fail ?? 0) > 0 || overall === "fail" ? "fail" : problems > 0 || overall === "warn" ? "warn" : "ok";
+  const overallLabel = overallTone === "fail" ? "Failing" : overallTone === "warn" ? "Needs attention" : "Healthy";
+  const totalChecks = (data?.summary.ok ?? 0) + (data?.summary.warn ?? 0) + (data?.summary.fail ?? 0);
+  const healMenu: MenuProps["items"] = [
+    {
+      key: "actionable",
+      label: "Fix everything that can be fixed safely",
+      disabled: healableCheckIDs.length === 0,
+      onClick: () => heal.mutate({ check_ids: healableCheckIDs, verify_after_fix: true, no_disruptive: true }),
+    },
+    {
+      key: "disruptive",
+      danger: true,
+      label: "Fix with service restarts…",
+      disabled: disruptiveHealableCheckIDs.length === 0,
+      onClick: () =>
+        modal.confirm({
+          title: "Fix with service restarts?",
+          content: "These fixes may restart NCC services. Use a maintenance window. They're blocked while a run is in progress.",
+          okText: "Fix and restart",
+          okButtonProps: { danger: true },
+          onOk: () =>
+            heal.mutate({
+              check_ids: disruptiveHealableCheckIDs,
+              verify_after_fix: true,
+              no_disruptive: false,
+              allow_disruptive: true,
+            }),
+        }),
+    },
+    { type: "divider" },
+    { key: "bundle", label: "Collect support bundle", onClick: () => bundle.mutate() },
+  ];
+
   return (
-    <div id="settings-health">
-    <Space orientation="vertical" size={16} style={{ width: "100%" }}>
-      <Card className="page-card">
-        <div className="health-overview-head">
-          <Space size={16} align="start">
-            <div className={`connection-orb ${overall === "ok" ? "ok" : "err"}`}>{overallMeta.icon}</div>
-            <div>
-              <Typography.Title level={4} style={{ margin: 0 }}>
-                Overall health
-              </Typography.Title>
-              <Typography.Text type="secondary">
-                {isKubernetes
-                  ? "Kubernetes-aware checks across configuration, shared storage, secrets, backups, runs, directory/SSO, UI HTTPS, and replica-safe runtime. Host supervisor checks are omitted because controllers own those."
-                  : `Self-heal checks across configuration, storage, secrets, backups, runs, performance, directory/SSO, TLS, and processes. Every fix is re-checked.${
-                      healOn ? " Safe remediations can be applied with one click." : ""
-                    }`}
-              </Typography.Text>
-              <Typography.Paragraph type="secondary" style={{ margin: "6px 0 0 0" }}>
-                {actionableCount} actionable issue{actionableCount === 1 ? "" : "s"}:{" "}
-                {actionableSummary?.auto_fixable ?? 0} auto-fixable, {actionableSummary?.manual_action ?? 0} manual follow-up.
-              </Typography.Paragraph>
-              <div style={{ marginTop: 8 }}>
-                <Space size={[8, 8]} wrap>
-                  <Tag color="success">{data?.summary.ok ?? 0} OK</Tag>
-                  <Tag color="warning">{data?.summary.warn ?? 0} warnings</Tag>
-                  <Tag color="error">{data?.summary.fail ?? 0} failing</Tag>
-                  {data?.auto_fix_loop ? (
-                    <Tooltip title="A background self-heal loop is applying safe fixes on a timer.">
-                      <Tag color="processing">auto-heal loop on</Tag>
-                    </Tooltip>
-                  ) : null}
-                  {data?.generated_at ? (
-                    <Tag>checked {formatTime(data.generated_at)}</Tag>
-                  ) : null}
-                </Space>
-              </div>
-            </div>
-          </Space>
-          <Space size={8} wrap>
-            <Button icon={<ReloadOutlined />} onClick={() => diag.refetch()} loading={diag.isFetching}>
-              Re-scan
-            </Button>
-            {healOn ? (
-              <>
-            <Popconfirm
-              title="Apply safe remediations?"
-              description="Runs non-disruptive self-heal fixers (no restart/stop actions): anchor relative output paths, create missing dirs, tighten secret-file perms, repair config, renew the self-signed TLS cert, rotate oversized logs, verify/auto-take a backup, remove leftovers of interrupted backups and updates, apply your report retention, and remove settings spelled twice (keeping the value in use)."
-              okText="Heal now"
-              onConfirm={() => heal.mutate({ verify_after_fix: true, no_disruptive: true })}
-            >
-              <Button type="primary" icon={<ThunderboltOutlined />} loading={heal.isPending}>
-                {heal.isPending ? "Healing…" : "Heal now"}
-              </Button>
-            </Popconfirm>
-            <Button
-              icon={<ThunderboltOutlined />}
-              loading={heal.isPending}
-              disabled={healableCheckIDs.length === 0}
-              onClick={() => heal.mutate({ check_ids: healableCheckIDs, verify_after_fix: true, no_disruptive: true })}
-            >
-              Heal all actionable
-            </Button>
-            <Popconfirm
-              title="Apply disruptive self-heal fixes?"
-              description="This may restart NCC services to re-align runtime ownership. Use only in a maintenance window. If a run is active, disruptive actions are automatically blocked."
-              okText="Heal with restart"
-              okButtonProps={{ danger: true }}
-              onConfirm={() =>
-                heal.mutate({
-                  check_ids: disruptiveHealableCheckIDs,
-                  verify_after_fix: true,
-                  no_disruptive: false,
-                  allow_disruptive: true,
-                })
-              }
-            >
-              <Button
-                danger
-                icon={<ThunderboltOutlined />}
-                loading={heal.isPending}
-                disabled={disruptiveHealableCheckIDs.length === 0}
+    <div id="settings-health" className="health-checks">
+      <div className="overview-runline">
+        <div className="overview-runline-text">
+        <StatusBadge tone={overallTone}>{overallLabel}</StatusBadge>
+        <span>
+          {problems === 0
+            ? "No problems found."
+            : `${problems} problem${problems === 1 ? "" : "s"} · ${actionableSummary?.auto_fixable ?? 0} can be fixed automatically`}
+          {data?.generated_at ? ` · checked ${formatTime(data.generated_at)}` : ""}
+          {data?.auto_fix_loop ? " · automatic healing is on" : ""}
+        </span>
+        </div>
+        <div className="overview-runline-actions">
+          <Button icon={<ReloadOutlined />} onClick={() => diag.refetch()} loading={diag.isFetching}>
+            Check again
+          </Button>
+          {healOn ? (
+            <Space.Compact>
+              <Popconfirm
+                title="Apply safe fixes?"
+                description="Only fixes that don't restart anything: missing folders, file permissions, config repairs, the self-signed certificate, log rotation, backups and leftover temporary files."
+                okText="Fix"
+                onConfirm={() => heal.mutate({ verify_after_fix: true, no_disruptive: true })}
               >
-                Heal disruptive issues
-              </Button>
-            </Popconfirm>
-              </>
-            ) : (
-              <Tooltip title="Turned off under Settings → Features. Checks still run and report problems.">
-                <Tag>Self-heal off</Tag>
-              </Tooltip>
-            )}
+                <Button type="primary" loading={heal.isPending}>
+                  Fix problems
+                </Button>
+              </Popconfirm>
+              <Dropdown menu={{ items: healMenu }} trigger={["click"]}>
+                <Button type="primary" icon={<DownOutlined />} aria-label="More fix options" />
+              </Dropdown>
+            </Space.Compact>
+          ) : (
             <Button onClick={() => bundle.mutate()} loading={bundle.isPending}>
               Collect support bundle
             </Button>
-          </Space>
+          )}
         </div>
-        {data?.fix_history?.count ? (
-          <Alert
-            style={{ marginTop: 12 }}
-            type={data.verified_stable ? "success" : "info"}
-            showIcon
-            title={`Last heal fixed ${data.fix_history.count} check(s)`}
-            description={
-              <Space orientation="vertical" size={2}>
-                <Typography.Text type="secondary">
-                  {(data.fix_history.fixed_titles || data.fix_history.fixed_ids || []).join(", ")}
-                </Typography.Text>
-                <Typography.Text type="secondary">
-                  Verification: {data.verification_runs ?? 0} re-scan(s), {data.verified_stable ? "stable" : "follow-up still needed"}
-                </Typography.Text>
-                {data.guardrails?.active_run_guard ? (
-                  <Typography.Text type="warning">Disruptive fixes were deferred due to active runs.</Typography.Text>
-                ) : null}
-                {data.guardrails?.allow_disruptive_requested && !data.guardrails?.allow_disruptive_applied ? (
-                  <Typography.Text type="warning">
-                    Disruptive heal was requested but guardrails kept execution non-disruptive.
-                  </Typography.Text>
-                ) : null}
-                {(data.actionable?.disruptive_skipped ?? 0) > 0 ? (
-                  <Typography.Text type="warning">
-                    {(data.actionable?.disruptive_skipped ?? 0).toLocaleString()} disruptive check(s) require CLI doctor without
-                    `--no-disruptive`.
-                  </Typography.Text>
-                ) : null}
-              </Space>
-            }
-          />
-        ) : null}
-        {data?.orchestrator_error ? (
-          <Alert
-            style={{ marginTop: 12 }}
-            type="warning"
-            showIcon
-            title="Orchestrator self-heal checks unavailable"
-            description={data.orchestrator_error}
-          />
-        ) : null}
-        {heal.error ? (
-          <Alert
-            style={{ marginTop: 12 }}
-            type="error"
-            showIcon
-            title="Self-heal failed"
-            description={heal.error instanceof Error ? heal.error.message : "The remediation request could not be completed."}
-          />
-        ) : null}
-      </Card>
+      </div>
 
-      <Card className="page-card" size="small">
-        <Space orientation="vertical" size={12} style={{ width: "100%" }}>
-          <Space align="center" style={{ justifyContent: "space-between", width: "100%" }}>
-            <Typography.Title level={5} style={{ margin: 0 }}>
-              Release readiness gates
-            </Typography.Title>
-            <Tag color={readinessPass === readinessChecks.length ? "success" : "warning"}>
-              {readinessPass}/{readinessChecks.length} pass
-            </Tag>
-          </Space>
-          <Progress percent={readinessPct} size="small" status={readinessPass === readinessChecks.length ? "success" : "active"} />
-          <Row gutter={[12, 12]}>
-            {readinessChecks.map((c) => (
-              <Col xs={24} md={12} lg={8} key={c.key}>
-                <Card size="small" className="health-gate-card">
-                  <Space orientation="vertical" size={8} style={{ width: "100%" }}>
-                    <Space align="center" style={{ justifyContent: "space-between", width: "100%" }}>
-                      <Typography.Text strong>{c.label}</Typography.Text>
-                      <Tag color={c.ok ? "success" : "error"}>{c.ok ? "pass" : "fail"}</Tag>
-                    </Space>
-                    {c.key === "supervisor" && Array.isArray((c as { details?: Array<{ title: string; status: string; message: string }> }).details) ? (
-                      <Space orientation="vertical" size={4} style={{ width: "100%" }}>
-                        {(c as { details?: Array<{ title: string; status: string; message: string }> }).details?.map((d) => (
-                          <Space key={`${d.title}-${d.status}`} size={6} wrap>
-                            <Tag color={d.status === "ok" ? "success" : d.status === "warn" ? "warning" : "error"}>
-                              {d.title}
-                            </Tag>
-                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                              {d.message}
-                            </Typography.Text>
-                          </Space>
-                        ))}
-                      </Space>
-                    ) : null}
-                    <Button
-                      size="small"
-                      icon={healsInline && (c.key === "api" || c.key === "supervisor" || c.key === "runs") ? <ThunderboltOutlined /> : undefined}
-                      loading={healsInline && (c.key === "api" || c.key === "supervisor" || c.key === "runs") ? heal.isPending : false}
-                      onClick={() => runReadinessFix(c.key, c.fix)}
-                    >
-                      {readinessFixLabel(c.key)}
-                    </Button>
-                  </Space>
-                </Card>
-              </Col>
-            ))}
-          </Row>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            This section summarizes release gates; detailed root-cause diagnostics remain below.
-          </Typography.Text>
-        </Space>
-      </Card>
+      <div className="overview-stats">
+        <StatTile label="Checks" value={totalChecks.toLocaleString()} />
+        <StatTile label="Failing" value={data?.summary.fail ?? 0} tone={(data?.summary.fail ?? 0) > 0 ? "fail" : undefined} />
+        <StatTile label="Warnings" value={data?.summary.warn ?? 0} tone={(data?.summary.warn ?? 0) > 0 ? "warn" : undefined} />
+        <StatTile label="Passing" value={data?.summary.ok ?? 0} tone="ok" />
+      </div>
 
-      <Card className="page-card" size="small">
-        <Space orientation="vertical" size={12} style={{ width: "100%" }}>
-          <Space align="center" style={{ justifyContent: "space-between", width: "100%" }} wrap>
-            <Typography.Title level={5} style={{ margin: 0 }}>
-              Guided remediation
-            </Typography.Title>
-            <Space wrap>
-              <Segmented
-                size="small"
-                value={severityFilter}
-                onChange={(v) => setSeverityFilter(v as "fail_warn" | "fail" | "all")}
-                options={[
-                  { label: "Fail + Warn", value: "fail_warn" },
-                  { label: "Fail only", value: "fail" },
-                  { label: "All", value: "all" },
-                ]}
-              />
-              <Button icon={<ReloadOutlined />} size="small" onClick={() => diag.refetch()} loading={diag.isFetching}>
-                Refresh
-              </Button>
-              <Input
-                allowClear
-                size="small"
-                placeholder="Search checks"
-                prefix={<SearchOutlined />}
-                value={searchText}
-                onChange={(e) => setSearchText(e.target.value)}
-                style={{ width: 220 }}
-              />
-              <Space size={4} align="center">
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  Hide healthy
-                </Typography.Text>
-                <Switch size="small" checked={hideHealthy} onChange={setHideHealthy} />
-              </Space>
-            </Space>
-          </Space>
+      {data?.fix_history?.count ? (
+        <Alert
+          type={data.verified_stable ? "success" : "info"}
+          showIcon
+          title={`The last fix repaired ${data.fix_history.count} check${data.fix_history.count === 1 ? "" : "s"}${
+            data.verified_stable ? " and they stayed fixed" : "; some still need attention"
+          }`}
+          description={
+            <>
+              {(data.fix_history.fixed_titles || data.fix_history.fixed_ids || []).join(", ")}
+              {data.guardrails?.active_run_guard ? " Fixes that restart services waited because a run was in progress." : ""}
+              {(data.actionable?.disruptive_skipped ?? 0) > 0
+                ? ` ${data.actionable?.disruptive_skipped} fix${data.actionable?.disruptive_skipped === 1 ? "" : "es"} need a service restart; use "Fix with service restarts".`
+                : ""}
+            </>
+          }
+        />
+      ) : null}
+      {data?.orchestrator_error ? (
+        <Alert type="warning" showIcon title="Some checks couldn't run" description={data.orchestrator_error} />
+      ) : null}
+      {heal.error ? (
+        <Alert
+          type="error"
+          showIcon
+          title="The fix didn't complete"
+          description={heal.error instanceof Error ? heal.error.message : undefined}
+        />
+      ) : null}
 
-          {(filteredChecks.length ?? 0) === 0 ? (
-            <Alert type="success" showIcon title="No actionable issues. System is healthy." />
-          ) : (
-            <Space orientation="vertical" size={10} style={{ width: "100%" }}>
-              {filteredChecks.map((c) => (
-                <Card key={`guide-${c.source}-${c.id}`} size="small" className="health-gate-card">
-                  <Space orientation="vertical" size={8} style={{ width: "100%" }}>
-                    <Space wrap style={{ justifyContent: "space-between", width: "100%" }}>
-                      <Space wrap>
-                        <Tag color={c.status === "fail" ? "error" : c.status === "warn" ? "warning" : "success"}>
-                          {c.status === "fail" ? "Failing" : c.status === "warn" ? "Warning" : "Healthy"}
-                        </Tag>
-                        <Tag bordered={false}>
-                          <CategoryLabel value={c.category} />
-                        </Tag>
-                        {c.source === "api" ? <Tag bordered={false}>probe-only</Tag> : null}
-                        {c.disruptive ? <Tag color="warning" bordered={false}>may restart services</Tag> : null}
-                        <Typography.Text strong>{c.title}</Typography.Text>
-                      </Space>
-                    </Space>
-                    <Typography.Text type="secondary">{c.message}</Typography.Text>
-                    {c.hint ? <Typography.Text type="secondary">{c.hint}</Typography.Text> : null}
-                    <Space wrap>
-                      <Link to={remediationTarget(c.category)}>
-                        <Button size="small">Open fix</Button>
-                      </Link>
-                      {healOn ? (
-                        <Button
-                          size="small"
-                          icon={<ThunderboltOutlined />}
-                          loading={heal.isPending}
-                          onClick={() => healSingleCheck(c, false)}
-                          disabled={c.source !== "orchestrator" || c.status === "ok" || heal.isPending}
-                        >
-                          Heal this check
-                        </Button>
-                      ) : null}
-                      {healOn && c.disruptive && c.source === "orchestrator" && c.status !== "ok" ? (
-                        <Popconfirm
-                          title="Run disruptive fix for this check?"
-                          description="This action may restart NCC services. It is blocked automatically while runs are active."
-                          okText="Run disruptive fix"
-                          okButtonProps={{ danger: true }}
-                          onConfirm={() => healSingleCheck(c, true)}
-                        >
-                          <Button size="small" danger loading={heal.isPending} disabled={heal.isPending}>
-                            Heal with restart
-                          </Button>
-                        </Popconfirm>
-                      ) : null}
-                    </Space>
-                  </Space>
-                </Card>
-              ))}
+      <Panel title="Readiness" description="What this installation needs before it can be relied on." flush>
+        <ItemList
+          items={readinessChecks}
+          itemKey={(c) => c.key}
+          render={(c) => (
+            <Space size={12} align="center" wrap>
+              <StatusBadge tone={c.ok ? "ok" : "fail"}>{c.ok ? "Ready" : "Not ready"}</StatusBadge>
+              <Typography.Text>{c.label}</Typography.Text>
             </Space>
           )}
-        </Space>
-      </Card>
+          actions={(c) =>
+            c.ok ? null : (
+              <Button
+                size="small"
+                loading={healsInline && (c.key === "api" || c.key === "supervisor" || c.key === "runs") ? heal.isPending : false}
+                onClick={() => runReadinessFix(c.key, c.fix)}
+              >
+                {readinessFixLabel(c.key)}
+              </Button>
+            )
+          }
+        />
+      </Panel>
 
-      <Card className="page-card" size="small">
-        <Row gutter={[12, 12]}>
-          <Col xs={12} md={6}>
-            <Statistic title="Checks" value={(data?.checks?.length ?? 0).toLocaleString()} />
-          </Col>
-          <Col xs={12} md={6}>
-            <Statistic title="Failing" value={data?.summary.fail ?? 0} valueStyle={{ color: "var(--ui-fail-text)" }} />
-          </Col>
-          <Col xs={12} md={6}>
-            <Statistic title="Warnings" value={data?.summary.warn ?? 0} valueStyle={{ color: "var(--ui-warn-text)" }} />
-          </Col>
-          <Col xs={12} md={6}>
-            <Statistic title="OK" value={data?.summary.ok ?? 0} valueStyle={{ color: "var(--ui-ok-text)" }} />
-          </Col>
-          <Col xs={12} md={6}>
-            <Statistic
-              title="Confidence"
-              value={confidenceScore}
-              suffix="%"
-              valueStyle={{ color: confidenceScore >= 90 ? "var(--ui-ok-text)" : confidenceScore >= 70 ? "var(--ui-warn-text)" : "var(--ui-fail-text)" }}
+      <Panel
+        title="Checks"
+        description={
+          isKubernetes
+            ? "Configuration, shared storage, secrets, backups, runs, sign-in and HTTPS. Kubernetes manages the processes."
+            : "Configuration, storage, secrets, backups, runs, performance, sign-in, HTTPS and processes. Every fix is checked again."
+        }
+        extra={
+          <Space wrap size={8}>
+            <Segmented
+              value={severityFilter}
+              onChange={(v) => setSeverityFilter(v as "fail_warn" | "fail" | "all")}
+              options={[
+                { label: "Problems", value: "fail_warn" },
+                { label: "Failing", value: "fail" },
+                { label: "All", value: "all" },
+              ]}
             />
-          </Col>
-        </Row>
-      </Card>
-
-      {(data?.checks?.length ?? 0) === 0 ? (
-        <Card className="page-card">
-          <Empty description="No diagnostics available" />
-        </Card>
-      ) : (
-        Object.entries(grouped).map(([category, checks]) => (
-          <Card key={category} className="page-card" size="small">
-            <Typography.Title level={5} style={{ marginTop: 0 }}>
-              <CategoryLabel value={category} />
-            </Typography.Title>
-            <Space orientation="vertical" size={10} style={{ width: "100%" }}>
-              {checks
-                .filter((c) => filteredChecks.some((fc) => fc.id === c.id && fc.source === c.source))
-                .map((c) => (
-                <CheckRow key={`${c.source}:${c.id}`} check={c} />
-                ))}
-            </Space>
-          </Card>
-        ))
-      )}
-    </Space>
+            <Input
+              allowClear
+              placeholder="Search checks"
+              prefix={<SearchOutlined />}
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              className="health-check-search"
+            />
+          </Space>
+        }
+        flush
+      >
+        <ItemList
+          items={filteredChecks}
+          itemKey={(c) => `${c.source}:${c.id}`}
+          empty={severityFilter === "all" && !searchText ? "No checks reported." : "Nothing matches. Everything here is passing."}
+          render={(c) => (
+            <div className="health-check">
+              <Space size={8} align="center" wrap>
+                <StatusBadge tone={toneFor(c.status)}>{STATUS_META[c.status]?.label ?? c.status}</StatusBadge>
+                <Typography.Text strong>{c.title}</Typography.Text>
+                <Tag>
+                  <CategoryLabel value={c.category} />
+                </Tag>
+                {c.disruptive ? <Tag color="warning">Restarts services</Tag> : null}
+                {c.recurring ? (
+                  <Tooltip title="Fixed several times in 24 hours: something keeps undoing it.">
+                    <Tag color="error">Keeps coming back</Tag>
+                  </Tooltip>
+                ) : null}
+                {c.fixed ? (
+                  <Tag color={c.verified === false ? "warning" : "success"}>
+                    {c.verified === false ? "Fixed, still failing" : "Fixed"}
+                  </Tag>
+                ) : null}
+              </Space>
+              <Typography.Paragraph type="secondary" className="health-check-text">
+                {c.fixed && c.fix_message ? c.fix_message : c.message}
+                {!c.fixed && c.hint ? ` ${c.hint}` : ""}
+              </Typography.Paragraph>
+            </div>
+          )}
+          actions={(c) =>
+            c.status === "ok" ? null : (
+              <Space size={8}>
+                {healOn && c.source === "orchestrator" ? (
+                  c.disruptive ? (
+                    <Popconfirm
+                      title="Fix with a service restart?"
+                      description="This fix may restart NCC services. It's blocked while a run is in progress."
+                      okText="Fix and restart"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => healSingleCheck(c, true)}
+                    >
+                      <Button size="small" danger loading={heal.isPending}>
+                        Fix
+                      </Button>
+                    </Popconfirm>
+                  ) : (
+                    <Button size="small" loading={heal.isPending} onClick={() => healSingleCheck(c, false)}>
+                      Fix
+                    </Button>
+                  )
+                ) : null}
+                <Link to={remediationTarget(c.category)}>
+                  <Button size="small">Open</Button>
+                </Link>
+              </Space>
+            )
+          }
+        />
+      </Panel>
     </div>
   );
 }

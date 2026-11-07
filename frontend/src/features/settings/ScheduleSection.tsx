@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   AutoComplete,
@@ -17,18 +17,12 @@ import {
   Select,
   Space,
   Switch,
-  Tag,
   Tooltip,
   Typography,
 } from "antd";
 import {
-  CheckCircleFilled,
-  ClockCircleOutlined,
   DeleteOutlined,
-  ExclamationCircleFilled,
   EyeOutlined,
-  MinusCircleFilled,
-  PauseCircleFilled,
   ReloadOutlined,
   SaveOutlined,
 } from "@ant-design/icons";
@@ -37,7 +31,8 @@ import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { notify } from "../../notify";
 import { formatDateTime, relativeTime } from "../../utils/datetime";
 import type { ConfigListItem, ScheduleSaveResult, ScheduleState } from "../../api/types";
-import { SaveBar } from "../../ui";
+import { SaveBar, StatTile, StatusBadge, type Tone } from "../../ui";
+import { LoadingStateCard } from "../../components/UxStates";
 import { describeCron, describeEvery, kubernetesCronFor, nextCronRuns, parseCron } from "./cron";
 
 type Props = {
@@ -187,17 +182,7 @@ function formatRun(d: Date, utc: boolean): string {
   });
 }
 
-/** One labelled figure in the status summary. */
-function StatusStat({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="schedule-stat">
-      <Typography.Text type="secondary" className="schedule-stat-label">
-        {label}
-      </Typography.Text>
-      <div className="schedule-stat-value">{children}</div>
-    </div>
-  );
-}
+const STATUS_TONE: Record<string, Tone> = { success: "ok", warning: "warn", error: "fail", default: "neutral" };
 
 export function ScheduleSection({ backendConfigPath, onError, isKubernetes = false }: Props) {
   const [mode, setMode] = useLocalStorageState<Mode>("settings.schedule.mode", "simple");
@@ -439,12 +424,12 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
     if (!health) return null;
     if (isKubernetes) {
       return health.suspended
-        ? { label: "Paused", tone: "warning", icon: <PauseCircleFilled /> }
-        : { label: "Active", tone: "success", icon: <CheckCircleFilled /> };
+        ? { label: "Paused", tone: "warning" }
+        : { label: "Active", tone: "success" };
     }
-    if (health.installed) return { label: "Active", tone: "success", icon: <CheckCircleFilled /> };
-    if (health.saved) return { label: "Not installed", tone: "warning", icon: <ExclamationCircleFilled /> };
-    return { label: "Not scheduled", tone: "default", icon: <MinusCircleFilled /> };
+    if (health.installed) return { label: "Active", tone: "success" };
+    if (health.saved) return { label: "Not installed", tone: "warning" };
+    return { label: "Not scheduled", tone: "default" };
   })();
 
   const healthUTC = isKubernetes && isUTCZone(health?.time_zone);
@@ -467,18 +452,8 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
         : health.last_success
           ? "succeeded"
           : null;
-  const outcomeTag =
-    outcome === "succeeded" ? (
-      <Tag color="green">Succeeded</Tag>
-    ) : outcome === "running" ? (
-      <Tag color="blue">Running</Tag>
-    ) : outcome === "failed" ? (
-      <Tooltip title={isKubernetes ? "The last scheduled Job has not completed successfully. Check it with kubectl get jobs." : health?.last_error}>
-        <Tag color="red">Failed</Tag>
-      </Tooltip>
-    ) : (
-      <Typography.Text type="secondary">—</Typography.Text>
-    );
+  const outcomeLabel =
+    outcome === "succeeded" ? "Succeeded" : outcome === "failed" ? "Failed" : outcome === "running" ? "Running" : "None yet";
 
   const details = health ? (
     <Descriptions size="small" column={1} bordered>
@@ -538,71 +513,70 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
   return (
     <Space orientation="vertical" size={16} style={{ width: "100%" }}>
       {/* Status: what is scheduled right now, from the scheduler itself. */}
-      <Card className="page-card schedule-status-card" aria-label="Schedule status">
-        <div className="schedule-status-head">
-          <div className="schedule-status-title">
-            {status ? (
-              <span className={`schedule-status-icon is-${status.tone}`} aria-hidden="true">
-                {status.icon}
-              </span>
-            ) : (
-              <ClockCircleOutlined className="schedule-status-icon" aria-hidden="true" />
-            )}
-            <div>
-              <Typography.Title level={4} className="section-title" style={{ margin: 0 }}>
-                {!health
-                  ? "Recurring runs"
-                  : !isKubernetes && !health.installed && !health.saved
-                    ? "No schedule yet"
-                    : describeSchedule(health.every, health.cron)}
-              </Typography.Title>
-              <Typography.Text type="secondary">
-                {status ? <Tag color={status.tone === "default" ? undefined : status.tone}>{status.label}</Tag> : null}
-                {isKubernetes ? `Kubernetes CronJob ${health?.task_name || ""}` : `Host scheduler${health?.detector ? ` (${health.detector})` : ""}`}
-              </Typography.Text>
-            </div>
-          </div>
-          <Space size={8} wrap>
-            {!isKubernetes && health?.installed ? (
-              <Popconfirm
-                title="Remove the schedule?"
-                description="Scheduled runs stop until you save a schedule again."
-                okText="Remove"
-                okButtonProps={{ danger: true }}
-                onConfirm={() => void removeSchedule()}
-              >
-                <Button danger icon={<DeleteOutlined />} loading={removing}>
-                  Remove
-                </Button>
-              </Popconfirm>
-            ) : null}
-            <Button icon={<ReloadOutlined />} loading={healthLoading} onClick={() => void loadHealth(false)} aria-label="Refresh status">
-              Refresh
-            </Button>
-          </Space>
+      <div className="overview-runline" aria-label="Schedule status">
+        <div className="overview-runline-text">
+          {status ? <StatusBadge tone={STATUS_TONE[status.tone] ?? "neutral"}>{status.label}</StatusBadge> : null}
+          <span>
+            {isKubernetes ? `Kubernetes CronJob ${health?.task_name || ""}`.trim() : `Host scheduler${health?.detector ? ` (${health.detector})` : ""}`}
+          </span>
         </div>
+        <div className="overview-runline-actions">
+          {!isKubernetes && health?.installed ? (
+            <Popconfirm
+              title="Remove the schedule?"
+              description="Scheduled runs stop until you save a schedule again."
+              okText="Remove"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => void removeSchedule()}
+            >
+              <Button danger icon={<DeleteOutlined />} loading={removing}>
+                Remove
+              </Button>
+            </Popconfirm>
+          ) : null}
+          <Button icon={<ReloadOutlined />} loading={healthLoading} onClick={() => void loadHealth(false)} aria-label="Refresh status">
+            Refresh
+          </Button>
+        </div>
+      </div>
 
-        {health ? (
-          <div className="schedule-stats">
-            <StatusStat label="Next run">
-              {healthNext ? (
+      {health ? (
+        <div className="overview-stats">
+          <StatTile
+            label="Schedule"
+            value={
+              !isKubernetes && !health.installed && !health.saved
+                ? "None"
+                : describeSchedule(health.every, health.cron) === "—"
+                  ? "Custom"
+                  : describeSchedule(health.every, health.cron)
+            }
+          />
+          <StatTile
+            label="Next run"
+            value={
+              healthNext ? (
                 <Tooltip title={formatDateTime(healthNext.toISOString())}>{relativeTime(healthNext.toISOString())}</Tooltip>
+              ) : status?.label === "Active" ? (
+                "Soon"
               ) : (
-                <Typography.Text type="secondary">{status?.label === "Active" ? "—" : "Not scheduled"}</Typography.Text>
-              )}
-            </StatusStat>
-            <StatusStat label="Last run">
-              {lastRunAt ? (
-                <Tooltip title={formatDateTime(lastRunAt)}>{relativeTime(lastRunAt)}</Tooltip>
-              ) : (
-                <Typography.Text type="secondary">Not yet</Typography.Text>
-              )}
-            </StatusStat>
-            <StatusStat label="Last outcome">{outcomeTag}</StatusStat>
-          </div>
-        ) : (
-          <Typography.Text type="secondary">Loading status…</Typography.Text>
-        )}
+                "Not scheduled"
+              )
+            }
+          />
+          <StatTile
+            label="Last run"
+            value={lastRunAt ? <Tooltip title={formatDateTime(lastRunAt)}>{relativeTime(lastRunAt)}</Tooltip> : "Not yet"}
+          />
+          <StatTile
+            label="Last outcome"
+            value={outcomeLabel}
+            tone={outcome === "succeeded" ? "ok" : outcome === "failed" ? "fail" : undefined}
+          />
+        </div>
+      ) : (
+        <LoadingStateCard rows={2} />
+      )}
 
         {isKubernetes && health?.suspended ? (
           <Alert
@@ -641,13 +615,11 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
 
         {details ? (
           <Collapse
-            ghost
             size="small"
             className="schedule-details"
             items={[{ key: "details", label: "Technical details", children: details }]}
           />
         ) : null}
-      </Card>
 
       {/* Editor */}
       <Card className="page-card">

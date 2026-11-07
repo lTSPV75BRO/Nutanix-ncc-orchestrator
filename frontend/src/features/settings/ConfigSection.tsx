@@ -38,7 +38,6 @@ import {
   SafetyCertificateOutlined,
   SaveOutlined,
   SearchOutlined,
-  SettingOutlined,
   ThunderboltOutlined,
   UndoOutlined,
   WarningOutlined,
@@ -430,15 +429,8 @@ function SectionForm({
   return (
     <Card id={`config-section-${section.id}`} className="page-card config-section-card">
       <div className="config-section-head">
-        <span className="config-section-icon">{SECTION_ICONS[section.icon]}</span>
-        <div>
-          <Typography.Title level={4} style={{ margin: 0 }}>
-            {section.title}
-          </Typography.Title>
-          <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-            {section.description}
-          </Typography.Text>
-        </div>
+        <h3 className="ui-panel-title">{section.title}</h3>
+        <p className="ui-panel-desc">{section.description}</p>
       </div>
       {/* One <form> per section so password fields have a form ancestor;
           Enter is swallowed because saving happens from the page toolbar. */}
@@ -816,12 +808,8 @@ export function ConfigSection({ onError }: Props) {
         <Row gutter={[16, 12]} align="middle">
           <Col xs={24} lg={11}>
             <Space size={10} align="center">
-              <SettingOutlined className="section-header-icon lg" />
               <div>
                 <Space size={8} wrap>
-                  <Typography.Title level={4} style={{ margin: 0 }}>
-                    Runner config
-                  </Typography.Title>
                   {loaded && !parseError ? (
                     <Tooltip
                       title={
@@ -834,7 +822,7 @@ export function ConfigSection({ onError }: Props) {
                     </Tooltip>
                   ) : null}
                 </Space>
-                <Typography.Text type="secondary" style={{ fontSize: 13, display: "block" }}>
+                <Typography.Text type="secondary" className="config-toolbar-path">
                   {configPath ? (
                     <>
                       Editing{" "}
