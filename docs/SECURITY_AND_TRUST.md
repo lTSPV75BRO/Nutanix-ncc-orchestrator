@@ -473,7 +473,7 @@ The api-server supports three authorization levels, ordered
 | **operator** | Everything a viewer can, plus: trigger/cancel/preflight runs; **create/update/apply the run schedule** (`PUT /api/v1/schedule`); **list run config files** (`GET /api/v1/runs/configs` — not `/api/v1/settings/configs`); **send test notifications** (`POST /api/v1/settings/notifications/test`); **read cluster topology** (`GET /api/v1/settings/clusters` and `GET /api/v1/settings/cluster-groups`) | Secret-bearing settings (config, users, SSO/LDAP, sessions, notifications config, backups, cluster-group **writes**), token rotation |
 | **admin** | Everything | — |
 
-The operator scope is deliberately limited to **operating** NCC (running it, scheduling it, verifying alerting, and seeing which clusters/groups exist to scope runs) without exposing or changing any secret. The carved-out operator endpoints either return no secrets (cluster topology is just names/membership; `/api/v1/runs/configs` is the same file list as Runs) or are run-adjacent actions; the test-notification path **redacts URLs** from delivery errors so a Slack/webhook secret can't leak to a non-admin (the full error is still logged server-side). In the UI, operators reach a reduced **Settings** view (Connection, Schedule, Runs, Logs, Audit); those tabs call only viewer/operator endpoints. The secret-bearing tabs (Config, Access, Notifications, System Health, Features, Maintenance, Advanced) stay admin-only.
+The operator scope is deliberately limited to **operating** NCC (running it, scheduling it, verifying alerting, and seeing which clusters/groups exist to scope runs) without exposing or changing any secret. The carved-out operator endpoints either return no secrets (cluster topology is just names/membership; `/api/v1/runs/configs` is the same file list as Runs) or are run-adjacent actions; the test-notification path **redacts URLs** from delivery errors so a Slack/webhook secret can't leak to a non-admin (the full error is still logged server-side). In the UI, operators see Schedule, Status, Logs and Audit log besides the main pages; those call only viewer/operator endpoints. The secret-bearing pages (Clusters & config, Notifications, Access, Features, Health & repair, Updates & backups, Developer) stay admin-only.
 
 A role can be presented four ways:
 
@@ -736,7 +736,7 @@ order):
   backups where no human is present to type a passphrase. Generate one with
   `openssl rand -base64 32` and keep it off the protected disk/backup.
 
-The web UI wires this end to end (*Settings → Access → Backup & restore*):
+The web UI wires this end to end (*System → Updates & backups → Backups*):
 **Download backup** and **Create snapshot** take an optional passphrase (encrypted
 output saves as `…tar.gz.enc`), and **Restore** prompts for the passphrase when
 the archive is encrypted. Passphrases never touch argv or the URL — the UI sends

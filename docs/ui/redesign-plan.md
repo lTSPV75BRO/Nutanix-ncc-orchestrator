@@ -285,6 +285,30 @@ type checks.
     `src/ui` — they already take the Panel look through the CSS bridge;
   - extending the guard test to the older Settings sections.
 
+### Phase 6 — done (2026-11-07): one look everywhere
+
+- **Foundation:** one purple accent in every theme (light `#7c3aed`, dark
+  and IT Pro `#8b5cf6`); flat surfaces, no gradients or glows; one type
+  scale (12/13/14/16/20/24/30) and weights 400/600; antd tokens set once
+  (`SHARED_TOKENS` in `theme.tsx`) so Card, Table, Tabs, Tag, Alert, Modal
+  and Drawer match `src/ui`.
+- **Colour:** antd preset tag colours map onto the five status tones plus
+  the accent; about 40 hex values in CSS and components became tokens. The
+  guard test now checks every component file for hex colours (exempt:
+  `theme.tsx`, Monaco, and the two SVG intro components).
+- **Pages rebuilt on `src/ui`:** Health & repair (status line, stat tiles,
+  Readiness and Checks lists, Automatic healing list, empty History),
+  Schedule, Features, Notifications, Updates, Audit log, Developer (no
+  nested card) and the 404 page. Panel titles carry no icons.
+- **One empty state:** every antd `Empty` shows the shared empty icon
+  (`ConfigProvider empty` in `theme.tsx`).
+- **Loaders and logo:** `DataLoader` for app start and route loading;
+  `BarsLoader` for `Spin`, `ArcSpinner` for button loading; slash-and-dot
+  logo.
+- **Wording:** "Couldn't …" for errors, "automatic healing" for self-heal,
+  "the services" for "the stack", sentence case; docs point to the current
+  page names.
+
 ## Risks and constraints
 
 - Large components (`AccessSection`, `ClusterTable`) need careful splitting;

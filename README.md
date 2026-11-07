@@ -4,7 +4,6 @@
 [![Go](https://img.shields.io/badge/go-1.27.3-00ADD8)](go.mod)
 [![Node](https://img.shields.io/badge/node-26.12.1%2B-5FA04E)](frontend/package.json)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Status](https://img.shields.io/badge/version-2.3.0-green)](docs/releases/RELEASE_NOTES_v2.3.0.md)
 
 Run **Nutanix Cluster Check (NCC)** across many clusters in parallel, collect the results in one place, and work through them in a web dashboard — with history, alert handling, scheduling, RBAC/SSO, and an API for ServiceNow, Prometheus, and other tools.
 
@@ -219,12 +218,15 @@ Metrics: `new-fails`, `resolved-fails`, `fail-rate`, `clusters-failed`, `regress
 
 ## Web dashboard
 
-- **Dashboard** — latest run at a glance, an alerts table for **NCC** findings or **PC · Beta** (live Prism Central alerts), filters kept in the URL (**Copy link** shares the exact view). Clicking an NCC alert opens a panel to acknowledge, resolve, or reopen it, with its **Lifecycle**: how long it has been open, when a run last reported it, how many times it came back after being resolved (and who resolved it last), and severity changes.
-- **Runs** — start a run, follow its output, cancel a stuck run, and browse past runs with status, duration, and cluster counts.
-- **Insights** — trends, regressions, flaky checks, run-to-run diffs, the NCC triage queue, and **Alert aging and recurrence**: open alerts by age per cluster, median time to acknowledge and resolve, findings that keep coming back, and open alerts that runs no longer report (resolvable in place).
-- **Settings** — config (form or YAML editor), schedule, notifications, users and access (local, LDAP/AD, OIDC, SAML), HTTPS certificate, software updates, backups, audit log, feature switches, and system health. Operators see only Connection, Schedule, Runs, Logs, and Audit. **Ctrl+K / ⌘K** jumps to any setting.
+The sidebar has three groups.
 
-Light, Dark, IT Professional, or follow the system theme; keyboard friendly; strict Content Security Policy (`script-src 'self'`). Optional views (Insights, Prism Central alerts, run comparison, flaky checks, SLO, NCC log index) can be turned off by an admin in **Settings → Features**.
+- **Overview, Findings, Insights, Runs.** Overview shows the latest run at a glance. Findings lists NCC results and, optionally, live Prism Central alerts; filters live in the URL, so **Copy link** shares the exact view. Open an NCC finding to acknowledge, resolve or reopen it and to see its history: how long it has been open, when a run last reported it, and how often it came back. Insights covers trends, regressions, flaky checks, run-to-run diffs, alert aging and the triage queue. Runs starts, follows and cancels runs and keeps their history.
+- **Settings:** Clusters & config (form or YAML), Schedule, Notifications, Access (users, sign-in with LDAP/AD, OpenID Connect or SAML, cluster groups, API tokens, HTTPS) and Features.
+- **System:** Status, Health & repair, Updates & backups, Logs, Audit log and Developer (API explorer, saved reports, run files).
+
+Operators see Overview, Findings, Insights, Runs, Schedule, Status, Logs and Audit log. **Ctrl+K / ⌘K** jumps to any page or setting.
+
+Themes: Light, Dark, IT Pro, or match the system. The UI is keyboard friendly and runs under a strict Content Security Policy (`script-src 'self'`). An admin can turn optional parts off (Insights, Prism Central alerts, run comparison, flaky checks, SLO, NCC log index and more) in **Settings → Features**.
 
 ---
 

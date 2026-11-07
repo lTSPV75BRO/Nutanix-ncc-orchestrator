@@ -66,9 +66,9 @@ events for actions taken by that account.
 (`NCC_PASSWORD`, the Kubernetes secret, or the `secret://` provider), then run
 a preflight check.
 
-**Data loss or corruption.** System → Maintenance → restore the latest
+**Data loss or corruption.** System → Updates & backups → Backups → restore the latest
 encrypted backup (or `ncc-orchestrator v2-restore`). Restores are validated
-and followed by self-heal checks; confirm with System → Health.
+and followed by health checks; confirm with System → Health & repair.
 
 **Bad upgrade.** Roll back to the previous release using the steps in that
 release's notes ([`docs/releases/`](../releases/README.md)); the updater keeps

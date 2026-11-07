@@ -143,7 +143,7 @@ request with `403` and `error_code: NCC_API_FEATURE_DISABLED`:
 | Key | Off means |
 | --- | --------- |
 | `alert_handling` | `POST /api/v1/alerts/ncc-dispositions` and `POST /api/v1/alerts/ncc/{id}/{action}` are refused. Findings has no checkboxes, bulk bar or Acknowledge / Resolve / Reopen; earlier marks and history stay visible. |
-| `self_heal` | `POST /api/v1/health/diagnostics` (apply fixes) is refused; `GET` still runs the checks. System → Health has no Heal buttons. |
+| `self_heal` | `POST /api/v1/health/diagnostics` (apply fixes) is refused; `GET` still runs the checks. System → Health & repair has no Fix buttons. |
 | `update_checks` | `GET /api/v1/settings/update` returns `disabled: true` without contacting the release server; `POST /api/v1/settings/update/apply` is refused. |
 
 **Sign-in:** `intro_title` turns the opening title off for everyone. It is
@@ -651,7 +651,7 @@ A caller's role can come from a static token or an interactive login:
   `managed_by=stack` with `mutation_supported=true`. Revert restores the
   self-signed pair (HTTPS stays on). Session cookies are `Secure`
   (`--cookie-secure`). Optional Ingress is TLS passthrough to that UI cert.
-- **Backup / restore** — `v2-backup` / `v2-restore` (Settings → Maintenance in the UI,
+- **Backup / restore** — `v2-backup` / `v2-restore` (System → Updates & backups in the UI,
   or the CLI) capture and recover all stateful auth data (accounts, roles,
   SAML/LDAP config, cluster groups, token, session policy) plus config and audit
   log. Restore **preserves host-specific networking/TLS** (CORS origins,
@@ -661,7 +661,7 @@ A caller's role can come from a static token or an interactive login:
   `/data/backups` (PVC root), include `config/`/`auth/`/`logs/`, and take an
   advisory lock so API replicas do not snapshot concurrently.
 - **In-app software updates** — admins can check for and apply a new release from
-  **Settings → Maintenance → Software updates** on host/VM installs. `GET /api/v1/settings/update` reports
+  **System → Updates & backups → Updates** on host/VM installs. `GET /api/v1/settings/update` reports
   the current/latest version and `update_available` (networked check only with
   `?check=1`; plain GET is a cheap status poll). `POST /api/v1/settings/update/apply`
   runs a background job that takes a **pre-update backup** with
@@ -1354,8 +1354,8 @@ and flagged with a warning to review.
 re-starts it for you so the restored data loads with no manual step. Use
 `--restart` to force a restart/start even when it looks stopped, or
 `--no-restart` to suppress it. The standalone `v2-restart` command performs the
-same binary-driven stop + `v2-start --detach`. The **UI restore** (Settings →
-Access → Backup & restore) applies the archive and then restarts the stack
+same binary-driven stop + `v2-start --detach`. The **UI restore**
+(System → Updates & backups → Backups) applies the archive and then restarts the services
 automatically via a detached orchestrator process; the page reconnects on its
 own once the new stack is healthy.
 
@@ -1368,7 +1368,7 @@ ncc-orchestrator v2-check --config-path /abs/config.yaml --api-listen :8081 --ui
 | Flag | Type | Default | Detailed explanation |
 |---|---|---|---|
 | `--install-dir` | string | `.ncc-v2` | Runtime layout root used to validate API/UI binaries and frontend assets. |
-| `--config-path` | string | `config.yaml` | Config file that must exist/read successfully for v2 startup. |
+| `--config-path` | string | `config.yaml` | Config file that must exist and be readable for v2 startup. |
 | `--output-dir` | string | `outputfiles` | Directory validated for write access before v2 runtime start. |
 | `--log-dir` | string | `nccfiles` | NCC raw log directory validated for write access. |
 | `--token-file` | string | `.ncc-api-token` | Token path parent is validated for write access. |

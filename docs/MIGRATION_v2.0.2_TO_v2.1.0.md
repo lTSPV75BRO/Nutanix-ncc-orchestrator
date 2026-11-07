@@ -98,7 +98,7 @@ segmenting access via **Settings → Access → Cluster groups**.
 
 ### 3. Backup/restore and self-heal are opt-in, zero-config
 
-- `v2-backup` / `v2-restore` and the **Settings → Access → Backup & restore**
+- `v2-backup` / `v2-restore` and the **System → Updates & backups → Backups**
   UI work immediately with no setup — encryption (`NCC_BACKUP_PASSPHRASE` /
   `NCC_BACKUP_KEY_FILE` / `NCC_BACKUP_KEY`) is optional and defaults to plain
   (unencrypted, same as any v2.0.2-era tarball would have been) if unset.

@@ -193,7 +193,7 @@ is switched off rather than only hiding it:
 | Switch | When off |
 | ------ | -------- |
 | Alert handling | Findings is read-only: no Acknowledge, Resolve or Reopen. Earlier marks stay visible. |
-| Self-heal actions | System → Health reports problems but has no Heal buttons. |
+| Automatic healing | System → Health & repair reports problems but has no Fix buttons. |
 | Update checks | Nothing is fetched from the release server and in-app updates are refused. |
 | Opening title | The animated title before sign-in is skipped for everyone. |
 

@@ -10,7 +10,7 @@
 
 ## Reporting a vulnerability
 
-Please report privately; do not open a public issue.
+Report privately; do not open a public issue.
 
 - **Preferred:** GitHub private vulnerability reporting —
   [Security → Report a vulnerability](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/security/advisories/new).

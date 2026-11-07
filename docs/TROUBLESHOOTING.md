@@ -111,7 +111,7 @@ See **`outputfiles/run-summary.json`** for `exit_code` and per-cluster `clusters
   resolve (`run_at` / report timestamp) and that the check title still
   matches. Marks live in `outputfiles/ncc-alert-dispositions.json`.
 
-### New API routes are missing from Settings → Advanced → API
+### New API routes are missing from System → Developer → API explorer
 
 - **Cause:** An older API catalog or UI bundle is still running, so
   `/api/v1/features` and `/api/v1/alerts/ncc-dispositions` are not listed
@@ -216,7 +216,7 @@ See **`outputfiles/run-summary.json`** for `exit_code` and per-cluster `clusters
   kubectl -n ncc-orchestrator-v2 rollout restart deployment/ncc-v2-api
   ```
 
-### Settings → HTTPS / TLS cannot upload a certificate
+### Settings → Access → HTTPS cannot upload a certificate
 
 - **Cause (host/VM):** local accounts / writable user store is not enabled.
 - **Fix:** Enable local login so the user database can persist TLS policy.

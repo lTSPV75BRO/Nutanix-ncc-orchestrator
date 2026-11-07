@@ -281,8 +281,8 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   - **Alert handling** (`alert_handling`): off makes Findings read-only (no
     Acknowledge / Resolve / Reopen, checkboxes or bulk bar); marks and
     history stay visible.
-  - **Self-heal actions** (`self_heal`): off removes the Heal buttons on
-    System → Health and refuses `POST /health/diagnostics`; checks still run.
+  - **Automatic healing** (`self_heal`): off removes the Fix buttons on
+    System → Health & repair and refuses `POST /health/diagnostics`; checks still run.
   - **Update checks** (`update_checks`): off makes no request to the release
     server and refuses in-app updates, for air-gapped or change-controlled
     sites.
@@ -378,6 +378,22 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 - **HTTP metrics:** `ncc_http_requests_total{route,method,code}` and
   `ncc_http_request_duration_seconds{route}` on `/metrics`, with bounded route
   labels.
+
+### Changed
+
+- **One look across the web UI.** Every theme uses one purple accent, flat
+  surfaces, one type scale (12–30 px) and weights of 400/600. Colours come
+  from theme tokens (a test enforces it), and antd tag colours map onto five
+  status tones.
+- **Pages share the same building blocks.** Schedule, Notifications, Health &
+  repair, Updates, Features, Audit log, Developer and the 404 page now use the
+  status line, stat tiles, panels, lists and empty state that Overview,
+  Insights and Runs use. Panel titles have no icons; empty lists show one
+  empty icon.
+- **New loaders and logo.** A data-packet loader while the app connects,
+  bar/arc/grid loaders in place of antd's spinner, and a slash-and-dot logo.
+- **Plainer wording.** Errors read "Couldn't …", "self-heal" is "automatic
+  healing", and the Features page says what turning each switch off does.
 
 ### Upgrade notes
 

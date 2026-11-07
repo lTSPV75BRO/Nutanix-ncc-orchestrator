@@ -211,9 +211,9 @@ PEM pair from **Settings → Access → HTTPS / TLS**; pods reload the files
 without a stack restart. Revert restores the self-signed pair (HTTPS stays
 on). Session cookies are `Secure`. Use `https://<LoadBalancer-IP>`.
 
-### System Health and backups
+### Health & repair and backups
 
-Settings → System Health runs PVC-safe doctor checks plus Kubernetes runtime
+System → Health & repair runs PVC-safe doctor checks plus Kubernetes runtime
 probes. Host supervisor/PID checks are not used.
 
 Scheduled and manual snapshots write to `/data/backups` on the shared PVC
@@ -312,7 +312,7 @@ Use a temporary debug pod mounting `ncc-v2-data`, or expose via API/UI artifact 
 - For temporary access, use `kubectl port-forward svc/ncc-v2-ui 8443:443`
   and open `https://localhost:8443`
 
-### 6) Settings → HTTPS / TLS
+### 6) Settings → Access → HTTPS
 
 The form is enabled. Certificates live on the shared PVC (`/data/tls`).
 After generate/upload, reload the browser (accept the self-signed warning
