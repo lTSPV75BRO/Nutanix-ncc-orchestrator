@@ -14,10 +14,11 @@ import {
   UserOutlined,
   WifiOutlined,
 } from "@ant-design/icons";
-import { Alert, Button, Dropdown, Spin, Tag, Tooltip } from "antd";
+import { Alert, Button, Dropdown, Tag, Tooltip } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, Route, Routes, useLocation } from "react-router";
 import { AppShell } from "./components/AppShell";
+import { DataLoader } from "./components/DataLoader";
 import { AboutDialog } from "./components/AboutDialog";
 import {
   canOpenSection,
@@ -173,7 +174,7 @@ function BootstrapSplash({
       }}
     >
       <div style={{ maxWidth: 420, width: "100%", textAlign: "center" }}>
-        <Spin size="large" />
+        <DataLoader label="Connecting to the API" />
         <div style={{ marginTop: 16, fontWeight: 600 }}>Connecting to the API through this UI…</div>
         {showActions ? (
           <div style={{ marginTop: 16, textAlign: "left" }}>
@@ -753,7 +754,7 @@ export default function App() {
           <Suspense
             fallback={
               <div className="ui-route-loading">
-                <Spin size="large" />
+                <DataLoader label="Loading page" />
               </div>
             }
           >
