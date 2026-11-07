@@ -1,11 +1,31 @@
+<div align="center">
+
+<img src="frontend/public/logo.svg" alt="" width="72" height="72" />
+
 # Nutanix NCC Orchestrator
 
-[![Version](https://img.shields.io/badge/version-2.3.0-blue)](docs/releases/RELEASE_NOTES_v2.3.0.md)
+Run **Nutanix Cluster Check (NCC)** across many clusters in parallel, keep the results in one place, and work through them in a web dashboard.
+
+[![Version](https://img.shields.io/badge/version-2.3.0-7c3aed)](docs/releases/RELEASE_NOTES_v2.3.0.md)
+[![CI](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/badge/go-1.27.3-00ADD8)](go.mod)
 [![Node](https://img.shields.io/badge/node-26.12.1%2B-5FA04E)](frontend/package.json)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Run **Nutanix Cluster Check (NCC)** across many clusters in parallel, collect the results in one place, and work through them in a web dashboard — with history, alert handling, scheduling, RBAC/SSO, and an API for ServiceNow, Prometheus, and other tools.
+**[Live demo](https://ltspv75bro.github.io/Nutanix-ncc-orchestrator/demo/)** · [Website](https://ltspv75bro.github.io/Nutanix-ncc-orchestrator/) · [Download](https://ltspv75bro.github.io/Nutanix-ncc-orchestrator/download.html) · [Docs](#documentation) · [Changelog](CHANGELOG.md)
+
+</div>
+
+<p align="center">
+  <a href="https://ltspv75bro.github.io/Nutanix-ncc-orchestrator/demo/">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="site/assets/screens/overview.png" />
+      <img src="site/assets/screens/overview-light.png" alt="The Overview page: health score, checks by result, clusters and recent runs" width="900" />
+    </picture>
+  </a>
+</p>
+
+History, alert handling, scheduling, role-based access with SSO, and an API for ServiceNow, Prometheus and other tools.
 
 > Independent open-source project. Not affiliated with or endorsed by Nutanix, Inc.
 
@@ -14,6 +34,7 @@ Run **Nutanix Cluster Check (NCC)** across many clusters in parallel, collect th
 ## Contents
 
 - [Highlights](#highlights)
+- [Try the live demo](#try-the-live-demo)
 - [How it fits together](#how-it-fits-together)
 - [Quick start](#quick-start)
 - [Configuration](#configuration)
@@ -39,6 +60,18 @@ Run **Nutanix Cluster Check (NCC)** across many clusters in parallel, collect th
 - **Secure by default**: HTTPS UI, role-based access (viewer / operator / admin), local accounts, LDAP/AD, OpenID Connect and SAML SSO, encrypted backups, rate limiting, and strict security headers.
 - **Runs anywhere**: single binaries for Linux, macOS, and Windows; a self-healing supervisor; Docker Compose; Kubernetes (kustomize or Helm).
 - **CI-friendly**: policy gates turn run results into exit codes.
+
+## Try the live demo
+
+**<https://ltspv75bro.github.io/Nutanix-ncc-orchestrator/demo/>** runs the real dashboard in your browser against a sample fleet of eight clusters. Sign in with one of these accounts; the password for each is `demo`.
+
+| Account | Role | What it can do |
+| --- | --- | --- |
+| `demo` | Admin | Everything: settings, users, health and repair, updates |
+| `alex.ops` | Operator | Start and cancel runs, handle findings, change the schedule |
+| `sam.noc` | Viewer | Read everything, change nothing |
+
+Start a run and watch its output, acknowledge or resolve findings, add users, change notifications and the schedule, and see each action land in the audit log. Nothing leaves your browser: changes last until you close the tab or click **Reset** in the demo badge.
 
 ## How it fits together
 
@@ -125,7 +158,7 @@ From the extracted folder, the stack finds its own config, output, log, and toke
 ./bin/ncc-orchestrator v2-stop
 ```
 
-Open **<https://localhost:8080>**. The UI uses HTTPS by default with a generated self-signed certificate (stored under `tls/`); `--ui-insecure-http` serves plain HTTP for a trusted loopback setup.
+Open **<https://localhost:8080>**: you land on the sign-in page, and after signing in on the Overview (`/overview`). The UI uses HTTPS by default with a generated self-signed certificate (stored under `tls/`); `--ui-insecure-http` serves plain HTTP for a trusted loopback setup.
 
 **First login:** the first start creates an `admin` account with a random password, printed once in the API log (search for `FIRST-RUN ADMIN`) and saved to `.ncc-initial-admin-password` in the install folder. You must change it at first login; the file is then deleted. To install the stack as a boot-time service, see `v2-install-service`.
 
@@ -176,7 +209,7 @@ go build -o ncc-mcp-server   ./cmd/ncc-mcp-server     # optional
 ./ncc-orchestrator v2-start --config-path examples/example_config.yaml --api-listen 127.0.0.1:8081 --ui-listen :8080
 ```
 
-`go build ./...` only compile-checks; use `-o` as above to get the binaries. Release builds for every platform come from [`scripts/binaryGO.txt`](scripts/binaryGO.txt) (`bash scripts/binaryGO.txt`, or `scriptsinaryGO.cmd` on Windows); see [`docs/BUILD_FROM_SCRATCH.md`](docs/BUILD_FROM_SCRATCH.md).
+`go build ./...` only compile-checks; use `-o` as above to get the binaries. Release builds for every platform come from [`scripts/binaryGO.txt`](scripts/binaryGO.txt) (`bash scripts/binaryGO.txt`, or `scripts\binaryGO.cmd` on Windows); see [`docs/BUILD_FROM_SCRATCH.md`](docs/BUILD_FROM_SCRATCH.md).
 
 ---
 
@@ -409,6 +442,7 @@ Before upgrading, configure a backup key: backups are now **encrypted by default
 | VM provisioning (cloud-init, Windows Sysprep) | [`deploy/README.md`](deploy/README.md) |
 | MCP server for AI assistants | [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md) |
 | Migrating from v1 / from v2.0.2 | [`docs/MIGRATION_v1_TO_v2.md`](docs/MIGRATION_v1_TO_v2.md), [`docs/MIGRATION_v2.0.2_TO_v2.1.0.md`](docs/MIGRATION_v2.0.2_TO_v2.1.0.md) |
+| Website and live demo (how they are built and deployed) | [Website](https://ltspv75bro.github.io/Nutanix-ncc-orchestrator/), [live demo](https://ltspv75bro.github.io/Nutanix-ncc-orchestrator/demo/), [`site/README.md`](site/README.md) |
 | Release notes and history | [`docs/releases/`](docs/releases) (latest: [v2.3.0](docs/releases/RELEASE_NOTES_v2.3.0.md)), [`CHANGELOG.md`](CHANGELOG.md) |
 
 ---
@@ -443,6 +477,7 @@ cd frontend
 npm ci
 npm test            # Vitest
 npm run build       # type-check (tsc -b) + production build
+npx vite build --config vite.demo.config.ts   # the website demo → frontend/dist-demo
 ```
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the same checks plus golangci-lint, govulncheck, `npm audit --omit=dev`, and a Trivy scan. Contribution guidelines: [`CONTRIBUTING.md`](CONTRIBUTING.md).
