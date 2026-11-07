@@ -27,8 +27,6 @@ import {
   CopyOutlined,
   ExclamationCircleOutlined,
   InfoCircleOutlined,
-  LoadingOutlined,
-  PlayCircleOutlined,
   ReloadOutlined,
   SearchOutlined,
   WarningOutlined,
@@ -53,6 +51,7 @@ import {
 import { useLocalStorageState } from "../hooks/useLocalStorageState";
 import { formatDateTime, formatTime, relativeTime } from "../utils/datetime";
 import { freshness } from "../utils/freshness";
+import { ArcSpinner, GridLoader } from "../components/Loaders";
 
 type Severity = "FAIL" | "WARN" | "ERR" | "INFO";
 type CompareMode = "all" | "changed" | "flaky";
@@ -675,7 +674,7 @@ export function FindingsPage() {
         <Alert
           type="info"
           showIcon
-          icon={<LoadingOutlined spin />}
+          icon={<ArcSpinner />}
           message="Loading Prism Central alerts…"
           description="Unresolved alerts are available now. Resolved and all-status results are loading in the background."
         />
@@ -717,7 +716,7 @@ export function FindingsPage() {
                 : "moments ago";
               return (
                 <Empty
-                  image={<PlayCircleOutlined spin style={{ fontSize: 48, color: "var(--ant-color-primary, #1677ff)" }} />}
+                  image={<GridLoader style={{ fontSize: 44 }} label="Run in progress" />}
                   imageStyle={{ height: 56 }}
                   description={
                     <Space orientation="vertical" size={4} align="center">

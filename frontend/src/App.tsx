@@ -8,7 +8,6 @@ import {
   LockOutlined,
   LogoutOutlined,
   MoreOutlined,
-  PlayCircleOutlined,
   RocketOutlined,
   ThunderboltOutlined,
   UserOutlined,
@@ -19,6 +18,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, Route, Routes, useLocation } from "react-router";
 import { AppShell } from "./components/AppShell";
 import { DataLoader } from "./components/DataLoader";
+import { BarsLoader } from "./components/Loaders";
 import { AboutDialog } from "./components/AboutDialog";
 import {
   canOpenSection,
@@ -378,7 +378,7 @@ function HeaderTriggerRunButton() {
   // Viewers (read-only role) cannot trigger runs, so hide the button entirely.
   if (!canOperate) return null;
 
-  // While a run is active, show a spinning <PlayCircleOutlined /> + live
+  // While a run is active, show the processing-bars loader + live
   // elapsed time so the header matches the "Running · 5m 23s" pill rendered
   // on Settings → Runs. When idle, show the lightning bolt + "Trigger".
   const elapsedMs = isActive && startMsRef.current ? Date.now() - startMsRef.current : 0;
@@ -390,7 +390,7 @@ function HeaderTriggerRunButton() {
     <Tooltip title={tooltipTitle}>
       <Button
         type={isActive ? "default" : "primary"}
-        icon={isActive ? <PlayCircleOutlined spin /> : <ThunderboltOutlined />}
+        icon={isActive ? <BarsLoader /> : <ThunderboltOutlined />}
         onClick={triggerNow}
         disabled={isActive}
         className={`header-trigger-btn${isActive ? " header-trigger-btn-running" : ""}`}

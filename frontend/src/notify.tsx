@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { useEffect } from "react";
 import { App, notification as staticNotification } from "antd";
 import type { NotificationInstance } from "antd/es/notification/interface";
-import { LoadingOutlined } from "@ant-design/icons";
+import { ArcSpinner } from "./components/Loaders";
 import { ApiError } from "./api/client";
 
 type ToastVariant = "success" | "info" | "warning" | "error";
@@ -70,7 +70,7 @@ export const notify = {
     const payload = typeof input === "string" ? { message: input } : input;
     open("info", {
       ...payload,
-      icon: payload.icon ?? <LoadingOutlined style={{ color: "#06b6d4" }} />,
+      icon: payload.icon ?? <ArcSpinner />,
       duration: payload.duration ?? 0,
     });
   },

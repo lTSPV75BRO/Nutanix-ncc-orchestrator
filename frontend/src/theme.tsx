@@ -3,6 +3,7 @@ import { App as AntApp, ConfigProvider, theme as antdTheme } from "antd";
 import type { ThemeConfig } from "antd";
 import { useLocalStorageState } from "./hooks/useLocalStorageState";
 import { NotifyBridge } from "./notify";
+import { ArcSpinner, BarsLoader } from "./components/Loaders";
 
 export type AppThemeKey = "dark" | "light" | "it-pro";
 export type AppThemeSelection = AppThemeKey | "auto";
@@ -164,7 +165,11 @@ export function AppThemeProvider({ children }: { children: ReactNode }) {
 
   return (
     <ThemeContext.Provider value={{ selectedTheme, theme, setTheme }}>
-      <ConfigProvider theme={toAntThemeConfig(theme)}>
+      <ConfigProvider
+        theme={toAntThemeConfig(theme)}
+        spin={{ indicator: <BarsLoader /> }}
+        button={{ loadingIcon: <ArcSpinner /> }}
+      >
         <AntApp notification={{ placement: "topRight", duration: 4.5 }} component={false}>
           <NotifyBridge />
           {children}
