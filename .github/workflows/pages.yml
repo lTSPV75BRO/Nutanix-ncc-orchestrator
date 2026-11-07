@@ -59,6 +59,10 @@ jobs:
           cp -R site/. _site/
           rm -f _site/README.md
           touch _site/.nojekyll
+          # Pages lets browsers cache files for 10 minutes; stamp CSS/JS links
+          # with the commit so a deploy never pairs new HTML with old styles.
+          sed -i -E "s#(assets/[A-Za-z0-9_.-]+\.(css|js))\"#\1?v=${GITHUB_SHA::8}\"#g" _site/*.html
+          grep -o 'assets/[a-z.]*?v=[0-9a-f]*' _site/index.html
 
       - name: Build the read-only demo
         working-directory: frontend
