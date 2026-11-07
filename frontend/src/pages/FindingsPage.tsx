@@ -62,10 +62,10 @@ type CompareMode = "all" | "changed" | "flaky";
 // chips) and the Alerts table's severity sort (see severityRank in
 // ClusterTable.tsx, which must be kept in sync with this ordering).
 const SEVERITY_META: Array<{ key: Severity; color: string; label: string; icon: ReactNode }> = [
-  { key: "FAIL", color: "#f43f5e", label: "FAIL", icon: <ExclamationCircleOutlined /> },
-  { key: "WARN", color: "#f59e0b", label: "WARN", icon: <WarningOutlined /> },
-  { key: "ERR", color: "#f97316", label: "ERR", icon: <CloseCircleOutlined /> },
-  { key: "INFO", color: "#38bdf8", label: "INFO", icon: <InfoCircleOutlined /> },
+  { key: "FAIL", color: "var(--ui-fail-text)", label: "FAIL", icon: <ExclamationCircleOutlined /> },
+  { key: "WARN", color: "var(--ui-warn-text)", label: "WARN", icon: <WarningOutlined /> },
+  { key: "ERR", color: "var(--ui-fail-text)", label: "ERR", icon: <CloseCircleOutlined /> },
+  { key: "INFO", color: "var(--ui-info-text)", label: "INFO", icon: <InfoCircleOutlined /> },
 ];
 
 
@@ -738,7 +738,7 @@ export function FindingsPage() {
             if (priorRunWasSuccessful) {
               return (
                 <Empty
-                  image={<CheckCircleOutlined style={{ fontSize: 48, color: "#22c55e" }} />}
+                  image={<CheckCircleOutlined style={{ fontSize: 44, color: "var(--ui-ok)" }} />}
                   imageStyle={{ height: 56 }}
                   description={
                     <Space orientation="vertical" size={4} align="center">

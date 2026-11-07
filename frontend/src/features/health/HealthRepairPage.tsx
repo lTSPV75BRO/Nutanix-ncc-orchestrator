@@ -148,7 +148,7 @@ export function HealthRepairPage() {
   const label = (text: string, count = 0, danger = false) => (
     <span className="repair-tab-label">
       {text}
-      {count > 0 ? <Badge count={count} size="small" color={danger ? undefined : "#faad14"} /> : null}
+      {count > 0 ? <Badge count={count} size="small" color={danger ? undefined : "var(--ui-warn)"} /> : null}
     </span>
   );
   return (

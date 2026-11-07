@@ -66,7 +66,7 @@ export function LifecycleInsightsCard({ enabled }: { enabled: boolean }) {
                 <Statistic
                   title={`Open ${b.label.toLowerCase()}`}
                   value={insights.buckets[b.key]}
-                  styles={{ content: b.key === "older" && insights.buckets.older > 0 ? { color: "#f43f5e" } : undefined }}
+                  styles={{ content: b.key === "older" && insights.buckets.older > 0 ? { color: "var(--ui-fail-text)" } : undefined }}
                 />
               </Col>
             ))}
@@ -91,7 +91,7 @@ export function LifecycleInsightsCard({ enabled }: { enabled: boolean }) {
               <Statistic
                 title="Open but no longer reported"
                 value={insights.looksFixed.length}
-                styles={{ content: insights.looksFixed.length > 0 ? { color: "#f59e0b" } : undefined }}
+                styles={{ content: insights.looksFixed.length > 0 ? { color: "var(--ui-warn-text)" } : undefined }}
               />
             </Col>
           </Row>

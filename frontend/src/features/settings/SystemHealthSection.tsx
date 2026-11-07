@@ -667,20 +667,20 @@ export function SystemHealthSection() {
             <Statistic title="Checks" value={(data?.checks?.length ?? 0).toLocaleString()} />
           </Col>
           <Col xs={12} md={6}>
-            <Statistic title="Failing" value={data?.summary.fail ?? 0} valueStyle={{ color: "#f43f5e" }} />
+            <Statistic title="Failing" value={data?.summary.fail ?? 0} valueStyle={{ color: "var(--ui-fail-text)" }} />
           </Col>
           <Col xs={12} md={6}>
-            <Statistic title="Warnings" value={data?.summary.warn ?? 0} valueStyle={{ color: "#f59e0b" }} />
+            <Statistic title="Warnings" value={data?.summary.warn ?? 0} valueStyle={{ color: "var(--ui-warn-text)" }} />
           </Col>
           <Col xs={12} md={6}>
-            <Statistic title="OK" value={data?.summary.ok ?? 0} valueStyle={{ color: "#22c55e" }} />
+            <Statistic title="OK" value={data?.summary.ok ?? 0} valueStyle={{ color: "var(--ui-ok-text)" }} />
           </Col>
           <Col xs={12} md={6}>
             <Statistic
               title="Confidence"
               value={confidenceScore}
               suffix="%"
-              valueStyle={{ color: confidenceScore >= 90 ? "#22c55e" : confidenceScore >= 70 ? "#f59e0b" : "#f43f5e" }}
+              valueStyle={{ color: confidenceScore >= 90 ? "var(--ui-ok-text)" : confidenceScore >= 70 ? "var(--ui-warn-text)" : "var(--ui-fail-text)" }}
             />
           </Col>
         </Row>

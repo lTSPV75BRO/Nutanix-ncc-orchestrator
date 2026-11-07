@@ -1,7 +1,8 @@
 // Guards the redesign's rules (docs/ui/redesign-plan.md) for the files built on
 // the design system: colours come from theme tokens in styles.css, never hex
 // values in components, and inline styles only carry data-driven sizes (bar
-// widths, chart heights). Older screens are not covered yet.
+// widths, chart heights). The inline-style rule covers the redesigned files;
+// the colour rule covers every component.
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +19,28 @@ const FILES = [
   "pages/RunDetailPage.tsx",
   "pages/InsightsPage.tsx",
 ];
+
+/** Files that may hold literal colours: the theme definitions themselves and
+ *  the intro animation, whose SVG stroke attributes cannot take CSS variables. */
+const COLOUR_EXEMPT = new Set([
+  "theme.tsx",
+  "components/MonacoCodeEditor.tsx",
+  "components/SiteIntro.tsx",
+  "components/StrokeText/StrokeText.tsx",
+]);
+
+function allComponents(dir = SRC): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) {
+      if (e.name !== "demo") out.push(...allComponents(p));
+    } else if (/\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name)) {
+      out.push(p);
+    }
+  }
+  return out;
+}
 
 function covered(): string[] {
   const out = FILES.map((f) => join(SRC, f));
@@ -68,12 +91,16 @@ describe("design rules", () => {
     const name = relative(SRC, file).replace(/\\/g, "/");
     const code = stripComments(readFileSync(file, "utf8"));
 
-    it(`${name}: no hex colours`, () => {
-      expect(hexColours(code)).toEqual([]);
-    });
-
     it(`${name}: inline styles only set data-driven sizes`, () => {
       expect(badInlineStyles(code)).toEqual([]);
+    });
+  }
+
+  for (const file of allComponents()) {
+    const name = relative(SRC, file).replace(/\\/g, "/");
+    if (COLOUR_EXEMPT.has(name)) continue;
+    it(`${name}: colours come from theme tokens`, () => {
+      expect(hexColours(stripComments(readFileSync(file, "utf8")))).toEqual([]);
     });
   }
 });

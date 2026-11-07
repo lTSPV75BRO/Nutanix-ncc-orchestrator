@@ -301,11 +301,11 @@ h3 {
 }
 
 .health-check-row.health-check-fail {
-  border-color: color-mix(in srgb, #f43f5e 45%, var(--table-cell-border));
+  border-color: color-mix(in srgb, var(--ui-fail) 45%, var(--table-cell-border));
 }
 
 .health-check-row.health-check-warn {
-  border-color: color-mix(in srgb, #f59e0b 45%, var(--table-cell-border));
+  border-color: color-mix(in srgb, var(--ui-warn) 45%, var(--table-cell-border));
 }
 
 .health-check-head {
@@ -316,13 +316,13 @@ h3 {
 }
 
 .health-check-icon.ok {
-  color: #22c55e;
+  color: var(--ui-ok);
 }
 .health-check-icon.warn {
-  color: #f59e0b;
+  color: var(--ui-warn);
 }
 .health-check-icon.fail {
-  color: #f43f5e;
+  color: var(--ui-fail);
 }
 
 /* Unified keyboard focus visibility across actions/inputs */
@@ -339,7 +339,7 @@ a:focus-visible,
 
 .note,
 .muted {
-  color: #93c5fd;
+  color: var(--ui-text-secondary);
 }
 
 .mono {
@@ -376,8 +376,8 @@ a:focus-visible,
 }
 
 pre {
-  background: #020617;
-  border: 1px solid #1e293b;
+  background: var(--pre-bg);
+  border: 1px solid var(--pre-border);
   border-radius: 8px;
   padding: 10px;
   white-space: pre-wrap;
@@ -397,15 +397,15 @@ pre {
 }
 
 .metric {
-  border: 1px solid #334155;
+  border: 1px solid var(--ui-border);
   border-radius: 8px;
   padding: 10px;
-  background: #0b1326;
+  background: var(--ui-surface);
 }
 
 .metric-label {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--ui-text-secondary);
 }
 
 .metric-value {
@@ -414,12 +414,12 @@ pre {
 }
 
 .text-fail {
-  color: #f87171;
+  color: var(--ui-fail-text);
   font-weight: 600;
 }
 
 .text-pass {
-  color: #86efac;
+  color: var(--ui-ok-text);
   font-weight: 600;
 }
 
@@ -430,13 +430,13 @@ pre {
 }
 
 .cluster-card {
-  border: 1px solid #334155;
+  border: 1px solid var(--ui-border);
   border-radius: 8px;
   padding: 10px;
 }
 
 .cluster-title {
-  color: #cbd5e1;
+  color: var(--ui-text);
   margin-bottom: 4px;
 }
 
@@ -457,12 +457,12 @@ table {
 th,
 td {
   text-align: left;
-  border-bottom: 1px solid #1e293b;
+  border-bottom: 1px solid var(--ui-border);
   padding: 8px;
 }
 
 .btn-active {
-  border-color: #93c5fd;
+  border-color: var(--ui-accent);
 }
 
 a {
@@ -1285,12 +1285,12 @@ textarea.config-mono {
 }
 
 .connection-orb.ok {
-  background: linear-gradient(135deg, #16a34a, #22c55e);
+  background: var(--ui-ok);
   color: #fff;
 }
 
 .connection-orb.err {
-  background: linear-gradient(135deg, #dc2626, #ef4444);
+  background: var(--ui-fail);
   color: #fff;
 }
 
@@ -1478,11 +1478,11 @@ textarea.config-mono {
 
 .alerts-handling-chip-returned.is-selected,
 .alerts-handling-chip-returned:not(.is-empty) {
-  border-color: color-mix(in srgb, #d946ef 50%, var(--control-border));
+  border-color: color-mix(in srgb, var(--ui-fail) 50%, var(--control-border));
 }
 
 .alerts-handling-chip-returned.is-selected {
-  background: color-mix(in srgb, #d946ef 16%, var(--control-bg));
+  background: color-mix(in srgb, var(--ui-fail) 16%, var(--control-bg));
 }
 
 .alerts-handling-chip-all.is-selected {
@@ -1852,29 +1852,15 @@ html[data-theme="light"] .alerts-toolbar {
 .severity-pill-unknown {
   background: rgba(148, 163, 184, 0.18) !important;
   border-color: rgba(148, 163, 184, 0.5) !important;
-  color: #cbd5e1 !important;
+  color: var(--ui-neutral-text) !important;
 }
 
-/* WCAG AA: antd's filled "error" tag in the dark themes renders bright-red
-   text (#f43f5e/#ef4444) on a dark translucent red fill, which lands just
-   under the 4.5:1 ratio. Brighten the text to rose-300 and firm up the border
-   so FAIL / Stale pills stay legible without changing the brand error color
-   used elsewhere (buttons, alerts). */
-html[data-theme="dark"] .ant-tag-error,
-html[data-theme="it-pro"] .ant-tag-error {
-  color: #fda4af !important;
-  border-color: rgba(244, 99, 122, 0.6) !important;
-}
-
-/* WCAG AA: a checked CheckableTag (the severity "ALL"/FAIL/WARN… filter pills)
-   fills with colorPrimary and white text. The dark theme's violet (#8b5cf6)
-   and IT-Pro teal (#14b8a6) are too light for white text (≈3.4:1). Use a
-   darker shade for the checked fill only so the label clears 4.5:1. */
-html[data-theme="dark"] .ant-tag-checkable-checked {
-  background: #7c3aed !important;
-}
+/* WCAG AA: a checked CheckableTag (severity filter pills) fills with the
+   accent and white text; #8b5cf6 is too light for white text (about 4:1), so
+   the dark themes use the darker #7c3aed for the checked fill. */
+html[data-theme="dark"] .ant-tag-checkable-checked,
 html[data-theme="it-pro"] .ant-tag-checkable-checked {
-  background: #0f766e !important;
+  background: #7c3aed !important;
 }
 
 pre {
@@ -4083,7 +4069,7 @@ html[data-theme="light"] .site-intro-skip {
 }
 
 .site-intro-skip:focus-visible {
-  outline: 2px solid #a78bfa;
+  outline: 2px solid var(--ui-accent);
   outline-offset: 2px;
 }
 
@@ -4775,34 +4761,22 @@ html[data-theme="light"] .site-intro-skip {
 
 .alerts-status-ack {
   --alerts-status-color: #f59e0b;
-  color: #d97706;
+  color: var(--ui-warn-text);
 }
 
 .alerts-status-resolved {
   --alerts-status-color: #22c55e;
-  color: #16a34a;
+  color: var(--ui-ok-text);
 }
 
 .alerts-status-returned {
   --alerts-status-color: #ec4899;
-  color: #db2777;
+  color: var(--ui-fail-text);
 }
 
 html[data-theme="dark"] .alerts-status-ack,
-html[data-theme="it-pro"] .alerts-status-ack {
-  color: #fbbf24;
-}
-
 html[data-theme="dark"] .alerts-status-resolved,
-html[data-theme="it-pro"] .alerts-status-resolved {
-  color: #4ade80;
-}
-
 html[data-theme="dark"] .alerts-status-returned,
-html[data-theme="it-pro"] .alerts-status-returned {
-  color: #f472b6;
-}
-
 /* ---- Full-page data loader (components/DataLoader.tsx) */
 .ui-data-loader {
   display: inline-flex;
@@ -5019,4 +4993,49 @@ h5.ant-typography {
 
 .ant-empty-description {
   color: var(--ui-text-secondary);
+}
+
+/* antd preset tag colours collapse onto the five status tones (plus accent),
+   so a "green" tag in one section and a "success" tag in another look the
+   same, in every theme. */
+.ant-tag {
+  --ui-tag-color: var(--ui-neutral);
+  --ui-tag-text: var(--ui-text-secondary);
+  color: var(--ui-tag-text);
+  background: color-mix(in srgb, var(--ui-tag-color) 12%, transparent);
+  border-color: transparent;
+}
+.ant-tag.ant-tag-green,
+.ant-tag.ant-tag-success,
+.ant-tag.ant-tag-lime {
+  --ui-tag-color: var(--ui-ok);
+  --ui-tag-text: var(--ui-ok-text);
+}
+.ant-tag.ant-tag-gold,
+.ant-tag.ant-tag-orange,
+.ant-tag.ant-tag-warning,
+.ant-tag.ant-tag-yellow {
+  --ui-tag-color: var(--ui-warn);
+  --ui-tag-text: var(--ui-warn-text);
+}
+.ant-tag.ant-tag-red,
+.ant-tag.ant-tag-error,
+.ant-tag.ant-tag-volcano,
+.ant-tag.ant-tag-magenta {
+  --ui-tag-color: var(--ui-fail);
+  --ui-tag-text: var(--ui-fail-text);
+}
+.ant-tag.ant-tag-blue,
+.ant-tag.ant-tag-geekblue,
+.ant-tag.ant-tag-cyan,
+.ant-tag.ant-tag-processing {
+  --ui-tag-color: var(--ui-info);
+  --ui-tag-text: var(--ui-info-text);
+}
+.ant-tag.ant-tag-purple {
+  --ui-tag-color: var(--ui-accent);
+  --ui-tag-text: var(--link-color);
+}
+.ant-tag .anticon {
+  color: inherit;
 }

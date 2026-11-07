@@ -114,7 +114,7 @@ export function notifyError(error: unknown, fallback = "Something went wrong"): 
           maxHeight: 320,
           overflow: "auto",
           fontSize: 12,
-          background: "rgba(127,127,127,0.12)",
+          background: "var(--ui-surface-hover)",
           borderRadius: 4,
         }}
       >

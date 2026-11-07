@@ -208,7 +208,7 @@ export function SecretsMigrationModal({
                   <Typography.Paragraph
                     copyable={{ text: snippets[k], onCopy: () => handleCopy(snippets[k], `${k} snippet`) }}
                     style={{
-                      background: "var(--surface-muted, rgba(0,0,0,0.04))",
+                      background: "var(--ui-surface-hover)",
                       padding: 10,
                       borderRadius: 6,
                       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
@@ -230,7 +230,7 @@ export function SecretsMigrationModal({
               <Typography.Paragraph
                 copyable={{ text: yamlSnippet, onCopy: () => handleCopy(yamlSnippet, "secrets.yaml snippet") }}
                 style={{
-                  background: "var(--surface-muted, rgba(0,0,0,0.04))",
+                  background: "var(--ui-surface-hover)",
                   padding: 10,
                   borderRadius: 6,
                   fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",

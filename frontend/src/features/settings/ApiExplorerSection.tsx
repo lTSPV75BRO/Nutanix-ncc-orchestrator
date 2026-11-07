@@ -445,7 +445,7 @@ export function ApiExplorerSection({ onError }: Props) {
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               <label htmlFor="api-explorer-allow-external">Allow external URLs</label>
             </Typography.Text>
-            {allowExternalURL ? <WarningOutlined style={{ color: "#f59e0b" }} /> : null}
+            {allowExternalURL ? <WarningOutlined style={{ color: "var(--ui-warn)" }} /> : null}
           </Space>
         </Tooltip>
       </Space>
@@ -472,7 +472,7 @@ export function ApiExplorerSection({ onError }: Props) {
             value={path}
             onChange={(e) => setPath(e.target.value)}
             placeholder="/api/v1/health"
-            prefix={<ApiOutlined style={{ color: "rgba(226,232,240,0.6)" }} />}
+            prefix={<ApiOutlined style={{ color: "var(--ui-text-tertiary)" }} />}
             autoComplete="off"
           />
         </Col>

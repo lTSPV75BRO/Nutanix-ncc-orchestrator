@@ -3044,7 +3044,7 @@ export function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }
   const confirmApply = () => {
     Modal.confirm({
       title: "Confirm software update",
-      icon: <CloudDownloadOutlined style={{ color: "#1677ff" }} />,
+      icon: <CloudDownloadOutlined style={{ color: "var(--ui-accent)" }} />,
       width: 540,
       content: (
         <div>

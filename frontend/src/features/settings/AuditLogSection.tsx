@@ -453,7 +453,7 @@ export function AuditLogSection({ onError }: Props) {
               margin: 0,
               padding: 12,
               borderRadius: 6,
-              background: "var(--surface-muted, rgba(0,0,0,0.04))",
+              background: "var(--ui-surface-hover)",
               fontSize: 12,
               maxHeight: 420,
               overflow: "auto",

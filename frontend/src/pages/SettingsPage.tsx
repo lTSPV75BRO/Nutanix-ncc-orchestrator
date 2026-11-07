@@ -275,7 +275,7 @@ export function SettingsPage({ isAdmin = true, section }: { isAdmin?: boolean; s
   const items = [
         {
           key: "connection",
-          label: tabLabel(<ApiOutlined />, "Connection", apiOk ? "#22c55e" : "#ef4444"),
+          label: tabLabel(<ApiOutlined />, "Connection", apiOk ? "var(--ui-ok)" : "var(--ui-fail)"),
           children: (
             <StatusTabs
               isAdmin={isAdmin}
