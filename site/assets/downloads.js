@@ -83,15 +83,15 @@
     var hash = sha(a);
     var fileCell = el("td", { class: "file" }, [
       el("a", { href: a.browser_download_url, text: a.name }),
-      recommended ? el("span", { class: "rec", text: "Recommended" }) : null,
-      el("small", { text: desc }),
+      recommended ? el("span", { class: "badge", text: "Recommended" }) : null,
+      desc ? el("small", { text: desc }) : null,
       hash ? el("div", { class: "sha" }, [el("span", { text: "SHA-256 " + hash }), copyButton(hash, "Copy SHA-256 of " + a.name)]) : null,
     ]);
     return el("tr", null, [
       fileCell,
       el("td", { class: "num hide-sm", text: kind }),
       el("td", { class: "num", text: size(a.size) }),
-      el("td", null, [el("a", { class: "btn btn-plain btn-sm", href: a.browser_download_url, "aria-label": "Download " + a.name, text: "Download" })]),
+      el("td", { class: "act" }, [el("a", { class: "btn btn-sm", href: a.browser_download_url, "aria-label": "Download " + a.name, text: "Download" })]),
     ]);
   }
 
@@ -122,14 +122,14 @@
 
     filesEl.textContent = "";
     if (rows.length === 0) {
-      filesEl.appendChild(el("p", { class: "note" }, ["No " + OS_LABEL[current] + " files in " + release.tag_name + ". ", el("a", { href: release.html_url || RELEASES, text: "See the release on GitHub" }), "."]));
+      filesEl.appendChild(el("p", { class: "loading" }, ["No " + OS_LABEL[current] + " files in " + release.tag_name + ". ", el("a", { href: release.html_url || RELEASES, text: "See the release on GitHub" }), "."]));
     } else {
       filesEl.appendChild(table(rows));
     }
     if (c.other.length) {
-      var details = el("details", { style: "margin-top:16px" }, [
-        el("summary", { text: "Other files: example config, release notes, SBOM, attestation" }),
-        el("div", { style: "margin-top:12px" }, [table(c.other.map(function (x) {
+      var details = el("details", { class: "more" }, [
+        el("summary", { text: "Other files: example config, release notes, SBOMs, attestation (" + c.other.length + ")" }),
+        el("div", null, [table(c.other.map(function (x) {
           var kind = /\.ya?ml$/.test(x.a.name) ? "Config" : /\.md$/.test(x.a.name) ? "Notes" : /bom-/.test(x.a.name) ? "SBOM" : "Provenance";
           return fileRow(x, kind, "", false);
         }))]),
@@ -143,11 +143,14 @@
     if (!rel) {
       metaEl.appendChild(el("span", null, ["Could not load the release list. ", el("a", { href: RELEASES, text: "Open the releases on GitHub" }), "."]));
       filesEl.textContent = "";
-      filesEl.appendChild(el("p", { class: "note" }, ["GitHub did not answer (it allows 60 requests per hour from one address). ", el("a", { href: RELEASES + "/latest", text: "Download the latest release from GitHub" }), " instead."]));
+      filesEl.appendChild(el("p", { class: "loading" }, ["GitHub did not answer (it allows 60 requests per hour from one address). ", el("a", { href: RELEASES + "/latest", text: "Download the latest release from GitHub" }), " instead."]));
       return;
     }
+    var title = document.getElementById("files-title");
+    if (title) title.textContent = "Release files · " + rel.tag_name;
     var date = rel.published_at ? new Date(rel.published_at).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }) : "";
-    metaEl.appendChild(el("span", null, [el("strong", { text: "Latest: " + rel.tag_name })]));
+    metaEl.appendChild(el("span", { class: "chip", text: "LATEST" }));
+    metaEl.appendChild(el("strong", { text: rel.tag_name }));
     if (date) metaEl.appendChild(el("span", { text: "Published " + date }));
     metaEl.appendChild(el("a", { href: rel.html_url || RELEASES, text: "Release notes" }));
     metaEl.appendChild(el("a", { href: RELEASES, text: "All releases" }));

@@ -76,7 +76,19 @@ npm run build:demo -- --outDir ../site/demo   # do not commit site/demo
 
 or `npx vite --config vite.demo.config.ts` for a dev server with hot reload.
 
-Screenshots in `assets/screens/` are 1440×900 captures of the demo in dark
-mode. Re-take them after visible UI changes, for example with headless Chrome
-or Edge: `--headless=new --force-dark-mode --force-prefers-reduced-motion
---window-size=1440,900 --screenshot=overview.png <demo URL>`.
+## Design
+
+The pages use the app's design system (`frontend/src/styles.css`): the same
+font stack, colour tokens, spacing scale, radii, panels, stat tiles, buttons
+and segmented control. Dark is the default, as in the app; the header toggle
+switches to light and stores the choice under the app's own `app.theme` key,
+so the site and the demo (same origin) always show the same theme. When the
+app's tokens change, update the matching variables at the top of
+`assets/style.css`.
+
+Screenshots in `assets/screens/` are 1440×900 captures of the demo, one per
+theme (`*.png` dark, `*-light.png` light); `assets/site.js` shows the one that
+matches the current theme. Re-take them after visible UI changes, for example
+with headless Chrome or Edge (`--headless=new --force-prefers-reduced-motion
+--window-size=1440,900 --screenshot=overview.png <demo URL>`), using a browser
+profile where `localStorage["app.theme"]` is `"light"` for the light set.
