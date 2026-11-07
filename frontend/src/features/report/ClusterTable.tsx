@@ -433,7 +433,7 @@ function displayPCStatus(raw: Record<string, unknown>): string {
   const status = String(raw.status ?? "").toUpperCase();
   if (status === "AUTO_RESOLVED" || raw.isAutoResolved === true || raw.auto_resolved === true) {
     const resolved = String(raw.resolvedTime ?? raw.resolved_at ?? "").trim();
-    return resolved ? `Auto Resolved (${new Date(resolved).toLocaleString()})` : "Auto Resolved";
+    return resolved ? `Resolved automatically (${new Date(resolved).toLocaleString()})` : "Resolved automatically";
   }
   if (status === "OPEN") return "—";
   return String(raw.status ?? "—").replace(/_/g, " ");
@@ -1260,7 +1260,7 @@ export function ClusterTable({
       notify.success("Alert copied to clipboard.");
       setTimeout(() => setCopyState("idle"), 1600);
     } catch {
-      notify.warning("Could not access clipboard.");
+      notify.warning("Couldn't copy to the clipboard.");
     }
   };
 

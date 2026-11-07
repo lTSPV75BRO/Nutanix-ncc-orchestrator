@@ -15,7 +15,7 @@ export function FeatureDisabled({ feature }: { feature: FeatureKey }) {
       await queryClient.invalidateQueries({ queryKey: ["feature-flags"] });
       notify.success(`${spec.title} is on.`);
     },
-    onError: (err) => notifyError(err, `Could not enable ${spec.title}`),
+    onError: (err) => notifyError(err, `Couldn't enable ${spec.title}`),
   });
 
   return (

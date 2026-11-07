@@ -24,7 +24,7 @@ const EXIT_LABEL: Record<string, string> = {
   unhealthy: "Stopped answering health probes",
   requested: "Restart requested",
   "port-in-use": "Port already in use",
-  "start-failed": "Could not start",
+  "start-failed": "Couldn't start",
 };
 
 const POLICY_LABEL: Record<string, string> = {
@@ -148,10 +148,10 @@ export function SupervisorPanel() {
       notify.success(`${CHILD_LABEL[child]} restart requested`);
       window.setTimeout(() => void qc.invalidateQueries({ queryKey: ["health", "supervisor"] }), 4000);
     },
-    onError: (err) => notifyError(err, "Could not request the restart"),
+    onError: (err) => notifyError(err, "Couldn't request the restart"),
   });
   if (q.isLoading) return <Card className="page-card"><Skeleton active /></Card>;
-  if (q.isError) return <Alert type="error" showIcon title="Could not load the supervisor" description={String((q.error as Error)?.message ?? "")} />;
+  if (q.isError) return <Alert type="error" showIcon title="Couldn't load the supervisor" description={String((q.error as Error)?.message ?? "")} />;
   const data = q.data;
   const st = data?.state;
   const intro = (
@@ -254,7 +254,7 @@ export function platformFindings(p: PlatformData): { type: "warning" | "info"; t
     out.push({ type: "warning", text: "Less than 10% of memory is available." });
   }
   if (p.host.service_manager === "none") {
-    out.push({ type: "warning", text: "Nothing restarts the stack after a crash or reboot. Install the boot service: ncc-orchestrator v2-install-service --now." });
+    out.push({ type: "warning", text: "Nothing restarts the services after a crash or reboot. Install the boot service: ncc-orchestrator v2-install-service --now." });
   }
   return out;
 }
@@ -262,7 +262,7 @@ export function platformFindings(p: PlatformData): { type: "warning" | "info"; t
 export function PlatformPanel() {
   const q = useQuery({ queryKey: ["health", "platform"], queryFn: api.platform, staleTime: 15_000 });
   if (q.isLoading) return <Card className="page-card"><Skeleton active /></Card>;
-  if (q.isError || !q.data) return <Alert type="error" showIcon title="Could not load platform details" description={String((q.error as Error)?.message ?? "")} />;
+  if (q.isError || !q.data) return <Alert type="error" showIcon title="Couldn't load platform details" description={String((q.error as Error)?.message ?? "")} />;
   const p = q.data;
   const { host, api_process: proc } = p;
   const findings = platformFindings(p);

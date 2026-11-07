@@ -601,7 +601,7 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
           />
         ) : null}
         {health?.install_check_error ? (
-          <Alert type="warning" showIcon className="schedule-status-alert" title="Could not check the host scheduler" description={health.install_check_error} />
+          <Alert type="warning" showIcon className="schedule-status-alert" title="Couldn't check the host scheduler" description={health.install_check_error} />
         ) : null}
         {!isKubernetes && health?.last_error ? (
           <Alert

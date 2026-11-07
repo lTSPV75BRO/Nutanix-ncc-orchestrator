@@ -67,7 +67,7 @@ export const FEATURE_CATALOG: FeatureSpec[] = [
   },
   {
     key: "self_heal",
-    title: "Self-heal actions",
+    title: "Automatic healing",
     group: "actions",
     saves: "Removes the Fix buttons from Health & repair. Checks still run and report problems.",
   },

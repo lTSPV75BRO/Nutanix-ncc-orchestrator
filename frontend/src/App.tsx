@@ -371,7 +371,7 @@ function HeaderTriggerRunButton() {
         void active.refetch();
         return;
       }
-      notifyError(e, "Could not start the run");
+      notifyError(e, "Couldn't start the run");
     }
   };
 
@@ -547,7 +547,7 @@ export default function App() {
       await api.logoutAll();
       notify.success("Signed out of all sessions on every device.");
     } catch (e) {
-      notifyError(e, "Could not sign out other sessions");
+      notifyError(e, "Couldn't sign out other sessions");
     }
     setLoginNotice({ type: "info", text: "You have been signed out on every device." });
     queryClient.clear();

@@ -63,7 +63,7 @@ const ACTION_PRESETS: { label: string; value: string }[] = [
   { label: "Schedule changes", value: "schedule." },
   { label: "Scheduled backup config", value: "schedule.backup." },
   { label: "Runs (preflight + trigger + cancel)", value: "runs." },
-  { label: "Health diagnostics / self-heal", value: "health.diagnostics." },
+  { label: "Health checks and repairs", value: "health.diagnostics." },
 ];
 
 type AuditRow = AuditLogEntry & { __idx: number };
@@ -368,7 +368,7 @@ export function AuditLogSection({ onError }: Props) {
           type="error"
           showIcon
           style={{ marginTop: 12 }}
-          title="Could not load audit entries"
+          title="Couldn't load audit entries"
           description={String(audit.error)}
         />
       ) : null}

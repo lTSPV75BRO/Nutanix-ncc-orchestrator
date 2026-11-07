@@ -53,7 +53,7 @@ function useUpdateOnboarding() {
     onSuccess: (data) => {
       queryClient.setQueryData(ONBOARDING_QUERY_KEY, data);
     },
-    onError: (e) => notifyError(e, "Could not update the setup checklist"),
+    onError: (e) => notifyError(e, "Couldn't update the setup checklist"),
   });
 }
 

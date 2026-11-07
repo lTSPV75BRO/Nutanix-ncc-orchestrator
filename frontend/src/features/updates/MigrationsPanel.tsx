@@ -48,7 +48,7 @@ function ConfigLayoutCard() {
     <Card className="page-card" size="small" title={<span><SwapOutlined /> Config file layout</span>}>
       {preview.isLoading ? <Skeleton active paragraph={{ rows: 3 }} /> : null}
       {preview.isError ? (
-        <Alert type="error" showIcon title="Could not check the config file" description={String((preview.error as Error)?.message ?? "")} />
+        <Alert type="error" showIcon title="Couldn't check the config file" description={String((preview.error as Error)?.message ?? "")} />
       ) : null}
       {preview.data?.error ? <Alert type="error" showIcon title="Migration is not possible" description={preview.data.error} /> : null}
       {res ? (
@@ -167,7 +167,7 @@ export function MigrationsPanel() {
       <Card className="page-card" size="small" title="Upgrades and restores">
         <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
           Software upgrades take a backup first and can be rolled back from <Link to={sectionHref("updates", { tab: "updates" })}>Updates</Link>.
-          After a restore, output paths, schedule files and the HTTPS certificate are repaired automatically before the stack restarts.
+          After a restore, output paths, schedule files and the HTTPS certificate are repaired automatically before the services restart.
         </Typography.Paragraph>
       </Card>
     </Space>

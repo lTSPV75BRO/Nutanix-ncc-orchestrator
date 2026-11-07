@@ -889,7 +889,7 @@ export function BackupRestoreCard() {
         title: "Backup restored",
         content:
           message ??
-          "Restart the stack (v2-stop then v2-start) for the restored data to take effect.",
+          "Restart the services (v2-stop then v2-start) for the restored data to take effect.",
       });
     }
   };
@@ -1131,7 +1131,7 @@ export function BackupRestoreCard() {
         scheduler/notification state, the start settings (CORS, listen addresses, session TTL), the
         audit log, and the latest run&apos;s report. Backups are portable across operating systems
         and versions, so a Windows backup restores onto Linux or macOS. Restoring overwrites the
-        current installation and then restarts the stack automatically. Archives contain secrets —
+        current installation and then restarts the services automatically. Archives contain secrets —
         store them securely.
       </Typography.Paragraph>
 
@@ -1885,7 +1885,7 @@ function OIDCCard({ embedded = false }: { embedded?: boolean }) {
       void qc.invalidateQueries({ queryKey: ["me"] });
       void qc.invalidateQueries({ queryKey: ["health"] });
     },
-    onError: (e) => notifyError(e, "Could not save OpenID Connect configuration"),
+    onError: (e) => notifyError(e, "Couldn't save the OpenID Connect settings"),
   });
 
   const testMut = useMutation({
@@ -2651,7 +2651,7 @@ function TLSCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
         content:
           nextScheme === "https"
             ? "UI servers will use the new certificate within a few seconds. If it is self-signed, accept the browser warning. This page will reload."
-            : "HTTPS stays enabled with the stack-managed self-signed certificate. This page will reload.",
+            : "HTTPS stays enabled with the built-in self-signed certificate. This page will reload.",
         okText: "Reload now",
         onOk: () => {
           window.location.reload();
@@ -2664,7 +2664,7 @@ function TLSCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
       Modal.warning({
         title: result.tls.https_enabled ? "Certificate installed" : "HTTPS disabled",
         content:
-          "An automatic restart was unavailable. Restart the stack (v2-restart) for the change to take effect.",
+          "An automatic restart was unavailable. Restart the services (v2-restart) for the change to take effect.",
       });
     }
   };
@@ -2751,7 +2751,7 @@ function TLSCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
         or upload your own PEM certificate and private key below.
         {isKubernetes
           ? " On Kubernetes the certificate lives on the shared volume; UI pods reload it without a stack restart."
-          : " Applying a certificate restarts the stack to bind the browser-facing server to TLS and marks session cookies as Secure."}{" "}
+          : " Applying a certificate restarts the services to bind the browser-facing server to TLS and marks session cookies as Secure."}{" "}
         The private key is stored with <code>0600</code> permissions on the server and is never shown
         again.
       </Typography.Paragraph>
@@ -2778,8 +2778,8 @@ function TLSCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
               title={isKubernetes ? "Revert to the self-signed certificate?" : "Disable HTTPS?"}
               description={
                 isKubernetes
-                  ? "The uploaded certificate is removed. HTTPS stays on with the stack-managed self-signed certificate."
-                  : "The stack restarts and falls back to plain HTTP. The stored certificate and key are removed. Note: if the stack is configured for HTTPS-by-default it will regenerate a self-signed certificate on the next start."
+                  ? "The uploaded certificate is removed. HTTPS stays on with the built-in self-signed certificate."
+                  : "The stack restarts and falls back to plain HTTP. The stored certificate and key are removed. Note: if the services are configured for HTTPS-by-default it will regenerate a self-signed certificate on the next start."
               }
               okText={isKubernetes ? "Revert" : "Disable HTTPS"}
               okButtonProps={{ danger: true }}
@@ -2849,7 +2849,7 @@ function TLSCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
                       a.click();
                       URL.revokeObjectURL(url);
                     } catch (e) {
-                      notifyError(e, "Could not download the UI certificate");
+                      notifyError(e, "Couldn't download the UI certificate");
                     }
                   }}
                 >
@@ -3022,7 +3022,7 @@ export function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }
         notify.warning("NCC components are running different versions.");
       }
     } catch (e) {
-      notifyError(e, "Could not check for updates");
+      notifyError(e, "Couldn't check for updates");
     } finally {
       setChecking(false);
     }
@@ -3038,7 +3038,7 @@ export function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }
       startPolling();
     } catch (e) {
       setApplying(false);
-      notifyError(e, "Could not start the update");
+      notifyError(e, "Couldn't start the update");
     }
   };
 
@@ -3071,7 +3071,7 @@ export function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }
               </li>
             ) : (
               <li>
-                <b>restart the stack automatically</b> to activate the new version.
+                <b>restart the services automatically</b> to activate the new version.
               </li>
             )}
           </ol>

@@ -164,7 +164,7 @@ export function OverviewPage() {
       {header}
 
       {report.isError && !data ? (
-        <Alert type="error" showIcon title="Could not load the latest results" description="Refresh to try again." />
+        <Alert type="error" showIcon title="Couldn't load the latest results" description="Refresh to try again." />
       ) : null}
 
       {regression.has_regression ? (

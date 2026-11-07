@@ -155,10 +155,10 @@ export function InsightsPage() {
   const tab: TabKey = requested && TABS.includes(requested) ? requested : "summary";
 
   useEffect(() => {
-    if (report.error) notifyError(report.error, "Could not load insights");
+    if (report.error) notifyError(report.error, "Couldn't load insights");
   }, [report.error]);
   useEffect(() => {
-    if (trends.error) notifyError(trends.error, "Could not load trends");
+    if (trends.error) notifyError(trends.error, "Couldn't load trends");
   }, [trends.error]);
 
   const data = report.data ?? EMPTY_REPORT_DATA;

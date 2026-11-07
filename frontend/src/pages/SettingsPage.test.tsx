@@ -108,7 +108,7 @@ describe("SettingsPage", () => {
         throw new Error("backend unavailable");
       },
     });
-    expect(await screen.findByText("Unable to load settings health context")).toBeInTheDocument();
+    expect(await screen.findByText("Couldn't load the health summary")).toBeInTheDocument();
     expect(screen.getAllByRole("alert")[0]).toHaveTextContent("backend unavailable");
   });
 

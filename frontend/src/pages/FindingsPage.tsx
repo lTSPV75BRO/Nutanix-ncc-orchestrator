@@ -219,7 +219,7 @@ export function FindingsPage() {
         notify.success(`Reopened ${noun}.`);
       }
     },
-    onError: (err) => notifyError(err, "Could not update the NCC alert"),
+    onError: (err) => notifyError(err, "Couldn't update the NCC alert"),
   });
 
   const features = useFeatureFlags();
@@ -264,11 +264,11 @@ export function FindingsPage() {
   }, [previewReport.data]);
 
   useEffect(() => {
-    if (previewReport.error) notifyError(previewReport.error, "Could not load the latest findings");
+    if (previewReport.error) notifyError(previewReport.error, "Couldn't load the latest findings");
   }, [previewReport.error]);
 
   useEffect(() => {
-    if (fullReport.error) notifyError(fullReport.error, "Could not load all findings");
+    if (fullReport.error) notifyError(fullReport.error, "Couldn't load all findings");
   }, [fullReport.error]);
 
   const reportData = fullReport.data ?? previewReport.data ?? {
@@ -623,7 +623,7 @@ export function FindingsPage() {
               aria-label="Filter alerts by cluster"
               mode="multiple"
               allowClear
-              placeholder="All Clusters"
+              placeholder="All clusters"
               maxTagCount="responsive"
               style={{ width: "100%" }}
               value={selectedClusters}

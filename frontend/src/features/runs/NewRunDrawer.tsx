@@ -61,7 +61,7 @@ export function NewRunDrawer({ open, onClose, backendConfigPath }: { open: boole
         const selected = preferred || fallbackPath;
         if (selected) setRunConfigPath(selected);
       } catch (e) {
-        notifyError(e, "Could not load the config files");
+        notifyError(e, "Couldn't load the config files");
       }
     })();
     return () => {
@@ -115,7 +115,7 @@ export function NewRunDrawer({ open, onClose, backendConfigPath }: { open: boole
       onClose();
     } catch (e) {
       notify.close(RUN_TOAST_KEY);
-      notifyError(e, "Could not start the run");
+      notifyError(e, "Couldn't start the run");
     } finally {
       setBusy("");
     }
@@ -138,7 +138,7 @@ export function NewRunDrawer({ open, onClose, backendConfigPath }: { open: boole
     try {
       await api.updateRunConfigPreference(value);
     } catch (e) {
-      notifyError(e, "Could not remember the config choice");
+      notifyError(e, "Couldn't remember the config choice");
     }
   };
 

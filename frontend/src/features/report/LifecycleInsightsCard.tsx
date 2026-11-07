@@ -38,7 +38,7 @@ export function LifecycleInsightsCard({ enabled }: { enabled: boolean }) {
       ]);
       notify.success("Resolved. A later run that finds the same check opens it again.");
     },
-    onError: (error) => notifyError(error, "Could not resolve the alert"),
+    onError: (error) => notifyError(error, "Couldn't resolve the alert"),
   });
 
   return (

@@ -50,7 +50,7 @@ export function ActiveRuns() {
       await queryClient.invalidateQueries({ queryKey: RUNS_ACTIVE_QUERY_KEY });
     } catch (e) {
       notify.close(RUN_TOAST_KEY);
-      notifyError(e, "Could not cancel");
+      notifyError(e, "Couldn't cancel");
     }
   };
 

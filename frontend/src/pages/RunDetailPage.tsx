@@ -127,7 +127,7 @@ export function RunDetailPage() {
         </Link>
         <Panel>
           <EmptyState
-            title={notFound ? "Run not found" : "Could not load this run"}
+            title={notFound ? "Run not found" : "Couldn't load this run"}
             description={notFound ? `There is no archived run "${id}". It may have been pruned by retention.` : String((q.error as Error)?.message || "")}
             actions={<Button onClick={() => void q.refetch()}>Try again</Button>}
           />

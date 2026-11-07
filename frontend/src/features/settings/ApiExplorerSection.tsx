@@ -387,7 +387,7 @@ export function ApiExplorerSection({ onError }: Props) {
       await navigator.clipboard.writeText(text);
       notify.success("cURL command copied.");
     } catch (e) {
-      notify.warning(e instanceof Error ? e.message : "Could not build the cURL command.");
+      notify.warning(e instanceof Error ? e.message : "Couldn't build the cURL command.");
     }
   };
 

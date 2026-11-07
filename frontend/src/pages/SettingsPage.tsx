@@ -246,11 +246,11 @@ export function SettingsPage({ isAdmin = true, section }: { isAdmin?: boolean; s
   );
 
   useEffect(() => {
-    if (health.error) notifyError(health.error, "Could not reach the API");
+    if (health.error) notifyError(health.error, "Couldn't reach the API");
   }, [health.error]);
 
   useEffect(() => {
-    if (report.error) notifyError(report.error, "Could not load report data");
+    if (report.error) notifyError(report.error, "Couldn't load report data");
   }, [report.error]);
 
   const apiOk = (health.data as { status?: string } | undefined)?.status === "ok";
@@ -402,7 +402,7 @@ export function SettingsPage({ isAdmin = true, section }: { isAdmin?: boolean; s
   if (health.isError && !health.data) {
     return (
       <ErrorStateCard
-        title="Unable to load settings health context"
+        title="Couldn't load the health summary"
         error={String((health.error as Error | undefined)?.message || "Unknown error")}
         onRetry={() => {
           void health.refetch();

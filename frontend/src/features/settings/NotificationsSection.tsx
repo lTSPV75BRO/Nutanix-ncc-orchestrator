@@ -123,7 +123,7 @@ export function NotificationsSection() {
       notify.success("Notification settings saved.");
       void qc.invalidateQueries({ queryKey: ["settings", "notifications"] });
     },
-    onError: (e) => notifyError(e, "Could not save notification settings"),
+    onError: (e) => notifyError(e, "Couldn't save notification settings"),
   });
 
   const testMut = useMutation({
@@ -183,7 +183,7 @@ export function NotificationsSection() {
 
   if (query.isLoading) return <Card className="page-card" loading title="Notifications" />;
   if (query.isError) {
-    return <Alert type="error" showIcon title="Could not load notification settings" description={String(query.error)} />;
+    return <Alert type="error" showIcon title="Couldn't load notification settings" description={String(query.error)} />;
   }
 
   const channelCard = (
@@ -367,7 +367,7 @@ export function NotificationsSection() {
             </Typography.Text>
             <ToggleRow
               label="Run failures"
-              help="Also failed backups and failing self-heal checks."
+              help="Also failed backups and failing automatic repairs."
               checked={Boolean(state.events?.run_failure)}
               disabled={!masterOn}
               onChange={(v) => patchIn("events", { run_failure: v })}

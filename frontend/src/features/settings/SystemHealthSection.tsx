@@ -55,7 +55,7 @@ export function SystemHealthSection() {
   const isKubernetes = Boolean(
     (health.data as { runtime?: { kubernetes?: boolean } } | undefined)?.runtime?.kubernetes,
   );
-  // Settings → Features "Self-heal actions": off leaves this page report-only.
+  // Settings → Features "Automatic healing": off leaves this page report-only.
   const healOn = useFeatureFlags().data?.self_heal !== false;
   // Readiness cards heal in place only on hosts with self-heal on; otherwise
   // they link to the details.

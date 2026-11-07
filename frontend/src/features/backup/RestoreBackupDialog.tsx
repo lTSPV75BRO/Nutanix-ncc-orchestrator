@@ -113,7 +113,7 @@ export function RestoreBackupDialog({ open, onClose, requireSignIn }: Props) {
           title: "Backup restored",
           content:
             res.message ??
-            "Restart the stack (v2-stop, then v2-start) to load the restored deployment, then sign in with its accounts.",
+            "Restart the services (v2-stop, then v2-start) to load the restored deployment, then sign in with its accounts.",
         });
       }
     } catch (e) {
