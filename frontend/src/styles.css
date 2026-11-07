@@ -4,22 +4,16 @@
 
 :root {
   --app-font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-  /* Dark theme: near-black neutral charcoal with very subtle purple/cyan
-     glow accents in the corners. Replaces the previous navy palette so the
-     surface reads as truly dark (a la VS Code Dark+ / IntelliJ Darcula). */
-  --app-bg:
-    radial-gradient(1100px 650px at 8% -8%, rgba(139, 92, 246, 0.18), transparent 55%),
-    radial-gradient(900px 550px at 92% 0%, rgba(56, 189, 248, 0.12), transparent 50%),
-    linear-gradient(180deg, #0a0a0a 0%, #050505 100%);
+  --app-bg: #0a0a0a;
   --app-text: #ededed;
-  --card-bg: linear-gradient(180deg, rgba(20, 20, 20, 0.96) 0%, rgba(16, 16, 16, 0.96) 100%);
-  --card-border: rgba(139, 92, 246, 0.25);
-  --card-hover-border: rgba(139, 92, 246, 0.45);
+  --card-bg: #111111;
+  --card-border: #262626;
+  --card-hover-border: #3a3a3a;
   --layout-bg: #0a0a0a;
-  --header-bg: linear-gradient(90deg, rgba(15, 15, 15, 0.95), rgba(20, 20, 20, 0.93), rgba(15, 15, 15, 0.95));
-  --header-border: rgba(139, 92, 246, 0.22);
-  --pre-bg: linear-gradient(180deg, rgba(8, 8, 8, 0.97), rgba(16, 16, 16, 0.97));
-  --pre-border: rgba(139, 92, 246, 0.2);
+  --header-bg: #0a0a0a;
+  --header-border: #262626;
+  --pre-bg: #0d0d0d;
+  --pre-border: #262626;
   --table-head-bg: rgba(26, 26, 26, 0.96);
   --table-head-text: #ededed;
   --table-row-even: rgba(16, 16, 16, 0.6);
@@ -41,33 +35,22 @@
   --tag-bg: #1a1a1a;
   --tag-text: #d4d4d8;
   --tag-border: #262626;
-  --tag-checked-bg: #3b82f6;
+  --tag-checked-bg: #7c3aed;
   --table-meta-text: rgba(237, 237, 237, 0.72);
-  --link-color: #a5b4fc;
-  /* Solid primary so left/right edges of buttons match (no diagonal split). */
+  --link-color: #c4b5fd;
   --btn-primary-bg: #7c3aed;
   --btn-primary-bg-hover: #8b5cf6;
-  /* Dark-theme brand chrome — purple→cyan gradient on near-black surface. */
-  --brand-name-grad: linear-gradient(90deg, #c4b5fd, #67e8f9);
-  --brand-version-bg: linear-gradient(90deg, rgba(139, 92, 246, 0.22), rgba(56, 189, 248, 0.22));
-  --brand-version-border: rgba(139, 92, 246, 0.45);
+  --brand-name-grad: none;
+  --brand-version-bg: rgba(139, 92, 246, 0.16);
+  --brand-version-border: rgba(139, 92, 246, 0.4);
   --brand-version-color: #c4b5fd;
-  --brand-logo-bg: linear-gradient(135deg, rgba(139, 92, 246, 0.22), rgba(56, 189, 248, 0.22));
+  --brand-logo-bg: transparent;
   --brand-logo-inner: rgba(255, 255, 255, 0.04);
-  --brand-logo-glow: linear-gradient(135deg, rgba(139, 92, 246, 0.55), rgba(56, 189, 248, 0.55));
-  /* Header chrome (dark) */
-  --header-shadow: 0 1px 0 rgba(255, 255, 255, 0.04), 0 8px 24px rgba(0, 0, 0, 0.45);
-  --header-underglow: linear-gradient(
-    90deg,
-    transparent 0%,
-    color-mix(in srgb, #8b5cf6 35%, transparent) 25%,
-    color-mix(in srgb, #38bdf8 35%, transparent) 75%,
-    transparent 100%
-  );
-  /* Nav pill (dark) */
+  --brand-logo-glow: none;
+  --header-shadow: none;
+  --header-underglow: none;
   --nav-pill-active-color: #c4b5fd;
   --nav-pill-active-shadow: rgba(139, 92, 246, 0.28);
-  /* Header health pills — readable on dark */
   --health-ok-bg: rgba(34, 197, 94, 0.16);
   --health-ok-border: rgba(34, 197, 94, 0.45);
   --health-ok-color: #86efac;
@@ -84,13 +67,13 @@
   --anim-normal: 220ms;
   --anim-ease: cubic-bezier(0.2, 0, 0.2, 1);
   --dashboard-gap: 16px;
-  --card-radius: 10px;
+  --card-radius: 12px;
   --card-pad-y: 20px;
   --card-pad-x: 24px;
   --tile-title-size: 16px;
   --tile-title-weight: 600;
-  --stat-value-size: 22px;
-  --stat-value-weight: 700;
+  --stat-value-size: 24px;
+  --stat-value-weight: 600;
   --label-size: 12px;
   --label-weight: 500;
   --pill-font-size: 12px;
@@ -98,21 +81,15 @@
 }
 
 html[data-theme="light"] {
-  /* Light theme: clean neutral zinc palette (very faint cool tint) instead
-     of the previous slate-blue. Reads as a "professional product" surface
-     similar to GitHub / Linear / Vercel light themes. */
-  --app-bg:
-    radial-gradient(1200px 700px at 5% -10%, rgba(37, 99, 235, 0.05), transparent 55%),
-    radial-gradient(1000px 600px at 95% 0%, rgba(14, 165, 233, 0.04), transparent 52%),
-    linear-gradient(180deg, #fafafa 0%, #f4f4f5 100%);
+  --app-bg: #f4f4f5;
   --app-text: #18181b;
-  --card-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(252, 252, 253, 0.98) 100%);
+  --card-bg: #ffffff;
   --card-border: rgba(228, 228, 231, 1);
-  --card-hover-border: rgba(37, 99, 235, 0.35);
+  --card-hover-border: rgba(124, 58, 237, 0.35);
   --layout-bg: #f4f4f5;
-  --header-bg: linear-gradient(90deg, rgba(255, 255, 255, 0.98), rgba(250, 250, 250, 0.98), rgba(255, 255, 255, 0.98));
+  --header-bg: #ffffff;
   --header-border: rgba(228, 228, 231, 1);
-  --pre-bg: linear-gradient(180deg, rgba(250, 250, 250, 0.98), rgba(244, 244, 245, 0.98));
+  --pre-bg: #fafafa;
   --pre-border: rgba(228, 228, 231, 1);
   --table-head-bg: rgba(244, 244, 245, 0.98);
   --table-head-text: #18181b;
@@ -122,9 +99,9 @@ html[data-theme="light"] {
   --control-bg: rgba(255, 255, 255, 1);
   --control-border: #e4e4e7;
   --control-text: #18181b;
-  --menu-selected-bg: rgba(37, 99, 235, 0.1);
-  --menu-selected-border: #2563eb;
-  --menu-hover-text: #1d4ed8;
+  --menu-selected-bg: rgba(124, 58, 237, 0.1);
+  --menu-selected-border: #7c3aed;
+  --menu-hover-text: #6d28d9;
   --menu-text: #18181b;
   --subtitle-text: rgba(82, 82, 91, 0.95);
   --shadow-color: rgba(24, 24, 27, 0.08);
@@ -135,33 +112,22 @@ html[data-theme="light"] {
   --tag-bg: #fafafa;
   --tag-text: #27272a;
   --tag-border: #e4e4e7;
-  --tag-checked-bg: #2563eb;
+  --tag-checked-bg: #7c3aed;
   --table-meta-text: rgba(82, 82, 91, 0.95);
-  --link-color: #1d4ed8;
-  /* Solid primary so left/right edges of buttons match (no diagonal split). */
-  --btn-primary-bg: #2563eb;
-  --btn-primary-bg-hover: #1d4ed8;
-  /* Header brand */
-  --brand-name-grad: linear-gradient(90deg, #1d4ed8, #0e7490);
-  --brand-version-bg: linear-gradient(90deg, rgba(37, 99, 235, 0.12), rgba(14, 165, 233, 0.12));
-  --brand-version-border: rgba(37, 99, 235, 0.45);
-  --brand-version-color: #1d4ed8;
-  --brand-logo-bg: linear-gradient(135deg, rgba(37, 99, 235, 0.18), rgba(14, 165, 233, 0.18));
+  --link-color: #6d28d9;
+  --btn-primary-bg: #7c3aed;
+  --btn-primary-bg-hover: #6d28d9;
+  --brand-name-grad: none;
+  --brand-version-bg: rgba(124, 58, 237, 0.1);
+  --brand-version-border: rgba(124, 58, 237, 0.45);
+  --brand-version-color: #6d28d9;
+  --brand-logo-bg: transparent;
   --brand-logo-inner: rgba(15, 23, 42, 0.06);
-  --brand-logo-glow: linear-gradient(135deg, rgba(37, 99, 235, 0.45), rgba(14, 165, 233, 0.45));
-  /* Header chrome */
-  --header-shadow: 0 1px 0 rgba(15, 23, 42, 0.04), 0 6px 16px rgba(15, 23, 42, 0.08);
-  --header-underglow: linear-gradient(
-    90deg,
-    transparent 0%,
-    color-mix(in srgb, #2563eb 35%, transparent) 25%,
-    color-mix(in srgb, #0ea5e9 35%, transparent) 75%,
-    transparent 100%
-  );
-  /* Nav pill */
-  --nav-pill-active-color: #1d4ed8;
-  --nav-pill-active-shadow: rgba(37, 99, 235, 0.18);
-  /* Header health pill — readable colors on a light background */
+  --brand-logo-glow: none;
+  --header-shadow: none;
+  --header-underglow: none;
+  --nav-pill-active-color: #6d28d9;
+  --nav-pill-active-shadow: rgba(124, 58, 237, 0.18);
   --health-ok-bg: rgba(34, 197, 94, 0.12);
   --health-ok-border: rgba(22, 163, 74, 0.45);
   --health-ok-color: #166534;
@@ -177,30 +143,27 @@ html[data-theme="light"] {
 }
 
 html[data-theme="it-pro"] {
-  --app-bg:
-    radial-gradient(1200px 700px at 5% -10%, rgba(20, 184, 166, 0.16), transparent 55%),
-    radial-gradient(1000px 600px at 95% 0%, rgba(2, 132, 199, 0.16), transparent 52%),
-    linear-gradient(180deg, #0f172a 0%, #111827 100%);
+  --app-bg: #0b1220;
   --app-text: #dbeafe;
-  --card-bg: linear-gradient(180deg, rgba(21, 34, 56, 0.95) 0%, rgba(15, 23, 42, 0.95) 100%);
-  --card-border: rgba(20, 184, 166, 0.3);
-  --card-hover-border: rgba(14, 165, 233, 0.42);
+  --card-bg: #111b2e;
+  --card-border: #24324a;
+  --card-hover-border: #334155;
   --layout-bg: #0b1220;
-  --header-bg: linear-gradient(90deg, rgba(30, 41, 59, 0.93), rgba(21, 34, 56, 0.92), rgba(15, 23, 42, 0.93));
-  --header-border: rgba(20, 184, 166, 0.3);
-  --pre-bg: linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(11, 18, 32, 0.98));
+  --header-bg: #0b1220;
+  --header-border: #24324a;
+  --pre-bg: #0e1729;
   --pre-border: rgba(51, 65, 85, 0.5);
   --table-head-bg: rgba(34, 48, 71, 0.95);
   --table-head-text: #dbeafe;
   --table-row-even: rgba(15, 23, 42, 0.72);
   --table-row-odd: rgba(21, 34, 56, 0.62);
-  --table-row-hover: rgba(8, 145, 178, 0.28);
+  --table-row-hover: rgba(139, 92, 246, 0.14);
   --control-bg: rgba(15, 23, 42, 0.88);
   --control-border: #334155;
   --control-text: #dbeafe;
-  --menu-selected-bg: rgba(20, 184, 166, 0.22);
-  --menu-selected-border: #14b8a6;
-  --menu-hover-text: #5eead4;
+  --menu-selected-bg: rgba(139, 92, 246, 0.22);
+  --menu-selected-border: #8b5cf6;
+  --menu-hover-text: #c4b5fd;
   --menu-text: #dbeafe;
   --subtitle-text: rgba(191, 219, 254, 0.82);
   --shadow-color: rgba(15, 23, 42, 0.3);
@@ -211,28 +174,20 @@ html[data-theme="it-pro"] {
   --tag-bg: #0f172a;
   --tag-text: #dbeafe;
   --tag-border: #334155;
-  --tag-checked-bg: #0d9488;
+  --tag-checked-bg: #7c3aed;
   --table-meta-text: rgba(191, 219, 254, 0.9);
-  --link-color: #38bdf8;
-  /* Solid primary so left/right edges of buttons match (no diagonal split). */
-  --btn-primary-bg: #0d9488;
-  --btn-primary-bg-hover: #0f766e;
-  /* Header brand — teal/cyan accent */
-  --brand-name-grad: linear-gradient(90deg, #5eead4, #38bdf8);
-  --brand-version-bg: linear-gradient(90deg, rgba(20, 184, 166, 0.32), rgba(2, 132, 199, 0.32));
-  --brand-version-border: rgba(20, 184, 166, 0.55);
-  --brand-version-color: #5eead4;
-  --brand-logo-bg: linear-gradient(135deg, rgba(20, 184, 166, 0.22), rgba(2, 132, 199, 0.22));
-  --brand-logo-glow: linear-gradient(135deg, rgba(20, 184, 166, 0.55), rgba(56, 189, 248, 0.5));
-  --header-underglow: linear-gradient(
-    90deg,
-    transparent 0%,
-    color-mix(in srgb, #14b8a6 55%, transparent) 25%,
-    color-mix(in srgb, #38bdf8 55%, transparent) 75%,
-    transparent 100%
-  );
-  --nav-pill-active-shadow: rgba(20, 184, 166, 0.32);
-  --card-radius: 6px;
+  --link-color: #c4b5fd;
+  --btn-primary-bg: #7c3aed;
+  --btn-primary-bg-hover: #6d28d9;
+  --brand-name-grad: none;
+  --brand-version-bg: rgba(139, 92, 246, 0.16);
+  --brand-version-border: rgba(139, 92, 246, 0.55);
+  --brand-version-color: #c4b5fd;
+  --brand-logo-bg: transparent;
+  --brand-logo-glow: none;
+  --header-underglow: none;
+  --nav-pill-active-shadow: rgba(139, 92, 246, 0.32);
+  --card-radius: 12px;
 }
 
 body {
@@ -264,7 +219,7 @@ h3 {
 }
 
 .sub {
-  color: #9ca3af;
+  color: var(--ui-text-secondary);
   margin: 0 0 12px;
 }
 
@@ -455,17 +410,17 @@ pre {
 
 .metric-value {
   font-size: 20px;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .text-fail {
   color: #f87171;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .text-pass {
   color: #86efac;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .cluster-cards {
@@ -486,8 +441,8 @@ pre {
 }
 
 .cluster-score {
-  font-size: 22px;
-  font-weight: 700;
+  font-size: 20px;
+  font-weight: 600;
 }
 
 .table-wrap {
@@ -514,25 +469,38 @@ a {
   color: var(--link-color);
 }
 
+/* Every antd Card takes the Panel look (src/ui/Panel.tsx): flat surface,
+   1px border, 12px radius, no shadow or hover lift. */
 .ant-card {
-  background: var(--card-bg);
-  border-color: var(--card-border);
-  box-shadow: 0 8px 26px var(--shadow-color);
-  backdrop-filter: blur(3px);
-  transition:
-    border-color var(--anim-fast) var(--anim-ease),
-    box-shadow var(--anim-fast) var(--anim-ease),
-    transform var(--anim-fast) var(--anim-ease),
-    background var(--anim-normal) var(--anim-ease);
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-lg);
+  box-shadow: none;
 }
 
 .ant-card .ant-card-body {
-  padding: 16px !important;
+  padding: var(--ui-space-4) var(--ui-space-5) !important;
 }
 
-.ant-card:hover {
-  border-color: var(--card-hover-border);
-  transform: translateY(-1px);
+.ant-card .ant-card-head {
+  border-bottom: 1px solid var(--ui-border);
+  padding: 0 var(--ui-space-5);
+}
+
+.ant-card .ant-card-head-title,
+.ant-card .section-title.ant-typography,
+.ant-card .tile-title.ant-typography {
+  font-size: var(--ui-text-lg) !important;
+  font-weight: 600 !important;
+}
+
+.ant-card .ant-card {
+  border-radius: var(--ui-radius-md);
+  background: transparent;
+}
+
+.ant-card .ant-card .ant-card-body {
+  padding: var(--ui-space-3) var(--ui-space-4) !important;
 }
 
 .ant-layout {
@@ -550,11 +518,11 @@ a {
   justify-content: center;
   padding: 1px 7px;
   border-radius: 999px;
-  background: var(--brand-version-bg, linear-gradient(90deg, rgba(139, 92, 246, 0.32), rgba(56, 189, 248, 0.32)));
+  background: var(--brand-version-bg);
   border: 1px solid var(--brand-version-border, rgba(139, 92, 246, 0.45));
   color: var(--brand-version-color, #ddd6fe);
-  font-size: 10px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 600;
   letter-spacing: 0.6px;
 }
 
@@ -729,9 +697,9 @@ a {
 .header-trigger-btn.ant-btn.header-trigger-btn-running {
   /* The button class is `.ant-btn-default` here — drop the muted background
      applied above and replace with a primary-tinted one. */
-  background: color-mix(in srgb, var(--ant-color-primary, #1677ff) 12%, var(--control-bg));
-  border-color: color-mix(in srgb, var(--ant-color-primary, #1677ff) 60%, transparent);
-  color: var(--ant-color-primary-text-active, var(--ant-color-primary, #1677ff));
+  background: color-mix(in srgb, var(--ant-color-primary, var(--ui-accent)) 12%, var(--control-bg));
+  border-color: color-mix(in srgb, var(--ant-color-primary, var(--ui-accent)) 60%, transparent);
+  color: var(--ant-color-primary-text-active, var(--ant-color-primary, var(--ui-accent)));
   cursor: default;
   animation: header-trigger-pulse 1.6s ease-in-out infinite;
 }
@@ -741,19 +709,19 @@ a {
   /* Override Ant's disabled-state desaturation so the running tint stays
      visible — disabled merely indicates the button is non-interactive while
      the run is in flight. */
-  background: color-mix(in srgb, var(--ant-color-primary, #1677ff) 12%, var(--control-bg));
-  border-color: color-mix(in srgb, var(--ant-color-primary, #1677ff) 60%, transparent);
-  color: var(--ant-color-primary-text-active, var(--ant-color-primary, #1677ff));
+  background: color-mix(in srgb, var(--ant-color-primary, var(--ui-accent)) 12%, var(--control-bg));
+  border-color: color-mix(in srgb, var(--ant-color-primary, var(--ui-accent)) 60%, transparent);
+  color: var(--ant-color-primary-text-active, var(--ant-color-primary, var(--ui-accent)));
   opacity: 1;
 }
 
 @keyframes header-trigger-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ant-color-primary, #1677ff) 35%, transparent);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ant-color-primary, var(--ui-accent)) 35%, transparent);
   }
   50% {
-    box-shadow: 0 0 0 6px color-mix(in srgb, var(--ant-color-primary, #1677ff) 0%, transparent);
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--ant-color-primary, var(--ui-accent)) 0%, transparent);
   }
 }
 
@@ -784,7 +752,7 @@ a {
   margin: 0 !important;
   font-size: var(--tile-title-size) !important;
   font-weight: var(--tile-title-weight) !important;
-  letter-spacing: 0.1px;
+  
   line-height: 1.3;
 }
 
@@ -909,7 +877,7 @@ a {
   margin-bottom: 12px !important;
   font-size: 20px !important;
   font-weight: 600 !important;
-  letter-spacing: 0.1px;
+  
 }
 
 .section-subtitle.ant-typography {
@@ -976,7 +944,7 @@ a {
   min-width: 20px;
   padding: 0 6px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   line-height: 18px;
   text-align: center;
@@ -1041,7 +1009,7 @@ a {
 .config-group-title.ant-typography {
   display: block;
   margin-bottom: 12px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -1076,7 +1044,7 @@ a {
 
 .config-field-label .ant-tag {
   margin: 0;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 18px;
 }
 
@@ -1178,13 +1146,13 @@ textarea.config-mono {
   border-radius: 10px;
   background: color-mix(in srgb, var(--menu-selected-border) 18%, transparent);
   color: var(--menu-selected-border);
-  font-size: 18px;
+  font-size: 16px;
   flex-shrink: 0;
 }
 
 .config-field-key {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px;
+  font-size: 12px;
   padding: 1px 6px;
   border-radius: 4px;
   background: color-mix(in srgb, var(--control-bg) 80%, transparent);
@@ -1194,11 +1162,11 @@ textarea.config-mono {
 
 .section-header-icon {
   color: var(--menu-selected-border);
-  font-size: 18px;
+  font-size: 16px;
 }
 
 .section-header-icon.lg {
-  font-size: 22px;
+  font-size: 20px;
 }
 
 .artifact-row {
@@ -1258,7 +1226,7 @@ textarea.config-mono {
   align-items: center;
   gap: 8px;
   font-weight: 500;
-  letter-spacing: 0.1px;
+  
   line-height: 1;
 }
 
@@ -1311,7 +1279,7 @@ textarea.config-mono {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 28px;
+  font-size: 30px;
   flex-shrink: 0;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
 }
@@ -1339,8 +1307,6 @@ textarea.config-mono {
 .ant-btn-primary:focus {
   background: var(--btn-primary-bg-hover) !important;
   border-color: transparent !important;
-  transform: translateY(-1px);
-  box-shadow: 0 4px 14px var(--shadow-color);
 }
 
 .ant-tag-checkable {
@@ -1360,8 +1326,8 @@ textarea.config-mono {
 }
 
 .ant-checkbox-checked .ant-checkbox-inner {
-  background-color: #8b5cf6;
-  border-color: #8b5cf6;
+  background-color: var(--btn-primary-bg);
+  border-color: var(--btn-primary-bg);
 }
 
 .ant-select-selector,
@@ -1488,7 +1454,7 @@ textarea.config-mono {
   border-radius: 999px;
   background: color-mix(in srgb, var(--app-text) 10%, transparent);
   font-variant-numeric: tabular-nums;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .alerts-handling-chip.is-empty:not(.is-selected) {
@@ -1730,7 +1696,7 @@ html.alerts-expanded .alerts-pagination {
 }
 
 .pc-alert-metric-label {
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 0.4px;
   text-transform: uppercase;
   color: var(--table-meta-text, #8c8c8c);
@@ -1879,7 +1845,7 @@ html[data-theme="light"] .alerts-toolbar {
   border-radius: 999px;
   padding-inline: 8px !important;
   font-size: var(--pill-font-size);
-  font-weight: 700;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
@@ -3481,7 +3447,7 @@ label.ui-field-inline {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--ui-text-tertiary);
 }
 
@@ -3660,7 +3626,7 @@ label.ui-field-inline {
 }
 
 .setup-banner-icon {
-  font-size: 18px;
+  font-size: 16px;
   color: var(--ui-accent);
 }
 
@@ -3810,7 +3776,7 @@ label.ui-field-inline {
 }
 
 .auth-brand-name {
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 600;
   letter-spacing: -0.01em;
 }
@@ -3824,7 +3790,7 @@ label.ui-field-inline {
   margin: 0;
   font-size: clamp(30px, 2.8vw, 40px);
   line-height: 1.15;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: -0.02em;
   color: var(--app-text);
 }
@@ -3871,7 +3837,7 @@ label.ui-field-inline {
 .auth-feature-title {
   display: block;
   margin-bottom: 2px;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
 }
 
@@ -4092,7 +4058,7 @@ html[data-theme="light"] .site-intro {
   display: block;
   text-align: center;
   font-size: clamp(40px, 9vw, 112px);
-  font-weight: 800;
+  font-weight: 600;
   letter-spacing: -0.03em;
 }
 
@@ -4193,7 +4159,7 @@ html[data-theme="light"] .site-intro-skip {
 }
 
 .schedule-status-icon {
-  font-size: 28px;
+  font-size: 30px;
   line-height: 1;
   margin-top: 2px;
   color: var(--subtitle-text);
@@ -4228,7 +4194,7 @@ html[data-theme="light"] .site-intro-skip {
 }
 
 .schedule-stat-value {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   margin-top: 2px;
 }
@@ -4465,7 +4431,7 @@ html[data-theme="light"] .site-intro-skip {
   width: 40px;
   height: 40px;
   border-radius: var(--ui-radius-md);
-  font-size: 18px;
+  font-size: 16px;
   color: var(--ui-text-secondary);
   background: var(--ui-surface-hover);
   flex: none;
@@ -4694,7 +4660,7 @@ html[data-theme="light"] .site-intro-skip {
    typographic scale, and states as dot + label instead of mixed tags/text. */
 .alerts-table .ant-table-thead > tr > th,
 .alerts-table .ant-table-thead > tr > td {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -4738,7 +4704,7 @@ html[data-theme="light"] .site-intro-skip {
 
 .alerts-title-flags .ant-tag {
   margin: 0;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 18px;
   padding-inline: 6px;
 }
@@ -4998,4 +4964,59 @@ html[data-theme="it-pro"] .alerts-status-returned {
     animation: none;
     opacity: 0.6;
   }
+}
+
+/* ---- Component bridge: antd parts used by the older sections look the same
+   as the src/ui components everywhere. */
+.ant-alert {
+  border-radius: var(--ui-radius-md);
+  font-size: var(--ui-text-md);
+}
+
+.ant-alert .ant-alert-title,
+.ant-alert .ant-alert-message {
+  font-weight: 500;
+}
+
+.ant-alert-with-description .ant-alert-title,
+.ant-alert-with-description .ant-alert-message {
+  font-size: var(--ui-text-md);
+  margin-bottom: 2px;
+}
+
+.ant-alert-with-description .ant-alert-icon {
+  font-size: 16px;
+}
+
+.ant-tag {
+  border-radius: var(--ui-radius-sm);
+  font-size: var(--ui-text-xs);
+  line-height: 20px;
+  margin-inline-end: var(--ui-space-1);
+}
+
+.ant-typography h1,
+h1.ant-typography,
+.ant-typography h2,
+h2.ant-typography,
+.ant-typography h3,
+h3.ant-typography,
+.ant-typography h4,
+h4.ant-typography,
+.ant-typography h5,
+h5.ant-typography {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.ant-tabs-tab {
+  font-size: var(--ui-text-md);
+}
+
+.ant-statistic-content {
+  font-weight: 600;
+}
+
+.ant-empty-description {
+  color: var(--ui-text-secondary);
 }
