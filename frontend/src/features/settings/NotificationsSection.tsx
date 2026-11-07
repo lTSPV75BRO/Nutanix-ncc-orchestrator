@@ -20,9 +20,7 @@ import {
 } from "antd";
 import {
   ApiOutlined,
-  BellOutlined,
   CheckCircleFilled,
-  ClockCircleOutlined,
   CloseCircleFilled,
   DeleteOutlined,
   MailOutlined,
@@ -36,7 +34,7 @@ import { api } from "../../api/client";
 import type { NotificationState } from "../../api/types";
 import { notify, notifyError } from "../../notify";
 import { formatDateTime, relativeTime } from "../../utils/datetime";
-import { SaveBar } from "../../ui";
+import { SaveBar, StatusBadge } from "../../ui";
 import {
   alertSummary,
   channelErrors,
@@ -77,15 +75,6 @@ const toTime = (hhmm?: string): Dayjs | null => {
 };
 // UTC RFC 3339 without milliseconds, as the server stores and matches it.
 const toRFC3339 = (d: Dayjs) => d.second(0).millisecond(0).toISOString().replace(/\.\d{3}Z$/, "Z");
-
-function SectionTitle({ icon, children }: { icon: ReactNode; children: ReactNode }) {
-  return (
-    <Space size={8}>
-      {icon}
-      {children}
-    </Space>
-  );
-}
 
 /** A toggle row: label and help on the left, the switch on the right. */
 function ToggleRow({
@@ -268,44 +257,45 @@ export function NotificationsSection() {
 
   return (
     <Space orientation="vertical" size={16} style={{ width: "100%" }} className="notif-page">
-      <Card className="page-card">
-        <div className="notif-summary">
-          <span className={`notif-summary-icon${masterOn && channelsOn ? " is-on" : ""}`} aria-hidden="true">
-            <BellOutlined />
+      <div className="overview-runline" aria-label="Alert status">
+        <div className="overview-runline-text">
+          <StatusBadge tone={!masterOn ? "neutral" : channelsOn === 0 ? "warn" : "ok"}>
+            {!masterOn ? "Paused" : channelsOn === 0 ? "No channel" : "Sending"}
+          </StatusBadge>
+          <span>
+            {!masterOn
+              ? "Nothing is sent from this server. Run reports from the runner still go out."
+              : channelsOn === 0
+                ? "Turn on a channel below to start sending."
+                : `Sending to ${channelsOn} channel${channelsOn === 1 ? "" : "s"}`}
           </span>
-          <div className="notif-summary-text">
-            <Typography.Title level={4} className="notif-summary-title">
-              {!masterOn ? "Alerts are paused" : channelsOn === 0 ? "No channel is set up yet" : `Sending to ${channelsOn} channel${channelsOn === 1 ? "" : "s"}`}
-            </Typography.Title>
+          {masterOn && channelsOn > 0 ? (
             <Typography.Text type="secondary">
-              {masterOn
-                ? `${alertSummary(state)}${state.digest?.enabled ? ` · ${digestLabel(state.digest.every).toLowerCase()} health digest` : ""}${state.quiet?.enabled ? ` · quiet ${state.quiet.start}–${state.quiet.end}` : ""}`
-                : "Nothing is sent from this server until you turn alerts back on. Run reports from the runner still go out."}
+              {`${alertSummary(state)}${state.digest?.enabled ? ` · ${digestLabel(state.digest.every).toLowerCase()} digest` : ""}${state.quiet?.enabled ? ` · quiet ${state.quiet.start}–${state.quiet.end}` : ""}`}
             </Typography.Text>
-          </div>
-          <Space wrap className="notif-summary-actions">
-            {testButton("all", "Test all channels")}
-            <Switch
-              checked={masterOn}
-              onChange={(v) => patch({ enabled: v })}
-              checkedChildren="On"
-              unCheckedChildren="Paused"
-              aria-label="Send alerts"
-            />
-          </Space>
+          ) : null}
         </div>
-        {activeWindow ? (
-          <Alert
-            className="notif-summary-alert"
-            type="warning"
-            showIcon
-            title={`Muted by a maintenance window until ${formatDateTime(activeWindow.end)}`}
-            description={activeWindow.note || undefined}
+        <div className="overview-runline-actions">
+          {testButton("all", "Test all channels")}
+          <Switch
+            checked={masterOn}
+            onChange={(v) => patch({ enabled: v })}
+            checkedChildren="On"
+            unCheckedChildren="Paused"
+            aria-label="Send alerts"
           />
-        ) : null}
-      </Card>
+        </div>
+      </div>
+      {activeWindow ? (
+        <Alert
+          type="warning"
+          showIcon
+          title={`Muted by a maintenance window until ${formatDateTime(activeWindow.end)}`}
+          description={activeWindow.note || undefined}
+        />
+      ) : null}
 
-      <Card className="page-card" title={<SectionTitle icon={<SendOutlined />}>Where to send</SectionTitle>}>
+      <Card className="page-card" title="Where to send">
         <div className="notif-channels">
           {channelCard("email", "Email", <MailOutlined />, "Through your SMTP server", (e) => (
             <div className="notif-grid">
@@ -368,7 +358,7 @@ export function NotificationsSection() {
         </div>
       </Card>
 
-      <Card className="page-card" title={<SectionTitle icon={<BellOutlined />}>What to send</SectionTitle>}>
+      <Card className="page-card" title="What to send">
         <div className="notif-groups">
           <div className="notif-group">
             <Typography.Title level={5} className="notif-group-title">Alerts</Typography.Title>
@@ -452,7 +442,7 @@ export function NotificationsSection() {
         </div>
       </Card>
 
-      <Card className="page-card" title={<SectionTitle icon={<ClockCircleOutlined />}>Quiet times</SectionTitle>}>
+      <Card className="page-card" title="Quiet times">
         <div className="notif-groups">
           <div className="notif-group">
             <Typography.Title level={5} className="notif-group-title">Quiet hours</Typography.Title>

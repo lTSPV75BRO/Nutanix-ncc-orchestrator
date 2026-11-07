@@ -73,12 +73,10 @@ export function UpgradeProgress() {
   if (!job) {
     if (!supervised) return null;
     return (
-      <Alert
-        type="info"
-        showIcon
-        title="Upgrades are checked and can roll back on their own"
-        description="The supervisor installs the update, restarts the API and then the web UI, and checks that each comes back healthy. If one does not, it puts the previous version back automatically."
-      />
+      <Typography.Paragraph type="secondary" className="upgrade-note">
+        <Typography.Text strong>Upgrades are checked and can roll back on their own</Typography.Text>
+        {". The supervisor restarts the API, then the web UI, and checks each one. If one doesn't come back healthy, the previous version goes back in."}
+      </Typography.Paragraph>
     );
   }
   const tag = PHASE_TAG[job.phase] ?? PHASE_TAG.failed;

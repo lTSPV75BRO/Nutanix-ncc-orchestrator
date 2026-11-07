@@ -40,7 +40,7 @@ function fmtExpiry(s?: string): ReactNode {
 }
 
 function roleColor(role: string): string {
-  return role === "admin" ? "gold" : role === "operator" ? "blue" : "default";
+  return role === "admin" ? "purple" : "default";
 }
 
 /**

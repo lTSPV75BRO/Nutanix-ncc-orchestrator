@@ -5077,3 +5077,8 @@ h5.ant-typography {
 .feature-flag-text.ant-typography {
   margin: 2px 0 0;
 }
+
+/* Audit log: action names in the table body size. */
+.audit-action {
+  font-size: var(--ui-text-xs);
+}

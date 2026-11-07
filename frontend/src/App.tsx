@@ -437,7 +437,7 @@ function HeaderUserMenu({
   onAbout: () => void;
   canSeeSetup?: boolean;
 }) {
-  const roleColor = role === "admin" ? "gold" : role === "operator" ? "blue" : "default";
+  const roleColor = role === "admin" ? "purple" : "default";
   const items = [
     {
       key: "who",

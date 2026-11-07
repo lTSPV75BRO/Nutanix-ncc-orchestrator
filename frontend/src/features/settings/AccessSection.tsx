@@ -60,6 +60,7 @@ import type {
 } from "../../api/types";
 import { notify, notifyError } from "../../notify";
 import { formatDateTime } from "../../utils/datetime";
+import { KeyValueList, StatusBadge } from "../../ui";
 
 const ROLE_OPTIONS = [
   { value: "admin", label: "admin — full access" },
@@ -68,7 +69,7 @@ const ROLE_OPTIONS = [
 ];
 
 function roleColor(role?: string): string {
-  return role === "admin" ? "gold" : role === "operator" ? "blue" : "default";
+  return role === "admin" ? "purple" : "default";
 }
 
 // The built-in "admin" account's role is fixed and it cannot be deleted; the UI
@@ -3093,11 +3094,7 @@ export function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }
   return (
     <Card
       className="page-card"
-      title={
-        <Space>
-          <CloudDownloadOutlined /> Software updates
-        </Space>
-      }
+      title="Software updates"
       extra={
         <Button
           icon={<ReloadOutlined />}
@@ -3122,40 +3119,49 @@ export function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }
         <Alert
           type="info"
           showIcon
-          title="Container image rollout required"
-          description="In Kubernetes mode, update the immutable API/UI/runner image tags through Helm or Kustomize and let the Deployments roll out. In-place binary replacement is disabled."
+          title="Update with Helm or Kustomize"
+          description="On Kubernetes, change the image tags and let the Deployments roll out. Updating in place is turned off."
         />
       ) : null}
       <Typography.Paragraph type="secondary">
-        Check for a newer release and apply it in place. The update creates a backup first, installs
-        the latest orchestrator, API, UI, and frontend components (verified against the published
-        release checksums), then restarts the stack automatically to activate the new version.
+        An update backs up first, checks the release checksums, installs every component together and
+        restarts the services.
       </Typography.Paragraph>
 
       <Space orientation="vertical" size={12} style={{ width: "100%" }}>
-        <Space wrap>
-          <Typography.Text type="secondary">Current version:</Typography.Text>
-          <Tag>{status?.current_version ? `v${status.current_version}` : "unknown"}</Tag>
-          {status?.latest_version ? (
-            <>
-              <Typography.Text type="secondary">Latest:</Typography.Text>
-              <Tag color={updateAvailable ? "gold" : "green"}>v{status.latest_version}</Tag>
-            </>
-          ) : null}
-        </Space>
+        <KeyValueList
+          items={[
+            { label: "Installed", value: status?.current_version ? `v${status.current_version}` : "Unknown" },
+            ...(status?.latest_version
+              ? [
+                  {
+                    label: "Latest",
+                    value: updateAvailable ? (
+                      <StatusBadge tone="warn">{`v${status.latest_version} available`}</StatusBadge>
+                    ) : (
+                      `v${status.latest_version}`
+                    ),
+                  },
+                ]
+              : []),
+            ...(components
+              ? (["orchestrator", "api-server", "ui-server"] as const).map((name) => {
+                  const component = components[name];
+                  return {
+                    label: name,
+                    value:
+                      component.status === "ok" ? (
+                        `v${component.version}`
+                      ) : (
+                        <StatusBadge tone="fail">Not found</StatusBadge>
+                      ),
+                  };
+                })
+              : []),
+          ]}
+        />
         {components ? (
           <>
-            <Typography.Text strong>Installed components</Typography.Text>
-            <Space wrap size={[8, 8]}>
-              {(["orchestrator", "api-server", "ui-server"] as const).map((name) => {
-                const component = components[name];
-                return (
-                  <Tag key={name} color={component.status === "ok" ? "green" : "red"}>
-                    {name}: {component.status === "ok" ? `v${component.version}` : "Component not found"}
-                  </Tag>
-                );
-              })}
-            </Space>
             {!components.consistent ? (
               <Alert
                 type="warning"
@@ -3163,8 +3169,8 @@ export function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }
                 title="Installed components are out of sync"
                 description={
                   isKubernetes
-                    ? "The orchestrator, API, and UI image tags differ. Roll out matching tags with Helm or Kustomize so every replica runs the same stack version."
-                    : "The orchestrator, API server, and UI server must be updated together. Apply the available stack update to restore consistency."
+                    ? "The image tags differ. Roll out matching tags with Helm or Kustomize."
+                    : "The orchestrator, API server and UI server must run the same version. Apply the update to bring them in line."
                 }
               />
             ) : null}
@@ -3176,16 +3182,16 @@ export function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }
             type="info"
             showIcon
             title="In-app updates are not available"
-            description="Updating from the UI requires a compiled ncc-orchestrator binary, which is not present in this development environment."
+            description="This build has no ncc-orchestrator binary to replace. Update from the release package instead."
           />
         ) : null}
 
         {supported && !inProgress && !restarting && status?.check_error ? (
-          <Alert type="warning" showIcon title="Unable to check for updates" description={status.check_error} />
+          <Alert type="warning" showIcon title="Couldn't check for updates" description={status.check_error} />
         ) : null}
 
         {supported && !inProgress && !restarting && status?.update_available === false ? (
-          <Alert type="success" showIcon title="This installation is running the latest available release." />
+          <Alert type="success" showIcon title="You're on the latest release." />
         ) : null}
 
         {!isKubernetes && supported && !inProgress && !restarting && updateAvailable ? (
@@ -3193,7 +3199,7 @@ export function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }
             type="warning"
             showIcon
             title={`Update available: v${status?.latest_version}`}
-            description="Select “Back up and update” to create a backup, install the update, and restart the stack."
+            description="Back up and update installs it and restarts the services."
             action={
               <Button type="primary" icon={<CloudDownloadOutlined />} onClick={confirmApply}>
                 Back up and update
@@ -3209,14 +3215,14 @@ export function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }
             title={`Update in progress — ${UPDATE_PHASE_LABEL[restarting ? "restarting" : phase] ?? phase}`}
             description={
               restarting
-                ? "The stack is restarting to load the new version. This page will reconnect automatically."
+                ? "The services are restarting. This page reconnects on its own."
                 : (job?.message ?? "Processing…")
             }
           />
         ) : null}
 
         {!inProgress && !restarting && phase === "error" && job?.error ? (
-          <Alert type="error" showIcon title="Last update failed" description={job.error} />
+          <Alert type="error" showIcon title="The last update failed" description={job.error} />
         ) : null}
 
         {!isKubernetes ? <UpgradeProgress /> : null}

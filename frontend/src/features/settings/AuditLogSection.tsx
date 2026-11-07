@@ -17,12 +17,9 @@ import {
   Typography,
 } from "antd";
 import {
-  CheckCircleOutlined,
-  CloseCircleOutlined,
   CopyOutlined,
   DownloadOutlined,
   FileExcelOutlined,
-  FileTextOutlined,
   ReloadOutlined,
   SearchOutlined,
 } from "@ant-design/icons";
@@ -33,6 +30,7 @@ import { api, type AuditQuery } from "../../api/client";
 import type { AuditLogEntry } from "../../api/types";
 import { notify } from "../../notify";
 import { formatDateTime, relativeTime } from "../../utils/datetime";
+import { StatusBadge } from "../../ui";
 
 type Props = {
   onError: (e: unknown) => void;
@@ -67,14 +65,6 @@ const ACTION_PRESETS: { label: string; value: string }[] = [
   { label: "Runs (preflight + trigger + cancel)", value: "runs." },
   { label: "Health diagnostics / self-heal", value: "health.diagnostics." },
 ];
-
-function actionTone(action: string): "blue" | "green" | "orange" | "purple" | "default" {
-  if (action.startsWith("runs.")) return "blue";
-  if (action.startsWith("settings.")) return "green";
-  if (action.startsWith("schedule.")) return "orange";
-  if (action.startsWith("auth.")) return "purple";
-  return "default";
-}
 
 type AuditRow = AuditLogEntry & { __idx: number };
 
@@ -172,7 +162,7 @@ export function AuditLogSection({ onError }: Props) {
       {
         title: "Action",
         key: "action",
-        render: (_, row) => <Tag color={actionTone(row.action)}>{row.action}</Tag>,
+        render: (_, row) => <Typography.Text className="mono audit-action">{row.action}</Typography.Text>,
       },
       {
         title: "Result",
@@ -180,15 +170,7 @@ export function AuditLogSection({ onError }: Props) {
         width: 110,
         align: "center",
         render: (_, row) =>
-          row.success ? (
-            <Tag icon={<CheckCircleOutlined />} color="success">
-              success
-            </Tag>
-          ) : (
-            <Tag icon={<CloseCircleOutlined />} color="error">
-              failed
-            </Tag>
-          ),
+          row.success ? <StatusBadge tone="ok">Succeeded</StatusBadge> : <StatusBadge tone="fail">Failed</StatusBadge>,
       },
       {
         title: "User",
@@ -202,7 +184,7 @@ export function AuditLogSection({ onError }: Props) {
             <Space size={4} wrap>
               <Typography.Text style={{ fontSize: 12 }}>{user}</Typography.Text>
               {role ? (
-                <Tag color={role === "admin" ? "gold" : role === "operator" ? "blue" : "default"}>{role}</Tag>
+                <Tag color={role === "admin" ? "purple" : "default"}>{role}</Tag>
               ) : null}
             </Space>
           );
@@ -285,19 +267,10 @@ export function AuditLogSection({ onError }: Props) {
 
   return (
     <Card className="page-card">
-      <Space size={12} align="center" style={{ marginBottom: 8 }}>
-        <span className="config-section-icon">
-          <FileTextOutlined />
-        </span>
-        <div>
-          <Typography.Title level={4} style={{ margin: 0 }}>
-            Recorded changes
-          </Typography.Title>
-          <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-            Persisted JSONL trail of config saves, schedule changes, and run triggers. Useful for change reviews and support tickets.
-          </Typography.Text>
-        </div>
-      </Space>
+      <div className="config-section-head">
+        <h3 className="ui-panel-title">Recorded changes</h3>
+        <p className="ui-panel-desc">Config saves, schedule changes, sign-ins and run triggers, newest first.</p>
+      </div>
 
       <Space size={[8, 8]} wrap style={{ marginTop: 12, width: "100%" }}>
         <Select
@@ -372,9 +345,9 @@ export function AuditLogSection({ onError }: Props) {
       </Space>
 
       <Space size={[8, 8]} wrap style={{ marginTop: 12 }}>
-        <Tag color="processing">{filtered.length} shown</Tag>
-        <Tag color="success">{successCount} success</Tag>
-        <Tag color="error">{failureCount} failed</Tag>
+        <Tag>{filtered.length} shown</Tag>
+        <Tag>{successCount} succeeded</Tag>
+        <Tag color={failureCount > 0 ? "error" : undefined}>{failureCount} failed</Tag>
         {data?.path ? (
           <Tooltip title={data.path}>
             <Tag>

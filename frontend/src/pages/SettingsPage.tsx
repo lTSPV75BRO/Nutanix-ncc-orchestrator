@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect } from "react";
 import type { ReactNode } from "react";
 import { Navigate, useSearchParams } from "react-router";
-import { Button, Card, Space, Tabs, Tooltip, Typography } from "antd";
+import { Button, Space, Tabs, Tooltip } from "antd";
 import {
   ApiOutlined,
   AuditOutlined,
@@ -212,15 +212,7 @@ function DeveloperTab({ onError }: { onError: (e: unknown) => void }) {
   }, [requestedDevTab, section, searchParams, setSearchParams]);
 
   return (
-    <Card className="page-card">
-      <Typography.Title level={4} className="section-title">
-        Advanced
-      </Typography.Title>
-      <Typography.Text type="secondary" className="section-subtitle">
-        Inspect the API, saved reports, and run files.
-      </Typography.Text>
       <Tabs
-        style={{ marginTop: 12 }}
         activeKey={activeSection}
         onChange={(nextSection) => {
           setSection(nextSection);
@@ -229,12 +221,11 @@ function DeveloperTab({ onError }: { onError: (e: unknown) => void }) {
           setSearchParams(next, { replace: true });
         }}
         items={[
-          { key: "api", label: "API Explorer", children: lazySection(<ApiExplorerSection onError={onError} />) },
+          { key: "api", label: "API explorer", children: lazySection(<ApiExplorerSection onError={onError} />) },
           { key: "json", label: "Saved reports", children: lazySection(<JsonOutputsSection onError={onError} />) },
           { key: "raw", label: "Run files", children: lazySection(<RawOutputsSection onError={onError} />) },
         ]}
       />
-    </Card>
   );
 }
 
