@@ -13,7 +13,7 @@ export type JumpItem = {
 };
 
 export const JUMP_ITEMS: JumpItem[] = [
-  { id: "dashboard", title: "Overview", keywords: "home dashboard summary health", to: "/", hint: "Overview" },
+  { id: "dashboard", title: "Overview", keywords: "home dashboard summary health", to: "/overview", hint: "Overview" },
   { id: "findings", title: "Findings", keywords: "alerts findings ncc pc fail warn acknowledge", to: "/findings", hint: "Findings" },
   { id: "insights", title: "Insights", keywords: "kb compare trends knowledge", to: "/insights", hint: "Reports" },
   { id: "tls", title: "HTTPS / TLS", keywords: "tls cert certificate https ssl trust fingerprint", to: sectionHref("access", { focus: "tls" }), hint: "Access" },

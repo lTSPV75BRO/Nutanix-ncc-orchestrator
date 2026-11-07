@@ -45,7 +45,7 @@ export class PageErrorBoundary extends Component<{ children: ReactNode }, State>
                 <Button type="primary" onClick={() => window.location.reload()}>
                   Reload
                 </Button>
-                <Button href="/">Go to Overview</Button>
+                <Button href="/overview">Go to Overview</Button>
               </>
             }
           />

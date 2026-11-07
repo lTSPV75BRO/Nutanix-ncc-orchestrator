@@ -20,10 +20,10 @@ export function NotFoundPage() {
         }
         actions={
           <>
-            <Link to="/">
+            <Link to="/overview">
               <Button type="primary">Go to Overview</Button>
             </Link>
-            <Button onClick={() => (canGoBack ? navigate(-1) : navigate("/"))}>Go back</Button>
+            <Button onClick={() => (canGoBack ? navigate(-1) : navigate("/overview"))}>Go back</Button>
           </>
         }
       />

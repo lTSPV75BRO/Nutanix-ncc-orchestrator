@@ -70,9 +70,12 @@ export const SECTIONS: SectionDef[] = [
   { key: "developer", path: "/system/developer", label: "Developer", title: "Developer tools", description: "The API explorer, saved reports and raw run files.", icon: <CodeOutlined />, group: "system", access: "admin" },
 ];
 
+/** Where signed-in people land; `/` redirects here. */
+export const OVERVIEW_PATH = "/overview";
+
 /** Top-level pages that are not Settings sections. */
 export const PAGES = [
-  { path: "/", label: "Overview", title: "Overview", icon: <DashboardOutlined /> },
+  { path: OVERVIEW_PATH, label: "Overview", title: "Overview", icon: <DashboardOutlined /> },
   { path: "/findings", label: "Findings", title: "Findings", icon: <AlertOutlined /> },
   { path: "/insights", label: "Insights", title: "Insights", icon: <BarChartOutlined /> },
 ] as const;
@@ -182,7 +185,7 @@ export function settingsLanding(v: Viewer): string {
     const s = sectionByKey(key);
     if (s && canOpenSection(s, v)) return s.path;
   }
-  return "/";
+  return OVERVIEW_PATH;
 }
 
 /**

@@ -3,7 +3,7 @@ import { Button, Drawer, Grid, Menu, type MenuProps } from "antd";
 import { MenuFoldOutlined, MenuOutlined, MenuUnfoldOutlined } from "@ant-design/icons";
 import { Link, useLocation, useNavigate } from "react-router";
 import { useLocalStorageState } from "../hooks/useLocalStorageState";
-import { PAGES, SECTIONS, canOpenSection, pageTitle, type Viewer } from "../navigation";
+import { OVERVIEW_PATH, PAGES, SECTIONS, canOpenSection, pageTitle, type Viewer } from "../navigation";
 import { PageErrorBoundary } from "./PageErrorBoundary";
 
 type MenuItem = Required<MenuProps>["items"][number];
@@ -40,7 +40,7 @@ function selectedKey(pathname: string): string {
  */
 function Brand({ brand, onNavigate }: { brand?: ReactNode; onNavigate?: () => void }) {
   return (
-    <Link to="/" className="ui-sidebar-brand" aria-label="NCC Orchestrator home" onClick={onNavigate}>
+    <Link to={OVERVIEW_PATH} className="ui-sidebar-brand" aria-label="NCC Orchestrator home" onClick={onNavigate}>
       <img src="/logo.svg" alt="" />
       <span className="ui-sidebar-brand-text">
         <span className="ui-sidebar-brand-name">NCC Orchestrator</span>

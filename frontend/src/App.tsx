@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ComponentProps } from "react";
 import { useRunsActive, useRunsActivePoller } from "./hooks/useRunsActive";
 import {
   BgColorsOutlined,
@@ -23,6 +23,7 @@ import { AboutDialog } from "./components/AboutDialog";
 import {
   canOpenSection,
   findingsRedirect,
+  OVERVIEW_PATH,
   legacySettingsTarget,
   pageTitle,
   sectionByPath,
@@ -59,16 +60,22 @@ function SectionRoute({ viewer }: { viewer: Viewer }) {
   const s = sectionByPath(location.pathname);
   if (!s || !canOpenSection(s, viewer)) {
     const landing = settingsLanding(viewer);
-    return <Navigate to={landing === location.pathname ? "/" : landing} replace />;
+    return <Navigate to={landing === location.pathname ? OVERVIEW_PATH : landing} replace />;
   }
   return <SettingsPage key={s.key} isAdmin={viewer.isAdmin} section={s.key} />;
 }
 
-/** `/`, except that old shared Dashboard links (`/?sev=FAIL…`) open Findings. */
-function OverviewRoute() {
+/** `/` goes to the Overview, except that old shared Dashboard links (`/?sev=FAIL…`) open Findings. */
+function RootRoute() {
   const location = useLocation();
-  const to = findingsRedirect(location.search);
-  return to ? <Navigate to={to} replace /> : <OverviewPage />;
+  return <Navigate to={findingsRedirect(location.search) ?? OVERVIEW_PATH} replace />;
+}
+
+/** Signed out: `/` becomes `/login`; deep links keep their address so sign-in returns to them. */
+function LoginRoute(props: ComponentProps<typeof LoginPage>) {
+  const location = useLocation();
+  if (location.pathname === "/") return <Navigate to={`/login${location.search}`} replace />;
+  return <LoginPage {...props} />;
 }
 
 /** Old `/settings?tab=X` links (bookmarks, docs) keep working. */
@@ -647,7 +654,7 @@ export default function App() {
   // cannot open the dashboard.
   if ((loginEnabled || meQuery.isError || forceLogin) && !authenticated) {
     return (
-      <LoginPage
+      <LoginRoute
         localEnabled={me?.local_enabled ?? true}
         ldapEnabled={Boolean(me?.ldap_enabled)}
         samlEnabled={Boolean(me?.saml_enabled)}
@@ -759,9 +766,10 @@ export default function App() {
             }
           >
             <Routes>
-              <Route path="/" element={<OverviewRoute />} />
+              <Route path="/" element={<RootRoute />} />
+              <Route path={OVERVIEW_PATH} element={<OverviewPage />} />
               <Route path="/findings" element={<FindingsPage />} />
-              <Route path="/login" element={<Navigate to="/" replace />} />
+              <Route path="/login" element={<Navigate to={OVERVIEW_PATH} replace />} />
               <Route path="/insights" element={<InsightsPage />} />
               <Route path="/runs" element={<RunsPage />} />
               <Route path="/runs/:id" element={<RunDetailPage />} />

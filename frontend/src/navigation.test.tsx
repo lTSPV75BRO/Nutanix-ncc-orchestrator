@@ -68,7 +68,7 @@ describe("navigation", () => {
   it("sends people to a section they may open", () => {
     expect(legacySettingsTarget("?tab=config", operator)).toBe("/settings/schedule");
     expect(settingsLanding(operator)).toBe("/settings/schedule");
-    expect(settingsLanding(viewer)).toBe("/");
+    expect(settingsLanding(viewer)).toBe("/overview");
   });
 
   it("sends old shared Dashboard links to Findings", () => {
@@ -80,7 +80,7 @@ describe("navigation", () => {
   it("names pages for the top bar", () => {
     expect(pageTitle("/findings")).toBe("Findings");
     expect(pageTitle("/runs/20261029T0940Z")).toBe("Run details");
-    expect(pageTitle("/")).toBe("Overview");
+    expect(pageTitle("/overview")).toBe("Overview");
     expect(pageTitle("/system/status")).toBe("System status");
     expect(pageTitle("/settings/config/")).toBe("Clusters & config");
   });
