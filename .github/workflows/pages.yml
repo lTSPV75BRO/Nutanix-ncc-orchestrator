@@ -1,0 +1,116 @@
+name: Website
+
+# Builds the public website in site/ and deploys it to GitHub Pages:
+#   /               landing page        (site/index.html)
+#   /download.html  downloads           (latest GitHub release, fetched at page load)
+#   /demo/          read-only demo      (frontend/ built with vite.demo.config.ts,
+#                                        sample data, no backend)
+#   /data/latest-release.json           release snapshot; the downloads page
+#                                        falls back to it if the GitHub API is
+#                                        rate-limited or unreachable
+#
+# One-time setup: Settings → Pages → Build and deployment → Source: "GitHub
+# Actions". See site/README.md.
+
+on:
+  push:
+    # v2.3.0 deploys the site until it is merged into main; then drop it here
+    # and in Settings → Environments → github-pages → deployment branches.
+    branches: [main, v2.3.0]
+    paths:
+      - "site/**"
+      - "frontend/**"
+      - ".github/workflows/pages.yml"
+  # Refresh the release snapshot after each release build. workflow_run runs in
+  # the default branch's context, which the github-pages environment allows.
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deployment at a time; never cancel a deployment that is under way.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build site
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26.12.1"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Copy static pages
+        run: |
+          mkdir -p _site/data
+          cp -R site/. _site/
+          rm -f _site/README.md
+          touch _site/.nojekyll
+
+      - name: Build the read-only demo
+        working-directory: frontend
+        env:
+          NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
+        run: |
+          npm ci
+          npm run build:demo -- --outDir ../_site/demo
+
+      - name: Snapshot the latest release
+        # Fallback data for download.html. A missing release (or an API error)
+        # leaves an empty object; the page then links to GitHub Releases.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/releases/latest" \
+              --jq '{tag_name, name, html_url, published_at,
+                     assets: [.assets[] | {name, size, digest, browser_download_url}]}' \
+              > _site/data/latest-release.json; then
+            jq -r '.tag_name' _site/data/latest-release.json
+          else
+            echo '{}' > _site/data/latest-release.json
+            echo "::warning::could not read the latest release; the downloads page will use the live API only"
+          fi
+
+      - name: Check the site
+        run: |
+          test -f _site/index.html
+          test -f _site/download.html
+          test -f _site/demo/index.html
+          # Release checklist (CHANGELOG.md): never offer standalone server binaries.
+          if grep -rEl 'ncc-(api|ui)-server-(linux|darwin|windows)' _site --include='*.html'; then
+            echo "::error::site links a standalone ncc-api-server/ncc-ui-server binary"; exit 1
+          fi
+          du -sh _site
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -63,3 +63,8 @@ ncc-v2-stack-*.zip
 /build/
 /bin/
 /node_modules/
+
+# Website build outputs (site/README.md)
+frontend/dist-demo/
+site/demo/
+_site/

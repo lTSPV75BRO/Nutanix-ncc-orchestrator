@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Download NCC Orchestrator</title>
+  <meta name="description" content="Download NCC Orchestrator for Linux, macOS and Windows: stack archives, standalone CLI binaries and SHA-256 checksums, with install and verification steps." />
+  <meta name="theme-color" content="#0b1224" />
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg" />
+  <link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="./"><img src="assets/logo.svg" alt="" /><span>NCC Orchestrator</span></a>
+    <nav class="nav" aria-label="Main">
+      <a class="hide-sm" href="./#features">Features</a>
+      <a href="demo/">Demo</a>
+      <a href="download.html" aria-current="page">Download</a>
+      <a class="hide-sm" href="./#docs">Docs</a>
+      <a class="gh" href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator" aria-label="GitHub repository">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        <span class="hide-sm">GitHub</span>
+      </a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <div class="hero page-hero">
+    <div class="wrap">
+      <h1>Download NCC Orchestrator</h1>
+      <div class="release-meta" id="release-meta">
+        <span>Loading the latest release…</span>
+      </div>
+    </div>
+  </div>
+
+  <section style="padding-top:44px">
+    <div class="wrap">
+      <div class="tabs" role="tablist" aria-label="Operating system">
+        <button role="tab" id="tab-linux" aria-controls="files" data-os="linux" aria-selected="true">Linux</button>
+        <button role="tab" id="tab-darwin" aria-controls="files" data-os="darwin" aria-selected="false">macOS</button>
+        <button role="tab" id="tab-windows" aria-controls="files" data-os="windows" aria-selected="false">Windows</button>
+      </div>
+
+      <div id="files" role="tabpanel" aria-live="polite">
+        <div class="loading">Loading release files from GitHub…</div>
+      </div>
+      <p class="status" id="source-note"></p>
+
+      <div class="two-col" style="margin-top:56px">
+        <div>
+          <h2 id="install">Install</h2>
+
+          <div class="os-panel" data-os="linux">
+            <ol class="steps">
+              <li><h3>Download and verify</h3>
+<pre><span class="c"># x86_64; use arm64 on ARM servers</span>
+VERSION=<span data-tag>vX.Y.Z</span>
+BASE=https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/$VERSION
+curl -LO $BASE/ncc-v2-stack-linux-amd64.tar.gz
+curl -LO $BASE/checksums.txt
+sha256sum -c checksums.txt --ignore-missing</pre></li>
+              <li><h3>Extract</h3><p>The archive holds <code>bin/</code>, <code>frontend-dist/</code> and <code>example_config.yaml</code> at the top level, so give it its own folder.</p>
+<pre>mkdir ncc &amp;&amp; tar -xzf ncc-v2-stack-linux-amd64.tar.gz -C ncc &amp;&amp; cd ncc
+chmod +x bin/*</pre></li>
+              <li><h3>Configure and scan</h3><p>Replace <code>REPLACE_WITH_CLUSTER_IP</code> in <code>example_config.yaml</code>, set the username, and export the secrets you use.</p>
+<pre>export NCC_PASSWORD='your-prism-password'
+./bin/ncc-orchestrator preflight-check --config example_config.yaml
+./bin/ncc-orchestrator --config example_config.yaml   <span class="c"># one-shot scan</span></pre></li>
+              <li><h3>Start the dashboard</h3>
+<pre>./bin/ncc-orchestrator v2-start --detach --self-heal \
+  --api-listen 127.0.0.1:8081 --ui-listen :8080
+./bin/ncc-orchestrator v2-status</pre><p>Open <code>https://localhost:8080</code>. The first admin password is in <code>.ncc-initial-admin-password</code>. To start at boot, see <code>v2-install-service</code>.</p></li>
+            </ol>
+          </div>
+
+          <div class="os-panel" data-os="darwin" hidden>
+            <ol class="steps">
+              <li><h3>Download and verify</h3>
+<pre><span class="c"># Apple silicon; use darwin-amd64 on Intel Macs</span>
+VERSION=<span data-tag>vX.Y.Z</span>
+BASE=https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/$VERSION
+curl -LO $BASE/ncc-v2-stack-darwin-arm64.tar.gz
+curl -LO $BASE/checksums.txt
+shasum -a 256 -c checksums.txt --ignore-missing</pre></li>
+              <li><h3>Extract and clear quarantine</h3><p>Binaries are not code-signed yet, so macOS quarantines them. Clear the flag for this folder only, after the checksum matched.</p>
+<pre>mkdir ncc &amp;&amp; tar -xzf ncc-v2-stack-darwin-arm64.tar.gz -C ncc &amp;&amp; cd ncc
+xattr -dr com.apple.quarantine .</pre></li>
+              <li><h3>Configure and scan</h3><p>Edit <code>example_config.yaml</code> (clusters and username), then:</p>
+<pre>export NCC_PASSWORD='your-prism-password'
+./bin/ncc-orchestrator preflight-check --config example_config.yaml
+./bin/ncc-orchestrator --config example_config.yaml</pre></li>
+              <li><h3>Start the dashboard</h3>
+<pre>./bin/ncc-orchestrator v2-start --detach --self-heal \
+  --api-listen 127.0.0.1:8081 --ui-listen :8080</pre><p>Open <code>https://localhost:8080</code> and sign in as <code>admin</code> with the password from <code>.ncc-initial-admin-password</code>.</p></li>
+            </ol>
+          </div>
+
+          <div class="os-panel" data-os="windows" hidden>
+            <ol class="steps">
+              <li><h3>Download and verify (PowerShell)</h3>
+<pre>$Version = '<span data-tag>vX.Y.Z</span>'
+$Base = "https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/$Version"
+Invoke-WebRequest "$Base/ncc-v2-stack-windows-amd64.zip" -OutFile ncc-v2-stack-windows-amd64.zip
+Invoke-WebRequest "$Base/checksums.txt" -OutFile checksums.txt
+(Get-FileHash .\ncc-v2-stack-windows-amd64.zip -Algorithm SHA256).Hash.ToLower()
+Select-String 'ncc-v2-stack-windows-amd64.zip' .\checksums.txt   <span class="c"># the hashes must match</span></pre></li>
+              <li><h3>Extract and unblock</h3><p>Windows marks downloaded files; unblock this folder only, after the checksum matched.</p>
+<pre>Expand-Archive .\ncc-v2-stack-windows-amd64.zip -DestinationPath .\ncc
+Set-Location .\ncc
+Get-ChildItem -Recurse . | Unblock-File</pre></li>
+              <li><h3>Configure and scan</h3><p>Edit <code>example_config.yaml</code> (clusters and username), then:</p>
+<pre>$env:NCC_PASSWORD = 'your-prism-password'
+.\bin\ncc-orchestrator.exe preflight-check --config example_config.yaml
+.\bin\ncc-orchestrator.exe --config example_config.yaml</pre></li>
+              <li><h3>Start the dashboard</h3>
+<pre>.\bin\ncc-orchestrator.exe v2-start --detach --self-heal `
+  --api-listen 127.0.0.1:8081 --ui-listen :8080</pre><p>Open <code>https://localhost:8080</code>. The first admin password is in <code>.ncc-initial-admin-password</code>.</p></li>
+            </ol>
+          </div>
+        </div>
+
+        <div>
+          <h2 id="verify">Verify your download</h2>
+          <p class="sub" style="margin-bottom:18px">Every release has a <code>checksums.txt</code> with the SHA-256 of each file, and a signed SLSA build-provenance attestation from the GitHub Actions run that built it. The table above also shows each file's SHA-256 as GitHub reports it.</p>
+          <ol class="steps">
+            <li><h3>Check the hash</h3><p>Stop if the result is not <code>OK</code> or the hashes differ.</p>
+<pre><span class="c"># Linux</span>
+sha256sum -c checksums.txt --ignore-missing
+<span class="c"># macOS</span>
+shasum -a 256 -c checksums.txt --ignore-missing
+<span class="c"># Windows (PowerShell)</span>
+Get-FileHash .\ncc-v2-stack-windows-amd64.zip -Algorithm SHA256</pre></li>
+            <li><h3>Check the provenance</h3><p>With the <a href="https://cli.github.com/">GitHub CLI</a>, confirm the file was built by this repository's release workflow:</p>
+<pre>gh attestation verify ncc-v2-stack-linux-amd64.tar.gz \
+  --owner lTSPV75BRO</pre></li>
+            <li><h3>Check the running binary</h3><p><code>ncc-orchestrator verify</code> prints the version, git revision and SHA-256 of the executable.</p></li>
+          </ol>
+          <p class="note info" style="margin-top:22px">More on GPG, Windows file properties and antivirus quarantine: <a href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/blob/main/docs/SECURITY_AND_TRUST.md">Security and trust</a>.</p>
+
+          <h2 style="margin-top:44px">Other ways to run it</h2>
+          <ul>
+            <li><a href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator#docker-compose">Docker Compose</a></li>
+            <li><a href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/blob/main/k8s/README.md">Kubernetes (kustomize)</a> and <a href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/blob/main/helm/ncc-orchestrator/README.md">Helm</a></li>
+            <li><a href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/blob/main/docs/BUILD_FROM_SCRATCH.md">Build from source</a></li>
+            <li><a href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases">All releases and release notes</a></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>NCC Orchestrator · MIT licence · Independent open-source project, not affiliated with or endorsed by Nutanix, Inc.</span>
+    <span><a href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator">GitHub</a> · <a href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/issues">Issues</a></span>
+  </div>
+</footer>
+<script src="assets/release.js" defer></script>
+<script src="assets/downloads.js" defer></script>
+</body>
+</html>

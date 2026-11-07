@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:demo": "vite build --config vite.demo.config.ts",
     "preview": "vite preview",
     "test": "vitest run --passWithNoTests",
     "coverage": "vitest run --coverage --passWithNoTests"
