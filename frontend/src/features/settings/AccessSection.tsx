@@ -696,20 +696,29 @@ function SessionCard() {
           onFinish={(v) => saveMut.mutate(Number(v.ttl_min))}
         >
           <Form.Item
-            name="ttl_min"
             label="Active for"
-            rules={[
-              { required: true, message: "Enter a duration" },
-              {
-                type: "number",
-                min: minMinutes,
-                max: maxMinutes,
-                message: `Between ${minMinutes} and ${maxMinutes} minutes`,
-              },
-            ]}
+            htmlFor="ttl_min"
+            required
             extra={`Allowed range: ${minMinutes}–${maxMinutes} minutes (max 24h).`}
           >
-            <InputNumber min={minMinutes} max={maxMinutes} step={5} addonAfter="minutes" style={{ width: 200 }} />
+            <Space.Compact style={{ width: 200 }}>
+              <Form.Item
+                name="ttl_min"
+                noStyle
+                rules={[
+                  { required: true, message: "Enter a duration" },
+                  {
+                    type: "number",
+                    min: minMinutes,
+                    max: maxMinutes,
+                    message: `Between ${minMinutes} and ${maxMinutes} minutes`,
+                  },
+                ]}
+              >
+                <InputNumber min={minMinutes} max={maxMinutes} step={5} style={{ width: "100%" }} />
+              </Form.Item>
+              <Space.Addon>minutes</Space.Addon>
+            </Space.Compact>
           </Form.Item>
           <Form.Item>
             <Space>
@@ -1918,19 +1927,19 @@ function OIDCCard({ embedded = false }: { embedded?: boolean }) {
           <Switch />
         </Form.Item>
         <Form.Item
-          name="issuer_url"
           label="Issuer URL"
+          htmlFor="issuer_url"
+          required
           extra="Entra ID: https://login.microsoftonline.com/<tenant-id>/v2.0 · Okta: https://<org>.okta.com · Google: https://accounts.google.com · Keycloak: https://<host>/realms/<realm>"
-          rules={[{ required: true }]}
         >
-          <Input
-            placeholder="https://login.microsoftonline.com/<tenant-id>/v2.0"
-            addonAfter={
-              <Button type="link" size="small" loading={testMut.isPending} onClick={() => testMut.mutate()} style={{ padding: 0, height: "auto" }}>
-                Test discovery
-              </Button>
-            }
-          />
+          <Space.Compact style={{ width: "100%" }}>
+            <Form.Item name="issuer_url" noStyle rules={[{ required: true, message: "Enter the issuer URL" }]}>
+              <Input placeholder="https://login.microsoftonline.com/<tenant-id>/v2.0" />
+            </Form.Item>
+            <Button loading={testMut.isPending} onClick={() => testMut.mutate()}>
+              Test discovery
+            </Button>
+          </Space.Compact>
         </Form.Item>
         {testResult ? (
           <Alert

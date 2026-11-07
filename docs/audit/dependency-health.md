@@ -38,12 +38,13 @@ module does not need that package.
 Production dependencies: no advisories (`osv-scanner`; CI also runs
 `npm audit --omit=dev`). React, React Router, TanStack Query, GSAP, and their
 compatible transitive dependencies were updated to their current tested
-releases. Ant Design 6.7.0 is available but deferred because it breaks the
-cluster-alert pagination behavior; the application remains on tested 6.6.5.
+releases. Ant Design 6.7.0, Vitest 5.1.0, jsdom 31 and Vite 8.3.6 followed on
+2026-11-07 (see the upgrade notes in
+[`THIRD_PARTY_DEPENDENCIES.md`](../THIRD_PARTY_DEPENDENCIES.md)).
 
-**Status: clean as of 2026-11-04.** `npm audit` reports zero advisories across
-the 256 installed dependencies, including development/build tooling. Production
-dependencies remain clean under `npm audit --omit=dev`.
+**Status: clean as of 2026-11-07.** `osv-scanner` reports no advisories for
+the 232 packages in `frontend/package-lock.json`, including development/build
+tooling (2026-11-04: `npm audit` clean across the previous 256).
 
 ## Prioritized update plan
 
@@ -51,9 +52,9 @@ dependencies remain clean under `npm audit --omit=dev`.
 | --- | --- | --- | --- |
 | 1 | npm dev tooling security fixes (**done**) | Low (patch/minor) | vitest, tsc, vite build, `npm audit` |
 | 2 | Go x/* + go-ldap patch/minor (**done**) | Low | full Go suite, govulncheck, golangci-lint (all pass) |
-| 3 | npm runtime minors (react, antd, react-query, react-router) | Low–medium (UI regressions) | vitest + manual smoke of Dashboard/Insights/Settings |
+| 3 | npm runtime minors (react, antd, react-query, react-router) (**done**) | Low–medium (UI regressions) | vitest + manual smoke of Dashboard/Insights/Settings |
 | 4 | OpenTelemetry 1.47 | Low | runner trace export smoke test |
-| 5 | Vitest 5 | Medium (major) | migration guide, test suite |
+| 5 | Vitest 5 (**done**) | Medium (major) | migration guide, test suite |
 
 ## Automation added
 

@@ -1478,7 +1478,7 @@ export function ClusterTable({
           ) : null
         }
         onClose={() => setDrawerRow(null)}
-        width={drawerRow?.source === "PC" ? 840 : 720}
+        size={drawerRow?.source === "PC" ? 840 : 720}
         extra={
           drawerRow ? (
             <Space size={8} wrap>

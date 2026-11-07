@@ -477,6 +477,7 @@ export function NotificationsSection() {
                 order={false}
                 allowClear={false}
                 disabled={!state.quiet?.enabled}
+                allowEmpty={state.quiet?.enabled ? undefined : [true, true]}
                 value={[toTime(state.quiet?.start), toTime(state.quiet?.end)]}
                 onChange={(v) => {
                   if (v?.[0] && v?.[1]) patchIn("quiet", { start: v[0].format("HH:mm"), end: v[1].format("HH:mm") });
@@ -561,22 +562,26 @@ export function NotificationsSection() {
               children: (
                 <Form layout="vertical" component="div" className="notif-grid">
                   <Form.Item label="Ignore repeats of the same alert for" extra="0 turns it off.">
-                    <InputNumber
-                      min={0}
-                      addonAfter="seconds"
-                      style={{ width: "100%" }}
-                      value={state.throttle?.dedup_window_sec ?? 0}
-                      onChange={(v) => patchIn("throttle", { dedup_window_sec: typeof v === "number" ? v : 0 })}
-                    />
+                    <Space.Compact style={{ width: "100%" }}>
+                      <InputNumber
+                        min={0}
+                        style={{ width: "100%" }}
+                        value={state.throttle?.dedup_window_sec ?? 0}
+                        onChange={(v) => patchIn("throttle", { dedup_window_sec: typeof v === "number" ? v : 0 })}
+                      />
+                      <Space.Addon>seconds</Space.Addon>
+                    </Space.Compact>
                   </Form.Item>
                   <Form.Item label="Leave at least this long between alerts" extra="0 turns it off.">
-                    <InputNumber
-                      min={0}
-                      addonAfter="seconds"
-                      style={{ width: "100%" }}
-                      value={state.throttle?.min_interval_sec ?? 0}
-                      onChange={(v) => patchIn("throttle", { min_interval_sec: typeof v === "number" ? v : 0 })}
-                    />
+                    <Space.Compact style={{ width: "100%" }}>
+                      <InputNumber
+                        min={0}
+                        style={{ width: "100%" }}
+                        value={state.throttle?.min_interval_sec ?? 0}
+                        onChange={(v) => patchIn("throttle", { min_interval_sec: typeof v === "number" ? v : 0 })}
+                      />
+                      <Space.Addon>seconds</Space.Addon>
+                    </Space.Compact>
                   </Form.Item>
                 </Form>
               ),

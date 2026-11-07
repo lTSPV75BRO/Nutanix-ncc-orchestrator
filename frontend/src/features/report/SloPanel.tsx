@@ -1,5 +1,6 @@
-import { Card, Col, Empty, List, Progress, Row, Statistic, Table, Tag, Typography } from "antd";
+import { Card, Col, Empty, Progress, Row, Statistic, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
+import { ItemList } from "../../ui";
 import { asArray, asRecord, resolveClusterName, toNumber, weightedHealthScore } from "../../utils/report";
 
 type Props = {
@@ -119,17 +120,17 @@ export function SloPanel({ sloDashboard, nccClusterSummary, regressionSummary, c
       <Row gutter={[12, 12]}>
         <Col xs={24} md={8}>
           <Card size="small" title="More failures">
-            {increased.length ? <List size="small" dataSource={increased} renderItem={(item) => <List.Item>{item}</List.Item>} /> : <Typography.Text type="secondary">None</Typography.Text>}
+            <ItemList items={increased} render={(item) => item} empty="None" />
           </Card>
         </Col>
         <Col xs={24} md={8}>
           <Card size="small" title="Fewer failures">
-            {decreased.length ? <List size="small" dataSource={decreased} renderItem={(item) => <List.Item>{item}</List.Item>} /> : <Typography.Text type="secondary">None</Typography.Text>}
+            <ItemList items={decreased} render={(item) => item} empty="None" />
           </Card>
         </Col>
         <Col xs={24} md={8}>
           <Card size="small" title="Unchanged">
-            {unchanged.length ? <List size="small" dataSource={unchanged} renderItem={(item) => <List.Item>{item}</List.Item>} /> : <Typography.Text type="secondary">None</Typography.Text>}
+            <ItemList items={unchanged} render={(item) => item} empty="None" />
           </Card>
         </Col>
       </Row>

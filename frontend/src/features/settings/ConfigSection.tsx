@@ -11,7 +11,6 @@ import {
   Form,
   Input,
   InputNumber,
-  List,
   Modal,
   Radio,
   Row,
@@ -52,7 +51,7 @@ import type { ConfigBatchOperation, ConfigListItem, ConfigRelatedFileBatchOperat
 import { PolicyGateBuilderSection } from "./PolicyGateBuilderSection";
 import { SecretsMigrationModal } from "./SecretsMigrationModal";
 import { notify } from "../../notify";
-import { SaveBar, middleEllipsis } from "../../ui";
+import { ItemList, SaveBar, middleEllipsis } from "../../ui";
 import {
   ALL_FIELDS,
   SECTIONS,
@@ -1029,13 +1028,12 @@ export function ConfigSection({ onError }: Props) {
                       The form does not edit these. Server notes (api, ui, deployment) are read by the API and UI servers or are documentation only;
                       the runner ignores them. Use YAML mode to change them.
                     </Typography.Text>
-                    <List
+                    <ItemList
                       style={{ marginTop: 10 }}
                       bordered
-                      size="small"
-                      dataSource={others}
-                      renderItem={(o) => (
-                        <List.Item>
+                      items={others}
+                      render={(o) => (
+                        <>
                           <Space size={8} wrap>
                             <Typography.Text code>{o.path}</Typography.Text>
                             {o.stack ? <Tag>Server note</Tag> : <Tag color="warning">Unknown to the runner</Tag>}
@@ -1043,7 +1041,7 @@ export function ConfigSection({ onError }: Props) {
                           <Typography.Text type="secondary" ellipsis style={{ maxWidth: "45%" }}>
                             {o.value || "—"}
                           </Typography.Text>
-                        </List.Item>
+                        </>
                       )}
                     />
                   </Card>
@@ -1077,31 +1075,27 @@ export function ConfigSection({ onError }: Props) {
           {files.length === 0 ? (
             <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="This config does not point to any files" />
           ) : (
-            <List
+            <ItemList
               bordered
-              size="small"
-              dataSource={files}
-              renderItem={(item) => (
-                <List.Item
-                  actions={[
-                    <Button key="use" size="small" onClick={() => loadRelatedFile(item.path)}>
-                      Open
-                    </Button>,
-                  ]}
-                >
-                  <Space orientation="vertical" size={0}>
-                    <Space size={8}>
-                      <Typography.Text code>{item.key}</Typography.Text>
-                      <Tag color={item.exists ? "success" : "default"}>{item.exists ? "Exists" : "Missing"}</Tag>
-                    </Space>
-                    <Typography.Text>{item.path}</Typography.Text>
-                    {item.resolved_path ? (
-                      <Typography.Text type="secondary">{item.resolved_path}</Typography.Text>
-                    ) : (
-                      <Typography.Text type="warning">Path is outside the app folder</Typography.Text>
-                    )}
+              items={files}
+              actions={(item) => (
+                <Button size="small" onClick={() => loadRelatedFile(item.path)}>
+                  Open
+                </Button>
+              )}
+              render={(item) => (
+                <Space orientation="vertical" size={0}>
+                  <Space size={8}>
+                    <Typography.Text code>{item.key}</Typography.Text>
+                    <Tag color={item.exists ? "success" : "default"}>{item.exists ? "Exists" : "Missing"}</Tag>
                   </Space>
-                </List.Item>
+                  <Typography.Text>{item.path}</Typography.Text>
+                  {item.resolved_path ? (
+                    <Typography.Text type="secondary">{item.resolved_path}</Typography.Text>
+                  ) : (
+                    <Typography.Text type="warning">Path is outside the app folder</Typography.Text>
+                  )}
+                </Space>
               )}
             />
           )}
@@ -1218,29 +1212,28 @@ export function ConfigSection({ onError }: Props) {
               Add
             </Button>
           </Space.Compact>
-          <List
+          <ItemList
             bordered
-            size="small"
-            dataSource={configItems}
-            locale={{ emptyText: "No config files discovered" }}
-            renderItem={(item) => (
-              <List.Item
-                actions={[
-                  <Button key="open" size="small" onClick={() => void openConfigFile(item.path)}>
-                    Open
-                  </Button>,
-                  <Button
-                    key="remove"
-                    size="small"
-                    danger
-                    icon={<DeleteOutlined />}
-                    disabled={item.is_active}
-                    onClick={() => void removeConfigFile(item.path)}
-                  >
-                    Remove
-                  </Button>,
-                ]}
-              >
+            items={configItems}
+            empty="No config files discovered"
+            actions={(item) => (
+              <>
+                <Button size="small" onClick={() => void openConfigFile(item.path)}>
+                  Open
+                </Button>
+                <Button
+                  size="small"
+                  danger
+                  icon={<DeleteOutlined />}
+                  disabled={item.is_active}
+                  onClick={() => void removeConfigFile(item.path)}
+                >
+                  Remove
+                </Button>
+              </>
+            )}
+            render={(item) => (
+              <>
                 <Space orientation="vertical" size={0}>
                   <Typography.Text code>{item.path}</Typography.Text>
                   <Typography.Text type="secondary">{item.resolved}</Typography.Text>
@@ -1249,7 +1242,7 @@ export function ConfigSection({ onError }: Props) {
                   <Tag color={item.exists ? "success" : "default"}>{item.exists ? "Exists" : "Missing"}</Tag>
                   {item.is_active ? <Tag color="processing">Active</Tag> : null}
                 </Space>
-              </List.Item>
+              </>
             )}
           />
         </Space>

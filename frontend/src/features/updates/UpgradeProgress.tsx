@@ -112,10 +112,10 @@ export function UpgradeProgress() {
           current={current}
           status={stepStatus}
           items={[
-            { title: "Prepare", description: "Backup and saved copy" },
-            { title: "Install", description: "Checksum-verified" },
-            { title: "Restart", description: "API, then web UI" },
-            { title: "Check", description: "Health and versions" },
+            { title: "Prepare", content: "Backup and saved copy" },
+            { title: "Install", content: "Checksum-verified" },
+            { title: "Restart", content: "API, then web UI" },
+            { title: "Check", content: "Health and versions" },
             { title: "Done" },
           ]}
         />

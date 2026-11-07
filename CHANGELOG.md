@@ -404,6 +404,17 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 
 ### Fixed
 
+- **Frontend on the latest Ant Design and Vitest.** Ant Design 6.7.0,
+  Vitest 5.1.0 (with coverage-v8), jsdom 31, Vite 8.3.6 and TanStack Query
+  5.107.1. The pagination test that held these back clicked a page's `<li>`,
+  which `@rc-component/pagination` 1.7 no longer handles (the page link does);
+  browsers were unaffected. The props antd 6.7 deprecates (`Drawer width`,
+  `addonAfter`, `List`, `iconPosition`, `Steps description`, `rowKey` index)
+  are replaced, so tests run without antd warnings. See
+  docs/THIRD_PARTY_DEPENDENCIES.md.
+- **Jump to (Ctrl/⌘+K) shows only pages you can open**, and leaves Ctrl/⌘+K
+  to the YAML editor while it has focus (Monaco uses it for chords such as
+  Ctrl+K Ctrl+C).
 - **Sending a notification no longer rewrites config.yaml.** Every alert
   (run results, self-heal, digest) saved its delivery status by rewriting
   config.yaml, which reformatted it and dropped comments, even with no

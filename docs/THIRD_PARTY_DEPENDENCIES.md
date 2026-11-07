@@ -76,8 +76,8 @@ the resolved module graph rather than upgraded independently.
 | --- | --- | --- |
 | `@ant-design/icons` | ^6.3.4 | UI icons |
 | `@monaco-editor/react` | ^4.7.0 | React integration for Monaco |
-| `@tanstack/react-query` | ^5.105.3 | Server-state fetching, caching, and mutations |
-| `antd` | ^6.6.5 | Accessible component library |
+| `@tanstack/react-query` | ^5.107.1 | Server-state fetching, caching, and mutations |
+| `antd` | ^6.7.0 | Accessible component library |
 | `gsap` | ^3.15.1 | Opening-title animation |
 | `monaco-editor` | ^0.57.0 | YAML/JSON editor engine |
 | `react` / `react-dom` | ^19.3.1 | UI runtime |
@@ -93,29 +93,41 @@ the resolved module graph rather than upgraded independently.
 | `@types/node` | ^26.6.6 | TypeScript Node types | No |
 | `@types/react` / `@types/react-dom` | ^19.3.0 | TypeScript React types | No |
 | `@vitejs/plugin-react` | ^6.2.1 | Vite React transform | No |
-| `@vitest/coverage-v8` | ^4.1.12 | Optional test coverage | No |
+| `@vitest/coverage-v8` | ^5.1.0 | Optional test coverage | No |
 | `aria-query` | ^5.3.2 | Accessibility test support | No |
-| `jsdom` | ^30.1.3 | Browser test environment | No |
+| `jsdom` | ^31.0.0 | Browser test environment | No |
 | `typescript` | ^7.0.2 | Type checking and compilation | No |
-| `vite` | ^8.3.5 | Frontend dev server and production bundling | No |
-| `vitest` | ^4.1.12 | Test runner | No |
+| `vite` | ^8.3.6 | Frontend dev server and production bundling | No |
+| `vitest` | ^5.1.0 | Test runner | No |
 
 `dompurify` is pinned through the npm `overrides` field to ensure the
 transitive editor dependency uses the selected patched version.
 
-### Compatibility exceptions
+### Upgrade notes (Ant Design 6.7, Vitest 5)
 
-Two available major/minor updates were tested but not retained because they
-break the current suite:
+Ant Design 6.7 and Vitest 5 were held back because the cluster-alert
+pagination test stayed on page 1. The cause was neither of them:
+`@rc-component/pagination` 1.7 (which antd's `^1.4.0` range already allows,
+so any fresh install picked it up) moved the page click handler from the
+`<li title="2">` to the `<a role="button" aria-label="Page 2">` inside it.
+Browsers were unaffected; the test clicked the `<li>`. Tests should click
+pages by role and name: `getByRole("button", { name: "Page 2" })`.
 
-- Ant Design 6.7.0 leaves the existing cluster-alert pagination test on the
-  first page; 6.6.5 remains the latest tested compatible version.
-- Vitest 5.1.0 changes test scheduling enough to produce the same pagination
-  failure; Vitest and `@vitest/coverage-v8` remain paired at 4.1.12.
+Ant Design 6.7 deprecates several props the app used; each now has its
+replacement, so the suite runs without antd warnings:
 
-Both retained versions have zero reported npm audit vulnerabilities. Revisit
-these upgrades with the required test or migration changes in a separate
-change.
+| Deprecated | Replacement |
+| --- | --- |
+| `Drawer` `width` | `size` (number or string) |
+| `Input` / `InputNumber` `addonAfter` | `Space.Compact` with `Space.Addon`; inside a form, bind the input with an inner `Form.Item noStyle name=…` |
+| `List` | `ItemList` from `src/ui` for short static lists (antd's replacement, `Listy`, is a virtual list) |
+| `Button` `iconPosition` | `iconPlacement` |
+| `Steps` `items.description` | `items.content` |
+| `rowKey` function's `index` argument | a key computed into the data |
+| a `disabled` `RangePicker` with an empty value | `allowEmpty` while disabled |
+
+Vitest 5 hides console output from passing tests; run
+`vitest run --silent=false` to see warnings.
 
 ## License and operational ownership
 

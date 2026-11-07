@@ -15,9 +15,9 @@ rough estimate: S, M, or L.
 | --- | --- | --- |
 | Report-cache observability | Expose cache state (`cold`, `warm`, `refreshing`, `stale`, `failed`) in `/report/data` and Prometheus; refetch when async refresh completes. | M |
 | Server-side report pagination | Build only the requested `checks_snapshot`/`agg_rows` page instead of loading and filtering the complete report before slicing. | M |
-| Version-skew protection | Detect mismatched API, UI, runner, and image versions; warn or block incompatible deployments. | S–M |
+| Version-skew protection | Host installs already flag mismatched components (`consistent` in the update status, with a warning on Updates) and supervised upgrades check versions before finishing. Remaining: compare container image versions in Kubernetes and block incompatible combinations. | S–M |
 | Kubernetes HA integration test | Exercise two API replicas, shared PVC access, CronJob execution, schedule updates, and pod rescheduling on separate nodes. | L |
-| Report retention | Add configurable retention and pruning for raw logs, report history, and per-run artifacts, with a dry-run preview. | M |
+| Report retention | Run history (`retain-last`, `retain-days`) and generated artifacts (`artifact-retain-days`, `artifact-retain-max-files`) already prune. Remaining: raw NCC logs, and a dry-run preview of what would be removed. | M |
 
 ## P1 — security and operations
 
@@ -38,7 +38,6 @@ rough estimate: S, M, or L.
 | Stale-report UX | Clearly show when stale data is being served, a refresh is in progress, or the UI has fallen back to a previous report. | S–M |
 | Notification delivery history | Show redacted channel status, last attempt, retry count, and dead-letter state; keep diagnostics administrator-only. | M |
 | Operator-safe empty states | Give direct actions for missing config, missing clusters, failed first runs, missing schedules, and restricted cluster groups. | S |
-| Role-aware command search | Filter destinations by role and preserve Ctrl/⌘+K for Monaco when the editor has focus. | S |
 | Session and lockout clarity | Show remaining session time and actionable account-lockout countdowns without exposing sensitive details. | S–M |
 
 ## P2 — engineering and test coverage
@@ -49,7 +48,6 @@ rough estimate: S, M, or L.
 | Race and load test profile | Run race tests plus concurrent report, alert, login, and schedule requests against a representative large report. | M |
 | Report package extraction | Move the remaining renderers from `goNCC.go` into focused `internal/report` packages with benchmarks. | L |
 | Support-bundle automation | Collect redacted health, events, component versions, CronJob/PVC state, and recent logs. | M |
-| Dependency major-upgrade track | Evaluate Ant Design 6.7+ and Vitest 5 in an isolated change with migration tests; retain the currently tested versions until then. | M |
 
 ## Performance sequence
 
@@ -58,11 +56,11 @@ Work in this order when performance is the goal:
 1. Server-side report pagination and remove the dashboard's full-report follow-up.
 2. Add a slim Insights payload and avoid rebuilding the same trend data.
 3. Add single-flight, multi-slot Prism alert caching.
-4. Add gzip/`Accept-Encoding` for large report, alert, and audit responses.
-5. Optimize audit tailing and run-history sparkline reads.
+4. Optimize audit tailing and run-history sparkline reads.
 
-Do not redo the existing preview pagination, alert pager, or five-minute Prism
-alert cache; those are already implemented.
+Do not redo the existing preview pagination, alert pager, five-minute Prism
+alert cache, or gzip API responses (`cmd/ncc-api-server/compress.go`); those
+are already implemented.
 
 ## Deferred ideas
 
@@ -95,4 +93,4 @@ See [`docs/FEATURES_AND_CONFIG_FLAGS.md`](FEATURES_AND_CONFIG_FLAGS.md),
 [`docs/THIRD_PARTY_DEPENDENCIES.md`](THIRD_PARTY_DEPENDENCIES.md) for the
 canonical operational and security details.
 
-_Last reviewed: 2026-11-05._
+_Last reviewed: 2026-11-07._

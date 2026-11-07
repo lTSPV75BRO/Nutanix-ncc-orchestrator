@@ -2794,6 +2794,55 @@ html[data-theme="it-pro"] {
   margin-top: var(--ui-space-2);
 }
 
+.ui-item-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ui-item-list-row {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-3);
+  padding: var(--ui-space-2) 0;
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.ui-item-list-row:last-child {
+  border-bottom: 0;
+}
+
+.ui-item-list.is-bordered {
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+}
+
+.ui-item-list.is-bordered .ui-item-list-row {
+  padding-inline: var(--ui-space-4);
+}
+
+.ui-item-list-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ui-space-2) var(--ui-space-4);
+}
+
+.ui-item-list-actions {
+  flex: none;
+  display: flex;
+  gap: var(--ui-space-2);
+}
+
+.ui-item-list-empty.is-bordered {
+  border: 1px dashed var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  padding: var(--ui-space-3) var(--ui-space-4);
+}
+
 .ui-kv {
   margin: 0;
   display: grid;

@@ -177,7 +177,7 @@ export function SupervisorPanel() {
     );
   }
   const children = Object.values(st.children ?? {}).sort((a, b) => a.name.localeCompare(b.name));
-  const events = [...(st.events ?? [])].reverse();
+  const events = [...(st.events ?? [])].reverse().map((e, i) => ({ ...e, key: `${e.at}-${e.child}-${i}` }));
   const supUp = secondsSince(st.started_at);
   return (
     <Space orientation="vertical" size={16} style={{ width: "100%" }}>
@@ -207,9 +207,9 @@ export function SupervisorPanel() {
       ))}
       <Card size="small" className="page-card" title="Recent events">
         {events.length ? (
-          <Table<SupervisorEvent>
+          <Table<SupervisorEvent & { key: string }>
             size="small"
-            rowKey={(r, i) => `${r.at}-${r.child}-${i}`}
+            rowKey="key"
             dataSource={events}
             pagination={{ pageSize: 10, size: "small", hideOnSinglePage: true }}
             scroll={{ x: 560 }}

@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { Button, Input, Modal, Typography } from "antd";
 import { SearchOutlined } from "@ant-design/icons";
-import { sectionHref } from "../navigation";
+import { canOpenSection, sectionByPath, sectionHref, type Viewer } from "../navigation";
 
 export type JumpItem = {
   id: string;
@@ -35,6 +35,20 @@ export const JUMP_ITEMS: JumpItem[] = [
   { id: "maintenance", title: "Updates", keywords: "update upgrade rollback maintenance", to: sectionHref("updates", { tab: "updates" }), hint: "Updates & backups" },
 ];
 
+/** The destinations this viewer may open (pages are open to everyone signed in). */
+export function visibleJumpItems(viewer?: Viewer, items: JumpItem[] = JUMP_ITEMS): JumpItem[] {
+  if (!viewer) return items;
+  return items.filter((it) => {
+    const s = sectionByPath(it.to.split("?")[0]);
+    return !s || canOpenSection(s, viewer);
+  });
+}
+
+/** Ctrl/⌘+K is Monaco's chord prefix (e.g. Ctrl+K Ctrl+C); leave it to the editor. */
+export function inCodeEditor(target: EventTarget | null): boolean {
+  return Boolean((target as Element | null)?.closest?.(".monaco-editor"));
+}
+
 export function matchJumpItems(query: string, items: JumpItem[] = JUMP_ITEMS): JumpItem[] {
   const n = query.trim().toLowerCase();
   if (!n) return items;
@@ -51,16 +65,16 @@ function shortcutLabel(): string {
  * sections. Items with `?focus=` let the destination scroll the matching card
  * into view.
  */
-export function CommandJump() {
+export function CommandJump({ viewer }: { viewer?: Viewer }) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
-  const matches = useMemo(() => matchJumpItems(q), [q]);
+  const matches = matchJumpItems(q, visibleJumpItems(viewer));
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K") && !inCodeEditor(e.target)) {
         e.preventDefault();
         setOpen((v) => !v);
         setQ("");

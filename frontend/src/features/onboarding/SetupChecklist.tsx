@@ -274,7 +274,7 @@ function SetupDrawer({ open, onClose, status, loading }: { open: boolean; onClos
       title="Setup checklist"
       open={open}
       onClose={onClose}
-      width={560}
+      size={560}
       footer={
         isAdmin ? (
           <Space style={{ width: "100%", justifyContent: "space-between" }} wrap>

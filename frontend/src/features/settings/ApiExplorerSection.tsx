@@ -9,7 +9,6 @@ import {
   Drawer,
   Empty,
   Input,
-  List,
   Row,
   Segmented,
   Select,
@@ -33,6 +32,7 @@ import {
 import { CodeEditor } from "../../components/CodeEditor";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { notify } from "../../notify";
+import { ItemList } from "../../ui";
 
 type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
@@ -595,7 +595,7 @@ export function ApiExplorerSection({ onError }: Props) {
         open={routesOpen}
         onClose={() => setRoutesOpen(false)}
         title="Discovered backend routes"
-        width={560}
+        size={560}
         styles={{ body: { padding: 16 } }}
       >
         <Input
@@ -616,40 +616,36 @@ export function ApiExplorerSection({ onError }: Props) {
         {filteredRoutes.length === 0 ? (
           <Empty description="No routes match" />
         ) : (
-          <List
-            size="small"
-            dataSource={filteredRoutes}
-            renderItem={(route) => (
-              <List.Item
-                actions={[
-                  <Button key="use" size="small" type="link" onClick={() => applyRouteMeta(route)}>
-                    Use
-                  </Button>,
-                ]}
-              >
-                <Space orientation="vertical" size={2} style={{ width: "100%" }}>
-                  <Space size={6} wrap>
-                    {route.methods.map((m) => (
-                      <Tag key={`${route.path}-${m}`} color={METHOD_COLOR[m as HttpMethod] || "default"}>
-                        {m}
+          <ItemList
+            items={filteredRoutes}
+            actions={(route) => (
+              <Button size="small" type="link" onClick={() => applyRouteMeta(route)}>
+                Use
+              </Button>
+            )}
+            render={(route) => (
+              <Space orientation="vertical" size={2} style={{ width: "100%" }}>
+                <Space size={6} wrap>
+                  {route.methods.map((m) => (
+                    <Tag key={`${route.path}-${m}`} color={METHOD_COLOR[m as HttpMethod] || "default"}>
+                      {m}
+                    </Tag>
+                  ))}
+                  <Typography.Text code style={{ fontSize: 12 }}>{route.path}</Typography.Text>
+                  {route.min_role ? (
+                    <Tooltip title={`Requires the ${route.min_role} role (or higher)`}>
+                      <Tag color={ROLE_COLOR[route.min_role] || "default"} style={{ marginInlineEnd: 0 }}>
+                        {route.min_role}
                       </Tag>
-                    ))}
-                    <Typography.Text code style={{ fontSize: 12 }}>{route.path}</Typography.Text>
-                    {route.min_role ? (
-                      <Tooltip title={`Requires the ${route.min_role} role (or higher)`}>
-                        <Tag color={ROLE_COLOR[route.min_role] || "default"} style={{ marginInlineEnd: 0 }}>
-                          {route.min_role}
-                        </Tag>
-                      </Tooltip>
-                    ) : null}
-                  </Space>
-                  {route.description ? (
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {route.description}
-                    </Typography.Text>
+                    </Tooltip>
                   ) : null}
                 </Space>
-              </List.Item>
+                {route.description ? (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {route.description}
+                  </Typography.Text>
+                ) : null}
+              </Space>
             )}
           />
         )}

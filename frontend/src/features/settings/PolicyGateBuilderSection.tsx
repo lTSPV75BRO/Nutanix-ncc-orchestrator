@@ -163,14 +163,16 @@ export function PolicyGateBuilderSection({ gates, ready, onApplyPolicyGates }: P
             <Select id="policy-op" value={op} onChange={setOp} options={OPERATORS} style={{ width: 88 }} />
           </Form.Item>
           <Form.Item label="Value" htmlFor="policy-value" style={{ marginBottom: 0 }}>
-            <InputNumber
-              id="policy-value"
-              name="policy-value"
-              value={value}
-              onChange={(v) => setValue(Number(v ?? 0))}
-              style={{ width: 120 }}
-              addonAfter={metricMeta(metric)?.unit}
-            />
+            <Space.Compact>
+              <InputNumber
+                id="policy-value"
+                name="policy-value"
+                value={value}
+                onChange={(v) => setValue(Number(v ?? 0))}
+                style={{ width: 120 }}
+              />
+              {metricMeta(metric)?.unit ? <Space.Addon>{metricMeta(metric)?.unit}</Space.Addon> : null}
+            </Space.Compact>
           </Form.Item>
           <Form.Item label=" " style={{ marginBottom: 0 }}>
             <Button type="primary" icon={<PlusOutlined />} onClick={addRule}>

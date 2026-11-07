@@ -707,7 +707,7 @@ export default function App() {
       }
       actions={
         <>
-          <CommandJump />
+          <CommandJump viewer={viewer} />
           {appReady && canSeeSettings ? <SetupHeaderButton /> : null}
           <HeaderHealthPill health={healthState} onRetry={() => void healthQuery.refetch()} />
           <HeaderTriggerRunButton />

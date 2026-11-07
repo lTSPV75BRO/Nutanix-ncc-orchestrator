@@ -120,7 +120,8 @@ describe("ClusterTable alert sources", () => {
     expect(screen.getByText("NCC finding 0")).toBeInTheDocument();
     expect(screen.queryByText("NCC finding 100")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByTitle("2"));
+    // The page link handles the click (rc-pagination 1.7+), not its <li title>.
+    fireEvent.click(screen.getByRole("button", { name: "Page 2" }));
 
     expect(screen.queryByText("NCC finding 0")).not.toBeInTheDocument();
     expect(screen.getByText("NCC finding 100")).toBeInTheDocument();

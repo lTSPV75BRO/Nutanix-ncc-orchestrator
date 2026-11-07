@@ -131,7 +131,7 @@ export function OverviewPage() {
           Refresh
         </Button>
         <Link to="/findings">
-          <Button type="primary" icon={<ArrowRightOutlined />} iconPosition="end">
+          <Button type="primary" icon={<ArrowRightOutlined />} iconPlacement="end">
             View findings
           </Button>
         </Link>
@@ -327,7 +327,7 @@ export function OverviewPage() {
         flush
         extra={
           <Link to={sectionHref("runs")}>
-            <Button size="small" type="text" icon={<ArrowRightOutlined />} iconPosition="end">
+            <Button size="small" type="text" icon={<ArrowRightOutlined />} iconPlacement="end">
               All runs
             </Button>
           </Link>
