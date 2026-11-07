@@ -8,7 +8,7 @@ on, it is served at `https://ltspv75bro.github.io/Nutanix-ncc-orchestrator/`.
 | --- | --- | --- |
 | `/` | `index.html` | Landing page: what the tool does, features, screenshots, quick start, links to the docs |
 | `/download.html` | `download.html`, `assets/downloads.js` | Downloads for the latest release, install steps per OS, checksum and provenance verification |
-| `/demo/` | `frontend/` built with `frontend/vite.demo.config.ts` | The real dashboard, read-only, against sample data (`frontend/src/demo/`) |
+| `/demo/` | `frontend/` built with `frontend/vite.demo.config.ts` | The real dashboard against sample data, with sign-in and changes kept in the tab (`frontend/src/demo/`) |
 | `/data/latest-release.json` | written by the workflow | Snapshot of the latest release, used if the GitHub API is unreachable |
 
 ## Why this layout
@@ -21,9 +21,12 @@ on, it is served at `https://ltspv75bro.github.io/Nutanix-ncc-orchestrator/`.
   Nothing to install or update, and nothing for Dependabot to chase.
 - **The demo is the real frontend.** `vite.demo.config.ts` imports
   `src/demo/install.ts` first, which answers `/api/*` from fixtures typed
-  against `src/api/types.ts` (so `tsc -b` catches fixture drift), refuses
-  every change with a "read-only demo" message, and switches to hash routing so
-  deep links work from a sub-folder. No app source file is changed.
+  against `src/api/types.ts` (so `tsc -b` catches fixture drift). Visitors
+  sign in with a sample account (`demo`, `alex.ops` or `sam.noc`, password
+  `demo`); runs, alert handling, users and settings changes live in
+  sessionStorage, so they survive a reload and reset with the tab or the
+  badge's Reset link. The build switches to hash routing so deep links work
+  from a sub-folder. No app source file is changed.
 
 ## Downloads stay current without edits
 

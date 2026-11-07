@@ -1,8 +1,8 @@
-// Read-only demo build for the public website (site/, deployed by
+// Demo build for the public website (site/, deployed by
 // .github/workflows/pages.yml). Same app and bundle layout as vite.config.ts,
 // with these differences, all applied here so no app source changes:
-//   1. src/demo/install.ts is imported first and answers /api/* from sample
-//      fixtures (no backend; every change is refused as read-only).
+//   1. src/demo/install.ts is imported first and answers /api/* in the browser:
+//      sample accounts and data, with changes kept in sessionStorage.
 //   2. HashRouter instead of BrowserRouter, so deep links survive a reload on
 //      a static host that serves the demo from a sub-folder (/<repo>/demo/).
 //   3. Relative asset paths (base "./", and "./logo.svg" in components) for
@@ -17,12 +17,19 @@ function demoMode(): Plugin {
     name: "ncc-demo-mode",
     enforce: "pre",
     transform(code, id) {
+      if (!/[\\/]src[\\/].*\.tsx?$/.test(id)) return null;
+      let out = code;
       // public/ files are referenced as "/logo.svg"; the demo is served from
       // a sub-folder, and with HashRouter the page URL never leaves it.
-      if (/[\\/]src[\\/].*\.tsx$/.test(id) && code.includes('"/logo.svg"') && !/[\\/]main\.tsx$/.test(id)) {
-        return { code: code.replaceAll('"/logo.svg"', '"./logo.svg"'), map: null };
-      }
-      if (!/[\\/]src[\\/]main\.tsx$/.test(id)) return null;
+      if (/\.tsx$/.test(id) && !/[\\/]main\.tsx$/.test(id)) out = out.replaceAll('"/logo.svg"', '"./logo.svg"');
+      // Sign-out and expired sessions hard-navigate to /login, which is
+      // outside the demo folder; go to the hash route and reload instead.
+      out = out.replaceAll(
+        'window.location.assign("/login")',
+        '(window.location.hash = "#/login", window.location.reload())',
+      );
+      if (!/[\\/]src[\\/]main\.tsx$/.test(id)) return out === code ? null : { code: out, map: null };
+      code = out;
       if (!code.includes("BrowserRouter")) {
         this.error("demo build: src/main.tsx no longer uses BrowserRouter; update vite.demo.config.ts");
       }

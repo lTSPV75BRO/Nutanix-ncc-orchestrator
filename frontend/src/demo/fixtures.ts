@@ -616,6 +616,8 @@ export const SESSION_POLICY: SessionPolicy = { ttl_sec: 28800, ttl_min: 480, def
 export const NOTIFICATIONS: NotificationState = {
   enabled: true,
   events: { run_success: false, run_failure: true, policy_violations: true },
+  slack: { enabled: true, webhook_url: "https://hooks.slack.com/services/T000/B000/demo", channel: "#nutanix-health", username: "NCC Orchestrator" },
+  digest: { enabled: true, every: "24h", last_sent_at: iso(NOW - 10 * HOUR) },
   last_delivery: {
     slack: { last_attempt_at: iso(LATEST_RUN_AT + 7 * MIN), last_success_at: iso(LATEST_RUN_AT + 7 * MIN), last_event: "policy_violations", success: true, total_success: 42, total_failure: 0 },
   },
