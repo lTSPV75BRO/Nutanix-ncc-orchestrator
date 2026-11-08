@@ -1,4 +1,15 @@
 import "@testing-library/jest-dom/vitest";
+import { cleanup } from "@testing-library/react";
+import { afterEach } from "vitest";
+
+// Testing Library only unmounts automatically when Vitest globals are on, and
+// they are off here. Without this, every rendered tree stays mounted after its
+// test: React Query fetches and timers keep running, and when the file ends
+// jsdom is torn down under them ("window is not defined" from React's
+// scheduler, seen on CI's slower Linux runners).
+afterEach(() => {
+  cleanup();
+});
 
 function createStorage(): Storage {
   const values = new Map<string, string>();
