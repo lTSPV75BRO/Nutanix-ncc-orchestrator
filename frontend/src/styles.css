@@ -4017,7 +4017,60 @@ label.ui-field-inline {
 
 .auth-form .ant-btn-primary {
   margin-top: 4px;
-  font-weight: 500;
+  font-weight: 600;
+}
+
+/* Flat buttons, as everywhere else in the app (no antd drop shadow). */
+.auth-panel .ant-btn {
+  box-shadow: none;
+}
+
+/* "Directory users: ..." under the username: a hint, quieter than the
+   heading's subtitle. */
+.auth-form .ant-form-item-extra {
+  margin-top: 4px;
+  font-size: var(--ui-text-xs);
+  color: var(--ui-text-tertiary);
+}
+
+/* The panel already spaces its children by 16px; the divider adds none. */
+.auth-panel > .ant-divider {
+  margin: 0;
+  font-size: var(--ui-text-xs);
+  color: var(--ui-text-tertiary);
+}
+
+.auth-sso {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Certificate help under the sign-in buttons: a quiet disclosure row, not
+   another button. */
+.auth-panel > .auth-collapse.ant-collapse {
+  background: transparent;
+  border-color: transparent;
+}
+
+.auth-panel > .auth-collapse > .ant-collapse-item {
+  border-bottom: 0;
+}
+
+.auth-panel > .auth-collapse .ant-collapse-header {
+  justify-content: center;
+  font-size: var(--ui-text-sm);
+  color: var(--ui-text-secondary);
+}
+
+.auth-panel > .auth-collapse.ant-collapse > .ant-collapse-item > .ant-collapse-header .ant-collapse-title {
+  flex: none;
+  margin-inline-end: 0;
+}
+
+.auth-panel > .auth-collapse .ant-collapse-content {
+  border-top: 0;
+  background: transparent;
 }
 
 .auth-form-links {

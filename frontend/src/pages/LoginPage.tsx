@@ -354,33 +354,36 @@ export function LoginPage({
 
       {passwordLogin && (samlEnabled || oidcEnabled) ? <Divider plain>or</Divider> : null}
 
-      {oidcEnabled ? (
-        <Button
-          block
-          size="large"
-          type={passwordLogin ? "default" : "primary"}
-          icon={<SafetyOutlined />}
-          onClick={() => {
-            window.location.href = "/api/v1/auth/oidc/login";
-          }}
-        >
-          Sign in with {oidcLabel || "single sign-on"}
-        </Button>
-      ) : null}
+      {oidcEnabled || samlEnabled ? (
+        <div className="auth-sso">
+          {oidcEnabled ? (
+            <Button
+              block
+              size="large"
+              type={passwordLogin ? "default" : "primary"}
+              icon={<SafetyOutlined />}
+              onClick={() => {
+                window.location.href = "/api/v1/auth/oidc/login";
+              }}
+            >
+              Sign in with {oidcLabel || "single sign-on"}
+            </Button>
+          ) : null}
 
-      {samlEnabled ? (
-        <Button
-          block
-          size="large"
-          type={passwordLogin || oidcEnabled ? "default" : "primary"}
-          icon={<SafetyOutlined />}
-          style={oidcEnabled ? { marginTop: 8 } : undefined}
-          onClick={() => {
-            window.location.href = "/saml/login";
-          }}
-        >
-          {oidcEnabled ? "Sign in with SAML" : "Sign in with single sign-on"}
-        </Button>
+          {samlEnabled ? (
+            <Button
+              block
+              size="large"
+              type={passwordLogin || oidcEnabled ? "default" : "primary"}
+              icon={<SafetyOutlined />}
+              onClick={() => {
+                window.location.href = "/saml/login";
+              }}
+            >
+              {oidcEnabled ? "Sign in with SAML" : "Sign in with single sign-on"}
+            </Button>
+          ) : null}
+        </div>
       ) : null}
 
       {!passwordLogin && !samlEnabled && !oidcEnabled ? (
