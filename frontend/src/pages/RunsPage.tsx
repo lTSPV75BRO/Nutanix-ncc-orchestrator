@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Segmented, Table } from "antd";
+import { Button, Segmented, Select, Table } from "antd";
 import { DownloadOutlined, FileTextOutlined, FolderOpenOutlined, HistoryOutlined, ReloadOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { api } from "../api/client";
 import type { ArtifactInfo, RunInfo } from "../api/types";
@@ -34,6 +34,7 @@ export function RunsPage() {
   const clusterRestricted = me?.cluster_access_unrestricted === false;
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
+  const [envFilter, setEnvFilter] = useState<string>("all");
   const health = useQuery({ queryKey: ["health"], queryFn: api.health, staleTime: 15_000 });
   const backendConfigPath = (health.data as { config_path?: string } | undefined)?.config_path ?? "";
   const runs = useQuery({ queryKey: ["runs", "history"], queryFn: () => api.runs(), staleTime: 15_000 });
@@ -60,7 +61,14 @@ export function RunsPage() {
 
   const all = runs.data ?? [];
   const problems = useMemo(() => all.filter((r) => ["fail", "warn"].includes(runStatusTone(r).tone)), [all]);
-  const shown: RunInfo[] = filter === "problems" ? problems : all;
+  const envNames = useMemo(() => Array.from(new Set(all.map((r) => r.environment).filter((e): e is string => Boolean(e)))).sort(), [all]);
+  const shown: RunInfo[] = useMemo(
+    () =>
+      (filter === "problems" ? problems : all).filter(
+        (r) => envFilter === "all" || (envFilter === "" ? !r.environment && r.source !== "trigger" : r.environment === envFilter),
+      ),
+    [filter, problems, all, envFilter],
+  );
 
   return (
     <div className="runs-page">
@@ -87,6 +95,21 @@ export function RunsPage() {
         description={runs.data ? `${all.length} run${all.length === 1 ? "" : "s"}` : undefined}
         flush
         extra={
+          <>
+          {envNames.length > 0 ? (
+            <Select
+              size="small"
+              aria-label="Filter by environment"
+              value={envFilter}
+              onChange={setEnvFilter}
+              popupMatchSelectWidth={false}
+              options={[
+                { value: "all", label: "All environments" },
+                { value: "", label: "Main config" },
+                ...envNames.map((e) => ({ value: e, label: e })),
+              ]}
+            />
+          ) : null}
           <Segmented<Filter>
             size="small"
             value={filter}
@@ -97,6 +120,7 @@ export function RunsPage() {
             ]}
             aria-label="Filter runs"
           />
+          </>
         }
       >
         <RunsTable

@@ -553,6 +553,57 @@ export type ConfigListItem = {
   is_active?: boolean;
 };
 
+/** A run environment: runner settings laid over the main config. */
+export type EnvironmentInfo = {
+  name: string;
+  description?: string;
+  /** Repo-relative file, configs/environments/<name>.yaml. */
+  path: string;
+  /** Target mode from the file: "clusters" or "pc". */
+  mode?: string;
+  /** Clusters listed in the file (and its clusters-file); empty for Prism Central discovery. */
+  clusters?: string[];
+  cluster_count: number;
+  prism_centrals?: string[];
+  updated_at?: string;
+  /** Set when the file can't be used (for example, it holds server settings). */
+  error?: string;
+};
+
+export type EnvironmentListData = {
+  items: EnvironmentInfo[];
+  main_config: string;
+  dir: string;
+};
+
+export type EnvironmentDetail = {
+  name: string;
+  path: string;
+  content: string;
+  info: EnvironmentInfo;
+};
+
+export type EnvironmentSchedule = {
+  id: string;
+  environment: string;
+  enabled: boolean;
+  /** 15m, 4h, 1d, 7d */
+  every: string;
+  /** HH:MM, server time, for whole-day intervals. */
+  at?: string;
+  created_at?: string;
+  last_run_at?: string;
+  last_run_id?: string;
+  last_result?: string;
+  next_run_at?: string;
+};
+
+export type EnvironmentScheduleData = {
+  items: EnvironmentSchedule[];
+  server_timezone?: string;
+  utc_offset_min?: number;
+};
+
 export type ConfigListData = {
   items: ConfigListItem[];
   default_path?: string;
@@ -870,6 +921,8 @@ export type RunInfo = {
   /** How `status` was derived: exit_code, legacy_summary, audit, or none. */
   status_source?: string;
   run_source?: string;
+  /** Environment the run used; absent for the main config. */
+  environment?: string;
   client?: string;
   user_agent?: string;
   auth_mode?: string;

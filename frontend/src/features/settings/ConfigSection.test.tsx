@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../api/client";
 import { ConfigSection } from "./ConfigSection";
@@ -11,17 +12,31 @@ vi.mock("../../notify", () => ({
   notifyError: vi.fn(),
   NotifyBridge: () => null,
 }));
-vi.mock("./exampleConfig", () => ({ default: "clusters: x\n" }));
 
 const EXAMPLE = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "examples", "example_config.yaml"), "utf8");
 
 function renderPage(content = EXAMPLE) {
   vi.spyOn(api, "loadConfig").mockResolvedValue({ content, path: "config.yaml" } as Awaited<ReturnType<typeof api.loadConfig>>);
-  vi.spyOn(api, "listConfigs").mockResolvedValue({ items: [] } as unknown as Awaited<ReturnType<typeof api.listConfigs>>);
+  vi.spyOn(api, "listEnvironments").mockResolvedValue({
+    items: [{ name: "prod", path: "configs/environments/prod.yaml", cluster_count: 1, clusters: ["10.9.0.1"], description: "Production" }],
+    main_config: "config.yaml",
+    dir: "configs/environments",
+  });
+  vi.spyOn(api, "getEnvironment").mockResolvedValue({
+    name: "prod",
+    path: "configs/environments/prod.yaml",
+    content: "schema-version: 1\ndescription: Production\nrunner:\n  targets:\n    clusters: [10.9.0.1]\n",
+    info: { name: "prod", path: "configs/environments/prod.yaml", cluster_count: 1 },
+  });
   vi.spyOn(api, "listConfigFiles").mockResolvedValue({ items: [] } as unknown as Awaited<ReturnType<typeof api.listConfigFiles>>);
   const save = vi.spyOn(api, "saveConfig").mockResolvedValue({} as Awaited<ReturnType<typeof api.saveConfig>>);
-  render(<ConfigSection onError={vi.fn()} />);
-  return { save };
+  const saveEnv = vi.spyOn(api, "saveEnvironment").mockResolvedValue({ info: { name: "prod", path: "", cluster_count: 1 } });
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <ConfigSection onError={vi.fn()} />
+    </QueryClientProvider>,
+  );
+  return { save, saveEnv };
 }
 
 afterEach(() => {
@@ -70,5 +85,25 @@ describe("ConfigSection", { timeout: 15_000 }, () => {
     fireEvent.click(within(field).getByRole("button", { name: /Use default/ }));
     await waitFor(() => expect(within(field).getByText("Default: 6.")).toBeInTheDocument());
     expect(within(field).queryByRole("button", { name: /Use default/ })).toBeNull();
+  });
+
+  it("edits an environment: runner settings only, the rest from the main config", async () => {
+    const { save, saveEnv } = renderPage();
+    expect(await screen.findByText("Nested layout")).toBeInTheDocument();
+    fireEvent.mouseDown(within(screen.getByLabelText("Config to edit").closest(".ant-select") as HTMLElement).getByRole("combobox"));
+    fireEvent.click(await screen.findByText("Environment: prod"));
+    expect(await screen.findByText("Editing the prod environment")).toBeInTheDocument();
+    // Server-side sections are not offered for an environment.
+    expect(screen.queryByRole("switch", { name: /Keep run history/ })).toBeInTheDocument();
+    expect(screen.queryByText("Notifications", { selector: "h3" })).not.toBeInTheDocument();
+    // Unset settings show what the main config supplies.
+    expect(screen.getAllByText(/From the main config:/).length).toBeGreaterThan(0);
+
+    fireEvent.change(screen.getByLabelText(/Per-cluster timeout/), { target: { value: "25m" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Save config" }));
+    await waitFor(() => expect(saveEnv).toHaveBeenCalled());
+    expect(saveEnv.mock.calls[0][0]).toBe("prod");
+    expect(saveEnv.mock.calls[0][1]).toMatch(/runner:[\s\S]*timeout: 25m/);
+    expect(save).not.toHaveBeenCalled();
   });
 });

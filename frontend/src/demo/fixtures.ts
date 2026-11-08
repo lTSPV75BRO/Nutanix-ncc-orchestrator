@@ -823,3 +823,40 @@ export const RUNNER_LOG = {
     `${iso(LATEST_RUN_AT + 7 * MIN)} WARN  run finished with exit code 3 (partial: 1 cluster unreachable)`,
   ].join("\n"),
 };
+
+// ----------------------------------------------------------- environments
+
+function envYaml(description: string, clusters: string[], extra = ""): string {
+  return [
+    "schema-version: 1",
+    `description: ${description}`,
+    "runner:",
+    "  targets:",
+    "    clusters:",
+    ...clusters.map((c) => `      - ${c}`),
+    extra,
+  ]
+    .filter(Boolean)
+    .join("\n") + "\n";
+}
+
+const byKind = (...kinds: string[]) => CLUSTERS.filter((c) => kinds.includes(c.name.split("-")[0])).map((c) => c.address);
+
+/** Runner-only environment files, configs/environments/<name>.yaml. */
+export const ENVIRONMENT_FILES: Record<string, string> = {
+  prod: envYaml("Production and VDI clusters", byKind("prod", "vdi"), "  execution:\n    timeout: 20m\n  automation:\n    enabled: false"),
+  dr: envYaml("Disaster-recovery sites", byKind("dr"), "  execution:\n    timeout: 30m"),
+  dev: envYaml("Lab and development clusters", byKind("dev"), "  automation:\n    enabled: true"),
+};
+
+export const ENVIRONMENT_UPDATED = iso(NOW - 6 * DAY);
+
+/** Older full config files that can be turned into environments. */
+export const IMPORTABLE_CONFIGS = ["configs/legacy-staging.yaml"];
+
+export const LEGACY_STAGING_CLUSTERS = byKind("dev").slice(0, 1);
+
+export const ENVIRONMENT_SCHEDULES = [
+  { id: "es-prod", environment: "prod", enabled: true, every: "1d", at: "02:00", created_at: iso(NOW - 20 * DAY) },
+  { id: "es-dev", environment: "dev", enabled: true, every: "7d", at: "06:00", created_at: iso(NOW - 20 * DAY) },
+];

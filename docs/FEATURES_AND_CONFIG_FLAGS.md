@@ -471,9 +471,10 @@ The api-server enforces three ordered roles `viewer < operator < admin`:
 
 - **viewer** — read non-settings `GET` endpoints only (plus reading the run schedule).
 - **operator** — viewer plus the day-to-day *operation* of NCC: trigger/cancel/preflight
-  runs, create/update/apply the run **schedule** (`PUT /api/v1/schedule`), list
-  **run config files** (`GET /api/v1/runs/configs`; `/api/v1/settings/configs`
-  stays admin), send **test notifications** (`POST /api/v1/settings/notifications/test`;
+  runs, create/update/apply the run **schedule** (`PUT /api/v1/schedule`) and the
+  per-environment schedules (`PUT /api/v1/environment-schedules`), run any
+  **environment** (`GET /api/v1/environments`; editing environment files under
+  `/api/v1/settings/environments` stays admin), send **test notifications** (`POST /api/v1/settings/notifications/test`;
   delivery errors are URL-redacted so secrets can't leak), and read **cluster topology**
   (`GET /api/v1/settings/clusters`, `GET /api/v1/settings/cluster-groups`).
   Operators reach a reduced Settings view in the UI (Connection, Schedule, Runs,
@@ -718,6 +719,51 @@ Create/list/remove scheduler entries:
 ```bash
 ncc-orchestrator create-schedule --type cron --every 4h --config config.yaml --print-only
 ```
+
+### 2.13a Environments (dev / staging / prod)
+
+One **main config** holds everything (API server, storage, auth, notifications
+and the default runner settings). Each **environment** is a small file,
+`configs/environments/<name>.yaml`, that may hold only `description` and a
+`runner:` section; a run on that environment merges it over the main config.
+Server settings can't be set per environment, so running one never changes how
+the stack itself is configured.
+
+```yaml
+# configs/environments/prod.yaml
+schema-version: 1
+description: Production clusters
+runner:
+  targets:
+    clusters: [10.20.1.11, 10.20.1.12]   # or clusters-file / pcs / prism-central-url
+  execution:
+    timeout: 20m
+  automation:
+    enabled: false
+```
+
+- **Manage:** Settings → Clusters & config → Environments (admin). Start from
+  the main config's runner, an empty file, a copy, or import an older full
+  config file (only its `runner:` part is kept; the response lists what was
+  dropped). The "Config to edit" picker opens an environment in the same form,
+  where unset fields show the value inherited from the main config. Saving
+  validates the merged result with `validate-config`.
+- **Run:** New run → Environment. Any operator may run any environment;
+  restricted users (cluster-group members) are still narrowed to their own
+  clusters. `POST /api/v1/runs/trigger {"environment": "prod", "clusters": [...]}`.
+- **Results:** one store; every run records `environment` in `run-meta.json`
+  (`NCC_RUN_ENVIRONMENT` is set for the runner and hooks). Runs, Findings and
+  Overview filter by environment (`/findings?env=prod`).
+- **Schedules:** Settings → Schedule → Environment schedules, for example prod
+  every day at 02:00 and dev every week. They run inside the API server
+  (checked every minute; `at` is server local time and applies to whole-day
+  intervals; minimum 15 minutes). The OS-level schedule (2.13) runs the main
+  config.
+
+API: `GET /api/v1/environments` (viewer+), `GET|PUT|DELETE
+/api/v1/settings/environments/<name>` and `GET|POST
+/api/v1/settings/environments/import` (admin), `GET|PUT
+/api/v1/environment-schedules` (viewer+ to read, operator+ to change).
 
 ### 2.14 Strict config validation
 
@@ -1437,8 +1483,9 @@ Scheduler health endpoint:
 Run config catalog (operator+):
 
 - `GET /api/v1/runs/configs` — same discovered file list as
-  `GET /api/v1/settings/configs` (admin). Schedule and Runs use this path
-  so operators can pick a config without reading secret-bearing settings.
+  `GET /api/v1/settings/configs` (admin), kept for compatibility.
+- Runs choose the main config or an environment (see 2.13a);
+  `config_path` on trigger/preflight accepts only those files.
 
 - All non-success API responses include a stable `error_code` field for automation/UI handling.
 - Examples:

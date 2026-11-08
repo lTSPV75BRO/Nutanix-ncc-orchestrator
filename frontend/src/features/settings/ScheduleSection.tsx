@@ -20,6 +20,7 @@ import {
   Tooltip,
   Typography,
 } from "antd";
+import { EnvironmentSchedulesPanel } from "./EnvironmentSchedulesPanel";
 import {
   DeleteOutlined,
   EyeOutlined,
@@ -629,7 +630,7 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
         <Typography.Text type="secondary" className="section-subtitle">
           {isKubernetes
             ? `Changes go to the ${health?.task_name || "runner"} CronJob. Re-applying the Helm or Kustomize manifests resets it to their schedule.`
-            : "Pick an interval, or use a cron expression for exact times."}
+            : "Runs the main config. Pick an interval, or use a cron expression for exact times."}
         </Typography.Text>
 
         <Form layout="vertical" onSubmitCapture={(e) => e.preventDefault()} style={{ marginTop: 16 }}>
@@ -858,6 +859,8 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
           </Space>
         </Form>
       </Card>
+
+      <EnvironmentSchedulesPanel />
 
       <Modal
         title="Scheduler entry preview"

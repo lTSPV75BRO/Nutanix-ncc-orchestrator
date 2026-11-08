@@ -185,6 +185,7 @@ export function RunDetailPage() {
           <p className="ui-page-header-desc">
             <span className="mono">{run.id}</span> · {formatDateTime(at)}
             {run.run_source ? ` · ${run.run_source === "scheduled" ? "Scheduled" : run.run_source === "manual" ? "Manual" : run.run_source}` : ""}
+            {run.environment ? ` · ${run.environment} environment` : ""}
           </p>
         </div>
         <StatusBadge tone={st.tone}>{st.label}</StatusBadge>
@@ -362,6 +363,7 @@ export function RunDetailPage() {
                   <KeyValueList
                     items={[
                       { label: "Run ID", value: run.id, mono: true, copy: run.id },
+                      { label: "Environment", value: run.environment || "Main config" },
                       { label: "Started", value: formatDateTime(at) },
                       { label: "Exit code", value: run.exit_code == null ? "—" : String(run.exit_code) },
                       { label: "Checks run", value: run.total_checks ? run.total_checks.toLocaleString() : "—" },

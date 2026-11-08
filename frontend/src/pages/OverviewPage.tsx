@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Skeleton, Tooltip } from "antd";
+import { Alert, Button, Select, Skeleton, Tooltip } from "antd";
 import { ArrowRightOutlined, ClusterOutlined, HistoryOutlined, PieChartOutlined, ReloadOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
@@ -24,7 +24,7 @@ const SEVERITIES: Array<{ key: string; label: string; count: (c: Record<string, 
   { key: "INFO", label: "Info", count: (c) => toNumber(c.info), tone: "info" },
 ];
 
-type ClusterRow = { name: string; ok: boolean; error: string; fail: number; warn: number; err: number; score: number | null };
+type ClusterRow = { name: string; address: string; ok: boolean; error: string; fail: number; warn: number; err: number; score: number | null };
 
 function clusterStatus(c: ClusterRow): { tone: Tone; label: string } {
   if (!c.ok) return { tone: "fail", label: "Not checked" };
@@ -171,6 +171,7 @@ export function OverviewPage() {
     return source
       .map((c) => ({
         name: resolveClusterName(c.address, nameMap) || String(c.address || "—"),
+        address: String(c.address || ""),
         ok: c.ok === undefined ? String(c.status || "").toLowerCase() !== "error" : Boolean(c.ok),
         error: String(c.error || ""),
         fail: toNumber(c.fail_count),
@@ -180,6 +181,20 @@ export function OverviewPage() {
       }))
       .sort((a, b) => Number(a.ok) - Number(b.ok) || b.fail + b.err - (a.fail + a.err) || b.warn - a.warn || a.name.localeCompare(b.name));
   }, [data]);
+
+  // Environment filter for the cluster list ("" = every cluster).
+  const environmentsQuery = useQuery({ queryKey: ["environments"], queryFn: api.listEnvironments, staleTime: 60_000 });
+  const environments = useMemo(
+    () => (environmentsQuery.data?.items ?? []).filter((e) => !e.error && (e.clusters?.length ?? 0) > 0),
+    [environmentsQuery.data],
+  );
+  const [environment, setEnvironment] = useState("");
+  const shownClusters = useMemo(() => {
+    const env = environments.find((e) => e.name === environment);
+    if (!env) return clusters;
+    const keys = new Set((env.clusters ?? []).map((v) => v.toLowerCase()));
+    return clusters.filter((c) => keys.has(c.address.toLowerCase()) || keys.has(c.name.toLowerCase()));
+  }, [clusters, environments, environment]);
 
   const header = (
     <div className="overview-runline">
@@ -361,11 +376,25 @@ export function OverviewPage() {
               title="Clusters" icon={<ClusterOutlined />}
               description={clusters.length ? `${clusters.length} in the latest run` : undefined}
               flush
+              extra={
+                environments.length > 0 && clusters.length > 0 ? (
+                  <Select
+                    aria-label="Environment"
+                    size="small"
+                    value={environment}
+                    onChange={setEnvironment}
+                    popupMatchSelectWidth={false}
+                    options={[{ value: "", label: "All environments" }, ...environments.map((e) => ({ value: e.name, label: e.name }))]}
+                  />
+                ) : null
+              }
             >
               {clusters.length === 0 ? (
                 <EmptyState icon={<ClusterOutlined />} title="No per-cluster results" description="The latest run did not record results per cluster." />
+              ) : shownClusters.length === 0 ? (
+                <EmptyState icon={<ClusterOutlined />} title={`No ${environment} clusters in the latest run`} description="Run this environment to see its clusters here." />
               ) : (
-                <ClusterHealthList clusters={clusters} />
+                <ClusterHealthList key={environment} clusters={shownClusters} />
               )}
             </Panel>
           </div>

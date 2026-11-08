@@ -55,6 +55,38 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 
 ### Added
 
+- **Environments: one main config, a runner file per dev / staging / prod.**
+  Each environment is `configs/environments/<name>.yaml` and may hold only
+  `description` and a `runner:` section (targets, credentials references,
+  execution, automation …). At run time it is merged over the main config,
+  so the API server, storage, auth and notification settings always come
+  from the main config and an environment can't disrupt the stack; a file
+  with any other top-level key is refused. Manage them in Settings →
+  Clusters & config → Environments (start from the main config's runner, an
+  empty file, a copy of another environment, or import an older full config,
+  which keeps only its runner part), and edit one with the same settings form
+  (unset fields show the value inherited from the main config). API:
+  `GET /api/v1/environments` (viewer+; restricted users see only their
+  clusters), `GET/PUT/DELETE /api/v1/settings/environments/<name>` and
+  `GET/POST /api/v1/settings/environments/import` (admin).
+- **Run on an environment.** New run: pick the main config or an
+  environment, then all of its clusters or a subset. Any operator may run
+  any environment; cluster-group membership still narrows a restricted user
+  to their clusters. The choice is remembered. `POST /api/v1/runs/trigger`
+  and `/runs/preflight` take `environment`.
+- **Results are tagged with their environment.** Runs keep one store; each
+  run records `environment` in `run-meta.json` (and `NCC_RUN_ENVIRONMENT`
+  for hooks). Runs shows an Environment column and filter; Findings and the
+  Overview cluster list filter by environment; run detail shows it.
+- **A schedule per environment** (for example prod daily at 02:00, dev
+  weekly). Settings → Schedule → Environment schedules; runs inside the API
+  server through the normal run engine (`GET/PUT
+  /api/v1/environment-schedules`, operator+ to change; minimum interval
+  15 minutes). The OS-level schedule still runs the main config.
+- **Long cluster lists stay usable at 7,000 clusters.** Overview, Insights,
+  run detail, Access and New run use windowed, searchable lists with status
+  filters and counts; long tag lists collapse to "+N more" with a searchable
+  popover; run-detail tables page at 50 rows.
 - **OpenID Connect sign-in.** Microsoft Entra ID, Okta, Google Workspace,
   Keycloak, Auth0 and other OIDC providers, configured in Settings → Access →
   Sign-in (or `/api/v1/settings/oidc`, with a discovery check at
@@ -388,8 +420,8 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 - **Pages share the same building blocks.** Schedule, Notifications, Health &
   repair, Updates, Features, Audit log, Developer and the 404 page now use the
   status line, stat tiles, panels, lists and empty state that Overview,
-  Insights and Runs use. Panel titles have no icons; empty lists show one
-  empty icon.
+  Insights and Runs use. Pages, panel titles, tabs and config sections carry
+  icons again, in the accent colour; empty lists show one empty icon.
 - **New loaders and logo.** A data-packet loader while the app connects,
   bar/arc/grid loaders in place of antd's spinner, and a slash-and-dot logo.
 - **Plainer wording.** Errors read "Couldn't …", "self-heal" is "automatic
@@ -417,6 +449,13 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   `docs/releases/`; `Prometheus.md` and `IMPROVEMENTS.md` are now
   `docs/PROMETHEUS.md` and `docs/IMPROVEMENTS.md`. Release assets, installed
   file names and the install layout are unchanged.
+- **Run config selection (breaking for API clients).** `config_path` on
+  `/api/v1/runs/trigger` and `/runs/preflight` must now be the main config or
+  an environment file; other YAML files under `configs/` are refused. Turn
+  them into environments (Settings → Clusters & config → Environments →
+  Import), which keeps only their `runner:` part. The old "Config files"
+  switcher in the config editor is gone. A saved run-config preference that
+  pointed at another file falls back to the main config.
 
 ### Fixed
 

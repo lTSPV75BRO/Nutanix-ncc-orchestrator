@@ -3,7 +3,7 @@ import { Alert, Button, Col, Collapse, Drawer, Input, Row, Select, Space, Switch
 import { FileSearchOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../api/client";
-import type { ConfigListItem, RunPreflightData } from "../../api/types";
+import type { EnvironmentInfo, RunPreflightData } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { RUNS_ACTIVE_QUERY_KEY } from "../../hooks/useRunsActive";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
@@ -14,19 +14,23 @@ import { buildExtraArgs, describeExtraArgs, type RunOptionValues } from "../../u
 const RUN_TOAST_KEY = "ncc-run-active";
 
 /**
- * Start a run: config, optional one-off password, cluster subset (group
- * members), run options from the server's allow-list, and a preflight check
- * shown in place. Closes once the server accepts the run.
+ * Start a run: environment (or the main config), optional one-off password,
+ * cluster subset, run options from the server's allow-list, and a preflight
+ * check shown in place. Closes once the server accepts the run.
+ *
+ * An environment only changes runner settings (which clusters, credentials,
+ * timeouts ...); results, notifications and server settings always come from
+ * the main config.
  */
 export function NewRunDrawer({ open, onClose, backendConfigPath }: { open: boolean; onClose: () => void; backendConfigPath: string }) {
-  const { me } = useAuth();
+  const { me, isAdmin } = useAuth();
   const queryClient = useQueryClient();
   // Group members may narrow the run to a subset of their allowed clusters.
   const clusterRestricted = me?.cluster_access_unrestricted === false;
   const allowedClusters = useMemo(() => me?.allowed_clusters ?? [], [me?.allowed_clusters]);
   const [selectedClusters, setSelectedClusters] = useState<string[]>([]);
-  const [runConfigPath, setRunConfigPath] = useState("");
-  const [runConfigOptions, setRunConfigOptions] = useState<ConfigListItem[]>([]);
+  const [lastEnvironment, setLastEnvironment] = useLocalStorageState("runs.environment", "");
+  const [environment, setEnvironment] = useState<string | null>(null);
   const [runPassword, setRunPassword] = useState("");
   const [extraArgs, setExtraArgs] = useLocalStorageState("runs.extraArgs", "");
   const [runOptionValues, setRunOptionValues] = useLocalStorageState<RunOptionValues>("runs.options", {});
@@ -36,40 +40,49 @@ export function NewRunDrawer({ open, onClose, backendConfigPath }: { open: boole
   const extraArgOptions = useMemo(() => extraArgOptionsQuery.data?.options ?? [], [extraArgOptionsQuery.data]);
   const setRunOption = (flag: string, value: string | boolean | undefined) => setRunOptionValues((prev) => ({ ...prev, [flag]: value }));
 
-  useEffect(() => {
-    if (backendConfigPath && !runConfigPath) setRunConfigPath(backendConfigPath);
-  }, [backendConfigPath, runConfigPath]);
+  const envQuery = useQuery({ queryKey: ["environments"], queryFn: api.listEnvironments, enabled: open, staleTime: 30_000 });
+  const environments = useMemo(() => envQuery.data?.items ?? [], [envQuery.data]);
+  const mainConfig = envQuery.data?.main_config || backendConfigPath || "config.yaml";
+  // Admins pick from the main config's clusters; others from their groups.
+  const inventoryQuery = useQuery({
+    queryKey: ["settings", "clusters"],
+    queryFn: api.getClusterInventory,
+    enabled: open && isAdmin,
+    staleTime: 60_000,
+  });
 
+  // The saved choice: the server preference for local accounts, else this browser's.
   useEffect(() => {
-    if (!open) return;
+    if (!open || environment !== null) return;
     let live = true;
     (async () => {
-      try {
-        // The per-user preference exists only for local accounts; on token-only
-        // installs it 404s, so it must not fail the config list.
-        const [cfgs, pref] = await Promise.all([
-          api.runConfigs(),
-          me?.is_local
-            ? api.getRunConfigPreference().catch(() => ({ path: undefined }) as { path?: string })
-            : Promise.resolve({ path: undefined } as { path?: string }),
-        ]);
-        if (!live) return;
-        const items = cfgs.items ?? [];
-        setRunConfigOptions(items);
-        const fallbackPath = items.find((it) => it.is_active)?.path || backendConfigPath || "";
-        const preferred = (pref.path || cfgs.default_path || me?.run_config_path || "").trim();
-        const selected = preferred || fallbackPath;
-        if (selected) setRunConfigPath(selected);
-      } catch (e) {
-        notifyError(e, "Couldn't load the config files");
+      let pick = lastEnvironment;
+      if (me?.is_local) {
+        const pref = await api.getRunConfigPreference().catch(() => ({}) as { environment?: string });
+        if (pref.environment) pick = pref.environment;
       }
+      if (live) setEnvironment(pick);
     })();
     return () => {
       live = false;
     };
-    // Load once per opening.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, environment, lastEnvironment, me?.is_local]);
+
+  const chosen: EnvironmentInfo | undefined = environments.find((e) => e.name === environment);
+  // A remembered environment that was deleted falls back to the main config.
+  const envName = chosen && !chosen.error ? chosen.name : "";
+
+  const clusterOptions = useMemo(() => {
+    let list: string[];
+    if (chosen && (chosen.clusters?.length ?? 0) > 0) list = chosen.clusters ?? [];
+    else if (clusterRestricted) list = allowedClusters;
+    else list = isAdmin ? ((inventoryQuery.data?.clusters ?? []) as string[]) : [];
+    if (clusterRestricted && chosen) {
+      const allowed = new Set(allowedClusters.map((c) => c.toLowerCase()));
+      list = list.filter((c) => allowed.has(c.toLowerCase()));
+    }
+    return list.map((c) => ({ value: c, label: c }));
+  }, [chosen, clusterRestricted, allowedClusters, isAdmin, inventoryQuery.data]);
 
   const composedExtraArgs = useMemo(
     () => buildExtraArgs(extraArgOptions, runOptionValues, extraArgs, { restricted: clusterRestricted }),
@@ -81,11 +94,11 @@ export function NewRunDrawer({ open, onClose, backendConfigPath }: { open: boole
     notify.loading({ key: RUN_TOAST_KEY, message: "Starting run…", description: "Submitting the run to the API server." });
     try {
       const out = await api.runTrigger({
-        config_path: runConfigPath || undefined,
+        environment: envName || undefined,
         password: runPassword || undefined,
         extra_args: composedExtraArgs,
-        // Only an explicit subset; empty runs the caller's full allowed set.
-        clusters: clusterRestricted && selectedClusters.length > 0 ? selectedClusters : undefined,
+        // Only an explicit subset; empty runs every cluster the choice covers.
+        clusters: selectedClusters.length > 0 ? selectedClusters : undefined,
       });
       notify.close(RUN_TOAST_KEY);
       const skipped = out.skipped_clusters ?? [];
@@ -127,7 +140,7 @@ export function NewRunDrawer({ open, onClose, backendConfigPath }: { open: boole
   const runPreflight = async () => {
     setBusy("preflight");
     try {
-      setPreflight(await api.runPreflight({ config_path: runConfigPath || undefined }));
+      setPreflight(await api.runPreflight({ environment: envName || undefined }));
     } catch (e) {
       notifyError(e, "Preflight failed to run");
     } finally {
@@ -135,13 +148,16 @@ export function NewRunDrawer({ open, onClose, backendConfigPath }: { open: boole
     }
   };
 
-  const onRunConfigChange = async (value: string) => {
-    setRunConfigPath(value);
+  const onEnvironmentChange = async (value: string) => {
+    setEnvironment(value);
+    setLastEnvironment(value);
+    setSelectedClusters([]);
     setPreflight(null);
+    if (!me?.is_local) return;
     try {
-      await api.updateRunConfigPreference(value);
+      await api.updateRunConfigPreference(value ? { environment: value } : { path: "" });
     } catch (e) {
-      notifyError(e, "Couldn't remember the config choice");
+      notifyError(e, "Couldn't remember the environment");
     }
   };
 
@@ -199,16 +215,34 @@ export function NewRunDrawer({ open, onClose, backendConfigPath }: { open: boole
         ) : null}
 
         {field(
-          "run-config-path",
-          "Config file",
+          "run-environment",
+          "Environment",
           <Select
-            id="run-config-path"
-            value={runConfigPath}
-            onChange={(v) => void onRunConfigChange(v)}
-            options={runConfigOptions.map((item) => ({ value: item.path, label: item.path }))}
-            placeholder={backendConfigPath || "config.yaml"}
-            showSearch
+            id="run-environment"
+            value={envName}
+            onChange={(v) => void onEnvironmentChange(v)}
+            loading={envQuery.isLoading}
+            optionLabelProp="title"
+            options={[
+              { value: "", title: "Main config", label: <EnvOption name="Main config" detail={mainConfig} /> },
+              ...environments.map((e) => ({
+                value: e.name,
+                title: e.name,
+                disabled: Boolean(e.error),
+                label: (
+                  <EnvOption
+                    name={e.name}
+                    detail={e.error ? e.error : [e.description, envTargets(e)].filter(Boolean).join(" · ")}
+                  />
+                ),
+              })),
+            ]}
           />,
+          envName
+            ? `Runner settings from ${chosen?.path} on top of the main config. Results, notifications and server settings stay as set in the main config.`
+            : environments.length
+              ? "Runs with the main config's runner settings."
+              : "Add environments (dev, staging, prod …) in Clusters & config to run them separately.",
         )}
         {field(
           "run-password",
@@ -222,7 +256,7 @@ export function NewRunDrawer({ open, onClose, backendConfigPath }: { open: boole
             autoComplete="new-password"
           />,
         )}
-        {clusterRestricted
+        {clusterOptions.length > 0 || clusterRestricted
           ? field(
               "run-clusters",
               "Clusters",
@@ -230,12 +264,15 @@ export function NewRunDrawer({ open, onClose, backendConfigPath }: { open: boole
                 id="run-clusters"
                 mode="multiple"
                 allowClear
-                placeholder="All clusters in your groups"
+                placeholder={
+                  clusterRestricted ? "All clusters in your groups" : envName ? `All clusters in ${envName}` : "All configured clusters"
+                }
                 maxTagCount="responsive"
                 value={selectedClusters}
                 onChange={setSelectedClusters}
-                options={allowedClusters.map((c) => ({ value: c, label: c }))}
+                options={clusterOptions}
               />,
+              clusterOptions.length > 0 ? `${clusterOptions.length.toLocaleString()} to choose from. Leave empty to run them all.` : undefined,
             )
           : null}
 
@@ -369,5 +406,20 @@ export function NewRunDrawer({ open, onClose, backendConfigPath }: { open: boole
         </section>
       ) : null}
     </Drawer>
+  );
+}
+
+function envTargets(e: EnvironmentInfo): string {
+  if (e.cluster_count > 0) return `${e.cluster_count.toLocaleString()} cluster${e.cluster_count === 1 ? "" : "s"}`;
+  if (e.mode === "pc" || (e.prism_centrals?.length ?? 0) > 0) return "clusters from Prism Central";
+  return "";
+}
+
+function EnvOption({ name, detail }: { name: string; detail?: string }) {
+  return (
+    <span className="env-option">
+      <span className="env-option-name">{name}</span>
+      {detail ? <span className="env-option-detail">{detail}</span> : null}
+    </span>
   );
 }

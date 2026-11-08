@@ -56,6 +56,11 @@ type runRecord struct {
 	outDir  string // per-run filtered output dir (absolute)
 	logDir  string // per-run logs dir (absolute)
 	cfgPath string
+	// environment is the run environment (configs/environments/<name>.yaml)
+	// the run used, or "" for the main config.
+	environment string
+	// source is NCC_RUN_SOURCE for the orchestrator: "api" or "scheduled".
+	source string
 
 	cmd []string
 	cwd string
@@ -81,7 +86,9 @@ type runRecord struct {
 // runStartParams is the validated input to submitRun, produced by
 // handleRunTrigger after config/scope checks.
 type runStartParams struct {
-	cfgPath   string
+	cfgPath     string
+	environment string
+	source      string
 	password  string
 	extraArgs []string
 	group     string
@@ -170,6 +177,8 @@ func (s *apiServer) submitRun(p runStartParams) runSubmitResult {
 		queuedAt:     time.Now().UTC(),
 		liveOut:      newTailBuffer(64000),
 		cfgPath:      p.cfgPath,
+		environment:  p.environment,
+		source:       p.source,
 		password:     p.password,
 		extraArgs:    p.extraArgs,
 		wildcard:     wildcard,
@@ -306,9 +315,17 @@ func (s *apiServer) launchRun(rec *runRecord) {
 	cmd := s.makeOrchestratorCommand(ctx, args...)
 	cmd.Dir = s.absPath(s.repoRoot)
 	injectedEnv := map[string]string{}
-	cmd.Env = append(childEnv(), "NCC_RUN_ID="+rec.id, "NCC_RUN_SOURCE=api")
+	runSource := rec.source
+	if runSource == "" {
+		runSource = "api"
+	}
+	cmd.Env = append(childEnv(), "NCC_RUN_ID="+rec.id, "NCC_RUN_SOURCE="+runSource)
 	injectedEnv["NCC_RUN_ID"] = rec.id
-	injectedEnv["NCC_RUN_SOURCE"] = "api"
+	injectedEnv["NCC_RUN_SOURCE"] = runSource
+	if rec.environment != "" {
+		cmd.Env = append(cmd.Env, "NCC_RUN_ENVIRONMENT="+rec.environment)
+		injectedEnv["NCC_RUN_ENVIRONMENT"] = rec.environment
+	}
 	if strings.TrimSpace(rec.password) != "" {
 		cmd.Env = append(cmd.Env, "NCC_PASSWORD="+rec.password)
 		injectedEnv["NCC_PASSWORD"] = "***"
@@ -370,7 +387,7 @@ func (s *apiServer) finishRun(rec *runRecord, runErr error, output string) {
 		}
 		mergeRunLogs(rec.logDir, s.absPath(s.logDir))
 		s.mergeMu.Unlock()
-		s.archiveRunDir(rec.outDir, rec.id, rec.startedAt, runErr)
+		s.archiveRunDir(rec.outDir, rec.id, rec.startedAt, runErr, rec.environment)
 		_ = os.RemoveAll(filepath.Dir(rec.outDir)) // .runs-live/<id>
 	}
 
@@ -948,7 +965,7 @@ func mergeRunLogs(perRunLogs, canonicalLogs string) {
 
 // archiveRunDir archives a single run's per-run artifacts under
 // outputDir/runs/<id> so the Runs history lists each concurrent run separately.
-func (s *apiServer) archiveRunDir(perRunDir, runID string, startedAt time.Time, runErr error) {
+func (s *apiServer) archiveRunDir(perRunDir, runID string, startedAt time.Time, runErr error, environment string) {
 	canonicalOut := s.absPath(s.outputDir)
 	id := strings.TrimSpace(runID)
 	if id == "" {
@@ -993,6 +1010,9 @@ func (s *apiServer) archiveRunDir(perRunDir, runID string, startedAt time.Time, 
 	}
 	if runErr != nil {
 		meta["error"] = runErr.Error()
+	}
+	if environment != "" {
+		meta["environment"] = environment
 	}
 	if b, err := json.MarshalIndent(meta, "", "  "); err == nil {
 		_ = os.WriteFile(filepath.Join(target, "run-meta.json"), b, 0o644)

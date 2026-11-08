@@ -70,6 +70,12 @@ export function RunsTable({
       },
     },
     { title: "Trigger", key: "trigger", render: (_: unknown, r) => trigger(r) },
+    {
+      title: "Environment",
+      key: "environment",
+      render: (_: unknown, r) =>
+        r.environment ? <span className="env-tag">{r.environment}</span> : <span className="ui-field-help">{r.source === "trigger" ? "—" : "Main config"}</span>,
+    },
     { title: "Duration", key: "duration", render: (_: unknown, r) => (r.source === "trigger" ? "—" : formatDuration(r.duration_s)) },
     {
       title: "Clusters",

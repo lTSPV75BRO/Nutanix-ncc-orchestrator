@@ -1,4 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { MemoryRouter } from "react-router";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ScheduleSection } from "./ScheduleSection";
 
@@ -7,6 +10,9 @@ vi.mock("../../notify", () => ({
   notifyError: vi.fn(),
   NotifyBridge: () => null,
 }));
+
+const renderWithQuery = (ui: ReactElement) =>
+  render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><MemoryRouter>{ui}</MemoryRouter></QueryClientProvider>);
 
 type Call = { url: string; method: string; body?: Record<string, unknown> };
 
@@ -50,7 +56,7 @@ describe("ScheduleSection on Kubernetes", () => {
 
   it("keeps a custom CronJob schedule instead of replacing it with the interval", async () => {
     const calls = fakeCronJobApi({ cron: "15 */4 * * *" });
-    render(<ScheduleSection backendConfigPath="config.yaml" onError={vi.fn()} isKubernetes />);
+    renderWithQuery(<ScheduleSection backendConfigPath="config.yaml" onError={vi.fn()} isKubernetes />);
     const cronInput = await screen.findByLabelText("Custom cron expression");
     await waitFor(() => expect(cronInput).toHaveValue("15 */4 * * *"));
     expect(screen.queryByLabelText("Scheduler type")).toBeNull();
@@ -63,7 +69,7 @@ describe("ScheduleSection on Kubernetes", () => {
 
   it("pauses and resumes the CronJob", async () => {
     const calls = fakeCronJobApi({ cron: "0 */4 * * *", every: "4h" });
-    render(<ScheduleSection backendConfigPath="config.yaml" onError={vi.fn()} isKubernetes />);
+    renderWithQuery(<ScheduleSection backendConfigPath="config.yaml" onError={vi.fn()} isKubernetes />);
     const pause = await screen.findByRole("switch", { name: "Pause scheduled runs" });
     fireEvent.click(pause);
     fireEvent.click(screen.getAllByRole("button", { name: /Save schedule/ })[0]);
@@ -75,7 +81,7 @@ describe("ScheduleSection on Kubernetes", () => {
 
   it("sends the interval alone in simple mode", async () => {
     const calls = fakeCronJobApi({ cron: "0 */4 * * *", every: "4h" });
-    render(<ScheduleSection backendConfigPath="config.yaml" onError={vi.fn()} isKubernetes />);
+    renderWithQuery(<ScheduleSection backendConfigPath="config.yaml" onError={vi.fn()} isKubernetes />);
     await waitFor(() => expect(screen.getByLabelText("Run every")).toHaveValue("4"));
     expect(screen.queryByLabelText("Custom cron expression")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Every 15m" }));
@@ -122,7 +128,7 @@ describe("ScheduleSection on a host", () => {
 
   it("installs on save and previews without saving", async () => {
     const calls = fakeHostApi();
-    render(<ScheduleSection backendConfigPath="config.yaml" onError={vi.fn()} />);
+    renderWithQuery(<ScheduleSection backendConfigPath="config.yaml" onError={vi.fn()} />);
     expect(await screen.findByText("No recurring runs yet")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /Preview/ }));
@@ -136,7 +142,7 @@ describe("ScheduleSection on a host", () => {
 
   it("explains a bad cron and blocks saving it", async () => {
     fakeHostApi();
-    render(<ScheduleSection backendConfigPath="config.yaml" onError={vi.fn()} />);
+    renderWithQuery(<ScheduleSection backendConfigPath="config.yaml" onError={vi.fn()} />);
     fireEvent.click(await screen.findByText("Custom cron"));
     fireEvent.change(screen.getByLabelText("Custom cron expression"), { target: { value: "*/5 * * *" } });
     expect(await screen.findByText(/Use five fields/)).toBeInTheDocument();

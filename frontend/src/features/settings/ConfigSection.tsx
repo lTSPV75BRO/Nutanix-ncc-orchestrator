@@ -11,7 +11,6 @@ import {
   Form,
   Input,
   InputNumber,
-  Modal,
   Radio,
   Row,
   Segmented,
@@ -28,6 +27,7 @@ import {
   BellOutlined,
   CloudServerOutlined,
   DeleteOutlined,
+  DeploymentUnitOutlined,
   EyeInvisibleOutlined,
   EyeOutlined,
   FileTextOutlined,
@@ -44,10 +44,12 @@ import {
   WarningOutlined,
 } from "@ant-design/icons";
 import type { ReactNode } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Document, parseDocument } from "yaml";
 import { api } from "../../api/client";
 import { CodeEditor, inferEditorLanguage } from "../../components/CodeEditor";
-import type { ConfigBatchOperation, ConfigListItem, ConfigRelatedFileBatchOperation, ConfigRelatedFileInfo } from "../../api/types";
+import type { ConfigRelatedFileBatchOperation, ConfigRelatedFileInfo } from "../../api/types";
+import { EnvironmentsModal } from "./EnvironmentsModal";
 import { PolicyGateBuilderSection } from "./PolicyGateBuilderSection";
 import { SecretsMigrationModal } from "./SecretsMigrationModal";
 import { notify } from "../../notify";
@@ -75,7 +77,6 @@ import {
   readText,
   writeValue,
 } from "./configDoc";
-import defaultConfigTemplate from "./exampleConfig";
 
 type Props = {
   onError: (e: unknown) => void;
@@ -83,15 +84,6 @@ type Props = {
 
 type Mode = "form" | "yaml";
 type Show = "all" | "changed" | "set";
-
-// Runtime-safe defaults used when strict validation rejects the richer example
-// template (for example due unresolved secret:// placeholders).
-const SAFE_DEFAULT_CONFIG = `clusters: "10.0.0.1"
-username: "admin"
-password: "admin"
-outputs: "html,csv"
-insecure-skip-verify: false
-`;
 
 const SECTION_ICONS: Record<SectionIcon, ReactNode> = {
   cluster: <CloudServerOutlined />,
@@ -348,6 +340,7 @@ function FieldItem({
   warn,
   error,
   onMigrateSecret,
+  inherit,
 }: {
   field: FieldDef;
   doc: Document;
@@ -357,12 +350,16 @@ function FieldItem({
   warn: boolean;
   error: string | null;
   onMigrateSecret?: () => void;
+  /** Editing an environment: the main config, whose value applies when unset here. */
+  inherit?: Document | null;
 }) {
   const where = locate(doc, field);
   const keyText = (where ?? (nested ? field.path : [field.key])).join(".");
   const set = where !== null;
   const custom = differsFromDefault(doc, field.key);
-  const fallback = defaultLabel(field);
+  const inheritedRaw = inherit && !set && locate(inherit, field) !== null ? readText(inherit, field.key) : "";
+  const inherited = inheritedRaw && field.type === "password" ? "set" : middleEllipsis(inheritedRaw, 60);
+  const fallback = inherit && set && locate(inherit, field) !== null ? "the main config's value" : defaultLabel(field);
   const wide = field.wide || field.type === "textarea" || field.type === "keyvalue";
   return (
     <Col xs={24} md={wide ? 24 : 12}>
@@ -390,10 +387,18 @@ function FieldItem({
           </div>
         }
         extra={
-          field.help || (!set && fallback !== null) ? (
+          field.help || (!set && (fallback !== null || inherited)) ? (
             <span className="config-field-help">
               {field.help}
-              {!set && fallback !== null ? <span className="config-field-default">{field.help ? " " : ""}Default: {fallback}.</span> : null}
+              {!set && inherited ? (
+                <span className="config-field-default">
+                  {field.help ? " " : ""}From the main config: {inherited}.
+                </span>
+              ) : !set && fallback !== null ? (
+                <span className="config-field-default">
+                  {field.help ? " " : ""}Default: {fallback}.
+                </span>
+              ) : null}
             </span>
           ) : null
         }
@@ -415,6 +420,7 @@ function SectionForm({
   errors,
   onMigrateSecret,
   extra,
+  inherit,
 }: {
   section: SectionDef;
   fields: FieldDef[];
@@ -426,6 +432,7 @@ function SectionForm({
   errors: Record<string, string>;
   onMigrateSecret?: () => void;
   extra?: ReactNode;
+  inherit?: Document | null;
 }) {
   return (
     <Card id={`config-section-${section.id}`} className="page-card config-section-card">
@@ -454,6 +461,7 @@ function SectionForm({
                   warn={warnings.has(field.key)}
                   error={errors[field.key] ?? null}
                   onMigrateSecret={onMigrateSecret}
+                  inherit={inherit}
                 />
               ))}
             </Row>
@@ -471,9 +479,12 @@ export function ConfigSection({ onError }: Props) {
   const [originalContent, setOriginalContent] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [configPath, setConfigPath] = useState("");
-  const [configItems, setConfigItems] = useState<ConfigListItem[]>([]);
-  const [configDialogOpen, setConfigDialogOpen] = useState(false);
-  const [newConfigPath, setNewConfigPath] = useState("");
+  // "" edits the main config; otherwise the environment of that name.
+  const [target, setTarget] = useState("");
+  const [mainContent, setMainContent] = useState("");
+  const [envModalOpen, setEnvModalOpen] = useState(false);
+  const envList = useQuery({ queryKey: ["environments"], queryFn: api.listEnvironments });
+  const queryClient = useQueryClient();
   const [files, setFiles] = useState<ConfigRelatedFileInfo[]>([]);
   const [activeFile, setActiveFile] = useState<string>("");
   const [activeFileContent, setActiveFileContent] = useState("");
@@ -495,7 +506,8 @@ export function ConfigSection({ onError }: Props) {
   const original = useMemo(() => safeParse(originalContent).doc, [originalContent]);
   const doc = parsed.doc;
   const parseError = parsed.error;
-  const nested = isNested(doc);
+  const nested = isNested(doc) || Boolean(target);
+  const mainDoc = useMemo(() => (target ? safeParse(mainContent).doc : null), [target, mainContent]);
 
   const edit = useCallback(
     (key: string, value: unknown) => {
@@ -505,12 +517,6 @@ export function ConfigSection({ onError }: Props) {
     },
     [doc],
   );
-
-  const refreshConfigOptions = useCallback(async () => {
-    const resp = await api.listConfigs();
-    setConfigItems(resp.items ?? []);
-    return resp.items ?? [];
-  }, []);
 
   const refreshConfigFiles = useCallback(async (preserveActivePath?: string) => {
     const resp = await api.listConfigFiles();
@@ -533,15 +539,22 @@ export function ConfigSection({ onError }: Props) {
     return next;
   }, [activeFile]);
 
-  const load = useCallback(async (suppressError = false, silent = false, requestedPath?: string) => {
+  const load = useCallback(async (suppressError = false, silent = false, requestedPath?: string, env = "") => {
     try {
-      const cfg = await api.loadConfig(requestedPath);
-      const text = cfg.content ?? "";
+      const cfg = await api.loadConfig(env ? undefined : requestedPath);
+      setMainContent(cfg.content ?? "");
+      let text = cfg.content ?? "";
+      let path = cfg.path ?? "";
+      if (env) {
+        const e = await api.getEnvironment(env);
+        text = e.content;
+        path = e.path;
+      }
       setContent(text);
       setOriginalContent(text);
-      setConfigPath(cfg.path ?? "");
+      setConfigPath(path);
+      setTarget(env);
       setLoaded(true);
-      await refreshConfigOptions();
       await refreshConfigFiles();
       if (!silent) notify.success("Config loaded.");
       return true;
@@ -549,7 +562,7 @@ export function ConfigSection({ onError }: Props) {
       if (!suppressError) onError(e);
       return false;
     }
-  }, [onError, refreshConfigFiles, refreshConfigOptions]);
+  }, [onError, refreshConfigFiles]);
 
   useEffect(() => {
     let cancelled = false;
@@ -615,13 +628,18 @@ export function ConfigSection({ onError }: Props) {
     (section: SectionDef) =>
       section.fields.filter(
         (f) =>
+          // An environment holds only runner settings.
+          (!target || f.path[0] === "runner") &&
           matchesQuery(f, query) &&
           (show === "all" || (show === "changed" ? changed.has(f.key) : differsFromDefault(doc, f.key))),
       ),
-    [query, show, changed, doc],
+    [query, show, changed, doc, target],
   );
 
-  const others = useMemo(() => (parseError ? [] : otherEntries(doc)), [doc, parseError]);
+  const others = useMemo(
+    () => (parseError ? [] : otherEntries(doc).filter((o) => !(target && o.path === "description"))),
+    [doc, parseError, target],
+  );
 
   const save = async () => {
     if (parseError) {
@@ -637,14 +655,30 @@ export function ConfigSection({ onError }: Props) {
       return;
     }
     try {
+      if (target) {
+        await api.saveEnvironment(target, content);
+        setOriginalContent(content);
+        void queryClient.invalidateQueries({ queryKey: ["environments"] });
+        notify.success(`Saved ${target}.`);
+        return;
+      }
       await api.saveConfig(content, configPath || undefined);
       setOriginalContent(content);
-      await refreshConfigOptions();
+      setMainContent(content);
       await refreshConfigFiles(activeFile);
       notify.success("Config saved.");
     } catch (e) {
       onError(e);
     }
+  };
+
+  const switchTarget = async (next: string) => {
+    if (next === target) return;
+    if (dirty) {
+      notify.warning({ message: "Unsaved changes", description: "Save or revert them before opening another file." });
+      return;
+    }
+    await load(false, true, undefined, next);
   };
 
   const revert = () => {
@@ -678,85 +712,6 @@ export function ConfigSection({ onError }: Props) {
       notify.success(`Saved ${activeFile}.`);
     } catch (e) {
       onError(e);
-    }
-  };
-
-  const runBatchConfigOps = async (operations: ConfigBatchOperation[], successVerb: string) => {
-    if (operations.length === 0) {
-      notify.info("No config file operations to apply.");
-      return undefined;
-    }
-    try {
-      const resp = await api.batchConfigs(operations);
-      const firstError = resp.results.find((r) => !r.ok)?.error;
-      if (resp.failed > 0) {
-        notify.warning({
-          message: `${successVerb}: ${resp.ok}/${resp.total} succeeded`,
-          description: firstError ? `First error: ${firstError}` : undefined,
-        });
-      } else {
-        notify.success(`${successVerb}: ${resp.ok}/${resp.total} succeeded.`);
-      }
-      await refreshConfigOptions();
-      return resp;
-    } catch (e) {
-      onError(e);
-      return undefined;
-    }
-  };
-
-  const addConfigFile = async () => {
-    const path = newConfigPath.trim();
-    if (!path) {
-      notify.info("Enter a config file path.");
-      return;
-    }
-    const seedContent = `${defaultConfigTemplate.trim()}\n`;
-    try {
-      const first = await api.batchConfigs([{ action: "add", path, content: seedContent }]);
-      if (first.failed === 0) {
-        await refreshConfigOptions();
-        notify.success("Config file add complete: 1/1 succeeded.");
-        setNewConfigPath("");
-        return;
-      }
-      const firstError = first.results.find((r) => !r.ok)?.error || "";
-      if (/strict config validation failed/i.test(firstError)) {
-        const second = await api.batchConfigs([{ action: "add", path, content: SAFE_DEFAULT_CONFIG }]);
-        await refreshConfigOptions();
-        if (second.failed === 0) {
-          notify.success("Config file created with default values.");
-          setNewConfigPath("");
-          return;
-        }
-        const secondError = second.results.find((r) => !r.ok)?.error || "unknown error";
-        notify.warning({
-          message: "Config file add complete: 0/1 succeeded",
-          description: `First error: ${secondError}`,
-        });
-        return;
-      }
-      notify.warning({
-        message: "Config file add complete: 0/1 succeeded",
-        description: `First error: ${firstError || "unknown error"}`,
-      });
-    } catch (e) {
-      onError(e);
-    }
-  };
-
-  const removeConfigFile = async (path: string) => {
-    await runBatchConfigOps([{ action: "remove", path }], "Config file remove complete");
-    if (path === configPath) {
-      await load(false, true);
-    }
-  };
-
-  const openConfigFile = async (path: string) => {
-    const ok = await load(false, true, path);
-    if (ok) {
-      notify.success(`Opened ${path}.`);
-      setConfigDialogOpen(false);
     }
   };
 
@@ -814,7 +769,18 @@ export function ConfigSection({ onError }: Props) {
             <Space size={10} align="center">
               <div>
                 <Space size={8} wrap>
-                  {loaded && !parseError ? (
+                  <Select
+                    aria-label="Config to edit"
+                    className="config-target-select"
+                    value={target}
+                    onChange={(v) => void switchTarget(v)}
+                    popupMatchSelectWidth={false}
+                    options={[
+                      { value: "", label: "Main config" },
+                      ...(envList.data?.items ?? []).map((e) => ({ value: e.name, label: `Environment: ${e.name}` })),
+                    ]}
+                  />
+                  {loaded && !parseError && !target ? (
                     <Tooltip
                       title={
                         nested
@@ -857,17 +823,12 @@ export function ConfigSection({ onError }: Props) {
                 <Radio.Button value="yaml">YAML</Radio.Button>
               </Radio.Group>
               <Tooltip title="Reload config from disk">
-                <Button icon={<ReloadOutlined />} onClick={() => void load()}>
+                <Button icon={<ReloadOutlined />} onClick={() => void load(false, false, undefined, target)}>
                   Reload
                 </Button>
               </Tooltip>
-              <Button
-                onClick={() => {
-                  void refreshConfigOptions();
-                  setConfigDialogOpen(true);
-                }}
-              >
-                Config files
+              <Button icon={<DeploymentUnitOutlined />} onClick={() => setEnvModalOpen(true)}>
+                Environments
               </Button>
               <Tooltip title="Revert unsaved changes (⇧⌘Z / Ctrl+Shift+Z)">
                 <Button icon={<RocketOutlined />} onClick={revert} disabled={!dirty}>
@@ -884,6 +845,15 @@ export function ConfigSection({ onError }: Props) {
             </Space>
           </Col>
         </Row>
+        {target ? (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginTop: 12 }}
+            title={`Editing the ${target} environment`}
+            description="Only runner settings live here. Anything not set comes from the main config, shown under each setting. Storage, notifications, logging and server settings are always the main config's."
+          />
+        ) : null}
         {parseError ? (
           <Alert
             type="error"
@@ -997,6 +967,7 @@ export function ConfigSection({ onError }: Props) {
                     warnings={warnings}
                     errors={errors}
                     onMigrateSecret={() => setSecretsModalOpen(true)}
+                    inherit={mainDoc}
                     extra={
                       section.id === "filtering" && show === "all" && !query ? (
                         <Card size="small" className="config-subcard">
@@ -1049,7 +1020,7 @@ export function ConfigSection({ onError }: Props) {
       )}
 
       {/* Linked files */}
-      <Card className="page-card">
+      <Card className="page-card" hidden={Boolean(target)}>
         <Space style={{ width: "100%", justifyContent: "space-between" }} align="start" wrap>
           <div className="config-section-head">
             <TitleIcon size="lg">
@@ -1187,63 +1158,13 @@ export function ConfigSection({ onError }: Props) {
         onApply={() => setSecretsModalOpen(false)}
         onClose={() => setSecretsModalOpen(false)}
       />
-      <Modal
-        title="Config files"
-        open={configDialogOpen}
-        onCancel={() => setConfigDialogOpen(false)}
-        footer={null}
-        width={760}
-      >
-        <Space orientation="vertical" size={12} style={{ width: "100%" }}>
-          <Typography.Text type="secondary">
-            Add or remove config files, and open one to edit it here.
-          </Typography.Text>
-          <Space.Compact style={{ width: "100%" }}>
-            <Input
-              value={newConfigPath}
-              onChange={(e) => setNewConfigPath(e.target.value)}
-              placeholder="configs/cluster-a.yaml"
-              aria-label="New config file path"
-            />
-            <Button type="primary" onClick={() => void addConfigFile()}>
-              Add
-            </Button>
-          </Space.Compact>
-          <ItemList
-            bordered
-            items={configItems}
-            empty="No config files discovered"
-            actions={(item) => (
-              <>
-                <Button size="small" onClick={() => void openConfigFile(item.path)}>
-                  Open
-                </Button>
-                <Button
-                  size="small"
-                  danger
-                  icon={<DeleteOutlined />}
-                  disabled={item.is_active}
-                  onClick={() => void removeConfigFile(item.path)}
-                >
-                  Remove
-                </Button>
-              </>
-            )}
-            render={(item) => (
-              <>
-                <Space orientation="vertical" size={0}>
-                  <Typography.Text code>{item.path}</Typography.Text>
-                  <Typography.Text type="secondary">{item.resolved}</Typography.Text>
-                </Space>
-                <Space>
-                  <Tag color={item.exists ? "success" : "default"}>{item.exists ? "Exists" : "Missing"}</Tag>
-                  {item.is_active ? <Tag color="processing">Active</Tag> : null}
-                </Space>
-              </>
-            )}
-          />
-        </Space>
-      </Modal>
+      <EnvironmentsModal
+        open={envModalOpen}
+        onClose={() => setEnvModalOpen(false)}
+        mainContent={mainContent}
+        editing={target}
+        onEdit={(name) => void switchTarget(name)}
+      />
       <SaveBar
         dirty={dirty}
         onSave={() => void save()}

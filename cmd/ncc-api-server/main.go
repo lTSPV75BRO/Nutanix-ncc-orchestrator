@@ -358,6 +358,8 @@ type configUpdateRequest struct {
 
 type runConfigPreferenceRequest struct {
 	Path string `json:"path,omitempty"`
+	// Environment, when set, makes the default an environment instead of a path.
+	Environment string `json:"environment,omitempty"`
 }
 
 type availableConfigFile struct {
@@ -427,7 +429,10 @@ type scheduleUpdateRequest struct {
 }
 
 type runTriggerRequest struct {
-	ConfigPath string   `json:"config_path,omitempty"`
+	// Environment names configs/environments/<name>.yaml; its runner settings
+	// are laid over the main config. Preferred over ConfigPath.
+	Environment string   `json:"environment,omitempty"`
+	ConfigPath  string   `json:"config_path,omitempty"`
 	Password   string   `json:"password,omitempty"`
 	ExtraArgs  []string `json:"extra_args,omitempty"`
 	// Group optionally scopes the run to a single cluster group (by name).
@@ -439,6 +444,7 @@ type runTriggerRequest struct {
 
 type runPreflightRequest struct {
 	ConfigPath string `json:"config_path,omitempty"`
+	Environment string `json:"environment,omitempty"`
 }
 
 type artifactInfo struct {
@@ -465,6 +471,9 @@ type runInfo struct {
 	Source string `json:"source,omitempty"`
 	// How the run was launched ("scheduled" | "manual"), from run-summary.json.
 	RunSource string `json:"run_source,omitempty"`
+	// Environment the run used (configs/environments/<name>.yaml); empty for
+	// the main config. From run-meta.json.
+	Environment string `json:"environment,omitempty"`
 
 	// Enrichment fields (populated from run-summary.json when available).
 	Timestamp      string  `json:"timestamp,omitempty"`
@@ -905,6 +914,7 @@ func main() {
 	s.startSelfHealLoop(context.Background())
 	s.ensureApplyUpdateWatcher()
 	s.startBackupScheduleLoop(context.Background())
+	s.startEnvironmentScheduleLoop(context.Background())
 	s.startNotificationDigestLoop(context.Background())
 	s.startUserDBReloadLoop(context.Background())
 	s.startAlertLifecycleSyncLoop(context.Background())
@@ -2236,18 +2246,6 @@ func (s *apiServer) discoverAvailableConfigFiles() ([]availableConfigFile, error
 	return items, nil
 }
 
-func (s *apiServer) resolvePreferredRunConfigPath(r *http.Request, requestedPath string) string {
-	if v := strings.TrimSpace(requestedPath); v != "" {
-		return v
-	}
-	if p, ok := principalFromContext(r.Context()); ok && s.users != nil {
-		if pref := strings.TrimSpace(s.users.getRunConfigPath(p.subject)); pref != "" {
-			return pref
-		}
-	}
-	return s.configPath
-}
-
 func (s *apiServer) handleConfigsList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
@@ -2280,9 +2278,12 @@ func (s *apiServer) handleRunConfigPreference(w http.ResponseWriter, r *http.Req
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{
-			"path": strings.TrimSpace(s.users.getRunConfigPath(p.subject)),
-		}})
+		pref := strings.TrimSpace(s.users.getRunConfigPath(p.subject))
+		data := map[string]interface{}{"path": pref}
+		if strings.HasPrefix(pref, "env:") {
+			data = map[string]interface{}{"environment": strings.TrimPrefix(pref, "env:")}
+		}
+		writeJSON(w, http.StatusOK, envelope{Success: true, Data: data})
 	case http.MethodPut:
 		if err := requireJSONContentType(r); err != nil {
 			writeJSON(w, http.StatusUnsupportedMediaType, envelope{Success: false, Error: err.Error()})
@@ -2294,8 +2295,14 @@ func (s *apiServer) handleRunConfigPreference(w http.ResponseWriter, r *http.Req
 			return
 		}
 		val := strings.TrimSpace(req.Path)
-		if val != "" {
-			if _, err := s.validateConfigPath(val); err != nil {
+		if env := strings.TrimSpace(req.Environment); env != "" {
+			if !s.environmentExists(env) {
+				writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: fmt.Sprintf("environment %q does not exist", env)})
+				return
+			}
+			val = "env:" + env
+		} else if val != "" {
+			if _, err := s.resolveRunConfig(nil, "", val); err != nil {
 				writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 				return
 			}
@@ -3282,6 +3289,7 @@ func (s *apiServer) handleRuns(w http.ResponseWriter, r *http.Request) {
 				ri.HasIndex = true
 			}
 			enrichRunInfoFromSummary(&ri, filepath.Join(runPath, "run-summary.json"))
+			ri.Environment = environmentForRunDir(runPath)
 			collected = append(collected, ri)
 		}
 	}
@@ -3461,6 +3469,7 @@ func (s *apiServer) handleRunByID(w http.ResponseWriter, r *http.Request, id str
 		ri.HasIndex = true
 	}
 	enrichRunInfoFromSummary(&ri, filepath.Join(runPath, "run-summary.json"))
+	ri.Environment = environmentForRunDir(runPath)
 
 	// Embed the artifacts we can find — keeps the UI from making N follow-up
 	// requests for a single drill-down.
@@ -3755,12 +3764,12 @@ func (s *apiServer) handleRunPreflight(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	cfgPath := s.resolvePreferredRunConfigPath(r, req.ConfigPath)
-	resolvedCfgPath, err := s.validateConfigPath(cfgPath)
+	choice, err := s.resolveRunConfig(r, req.Environment, req.ConfigPath)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 		return
 	}
+	resolvedCfgPath := choice.path
 	extendDeadlines(w, preflightTimeout)
 	out, err := s.runOrchestrator([]string{"preflight-check", "--config", resolvedCfgPath, "--format", "json"}, preflightTimeout)
 	if err != nil {
@@ -3799,6 +3808,14 @@ func (s *apiServer) handleRunPreflight(w http.ResponseWriter, r *http.Request) {
 	if v, present := payload["failed"]; present {
 		successFields["failed"] = v
 	}
+	if choice.environment != "" {
+		successFields["environment"] = choice.environment
+		payload["environment"] = choice.environment
+		// Show the environment file, not the generated merge.
+		if src, err := s.environmentFile(choice.environment); err == nil {
+			payload["config_path"] = s.displayRelPath(src)
+		}
+	}
 	s.audit(r, "runs.preflight", true, successFields)
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: payload})
 }
@@ -3817,12 +3834,13 @@ func (s *apiServer) handleRunTrigger(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 		return
 	}
-	cfgPath := s.resolvePreferredRunConfigPath(r, req.ConfigPath)
-	resolvedCfgPath, err := s.validateConfigPath(cfgPath)
+	choice, err := s.resolveRunConfig(r, req.Environment, req.ConfigPath)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 		return
 	}
+	resolvedCfgPath := choice.path
+	cfgPath := resolvedCfgPath
 	if len(req.Password) > 256 {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "password too long"})
 		return
@@ -3840,6 +3858,9 @@ func (s *apiServer) handleRunTrigger(w http.ResponseWriter, r *http.Request) {
 	p, _ := principalFromContext(r.Context())
 	access := s.allowedClusters(p)
 	scopedClusters, scopeErr := s.resolveRunClusterScope(req, access, cleanExtraArgs)
+	if scopeErr == nil {
+		scopedClusters, scopeErr = confineToEnvironment(scopedClusters, choice, access.unrestricted)
+	}
 	if scopeErr != nil {
 		writeJSON(w, http.StatusForbidden, envelope{Success: false, Error: scopeErr.Error()})
 		return
@@ -3862,6 +3883,7 @@ func (s *apiServer) handleRunTrigger(w http.ResponseWriter, r *http.Request) {
 	// when all concurrency slots are busy.
 	res := s.submitRun(runStartParams{
 		cfgPath:      resolvedCfgPath,
+		environment:  choice.environment,
 		password:     req.Password,
 		extraArgs:    cleanExtraArgs,
 		group:        strings.TrimSpace(req.Group),
@@ -3872,6 +3894,9 @@ func (s *apiServer) handleRunTrigger(w http.ResponseWriter, r *http.Request) {
 	})
 
 	baseFields := map[string]interface{}{"config_path": resolvedCfgPath, "extra_args_count": len(cleanExtraArgs)}
+	if choice.environment != "" {
+		baseFields["environment"] = choice.environment
+	}
 	if strings.TrimSpace(req.Group) != "" {
 		baseFields["group"] = strings.TrimSpace(req.Group)
 	}
@@ -6012,6 +6037,10 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/api/v1/runs/summary", s.handleRunSummary)
 	mux.HandleFunc("/api/v1/runs/active", s.handleRunActive)
 	mux.HandleFunc("/api/v1/runs/config-preference", s.handleRunConfigPreference)
+	mux.HandleFunc("/api/v1/environments", s.handleEnvironments)
+	mux.HandleFunc("/api/v1/environment-schedules", s.handleEnvironmentSchedules)
+	mux.HandleFunc("/api/v1/settings/environments", s.handleEnvironmentSettings)
+	mux.HandleFunc("/api/v1/settings/environments/", s.handleEnvironmentSettings)
 	mux.HandleFunc("/api/v1/runs/configs", s.handleConfigsList)
 	mux.HandleFunc("/api/v1/runs/extra-args", s.handleRunExtraArgs)
 	mux.HandleFunc("/api/v1/runs/preflight", s.handleRunPreflight)

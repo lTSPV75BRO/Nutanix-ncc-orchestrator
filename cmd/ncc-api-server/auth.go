@@ -434,6 +434,15 @@ func routeMinRoleFor(p string, isRead bool) Role {
 			return RoleViewer
 		}
 		return RoleOperator
+	case p == "/api/v1/environments":
+		return RoleViewer
+	case p == "/api/v1/environment-schedules":
+		// Like the run schedule: reading is a viewer read, changing it automates
+		// runs an operator may already start by hand.
+		if isRead {
+			return RoleViewer
+		}
+		return RoleOperator
 	case p == "/api/v1/runs/config-preference":
 		// Any authenticated caller may store their own default run config.
 		return RoleViewer

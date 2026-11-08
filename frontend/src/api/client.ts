@@ -3,6 +3,11 @@ import type {
   AuditLogData,
   ConfigData,
   ConfigListData,
+  EnvironmentDetail,
+  EnvironmentInfo,
+  EnvironmentListData,
+  EnvironmentSchedule,
+  EnvironmentScheduleData,
   ConfigBatchData,
   ConfigBatchOperation,
   ConfigRelatedFileData,
@@ -391,18 +396,39 @@ export const api = {
   runSummary: () => callApi<unknown>("/api/v1/runs/summary"),
   runActive: (signal?: AbortSignal) => callApi<RunActiveData>("/api/v1/runs/active", signal ? { signal } : undefined),
   runExtraArgs: () => callApi<{ options: ExtraArgOption[] }>("/api/v1/runs/extra-args"),
-  getRunConfigPreference: () => callApi<{ path?: string }>("/api/v1/runs/config-preference"),
-  updateRunConfigPreference: (path?: string) =>
-    callApi<{ path?: string }>("/api/v1/runs/config-preference", {
+  getRunConfigPreference: () => callApi<{ path?: string; environment?: string }>("/api/v1/runs/config-preference"),
+  updateRunConfigPreference: (pref: { path?: string; environment?: string }) =>
+    callApi<{ path?: string; environment?: string }>("/api/v1/runs/config-preference", {
       method: "PUT",
-      body: JSON.stringify({ path: path ?? "" }),
+      body: JSON.stringify({ path: pref.path ?? "", environment: pref.environment ?? "" }),
     }),
   runConfigs: () => callApi<ConfigListData>("/api/v1/runs/configs"),
+  listEnvironments: () => callApi<EnvironmentListData>("/api/v1/environments"),
+  getEnvironment: (name: string) => callApi<EnvironmentDetail>(`/api/v1/settings/environments/${encodeURIComponent(name)}`),
+  saveEnvironment: (name: string, content: string, create = false) =>
+    callApi<{ info: EnvironmentInfo }>(`/api/v1/settings/environments/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      body: JSON.stringify({ content, create }),
+    }),
+  deleteEnvironment: (name: string) =>
+    callApi<unknown>(`/api/v1/settings/environments/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  importableConfigFiles: () => callApi<{ items: string[] }>("/api/v1/settings/environments/import"),
+  importEnvironment: (path: string, name: string) =>
+    callApi<{ info: EnvironmentInfo; dropped: string[] }>("/api/v1/settings/environments/import", {
+      method: "POST",
+      body: JSON.stringify({ path, name }),
+    }),
+  environmentSchedules: () => callApi<EnvironmentScheduleData>("/api/v1/environment-schedules"),
+  saveEnvironmentSchedules: (items: EnvironmentSchedule[]) =>
+    callApi<{ items: EnvironmentSchedule[] }>("/api/v1/environment-schedules", {
+      method: "PUT",
+      body: JSON.stringify({ items }),
+    }),
   runCancel: (id?: string) =>
     callApi<RunCancelData>(id ? `/api/v1/runs/active?id=${encodeURIComponent(id)}` : "/api/v1/runs/active", {
       method: "DELETE",
     }),
-  runPreflight: (payload: { config_path?: string }) =>
+  runPreflight: (payload: { config_path?: string; environment?: string }) =>
     callApi<RunPreflightData>(
       "/api/v1/runs/preflight",
       {
@@ -412,6 +438,7 @@ export const api = {
       LONG_CALL_TIMEOUT_MS.preflight,
     ),
   runTrigger: (payload: {
+    environment?: string;
     config_path?: string;
     password?: string;
     extra_args: string[];

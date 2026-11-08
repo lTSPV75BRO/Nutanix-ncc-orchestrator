@@ -6,10 +6,13 @@
 // handling, runs, users, notification and schedule settings, backups, feature
 // switches) is kept in sessionStorage, so it survives a reload and resets when
 // the tab closes or they choose Reset. Nothing leaves the browser.
+import { parse as parseYaml } from "yaml";
 import * as fx from "./fixtures";
 import type {
   AuditLogEntry,
   BackupEntry,
+  EnvironmentInfo,
+  EnvironmentSchedule,
   NCCAlert,
   NCCAlertEvent,
   NCCDisposition,
@@ -28,7 +31,8 @@ const NOT_IN_DEMO =
   "Not available in the demo. Download NCC Orchestrator to try it on your own clusters.";
 
 type AlertMark = { state: NCCAlert["state"]; by: string; at: string; note?: string };
-type ActiveRun = { id: string; startedAt: number; clusters: string[]; user: string };
+type ActiveRun = { id: string; startedAt: number; clusters: string[]; user: string; environment?: string; source?: string };
+type EnvFile = { content: string; updated_at: string };
 
 type DemoState = {
   user: { username: string; role: UserRole } | null;
@@ -38,6 +42,8 @@ type DemoState = {
   active: ActiveRun | null;
   backups: BackupEntry[];
   audit: AuditLogEntry[];
+  environments: Record<string, EnvFile>;
+  envSchedules: EnvironmentSchedule[];
   /** GET answers replaced by a save (path → body). */
   saved: Record<string, unknown>;
 };
@@ -53,6 +59,8 @@ function freshState(): DemoState {
     active: null,
     backups: clone(fx.BACKUPS.backups),
     audit: [],
+    environments: Object.fromEntries(Object.entries(fx.ENVIRONMENT_FILES).map(([k, content]) => [k, { content, updated_at: fx.ENVIRONMENT_UPDATED }])),
+    envSchedules: clone(fx.ENVIRONMENT_SCHEDULES),
     saved: {},
   };
 }
@@ -110,12 +118,86 @@ function audit(action: string, success = true, extra: Partial<AuditLogEntry> = {
   state.audit = state.audit.slice(0, 100);
 }
 
+// ---------------------------------------------------------- environments
+
+const ENV_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
+const ENV_KEYS = new Set(["schema-version", "description", "runner"]);
+
+/** What the server reports about one environment file; error when it can't be used. */
+function envInfo(name: string, content: string, updated_at?: string): EnvironmentInfo {
+  const path = `configs/environments/${name}.yaml`;
+  let doc: Record<string, unknown>;
+  try {
+    doc = (parseYaml(content) ?? {}) as Record<string, unknown>;
+  } catch (e) {
+    return { name, path, cluster_count: 0, updated_at, error: `Not valid YAML: ${(e as Error).message.split("\n")[0]}` };
+  }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return { name, path, cluster_count: 0, updated_at, error: "The file must be a YAML mapping." };
+  const extra = Object.keys(doc).filter((k) => !ENV_KEYS.has(k));
+  const runner = (doc.runner ?? {}) as Record<string, unknown>;
+  const targets = (runner.targets ?? {}) as Record<string, unknown>;
+  const clusters = Array.isArray(targets.clusters) ? targets.clusters.map(String) : [];
+  const pcs = Array.isArray(targets.pcs) ? targets.pcs.map(String) : [];
+  return {
+    name,
+    path,
+    description: typeof doc.description === "string" ? doc.description : undefined,
+    mode: pcs.length && !clusters.length ? "pc" : "clusters",
+    clusters,
+    cluster_count: clusters.length,
+    prism_centrals: pcs.length ? pcs : undefined,
+    updated_at,
+    ...(extra.length ? { error: `Holds server settings (${extra.join(", ")}). An environment file may only set runner options.` } : {}),
+  };
+}
+
+function envList(): EnvironmentInfo[] {
+  return Object.entries(state.environments)
+    .map(([name, f]) => envInfo(name, f.content, f.updated_at))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+const DURATION = /^([1-9][0-9]*)(m|h|d)$/;
+
+function nextScheduleRun(e: EnvironmentSchedule, from = Date.now()): string | undefined {
+  if (!e.enabled) return undefined;
+  const m = DURATION.exec(e.every);
+  if (!m) return undefined;
+  const n = Number(m[1]);
+  const ms = n * (m[2] === "m" ? 60_000 : m[2] === "h" ? 3600_000 : 86400_000);
+  if (m[2] === "d" && e.at) {
+    const [hh, mm] = e.at.split(":").map(Number);
+    const d = new Date(from);
+    d.setHours(hh, mm, 0, 0);
+    while (d.getTime() <= from) d.setDate(d.getDate() + 1);
+    if (n > 1 && e.last_run_at) {
+      const earliest = new Date(e.last_run_at).getTime() + ms - 3600_000;
+      while (d.getTime() < earliest) d.setDate(d.getDate() + 1);
+    }
+    return d.toISOString();
+  }
+  const last = e.last_run_at ? new Date(e.last_run_at).getTime() : from;
+  return new Date(Math.max(from + 60_000, last + ms)).toISOString();
+}
+
+function envSchedules() {
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return {
+    items: state.envSchedules.map((e) => ({ ...e, next_run_at: nextScheduleRun(e) })),
+    server_timezone: tz,
+    utc_offset_min: -new Date().getTimezoneOffset(),
+  };
+}
+
 // ------------------------------------------------------------------ runs
 
 const ALL_CLUSTERS = fx.CLUSTER_INVENTORY.clusters;
 
 function liveOutput(run: ActiveRun, elapsed: number): string {
-  const lines = [`${new Date(run.startedAt).toISOString()} INFO  run ${run.id} started (manual, ${run.user}) for ${run.clusters.length} clusters`];
+  const lines = [
+    `${new Date(run.startedAt).toISOString()} INFO  run ${run.id} started (${run.source ?? "manual"}, ${run.user}) for ${run.clusters.length} clusters` +
+      (run.environment ? ` from the ${run.environment} environment` : ""),
+  ];
   const per = (RUN_SECONDS - 5) / run.clusters.length;
   run.clusters.forEach((c, i) => {
     const startAt = 2 + i * per * 0.5;
@@ -144,7 +226,10 @@ function finishRun(run: ActiveRun, status: "partial" | "cancelled") {
     timestamp: new Date(run.startedAt).toISOString(),
     duration_s: Math.round((end - run.startedAt) / 1000),
     source: "trigger",
-    run_source: "manual",
+    run_source: run.source ?? "manual",
+    environment: run.environment,
+    clusters_ok: Math.max(0, run.clusters.length - (run.clusters.includes("10.40.2.21") ? 1 : 0)),
+    clusters_failed: run.clusters.includes("10.40.2.21") ? 1 : 0,
     status,
     success: false,
     exit_code: status === "cancelled" ? 130 : 3,
@@ -186,7 +271,7 @@ function activeData(): RunActiveData {
         clusters: run.clusters,
         all_clusters: run.clusters.length === ALL_CLUSTERS.length,
         live_output: out,
-        source: "manual",
+        source: run.source ?? "manual",
       },
     ],
   };
@@ -194,7 +279,7 @@ function activeData(): RunActiveData {
 
 function allRuns(): RunInfo[] {
   const running: RunInfo[] = state.active
-    ? [{ id: state.active.id, mod_time: new Date(state.active.startedAt).toISOString(), has_index: false, source: "trigger", timestamp: new Date(state.active.startedAt).toISOString(), status: "running", run_source: "manual" }]
+    ? [{ id: state.active.id, mod_time: new Date(state.active.startedAt).toISOString(), has_index: false, source: "trigger", timestamp: new Date(state.active.startedAt).toISOString(), status: "running", run_source: state.active.source ?? "manual", environment: state.active.environment }]
     : [];
   return [...running, ...state.runs, ...fx.RUNS];
 }
@@ -300,7 +385,10 @@ const gets: Record<string, Handler> = {
   "/api/v1/runs/active": () => activeData(),
   "/api/v1/runs/summary": () => latestSummary(),
   "/api/v1/runs/extra-args": () => fx.EXTRA_ARGS,
-  "/api/v1/runs/config-preference": () => ({ path: "config.yaml" }),
+  "/api/v1/runs/config-preference": () => ({ path: "config.yaml", environment: "" }),
+  "/api/v1/environments": () => ({ items: envList(), main_config: "config.yaml", dir: "configs/environments" }),
+  "/api/v1/environment-schedules": () => envSchedules(),
+  "/api/v1/settings/environments/import": () => ({ items: fx.IMPORTABLE_CONFIGS }),
   "/api/v1/runs/configs": () => fx.CONFIG_LIST,
   "/api/v1/artifacts": () => [],
   "/api/v1/report/data": () => ({ ...fx.REPORT, run_summary: latestSummary() }),
@@ -412,15 +500,34 @@ async function write(method: string, path: string, url: URL, init?: RequestInit)
   if (role === "viewer") return fail(403, "Viewers can look but not change anything. Sign in as demo (admin) or alex.ops (operator) to try changes.", "NCC_API_FORBIDDEN");
 
   // ---- runs (operator+)
+  const runEnv = typeof body.environment === "string" && body.environment ? body.environment : "";
+  const envTargets = (): { clusters: string[]; error?: string } => {
+    if (!runEnv) return { clusters: ALL_CLUSTERS };
+    const f = state.environments[runEnv];
+    if (!f) return { clusters: [], error: `There is no ${runEnv} environment.` };
+    const info = envInfo(runEnv, f.content);
+    if (info.error) return { clusters: [], error: `The ${runEnv} environment can't be used: ${info.error}` };
+    if (!info.clusters?.length) return { clusters: [], error: `The ${runEnv} environment lists no clusters.` };
+    return { clusters: info.clusters };
+  };
   if (path === "/api/v1/runs/preflight") {
+    const t = envTargets();
+    if (t.error) return fail(400, t.error);
+    const file = runEnv ? `configs/environments/${runEnv}.yaml` : "config.yaml";
     return ok({
       ok: true,
       failed: 0,
       warn: 1,
-      config_path: "config.yaml",
+      config_path: file,
+      environment: runEnv || undefined,
       actionableHints: [],
       checks: [
-        { id: "config", status: "pass", title: "Config file is valid", message: `config.yaml lists ${ALL_CLUSTERS.length} clusters.` },
+        {
+          id: "config",
+          status: "pass",
+          title: "Config file is valid",
+          message: runEnv ? `${file} on top of config.yaml lists ${t.clusters.length} clusters.` : `config.yaml lists ${t.clusters.length} clusters.`,
+        },
         { id: "credentials", status: "pass", title: "Cluster credentials are set", message: "Read from the secrets provider." },
         { id: "reachability", status: "warn", title: "One cluster didn't answer", message: "10.40.2.21:9440 timed out. The run continues without it." },
         { id: "disk", status: "pass", title: "Enough disk space", message: "41 GB free for reports." },
@@ -429,12 +536,25 @@ async function write(method: string, path: string, url: URL, init?: RequestInit)
   }
   if (path === "/api/v1/runs/trigger") {
     if (state.active) return fail(409, "A run is already in progress.", "NCC_API_RUN_IN_PROGRESS");
-    const picked = Array.isArray(body.clusters) && body.clusters.length ? (body.clusters as string[]) : ALL_CLUSTERS;
+    const t = envTargets();
+    if (t.error) return fail(400, t.error);
+    const asked = Array.isArray(body.clusters) ? (body.clusters as string[]) : [];
+    const outside = asked.filter((c) => !t.clusters.includes(c));
+    if (runEnv && outside.length) return fail(400, `${outside.slice(0, 3).join(", ")}${outside.length > 3 ? " …" : ""} not in the ${runEnv} environment.`);
+    const picked = asked.length ? asked : t.clusters;
     const startedAt = Date.now();
-    state.active = { id: runIdAt(startedAt), startedAt, clusters: picked, user: state.user.username };
+    state.active = { id: runIdAt(startedAt), startedAt, clusters: picked, user: state.user.username, environment: runEnv || undefined };
     audit("run.start", true, { path: "/api/v1/runs/trigger" });
     save();
-    return ok({ run_id: state.active.id, started: true, started_at: new Date(startedAt).toISOString(), config_path: "config.yaml", clusters: picked, running_count: 1 });
+    return ok({
+      run_id: state.active.id,
+      started: true,
+      started_at: new Date(startedAt).toISOString(),
+      config_path: runEnv ? `configs/environments/${runEnv}.yaml` : "config.yaml",
+      environment: runEnv || undefined,
+      clusters: picked,
+      running_count: 1,
+    });
   }
   if (path === "/api/v1/runs/active" && method === "DELETE") {
     const run = state.active;
@@ -472,6 +592,30 @@ async function write(method: string, path: string, url: URL, init?: RequestInit)
     audit("schedule.update");
     save();
     return ok({ schedule, applied: Boolean(body.apply), output: "Installed the systemd timer ncc-orchestrator-scan.timer (demo)." });
+  }
+
+  if (path === "/api/v1/environment-schedules") {
+    const items = (Array.isArray(body.items) ? body.items : []) as EnvironmentSchedule[];
+    for (const e of items) {
+      if (!state.environments[e.environment]) return fail(400, `There is no ${e.environment || "(unnamed)"} environment.`);
+      if (!DURATION.exec(e.every)) return fail(400, `"${e.every}" is not an interval such as 4h or 1d.`);
+      if (e.at && !/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(e.at)) return fail(400, `"${e.at}" is not a time such as 02:00.`);
+    }
+    const before = new Map(state.envSchedules.map((e) => [e.id, e]));
+    state.envSchedules = items.map((e, i) => {
+      const old = e.id ? before.get(e.id) : undefined;
+      return {
+        ...(old ?? { created_at: nowIso() }),
+        id: old?.id ?? `es-${Date.now().toString(36)}-${i}`,
+        environment: e.environment,
+        enabled: Boolean(e.enabled),
+        every: e.every,
+        at: /d$/.test(e.every) ? e.at || "" : "",
+      };
+    });
+    audit("environment_schedules.update");
+    save();
+    return ok(envSchedules());
   }
 
   // ---- admin only from here
@@ -523,6 +667,39 @@ async function write(method: string, path: string, url: URL, init?: RequestInit)
     save();
     return ok({ schedule });
   }
+  if (path === "/api/v1/settings/environments/import" && method === "POST") {
+    const name = String(body.name ?? "").trim();
+    if (!ENV_NAME.test(name)) return fail(400, "Use lowercase letters, digits and dashes, for example prod or eu-staging.");
+    if (state.environments[name]) return fail(409, `The ${name} environment already exists.`);
+    if (!fx.IMPORTABLE_CONFIGS.includes(String(body.path))) return fail(400, "Pick one of the listed config files.");
+    const content = `schema-version: 1\ndescription: Imported from ${String(body.path)}\nrunner:\n  targets:\n    clusters:\n${fx.LEGACY_STAGING_CLUSTERS.map((c) => `      - ${c}\n`).join("")}  execution:\n    timeout: 15m\n`;
+    state.environments[name] = { content, updated_at: nowIso() };
+    audit("settings.environments.import", true, { path: `/api/v1/settings/environments/${name}` });
+    save();
+    return ok({ info: envInfo(name, content, nowIso()), dropped: ["api-server", "notifications", "storage"] });
+  }
+  const envPath = /^\/api\/v1\/settings\/environments\/([^/]+)$/.exec(path);
+  if (envPath) {
+    const name = decodeURIComponent(envPath[1]);
+    if (method === "DELETE") {
+      if (!state.environments[name]) return fail(404, `There is no ${name} environment.`);
+      delete state.environments[name];
+      state.envSchedules = state.envSchedules.filter((e) => e.environment !== name);
+      audit("settings.environments.delete", true, { path });
+      save();
+      return ok({ name });
+    }
+    if (!ENV_NAME.test(name)) return fail(400, "Use lowercase letters, digits and dashes, for example prod or eu-staging.");
+    if (body.create && state.environments[name]) return fail(409, `The ${name} environment already exists.`);
+    if (!body.create && !state.environments[name]) return fail(404, `There is no ${name} environment.`);
+    const content = String(body.content ?? "");
+    const info = envInfo(name, content, nowIso());
+    if (info.error) return fail(400, info.error, "NCC_API_CONFIG_INVALID");
+    state.environments[name] = { content, updated_at: info.updated_at as string };
+    audit(body.create ? "settings.environments.create" : "settings.environments.update", true, { path });
+    save();
+    return ok({ info });
+  }
   if (MERGE_SAVES[path]) {
     const merged = { ...(getAnswer(path, url) as object), ...body, updated_at: nowIso() };
     state.saved[path] = merged;
@@ -540,6 +717,7 @@ async function route(method: string, url: URL, init?: RequestInit): Promise<Resp
 
   if (!state.user && !PUBLIC.has(path)) return fail(401, "Sign in to continue.", "NCC_API_UNAUTHORIZED");
   if (gets[path]) return ok(getAnswer(path, url));
+  if (!state.user) return fail(401, "Sign in to continue.", "NCC_API_UNAUTHORIZED");
 
   const run = /^\/api\/v1\/runs\/([^/]+)$/.exec(path);
   if (run) {
@@ -551,6 +729,14 @@ async function route(method: string, url: URL, init?: RequestInit): Promise<Resp
     }
     const data = fx.runById(id);
     return data ? ok(data) : fail(404, "Run not found.");
+  }
+  const env = /^\/api\/v1\/settings\/environments\/([^/]+)$/.exec(path);
+  if (env) {
+    if (state.user.role !== "admin") return fail(403, "Only admins can open environment files.", "NCC_API_FORBIDDEN");
+    const name = decodeURIComponent(env[1]);
+    const f = state.environments[name];
+    if (!f) return fail(404, `There is no ${name} environment.`);
+    return ok({ name, path: `configs/environments/${name}.yaml`, content: f.content, info: envInfo(name, f.content, f.updated_at) });
   }
   const alert = /^\/api\/v1\/alerts\/ncc\/([^/]+)$/.exec(path);
   if (alert) {

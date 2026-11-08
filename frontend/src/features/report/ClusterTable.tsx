@@ -34,6 +34,8 @@ type Props = {
   nccLogs?: Array<{ name: string; path: string }>;
   filterText: string;
   selectedClusters: string[];
+  /** Only rows on these clusters (an environment's list); null for all. */
+  environmentClusters?: string[] | null;
   clusterNameMap: Record<string, string>;
   severityFilters: Array<"FAIL" | "WARN" | "ERR" | "INFO">;
   pcAlerts?: unknown[];
@@ -713,6 +715,7 @@ export function ClusterTable({
   nccLogs,
   filterText,
   selectedClusters,
+  environmentClusters = null,
   clusterNameMap,
   severityFilters,
   pcAlerts,
@@ -812,7 +815,10 @@ export function ClusterTable({
         key: `${cluster}-${alert}-${idx}`,
         clusterName,
         searchText: `${clusterName} ${cluster} ${severity} ${alert}`.toLowerCase(),
-        clusterKeys: [clusterName.toLowerCase(), nameOf(cluster).toLowerCase()],
+        // Names and addresses, so filters given either (environment files list addresses) match.
+        clusterKeys: [clusterName, nameOf(cluster), cluster, String(raw.cluster_ip ?? raw.address ?? "")]
+          .map((k) => k.trim().toLowerCase())
+          .filter(Boolean),
         cluster,
         clusterIP: String(raw.cluster_ip ?? raw.address ?? ""),
         alert,
@@ -904,7 +910,9 @@ export function ClusterTable({
         .filter((t) => !/^(sev|severity|cluster|changed|flaky):/.test(t)),
     };
     const selectedSet = new Set((selectedClusters || []).map((v) => v.toLowerCase()));
+    const envSet = environmentClusters ? new Set(environmentClusters.map((v) => v.toLowerCase())) : null;
     return baseRows.filter((r) => {
+      if (envSet && !r.clusterKeys.some((k) => envSet.has(k))) return false;
       if (severityFilters.length > 0 && !severityFilters.includes(r.severity as "FAIL" | "WARN" | "ERR" | "INFO")) return false;
       if (parsedTokens.sev && r.severity !== parsedTokens.sev) return false;
       if (parsedTokens.cluster && !`${r.clusterName} ${r.cluster}`.toLowerCase().includes(parsedTokens.cluster)) return false;
@@ -916,7 +924,7 @@ export function ClusterTable({
       if (alertSource === "PC" && pcResolvedFilter !== "all" && r.resolved !== pcResolvedFilter) return false;
       return parsedTokens.terms.every((t) => r.searchText.includes(t));
     });
-  }, [baseRows, deferredFilterText, selectedClusters, severityFilters, alertSource, pcResolvedFilter, compareMode]);
+  }, [baseRows, deferredFilterText, selectedClusters, environmentClusters, severityFilters, alertSource, pcResolvedFilter, compareMode]);
 
   const dispositionByKey = useMemo(() => {
     const map = new Map<string, NCCDisposition>();

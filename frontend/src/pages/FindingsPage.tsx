@@ -91,6 +91,17 @@ export function FindingsPage() {
   const [pcResolvedFilter, setPcResolvedFilter] = useState<"all" | "No" | "Yes">("No");
   const [loadFullReport, setLoadFullReport] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
+  const [environment, setEnvironment] = useState(() => (searchParams.get("env") || "").trim());
+  // Findings on one environment's clusters ("" = every cluster).
+  const environmentsQuery = useQuery({ queryKey: ["environments"], queryFn: api.listEnvironments, staleTime: 60_000 });
+  const filterableEnvironments = useMemo(
+    () => (environmentsQuery.data?.items ?? []).filter((e) => !e.error && (e.clusters?.length ?? 0) > 0),
+    [environmentsQuery.data],
+  );
+  const environmentClusters = useMemo(
+    () => filterableEnvironments.find((e) => e.name === environment)?.clusters ?? null,
+    [filterableEnvironments, environment],
+  );
   const [filtersReady, setFiltersReady] = useState(false);
   const [tableSummary, setTableSummary] = useState<{
     total: number;
@@ -137,6 +148,8 @@ export function FindingsPage() {
     else next.delete("sev");
     if (selectedClusters.length > 0) next.set("clusters", selectedClusters.join(","));
     else next.delete("clusters");
+    if (environment) next.set("env", environment);
+    else next.delete("env");
     if (compareMode !== "all") next.set("mode", compareMode);
     else next.delete("mode");
     if (alertSource === "PC" && pcResolvedFilter !== "No") next.set("resolved", pcResolvedFilter);
@@ -149,6 +162,7 @@ export function FindingsPage() {
     filterText,
     severityFilters,
     selectedClusters,
+    environment,
     compareMode,
     alertSource,
     pcResolvedFilter,
@@ -165,6 +179,7 @@ export function FindingsPage() {
     if (filterText.trim()) next.set("q", filterText.trim());
     if (severityFilters.length > 0) next.set("sev", severityFilters.join(","));
     if (selectedClusters.length > 0) next.set("clusters", selectedClusters.join(","));
+    if (environment) next.set("env", environment);
     if (compareMode !== "all") next.set("mode", compareMode);
     if (alertSource === "PC" && pcResolvedFilter !== "No") next.set("resolved", pcResolvedFilter);
     u.search = next.toString();
@@ -477,12 +492,14 @@ export function FindingsPage() {
     setCompareMode("all");
     setAlertSource("NCC");
     setPcResolvedFilter("No");
+    setEnvironment("");
   };
 
   const filtersActive =
     filterText.trim().length > 0 ||
     severityFilters.length > 0 ||
     selectedClusters.length > 0 ||
+    Boolean(environment) ||
     compareMode !== "all" ||
     alertSource !== "NCC";
 
@@ -617,6 +634,19 @@ export function FindingsPage() {
               }
             />
           </div>
+          {filterableEnvironments.length > 0 && alertSource === "NCC" ? (
+            <Select
+              aria-label="Filter by environment"
+              className="findings-toolbar-select"
+              value={environment}
+              onChange={setEnvironment}
+              popupMatchSelectWidth={false}
+              options={[
+                { value: "", label: "All environments" },
+                ...filterableEnvironments.map((e) => ({ value: e.name, label: e.name })),
+              ]}
+            />
+          ) : null}
           <div className="findings-toolbar-clusters">
             <Select
               id="dashboard-cluster-filter"
@@ -822,6 +852,7 @@ export function FindingsPage() {
           nccLogs={Array.isArray(reportData.ncc_logs) ? reportData.ncc_logs : NO_LOGS}
           filterText={filterText}
           selectedClusters={selectedClusters}
+          environmentClusters={alertSource === "NCC" ? environmentClusters : null}
           clusterNameMap={clusterNameMap}
           severityFilters={severityFilters}
           alertSource={alertSource}
