@@ -1,6 +1,6 @@
 # NCC Orchestrator — v2.3.0
 
-**Release status:** Release candidate. Planned date: set when the `v2.3.0` tag is pushed (the release workflow publishes on tag push).
+**Released:** 2026-11-08.
 
 > **Affiliation:** This is an independent open-source project. It is not
 > affiliated with or endorsed by Nutanix, Inc. The project is MIT licensed.

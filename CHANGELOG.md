@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [2.3.0] - Unreleased (date set when the v2.3.0 tag is published)
+## [2.3.0] - 2026-11-08
 
 Setup checklist, redesigned sign-in, HA-safe user store, transactional restore,
 Windows fixes, and security hardening from a full application audit. Release
