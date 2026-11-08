@@ -66,6 +66,14 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   A request for `admin` is now queued like any other account's and changes
   nothing. Re-enable the old behaviour with `--allow-admin-self-reset` (or
   `NCC_ALLOW_ADMIN_SELF_RESET=true`).
+- **UI-server API proxy on `ReverseProxy.Rewrite`.** The `/api/` proxy in
+  `ncc-ui-server` moved off the deprecated `Director` hook. Credentials are
+  now stripped and injected after hop-by-hop header removal, so a client
+  sending `Connection: X-API-Token` (or `Authorization`) can no longer strip
+  the token or session the UI server adds. The inbound Host, the
+  `X-Forwarded-For` chain (with the client IP appended) and the
+  `NCC_UI_TOKEN_MISMATCH` diagnostic behave as before; proxy tests cover
+  them.
 
 ### Added
 

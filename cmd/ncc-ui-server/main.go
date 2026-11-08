@@ -15,7 +15,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"os"
 	pathpkg "path"
@@ -624,8 +623,6 @@ func main() {
 		return sessionToken
 	}
 
-	proxy := httputil.NewSingleHostReverseProxy(backend)
-	proxy.Transport = transport
 	uiCSP := "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'"
 	apiCSP := "default-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"
 	applyHeaders := func(w http.ResponseWriter, isTLS bool, csp string) {
@@ -640,95 +637,18 @@ func main() {
 	}
 	applyUIHeaders := func(w http.ResponseWriter, isTLS bool) { applyHeaders(w, isTLS, uiCSP) }
 	applyAPIHeaders := func(w http.ResponseWriter, isTLS bool) { applyHeaders(w, isTLS, apiCSP) }
-	proxy.ModifyResponse = func(resp *http.Response) error {
-		// Normalize security headers on proxied API responses to avoid duplicate comma-joined values.
-		resp.Header.Set("X-Content-Type-Options", "nosniff")
-		resp.Header.Set("X-Frame-Options", "DENY")
-		resp.Header.Set("Referrer-Policy", "no-referrer")
-		resp.Header.Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
-		resp.Header.Set("Content-Security-Policy", apiCSP)
-		// Rewrite a backend 401 into a diagnostic envelope so the UI shows
-		// "the UI server's token doesn't match the API server's token" instead
-		// of a bare "unauthorized" message. This is the single most common
-		// failure mode when the two servers start from different working
-		// directories or one was rotated after the other started.
-		//
-		// This diagnostic is ONLY meaningful when the UI server itself attached
-		// the credential the backend rejected (token-injection / minted-session
-		// modes). When we forward the browser's own session cookie
-		// (interactive-login mode), or the request targets an auth/SSO endpoint,
-		// a 401 is the user's own credential failure (e.g. a wrong password) and
-		// the backend's clear message ("invalid username or password") must pass
-		// through untouched.
-		isUserAuthPath := func(p string) bool {
-			return strings.HasPrefix(p, "/api/v1/auth/") || strings.HasPrefix(p, "/saml/")
-		}
-		uiSuppliedCredential := !forwardSessions.Load()
-		reqPath := ""
-		if resp.Request != nil && resp.Request.URL != nil {
-			reqPath = resp.Request.URL.Path
-		}
-		if resp.StatusCode == http.StatusUnauthorized && uiSuppliedCredential && !isUserAuthPath(reqPath) {
-			cause := "token mismatch or empty token"
-			if tok := getBackendToken(); tok == "" {
-				cause = "UI server has no API token available (token file is empty or missing)"
-			}
-			body := map[string]interface{}{
-				"success":    false,
-				"error":      "Backend rejected the UI server's API token: " + cause + ". Confirm that the UI server's token file (" + filepath.Base(absTokenFile) + ") contains the same token the ncc-api-server is using (or set NCC_API_TOKEN to the same value for both processes), then restart this UI server.",
-				"error_code": "NCC_UI_TOKEN_MISMATCH",
-				"data": map[string]interface{}{
-					"backend_status":     401,
-					"token_file":         filepath.Base(absTokenFile),
-					"token_file_present": fileExists(tokenFile),
-					"token_override_set": apiToken != "",
-				},
-			}
-			b, _ := json.Marshal(body)
-			resp.Body = io.NopCloser(strings.NewReader(string(b)))
-			resp.ContentLength = int64(len(b))
-			resp.Header.Set("Content-Type", "application/json")
-			resp.Header.Set("Content-Length", strconv.Itoa(len(b)))
-			// Drop the Content-Encoding header in case backend sent gzipped
-			// JSON — we wrote a plain UTF-8 body.
-			resp.Header.Del("Content-Encoding")
-		}
-		return nil
-	}
-	// Director is deprecated in favor of Rewrite, which handles forwarding
-	// headers differently (it drops inbound X-Forwarded-* and does not add
-	// X-Forwarded-For unless asked). This hook strips client credentials and
-	// injects the backend token, so migrate it with dedicated proxy tests
-	// rather than as a lint fix.
-	origDirector := proxy.Director             //nolint:staticcheck // SA1019: see above
-	proxy.Director = func(req *http.Request) { //nolint:staticcheck // SA1019: see above
-		origDirector(req)
-		req.Header.Del("Authorization")
-		req.Header.Del("X-API-Token")
-		req.Header.Del("X-Forwarded-Host")
-		req.Header.Set("X-Forwarded-Proto", backend.Scheme)
-		if forwardSessions.Load() {
-			// The browser's session cookie (forwarded automatically) plus its
-			// X-CSRF-Token header authenticate the request at its own role.
-			// We deliberately do not inject the admin token here.
-			return
-		}
-		if authMode == "session" {
-			if tok := mintSession(); tok != "" {
-				req.Header.Set("Authorization", "Bearer "+tok)
-			}
-			return
-		}
-		if tok := getBackendToken(); tok != "" {
-			req.Header.Set("X-API-Token", tok)
-		}
-	}
-	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, e error) {
-		// Log the detail (backend address, dial error) server-side only.
-		log.Printf("api proxy error for %s (request_id=%s): %v", r.URL.Path, r.Header.Get("X-Request-ID"), e)
-		w.Header().Set("X-Request-ID", r.Header.Get("X-Request-ID"))
-		writeAPIError(w, http.StatusBadGateway, "the API server is unreachable; check that ncc-api-server is running", r.TLS != nil, apiCSP)
-	}
+	proxy := newAPIProxy(apiProxyConfig{
+		Backend:          backend,
+		Transport:        transport,
+		APICSP:           apiCSP,
+		ForwardSessions:  forwardSessions.Load,
+		AuthMode:         authMode,
+		MintSession:      mintSession,
+		BackendToken:     getBackendToken,
+		TokenFile:        tokenFile,
+		AbsTokenFile:     absTokenFile,
+		TokenOverrideSet: apiToken != "",
+	})
 
 	originSet := map[string]struct{}{}
 	for _, o := range strings.Split(allowedOrigins, ",") {
