@@ -17,6 +17,12 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 
 ### Security
 
+- **Directory and SAML users can no longer take a local account's name.**
+  An AD/LDAP user whose directory name (or a SAML user whose NameID) equals a
+  local account's username is refused (`username_conflict` in the audit log),
+  as OIDC sign-in already was. Before, an AD account named `admin` whose
+  password differed from the local admin's could sign in as `admin`, and
+  personal access tokens it created re-resolved to the local admin's role.
 - **SAML library on v0.6.3 (GO-2026-6909).** crewjam/saml v0.5.1 could
   panic on a signed assertion without `<Subject>` or `<Conditions>` and read a
   `NameID` from any XML namespace. v0.5.2 fixed both upstream (refuses those
@@ -497,6 +503,10 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   encrypts with those, switch it to RSA-OAEP and AES-GCM/AES-CBC, or sign-in
   fails with an "algorithm not implemented" error. Assertions must also carry
   a NameID or the configured username attribute.
+- **AD/LDAP and SAML users named like a local account are refused.** Rename
+  or delete one of the two before upgrading. Several AD domains: use a Global
+  Catalog with `userPrincipalName` usernames
+  ([`docs/setup/SIGN_IN.md`](docs/setup/SIGN_IN.md#several-domains-or-forests)).
 - A locked-out sole admin recovers on the host with
   `ncc-orchestrator v2-reset-password --user admin` (or
   `ncc-api-server --reset-admin`; on Kubernetes, run it in the API pod), unless

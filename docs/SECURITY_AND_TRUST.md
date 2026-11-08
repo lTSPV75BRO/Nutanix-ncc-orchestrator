@@ -925,7 +925,10 @@ SAML can be configured two ways:
 Either way the server exposes `/saml/metadata` and `/saml/acs`; `/saml/login`
 starts the SP-initiated flow. Map IdP group/role attribute values to local roles
 with the role attribute + role map (e.g. `ncc-admins=admin,ncc-ops=operator`);
-unmatched users fall back to the default role (`viewer`).
+unmatched users fall back to the default role (`viewer`). A SAML user whose
+name matches a local account is refused (audited as `auth.saml.login` with
+reason `username_conflict`), so an IdP identity can never take over a local
+account's name or the role its personal access tokens re-resolve to.
 
 **Same-origin SP endpoints.** The SP endpoints must live on the same origin the
 SPA runs on so the post-login session cookie lands on the right host, so
@@ -1002,7 +1005,22 @@ binds the read-only service account, searches `base_dn` with the user filter
 users can sign in with either `jdoe` or `jdoe@corp.example.com`), then re-binds as the found
 user DN to verify the password. An empty password is rejected up front so an
 LDAP anonymous bind can never be mistaken for a successful login, and the login
-name is escaped into the search filter.
+name is escaped into the search filter. If the directory's name for the user
+(the **username attribute**, `sAMAccountName` by default) matches a local
+account, the sign-in is refused with the generic "invalid username or
+password" and audited as `auth.login` with error `username_conflict`: a
+directory identity can never act as a local account, nor mint tokens that
+re-resolve to the local account's role.
+
+**Several domains.** There is one directory connection; several URLs are
+failover servers for the same directory, not a routing table, and the
+`@domain` suffix does not select a server. For child domains of one forest,
+point the URL at a Global Catalog (port 3269 for LDAPS) with the forest-root
+base DN and set the username attribute to `userPrincipalName`, so names are
+unique across domains. A search that matches more than one entry is refused
+("matched N entries"), never resolved by picking one. Separate forests are not
+supported; federate them through an OIDC or SAML identity provider instead.
+Details: [`setup/SIGN_IN.md`](setup/SIGN_IN.md#several-domains-or-forests).
 
 Configure it two ways:
 

@@ -109,6 +109,39 @@ then the directory.
 With plain `ldap://`, turn on **StartTLS** so passwords are not sent in clear
 text. Use **Skip TLS verification** only for a short test.
 
+**A directory user with the same name as a local account can't sign in.**
+Local accounts are checked first. If the password doesn't match the local
+account, the directory is not used under that name: an AD `admin` gets
+"invalid username or password". Rename one of them, or set **Username
+attribute** to `userPrincipalName` (see below).
+
+### Several domains or forests
+
+There is one directory connection. Several **Server URL(s)** are failover
+servers for the *same* directory, tried in order. The app does not pick a
+server by the `@domain` part of the name, and it does not accept
+`DOMAIN\user`.
+
+**Child domains in one forest** (`corp.example.com`, `emea.corp.example.com`)
+work through a Global Catalog, which can find users in every domain:
+
+| Field | Value |
+| --- | --- |
+| Server URL(s) | A Global Catalog: `ldaps://gc.corp.example.com:3269` (plain GC is port 3268) |
+| Base DN | The forest root: `DC=corp,DC=example,DC=com` |
+| Username attribute | `userPrincipalName` |
+
+People then sign in with their UPN, `jdoe@emea.corp.example.com`. That is
+also the name the app stores, so `jdoe` in two domains are two different
+people. If the same short name exists in two domains, signing in with just
+`jdoe` fails with "matched 2 entries", and the UPN works. For role mapping use
+**universal** groups: a Global Catalog may not show global-group membership
+from other domains.
+
+**Separate forests** without a shared Global Catalog are not supported.
+Choose one forest, or use OpenID Connect or SAML through an identity provider
+that already federates them (Entra ID, Okta, ADFS).
+
 **OpenLDAP and other directories:** set **User filter** (for example
 `(uid=%s)`), **Username attribute** (`uid`) and **Group attribute** to match
 your schema.
@@ -295,10 +328,13 @@ group still sees everything, and admins always see everything.
 | --- | --- |
 | LDAP test fails with a TLS error | Paste the DC's CA certificate, or check the DC name matches its certificate. |
 | LDAP user gets `viewer` instead of `admin` | Run **Test connection…** and look at the groups found; copy the DN exactly into the mapping. Nested groups are not expanded, so map the group the user is directly in. |
+| LDAP: "matched 2 entries (tighten user_filter)" | The same short name exists in two domains. Sign in with the UPN, or set **Username attribute** to `userPrincipalName` (see [Several domains or forests](#several-domains-or-forests)). |
+| AD user gets "invalid username or password" but the password is right | A local account has the same name, and directory users can't take it. Rename or delete the local account, or switch to UPN usernames. The server log says "matches a local account". |
 | OIDC: "redirect URI mismatch" at the provider | The redirect URI must match exactly, including `https`, host, port and path. Fix **Dashboard URL** or the provider app. |
 | OIDC: everyone gets the default role | The token has no groups claim, or the names differ (Entra sends object IDs). Check the provider's groups claim settings. |
 | OIDC: "this username belongs to a local account" | A local account has the same name. Rename or delete the local account. |
 | SAML: loops back to sign-in, or "no NameID" | Check **Server root URL** is the browser address and on HTTPS, and the provider sends a NameID or set **Username attribute**. |
+| SAML: "This name belongs to a local account" | The NameID (or **Username attribute**) equals a local account's name. Rename or delete the local account, or send a different name such as the UPN. |
 | SAML: role is always the default | The **Role/group attribute** name must match the attribute name the provider sends (Entra's is the long URL above). |
 | Locked out of every admin account | On the server: `ncc-orchestrator v2-reset-password --user admin`. |
 

@@ -362,6 +362,11 @@ the provider apply automatically. Setup notes per provider are in
 
 ## Security
 
+- **Directory and SAML users can no longer take a local account's name.**
+  An AD/LDAP or SAML user with the same name as a local account is now
+  refused, as OIDC users already were. Before, an AD account called `admin`
+  could sign in under the local admin's name, and API tokens it created
+  carried the local admin's role.
 - **Passwords follow NIST SP 800-63B:** at least 15 characters (spaces
   welcome; a few unrelated words work well), and common, repeated, sequential
   or username-based passwords are refused. Existing passwords keep working
@@ -435,6 +440,12 @@ the provider apply automatically. Setup notes per provider are in
    the identity provider to RSA-OAEP with AES before upgrading, or SAML
    sign-in fails. Assertions must also carry a NameID or the configured
    username attribute.
+8. **AD/LDAP and SAML users named like a local account** can no longer sign
+   in. Before upgrading, check **Settings → Access → Users & roles** for local
+   accounts that share a name with directory users and rename or delete one
+   of them. With several AD domains, use a Global Catalog and
+   `userPrincipalName` usernames
+   ([guide](../setup/SIGN_IN.md#several-domains-or-forests)).
 
 ## Rollback
 

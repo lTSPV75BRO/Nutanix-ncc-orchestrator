@@ -418,6 +418,15 @@ func (s *apiServer) handleSAMLComplete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, envelope{Success: false, Error: "The identity provider's response didn't say who you are (no NameID or username attribute). Ask your admin to check the SAML username attribute."})
 		return
 	}
+	// A SAML identity must never take over a local account's name (its
+	// personal access tokens would re-resolve to the local role). Same rule
+	// as OIDC and LDAP sign-in.
+	if _, clash := s.users.lookup(username); clash {
+		serverLog.WarnContext(r.Context(), "saml login refused: user matches a local account", "username", username)
+		s.audit(r, "auth.saml.login", false, map[string]interface{}{"username": username, "reason": "username_conflict"})
+		writeJSON(w, http.StatusForbidden, envelope{Success: false, Error: "This name belongs to a local account, so it can't be used for single sign-on. Ask your admin to rename or remove the local account."})
+		return
+	}
 	role := p.roleFromValues(attrs[p.roleAtt])
 	token, exp, err := s.issueRoleSessionToken(cleanClientIP(r), username, role)
 	if err != nil {

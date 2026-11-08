@@ -209,6 +209,24 @@ func TestHandleLoginLocalFirstThenLDAP(t *testing.T) {
 		}
 	})
 
+	t.Run("AD user named like a local account is refused", func(t *testing.T) {
+		// The local password is wrong, AD accepts the user, and the AD
+		// account's name is "admin": signing in would give an AD identity the
+		// local admin's name (and its token re-resolution), so it is refused.
+		fake := &fakeLDAP{role: RoleViewer, canonical: "Admin", ok: true}
+		s, _ := newLDAPLoginTestServer(t, fake)
+		code, data := loginRequest(t, s, "admin", "ad-password")
+		if code != http.StatusUnauthorized {
+			t.Fatalf("expected 401, got %d %+v", code, data)
+		}
+		if !fake.called {
+			t.Fatal("LDAP should have been consulted after the local password failed")
+		}
+		if msg, _ := data["__error"].(string); msg != "invalid username or password" {
+			t.Fatalf("error should be generic, got %q", msg)
+		}
+	})
+
 	t.Run("AD rejection returns 401", func(t *testing.T) {
 		fake := &fakeLDAP{ok: false}
 		s, _ := newLDAPLoginTestServer(t, fake)

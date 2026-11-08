@@ -675,6 +675,18 @@ func (s *apiServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 			if strings.TrimSpace(canonical) != "" {
 				username = strings.TrimSpace(canonical)
 			}
+			// A directory identity must never take over a local account's
+			// name: personal access tokens of a local owner re-resolve to the
+			// local account's role, so an AD "admin" (or any name a local
+			// account uses) would otherwise mint admin tokens. Same rule as
+			// OIDC sign-in.
+			if _, clash := s.users.lookup(username); clash {
+				log.Printf("LDAP sign-in refused: directory user %q matches a local account", username)
+				s.loginFailureTotal.Add(1)
+				s.audit(r, "auth.login", false, map[string]interface{}{"username": username, "method": "ldap", "error": "username_conflict"})
+				writeJSON(w, http.StatusUnauthorized, envelope{Success: false, Error: "invalid username or password"})
+				return
+			}
 			role, ok, mustChange, method, ldapGroups = ldapRole, true, false, "ldap", groups
 		}
 	}
