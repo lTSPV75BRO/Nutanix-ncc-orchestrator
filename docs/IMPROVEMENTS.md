@@ -24,9 +24,10 @@ rough estimate: S, M, or L.
 | Item | Scope | Size |
 | --- | --- | --- |
 | Narrow Kubernetes RBAC | Split user-store and CronJob permissions; remove unnecessary Job access and use a dedicated scheduler boundary. | M |
-| Optimistic CronJob updates | Send and verify `resourceVersion` so concurrent administrators cannot overwrite schedule changes. | S |
 | Secret rotation workflow | Document and optionally guide rotation of API tokens, JWT secrets, backup keys, and Prism credentials across replicas. | M |
 | Outbound URL policy | Provide an administrator-visible allowlist/policy for Prism Central, LDAP, OIDC, SMTP, webhook, and update-server destinations. | M |
+| UI-server proxy on `ReverseProxy.Rewrite` | `ncc-ui-server` still uses the deprecated `Director` hook (go 1.26). Extract the proxy from `main()`, move to `Rewrite` while keeping the inbound Host, the `X-Forwarded-For` chain and credential stripping, and cover it with proxy tests. Low risk today: a client can only strip headers from its own request. | S–M |
+| Restore verifies release signatures (SEC-07) | A restore can replace stack binaries without checking them against the release checksums/signatures. | M |
 | Signed image and SBOM verification | Publish Cosign signatures/SBOMs and optionally verify image provenance during deployment. | M |
 | Kubernetes failure alerts | Provide PrometheusRule examples for failed CronJobs, stale reports, unavailable API replicas, PVC pressure, and version skew. | S |
 | Isolated backup verification | Validate archive contents, secrets, report paths, and version compatibility without changing the live install. | M |
@@ -36,7 +37,7 @@ rough estimate: S, M, or L.
 | Item | Scope | Size |
 | --- | --- | --- |
 | Stale-report UX | Clearly show when stale data is being served, a refresh is in progress, or the UI has fallen back to a previous report. | S–M |
-| Notification delivery history | Show redacted channel status, last attempt, retry count, and dead-letter state; keep diagnostics administrator-only. | M |
+| Notification delivery history | Every attempt, retry and final failure is now logged (System → Logs, API server). Remaining: a per-channel status view with last attempt, retry count and dead-letter state. | M |
 | Operator-safe empty states | Give direct actions for missing config, missing clusters, failed first runs, missing schedules, and restricted cluster groups. | S |
 | Session and lockout clarity | Show remaining session time and actionable account-lockout countdowns without exposing sensitive details. | S–M |
 
@@ -47,7 +48,7 @@ rough estimate: S, M, or L.
 | Kubernetes API contract tests | Fake Kubernetes API errors, missing RBAC, suspended schedules, invalid cron, and concurrent updates. | M |
 | Race and load test profile | Run race tests plus concurrent report, alert, login, and schedule requests against a representative large report. | M |
 | Report package extraction | Move the remaining renderers from `goNCC.go` into focused `internal/report` packages with benchmarks. | L |
-| Support-bundle automation | Collect redacted health, events, component versions, CronJob/PVC state, and recent logs. | M |
+| Support-bundle automation | Collect redacted health, events, component versions, CronJob/PVC state, and recent logs into one download (the logs are already redacted and listed by `GET /api/v1/logs`). | M |
 
 ## Performance sequence
 
@@ -68,10 +69,10 @@ These ideas remain valid but are intentionally below the active priorities:
 
 - Resumable/checkpointed runs and cluster-subset filters.
 - Custom notification templates and Slack/Teams interactive messages.
-- Multi-team profiles with separate configuration and output roots.
+- Multi-team profiles with separate configuration and output roots (dev /
+  staging / prod environments now cover separate cluster sets and runner
+  settings; separate output roots are still open).
 - A lightweight history UI for browsing archived reports.
-- A built-in scheduler for installations outside Kubernetes or the host service
-  manager.
 - A minimal-install guide, architecture diagram, and operator glossary.
 
 ## Current baseline
@@ -84,8 +85,12 @@ Already covered by v2.3.x and therefore tracked elsewhere:
   supervised updates.
 - Report preview pagination, asynchronous large-report refresh, and the current
   Prism alert cache.
-- Dependency security gates, SBOM/provenance release tooling, and cross-platform
-  CI coverage.
+- Dependency security gates (govulncheck through `tools/vulngate`),
+  SBOM/provenance release tooling, and cross-platform CI coverage.
+- Environments (dev / staging / prod) with per-environment schedules run by
+  the API server.
+- Structured logs from every process, a Logs page, and run-time log level.
+- Conditional (resourceVersion) Kubernetes schedule saves.
 
 See [`docs/FEATURES_AND_CONFIG_FLAGS.md`](FEATURES_AND_CONFIG_FLAGS.md),
 [`docs/SECURITY_AND_TRUST.md`](SECURITY_AND_TRUST.md),
@@ -93,4 +98,4 @@ See [`docs/FEATURES_AND_CONFIG_FLAGS.md`](FEATURES_AND_CONFIG_FLAGS.md),
 [`docs/THIRD_PARTY_DEPENDENCIES.md`](THIRD_PARTY_DEPENDENCIES.md) for the
 canonical operational and security details.
 
-_Last reviewed: 2026-11-07._
+_Last reviewed: 2026-11-08._

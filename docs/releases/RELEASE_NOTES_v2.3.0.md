@@ -11,11 +11,65 @@ setup modal with a setup checklist derived from the install's real state,
 redesigns the sign-in screens, makes the user store safe with several API
 replicas, makes restores roll back on failure, fixes a set of Windows-only
 defects, and adds request IDs, per-route metrics, and a readiness endpoint.
+It also adds dev / staging / prod environments with their own schedules,
+detailed logs from every process with a Logs page, and OpenID Connect
+sign-in.
 
 **Before upgrading:** the anonymous admin self-reset from the login page is
 now **off by default**. See [Upgrade](#upgrade).
 
 ## New
+
+### Environments: dev / staging / prod
+
+One main config, plus a runner file per environment in
+`configs/environments/<name>.yaml`. An environment may hold only a
+description and a `runner:` section (clusters, credential references,
+execution and automation). It is laid over the main config at run time, so
+the server, storage, sign-in and notification settings always come from the
+main config and an environment can't break the stack.
+
+- Manage environments in Settings → Clusters & config → Environments. Start
+  from the main config's runner, an empty file, a copy of another
+  environment, or an older full config (only its runner part is kept).
+- New run: pick the main config or an environment, then all of its clusters
+  or a subset. Any operator may run any environment; cluster groups still
+  limit restricted users to their clusters.
+- Every run is tagged with its environment. Runs, Findings and the Overview
+  cluster list filter by it.
+- A schedule per environment (for example prod daily at 02:00, dev weekly),
+  run by the API server through the normal run engine. The OS-level schedule
+  still runs the main config.
+- API: `GET /api/v1/environments`, `GET/PUT/DELETE
+  /api/v1/settings/environments/<name>`, `GET/PUT
+  /api/v1/environment-schedules`; `environment` on `/runs/trigger` and
+  `/runs/preflight`.
+
+### Detailed logs, and a Logs page
+
+Every process now says what it did, to what, for whom, and why it failed:
+
+- **API server:** rotated JSON log `logs/ncc-api.log` with every request
+  (request ID, user, status, duration, error), each run from accepted to
+  finished (process ID, command, config, output tail), self-heal, schedules,
+  backups, notification delivery, audit forwarding, user-store reloads, the
+  audit trail and panics with their stack.
+- **Runner:** one line per cluster step with run ID, environment and timings.
+- **Notifications:** every attempt, retry and final failure.
+- **UI server:** failed, slow and write requests, with the API's request ID.
+- **MCP server:** each tool call and its outcome (never the arguments).
+
+Passwords, tokens, API keys and webhook URL paths are removed before a line
+is written. **System → Logs** shows each log newest first, with level
+filters, search, per-line details ("all lines for this run / request /
+cluster"), raw view, live refresh and download. Everyone sees the runner
+log; admins see every log and can change the API server's log level until
+the next restart. New settings: `--log-level`, `--log-format`,
+`--server-log-path` (`NCC_LOG_LEVEL`, `NCC_LOG_FORMAT`,
+`NCC_SERVER_LOG_PATH`).
+
+Scrollbars now follow the theme, and role tags are back to admin gold,
+operator blue, viewer plain everywhere.
 
 ### Setup checklist (replaces the first-time setup modal)
 
@@ -279,6 +333,11 @@ the provider apply automatically. Setup notes per provider are in
   per-user preference request 404'd.
 - Dashboard showed a red "0.0%" health score with no data.
 - A malformed webhook URL could panic the notification path.
+- **Two admins saving the Kubernetes schedule could overwrite each other.**
+  A save from a form opened before someone else's change now gets 409
+  (`NCC_API_SCHEDULE_CONFLICT`) and the page reloads the current schedule.
+- A self-heal retry of an environment run fell back to the main config; it
+  now keeps the run's environment and source.
 
 ## Security
 
@@ -304,12 +363,26 @@ the provider apply automatically. Setup notes per provider are in
   line); `create_schedule` refuses a custom command unless
   `NCC_MCP_ALLOW_SCHEDULE_COMMAND=true`.
 - Runner email headers are encoded (no CR/LF header injection from run data).
+- **SAML library updated to crewjam/saml v0.6.3 (GO-2026-6909).** The old
+  version could crash on a signed assertion without a subject or conditions,
+  and read the user name from the wrong XML namespace. A SAML login whose
+  assertion names no user is now refused (it used to sign in as a shared
+  `saml-user`).
+- The first-run admin password is printed to the console only, never to a
+  log file.
 
 ## CI and dependencies
 
 - Windows `go vet` + `go test` job; advisory full `npm audit`; Dependabot for
   Go modules, npm and GitHub Actions.
 - golang.org/x/crypto 0.58.0, x/sys 0.49.0, x/term 0.47.0, go-ldap 3.4.15.
+- Latest Go modules: grpc 1.85.0, OpenTelemetry 1.47.0, go-jose 4.1.9,
+  grpc-gateway 2.33.0, yaml 3.0.6, pflag 1.1.0, crewjam/saml 0.6.3.
+- govulncheck (release build and CI) runs through `tools/vulngate`: it fails
+  on any vulnerability the code calls, except advisories reviewed in
+  `scripts/govulncheck-accepted.txt` with a reason and a review-by date.
+  GO-2026-6909 is listed there because the Go vulnerability database has not
+  yet recorded the upstream fix (v0.5.2).
 
 ## Upgrade
 
@@ -332,10 +405,15 @@ the provider apply automatically. Setup notes per provider are in
 6. **Building from source:** the repository root was tidied. The runner is
    built with `go build ./cmd/ncc-orchestrator` (was `go build .`), the
    release build is `bash scripts/binaryGO.txt` (Windows:
-   `scriptsinaryGO.cmd`), the reference config is
+   `scripts\binaryGO.cmd`), the reference config is
    `examples/example_config.yaml`, source-build Dockerfiles are in
    `build/docker/`, and release notes are in `docs/releases/`. Release assets,
    installed file names and the install layout do not change.
+7. **SAML with encrypted assertions:** the updated SAML library no longer
+   decrypts assertions that use RSA-1_5 key transport or TripleDES. Switch
+   the identity provider to RSA-OAEP with AES before upgrading, or SAML
+   sign-in fails. Assertions must also carry a NameID or the configured
+   username attribute.
 
 ## Rollback
 

@@ -1,15 +1,26 @@
 # NCC Orchestrator — v2.2.1
 
-**Release status:** Release candidate. Planned date: set when the `v2.2.1` tag is pushed (the release workflow publishes on tag push).
+**Released:** 2026-10-24
 
 > **Affiliation:** This is an independent open-source project. It is not
 > affiliated with or endorsed by Nutanix, Inc. The project is MIT licensed.
 
-v2.2.1 is a maintenance and security release on top of v2.2.0. It fixes alert
-acknowledgements that disappeared after new reports, the "—" run status,
-in-app upgrades on Windows, and broken container builds; adds a persistent
-alert history with an API and dashboard views; and hardens backups, login,
-notifications, and API responses.
+v2.2.1 is a quick security release on top of v2.2.0:
+
+- **eMudhra certificate compromise:** container images now always pick up the
+  latest `ca-certificates` bundle at build time, and the published images no
+  longer swap it back for the base image's older copy. Images built for this
+  release do not trust the eMudhra roots that Mozilla removed in NSS 3.131.1.
+  Rebuild or pull the 2.2.1 images, and update host trust stores on VM and
+  Windows installs.
+- **Node.js CVE-2026-111497 (Brotli decoder):** the frontend build toolchain
+  is pinned to Node.js 26.12.1, the first fixed 26.x release. Node.js does not
+  run in any shipped image or server; only the build was exposed.
+
+It also squashes several bugs — alert acknowledgements that disappeared after
+new reports, the "—" run status, in-app upgrades on Windows, and broken
+Docker Compose builds — adds a persistent alert history with an API and
+dashboard views, and hardens backups, login, notifications, and API responses.
 
 **Before upgrading:** backups are now encrypted by default and the in-app
 updater needs a server-side backup key. See [Upgrade](#upgrade).

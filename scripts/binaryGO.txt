@@ -3,7 +3,7 @@
 #
 # Hosts (same script, same flags):
 #   Linux / macOS:   bash scripts/binaryGO.txt
-#   Windows:         scriptsinaryGO.cmd
+#   Windows:         scripts\binaryGO.cmd
 #                    or, from Git Bash: bash scripts/binaryGO.txt
 #
 # The script changes to the repository root first, so it can be run from
@@ -83,7 +83,7 @@ IMAGE_PREFIX="${NCC_IMAGE_PREFIX:-prajwalnutant}"
 usage() {
   cat <<'EOF'
 Usage: bash scripts/binaryGO.txt [options]
-       scriptsinaryGO.cmd [options]          (Windows cmd or PowerShell)
+       scripts\binaryGO.cmd [options]          (Windows cmd or PowerShell)
 
 Build linux, macOS, and Windows binaries (default), then stack archives.
 Runs on Linux, macOS, and Windows Git Bash. A Linux or Windows host can

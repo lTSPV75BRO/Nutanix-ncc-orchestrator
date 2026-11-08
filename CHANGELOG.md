@@ -481,7 +481,7 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 - **Repository layout (building from source).** The root now holds only
   project metadata. The runner moved to `cmd/ncc-orchestrator/` (build with
   `go build ./cmd/ncc-orchestrator`, not `go build .`); the release build is
-  `scripts/binaryGO.txt` / `scriptsinaryGO.cmd`; source-build Dockerfiles
+  `scripts/binaryGO.txt` / `scripts\binaryGO.cmd`; source-build Dockerfiles
   are in `build/docker/` (`docker-compose.yml` already points there); the
   reference config is `examples/example_config.yaml`; release notes are in
   `docs/releases/`; `Prometheus.md` and `IMPROVEMENTS.md` are now
@@ -497,6 +497,10 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 
 ### Fixed
 
+- **Two admins saving the Kubernetes schedule could overwrite each other.**
+  The schedule now carries the CronJob's `resourceVersion`; a save from a
+  stale form gets 409 (`NCC_API_SCHEDULE_CONFLICT`) and the page reloads the
+  current schedule. Clients that send no version keep last-write-wins.
 - **A self-heal retry of an environment run kept its environment.** The retry
   now runs against the same environment file and keeps the run's source,
   instead of falling back to the main config.
@@ -678,10 +682,12 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 - Windows `go vet` + `go test` job; advisory full `npm audit`; Dependabot for
   Go modules, npm and GitHub Actions.
 
-## [2.2.1] - Unreleased (date set when the v2.2.1 tag is published)
+## [2.2.1] - 2026-10-24
 
-Bug fixes, alert history, security hardening, and integration docs. Release
-notes: [`RELEASE_NOTES_v2.2.1.md`](docs/releases/RELEASE_NOTES_v2.2.1.md). See
+Quick security release for the eMudhra certificate compromise (CA bundle
+kept current in images) and Node.js CVE-2026-111497 (build toolchain pinned to
+26.12.1), plus bug fixes, alert history, security hardening, and integration
+docs. Release notes: [`RELEASE_NOTES_v2.2.1.md`](docs/releases/RELEASE_NOTES_v2.2.1.md). See
 [`docs/security/security-assessment-2026-10.md`](docs/security/security-assessment-2026-10.md)
 and [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/third-party-alert-integrations.md).
 
