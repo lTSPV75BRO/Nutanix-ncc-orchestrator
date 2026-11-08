@@ -340,6 +340,11 @@ Guide: [Several domains or forests](../setup/SIGN_IN.md#several-domains-or-fores
 
 ## Bug fixes
 
+- **An environment chosen by file path was refused when the install folder
+  is reached through a symlink or a Windows short name** (for example macOS
+  `/tmp`, or `C:\Users\RUNNER~1`) with "runs use the main config or an
+  environment". Choosing an environment by name, as the dashboard does, was
+  not affected.
 - **User-store changes could be lost with several API replicas** (Helm default
   2): a write on one replica could undo a user deletion, demotion, token
   revocation, or sign-out-everywhere made on another. Every change now reloads
@@ -412,6 +417,9 @@ Guide: [Several domains or forests](../setup/SIGN_IN.md#several-domains-or-fores
 
 ## CI and dependencies
 
+- Frontend tests unmount what they render after every test. Pages left
+  mounted could crash with "window is not defined" after a test file ended,
+  failing CI on Linux although every test passed.
 - Windows `go vet` + `go test` job; advisory full `npm audit`; Dependabot for
   Go modules, npm and GitHub Actions.
 - golang.org/x/crypto 0.58.0, x/sys 0.49.0, x/term 0.47.0, go-ldap 3.4.15.
