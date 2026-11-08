@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router";
 import { Alert, Button, Drawer, Segmented, Select, Switch, Tooltip, Typography } from "antd";
 import {
   ApiOutlined,
@@ -156,6 +157,20 @@ export function LogsSection({ onError }: Props) {
   const [level, setLevel] = useLocalStorageState<string>("settings.logs.level", "all");
   const [raw, setRaw] = useLocalStorageState("settings.logs.raw", false);
   const [open, setOpen] = useState<Entry | null>(null);
+
+  // ?q=<run or request ID> (from a run's "Logs for this run"): search for it
+  // across the runner log, then drop the parameter.
+  const [params, setParams] = useSearchParams();
+  const linkedQuery = params.get("q");
+  useEffect(() => {
+    if (!linkedQuery) return;
+    setSearch(linkedQuery);
+    setLevel("all");
+    setSourceId("runner");
+    const next = new URLSearchParams(params);
+    next.delete("q");
+    setParams(next, { replace: true });
+  }, [linkedQuery, params, setParams, setSearch, setLevel, setSourceId]);
 
   const sourcesQuery = useQuery({ queryKey: ["log-sources"], queryFn: api.logSources, staleTime: 30_000 });
   const sources: LogSource[] = sourcesQuery.data?.sources ?? [];

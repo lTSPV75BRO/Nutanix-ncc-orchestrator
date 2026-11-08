@@ -5503,3 +5503,15 @@ h5.ant-typography {
     display: none;
   }
 }
+
+/* ---- Run detail: status plus "Logs for this run" / "Re-run failed" */
+.run-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--ui-space-2);
+}
+.new-run-preset {
+  margin-bottom: var(--ui-space-4);
+}

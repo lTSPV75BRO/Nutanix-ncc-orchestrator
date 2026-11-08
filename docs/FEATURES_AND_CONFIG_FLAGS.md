@@ -379,6 +379,12 @@ at run time (until restart). API: `GET /api/v1/logs` (sources visible to you),
 `GET /api/v1/logs/<source>?file=&bytes=` (tail of one file, default 256 KB,
 max 4 MiB), `GET|PUT /api/v1/settings/logging` (admin).
 
+**Support bundle.** Health & repair → Collect support bundle builds
+`logs/ncc-support-<UTC>.tar.gz` (doctor report, the last lines of every
+process log, redacted `config.yaml` and environment files) and downloads it
+in the browser. API: `POST /api/v1/health/diagnostics/support-bundle`, then
+`GET /api/v1/health/diagnostics/support-bundle?name=<name>` (admin).
+
 | Setting | Env | Default | Meaning |
 |---|---|---|---|
 | `ncc-api-server --log-level` | `NCC_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. `debug` also logs every polled read. The UI server reads `NCC_LOG_LEVEL` too. |

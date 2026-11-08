@@ -7,6 +7,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router";
 import { sectionHref } from "../../navigation";
 import { api } from "../../api/client";
+import { triggerBlobDownload } from "../../utils/download";
 import type { DiagnosticCheck, DiagnosticsData } from "../../api/types";
 import { notify, notifyError } from "../../notify";
 import { formatTime } from "../../utils/datetime";
@@ -88,9 +89,20 @@ export function SystemHealthSection() {
     },
     onError: (e) => notifyError(e, "The fix didn't complete"),
   });
+  // Collect, then hand the file to the browser: no shell access to the
+  // server is needed on any install (VM, Windows, Docker, Kubernetes).
   const bundle = useMutation({
-    mutationFn: api.createDiagnosticsSupportBundle,
-    onSuccess: (d) => notify.success(`Support bundle saved to ${d.path}`),
+    mutationFn: async () => {
+      const made = await api.createDiagnosticsSupportBundle();
+      if (!made.name) return { made, downloaded: false };
+      const { blob, filename } = await api.downloadSupportBundle(made.name);
+      triggerBlobDownload(blob, filename);
+      return { made, downloaded: true };
+    },
+    onSuccess: ({ made, downloaded }) =>
+      downloaded
+        ? notify.success(`Support bundle downloaded (${made.name}). A copy is kept on the server in logs/.`)
+        : notify.success(`Support bundle saved to ${made.path}`),
     onError: (e) => notifyError(e, "Couldn't create the support bundle"),
   });
 

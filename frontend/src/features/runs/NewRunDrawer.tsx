@@ -13,6 +13,16 @@ import { buildExtraArgs, describeExtraArgs, type RunOptionValues } from "../../u
 
 const RUN_TOAST_KEY = "ncc-run-active";
 
+/** Opens the drawer pre-filled, e.g. "re-run the clusters that failed". */
+export type RunPreset = {
+  /** Changes when a new preset is applied. */
+  key: string;
+  /** "" = the main config. */
+  environment: string;
+  clusters: string[];
+  note: string;
+};
+
 /**
  * Start a run: environment (or the main config), optional one-off password,
  * cluster subset, run options from the server's allow-list, and a preflight
@@ -22,7 +32,17 @@ const RUN_TOAST_KEY = "ncc-run-active";
  * timeouts ...); results, notifications and server settings always come from
  * the main config.
  */
-export function NewRunDrawer({ open, onClose, backendConfigPath }: { open: boolean; onClose: () => void; backendConfigPath: string }) {
+export function NewRunDrawer({
+  open,
+  onClose,
+  backendConfigPath,
+  preset,
+}: {
+  open: boolean;
+  onClose: () => void;
+  backendConfigPath: string;
+  preset?: RunPreset | null;
+}) {
   const { me, isAdmin } = useAuth();
   const queryClient = useQueryClient();
   // Group members may narrow the run to a subset of their allowed clusters.
@@ -51,9 +71,18 @@ export function NewRunDrawer({ open, onClose, backendConfigPath }: { open: boole
     staleTime: 60_000,
   });
 
+  // A preset (re-run failed clusters) wins over the remembered choice.
+  useEffect(() => {
+    if (!open || !preset) return;
+    setEnvironment(preset.environment);
+    setSelectedClusters(preset.clusters);
+    // Apply once per preset; the user may change both afterwards.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, preset?.key]);
+
   // The saved choice: the server preference for local accounts, else this browser's.
   useEffect(() => {
-    if (!open || environment !== null) return;
+    if (!open || environment !== null || preset) return;
     let live = true;
     (async () => {
       let pick = lastEnvironment;
@@ -66,7 +95,7 @@ export function NewRunDrawer({ open, onClose, backendConfigPath }: { open: boole
     return () => {
       live = false;
     };
-  }, [open, environment, lastEnvironment, me?.is_local]);
+  }, [open, environment, lastEnvironment, me?.is_local, preset]);
 
   const chosen: EnvironmentInfo | undefined = environments.find((e) => e.name === environment);
   // A remembered environment that was deleted falls back to the main config.
@@ -197,6 +226,7 @@ export function NewRunDrawer({ open, onClose, backendConfigPath }: { open: boole
         }}
         autoComplete="off"
       >
+        {preset ? <Alert type="info" showIcon className="new-run-preset" title={preset.note} /> : null}
         <Typography.Paragraph type="secondary">
           Runs NCC on the configured clusters. Clusters already being checked by another run are skipped. Preflight
           checks the config and connectivity without running NCC.

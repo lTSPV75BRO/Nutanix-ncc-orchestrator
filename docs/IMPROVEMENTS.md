@@ -47,7 +47,7 @@ rough estimate: S, M, or L.
 | Kubernetes API contract tests | Fake Kubernetes API errors, missing RBAC, suspended schedules, invalid cron, and concurrent updates. | M |
 | Race and load test profile | Run race tests plus concurrent report, alert, login, and schedule requests against a representative large report. | M |
 | Report package extraction | Move the remaining renderers from `goNCC.go` into focused `internal/report` packages with benchmarks. | L |
-| Support-bundle automation | Collect redacted health, events, component versions, CronJob/PVC state, and recent logs into one download (the logs are already redacted and listed by `GET /api/v1/logs`). | M |
+| Support-bundle: Kubernetes state | The bundle (downloadable from Health & repair) has the doctor report, every process log, and redacted config and environment files. Remaining: Kubernetes events, CronJob/PVC state, and component versions per pod. | S–M |
 
 ## Performance sequence
 

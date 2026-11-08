@@ -10950,13 +10950,34 @@ func writeDoctorBundle(path, report, installDir string) error {
 		return err
 	}
 
+	// Every process log under logs/: the stack's console logs plus the
+	// structured API server, runner and scheduler logs (secrets are redacted
+	// when those lines are written). Rotated .gz backups are left out.
 	logDir := filepath.Join(installDir, "logs")
-	for _, name := range []string{"v2-supervisor.log", "v2-api.log", "v2-ui.log", "v2-api-supervisor.log", "v2-ui-supervisor.log"} {
-		p := filepath.Join(logDir, name)
+	for _, name := range doctorBundleLogNames(logDir) {
+		lines := 1000
+		if !strings.HasPrefix(name, "v2-") {
+			lines = 5000 // structured logs: one line per event, worth more history
+		}
 		var buf bytes.Buffer
-		doctorTailFile(&buf, p, 1000)
-		if err := addFile(filepath.Join("logs", name), buf.Bytes(), 0o644); err != nil {
+		doctorTailFile(&buf, filepath.Join(logDir, name), lines)
+		if err := addFile("logs/"+name, buf.Bytes(), 0o644); err != nil {
 			return err
+		}
+	}
+
+	// Environment runner files (dev / staging / prod), redacted like config.
+	envDir := filepath.Join(installDir, "configs", "environments")
+	if entries, err := os.ReadDir(envDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+				continue
+			}
+			if data, err := os.ReadFile(filepath.Join(envDir, e.Name())); err == nil {
+				if err := addFile("environments/"+strings.TrimSuffix(e.Name(), ".yaml")+".redacted.yaml", redactConfigYAML(data), 0o644); err != nil {
+					return err
+				}
+			}
 		}
 	}
 
@@ -10971,6 +10992,35 @@ func writeDoctorBundle(path, report, installDir string) error {
 		}
 	}
 	return nil
+}
+
+// doctorBundleLogNames lists the logs a support bundle carries: the stack's
+// fixed console logs (always, so a missing one shows as empty) plus every
+// other *.log in logDir, at most 40 files.
+func doctorBundleLogNames(logDir string) []string {
+	names := []string{"v2-supervisor.log", "v2-api.log", "v2-ui.log", "v2-api-supervisor.log", "v2-ui-supervisor.log"}
+	seen := map[string]bool{}
+	for _, n := range names {
+		seen[n] = true
+	}
+	entries, err := os.ReadDir(logDir)
+	if err != nil {
+		return names
+	}
+	var extra []string
+	for _, e := range entries {
+		n := e.Name()
+		if e.IsDir() || seen[n] || !strings.HasSuffix(n, ".log") {
+			continue
+		}
+		extra = append(extra, n)
+	}
+	sort.Strings(extra)
+	names = append(names, extra...)
+	if len(names) > 40 {
+		names = names[:40]
+	}
+	return names
 }
 
 // redactConfigYAML masks values for keys whose name contains

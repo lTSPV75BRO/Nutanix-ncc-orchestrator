@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Button, Segmented, Select, Table } from "antd";
 import { DownloadOutlined, FileTextOutlined, FolderOpenOutlined, HistoryOutlined, ReloadOutlined, ThunderboltOutlined } from "@ant-design/icons";
@@ -7,7 +7,7 @@ import { api } from "../api/client";
 import type { ArtifactInfo, RunInfo } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { ActiveRuns } from "../features/runs/ActiveRuns";
-import { NewRunDrawer } from "../features/runs/NewRunDrawer";
+import { NewRunDrawer, type RunPreset } from "../features/runs/NewRunDrawer";
 import { RunsTable } from "../features/runs/RunsTable";
 import { useRunsActive } from "../hooks/useRunsActive";
 import { EmptyState, Panel } from "../ui";
@@ -33,6 +33,17 @@ export function RunsPage() {
   const { canOperate, me } = useAuth();
   const clusterRestricted = me?.cluster_access_unrestricted === false;
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const location = useLocation();
+  const [preset, setPreset] = useState<RunPreset | null>(null);
+  // A run's page sends { rerun: RunPreset } to start the failed clusters again.
+  useEffect(() => {
+    const rerun = (location.state as { rerun?: RunPreset } | null)?.rerun;
+    if (!rerun || !canOperate) return;
+    setPreset(rerun);
+    setDrawerOpen(true);
+    // Drop the state so a reload or Back doesn't reopen the drawer.
+    navigate(location.pathname + location.search, { replace: true, state: null });
+  }, [location.state, location.pathname, location.search, canOperate, navigate]);
   const [filter, setFilter] = useState<Filter>("all");
   const [envFilter, setEnvFilter] = useState<string>("all");
   const health = useQuery({ queryKey: ["health"], queryFn: api.health, staleTime: 15_000 });
@@ -81,7 +92,14 @@ export function RunsPage() {
             Refresh
           </Button>
           {canOperate ? (
-            <Button type="primary" icon={<ThunderboltOutlined />} onClick={() => setDrawerOpen(true)}>
+            <Button
+              type="primary"
+              icon={<ThunderboltOutlined />}
+              onClick={() => {
+                setPreset(null);
+                setDrawerOpen(true);
+              }}
+            >
               New run
             </Button>
           ) : null}
@@ -185,7 +203,15 @@ export function RunsPage() {
         </Panel>
       ) : null}
 
-      {canOperate ? <NewRunDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} backendConfigPath={backendConfigPath} /> : null}
+      {canOperate ? <NewRunDrawer
+          open={drawerOpen}
+          onClose={() => {
+            setDrawerOpen(false);
+            setPreset(null);
+          }}
+          backendConfigPath={backendConfigPath}
+          preset={preset}
+        /> : null}
     </div>
   );
 }

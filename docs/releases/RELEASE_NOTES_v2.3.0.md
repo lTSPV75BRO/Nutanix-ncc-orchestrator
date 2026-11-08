@@ -71,6 +71,19 @@ the next restart. New settings: `--log-level`, `--log-format`,
 Scrollbars now follow the theme, and role tags are back to admin gold,
 operator blue, viewer plain everywhere.
 
+### Day-to-day conveniences
+
+- **Support bundle in the browser.** Health & repair → Collect support bundle
+  now downloads the file, so no shell access to the server is needed on a
+  VM, Windows, Docker or Kubernetes install. The bundle now carries every
+  process log (API server, runner, scheduler, UI and supervisor) and the
+  environment files, with secrets redacted.
+- **Re-run failed clusters.** A run with clusters that couldn't be checked
+  shows "Re-run N failed clusters" on its page. New run opens with the same
+  environment and only those clusters.
+- **Logs for this run.** A run's page links straight to System → Logs,
+  filtered to that run.
+
 ### Setup checklist (replaces the first-time setup modal)
 
 The old modal kept its progress in each browser, so every new browser saw
@@ -338,6 +351,8 @@ the provider apply automatically. Setup notes per provider are in
   (`NCC_API_SCHEDULE_CONFLICT`) and the page reloads the current schedule.
 - A self-heal retry of an environment run fell back to the main config; it
   now keeps the run's environment and source.
+- Error messages on the Access page read "Could notcreate user" and similar
+  (missing space).
 
 ## Security
 

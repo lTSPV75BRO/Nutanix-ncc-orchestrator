@@ -4444,7 +4444,7 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/metrics/rate-limit", Methods: []string{http.MethodGet}, Description: "Rate limiter configuration and counters"},
 		{Path: "/metrics", Methods: []string{http.MethodGet}, Description: "Prometheus exposition (run/auth/update counters, build info, self-heal, backup inventory gauges, update-availability, audit-forward drops)"},
 		{Path: "/api/v1/health/diagnostics", Methods: []string{http.MethodGet, http.MethodPost}, Description: "Admin-only: GET runs a read-only self-heal scan (doctor checks + live LDAP/SAML/clock probes) returning a ranked diagnostics list with an overall status; POST supports targeted fixes (check_ids), guardrails (no_disruptive), and post-fix verification."},
-		{Path: "/api/v1/health/diagnostics/support-bundle", Methods: []string{http.MethodPost}, Description: "Admin-only: generate a redacted doctor support bundle and return its path on disk."},
+		{Path: "/api/v1/health/diagnostics/support-bundle", Methods: []string{http.MethodGet, http.MethodPost}, Description: "Admin-only: POST generates a redacted support bundle (doctor report, every process log, redacted config and environment files) and returns its path and name; GET ?name=<name> downloads it."},
 		{Path: "/api/v1/health/history", Methods: []string{http.MethodGet}, Description: "Admin-only: fixes applied by self-heal (background loop, Heal now, CLI doctor --fix), newest first, with per-check 24h/7d counts and recurring flags. ?limit=1..1000 (default 100)."},
 		{Path: "/api/v1/health/autoheal", Methods: []string{http.MethodGet}, Description: "Admin-only: the automatic healing mechanisms (background checks, run auto-retry, runner automation, heal actions, repair after restore), whether each is on, and its counters."},
 		{Path: "/api/v1/health/supervisor", Methods: []string{http.MethodGet}, Description: "Admin-only: the native supervisor's published state: each server's state, uptime, restarts, last exit reason with the end of its log, probe timings, policy and recent events; mode is supervised, manual or kubernetes."},
@@ -4893,7 +4893,8 @@ func (s *apiServer) buildOpenAPISpecBase() map[string]interface{} {
 				"post": map[string]interface{}{"summary": "Admin-only: run self-heal with optional targeted checks (check_ids), disruptive-fix guardrails, and post-fix verification loops."},
 			},
 			"/api/v1/health/diagnostics/support-bundle": map[string]interface{}{
-				"post": map[string]interface{}{"summary": "Admin-only: generate a redacted doctor support bundle and return the bundle path."},
+				"post": map[string]interface{}{"summary": "Admin-only: generate a redacted support bundle (doctor report, every process log, redacted config and environment files); returns path, name and size."},
+				"get":  map[string]interface{}{"summary": "Admin-only: download a bundle by name (?name=ncc-support-<UTC>.tar.gz)."},
 			},
 			"/api/v1/health/history": map[string]interface{}{
 				"get": map[string]interface{}{"summary": "Admin-only: self-heal fix history, newest first, with per-check counts and recurring flags."},

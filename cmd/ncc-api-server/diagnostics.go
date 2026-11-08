@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,7 +61,15 @@ func (s *apiServer) handleHealthDiagnostics(w http.ResponseWriter, r *http.Reque
 	}
 }
 
+// supportBundleName matches the bundles handleHealthSupportBundle writes, so
+// the download can't be pointed at any other file in logs/.
+var supportBundleName = regexp.MustCompile(`^ncc-support-\d{8}T\d{6}Z\.tar\.gz$`)
+
 func (s *apiServer) handleHealthSupportBundle(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		s.downloadSupportBundle(w, r)
+		return
+	}
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
@@ -72,7 +83,44 @@ func (s *apiServer) handleHealthSupportBundle(w http.ResponseWriter, r *http.Req
 		return
 	}
 	s.audit(r, "health.diagnostics.bundle", true, map[string]interface{}{"path": outPath})
-	writeJSON(w, http.StatusOK, envelope{Success: true, Message: "support bundle generated", Data: map[string]interface{}{"path": outPath}})
+	size := int64(0)
+	if fi, err := os.Stat(outPath); err == nil {
+		size = fi.Size()
+	}
+	writeJSON(w, http.StatusOK, envelope{Success: true, Message: "support bundle generated", Data: map[string]interface{}{
+		"path": outPath, "name": filepath.Base(outPath), "size": size,
+	}})
+}
+
+// downloadSupportBundle streams a bundle made by handleHealthSupportBundle
+// (GET ?name=ncc-support-<UTC>.tar.gz), so it can be fetched from the
+// browser on any install without shell access to the server.
+func (s *apiServer) downloadSupportBundle(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	if !supportBundleName.MatchString(name) {
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "invalid support bundle name", ErrorCode: "NCC_API_INVALID_INPUT"})
+		return
+	}
+	path := filepath.Join(s.maintenanceInstallDir(), "logs", name)
+	f, err := os.Open(path)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, envelope{Success: false, Error: "support bundle not found; collect a new one"})
+		return
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "stat support bundle: " + err.Error()})
+		return
+	}
+	extendDeadlines(w, 2*time.Minute)
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name))
+	w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, f)
+	s.audit(r, "health.diagnostics.bundle.download", true, map[string]interface{}{"name": name, "bytes": fi.Size()})
 }
 
 type diagnosticsRequest struct {

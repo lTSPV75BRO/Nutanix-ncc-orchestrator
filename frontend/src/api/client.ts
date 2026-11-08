@@ -382,7 +382,7 @@ export const api = {
   applyConfigMigration: () =>
     callApi<{ result: ConfigMigrationResult }>("/api/v1/health/migrations/config", { method: "POST" }),
   createDiagnosticsSupportBundle: () =>
-    callApi<{ path: string }>(
+    callApi<{ path: string; name?: string; size?: number }>(
       "/api/v1/health/diagnostics/support-bundle",
       { method: "POST" },
       LONG_CALL_TIMEOUT_MS.backup,
@@ -715,6 +715,19 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name }),
     }),
+  /** Download a support bundle made by createDiagnosticsSupportBundle (admin). */
+  downloadSupportBundle: async (name: string): Promise<{ blob: Blob; filename: string }> => {
+    const response = await apiFetch(
+      `/api/v1/health/diagnostics/support-bundle?name=${encodeURIComponent(name)}`,
+      { method: "GET" },
+    );
+    const contentType = (response.headers.get("content-type") || "").toLowerCase();
+    if (!response.ok || contentType.includes("application/json")) {
+      const payload = (await response.json().catch(() => ({}))) as Envelope<unknown>;
+      throw new ApiError(payload.error ?? response.statusText, response.status, payload.data);
+    }
+    return { blob: await response.blob(), filename: name };
+  },
   downloadNamedBackup: async (name: string): Promise<{ blob: Blob; filename: string }> => {
     const response = await apiFetch(
       `/api/v1/settings/backups/download?name=${encodeURIComponent(name)}`,

@@ -93,6 +93,17 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   (`NCC_LOG_LEVEL`, `NCC_LOG_FORMAT`, `NCC_SERVER_LOG_PATH`); new endpoints
   `GET /api/v1/logs`, `GET /api/v1/logs/<source>`, `GET|PUT
   /api/v1/settings/logging`.
+- **Support bundle downloads in the browser, with every log.** Health &
+  repair → Collect support bundle now downloads the file (no shell access to
+  the server needed on VM, Windows, Docker or Kubernetes); a copy stays in
+  `logs/`. The bundle adds the API server, runner and scheduler logs (last
+  5,000 lines each) and the environment files, redacted like the config.
+  `GET /api/v1/health/diagnostics/support-bundle?name=` (admin).
+- **Re-run failed clusters.** A run's page has "Re-run N failed clusters":
+  New run opens with the same environment and only the clusters that
+  couldn't be checked.
+- **Logs for this run.** A run's page links to System → Logs, filtered to
+  that run ID.
 - **Scrollbars follow the theme**, and role tags are back to admin gold,
   operator blue, viewer plain everywhere (header, users, audit log, tokens,
   API explorer).
@@ -505,6 +516,8 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 
 ### Fixed
 
+- Error messages on the Access page and in personal tokens read "Could
+  notcreate user", "Could notdelete user" and so on (missing space).
 - **Two admins saving the Kubernetes schedule could overwrite each other.**
   The schedule now carries the CronJob's `resourceVersion`; a save from a
   stale form gets 409 (`NCC_API_SCHEDULE_CONFLICT`) and the page reloads the

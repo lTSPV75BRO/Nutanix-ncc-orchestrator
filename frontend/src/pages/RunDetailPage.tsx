@@ -1,9 +1,11 @@
 import { useMemo, useState } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, Button, Segmented, Skeleton, Table, Tabs, Tooltip, Typography, type TablePaginationConfig } from "antd";
-import { ArrowLeftOutlined, ClusterOutlined, DisconnectOutlined, DownloadOutlined, FileTextOutlined, FolderOpenOutlined, InfoCircleOutlined, SwapOutlined, WarningOutlined } from "@ant-design/icons";
+import { ArrowLeftOutlined, ClusterOutlined, RedoOutlined, DisconnectOutlined, DownloadOutlined, FileTextOutlined, FolderOpenOutlined, InfoCircleOutlined, SwapOutlined, WarningOutlined } from "@ant-design/icons";
 import { api, ApiError } from "../api/client";
+import { useAuth } from "../auth/AuthContext";
+import type { RunPreset } from "../features/runs/NewRunDrawer";
 import { sectionHref } from "../navigation";
 import { EmptyState, KeyValueList, ListToolbar, matchesSearch, Panel, StatTile, StatusBadge, toneFor, type Tone } from "../ui";
 import { formatDateTime, relativeTime } from "../utils/datetime";
@@ -71,6 +73,8 @@ const FILE_LABELS: Record<string, string> = {
  */
 export function RunDetailPage() {
   const { id = "" } = useParams();
+  const navigate = useNavigate();
+  const { canOperate } = useAuth();
   const [sev, setSev] = useState<SevFilter>("all");
   const [clusterSearch, setClusterSearch] = useState("");
   const [clusterFilter, setClusterFilter] = useState<ClusterFilter>("all");
@@ -105,6 +109,14 @@ export function RunDetailPage() {
       }))
       .sort((a, b) => Number(a.ok) - Number(b.ok) || b.fail + b.err - (a.fail + a.err) || b.warn - a.warn || a.address.localeCompare(b.address));
   }, [summary.clusters, summary.failed_clusters, snapshot.clusters]);
+
+  // Clusters this run couldn't check (unreachable, auth, NCC failure), for
+  // "Re-run failed clusters".
+  const failedClusters = useMemo(() => {
+    const out = new Set(asArray(summary.failed_clusters).map(String).filter(Boolean));
+    for (const c of clusters) if (!c.ok && c.address !== "—") out.add(c.address);
+    return [...out];
+  }, [clusters, summary.failed_clusters]);
 
   const checks: CheckRow[] = useMemo(() => {
     const rows: CheckRow[] = [];
@@ -188,7 +200,33 @@ export function RunDetailPage() {
             {run.environment ? ` · ${run.environment} environment` : ""}
           </p>
         </div>
-        <StatusBadge tone={st.tone}>{st.label}</StatusBadge>
+        <div className="run-head-actions">
+          <StatusBadge tone={st.tone}>{st.label}</StatusBadge>
+          {canOperate ? (
+            <Tooltip title="Every line the runner and the API server wrote for this run">
+              <Button icon={<FileTextOutlined />} onClick={() => navigate(`${sectionHref("logs")}?q=${encodeURIComponent(run.id)}`)}>
+                Logs for this run
+              </Button>
+            </Tooltip>
+          ) : null}
+          {canOperate && failedClusters.length > 0 ? (
+            <Button
+              type="primary"
+              icon={<RedoOutlined />}
+              onClick={() => {
+                const rerun: RunPreset = {
+                  key: `${run.id}:${Date.now()}`,
+                  environment: run.environment ?? "",
+                  clusters: failedClusters,
+                  note: `Re-running the ${failedClusters.length} cluster${failedClusters.length === 1 ? "" : "s"} that couldn't be checked in run ${run.id}${run.environment ? ` (${run.environment} environment)` : ""}. Change the selection below if needed.`,
+                };
+                navigate(sectionHref("runs"), { state: { rerun } });
+              }}
+            >
+              Re-run {failedClusters.length} failed cluster{failedClusters.length === 1 ? "" : "s"}
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       <div className="overview-stats">
