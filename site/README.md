@@ -6,7 +6,7 @@ on, it is served at `https://ltspv75bro.github.io/Nutanix-ncc-orchestrator/`.
 
 | Path | Source | What it is |
 | --- | --- | --- |
-| `/` | `index.html` | Landing page: what the tool does, features, screenshots, quick start, links to the docs |
+| `/` | `index.html` | Landing page: what the tool does, a screenshot per main page, the app's pages, quick start, links to the docs |
 | `/download.html` | `download.html`, `assets/downloads.js` | Downloads for the latest release, install steps per OS, checksum and provenance verification |
 | `/demo/` | `frontend/` built with `frontend/vite.demo.config.ts` | The real dashboard against sample data, with sign-in and changes kept in the tab (`frontend/src/demo/`) |
 | `/data/latest-release.json` | written by the workflow | Snapshot of the latest release, used if the GitHub API is unreachable |
@@ -81,9 +81,13 @@ or `npx vite --config vite.demo.config.ts` for a dev server with hot reload.
 
 ## Design
 
-The pages use the app's design system (`frontend/src/styles.css`): the same
-font stack, colour tokens, spacing scale, radii, panels, stat tiles, buttons
-and segmented control. Dark is the default, as in the app; the header toggle
+The pages follow the app's design (`frontend/src/styles.css`): flat surfaces
+with 1px borders (no gradients or glows), one purple accent in both themes,
+the same Inter/system font stack, the 12-30px type scale with weights 400 and
+600, the 4-32px spacing scale, 6/8/12px radii, panels, buttons and the
+segmented control. The wording follows the app too: the hero and the three
+features are the sign-in page's, and the page list uses the app's navigation
+names. Dark is the default, as in the app; the header toggle
 switches to light and stores the choice under the app's own `app.theme` key,
 so the site and the demo (same origin) always show the same theme. When the
 app's tokens change, update the matching variables at the top of
@@ -91,7 +95,8 @@ app's tokens change, update the matching variables at the top of
 
 Screenshots in `assets/screens/` are 1440×900 captures of the demo, one per
 theme (`*.png` dark, `*-light.png` light); `assets/site.js` shows the one that
-matches the current theme. Re-take them after visible UI changes, for example
+matches the current theme, and the Overview / Findings / Insights / Runs
+tabs on the landing page switch between them. Re-take them after visible UI changes, for example
 with headless Chrome or Edge (`--headless=new --force-prefers-reduced-motion
 --window-size=1440,900 --screenshot=overview.png <demo URL>`), using a browser
 profile where `localStorage["app.theme"]` is `"light"` for the light set.

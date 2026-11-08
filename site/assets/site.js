@@ -47,11 +47,51 @@
   if (media && media.addEventListener) media.addEventListener("change", apply);
   window.addEventListener("storage", function (e) { if (e.key === KEY) apply(); });
 
-  // Latest version in the header chip and hero pill (release.js announces it).
+  // Latest version next to the name and above the hero (release.js announces it).
   document.addEventListener("ncc-release", function (e) {
     var rel = e.detail;
     if (!rel) return;
     Array.prototype.forEach.call(document.querySelectorAll("[data-latest]"), function (n) { n.textContent = rel.tag_name; n.hidden = false; });
-    Array.prototype.forEach.call(document.querySelectorAll("[data-latest-text]"), function (n) { n.textContent = rel.tag_name + " is the latest release"; });
+    Array.prototype.forEach.call(document.querySelectorAll("[data-latest-text]"), function (n) { n.textContent = rel.tag_name + " is the latest release"; n.hidden = false; });
+  });
+
+  // Landing page: one screenshot, switched by the Overview/Findings/... tabs.
+  var SHOTS = {
+    overview: { route: "overview", alt: "Overview page: health of every cluster from the latest runs.", caption: "Health of every cluster from the latest runs, and what needs attention." },
+    findings: { route: "findings", alt: "Findings page: every NCC result by severity, cluster and check.", caption: "Every result from every cluster, filtered by severity, cluster or check, with its alert state and history." },
+    insights: { route: "insights", alt: "Insights page: health over time and regressions since the last run.", caption: "Health over time, regressions since the last run, and checks that keep flapping." },
+    runs: { route: "runs", alt: "Runs page: scheduled and manual runs with outcome and duration.", caption: "Scheduled and manual runs with outcome, duration and clusters checked." },
+  };
+  document.addEventListener("DOMContentLoaded", function () {
+    var tabs = Array.prototype.slice.call(document.querySelectorAll("[data-shot]"));
+    var img = document.getElementById("shot-img");
+    var link = document.getElementById("shot-link");
+    var caption = document.getElementById("shot-caption");
+    if (!tabs.length || !img) return;
+    function show(name) {
+      var s = SHOTS[name];
+      if (!s) return;
+      tabs.forEach(function (t) {
+        var on = t.getAttribute("data-shot") === name;
+        t.setAttribute("aria-selected", String(on));
+        t.tabIndex = on ? 0 : -1;
+      });
+      img.setAttribute("data-dark", "assets/screens/" + name + ".png");
+      img.setAttribute("data-light", "assets/screens/" + name + "-light.png");
+      img.setAttribute("alt", s.alt);
+      if (link) link.setAttribute("href", "demo/#/" + s.route);
+      if (caption) caption.textContent = s.caption;
+      apply();
+    }
+    tabs.forEach(function (t, i) {
+      t.addEventListener("click", function () { show(t.getAttribute("data-shot")); });
+      t.addEventListener("keydown", function (e) {
+        var d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+        if (!d) return;
+        var n = tabs[(i + d + tabs.length) % tabs.length];
+        n.focus();
+        n.click();
+      });
+    });
   });
 })();

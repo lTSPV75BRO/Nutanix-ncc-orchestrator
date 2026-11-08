@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>NCC Orchestrator · Nutanix NCC health checks across every cluster</title>
-  <meta name="description" content="Run Nutanix Cluster Check (NCC) across many clusters in parallel, triage the results in a web dashboard, and keep it running with scheduling, alerts and a self-healing supervisor. Open source." />
+  <title>NCC Orchestrator · Automate Nutanix cluster health checks</title>
+  <meta name="description" content="Run NCC checks in parallel, review the results, and resolve issues faster. Open-source NCC Orchestrator for Nutanix clusters: dashboard, scheduling, notifications and a self-healing supervisor." />
   <meta property="og:title" content="NCC Orchestrator" />
-  <meta property="og:description" content="Nutanix NCC health checks across every cluster: parallel runs, a triage dashboard, alerts, scheduling and a self-healing supervisor." />
+  <meta property="og:description" content="Automate Nutanix cluster health checks. Run NCC checks in parallel, review the results, and resolve issues faster." />
   <meta property="og:type" content="website" />
   <meta property="og:image" content="assets/screens/overview.png" />
   <meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)" />
@@ -21,14 +21,14 @@
   <div class="wrap">
     <a class="brand" href="./" aria-label="NCC Orchestrator home">
       <img src="assets/logo.svg" alt="" />
-      <span class="brand-text"><span class="brand-name">NCC Orchestrator</span><span class="chip" data-latest hidden></span></span>
+      <span>NCC Orchestrator</span>
+      <span class="version hide-sm" data-latest hidden></span>
     </a>
     <nav class="nav" aria-label="Main">
-      <a class="hide-sm" href="#features">Features</a>
-      <a href="demo/">Live demo</a>
+      <a href="demo/">Demo</a>
       <a href="download.html">Download</a>
       <a class="hide-sm" href="#docs">Docs</a>
-      <a class="gh" href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator" aria-label="GitHub repository">
+      <a class="hide-sm" href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator" aria-label="GitHub repository">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
         <span class="hide-sm">GitHub</span>
       </a>
@@ -40,152 +40,98 @@
 <main id="main">
   <section class="hero">
     <div class="wrap">
-      <div>
-        <a class="release-pill" href="download.html"><span class="dot"></span><span data-latest-text>Latest release</span></a>
-        <h1>Nutanix NCC health checks across <span class="grad">every cluster</span>, in one place.</h1>
-        <p class="lead">Run Nutanix Cluster Check on all your Prism Element clusters in parallel, collect the results, and triage them in one dashboard, with history, alerts, scheduling and a self-healing supervisor.</p>
-        <div class="ctas">
-          <a class="btn btn-primary btn-lg" href="download.html">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a1 1 0 011 1v9.59l3.3-3.3a1 1 0 111.4 1.42l-5 5a1 1 0 01-1.4 0l-5-5a1 1 0 111.4-1.42l3.3 3.3V4a1 1 0 011-1zM5 19a1 1 0 100 2h14a1 1 0 100-2H5z"/></svg>
-            Download
-          </a>
-          <a class="btn btn-lg" href="demo/">Try the live demo</a>
-          <a class="btn btn-lg" href="#start">Quick start</a>
-        </div>
-        <div class="meta">
-          <span class="tag">Linux · macOS · Windows</span>
-          <span class="tag">amd64 · arm64</span>
-          <span class="tag">Docker · Kubernetes · Helm</span>
-          <span class="tag">MIT licence</span>
-        </div>
+      <p class="release-line" data-latest-text hidden></p>
+      <h1>Automate Nutanix cluster <span class="accent">health checks</span></h1>
+      <p class="lead">Run NCC checks in parallel, review the results, and resolve issues faster.</p>
+      <div class="actions">
+        <a class="btn btn-primary" href="download.html">Download</a>
+        <a class="btn" href="demo/">Try the live demo</a>
       </div>
-      <div class="shot">
-        <div class="bar"><i></i><i></i><i></i><span>https://ncc.example.internal:8080/</span></div>
-        <a href="demo/"><img src="assets/screens/overview.png" data-dark="assets/screens/overview.png" data-light="assets/screens/overview-light.png" width="1440" height="900" alt="The Overview page: fleet health score, clusters checked, findings by severity, and recent runs." /></a>
-      </div>
+      <p class="meta">Linux, macOS and Windows · Docker, Kubernetes and Helm · Open source, MIT licence</p>
     </div>
   </section>
 
-  <section class="section" id="how" aria-label="How it works">
-    <div class="wrap">
-      <div class="stats">
-        <div class="stat"><span class="stat-label">Configure</span><span class="stat-value">Clusters &amp; secrets</span><span class="stat-hint">List Prism Element clusters or discover them from Prism Central</span></div>
-        <div class="stat"><span class="stat-label">Run</span><span class="stat-value">In parallel</span><span class="stat-hint">Retries and back-off; from the UI, the API or the CLI</span></div>
-        <div class="stat"><span class="stat-label">Triage</span><span class="stat-value">One table</span><span class="stat-hint">FAIL, WARN, ERR and INFO from every cluster</span></div>
-        <div class="stat"><span class="stat-label">Automate</span><span class="stat-value">Schedule &amp; alert</span><span class="stat-hint">Slack, email, webhooks, policy gates and a REST API</span></div>
-      </div>
+  <section class="wrap shots" aria-label="Screenshots">
+    <div class="segmented shot-tabs" role="tablist" aria-label="Page">
+      <button type="button" role="tab" aria-selected="true" data-shot="overview">Overview</button>
+      <button type="button" role="tab" aria-selected="false" data-shot="findings">Findings</button>
+      <button type="button" role="tab" aria-selected="false" data-shot="insights">Insights</button>
+      <button type="button" role="tab" aria-selected="false" data-shot="runs">Runs</button>
     </div>
+    <a class="shot" id="shot-link" href="demo/#/overview">
+      <img id="shot-img" src="assets/screens/overview.png" data-dark="assets/screens/overview.png" data-light="assets/screens/overview-light.png" width="1440" height="900" alt="Overview page: health of every cluster from the latest runs." />
+    </a>
+    <p class="shot-caption" id="shot-caption">Health of every cluster from the latest runs, and what needs attention.</p>
   </section>
 
   <section class="section" id="features">
     <div class="wrap">
-      <div class="section-head">
-        <div class="text">
-          <span class="eyebrow">Features</span>
-          <h2>Everything a fleet health check needs</h2>
-          <p>One tool instead of logging in to each cluster, running <code>ncc health_checks run_all</code> and comparing the output by hand.</p>
+      <div class="features">
+        <div>
+          <span class="feature-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/></svg></span>
+          <h3>Parallel execution</h3>
+          <p>Run NCC checks across multiple clusters simultaneously.</p>
         </div>
-      </div>
-      <div class="grid">
-        <article class="card">
-          <div class="ic"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="1.5"/><circle cx="14" cy="12" r="1.5"/><circle cx="10" cy="18" r="1.5"/></svg></div>
-          <div><h3>Parallel NCC runs</h3><p>Dozens or thousands of clusters at once, with retries, adaptive back-off on HTTP 429, and reports in HTML, CSV, JSON, Markdown and SARIF.</p></div>
-        </article>
-        <article class="card">
-          <div class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 13h5M8 16h8"/></svg></div>
-          <div><h3>Web dashboard</h3><p>Fleet overview, findings by severity and cluster, run history, trends, regressions since the last run, and flaky-check detection.</p></div>
-        </article>
-        <article class="card">
-          <div class="ic"><svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V7l8-4z"/><path d="M9 12l2 2 4-4"/></svg></div>
-          <div><h3>Alert lifecycle</h3><p>Acknowledge, resolve and reopen findings. Each alert keeps an append-only history: how long it has been open and whether it recurs.</p></div>
-        </article>
-        <article class="card">
-          <div class="ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
-          <div><h3>Scheduling</h3><p>Install a daily or hourly scan as a systemd timer, cron job, Windows scheduled task or Kubernetes CronJob, straight from the UI.</p></div>
-        </article>
-        <article class="card">
-          <div class="ic"><svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 1112 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10 20a2 2 0 004 0"/></svg></div>
-          <div><h3>Alerts and reports</h3><p>Slack, email and signed webhooks on failures, regressions or policy violations, with quiet hours, maintenance windows and a digest.</p></div>
-        </article>
-        <article class="card">
-          <div class="ic"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 11-3-6.7"/><path d="M21 4v5h-5"/></svg></div>
-          <div><h3>Self-healing supervisor</h3><p>Probes the API and UI servers and restarts one that crashes or hangs. Upgrades take a snapshot and roll back if checks fail.</p></div>
-        </article>
-        <article class="card">
-          <div class="ic"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/></svg></div>
-          <div><h3>Secure by default</h3><p>HTTPS UI, viewer, operator and admin roles, cluster groups, LDAP/AD, OpenID Connect and SAML sign-in, encrypted backups and an audit log.</p></div>
-        </article>
-        <article class="card">
-          <div class="ic"><svg viewBox="0 0 24 24"><path d="M8 9l-4 3 4 3M16 9l4 3-4 3M14 5l-4 14"/></svg></div>
-          <div><h3>API and integrations</h3><p>REST API with an OpenAPI 3 spec, personal access tokens, an event feed for ticketing tools, Prometheus <code>/metrics</code> and an MCP server.</p></div>
-        </article>
-        <article class="card">
-          <div class="ic"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></div>
-          <div><h3>Runs anywhere</h3><p>Single binaries for Linux, macOS and Windows on amd64 and arm64, Docker Compose, and Kubernetes. Policy gates turn results into CI exit codes.</p></div>
-        </article>
+        <div>
+          <span class="feature-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg></span>
+          <h3>Actionable analysis</h3>
+          <p>Turn NCC results into findings you can triage.</p>
+        </div>
+        <div>
+          <span class="feature-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 2v4M16 2v4M3 9h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM9 15l2 2 4-4"/></svg></span>
+          <h3>Unified operations</h3>
+          <p>Track findings through to resolution in one place.</p>
+        </div>
       </div>
     </div>
   </section>
 
-  <section class="section" id="tour">
+  <section class="section">
     <div class="wrap">
       <div class="section-head">
-        <div class="text">
-          <span class="eyebrow">Tour</span>
-          <h2>See it with sample data</h2>
-          <p>The real dashboard running in your browser against a sample fleet of eight clusters. Sign in as an admin, operator or viewer, start a run, resolve findings and change settings. Nothing leaves your browser, and closing the tab resets it.</p>
-        </div>
-        <a class="btn" href="demo/">Open the live demo →</a>
+        <h2>In the app</h2>
+        <p>The pages you work in every day.</p>
       </div>
-      <div class="gallery">
-        <figure>
-          <a class="frame" href="demo/#/findings"><img src="assets/screens/findings.png" data-dark="assets/screens/findings.png" data-light="assets/screens/findings-light.png" width="1440" height="900" loading="lazy" alt="Findings page: every FAIL, WARN, ERR and INFO result across clusters, with filters." /></a>
-          <figcaption><b>Findings.</b> Every result from every cluster, filtered by severity, cluster or check, with alert state and history.</figcaption>
-        </figure>
-        <figure>
-          <a class="frame" href="demo/#/insights"><img src="assets/screens/insights.png" data-dark="assets/screens/insights.png" data-light="assets/screens/insights-light.png" width="1440" height="900" loading="lazy" alt="Insights page: health score and findings trends over recent runs." /></a>
-          <figcaption><b>Insights.</b> Health score and findings over time, regressions since the last run, and checks that keep flapping.</figcaption>
-        </figure>
-        <figure>
-          <a class="frame" href="demo/#/runs"><img src="assets/screens/runs.png" data-dark="assets/screens/runs.png" data-light="assets/screens/runs-light.png" width="1440" height="900" loading="lazy" alt="Runs page: history of scheduled and manual runs with outcome and duration." /></a>
-          <figcaption><b>Runs.</b> Scheduled and manual runs with outcome, duration and clusters checked; start a run with a preflight check.</figcaption>
-        </figure>
+      <div class="list">
+        <div><b>Overview</b><span>Health of every cluster and what needs attention.</span></div>
+        <div><b>Findings</b><span>Every result from every cluster by severity; acknowledge, resolve and reopen.</span></div>
+        <div><b>Insights</b><span>Health over time, regressions since the last run, and flapping checks.</span></div>
+        <div><b>Runs</b><span>Scheduled and manual runs with outcome, duration and clusters checked.</span></div>
+        <div><b>Schedule</b><span>Daily or hourly scans as a systemd timer, cron job, Windows task or CronJob.</span></div>
+        <div><b>Notifications</b><span>Slack, email and signed webhooks, with quiet hours and a digest.</span></div>
+        <div><b>Access</b><span>Viewer, operator and admin roles; LDAP, OpenID Connect and SAML sign-in.</span></div>
+        <div><b>Health &amp; repair</b><span>A supervisor that restarts a crashed or hung server, and diagnostics.</span></div>
       </div>
     </div>
   </section>
 
-  <section class="section" id="start">
+  <section class="section" id="docs">
     <div class="wrap split">
-      <div class="panel">
-        <div class="panel-head">
-          <div><div class="panel-title">Quick start</div><div class="panel-desc">Linux amd64 shown; the download page has macOS and Windows.</div></div>
-          <div class="panel-extra"><a class="btn btn-primary btn-sm" href="download.html">Get the latest release</a></div>
+      <div>
+        <div class="section-head">
+          <h2>Quick start</h2>
+          <p>Linux shown. <a href="download.html">Download</a> has macOS and Windows.</p>
         </div>
-        <div class="panel-body">
-<pre aria-label="Quick start commands for Linux">mkdir ncc &amp;&amp; tar -xzf ncc-v2-stack-linux-amd64.tar.gz -C ncc &amp;&amp; cd ncc
+<pre aria-label="Quick start commands for Linux">mkdir ncc
+tar -xzf ncc-v2-stack-linux-amd64.tar.gz -C ncc &amp;&amp; cd ncc
 export NCC_PASSWORD='your-prism-password'
 ./bin/ncc-orchestrator preflight-check --config example_config.yaml
 
-<span class="c"># one-shot scan from the command line</span>
-./bin/ncc-orchestrator --config example_config.yaml
-
-<span class="c"># or start the dashboard on https://localhost:8080</span>
+<span class="c"># start the dashboard on https://localhost:8080</span>
 ./bin/ncc-orchestrator v2-start --detach --self-heal</pre>
-        </div>
       </div>
-      <div class="panel" id="docs">
-        <div class="panel-head">
-          <div><div class="panel-title">Documentation</div><div class="panel-desc">In the repository on GitHub.</div></div>
+      <div>
+        <div class="section-head">
+          <h2>Documentation</h2>
+          <p>In the repository on GitHub.</p>
         </div>
-        <div class="links">
-          <a href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator#readme"><b>README</b><span>Install, first run, full stack</span></a>
-          <a href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/blob/main/docs/FEATURES_AND_CONFIG_FLAGS.md"><b>Configuration</b><span>Every key, variable and flag</span></a>
-          <a href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/blob/main/docs/TROUBLESHOOTING.md"><b>Troubleshooting</b><span>TLS, Prism Central, API, runs</span></a>
-          <a href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/blob/main/docs/ARCHITECTURE_AND_HANDOVER.md"><b>Architecture</b><span>Runner, API, UI, supervisor</span></a>
-          <a href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/blob/main/docs/integrations/third-party-alert-integrations.md"><b>Integrations</b><span>ServiceNow, Prometheus, webhooks</span></a>
-          <a href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/blob/main/docs/SECURITY_AND_TRUST.md"><b>Security and trust</b><span>Verifying binaries, roles, SSO</span></a>
-          <a href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/blob/main/k8s/README.md"><b>Kubernetes and Helm</b><span>kustomize or the Helm chart</span></a>
-          <a href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases"><b>Release notes</b><span>What changed in each version</span></a>
+        <div class="list">
+          <a class="list-item" href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator#readme"><b>README</b><span>Install and first run</span></a>
+          <a class="list-item" href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/blob/main/docs/FEATURES_AND_CONFIG_FLAGS.md"><b>Configuration</b><span>Keys, variables and flags</span></a>
+          <a class="list-item" href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/blob/main/docs/TROUBLESHOOTING.md"><b>Troubleshooting</b><span>TLS, Prism Central, runs</span></a>
+          <a class="list-item" href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/blob/main/k8s/README.md"><b>Kubernetes and Helm</b><span>Manifests and the chart</span></a>
+          <a class="list-item" href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/blob/main/docs/SECURITY_AND_TRUST.md"><b>Security and trust</b><span>Verify binaries, roles, SSO</span></a>
+          <a class="list-item" href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases"><b>Release notes</b><span>What changed in each version</span></a>
         </div>
       </div>
     </div>
@@ -194,7 +140,7 @@ export NCC_PASSWORD='your-prism-password'
 
 <footer>
   <div class="wrap">
-    <span>NCC Orchestrator · MIT licence · Independent open-source project, not affiliated with or endorsed by Nutanix, Inc.</span>
+    <span>NCC Orchestrator · MIT licence · Not affiliated with or endorsed by Nutanix, Inc.</span>
     <span><a href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator">GitHub</a> · <a href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/issues">Issues</a> · <a href="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/blob/main/.github/SECURITY.md">Report a vulnerability</a></span>
   </div>
 </footer>
