@@ -1012,14 +1012,51 @@ password" and audited as `auth.login` with error `username_conflict`: a
 directory identity can never act as a local account, nor mint tokens that
 re-resolve to the local account's role.
 
-**Several domains.** There is one directory connection; several URLs are
-failover servers for the same directory, not a routing table, and the
-`@domain` suffix does not select a server. For child domains of one forest,
-point the URL at a Global Catalog (port 3269 for LDAPS) with the forest-root
-base DN and set the username attribute to `userPrincipalName`, so names are
-unique across domains. A search that matches more than one entry is refused
-("matched N entries"), never resolved by picking one. Separate forests are not
-supported; federate them through an OIDC or SAML identity provider instead.
+**Several domains.** Several URLs within one directory are failover servers
+for the same directory, not a routing table. For child domains of one forest,
+one directory pointing at a Global Catalog (port 3269 for LDAPS) with the
+forest-root base DN and the username attribute set to `userPrincipalName`
+keeps names unique across domains. A search that matches more than one entry
+is refused ("matched N entries"), never resolved by picking one.
+
+For separate forests, or domains with their own controllers, add **directory
+profiles**: further directories, each with its own URLs, base DN, service
+account, CA and role map, that claim UPN suffixes (`emea.corp.example.com`)
+and NetBIOS domains (`EMEA`). The top-level config is the default profile; a
+config saved before profiles existed is exactly that, and needs no migration.
+The rules:
+
+- **Routing is by the login name only.** `user@suffix` goes to the profile
+  claiming the suffix, `NETBIOS\user` to the profile claiming the NetBIOS
+  domain (with `user` as the search name); anything else goes to the default
+  profile unchanged. Exactly one directory is asked, so a password is never
+  sent to a directory the name doesn't route to.
+- **Claims are exclusive.** A suffix or NetBIOS domain can belong to one
+  profile only (checked on save and on load), and profile names are unique.
+- **Canonical names are unique across directories.** A named profile's user
+  is stored under their `userPrincipalName`, lowercased, and that UPN must end
+  in a suffix the same profile claims; a user without a UPN or under an
+  unclaimed suffix is refused (`upn_missing`, `upn_suffix_unclaimed`). A
+  default-profile user keeps the username attribute's value, as before, but is
+  refused (`directory_conflict`) when that value ends in a suffix another
+  profile claims. So a name ending in `@suffix` can only come from the profile
+  that owns the suffix, and a name without `@` only from the default profile.
+- These refusals are handled like `username_conflict`: the user sees the
+  generic "invalid username or password", and `auth.login` is audited with the
+  code. Local-first sign-in and the local-account name check are unchanged.
+- **Cluster groups.** A cluster-group user entry `jdoe@<suffix>` normally also
+  matches the short name `jdoe`; that leniency is off for suffixes claimed by
+  named profiles, so the default forest's `jdoe` never inherits the access of
+  another forest's `jdoe@emea…`. Group CNs are not forest-qualified: use full
+  group DNs in cluster groups when several forests are configured.
+- **Secrets.** Each profile's bind password and CA certificate are write-only
+  like the default's (never returned; omitted on PUT keeps the stored value;
+  a renamed profile names its old name in `previous_name`). They live in the
+  same user store, so the store's envelope encryption covers them.
+
+Profiles are runtime-only: the `--ldap-*` startup flags configure the default
+profile, and flag-managed LDAP stays read-only. Federating forests through an
+OIDC or SAML identity provider is still an alternative.
 Details: [`setup/SIGN_IN.md`](setup/SIGN_IN.md#several-domains-or-forests).
 
 Configure it two ways:

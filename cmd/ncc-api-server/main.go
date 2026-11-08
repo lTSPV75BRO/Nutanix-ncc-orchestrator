@@ -875,7 +875,7 @@ func main() {
 		}
 	}
 	if ldapCfg.configured() {
-		prov, _, err := buildLDAPProvider(&ldapCfg)
+		prov, _, err := buildLDAPRouter(&ldapCfg)
 		if err != nil {
 			log.Fatalf("init LDAP: %v", err)
 		}
@@ -4470,7 +4470,7 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/settings/sso", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/update the runtime SAML SSO configuration (read-only when configured via startup flags)", SampleBody: "{\n  \"enabled\": true,\n  \"root_url\": \"https://ncc.example.com\",\n  \"idp_metadata_url\": \"https://idp.example.com/metadata\",\n  \"role_attribute\": \"groups\",\n  \"role_map\": \"ncc-admins=admin,ncc-ops=operator\",\n  \"default_role\": \"viewer\"\n}"},
 		{Path: "/api/v1/settings/oidc", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/update the OpenID Connect sign-in configuration (client secret is write-only; discovery is checked before saving)", SampleBody: "{\n  \"enabled\": true,\n  \"issuer_url\": \"https://login.microsoftonline.com/<tenant-id>/v2.0\",\n  \"client_id\": \"<application-id>\",\n  \"client_secret\": \"<client-secret>\",\n  \"root_url\": \"https://ncc.example.com\",\n  \"groups_claim\": \"groups\",\n  \"role_map\": \"ncc-admins=admin,ncc-ops=operator\",\n  \"default_role\": \"viewer\",\n  \"button_label\": \"Microsoft\"\n}"},
 		{Path: "/api/v1/settings/oidc/test", Methods: []string{http.MethodPost}, Description: "Admin-only: run OIDC discovery against an issuer without saving (returns endpoints, scopes, claims, PKCE support)", SampleBody: "{\n  \"issuer_url\": \"https://accounts.google.com\"\n}"},
-		{Path: "/api/v1/settings/ldap", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/update the runtime LDAP/Active Directory configuration (bind password is write-only; read-only when configured via startup flags)", SampleBody: "{\n  \"enabled\": true,\n  \"url\": \"ldaps://dc1.corp.example.com:636\",\n  \"bind_dn\": \"CN=ncc-svc,OU=Service Accounts,DC=corp,DC=example,DC=com\",\n  \"bind_password\": \"service-account-secret\",\n  \"base_dn\": \"DC=corp,DC=example,DC=com\",\n  \"role_map\": \"CN=NCC-Admins,OU=Groups,DC=corp,DC=example,DC=com=admin\",\n  \"default_role\": \"viewer\"\n}"},
+		{Path: "/api/v1/settings/ldap", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/update the runtime LDAP/Active Directory configuration: the default directory plus optional named directory profiles (profiles[]) picked by UPN suffix or NetBIOS domain. Bind passwords and CA certs are write-only; omitting profiles keeps the stored ones. Read-only when configured via startup flags", SampleBody: "{\n  \"enabled\": true,\n  \"url\": \"ldaps://dc1.corp.example.com:636\",\n  \"bind_dn\": \"CN=ncc-svc,OU=Service Accounts,DC=corp,DC=example,DC=com\",\n  \"bind_password\": \"service-account-secret\",\n  \"base_dn\": \"DC=corp,DC=example,DC=com\",\n  \"role_map\": \"CN=NCC-Admins,OU=Groups,DC=corp,DC=example,DC=com=admin\",\n  \"default_role\": \"viewer\"\n}"},
 		{Path: "/api/v1/settings/ldap/test", Methods: []string{http.MethodPost}, Description: "Admin-only: validate an LDAP/AD configuration by authenticating sample credentials, without saving it", SampleBody: "{\n  \"url\": \"ldaps://dc1.corp.example.com:636\",\n  \"base_dn\": \"DC=corp,DC=example,DC=com\",\n  \"bind_dn\": \"CN=ncc-svc,DC=corp,DC=example,DC=com\",\n  \"bind_password\": \"service-account-secret\",\n  \"role_map\": \"CN=NCC-Admins,OU=Groups,DC=corp,DC=example,DC=com=admin\",\n  \"test_username\": \"jdoe\",\n  \"test_password\": \"users-password\"\n}"},
 		{Path: "/api/v1/settings/ldap/search", Methods: []string{http.MethodGet}, Description: "Admin-only: live AD/LDAP type-ahead search for groups and users (?q=<term>&type=group|user|all&limit=<n>) to assign to cluster groups"},
 		{Path: "/api/v1/settings/session", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/set the session lifetime (ttl_sec or ttl_min; 0 restores the --session-ttl default)", SampleBody: "{\n  \"ttl_min\": 360\n}"},
@@ -4771,7 +4771,7 @@ func (s *apiServer) buildOpenAPISpecBase() map[string]interface{} {
 			"/api/v1/settings/ldap": map[string]interface{}{
 				"get": map[string]interface{}{"summary": "Admin-only: read the runtime LDAP/Active Directory config (the bind password is never returned; has_bind_password is reported instead). Reports whether LDAP is enabled and whether it is managed via startup flags or runtime."},
 				"put": map[string]interface{}{
-					"summary": "Admin-only: update the runtime LDAP/AD config and hot-reload the provider. The bind password is write-only (omit to keep the stored secret). Returns 409 when LDAP is managed via startup flags.",
+					"summary": "Admin-only: update the runtime LDAP/AD config and hot-reload the provider. The flat fields are the default directory; profiles[] are further directories routed by upn_suffixes / netbios_names (omit profiles to keep the stored list, send [] to clear it). Bind passwords and CA certs are write-only (omit to keep the stored secret; a renamed profile names its old name in previous_name). Returns 409 when LDAP is managed via startup flags.",
 					"requestBody": map[string]interface{}{
 						"required": true,
 						"content": map[string]interface{}{

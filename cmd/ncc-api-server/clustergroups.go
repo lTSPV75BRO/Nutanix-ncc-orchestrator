@@ -130,9 +130,10 @@ func (s *apiServer) allowedClusters(p principal) clusterAccess {
 			}
 		}
 	}
+	foreign := s.foreignUPNSuffixes()
 	memberOfAnyGroup := false
 	for _, grp := range s.users.getClusterGroups() {
-		if !principalInClusterGroup(subj, adVals, grp) {
+		if !principalInClusterGroup(subj, adVals, grp, foreign) {
 			continue
 		}
 		memberOfAnyGroup = true
@@ -414,8 +415,10 @@ func (s *apiServer) resolveRunClusterScope(req runTriggerRequest, access cluster
 // userIdentifierMatches reports whether a stored member identifier matches the
 // caller's (lower-cased) subject. It compares case-insensitively and also
 // accepts a UPN whose local part equals the subject (e.g. "jdoe@corp.example.com"
-// matches subject "jdoe").
-func userIdentifierMatches(subjLower, candidate string) bool {
+// matches subject "jdoe"). The local-part match is skipped for suffixes in
+// foreign (those claimed by a named LDAP directory profile): such a UPN is a
+// user of another forest, never the default directory's "jdoe".
+func userIdentifierMatches(subjLower, candidate string, foreign map[string]bool) bool {
 	c := strings.ToLower(strings.TrimSpace(candidate))
 	if c == "" {
 		return false
@@ -423,10 +426,19 @@ func userIdentifierMatches(subjLower, candidate string) bool {
 	if c == subjLower {
 		return true
 	}
-	if at := strings.IndexByte(c, '@'); at > 0 && c[:at] == subjLower {
+	if at := strings.IndexByte(c, '@'); at > 0 && c[:at] == subjLower && !foreign[c[at+1:]] {
 		return true
 	}
 	return false
+}
+
+// foreignUPNSuffixes are the UPN suffixes claimed by named LDAP directory
+// profiles (nil when there are none).
+func (s *apiServer) foreignUPNSuffixes() map[string]bool {
+	if r, ok := s.currentLDAP().(*ldapRouter); ok && r != nil {
+		return r.foreignUPNSuffixes()
+	}
+	return nil
 }
 
 // clusterKeyCandidates are object field names that hold a cluster identity in
@@ -491,14 +503,14 @@ func deepFilterClusters(v interface{}, access clusterAccess) interface{} {
 
 // principalInClusterGroup reports whether the (lower-cased) subject or any of the
 // principal's (lower-cased) AD group values/CNs are a member of grp.
-func principalInClusterGroup(subjLower string, adVals map[string]bool, grp clusterGroup) bool {
+func principalInClusterGroup(subjLower string, adVals map[string]bool, grp clusterGroup, foreign map[string]bool) bool {
 	if subjLower != "" {
 		// Local accounts and individual AD users are both matched by the
 		// caller's canonical subject (an AD login resolves to its
 		// sAMAccountName). UPN-style entries are matched on their local part
 		// too, so "jdoe@corp" also matches the subject "jdoe".
 		for _, u := range append(append([]string{}, grp.LocalUsers...), grp.ADUsers...) {
-			if userIdentifierMatches(subjLower, u) {
+			if userIdentifierMatches(subjLower, u, foreign) {
 				return true
 			}
 		}

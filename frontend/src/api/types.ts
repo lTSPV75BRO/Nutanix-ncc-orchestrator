@@ -470,6 +470,52 @@ export type LDAPConfig = {
   group_attribute?: string;
   role_map?: string;
   default_role?: string;
+  /** Login domains the default directory claims (jdoe@suffix, NETBIOS\jdoe). */
+  upn_suffixes?: string[];
+  netbios_names?: string[];
+  /** Further directories, each picked by the login name's domain. */
+  profiles?: LDAPProfile[];
+};
+
+/** A named directory profile as returned by GET /settings/ldap (no secrets). */
+export type LDAPProfile = {
+  name: string;
+  upn_suffixes: string[];
+  netbios_names: string[];
+  url: string;
+  start_tls?: boolean;
+  insecure_skip_verify?: boolean;
+  has_ca_cert?: boolean;
+  bind_dn?: string;
+  has_bind_password?: boolean;
+  base_dn: string;
+  user_filter?: string;
+  username_attribute?: string;
+  group_attribute?: string;
+  role_map?: string;
+  default_role?: string;
+};
+
+export type LDAPProfileInput = {
+  name: string;
+  /** The stored name when renaming, so the stored secrets carry over. */
+  previous_name?: string;
+  upn_suffixes: string[];
+  netbios_names?: string[];
+  url: string;
+  start_tls?: boolean;
+  insecure_skip_verify?: boolean;
+  /** Write-only. Omit to keep the stored CA; empty string clears it. */
+  ca_cert_pem?: string;
+  bind_dn?: string;
+  /** Write-only. Omit to keep the stored secret; empty string clears it. */
+  bind_password?: string;
+  base_dn: string;
+  user_filter?: string;
+  username_attribute?: string;
+  group_attribute?: string;
+  role_map?: string;
+  default_role?: string;
 };
 
 export type LDAPConfigInput = {
@@ -487,6 +533,10 @@ export type LDAPConfigInput = {
   group_attribute?: string;
   role_map?: string;
   default_role?: string;
+  /** Omit to keep the stored values (older clients); [] clears. */
+  upn_suffixes?: string[];
+  netbios_names?: string[];
+  profiles?: LDAPProfileInput[];
 };
 
 export type LDAPTestInput = LDAPConfigInput & {
@@ -496,6 +546,8 @@ export type LDAPTestInput = LDAPConfigInput & {
 
 export type LDAPTestResult = {
   username: string;
+  /** The directory profile the login name was routed to ("default" or a profile name). */
+  directory?: string;
   role: UserRole;
   groups?: string[];
 };
@@ -526,6 +578,8 @@ export type DirectoryEntry = {
   name: string;
   dn: string;
   upn?: string;
+  /** The directory profile it came from; absent for the default directory. */
+  directory?: string;
 };
 
 export type DirectorySearchResult = {

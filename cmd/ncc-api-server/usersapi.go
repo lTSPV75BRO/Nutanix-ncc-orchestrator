@@ -331,6 +331,29 @@ func (s *apiServer) handleLDAP(w http.ResponseWriter, r *http.Request) {
 			data["group_attribute"] = cfg.GroupAttr
 			data["role_map"] = cfg.RoleMapRaw
 			data["default_role"] = cfg.DefaultRole
+			data["upn_suffixes"] = nonNilStrings(cfg.UPNSuffixes)
+			data["netbios_names"] = nonNilStrings(cfg.NetBIOSNames)
+			profiles := make([]map[string]interface{}, 0, len(cfg.Profiles))
+			for _, p := range cfg.Profiles {
+				profiles = append(profiles, map[string]interface{}{
+					"name":                 p.Name,
+					"upn_suffixes":         nonNilStrings(p.UPNSuffixes),
+					"netbios_names":        nonNilStrings(p.NetBIOSNames),
+					"url":                  p.URL,
+					"start_tls":            p.StartTLS,
+					"insecure_skip_verify": p.InsecureSkipVerify,
+					"has_ca_cert":          strings.TrimSpace(p.CACertPEM) != "",
+					"bind_dn":              p.BindDN,
+					"has_bind_password":    strings.TrimSpace(p.BindPassword) != "",
+					"base_dn":              p.BaseDN,
+					"user_filter":          p.UserFilter,
+					"username_attribute":   p.UsernameAttr,
+					"group_attribute":      p.GroupAttr,
+					"role_map":             p.RoleMapRaw,
+					"default_role":         p.DefaultRole,
+				})
+			}
+			data["profiles"] = profiles
 		}
 		writeJSON(w, http.StatusOK, envelope{Success: true, Data: data})
 	case http.MethodPut:
@@ -338,47 +361,16 @@ func (s *apiServer) handleLDAP(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusConflict, envelope{Success: false, Error: "LDAP is managed via startup flags and cannot be edited at runtime"})
 			return
 		}
-		var body struct {
-			Enabled            bool    `json:"enabled"`
-			URL                string  `json:"url"`
-			StartTLS           bool    `json:"start_tls"`
-			InsecureSkipVerify bool    `json:"insecure_skip_verify"`
-			CACertPEM          string  `json:"ca_cert_pem"`
-			BindDN             string  `json:"bind_dn"`
-			BindPassword       *string `json:"bind_password"`
-			BaseDN             string  `json:"base_dn"`
-			UserFilter         string  `json:"user_filter"`
-			UsernameAttr       string  `json:"username_attribute"`
-			GroupAttr          string  `json:"group_attribute"`
-			RoleMapRaw         string  `json:"role_map"`
-			DefaultRole        string  `json:"default_role"`
-		}
+		var body ldapConfigInput
 		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 		if err := dec.Decode(&body); err != nil {
 			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "invalid JSON body"})
 			return
 		}
-		prev := s.users.getLDAP()
-		cfg := &ldapPersisted{
-			Enabled:            body.Enabled,
-			URL:                strings.TrimSpace(body.URL),
-			StartTLS:           body.StartTLS,
-			InsecureSkipVerify: body.InsecureSkipVerify,
-			CACertPEM:          strings.TrimSpace(body.CACertPEM),
-			BindDN:             strings.TrimSpace(body.BindDN),
-			BaseDN:             strings.TrimSpace(body.BaseDN),
-			UserFilter:         strings.TrimSpace(body.UserFilter),
-			UsernameAttr:       strings.TrimSpace(body.UsernameAttr),
-			GroupAttr:          strings.TrimSpace(body.GroupAttr),
-			RoleMapRaw:         strings.TrimSpace(body.RoleMapRaw),
-			DefaultRole:        strings.TrimSpace(body.DefaultRole),
-		}
-		// Bind password is write-only: a nil field preserves the stored secret;
-		// an empty string clears it (anonymous bind).
-		if body.BindPassword != nil {
-			cfg.BindPassword = *body.BindPassword
-		} else if prev != nil {
-			cfg.BindPassword = prev.BindPassword
+		cfg, err := body.merge(s.users.getLDAP(), false)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
+			return
 		}
 		if body.Enabled && !cfg.configured() {
 			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "url and base_dn are required to enable LDAP"})
@@ -389,11 +381,18 @@ func (s *apiServer) handleLDAP(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 			return
 		}
+		// Directory profiles: names, claims and per-profile fields (also
+		// normalizes suffixes / NetBIOS names before they are stored).
+		if err := validateLDAPProfiles(cfg); err != nil {
+			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
+			return
+		}
 		// When enabling LDAP, verify connectivity (dial + service-account bind +
-		// base-DN search) before persisting so the admin gets a clear, actionable
-		// error instead of a config that only fails later at login time.
+		// base-DN search) of every directory before persisting so the admin
+		// gets a clear, actionable error instead of a config that only fails
+		// later at login time.
 		if cfg.configured() {
-			prov, _, err := buildLDAPProvider(cfg)
+			prov, _, err := buildLDAPRouter(cfg)
 			if err != nil {
 				writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 				return
@@ -411,44 +410,183 @@ func (s *apiServer) handleLDAP(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "saved but failed to activate LDAP: " + err.Error()})
 			return
 		}
-		s.audit(r, "settings.ldap.update", true, map[string]interface{}{"enabled": body.Enabled})
+		s.audit(r, "settings.ldap.update", true, map[string]interface{}{"enabled": body.Enabled, "profiles": len(cfg.Profiles)})
 		writeJSON(w, http.StatusOK, envelope{Success: true, Message: "LDAP configuration updated"})
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 	}
 }
 
+func nonNilStrings(in []string) []string {
+	if in == nil {
+		return []string{}
+	}
+	return in
+}
+
+// ldapProfileInput is a directory profile as sent by PUT /settings/ldap (and
+// the test endpoint). Secrets are write-only: a nil bind_password /
+// ca_cert_pem keeps the value stored for the profile of the same name (or
+// previous_name, when the profile is being renamed); an empty string clears
+// it.
+type ldapProfileInput struct {
+	Name               string   `json:"name"`
+	PreviousName       string   `json:"previous_name"`
+	UPNSuffixes        []string `json:"upn_suffixes"`
+	NetBIOSNames       []string `json:"netbios_names"`
+	URL                string   `json:"url"`
+	StartTLS           bool     `json:"start_tls"`
+	InsecureSkipVerify bool     `json:"insecure_skip_verify"`
+	CACertPEM          *string  `json:"ca_cert_pem"`
+	BindDN             string   `json:"bind_dn"`
+	BindPassword       *string  `json:"bind_password"`
+	BaseDN             string   `json:"base_dn"`
+	UserFilter         string   `json:"user_filter"`
+	UsernameAttr       string   `json:"username_attribute"`
+	GroupAttr          string   `json:"group_attribute"`
+	RoleMapRaw         string   `json:"role_map"`
+	DefaultRole        string   `json:"default_role"`
+}
+
+// ldapConfigInput is the PUT /settings/ldap body. The flat fields are the
+// default directory, exactly as before profiles existed. Omitting
+// upn_suffixes / netbios_names / profiles keeps the stored values, so an
+// older client that only knows the single-directory fields doesn't wipe the
+// profiles; send [] to clear them.
+type ldapConfigInput struct {
+	Enabled            bool                `json:"enabled"`
+	URL                string              `json:"url"`
+	StartTLS           bool                `json:"start_tls"`
+	InsecureSkipVerify bool                `json:"insecure_skip_verify"`
+	CACertPEM          *string             `json:"ca_cert_pem"`
+	BindDN             string              `json:"bind_dn"`
+	BindPassword       *string             `json:"bind_password"`
+	BaseDN             string              `json:"base_dn"`
+	UserFilter         string              `json:"user_filter"`
+	UsernameAttr       string              `json:"username_attribute"`
+	GroupAttr          string              `json:"group_attribute"`
+	RoleMapRaw         string              `json:"role_map"`
+	DefaultRole        string              `json:"default_role"`
+	UPNSuffixes        *[]string           `json:"upn_suffixes"`
+	NetBIOSNames       *[]string           `json:"netbios_names"`
+	Profiles           *[]ldapProfileInput `json:"profiles"`
+}
+
+// merge builds the config to store from the input and the stored config
+// (prev, may be nil), carrying write-only secrets over. With blankKeeps (the
+// test endpoint) an empty secret also means "use the stored one".
+func (in *ldapConfigInput) merge(prev *ldapPersisted, blankKeeps bool) (*ldapPersisted, error) {
+	keep := func(v *string, stored string) string {
+		if v == nil || (blankKeeps && strings.TrimSpace(*v) == "") {
+			return stored
+		}
+		return strings.TrimSpace(*v)
+	}
+	var prevDef ldapPersisted
+	if prev != nil {
+		prevDef = *prev
+	}
+	cfg := &ldapPersisted{
+		Enabled:            in.Enabled,
+		URL:                strings.TrimSpace(in.URL),
+		StartTLS:           in.StartTLS,
+		InsecureSkipVerify: in.InsecureSkipVerify,
+		CACertPEM:          keep(in.CACertPEM, prevDef.CACertPEM),
+		BindDN:             strings.TrimSpace(in.BindDN),
+		BaseDN:             strings.TrimSpace(in.BaseDN),
+		UserFilter:         strings.TrimSpace(in.UserFilter),
+		UsernameAttr:       strings.TrimSpace(in.UsernameAttr),
+		GroupAttr:          strings.TrimSpace(in.GroupAttr),
+		RoleMapRaw:         strings.TrimSpace(in.RoleMapRaw),
+		DefaultRole:        strings.TrimSpace(in.DefaultRole),
+		UPNSuffixes:        prevDef.UPNSuffixes,
+		NetBIOSNames:       prevDef.NetBIOSNames,
+		Profiles:           prevDef.Profiles,
+	}
+	// Bind password is write-only: a nil field preserves the stored secret;
+	// an empty string clears it (anonymous bind). The password itself is not
+	// trimmed.
+	cfg.BindPassword = prevDef.BindPassword
+	if in.BindPassword != nil && !(blankKeeps && *in.BindPassword == "") {
+		cfg.BindPassword = *in.BindPassword
+	}
+	if in.UPNSuffixes != nil {
+		cfg.UPNSuffixes = *in.UPNSuffixes
+	}
+	if in.NetBIOSNames != nil {
+		cfg.NetBIOSNames = *in.NetBIOSNames
+	}
+	if in.Profiles != nil {
+		stored := map[string]ldapProfile{}
+		for _, p := range prevDef.Profiles {
+			stored[strings.ToLower(p.Name)] = p
+		}
+		cfg.Profiles = make([]ldapProfile, 0, len(*in.Profiles))
+		for _, pi := range *in.Profiles {
+			from := strings.TrimSpace(pi.PreviousName)
+			if from == "" {
+				from = strings.TrimSpace(pi.Name)
+			}
+			old := stored[strings.ToLower(from)]
+			p := ldapProfile{
+				Name:               strings.TrimSpace(pi.Name),
+				UPNSuffixes:        pi.UPNSuffixes,
+				NetBIOSNames:       pi.NetBIOSNames,
+				URL:                strings.TrimSpace(pi.URL),
+				StartTLS:           pi.StartTLS,
+				InsecureSkipVerify: pi.InsecureSkipVerify,
+				CACertPEM:          keep(pi.CACertPEM, old.CACertPEM),
+				BindDN:             strings.TrimSpace(pi.BindDN),
+				BindPassword:       old.BindPassword,
+				BaseDN:             strings.TrimSpace(pi.BaseDN),
+				UserFilter:         strings.TrimSpace(pi.UserFilter),
+				UsernameAttr:       strings.TrimSpace(pi.UsernameAttr),
+				GroupAttr:          strings.TrimSpace(pi.GroupAttr),
+				RoleMapRaw:         strings.TrimSpace(pi.RoleMapRaw),
+				DefaultRole:        strings.TrimSpace(pi.DefaultRole),
+			}
+			if pi.BindPassword != nil && !(blankKeeps && *pi.BindPassword == "") {
+				p.BindPassword = *pi.BindPassword
+			}
+			cfg.Profiles = append(cfg.Profiles, p)
+		}
+	}
+	if len(cfg.Profiles) == 0 {
+		cfg.Profiles = nil
+	}
+	return cfg, nil
+}
+
 // handleLDAPTest validates an LDAP/AD configuration without persisting it
-// (admin-only). It builds an ephemeral provider from the posted config and
-// attempts to authenticate the supplied sample credentials, reporting the
-// resolved role and groups so admins can verify connectivity and role mapping.
+// (admin-only). It builds an ephemeral router from the posted config (the
+// default directory plus any profiles), routes the sample login name exactly
+// as sign-in would, and attempts to authenticate the supplied sample
+// credentials, reporting the directory used, the resolved name, role and
+// groups so admins can verify routing, connectivity and role mapping.
+// Blank secrets reuse the stored ones so admins can test without
+// re-entering them.
 func (s *apiServer) handleLDAPTest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
 	var body struct {
-		ldapPersisted
+		ldapConfigInput
 		TestUsername string `json:"test_username"`
 		TestPassword string `json:"test_password"`
-		BindPassword string `json:"bind_password"`
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err := dec.Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "invalid JSON body"})
 		return
 	}
-	cfg := body.ldapPersisted
-	cfg.Enabled = true // force-evaluate even if the saved config is disabled
-	cfg.BindPassword = body.BindPassword
-	// A blank bind password reuses the stored secret so admins can test without
-	// re-entering it.
-	if strings.TrimSpace(cfg.BindPassword) == "" {
-		if prev := s.users.getLDAP(); prev != nil {
-			cfg.BindPassword = prev.BindPassword
-		}
+	body.Enabled = true // force-evaluate even if the saved config is disabled
+	cfg, err := body.merge(s.users.getLDAP(), true)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
+		return
 	}
-	prov, enabled, err := buildLDAPProvider(&cfg)
+	prov, enabled, err := buildLDAPRouter(cfg)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 		return
@@ -461,20 +599,21 @@ func (s *apiServer) handleLDAPTest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "test_username and test_password are required"})
 		return
 	}
-	role, canonical, groups, ok, err := prov.authenticate(body.TestUsername, body.TestPassword)
+	directory, role, canonical, groups, ok, err := prov.authenticateRouted(body.TestUsername, body.TestPassword)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, envelope{Success: false, Error: "LDAP error: " + err.Error()})
 		return
 	}
 	if !ok {
-		writeJSON(w, http.StatusUnauthorized, envelope{Success: false, Error: "LDAP rejected the sample credentials (bad username/password or no matching user)"})
+		writeJSON(w, http.StatusUnauthorized, envelope{Success: false, Error: fmt.Sprintf("LDAP rejected the sample credentials in directory %q (bad username/password or no matching user)", directory)})
 		return
 	}
-	s.audit(r, "settings.ldap.test", true, map[string]interface{}{"username": canonical})
+	s.audit(r, "settings.ldap.test", true, map[string]interface{}{"username": canonical, "directory": directory})
 	writeJSON(w, http.StatusOK, envelope{Success: true, Message: "LDAP authentication succeeded", Data: map[string]interface{}{
-		"username": canonical,
-		"role":     role.String(),
-		"groups":   groups,
+		"username":  canonical,
+		"role":      role.String(),
+		"groups":    groups,
+		"directory": directory,
 	}})
 }
 

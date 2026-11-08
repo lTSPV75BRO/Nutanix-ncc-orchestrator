@@ -54,10 +54,10 @@ func (s *apiServer) authDiagnostics() []diagResult {
 // validate() used at config-save time).
 func (s *apiServer) diagLDAP() diagResult {
 	res := diagResult{ID: "ldap-bind", Title: "LDAP/AD directory reachable", Category: "directory"}
-	var prov *ldapProvider
+	var prov *ldapRouter
 	if s.users != nil {
 		if cfg := s.users.getLDAP(); cfg != nil && cfg.Enabled {
-			p, enabled, err := buildLDAPProvider(cfg)
+			p, enabled, err := buildLDAPRouter(cfg)
 			if err != nil {
 				res.Status = diagFail
 				res.Message = "invalid LDAP config: " + err.Error()
@@ -71,7 +71,7 @@ func (s *apiServer) diagLDAP() diagResult {
 	}
 	if prov == nil {
 		if la := s.currentLDAP(); la != nil {
-			if p, ok := la.(*ldapProvider); ok {
+			if p, ok := la.(*ldapRouter); ok {
 				prov = p
 			}
 		}
