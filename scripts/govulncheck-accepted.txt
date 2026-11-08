@@ -1,0 +1,8 @@
+# govulncheck advisories that were reviewed and found to be wrong about the
+# version we ship. tools/vulngate lets the build pass on these and nothing
+# else. Every entry needs a review-by date; past it, the build fails until
+# someone re-checks the advisory. Remove an entry as soon as govulncheck stops
+# reporting it (vulngate prints it as "stale").
+#
+# <OSV id>      <module>                  <review-by>  # why
+GO-2026-6909    github.com/crewjam/saml   2027-01-31   # Fixed upstream in v0.5.2 (PR #679, commit e05a6f1: nil checks for Subject/Conditions, NameID bound to the SAML assertion namespace; maintainer confirmed on crewjam/saml#693). We ship v0.6.3, which has both fixes; the vulndb record still has no fixed version. The API server also recovers panics per request and refuses SAML logins without a NameID.

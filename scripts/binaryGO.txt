@@ -534,17 +534,24 @@ check_versions() {
 # such as @oxc-project disappears mid-walk.
 GO_PKGS="./cmd/... ./internal/... ./tools/..."
 
+# govulncheck, gated by tools/vulngate: fails on any vulnerable symbol the
+# code calls unless the advisory is listed (with a reason and review date) in
+# scripts/govulncheck-accepted.txt because the database is wrong about it.
+run_govulncheck() {
+  if ! command -v govulncheck >/dev/null 2>&1; then
+    go install golang.org/x/vuln/cmd/govulncheck@latest
+    export PATH="$(go env GOPATH)/bin:${PATH}"
+  fi
+  govulncheck -format json $GO_PKGS | go run ./tools/vulngate scripts/govulncheck-accepted.txt
+}
+
 update_deps() {
   echo "updating Go modules..."
   go get -u $GO_PKGS
   go mod tidy
   echo "updating frontend npm packages..."
   (cd frontend && run_npm update && run_npm audit --omit=dev)
-  if ! command -v govulncheck >/dev/null 2>&1; then
-    go install golang.org/x/vuln/cmd/govulncheck@latest
-    export PATH="$(go env GOPATH)/bin:${PATH}"
-  fi
-  govulncheck $GO_PKGS
+  run_govulncheck
   echo "dependency update finished; review git diff before committing"
 }
 
@@ -702,11 +709,7 @@ else
 fi
 
 if [ "$DO_GOVULN" = 1 ]; then
-  if ! command -v govulncheck >/dev/null 2>&1; then
-    go install golang.org/x/vuln/cmd/govulncheck@latest
-    export PATH="$(go env GOPATH)/bin:${PATH}"
-  fi
-  govulncheck $GO_PKGS
+  run_govulncheck
 fi
 echo "PREFLIGHT_OK"
 

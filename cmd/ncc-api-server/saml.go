@@ -408,8 +408,15 @@ func (s *apiServer) handleSAMLComplete(w http.ResponseWriter, r *http.Request) {
 			username = jc.Subject
 		}
 	}
+	username = strings.TrimSpace(username)
 	if username == "" {
-		username = "saml-user"
+		// No NameID and no username attribute: refuse rather than sign
+		// everyone in as one shared account (defence in depth for
+		// GO-2026-6909, where a NameID in the wrong namespace was ignored).
+		serverLog.WarnContext(r.Context(), "saml login refused: assertion names no user", "username_attribute", p.usernameAtt)
+		s.audit(r, "auth.saml.login", false, map[string]interface{}{"reason": "assertion names no user"})
+		writeJSON(w, http.StatusForbidden, envelope{Success: false, Error: "The identity provider's response didn't say who you are (no NameID or username attribute). Ask your admin to check the SAML username attribute."})
+		return
 	}
 	role := p.roleFromValues(attrs[p.roleAtt])
 	token, exp, err := s.issueRoleSessionToken(cleanClientIP(r), username, role)

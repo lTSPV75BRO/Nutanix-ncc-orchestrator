@@ -17,6 +17,20 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 
 ### Security
 
+- **SAML library on v0.6.3 (GO-2026-6909).** crewjam/saml v0.5.1 could
+  panic on a signed assertion without `<Subject>` or `<Conditions>` and read a
+  `NameID` from any XML namespace. v0.5.2 fixed both upstream (refuses those
+  assertions; `NameID` bound to the SAML assertion namespace); we now ship
+  v0.6.3. The Go vulnerability database still lists no fixed version, so
+  govulncheck keeps flagging it: builds and CI now run govulncheck through
+  `tools/vulngate`, which fails on any called vulnerability except ones
+  reviewed in `scripts/govulncheck-accepted.txt` (each with a reason and a
+  review-by date, after which the build fails again until re-checked). A
+  SAML login whose assertion names no user is now refused instead of signing
+  in as a shared `saml-user` account.
+- **Go modules on their latest releases:** grpc 1.85.0, OpenTelemetry 1.47.0,
+  go-jose 4.1.9, grpc-gateway 2.33.0, yaml 3.0.6, pflag 1.1.0, genproto
+  2026-11-04, go-colorable 0.1.16, go-runewidth 0.0.31.
 - **Password policy follows NIST SP 800-63B rev. 4.** New, reset and changed
   local passwords need at least 15 characters (up to 72 bytes, spaces
   allowed, no composition rules) and are refused when they contain the
@@ -448,6 +462,11 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 
 ### Upgrade notes
 
+- **SAML with encrypted assertions:** crewjam/saml 0.5.2+ no longer
+  decrypts assertions that use RSA-1_5 key transport or TripleDES. If your IdP
+  encrypts with those, switch it to RSA-OAEP and AES-GCM/AES-CBC, or sign-in
+  fails with an "algorithm not implemented" error. Assertions must also carry
+  a NameID or the configured username attribute.
 - A locked-out sole admin recovers on the host with
   `ncc-orchestrator v2-reset-password --user admin` (or
   `ncc-api-server --reset-admin`; on Kubernetes, run it in the API pod), unless
