@@ -3795,6 +3795,9 @@ func artifactRetentionCandidates(outputDir string, retainDays, retainMaxFiles in
 		// feature-flag overrides after every run.
 		"ncc-alert-dispositions.json": true,
 		"feature-flags.json":          true,
+		// Per-channel notification delivery status (runner + api-server).
+		".ncc-notification-status.json":      true,
+		".ncc-notification-status.json.lock": true,
 	}
 	type item struct {
 		name string

@@ -4498,6 +4498,7 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/settings/config-files/batch", Methods: []string{http.MethodPost}, Description: "Bulk add/update/remove config-referenced files", SampleBody: "{\n  \"operations\": [\n    {\"action\": \"add\", \"path\": \"clusters.txt\", \"content\": \"10.0.0.1\\n\"},\n    {\"action\": \"remove\", \"path\": \"exclude.txt\"}\n  ]\n}"},
 		{Path: "/api/v1/settings/notifications", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/write notification channels (slack/webhook/email), events, and delivery controls — quiet hours, maintenance windows, dedup/rate-limit throttle, the scheduled health digest, and run_reports (per_run, only_on_regression: how the runner reports each run, config.yaml notify-digest / notify-on-regression). Failures (run/backup/self-heal) reuse the run_failure toggle.", SampleBody: "{\n  \"enabled\": true,\n  \"events\": {\"run_failure\": true, \"run_success\": false, \"policy_violations\": true},\n  \"email\": {\"enabled\": true, \"smtp_host\": \"smtp.example.com\", \"smtp_port\": 587, \"from\": \"ncc@example.com\", \"to\": \"sre@example.com\"},\n  \"quiet\": {\"enabled\": true, \"start\": \"22:00\", \"end\": \"07:00\", \"timezone\": \"UTC\", \"allow_failures\": true},\n  \"maintenance\": [{\"start\": \"2026-07-01T01:00:00Z\", \"end\": \"2026-07-01T03:00:00Z\", \"note\": \"patching\"}],\n  \"throttle\": {\"dedup_window_sec\": 300, \"min_interval_sec\": 30},\n  \"digest\": {\"enabled\": true, \"every\": \"24h\"}\n}"},
 		{Path: "/api/v1/settings/notifications/test", Methods: []string{http.MethodPost}, Description: "Operator+: send a test message to one channel, or to every enabled channel (all); kind digest sends the health digest now. Uses the saved settings; delivery errors are URL-redacted.", SampleBody: "{\n  \"channel\": \"all\"\n}"},
+		{Path: "/api/v1/settings/notifications/status", Methods: []string{http.MethodGet}, Description: "Operator+: per-channel delivery status shared by the runner and this server: state (ok, failing, never), last attempt and last success times, the last URL-redacted error, attempts on the last delivery, and how many undelivered messages wait in notification-deadletter-dir."},
 		{Path: "/api/v1/schedule", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET viewer+: read scheduler state; PUT operator+: create/update/apply a recurring run", SampleBody: "{\n  \"type\": \"cron\",\n  \"action\": \"create\",\n  \"cron\": \"15 */4 * * *\",\n  \"config\": \"config.yaml\",\n  \"print_only\": true,\n  \"apply\": false\n}"},
 		{Path: "/api/v1/schedule/health", Methods: []string{http.MethodGet}, Description: "Scheduler health snapshot (last run/success/error hints)"},
 		{Path: "/api/v1/artifacts", Methods: []string{http.MethodGet}, Description: "List available artifacts"},
@@ -5003,6 +5004,9 @@ func (s *apiServer) buildOpenAPISpecBase() map[string]interface{} {
 						},
 					},
 				},
+			},
+			"/api/v1/settings/notifications/status": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Per-channel notification delivery status (operator+)"},
 			},
 			"/api/v1/settings/notifications/test": map[string]interface{}{
 				"post": map[string]interface{}{
@@ -6065,6 +6069,7 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/api/v1/settings/config-files/batch", s.handleConfigFilesBatch)
 	mux.HandleFunc("/api/v1/settings/notifications", s.handleNotifications)
 	mux.HandleFunc("/api/v1/settings/notifications/test", s.handleNotificationsTest)
+	mux.HandleFunc("/api/v1/settings/notifications/status", s.handleNotificationsStatus)
 	mux.HandleFunc("/api/v1/schedule", s.handleSchedule)
 	mux.HandleFunc("/api/v1/schedule/health", s.handleScheduleHealth)
 	mux.HandleFunc("/api/v1/health/diagnostics", s.handleHealthDiagnostics)

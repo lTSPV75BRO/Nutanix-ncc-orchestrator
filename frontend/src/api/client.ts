@@ -66,6 +66,7 @@ import type {
   BackupScheduleResponse,
   BackupScheduleState,
   NotificationState,
+  NotificationStatusResponse,
   PCAlertsData,
   NCCAlert,
   NCCAlertDetail,
@@ -681,6 +682,8 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(state),
     }),
+  /** Per-channel delivery status, shared by the runner and the server (operator+). */
+  getNotificationStatus: () => callApi<NotificationStatusResponse>("/api/v1/settings/notifications/status"),
   /** Sends a test message (or, with kind "digest", the health digest) using the saved settings. */
   testNotification: (channel: string, kind: "test" | "digest" = "test") =>
     callApiEnvelope<{ channel: string; last_delivery?: Record<string, unknown> }>(

@@ -18,18 +18,18 @@ import {
   Tooltip,
   Typography,
 } from "antd";
-import { ApiOutlined, BellOutlined, CheckCircleFilled, ClockCircleOutlined, CloseCircleFilled, DeleteOutlined, FilterOutlined, MailOutlined, PlusOutlined, SendOutlined, SlackOutlined } from "@ant-design/icons";
+import { ApiOutlined, BellOutlined, ClockCircleOutlined, DeleteOutlined, FilterOutlined, MailOutlined, PlusOutlined, SendOutlined, SlackOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs, { type Dayjs } from "dayjs";
 import { api } from "../../api/client";
 import type { NotificationState } from "../../api/types";
 import { notify, notifyError } from "../../notify";
 import { formatDateTime, relativeTime } from "../../utils/datetime";
-import { IconTitle, SaveBar, StatusBadge } from "../../ui";
+import { IconTitle, KeyValueList, SaveBar, StatusBadge } from "../../ui";
 import {
   alertSummary,
   channelErrors,
-  deliveryView,
+  channelStatusView,
   DIGEST_EVERY_OPTIONS,
   digestLabel,
   enabledChannelCount,
@@ -98,6 +98,14 @@ function ToggleRow({
 export function NotificationsSection() {
   const qc = useQueryClient();
   const query = useQuery({ queryKey: ["settings", "notifications"], queryFn: api.getNotifications });
+  // Shared with the runner, so it changes after every run: poll gently. Test
+  // sends and saves refresh it through the ["settings", "notifications"] prefix.
+  const statusQuery = useQuery({
+    queryKey: ["settings", "notifications", "status"],
+    queryFn: api.getNotificationStatus,
+    refetchInterval: 60_000,
+    retry: false,
+  });
   const [state, setState] = useState<NotificationState>({});
   const [baseline, setBaseline] = useState<NotificationState | null>(null);
 
@@ -186,7 +194,11 @@ export function NotificationsSection() {
   ) => {
     const on = Boolean(state[key]?.enabled);
     const errors = channelErrors(state, key);
-    const delivery = deliveryView(state.last_delivery?.[key]);
+    const status = channelStatusView(
+      statusQuery.data?.channels?.find((c) => c.channel === key),
+      state.last_delivery?.[key],
+      Boolean(statusQuery.data?.dead_letter_configured),
+    );
     return (
       <section className={`notif-channel${on ? " is-on" : ""}`} aria-label={title}>
         <header className="notif-channel-head">
@@ -209,16 +221,29 @@ export function NotificationsSection() {
               {fields(errors)}
             </Form>
             <footer className="notif-channel-foot">
-              <span className={`notif-delivery is-${delivery.tone}`}>
-                {delivery.tone === "ok" ? <CheckCircleFilled /> : delivery.tone === "fail" ? <CloseCircleFilled /> : null}
-                {delivery.text}
-                {delivery.at ? (
-                  <Tooltip title={formatDateTime(delivery.at)}>
-                    <span> {relativeTime(delivery.at)}</span>
-                  </Tooltip>
+              <div className="notif-status" aria-label={`${title} delivery status`}>
+                <div className="notif-status-line">
+                  <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                  <span className="notif-delivery">
+                    {status.text}
+                    {status.at ? (
+                      <Tooltip title={formatDateTime(status.at)}>
+                        <span>{relativeTime(status.at)}</span>
+                      </Tooltip>
+                    ) : null}
+                  </span>
+                </div>
+                {status.error ? <span className="notif-delivery-error">{status.error}</span> : null}
+                {status.details.length ? (
+                  <KeyValueList
+                    items={status.details.map((d) =>
+                      d.label === "Last attempt"
+                        ? { label: d.label, value: relativeTime(d.value), title: formatDateTime(d.value) }
+                        : d,
+                    )}
+                  />
                 ) : null}
-                {delivery.error ? <span className="notif-delivery-error">— {delivery.error}</span> : null}
-              </span>
+              </div>
               {testButton(key)}
             </footer>
           </>

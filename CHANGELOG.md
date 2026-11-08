@@ -102,6 +102,17 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 - **Re-run failed clusters.** A run's page has "Re-run N failed clusters":
   New run opens with the same environment and only the clusters that
   couldn't be checked.
+- **Notification delivery status per channel.** Settings → Notifications
+  shows, beside each channel's "Send test", whether it is delivering or
+  failing, when it last delivered, the last error (webhook URL paths
+  redacted), how many tries the last message took, whether it came from the
+  runner or the server, and how many undelivered messages wait in
+  `notification-deadletter-dir`. The runner (run reports) and the API server
+  (alerts, digests, tests) both record every delivery in
+  `<output-dir>/.ncc-notification-status.json`, written atomically under a
+  file lock, so it works the same on VM, Windows, Docker and Kubernetes. The
+  status refreshes after a test send and every minute.
+  `GET /api/v1/settings/notifications/status` (operator).
 - **Logs for this run.** A run's page links to System → Logs, filtered to
   that run ID.
 - **Scrollbars follow the theme**, and role tags are back to admin gold,

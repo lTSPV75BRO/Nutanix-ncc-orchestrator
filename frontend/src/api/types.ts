@@ -336,6 +336,30 @@ export type DigestConfig = {
   last_sent_at?: string;
 };
 
+/** One channel of GET /api/v1/settings/notifications/status (runner and server deliveries). */
+export type NotificationChannelStatus = {
+  channel: "email" | "webhook" | "slack";
+  enabled: boolean;
+  state: "ok" | "failing" | "never";
+  last_attempt_at?: string;
+  last_success_at?: string;
+  /** URL-redacted. */
+  last_error?: string;
+  /** Tries the last delivery took. */
+  attempts?: number;
+  /** "runner" (run reports) or "api" (alerts, digests, tests). */
+  source?: string;
+  event?: string;
+  /** Undelivered messages waiting in notification-deadletter-dir. */
+  dead_letters: number;
+};
+
+export type NotificationStatusResponse = {
+  channels: NotificationChannelStatus[];
+  dead_letter_configured: boolean;
+  updated_at?: string;
+};
+
 export type NotificationDeliveryStatus = {
   last_attempt_at?: string;
   last_success_at?: string;

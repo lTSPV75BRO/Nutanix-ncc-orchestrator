@@ -19,6 +19,7 @@ import type {
   NCCAlert,
   NCCDisposition,
   NotificationState,
+  NotificationStatusResponse,
   OnboardingStatus,
   PCAlertsData,
   PlatformData,
@@ -684,11 +685,45 @@ export const NOTIFICATIONS: NotificationState = {
   enabled: true,
   events: { run_success: false, run_failure: true, policy_violations: true },
   slack: { enabled: true, webhook_url: "https://hooks.slack.com/services/T000/B000/demo", channel: "#nutanix-health", username: "NCC Orchestrator" },
+  webhook: { enabled: true, url: "https://events.example.com/ncc" },
   digest: { enabled: true, every: "24h", last_sent_at: iso(NOW - 10 * HOUR) },
   last_delivery: {
     slack: { last_attempt_at: iso(LATEST_RUN_AT + 7 * MIN), last_success_at: iso(LATEST_RUN_AT + 7 * MIN), last_event: "policy_violations", success: true, total_success: 42, total_failure: 0 },
   },
   updated_at: iso(NOW - 15 * DAY),
+};
+
+// Slack delivers; the team's own event endpoint has been returning 503 since
+// yesterday, so its run reports are piling up in the dead-letter folder.
+export const NOTIFICATION_STATUS: NotificationStatusResponse = {
+  dead_letter_configured: true,
+  updated_at: iso(LATEST_RUN_AT + 7 * MIN),
+  channels: [
+    { channel: "email", enabled: false, state: "never", dead_letters: 0 },
+    {
+      channel: "webhook",
+      enabled: true,
+      state: "failing",
+      last_attempt_at: iso(LATEST_RUN_AT + 6 * MIN),
+      last_success_at: iso(NOW - 26 * HOUR),
+      last_error: "webhook status 503",
+      attempts: 3,
+      source: "runner",
+      event: "run_report",
+      dead_letters: 4,
+    },
+    {
+      channel: "slack",
+      enabled: true,
+      state: "ok",
+      last_attempt_at: iso(LATEST_RUN_AT + 7 * MIN),
+      last_success_at: iso(LATEST_RUN_AT + 7 * MIN),
+      attempts: 1,
+      source: "api",
+      event: "policy_violations",
+      dead_letters: 0,
+    },
+  ],
 };
 
 export const BACKUPS: { backups: BackupEntry[]; encryption_policy: { required: boolean; server_key_configured: boolean } } = {

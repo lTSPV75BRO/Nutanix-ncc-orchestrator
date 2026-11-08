@@ -83,6 +83,12 @@ operator blue, viewer plain everywhere.
   environment and only those clusters.
 - **Logs for this run.** A run's page links straight to System → Logs,
   filtered to that run.
+- **Is each notification channel working?** Settings → Notifications shows a
+  status beside each channel's "Send test": delivering or failing, when it
+  last delivered, the last error, tries on the last message, and how many
+  undelivered messages are waiting in the dead-letter folder. It covers the
+  runner's run reports as well as this server's alerts, digests and tests,
+  on every platform.
 
 ### Setup checklist (replaces the first-time setup modal)
 

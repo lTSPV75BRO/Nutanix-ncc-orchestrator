@@ -1,6 +1,7 @@
 // Pure helpers for the Notifications settings page (tested in
 // notificationsModel.test.ts).
-import type { NotificationDeliveryStatus, NotificationState } from "../../api/types";
+import type { NotificationChannelStatus, NotificationDeliveryStatus, NotificationState } from "../../api/types";
+import type { Tone } from "../../ui";
 
 export type ChannelKey = "slack" | "webhook" | "email";
 
@@ -19,6 +20,72 @@ export function deliveryView(d?: NotificationDeliveryStatus): DeliveryView {
   const failedLast = Boolean(d.last_error) && (!Number.isFinite(success) || attempt > success);
   if (failedLast) return { tone: "fail", text: "Last send failed", at: d.last_attempt_at, error: d.last_error };
   return { tone: "ok", text: "Last sent", at: d.last_success_at || d.last_attempt_at };
+}
+
+export type ChannelStatusView = {
+  tone: Tone;
+  /** Badge text. */
+  label: string;
+  /** "Last delivered" / "Never delivered" / "Nothing sent yet", followed by `at` when set. */
+  text: string;
+  at?: string;
+  error?: string;
+  details: { label: string; value: string }[];
+};
+
+const SOURCE_LABEL: Record<string, string> = {
+  runner: "Run report from the runner",
+  api: "Alert, digest or test from this server",
+};
+
+/**
+ * The status row for one channel, from the shared delivery status (runner and
+ * server). Falls back to the server-only `last_delivery` when the status
+ * endpoint gave nothing (older server, or no permission).
+ */
+export function channelStatusView(row?: NotificationChannelStatus, legacy?: NotificationDeliveryStatus, deadLetterConfigured = false): ChannelStatusView {
+  if (!row) {
+    const d = deliveryView(legacy);
+    if (d.tone === "none") return { tone: "neutral", label: "Not sent yet", text: "Nothing sent yet", details: [] };
+    if (d.tone === "fail") {
+      return {
+        tone: "fail",
+        label: "Failing",
+        text: legacy?.last_success_at ? "Last delivered" : "Never delivered",
+        at: legacy?.last_success_at,
+        error: d.error,
+        details: [],
+      };
+    }
+    return { tone: "ok", label: "Delivering", text: "Last delivered", at: d.at, details: [] };
+  }
+  const details: { label: string; value: string }[] = [];
+  if (row.state === "failing" && row.last_attempt_at) details.push({ label: "Last attempt", value: row.last_attempt_at });
+  if (row.attempts && row.state !== "never") {
+    details.push({ label: "Tries", value: row.attempts === 1 ? "1 try" : `${row.attempts} tries` });
+  }
+  if (row.source && SOURCE_LABEL[row.source]) details.push({ label: "Last message", value: SOURCE_LABEL[row.source] });
+  if (deadLetterConfigured || row.dead_letters > 0) {
+    details.push({ label: "Undelivered", value: row.dead_letters === 0 ? "None" : row.dead_letters === 1 ? "1 message saved" : `${row.dead_letters} messages saved` });
+  }
+  if (row.state === "never") return { tone: "neutral", label: "Not sent yet", text: "Nothing sent yet", details };
+  if (row.state === "failing") {
+    return {
+      tone: "fail",
+      label: "Failing",
+      text: row.last_success_at ? "Last delivered" : "Never delivered",
+      at: row.last_success_at,
+      error: row.last_error,
+      details,
+    };
+  }
+  return {
+    tone: row.dead_letters > 0 ? "warn" : "ok",
+    label: row.dead_letters > 0 ? "Delivering, some undelivered" : "Delivering",
+    text: "Last delivered",
+    at: row.last_success_at || row.last_attempt_at,
+    details,
+  };
 }
 
 const HTTP_URL = /^https?:\/\/[^\s/?#]+[^\s]*$/i;

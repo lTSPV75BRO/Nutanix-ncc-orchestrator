@@ -425,6 +425,8 @@ func routeMinRoleFor(p string, isRead bool) Role {
 		return RoleOperator
 	case p == "/api/v1/settings/notifications/test":
 		return RoleOperator
+	case isRead && p == "/api/v1/settings/notifications/status":
+		return RoleOperator
 	case p == "/api/v1/runs/configs":
 		return RoleOperator
 	case p == "/api/v1/alerts":

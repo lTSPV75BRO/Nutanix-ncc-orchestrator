@@ -16,6 +16,8 @@ import type {
   NCCAlert,
   NCCAlertEvent,
   NCCDisposition,
+  NotificationState,
+  NotificationStatusResponse,
   RunActiveData,
   RunInfo,
   UserAccount,
@@ -436,6 +438,7 @@ const gets: Record<string, Handler> = {
   "/api/v1/settings/clusters": () => fx.CLUSTER_INVENTORY,
   "/api/v1/settings/session": () => fx.SESSION_POLICY,
   "/api/v1/settings/notifications": () => fx.NOTIFICATIONS,
+  "/api/v1/settings/notifications/status": () => state.saved["/api/v1/settings/notifications/status"] ?? fx.NOTIFICATION_STATUS,
   "/api/v1/settings/backups": () => ({ ...fx.BACKUPS, backups: state.backups }),
   "/api/v1/settings/backups/schedule": () => fx.BACKUP_SCHEDULE,
   "/api/v1/settings/update": () => fx.UPDATE_STATUS,
@@ -671,8 +674,28 @@ async function write(method: string, path: string, url: URL, init?: RequestInit)
     return ok(body.generate_password ? { temporary_password: DEMO_PASSWORD } : {});
   }
   if (path === "/api/v1/settings/notifications/test") {
-    audit("settings.notifications.test");
+    // Update the shared delivery status the way the server does: the demo's
+    // webhook endpoint keeps failing, every other channel delivers.
+    const statusPath = "/api/v1/settings/notifications/status";
+    const notif = getAnswer("/api/v1/settings/notifications", url) as NotificationState;
+    const wanted = String(body.channel ?? "all");
+    const prev = (state.saved[statusPath] as NotificationStatusResponse | undefined) ?? fx.NOTIFICATION_STATUS;
+    let failed = "";
+    const channels = prev.channels.map((c) => {
+      const on = Boolean(notif[c.channel]?.enabled);
+      if (!on || (wanted !== "all" && wanted !== c.channel)) return { ...c, enabled: on };
+      const at = nowIso();
+      const event = body.kind === "digest" ? "digest" : "manual_test";
+      if (c.channel === "webhook") {
+        failed = "webhook: webhook status 503";
+        return { ...c, enabled: on, state: "failing" as const, last_attempt_at: at, last_error: "webhook status 503", attempts: 1, source: "api", event };
+      }
+      return { ...c, enabled: on, state: "ok" as const, last_attempt_at: at, last_success_at: at, last_error: undefined, attempts: 1, source: "api", event };
+    });
+    state.saved[statusPath] = { ...prev, channels, updated_at: nowIso() };
+    audit("settings.notifications.test", !failed);
     save();
+    if (failed) return fail(502, failed);
     return ok({ channel: body.channel ?? "all", last_delivery: { success: true, last_attempt_at: nowIso(), last_success_at: nowIso() } }, "Sent a test message (demo: nothing actually left the browser).");
   }
   if (path === "/api/v1/settings/backups" && method === "POST") {

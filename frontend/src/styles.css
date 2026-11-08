@@ -4671,16 +4671,29 @@ html[data-theme="light"] .site-intro-skip {
   color: var(--ui-text-secondary);
 }
 
-.notif-delivery.is-ok .anticon {
-  color: var(--ui-ok);
+.notif-status {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-2);
+  min-width: 0;
+  flex: 1 1 260px;
 }
 
-.notif-delivery.is-fail {
-  color: var(--ui-fail-text);
+.notif-status-line {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+  flex-wrap: wrap;
 }
 
 .notif-delivery-error {
   overflow-wrap: anywhere;
+  font-size: var(--ui-text-sm);
+  color: var(--ui-fail-text);
+}
+
+.notif-status .ui-kv {
+  font-size: var(--ui-text-sm);
 }
 
 .notif-groups {

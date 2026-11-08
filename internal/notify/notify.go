@@ -286,6 +286,7 @@ func SendEmailWithRetry(cfg model.Config, subj string, body string, attachPath s
 		lastErr = SendEmail(cfg, subj, body, attachPath)
 		if lastErr == nil {
 			defaultMetrics.Record("email", nil)
+			recordRunnerDelivery(cfg.OutputDirFiltered, "email", attempt, nil, cfg.NotificationDeadLetterDir)
 			log.Info().Str("channel", "email").Str("smtp_server", cfg.SMTPServer).Int("recipients", len(cfg.EmailTo)).Int("attempts", attempt).Dur("took", time.Since(start)).Msg("notification delivered")
 			return nil
 		}
@@ -296,6 +297,7 @@ func SendEmailWithRetry(cfg model.Config, subj string, body string, attachPath s
 		}
 	}
 	defaultMetrics.Record("email", lastErr)
+	recordRunnerDelivery(cfg.OutputDirFiltered, "email", RetryAttempts, lastErr, cfg.NotificationDeadLetterDir)
 	log.Error().Str("channel", "email").Str("smtp_server", cfg.SMTPServer).Int("attempts", RetryAttempts).Str("error", RedactURLPaths(lastErr.Error())).Str("dead_letter_dir", cfg.NotificationDeadLetterDir).Msg("notification not delivered")
 	writeDeadLetter(cfg.NotificationDeadLetterDir, "email", "", subj, lastErr, []byte(body))
 	return lastErr
@@ -394,6 +396,7 @@ func SendWebhookWithRetry(ctx context.Context, client model.HTTPClient, cfg mode
 		lastErr = SendWebhook(ctx, client, cfg, summary)
 		if lastErr == nil {
 			defaultMetrics.Record("webhook", nil)
+			recordRunnerDelivery(cfg.OutputDirFiltered, "webhook", attempt, nil, cfg.NotificationDeadLetterDir)
 			log.Info().Str("channel", "webhook").Str("host", urlHost(cfg.WebhookURL)).Str("cluster", summary.Cluster).Int("attempts", attempt).Dur("took", time.Since(start)).Msg("notification delivered")
 			return nil
 		}
@@ -408,6 +411,7 @@ func SendWebhookWithRetry(ctx context.Context, client model.HTTPClient, cfg mode
 		}
 	}
 	defaultMetrics.Record("webhook", lastErr)
+	recordRunnerDelivery(cfg.OutputDirFiltered, "webhook", RetryAttempts, lastErr, cfg.NotificationDeadLetterDir)
 	log.Error().Str("channel", "webhook").Str("host", urlHost(cfg.WebhookURL)).Str("cluster", summary.Cluster).Int("attempts", RetryAttempts).Str("error", RedactURLPaths(lastErr.Error())).Str("dead_letter_dir", cfg.NotificationDeadLetterDir).Msg("notification not delivered")
 	if body, mErr := json.Marshal(summary); mErr == nil {
 		writeDeadLetter(cfg.NotificationDeadLetterDir, "webhook", summary.Cluster, "", lastErr, body)
@@ -511,6 +515,7 @@ func SendSlackWithRetry(ctx context.Context, client model.HTTPClient, cfg model.
 		lastErr = SendSlack(ctx, client, cfg, summary)
 		if lastErr == nil {
 			defaultMetrics.Record("slack", nil)
+			recordRunnerDelivery(cfg.OutputDirFiltered, "slack", attempt, nil, cfg.NotificationDeadLetterDir)
 			log.Info().Str("channel", "slack").Str("host", urlHost(cfg.SlackWebhookURL)).Str("cluster", summary.Cluster).Int("attempts", attempt).Dur("took", time.Since(start)).Msg("notification delivered")
 			return nil
 		}
@@ -525,6 +530,7 @@ func SendSlackWithRetry(ctx context.Context, client model.HTTPClient, cfg model.
 		}
 	}
 	defaultMetrics.Record("slack", lastErr)
+	recordRunnerDelivery(cfg.OutputDirFiltered, "slack", RetryAttempts, lastErr, cfg.NotificationDeadLetterDir)
 	log.Error().Str("channel", "slack").Str("host", urlHost(cfg.SlackWebhookURL)).Str("cluster", summary.Cluster).Int("attempts", RetryAttempts).Str("error", RedactURLPaths(lastErr.Error())).Str("dead_letter_dir", cfg.NotificationDeadLetterDir).Msg("notification not delivered")
 	if body, mErr := json.Marshal(summary); mErr == nil {
 		writeDeadLetter(cfg.NotificationDeadLetterDir, "slack", summary.Cluster, "", lastErr, body)

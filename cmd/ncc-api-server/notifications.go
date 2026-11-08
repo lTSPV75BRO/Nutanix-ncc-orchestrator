@@ -1130,6 +1130,7 @@ func (s *apiServer) recordDelivery(st *notificationState, channel, event string,
 		item.TotalSuccess++
 	}
 	st.LastDelivery[channel] = item
+	s.recordSharedDelivery(channel, event, err)
 }
 
 func requestedChannels(channel string) (map[string]bool, error) {
