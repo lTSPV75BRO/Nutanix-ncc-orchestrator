@@ -147,6 +147,22 @@ func TestResolveRunConfig(t *testing.T) {
 	}
 }
 
+// A repo root reached through a symlink (macOS /tmp, or an 8.3 short name on
+// Windows) must still map an environment file path to its environment.
+func TestResolveRunConfigSymlinkedRoot(t *testing.T) {
+	real := envTestServer(t)
+	link := filepath.Join(t.TempDir(), "root-link")
+	if err := os.Symlink(real.repoRoot, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	s := &apiServer{repoRoot: link, configPath: "config.yaml", outputDir: "outputfiles"}
+	writeEnv(t, s, "dev", "runner:\n  targets:\n    clusters: [10.1.0.1]\n")
+	got, err := s.resolveRunConfig(nil, "", "configs/environments/dev.yaml")
+	if err != nil || got.environment != "dev" {
+		t.Fatalf("environment file under a symlinked root: %+v %v", got, err)
+	}
+}
+
 func TestConfineToEnvironment(t *testing.T) {
 	choice := runConfigChoice{environment: "prod", clusters: []string{"10.0.0.1", "10.0.0.2"}}
 	got, err := confineToEnvironment([]string{"10.0.0.2", "10.5.5.5"}, choice, false)

@@ -83,12 +83,16 @@ func TestEmptyInputIsAnError(t *testing.T) {
 func TestReadAccepted(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "a.txt")
-	os.WriteFile(p, []byte("# comment\n\nGO-1  github.com/crewjam/saml  2027-01-31  # fixed upstream\n"), 0o600)
+	if err := os.WriteFile(p, []byte("# comment\n\nGO-1  github.com/crewjam/saml  2027-01-31  # fixed upstream\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	acc, err := readAccepted(p)
 	if err != nil || acc["GO-1"].module != "github.com/crewjam/saml" || acc["GO-1"].reason != "fixed upstream" {
 		t.Fatalf("%v %+v", err, acc)
 	}
-	os.WriteFile(p, []byte("GO-1 github.com/crewjam/saml 2027-01-31\n"), 0o600)
+	if err := os.WriteFile(p, []byte("GO-1 github.com/crewjam/saml 2027-01-31\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := readAccepted(p); err == nil {
 		t.Fatal("want error for an entry without a reason")
 	}

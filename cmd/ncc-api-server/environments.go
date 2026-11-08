@@ -77,8 +77,12 @@ func (s *apiServer) environmentFile(name string) (string, error) {
 // environmentNameForPath returns the environment a config path names, if the
 // path is an environment file.
 func (s *apiServer) environmentNameForPath(abs string) (string, bool) {
-	dir := filepath.Clean(s.environmentsDir())
-	if !strings.EqualFold(filepath.Dir(filepath.Clean(abs)), dir) {
+	// Compare resolved directories: callers pass paths built from the repo
+	// root after EvalSymlinks (normalizeAndConfinePath), which differs from
+	// the configured root under a symlink (macOS /tmp) or an 8.3 short name
+	// (C:\Users\RUNNER~1 on Windows).
+	dir := resolvedDir(s.environmentsDir())
+	if !strings.EqualFold(resolvedDir(filepath.Dir(abs)), dir) {
 		return "", false
 	}
 	base := filepath.Base(abs)
@@ -91,6 +95,15 @@ func (s *apiServer) environmentNameForPath(abs string) (string, bool) {
 		return "", false
 	}
 	return name, true
+}
+
+// resolvedDir cleans dir and resolves symlinks and short names when it exists.
+func resolvedDir(dir string) string {
+	dir = filepath.Clean(dir)
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		return filepath.Clean(real)
+	}
+	return dir
 }
 
 // parseEnvironment checks that content is a runner-only environment file and
