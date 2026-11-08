@@ -14,9 +14,7 @@ name: Website
 
 on:
   push:
-    # v2.3.0 deploys the site until it is merged into main; then drop it here
-    # and in Settings → Environments → github-pages → deployment branches.
-    branches: [main, v2.3.0]
+    branches: [main]
     paths:
       - "site/**"
       - "frontend/**"
