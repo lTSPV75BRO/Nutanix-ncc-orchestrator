@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -287,7 +286,11 @@ func (s *apiServer) runDueEnvironmentSchedules(now time.Time) {
 	environmentScheduleMu.Lock()
 	defer environmentScheduleMu.Unlock()
 	list, err := s.loadEnvironmentSchedules()
-	if err != nil || len(list) == 0 {
+	if err != nil {
+		serverLog.Error("environment schedules could not be read", "error", err.Error())
+		return
+	}
+	if len(list) == 0 {
 		return
 	}
 	changed := false
@@ -302,7 +305,7 @@ func (s *apiServer) runDueEnvironmentSchedules(now time.Time) {
 		if err != nil {
 			list[i].LastResult = "Not started: " + err.Error()
 			list[i].LastRunID = ""
-			log.Printf("environment schedule %s (%s): %v", list[i].ID, list[i].Environment, err)
+			serverLog.Error("environment schedule due but its environment can't be used", "schedule_id", list[i].ID, "environment", list[i].Environment, "error", err.Error())
 			continue
 		}
 		res := s.submitRun(runStartParams{
@@ -326,10 +329,11 @@ func (s *apiServer) runDueEnvironmentSchedules(now time.Time) {
 				list[i].LastRunID = res.rec.id
 			}
 		}
+		serverLog.Info("environment schedule fired", "schedule_id", list[i].ID, "environment", list[i].Environment, "every", list[i].Every, "at", list[i].At, "result", list[i].LastResult, "run_id", list[i].LastRunID, "due_at", next.Format(time.RFC3339))
 	}
 	if changed {
 		if err := s.saveEnvironmentSchedules(list); err != nil {
-			log.Printf("environment schedules: save: %v", err)
+			serverLog.Error("environment schedules could not be saved", "error", err.Error())
 		}
 	}
 }

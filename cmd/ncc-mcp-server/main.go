@@ -461,6 +461,8 @@ func main() {
 
 	// Log to stderr only (stdout is used for MCP JSON-RPC)
 	log.SetOutput(os.Stderr)
+	server.AddReceivingMiddleware(logMCPCalls)
+	log.Printf("level=INFO msg=\"ncc-mcp-server starting\" transport=stdio")
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Fatalf("MCP server error: %v", err)
 	}

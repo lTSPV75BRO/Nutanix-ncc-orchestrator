@@ -90,7 +90,11 @@ func (s *apiServer) sendDigestOnce(st notificationState) {
 		"generated": time.Now().UTC().Format(time.RFC3339),
 	}
 	// Dispatch directly (bypasses event throttle/quiet-hours by design).
-	_ = s.dispatchNotifications(&st, "digest", title, details, nil)
+	if err := s.dispatchNotifications(&st, "digest", title, details, nil); err != nil {
+		serverLog.Warn("health digest sent with errors", "error", err.Error())
+	} else {
+		serverLog.Info("health digest sent", "every", st.Digest.Every)
+	}
 
 	// Persist last-sent without clobbering a concurrent config edit: reload,
 	// set the timestamp, save.
@@ -101,6 +105,7 @@ func (s *apiServer) sendDigestOnce(st notificationState) {
 	cur.Digest.LastSentAt = time.Now().UTC().Format(time.RFC3339)
 	if saveErr := s.saveNotificationStatus(cur); saveErr != nil {
 		// Non-fatal: a failed persist just means the next tick may re-send.
+		serverLog.Warn("health digest sent but its last-sent time was not saved; it may be sent again", "error", saveErr.Error())
 		return
 	}
 }

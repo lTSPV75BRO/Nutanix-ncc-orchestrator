@@ -31,6 +31,7 @@ import type { AuditLogEntry } from "../../api/types";
 import { notify } from "../../notify";
 import { formatDateTime, relativeTime } from "../../utils/datetime";
 import { StatusBadge } from "../../ui";
+import { roleColor } from "../../auth/roleColor";
 
 type Props = {
   onError: (e: unknown) => void;
@@ -184,7 +185,7 @@ export function AuditLogSection({ onError }: Props) {
             <Space size={4} wrap>
               <Typography.Text style={{ fontSize: 12 }}>{user}</Typography.Text>
               {role ? (
-                <Tag color={role === "admin" ? "purple" : "default"}>{role}</Tag>
+                <Tag color={roleColor(role)}>{role}</Tag>
               ) : null}
             </Space>
           );

@@ -2403,17 +2403,33 @@ func setupFileLogger(logPath string, lvl zerolog.Level) error {
 				break
 			}
 		}
-		log.Logger = zerolog.New(fileWriter).Level(lvl).With().
+		log.Logger = runLogContext(zerolog.New(fileWriter).Level(lvl).With().
 			Timestamp().
 			Str("git_revision", gitRevision).
 			Str("go_version", bi.GoVersion).
 			Str("Version", Version).
-			Str("stream", Stream).
+			Str("stream", Stream)).
 			Logger()
 	} else {
-		log.Logger = zerolog.New(fileWriter).Level(lvl).With().Timestamp().Logger()
+		log.Logger = runLogContext(zerolog.New(fileWriter).Level(lvl).With().Timestamp()).Logger()
 	}
 	return nil
+}
+
+// runLogContext tags every runner log line with the run it belongs to (set by
+// the API server or scheduler that started the run) and the process, so lines
+// from runs that overlap in the shared log can be told apart.
+func runLogContext(c zerolog.Context) zerolog.Context {
+	c = c.Str("component", "runner").Int("pid", os.Getpid())
+	if host, err := os.Hostname(); err == nil && host != "" {
+		c = c.Str("host", host)
+	}
+	for _, kv := range [][2]string{{"NCC_RUN_ID", "run_id"}, {"NCC_RUN_SOURCE", "run_source"}, {"NCC_RUN_ENVIRONMENT", "environment"}} {
+		if v := strings.TrimSpace(os.Getenv(kv[0])); v != "" {
+			c = c.Str(kv[1], v)
+		}
+	}
+	return c
 }
 
 // ==================== Retry Helpers ====================
@@ -16578,14 +16594,23 @@ Run 'ncc-orchestrator --help' for a full list of options.
 							if err != nil {
 								job.setPhase("failed")
 								job.finish(false)
-								log.Error().Str("cluster", job.cluster).Err(err).Msg("cluster run failed")
+								log.Error().Str("cluster", job.cluster).Err(err).Str("error_class", string(classifyClusterError(err))).Float64("duration_s", clusterElapsed(job.cluster)).Msg("cluster run failed")
 								fmt.Fprintf(os.Stderr, "\n❌ Cluster %s failed: %v\n", job.cluster, err)
 								record(ClusterResult{Cluster: job.cluster, Err: err, ErrorClass: classifyClusterError(err)})
 								return
 							}
 							job.setPhase("done")
 							job.finish(true)
-							log.Info().Str("cluster", job.cluster).Msg("cluster run completed")
+							fails, warns := 0, 0
+							for _, blk := range runOut.Blocks {
+								switch strings.ToUpper(blk.Severity) {
+								case "FAIL", "ERR":
+									fails++
+								case "WARN":
+									warns++
+								}
+							}
+							log.Info().Str("cluster", job.cluster).Int("findings", len(runOut.Blocks)).Int("fail_or_error", fails).Int("warn", warns).Int("excluded_by_title", len(runOut.ExcludedByTitle)).Float64("duration_s", clusterElapsed(job.cluster)).Msg("cluster run completed")
 							record(ClusterResult{Cluster: job.cluster, Blocks: runOut.Blocks, ExcludedByTitle: runOut.ExcludedByTitle, Meta: runOut.Meta})
 						}()
 					}
@@ -16680,6 +16705,13 @@ Run 'ncc-orchestrator --help' for a full list of options.
 
 						reqCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 						defer cancel()
+						clusterStartedAt.Store(cl, time.Now())
+						log.Info().Str("cluster", cl).
+							Int("active_workers", int(atomic.LoadInt32(&activeWorkers))).
+							Int("parallel_limit", currentAdaptiveParallel(cfg.MaxParallel)).
+							Dur("timeout", cfg.Timeout).
+							Bool("own_credentials", user != cfg.Username).
+							Msg("cluster run started")
 
 						reqCtx, span := trace.StartCluster(reqCtx, cl)
 						defer span.End()
@@ -16700,6 +16732,8 @@ Run 'ncc-orchestrator --help' for a full list of options.
 								Str("cluster", cl).
 								Err(err).
 								Str("error_type", fmt.Sprintf("%T", err)).
+								Str("error_class", string(classifyClusterError(err))).
+								Float64("duration_s", clusterElapsed(cl)).
 								Msg("cluster run failed")
 							// Also print to console for visibility
 							fmt.Fprintf(os.Stderr, "\n❌ Cluster %s failed: %v\n", cl, err)
@@ -16709,6 +16743,7 @@ Run 'ncc-orchestrator --help' for a full list of options.
 							record(ClusterResult{Cluster: cl, Blocks: nil, Err: err, ErrorClass: classifyClusterError(err)})
 							return
 						}
+						log.Info().Str("cluster", cl).Float64("fetch_s", clusterElapsed(cl)).Msg("cluster results fetched; processing")
 						setPhase("queued")
 						procPending.Add(1)
 						// Waits while the processing pool is busy, still holding the
@@ -17045,6 +17080,8 @@ Run 'ncc-orchestrator --help' for a full list of options.
 					subj, bodyEmail = applyEmailTemplates(cfg, subj, bodyEmail, digestSummary, log.Logger)
 					if err := sendEmailWithRetry(cfg, subj, bodyEmail, attachPath); err != nil {
 						log.Error().Err(err).Msg("digest email failed")
+					} else if cfg.EmailEnabled && cfg.SMTPServer != "" && len(cfg.EmailTo) > 0 {
+						log.Info().Int("recipients", len(cfg.EmailTo)).Bool("attachment", attachPath != "").Msg("digest email sent")
 					}
 					if cfg.WebhookIncludeHTML {
 						if b, err := os.ReadFile(indexPath); err == nil {
@@ -18499,4 +18536,16 @@ func main() {
 		os.Exit(code)
 	}
 	os.Exit(0)
+}
+
+// clusterStartedAt holds when each cluster's run began, for the durations in
+// the per-cluster log lines.
+var clusterStartedAt sync.Map
+
+// clusterElapsed is seconds since the cluster's run began (0 if unknown).
+func clusterElapsed(cluster string) float64 {
+	if v, ok := clusterStartedAt.Load(cluster); ok {
+		return math.Round(time.Since(v.(time.Time)).Seconds()*10) / 10
+	}
+	return 0
 }

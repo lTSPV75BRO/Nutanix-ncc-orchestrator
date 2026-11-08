@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"sync"
 	"time"
 )
 
@@ -135,11 +136,13 @@ func (f *auditForwarder) sendHTTP(ctx context.Context, line []byte) {
 	resp, err := f.client.Do(req)
 	if err != nil {
 		f.dropped.Add(1)
+		logForwardFailure("http", err.Error())
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		f.dropped.Add(1)
+		logForwardFailure("http", fmt.Sprintf("collector answered HTTP %d", resp.StatusCode))
 	}
 }
 
@@ -153,6 +156,7 @@ func (f *auditForwarder) sendSyslog(line []byte) {
 	conn, err := net.DialTimeout(f.syslogNet, f.syslogAddr, 5*time.Second)
 	if err != nil {
 		f.dropped.Add(1)
+		logForwardFailure("syslog", err.Error())
 		return
 	}
 	defer conn.Close()
@@ -164,4 +168,17 @@ func (f *auditForwarder) sendSyslog(line []byte) {
 	if _, err := conn.Write([]byte(payload)); err != nil {
 		f.dropped.Add(1)
 	}
+}
+
+// logForwardFailure reports a failed audit delivery at most once a minute per
+// sink, so a collector outage doesn't flood the server log.
+var forwardFailureLogged sync.Map
+
+func logForwardFailure(sink, detail string) {
+	now := time.Now()
+	if v, ok := forwardFailureLogged.Load(sink); ok && now.Sub(v.(time.Time)) < time.Minute {
+		return
+	}
+	forwardFailureLogged.Store(sink, now)
+	serverLog.Warn("audit event could not be forwarded (further failures for this sink are summarised once a minute)", "sink", sink, "error", detail)
 }

@@ -94,6 +94,9 @@ type apiServer struct {
 	outputDir               string
 	logDir                  string
 	runnerLogPath           string
+	serverLogPath           string
+	logLevel                string
+	logFormat               string
 	scheduleStatePath       string
 	backupScheduleStatePath string
 	notificationStatePath   string
@@ -554,6 +557,9 @@ func main() {
 	flag.StringVar(&s.outputDir, "output-dir", "outputfiles", "Artifacts output directory")
 	flag.StringVar(&s.logDir, "log-dir", "nccfiles", "Raw logs directory")
 	flag.StringVar(&s.runnerLogPath, "runner-log-path", "logs/ncc-runner.log", "Runner log file path")
+	flag.StringVar(&s.serverLogPath, "server-log-path", envOrDefault("NCC_SERVER_LOG_PATH", defaultServerLogPath), "API server's own log (JSON lines, rotated at 50 MB, 10 kept). \"-\" logs to stderr only. Also via NCC_SERVER_LOG_PATH")
+	flag.StringVar(&s.logLevel, "log-level", envOrDefault("NCC_LOG_LEVEL", "info"), "API server log level: debug, info, warn or error (changeable at run time in Settings → Logs). Also via NCC_LOG_LEVEL")
+	flag.StringVar(&s.logFormat, "log-format", envOrDefault("NCC_LOG_FORMAT", "text"), "Console (stderr) log format: text or json. The log file is always JSON. Also via NCC_LOG_FORMAT")
 	flag.StringVar(&s.scheduleStatePath, "schedule-state-path", ".ncc-api-schedule.json", "Schedule state file path")
 	flag.StringVar(&s.backupScheduleStatePath, "backup-schedule-state-path", ".ncc-api-backup-schedule.json", "Scheduled-backup state file path")
 	flag.StringVar(&s.notificationStatePath, "notifications-state-path", ".ncc-api-notifications.json", "Legacy notifications metadata path (delivery history/API-only fields)")
@@ -688,6 +694,24 @@ func main() {
 	// from the stack root.
 	applyStackAwareDefaults(&s, os.Args[1:])
 
+	{
+		logFile := strings.TrimSpace(s.serverLogPath)
+		if logFile != "" && logFile != "-" {
+			// Replicas sharing a volume each keep their own file, so rotation
+			// never races between pods.
+			if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+				if host, err := os.Hostname(); err == nil && host != "" {
+					ext := filepath.Ext(logFile)
+					logFile = strings.TrimSuffix(logFile, ext) + "-" + host + ext
+				}
+			}
+			logFile = s.absPath(logFile)
+		}
+		if _, err := setupServerLogging(logFile, s.logLevel, s.logFormat, os.Stderr); err != nil {
+			serverLog.Warn("logging setup", "error", err.Error())
+		}
+	}
+
 	s.authToken = strings.TrimSpace(os.Getenv("NCC_API_TOKEN"))
 	if s.authToken == "" {
 		s.authToken = strings.TrimSpace(os.Getenv("NCC_API_STATIC_TOKEN"))
@@ -788,15 +812,17 @@ func main() {
 			}
 			if created {
 				hint := db.setInitialPassword("admin", pw)
-				log.Printf("==================================================================")
-				log.Printf(" FIRST-RUN ADMIN CREATED (store: %s)", db.location())
-				log.Printf("   username: admin")
-				log.Printf("   password: %s", pw)
-				log.Printf("   You MUST change this password on first login.")
+				// Console only: the password must not reach the log file.
+				fmt.Fprintf(os.Stderr, "==================================================================\n")
+				fmt.Fprintf(os.Stderr, " FIRST-RUN ADMIN CREATED (store: %s)\n", db.location())
+				fmt.Fprintf(os.Stderr, "   username: admin\n")
+				fmt.Fprintf(os.Stderr, "   password: %s\n", pw)
+				fmt.Fprintf(os.Stderr, "   You MUST change this password on first login.\n")
 				if hint != "" {
-					log.Printf("   retrieve it later via: %s", hint)
+					fmt.Fprintf(os.Stderr, "   retrieve it later via: %s\n", hint)
 				}
-				log.Printf("==================================================================")
+				fmt.Fprintf(os.Stderr, "==================================================================\n")
+				serverLog.Warn("first-run admin account created; its temporary password was printed to the console", "store", db.location(), "retrieve_hint", hint)
 			}
 		}
 	} else if strings.TrimSpace(s.usersFilePath) != "" {
@@ -924,6 +950,7 @@ func main() {
 	go s.warmReportCache()
 
 	handler := s.buildHandler()
+	s.logStartup(listen)
 	srv := &http.Server{
 		Addr:              listen,
 		Handler:           handler,
@@ -4478,6 +4505,13 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/report/data", Methods: []string{http.MethodGet}, Description: "Aggregated report payload (supports optional limit/offset pagination for large arrays)"},
 		{Path: "/api/v1/report/trends", Methods: []string{http.MethodGet}, Description: "Historical trends from run summaries"},
 		{Path: "/api/v1/logs/runner", Methods: []string{http.MethodGet}, Description: "Read tail of runner log"},
+		{Path: "/api/v1/logs", Methods: []string{http.MethodGet}, Description: "Log sources the caller may read (runner for everyone; API server, UI server, supervisor and scheduler for admins) and the current server log level"},
+		{Path: "/api/v1/logs/{source}", Methods: []string{http.MethodGet}, Description: "Tail of one log (?file= picks among a source's files, ?bytes= up to 4 MiB)"},
+		{Path: "/api/v1/settings/logging", Methods: []string{http.MethodGet, http.MethodPut}, Description: "API server log level (debug, info, warn, error); changes apply at once and last until restart"},
+		{Path: "/api/v1/environments", Methods: []string{http.MethodGet}, Description: "Run environments (dev/staging/prod runner files) with their clusters"},
+		{Path: "/api/v1/environment-schedules", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Per-environment run schedules"},
+		{Path: "/api/v1/settings/environments/{name}", Methods: []string{http.MethodGet, http.MethodPut, http.MethodDelete}, Description: "Read, create/update or delete one environment file"},
+		{Path: "/api/v1/settings/environments/import", Methods: []string{http.MethodGet, http.MethodPost}, Description: "List config files that can become environments; import one's runner section"},
 		{Path: "/api/v1/openapi.json", Methods: []string{http.MethodGet}, Description: "OpenAPI 3.0 specification"},
 		{Path: "/api/v1/meta/routes", Methods: []string{http.MethodGet}, Description: "List available REST routes for API explorer"},
 	}
@@ -5142,10 +5176,13 @@ func (s *apiServer) runOrchestratorEnv(args []string, timeout time.Duration, ext
 	if len(extraEnv) > 0 {
 		cmd.Env = append(cmd.Env, extraEnv...)
 	}
+	start := time.Now()
+	serverLog.Debug("orchestrator command starting", "args", strings.Join(redactedArgs(args), " "), "timeout", timeout.String())
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
-		return string(out), fmt.Errorf("command timed out after %s", timeout)
+		err = fmt.Errorf("command timed out after %s", timeout)
 	}
+	logSubprocess("orchestrator command", redactedArgs(args), time.Since(start), string(out), err)
 	return string(out), err
 }
 
@@ -6048,12 +6085,15 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/api/v1/report/data", s.handleReportData)
 	mux.HandleFunc("/api/v1/report/trends", s.handleReportTrends)
 	mux.HandleFunc("/api/v1/logs/runner", s.handleRunnerLogs)
+	mux.HandleFunc("/api/v1/logs", s.handleLogs)
+	mux.HandleFunc("/api/v1/logs/", s.handleLogs)
+	mux.HandleFunc("/api/v1/settings/logging", s.handleLoggingSettings)
 	mux.HandleFunc("/api/v1/openapi.json", s.handleOpenAPI)
 	mux.HandleFunc("/api/v1/meta/routes", s.handleMetaRoutes)
 	mux.HandleFunc("/docs/assets/", s.handleSwaggerAsset)
 	mux.HandleFunc("/", s.handleAPIDocsHome)
 
-	return s.withRequestMeta(s.withCompression(s.withCORS(s.withRateLimit(s.withAuth(mux)))))
+	return s.withRequestMeta(s.withCompression(s.withCORS(s.withRateLimit(s.withAuth(withErrorCapture(mux))))))
 }
 
 // initJWTSecret loads NCC_JWT_SECRET (or reuses --session-secret) for HS256

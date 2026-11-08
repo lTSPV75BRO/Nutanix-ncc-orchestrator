@@ -848,7 +848,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:         listen,
-		Handler:      handler,
+		Handler:      withAccessLog(handler),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  60 * time.Second,

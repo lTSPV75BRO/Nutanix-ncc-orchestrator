@@ -45,16 +45,13 @@ import type {
 import { notify, notifyError } from "../../notify";
 import { formatDateTime } from "../../utils/datetime";
 import { IconTitle, KeyValueList, StatusBadge, TagList } from "../../ui";
+import { roleColor } from "../../auth/roleColor";
 
 const ROLE_OPTIONS = [
   { value: "admin", label: "admin — full access" },
   { value: "operator", label: "operator — trigger/cancel runs" },
   { value: "viewer", label: "viewer — read-only" },
 ];
-
-function roleColor(role?: string): string {
-  return role === "admin" ? "purple" : "default";
-}
 
 // The built-in "admin" account's role is fixed and it cannot be deleted; the UI
 // disables those controls to match the server-side enforcement.
@@ -182,7 +179,7 @@ function UsersCard() {
       }
     >
       <Typography.Paragraph type="secondary">
-        Manage password accounts and roles. Roles: <Tag color="gold">admin</Tag> full access,{" "}
+        Manage password accounts and roles. Roles: <Tag color={roleColor("admin")}>admin</Tag> full access,{" "}
         <Tag color="blue">operator</Tag> can trigger/cancel runs, <Tag>viewer</Tag> is read-only.
       </Typography.Paragraph>
       <Input

@@ -131,7 +131,7 @@ func (s *apiServer) runScheduledBackupOnce(ctx context.Context, st backupSchedul
 	release, lockErr := acquireBackupLock(dir)
 	if lockErr != nil {
 		// Another replica is already taking a snapshot; skip this tick.
-		log.Printf("scheduled backup: %v", lockErr)
+		serverLog.Info("scheduled backup skipped: another replica is taking one", "detail", lockErr.Error())
 		return
 	}
 	defer release()
@@ -148,11 +148,15 @@ func (s *apiServer) runScheduledBackupOnce(ctx context.Context, st backupSchedul
 	if encrypt {
 		args = append(args, "--encrypt")
 	}
+	serverLog.Info("scheduled backup starting", "dir", dir, "encrypt", encrypt, "every", st.Every, "retain", st.Retain)
+	started := time.Now()
 	out, err := s.runOrchestratorEnv(args, 5*time.Minute, nil)
 	if err != nil {
+		serverLog.Error("scheduled backup failed", "error", firstNonEmptyLine(out, err.Error()), "took_ms", time.Since(started).Milliseconds())
 		s.finishScheduledBackup(st, "", fmt.Errorf("%s", firstNonEmptyLine(out, err.Error())))
 		return
 	}
+	serverLog.Info("scheduled backup written", "file", scheduledBackupFileFromOutput(out), "took_ms", time.Since(started).Milliseconds())
 	// Prune older scheduled archives (ncc-backup-*), leaving manual-* and the
 	// pre-update-* rollback points untouched.
 	if st.Retain > 0 {

@@ -88,9 +88,28 @@ type principal struct {
 // so the audit logger can attribute every action to the acting user + role.
 type principalCtxKey struct{}
 
-// withPrincipal returns a shallow copy of r carrying the resolved principal.
+// withPrincipal returns a shallow copy of r carrying the resolved principal,
+// and names the caller on the request's log line.
 func withPrincipal(r *http.Request, p principal) *http.Request {
+	requestLogInfoFrom(r.Context()).setPrincipal(p)
 	return r.WithContext(context.WithValue(r.Context(), principalCtxKey{}, p))
+}
+
+// String names the auth method for logs.
+func (m authMethod) String() string {
+	switch m {
+	case authStaticAdminToken:
+		return "static-admin-token"
+	case authStaticViewerToken:
+		return "static-viewer-token"
+	case authSessionCookie:
+		return "session-cookie"
+	case authSessionBearer:
+		return "session-bearer"
+	case authPAT:
+		return "personal-access-token"
+	}
+	return "none"
 }
 
 // principalFromContext retrieves a principal previously stored by withAuth.

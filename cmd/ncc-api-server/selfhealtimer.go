@@ -4,7 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"errors"
+	"log/slog"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -39,7 +40,7 @@ func (s *apiServer) startSelfHealLoop(ctx context.Context) {
 	if s.selfHealInterval <= 0 {
 		return
 	}
-	log.Printf("self-heal loop enabled: every %s (auto-fix=%t)", s.selfHealInterval, s.selfHealAutoFix)
+	serverLog.Info("self-heal loop enabled", "every", s.selfHealInterval.String(), "auto_fix", s.selfHealAutoFix)
 	go func() {
 		first := time.NewTimer(30 * time.Second)
 		defer first.Stop()
@@ -49,7 +50,7 @@ func (s *apiServer) startSelfHealLoop(ctx context.Context) {
 		case <-first.C:
 		}
 		if _, err := s.runSelfHealOnce(ctx, s.selfHealAutoFix); err != nil {
-			log.Printf("self-heal: %v", err)
+			serverLog.Error("self-heal check failed to run", "error", err.Error())
 		}
 		ticker := time.NewTicker(s.selfHealInterval)
 		defer ticker.Stop()
@@ -59,7 +60,7 @@ func (s *apiServer) startSelfHealLoop(ctx context.Context) {
 				return
 			case <-ticker.C:
 				if _, err := s.runSelfHealOnce(ctx, s.selfHealAutoFix); err != nil {
-					log.Printf("self-heal: %v", err)
+					serverLog.Error("self-heal check failed to run", "error", err.Error())
 				}
 			}
 		}
@@ -118,14 +119,38 @@ func (s *apiServer) runSelfHealOnceWithOptions(ctx context.Context, opts selfHea
 	cmd := exec.CommandContext(cctx, bin, args...)
 	cmd.Dir = s.absPath(s.repoRoot)
 	cmd.Env = childEnv()
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	started := time.Now()
 	out, runErr := cmd.Output()
 
 	var rep selfHealReport
 	if jerr := json.Unmarshal(out, &rep); jerr != nil {
+		logSubprocess("self-heal doctor", args, time.Since(started), stderr.String()+string(out), errors.Join(runErr, jerr))
 		if runErr != nil {
 			return nil, fmt.Errorf("self-heal doctor failed: %v", runErr)
 		}
 		return nil, fmt.Errorf("parse doctor output: %w", jerr)
+	}
+	serverLog.Info("self-heal checks ran", "fix", opts.Fix, "ok", rep.Summary["ok"], "warn", rep.Summary["warn"], "fail", rep.Summary["fail"], "took_ms", time.Since(started).Milliseconds())
+	for _, r := range rep.Results {
+		status, _ := r["status"].(string)
+		if status != "fail" && status != "warn" {
+			if f, _ := r["fixed"].(bool); !f {
+				continue
+			}
+		}
+		id, _ := r["id"].(string)
+		title, _ := r["title"].(string)
+		msg, _ := r["message"].(string)
+		fixed, _ := r["fixed"].(bool)
+		lvl := slog.LevelWarn
+		if status == "fail" && !fixed {
+			lvl = slog.LevelError
+		} else if fixed {
+			lvl = slog.LevelInfo
+		}
+		serverLog.Log(ctx, lvl, "self-heal check", "check", id, "title", title, "status", status, "fixed", fixed, "detail", msg)
 	}
 	rep.RanAt = time.Now().UTC()
 
@@ -143,9 +168,6 @@ func (s *apiServer) runSelfHealOnceWithOptions(ctx context.Context, opts selfHea
 	if fixes > 0 {
 		s.selfHealFixesTotal.Add(int64(fixes))
 		s.auditEvent("selfheal.autofix", true, map[string]interface{}{"fixes": fixes})
-	}
-	if rep.Summary["fail"] > 0 {
-		log.Printf("self-heal: %d failing check(s) (warn=%d, ok=%d)", rep.Summary["fail"], rep.Summary["warn"], rep.Summary["ok"])
 	}
 	// Notify only on a transition into a failing state (prev had no failures),
 	// so a persistently-failing check doesn't alert on every cycle.

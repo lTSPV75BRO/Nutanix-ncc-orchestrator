@@ -355,6 +355,36 @@ and scheduler output. Supervised API/UI child logs rotate automatically at
 `doctor` `log-sizes` check monitors `logs/*.log` and can rotate oversized
 files with `doctor --fix`.
 
+**What each process logs.** Every line is meant to answer "what happened, to
+what, for whom, and why did it fail" without a debugger:
+
+| Process | File | Format | What's in it |
+|---|---|---|---|
+| Runner (`ncc-orchestrator`) | `logs/ncc-runner.log` | JSON (zerolog) | Run start/finish, one line per cluster step (started, results fetched, completed with findings and duration, failed with error class), digest e-mail, notification attempts. Every line carries `run_id`, `run_source`, `environment`, `pid` and `host` when the API server started the run. |
+| API server | `logs/ncc-api.log` (Kubernetes: `logs/ncc-api-<hostname>.log`) | JSON (slog) with source file:line | Startup settings; every API request with `request_id`, `user`, auth method, status, duration, bytes and the error message/code on 4xx/5xx (polled reads only at debug); runs accepted, queued, started (pid, command, config), cancelled and finished with the output tail; self-heal, schedules, backups, notification delivery, audit forwarding, user-store reloads and the audit trail; panics with stack. Rotates at 50 MB, 10 compressed backups, 30 days. |
+| API server console | `logs/v2-api.log` | text | Same lines as the API log in readable form, plus anything printed before logging starts. |
+| UI server | `logs/v2-ui.log` | text (`level=… msg=…`) | Failed (4xx/5xx) and slow (>3 s) requests and API writes, with the API's `request_id`; every request at `NCC_LOG_LEVEL=debug`. |
+| MCP server | stderr | text | Each tool call with outcome and duration (never the arguments). |
+| Supervisor / scheduler | `logs/v2-*supervisor.log`, `logs/ncc-scheduler.log` | text | Process start, stop, restart and health checks; scheduled runs. |
+
+Passwords, tokens, API keys, `Authorization` headers, secret query values and
+webhook URL paths are removed before a line is written; the first-run admin
+password is printed to the console only, never to a log file.
+
+**Logs in the UI.** System → Logs shows each source newest first, with level
+filters, search, a detail drawer per line ("all lines for this request / run /
+cluster"), raw view, live refresh and download. Viewers and operators see the
+runner log; admins see every source and can change the API server's log level
+at run time (until restart). API: `GET /api/v1/logs` (sources visible to you),
+`GET /api/v1/logs/<source>?file=&bytes=` (tail of one file, default 256 KB,
+max 4 MiB), `GET|PUT /api/v1/settings/logging` (admin).
+
+| Setting | Env | Default | Meaning |
+|---|---|---|---|
+| `ncc-api-server --log-level` | `NCC_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. `debug` also logs every polled read. The UI server reads `NCC_LOG_LEVEL` too. |
+| `ncc-api-server --log-format` | `NCC_LOG_FORMAT` | `text` | Console format: `text` or `json`. The file is always JSON. |
+| `ncc-api-server --server-log-path` | `NCC_SERVER_LOG_PATH` | `logs/ncc-api.log` | API server JSON log file; empty turns the file off. |
+
 ### 2.7 Policy gates (CI/CD enforcement)
 
 Fail a run if thresholds are violated:
@@ -1256,6 +1286,9 @@ These are runtime flags for v2 services (`cmd/ncc-api-server`, `cmd/ncc-ui-serve
 | `ncc-api-server` | `--login-lockout-account-threshold` | `0` (= 4x threshold) | Failures for one account from any source before an account-wide lock. |
 | `ncc-api-server` | `--login-lockout-source-threshold` | `0` (= 4x threshold) | Failures from one client IP across all accounts before that source is locked. |
 | `ncc-api-server` | `--login-guard-state-file` | empty (Kubernetes: `<repo-root>/.ncc-login-guard.json`) | Shared login-failure counters so limits hold across replicas. Env `NCC_LOGIN_GUARD_STATE_FILE`. |
+| `ncc-api-server` | `--log-level` | `info` | API server log level (`debug`, `info`, `warn`, `error`); admins can change it at run time in System → Logs. Env `NCC_LOG_LEVEL`. |
+| `ncc-api-server` | `--log-format` | `text` | Console log format (`text` or `json`); the log file is always JSON. Env `NCC_LOG_FORMAT`. |
+| `ncc-api-server` | `--server-log-path` | `logs/ncc-api.log` | Rotated JSON log of every request, run and background job. Env `NCC_SERVER_LOG_PATH`. |
 | `ncc-api-server` | `--trusted-proxy-cidrs` | `private,loopback` | Peers whose `X-Forwarded-For` is honored (CIDRs, `loopback`, `private`, `none`); parsed right-to-left. Env `NCC_TRUSTED_PROXY_CIDRS`. Narrow to your proxy/ingress/UI-pod CIDRs. |
 | `ncc-api-server` | `--alert-history-retain-days` | `365` | Days to keep closed NCC alert instances and their events (active alerts are never pruned; `0` keeps forever). |
 | `ncc-api-server` | `--audit-log-keep` | `10` | Rotated audit log generations kept (`<path>.1` … `<path>.N`). |

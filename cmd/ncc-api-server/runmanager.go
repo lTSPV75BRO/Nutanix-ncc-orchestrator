@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"log"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -208,6 +210,7 @@ func (s *apiServer) submitRun(p runStartParams) runSubmitResult {
 		if len(remainder) == 0 {
 			// Everything requested is already being refreshed by other runs.
 			s.mu.Unlock()
+			serverLog.Info("run not started: every requested cluster is already in another run", rec.logAttrs("skipped", skipped)...)
 			return runSubmitResult{noop: true, skipped: skipped, skippedOwner: rec.skippedOwner}
 		}
 		// Reserve ownership of this run's clusters (covers queued + running) so
@@ -240,7 +243,9 @@ func (s *apiServer) submitRun(p runStartParams) runSubmitResult {
 		s.refreshLegacyRunStateLocked()
 		res.started = true
 		s.persistJob(rec)
+		running := res.runningCount + 1
 		s.mu.Unlock()
+		serverLog.Info("run accepted", rec.logAttrs("running_runs", running, "skipped", skipped)...)
 		go s.launchRun(rec)
 		return res
 	}
@@ -250,6 +255,7 @@ func (s *apiServer) submitRun(p runStartParams) runSubmitResult {
 	res.queuePos = len(s.runQueue)
 	s.persistJob(rec)
 	s.mu.Unlock()
+	serverLog.Info("run queued", rec.logAttrs("queue_position", res.queuePos, "running_runs", res.runningCount, "max_concurrent_runs", s.maxConcurrentRuns, "skipped", skipped)...)
 	return res
 }
 
@@ -288,6 +294,7 @@ func (s *apiServer) launchRun(rec *runRecord) {
 	perRunFiltered := filepath.Join(canonicalOut, ".runs-live", rec.id, "filtered")
 	perRunLogs := filepath.Join(canonicalOut, ".runs-live", rec.id, "logs")
 	if err := os.MkdirAll(perRunFiltered, 0o755); err != nil {
+		serverLog.Error("run output folder could not be created", rec.logAttrs("dir", perRunFiltered, "error", err.Error())...)
 		s.finishRun(rec, fmt.Errorf("create run output dir: %w", err), "")
 		return
 	}
@@ -346,10 +353,12 @@ func (s *apiServer) launchRun(rec *runRecord) {
 
 	if err := cmd.Start(); err != nil {
 		cancel()
+		serverLog.Error("run process failed to start", rec.logAttrs("command", strings.Join(fullCmd, " "), "cwd", cmd.Dir, "error", err.Error())...)
 		s.finishRun(rec, err, "")
 		return
 	}
 	pid := cmd.Process.Pid
+	serverLog.Info("run process started", rec.logAttrs("pid", pid, "command", strings.Join(fullCmd, " "), "cwd", cmd.Dir, "config", rec.cfgPath, "timeout", s.runTimeout.String(), "output_dir", perRunFiltered)...)
 	s.mu.Lock()
 	rec.pid = pid
 	s.refreshLegacyRunStateLocked()
@@ -382,8 +391,11 @@ func (s *apiServer) finishRun(rec *runRecord, runErr error, output string) {
 		s.mergeMu.Lock()
 		canonicalOut := s.absPath(s.outputDir)
 		owned := ownedClusterSet(rec, rec.outDir)
+		mergeStart := time.Now()
 		if err := mergeRunIntoCanonical(canonicalOut, rec.outDir, owned); err != nil {
-			log.Printf("run %s: merge artifacts: %v", rec.id, err)
+			serverLog.Error("run results could not be merged into the dashboard", rec.logAttrs("error", err.Error())...)
+		} else {
+			serverLog.Debug("run results merged", rec.logAttrs("owned_clusters", len(owned), "took_ms", time.Since(mergeStart).Milliseconds())...)
 		}
 		mergeRunLogs(rec.logDir, s.absPath(s.logDir))
 		s.mergeMu.Unlock()
@@ -442,6 +454,8 @@ func (s *apiServer) finishRun(rec *runRecord, runErr error, output string) {
 	if healDecision.Retry {
 		retryParams = runStartParams{
 			cfgPath:      rec.cfgPath,
+			environment:  rec.environment,
+			source:       rec.source,
 			password:     rec.password,
 			extraArgs:    append(append([]string{}, rec.extraArgs...), healDecision.Mitigation...),
 			group:        rec.group,
@@ -459,14 +473,16 @@ func (s *apiServer) finishRun(rec *runRecord, runErr error, output string) {
 	s.refreshLegacyRunStateLocked()
 	s.mu.Unlock()
 
+	s.logRunFinished(rec, runErr, output)
 	for _, q := range toStart {
+		serverLog.Info("queued run starting", q.logAttrs("waited_s", int(time.Since(q.queuedAt).Seconds()))...)
 		go s.launchRun(q)
 	}
 
 	if healDecision.Retry {
 		s.runAutoRetriesTotal.Add(1)
-		log.Printf("run %s failed (%s); self-heal auto-retrying once with mitigation %v",
-			rec.id, healDecision.Class, healDecision.Mitigation)
+		serverLog.Warn("run failed; self-heal retries it once",
+			rec.logAttrs("class", string(healDecision.Class), "mitigation", strings.Join(healDecision.Mitigation, " "), "retry_count", retryParams.retryCount)...)
 		s.auditEvent("run.auto_retry", true, map[string]interface{}{
 			"failed_run":  rec.id,
 			"class":       string(healDecision.Class),
@@ -527,6 +543,7 @@ func (s *apiServer) cancelRunByID(id string) (*runRecord, bool) {
 		rec.cancelled = true
 		cancel := rec.cancel
 		s.mu.Unlock()
+		serverLog.Info("run cancel requested; stopping the process", rec.logAttrs("pid", rec.pid)...)
 		if cancel != nil {
 			cancel()
 		}
@@ -552,7 +569,9 @@ func (s *apiServer) cancelRunByID(id string) (*runRecord, bool) {
 	toStart = s.dequeueRunnableLocked()
 	s.refreshLegacyRunStateLocked()
 	s.mu.Unlock()
+	serverLog.Info("queued run cancelled before it started", rec.logAttrs()...)
 	for _, q := range toStart {
+		serverLog.Info("queued run starting", q.logAttrs("waited_s", int(time.Since(q.queuedAt).Seconds()))...)
 		go s.launchRun(q)
 	}
 	return rec, true
@@ -1101,3 +1120,69 @@ func replaceInlineJSONVar(path, varName string, value interface{}) error {
 	buf.Write(b[end:])
 	return os.WriteFile(path, buf.Bytes(), 0o644)
 }
+
+// logAttrs are the fields every run log line carries, plus extra key/values.
+func (rec *runRecord) logAttrs(extra ...any) []any {
+	attrs := []any{"run_id", rec.id}
+	if rec.environment != "" {
+		attrs = append(attrs, "environment", rec.environment)
+	}
+	src := rec.source
+	if src == "" {
+		src = "api"
+	}
+	attrs = append(attrs, "source", src)
+	if rec.auditSubject != "" {
+		attrs = append(attrs, "user", rec.auditSubject, "role", rec.auditRole)
+	}
+	if rec.group != "" {
+		attrs = append(attrs, "group", rec.group)
+	}
+	if rec.wildcard {
+		attrs = append(attrs, "clusters", "all")
+	} else {
+		attrs = append(attrs, "cluster_count", len(rec.clusters))
+		if len(rec.clusters) <= 25 {
+			attrs = append(attrs, "clusters", strings.Join(rec.clusters, ","))
+		}
+	}
+	if rec.retryCount > 0 {
+		attrs = append(attrs, "retry_count", rec.retryCount)
+	}
+	for i := 0; i+1 < len(extra); i += 2 {
+		if v, ok := extra[i+1].([]string); ok {
+			if len(v) == 0 {
+				continue
+			}
+			extra[i+1] = strings.Join(v, ",")
+		}
+		attrs = append(attrs, extra[i], extra[i+1])
+	}
+	return attrs
+}
+
+// logRunFinished writes the run's outcome; a failed run includes the end of
+// its output so the cause is in the server log without opening the run.
+func (s *apiServer) logRunFinished(rec *runRecord, runErr error, output string) {
+	attrs := rec.logAttrs("pid", rec.pid)
+	if !rec.startedAt.IsZero() {
+		attrs = append(attrs, "duration_s", int(rec.finished.Sub(rec.startedAt).Seconds()))
+	}
+	var exitErr *exec.ExitError
+	switch {
+	case runErr == nil:
+		serverLog.Info("run finished", append(attrs, "result", "ok", "exit_code", 0)...)
+	case rec.cancelled:
+		serverLog.Info("run finished", append(attrs, "result", "cancelled")...)
+	case errors.As(runErr, &exitErr):
+		lvl := slog.LevelError
+		result := "failed"
+		if exitErr.ExitCode() == 3 {
+			lvl, result = slog.LevelWarn, "partial"
+		}
+		serverLog.Log(context.Background(), lvl, "run finished", append(attrs, "result", result, "exit_code", exitErr.ExitCode(), "error", runErr.Error(), "output_tail", tailString(strings.TrimSpace(output), 2000))...)
+	default:
+		serverLog.Error("run finished", append(attrs, "result", "failed", "error", runErr.Error(), "output_tail", tailString(strings.TrimSpace(output), 2000))...)
+	}
+}
+

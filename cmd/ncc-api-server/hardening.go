@@ -881,7 +881,7 @@ func (s *apiServer) auditEvent(action string, success bool, fields map[string]in
 		payload[k] = v
 	}
 	b, _ := json.Marshal(payload)
-	fmt.Printf("AUDIT %s\n", string(b))
+	logAuditEntry(payload)
 	s.appendAuditLine(b)
 }
 
@@ -920,7 +920,7 @@ func (s *apiServer) audit(r *http.Request, action string, success bool, fields m
 		payload[k] = v
 	}
 	b, _ := json.Marshal(payload)
-	fmt.Printf("AUDIT %s\n", string(b))
+	logAuditEntry(payload)
 	s.appendAuditLine(b)
 }
 

@@ -283,6 +283,9 @@ func (db *userDB) refreshIfStale() {
 	}
 	raw, version, err := backendLoad(db.backend)
 	if err != nil || len(raw) == 0 {
+		if err != nil {
+			serverLog.Warn("user store reload failed; keeping the accounts already loaded", "store", db.location(), "error", err.Error())
+		}
 		db.lastRefresh = time.Now()
 		return
 	}
@@ -300,8 +303,10 @@ func (db *userDB) refreshIfStale() {
 	}
 	var f usersDBFile
 	if err := json.Unmarshal(raw, &f); err != nil {
+		serverLog.Error("user store changed on disk but can't be parsed; keeping the accounts already loaded", "store", db.location(), "error", err.Error())
 		return
 	}
+	serverLog.Info("user store changed elsewhere (another replica or an edit); reloading", "store", db.location())
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if err := db.applyDocument(f); err != nil {

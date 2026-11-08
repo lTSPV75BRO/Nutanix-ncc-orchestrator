@@ -814,15 +814,85 @@ export const EXTRA_ARGS: { options: ExtraArgOption[] } = {
   ],
 };
 
+/** One runner (zerolog) JSON line. */
+export function runnerLine(t: number, level: string, message: string, fields: Record<string, unknown> = {}): string {
+  return JSON.stringify({ level, component: "runner", pid: 4182, ...fields, time: iso(t), message });
+}
+
+/** One API server (slog) JSON line. */
+function apiLine(t: number, level: string, msg: string, fields: Record<string, unknown> = {}): string {
+  return JSON.stringify({ time: iso(t), level, msg, ...fields });
+}
+
+const RUN_FIELDS = { run_id: LATEST_RUN_ID, run_source: "schedule" };
+
 export const RUNNER_LOG = {
-  path: "logs/runner.log",
+  path: "logs/ncc-runner.log",
   exists: true,
   content: [
-    `${iso(LATEST_RUN_AT)} INFO  run ${LATEST_RUN_ID} started (scheduled) for ${CLUSTERS.length} clusters`,
-    ...CLUSTERS.map((c) => (c.error ? `${iso(LATEST_RUN_AT + 2 * MIN)} ERROR ${c.address} (${c.name}): ${c.error}` : `${iso(LATEST_RUN_AT + 5 * MIN)} INFO  ${c.address} (${c.name}): NCC finished, health score ${countsFor(c.address).score}`)),
-    `${iso(LATEST_RUN_AT + 7 * MIN)} WARN  run finished with exit code 3 (partial: 1 cluster unreachable)`,
+    runnerLine(LATEST_RUN_AT, "info", "run started", { ...RUN_FIELDS, clusters: CLUSTERS.length, config: "config.yaml" }),
+    ...CLUSTERS.flatMap((c, i) => {
+      const start = LATEST_RUN_AT + 2_000 + i * 900;
+      const lines = [runnerLine(start, "info", "cluster run started", { ...RUN_FIELDS, cluster: c.address, cluster_name: c.name })];
+      if (c.error) {
+        lines.push(runnerLine(start + 30_000, "error", "cluster run failed", { ...RUN_FIELDS, cluster: c.address, error: c.error, error_class: "network", duration_s: 30.0 }));
+      } else {
+        const k = countsFor(c.address);
+        lines.push(runnerLine(start + 3 * MIN, "debug", "results fetched", { ...RUN_FIELDS, cluster: c.address, fetch_s: 2.4 }));
+        lines.push(runnerLine(start + 3 * MIN + 5_000, "info", "cluster run completed", { ...RUN_FIELDS, cluster: c.address, findings: k.fail + k.warn, fail_or_error: k.fail, warn: k.warn, duration_s: 185.2, health_score: k.score }));
+      }
+      return lines;
+    }),
+    runnerLine(LATEST_RUN_AT + 7 * MIN, "info", "digest email sent", { ...RUN_FIELDS, recipients: 3 }),
+    runnerLine(LATEST_RUN_AT + 7 * MIN + 1_000, "warn", "run finished partial", { ...RUN_FIELDS, exit_code: 3, failed_clusters: CLUSTERS.filter((c) => c.error).length }),
   ].join("\n"),
 };
+
+export const API_LOG = {
+  path: "logs/ncc-api.log",
+  exists: true,
+  content: [
+    apiLine(NOW - 3 * HOUR, "INFO", "ncc-api-server starting", { listen: ":8080", version: "v2.3.0", log_level: "info", auth: "local" }),
+    apiLine(NOW - 3 * HOUR + 1_000, "INFO", "self-heal timer armed", { interval: "6h0m0s" }),
+    apiLine(LATEST_RUN_AT - 1_000, "INFO", "environment schedule fired", { environment: "prod", schedule: "0 */6 * * *" }),
+    apiLine(LATEST_RUN_AT, "INFO", "run accepted", { run_id: LATEST_RUN_ID, source: "schedule", environment: "prod" }),
+    apiLine(LATEST_RUN_AT + 200, "INFO", "runner process started", { run_id: LATEST_RUN_ID, pid: 4182, config: "configs/environments/prod.yaml" }),
+    apiLine(LATEST_RUN_AT + 7 * MIN + 1_200, "WARN", "run finished partial", { run_id: LATEST_RUN_ID, exit_code: 3, duration_s: 421.7 }),
+    apiLine(NOW - 30 * MIN, "INFO", "http request", { method: "POST", path: "/api/v1/auth/login", status: 200, duration_ms: 84.2, user: "demo", request_id: "req-7f3a91" }),
+    apiLine(NOW - 22 * MIN, "WARN", "http request", { method: "POST", path: "/api/v1/auth/login", status: 401, duration_ms: 61.0, request_id: "req-81bc02", error: "Wrong username or password.", error_code: "NCC_API_UNAUTHORIZED" }),
+    apiLine(NOW - 20 * MIN, "INFO", "audit", { action: "settings.notifications.update", user: "demo", ok: true, request_id: "req-82d114" }),
+    apiLine(NOW - 19 * MIN, "WARN", "notification not delivered", { channel: "slack", host: "hooks.slack.com", attempts: 3, error: "Post \"https://hooks.slack.com/…\": context deadline exceeded" }),
+    apiLine(NOW - 12 * MIN, "ERROR", "http request", { method: "GET", path: "/api/v1/report/trends", status: 500, duration_ms: 3120.5, user: "alex.ops", request_id: "req-90ae55", error: "read logs/run_history.jsonl: file is locked" }),
+    apiLine(NOW - 5 * MIN, "INFO", "scheduled backup written", { path: "backups/ncc-backup-latest.tar.gz", size_bytes: 482113 }),
+  ].join("\n"),
+};
+
+export const UI_LOG = {
+  path: "logs/v2-ui.log",
+  exists: true,
+  content: [
+    `${iso(NOW - 3 * HOUR)} level=INFO msg="ncc-ui-server listening" addr=:5173`,
+    `${iso(NOW - 22 * MIN)} level=WARN msg="http request" method=POST path="/api/v1/auth/login" status=401 duration_ms=63.4 request_id=req-81bc02`,
+    `${iso(NOW - 12 * MIN)} level=ERROR msg="http request" method=GET path="/api/v1/report/trends" status=500 duration_ms=3124.0 request_id=req-90ae55`,
+  ].join("\n"),
+};
+
+export const SUPERVISOR_LOG = {
+  path: "logs/v2-supervisor.log",
+  exists: true,
+  content: [
+    `${iso(NOW - 3 * HOUR)} INFO starting ncc-api-server (pid 3920)`,
+    `${iso(NOW - 3 * HOUR + 1_500)} INFO starting ncc-ui-server (pid 3944)`,
+    `${iso(NOW - 3 * HOUR + 3_000)} INFO health check ok: http://127.0.0.1:8080/healthz`,
+  ].join("\n"),
+};
+
+export const LOG_SOURCES = [
+  { id: "runner", label: "Runner", description: "Health-check runs: one line per cluster step, with run ID and timings.", format: "json", files: ["logs/ncc-runner.log"], admin_only: false },
+  { id: "api", label: "API server", description: "Every API request, run, schedule, notification and setting change, with request ID and user.", format: "json", files: ["logs/ncc-api.log"], admin_only: true },
+  { id: "ui", label: "UI server", description: "Web UI server: failed and slow requests, and API writes.", format: "text", files: ["logs/v2-ui.log"], admin_only: true },
+  { id: "supervisor", label: "Supervisor", description: "Process start, stop, restart and health checks.", format: "text", files: ["logs/v2-supervisor.log"], admin_only: true },
+] as const;
 
 // ----------------------------------------------------------- environments
 

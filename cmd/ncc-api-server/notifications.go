@@ -1072,29 +1072,38 @@ func (s *apiServer) dispatchNotifications(st *notificationState, event, title st
 	if channels["webhook"] && st.Webhook.Enabled {
 		err := sendWebhookJSONWith(st.Webhook.URL, payload, transport.webhookSecret, transport.webhookHeaders)
 		s.recordDelivery(st, "webhook", event, err)
+		if err == nil {
+			serverLog.Info("notification delivered", "channel", "webhook", "event", event)
+		}
 		if err != nil {
-			log.Printf("notifications webhook error: %v", err)
+			serverLog.Warn("notification not delivered", "channel", "webhook", "event", event, "error", redactURLPaths(err.Error()))
 			failed = append(failed, "webhook: "+err.Error())
 		}
 	}
 	if channels["slack"] && st.Slack.Enabled {
 		err := sendSlackWebhook(st.Slack, title, text)
 		s.recordDelivery(st, "slack", event, err)
+		if err == nil {
+			serverLog.Info("notification delivered", "channel", "slack", "event", event)
+		}
 		if err != nil {
-			log.Printf("notifications slack error: %v", err)
+			serverLog.Warn("notification not delivered", "channel", "slack", "event", event, "error", redactURLPaths(err.Error()))
 			failed = append(failed, "slack: "+err.Error())
 		}
 	}
 	if channels["email"] && st.Email.Enabled {
 		err := sendSMTPMailWith(st.Email, title, text, transport.requireTLS, transport.insecureTLS)
 		s.recordDelivery(st, "email", event, err)
+		if err == nil {
+			serverLog.Info("notification delivered", "channel", "email", "event", event)
+		}
 		if err != nil {
-			log.Printf("notifications email error: %v", err)
+			serverLog.Warn("notification not delivered", "channel", "email", "event", event, "error", redactURLPaths(err.Error()))
 			failed = append(failed, "email: "+err.Error())
 		}
 	}
 	if err := s.saveNotificationStatus(*st); err != nil {
-		log.Printf("notifications status save error: %v", err)
+		serverLog.Warn("notification delivery status could not be saved", "error", err.Error())
 	}
 	if len(failed) > 0 {
 		return errors.New(strings.Join(failed, "; "))

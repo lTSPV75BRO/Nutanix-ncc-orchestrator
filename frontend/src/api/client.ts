@@ -23,6 +23,9 @@ import type {
   RunPreflightData,
   RunActiveData,
   RunnerLogData,
+  LogSourcesData,
+  LogFileData,
+  LoggingSettings,
   RunInfo,
   ScheduleSaveResult,
   ScheduleState,
@@ -479,6 +482,17 @@ export const api = {
   },
   reportTrends: (limit = 30) => callApi<ReportTrendsData>(`/api/v1/report/trends?limit=${encodeURIComponent(String(limit))}`),
   runnerLogs: () => callApi<RunnerLogData>("/api/v1/logs/runner"),
+  logSources: () => callApi<LogSourcesData>("/api/v1/logs"),
+  logFile: (source: string, file?: string, bytes?: number) => {
+    const q = new URLSearchParams();
+    if (file) q.set("file", file);
+    if (bytes) q.set("bytes", String(bytes));
+    const qs = q.toString();
+    return callApi<LogFileData>(`/api/v1/logs/${encodeURIComponent(source)}${qs ? `?${qs}` : ""}`);
+  },
+  loggingSettings: () => callApi<LoggingSettings>("/api/v1/settings/logging"),
+  setLogLevel: (level: string) =>
+    callApi<LoggingSettings>("/api/v1/settings/logging", { method: "PUT", body: JSON.stringify({ level }) }),
   audit: (opts?: AuditQuery) => {
     const path = buildAuditPath(opts);
     return callApi<AuditLogData>(path);

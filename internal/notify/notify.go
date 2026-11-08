@@ -21,8 +21,10 @@ import (
 	"net"
 	"net/http"
 	"net/smtp"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -279,18 +281,22 @@ func SendEmailWithRetry(cfg model.Config, subj string, body string, attachPath s
 		return nil
 	}
 	var lastErr error
+	start := time.Now()
 	for attempt := 1; attempt <= RetryAttempts; attempt++ {
 		lastErr = SendEmail(cfg, subj, body, attachPath)
 		if lastErr == nil {
 			defaultMetrics.Record("email", nil)
+			log.Info().Str("channel", "email").Str("smtp_server", cfg.SMTPServer).Int("recipients", len(cfg.EmailTo)).Int("attempts", attempt).Dur("took", time.Since(start)).Msg("notification delivered")
 			return nil
 		}
 		if attempt < RetryAttempts {
 			backoff := retryutil.JitteredBackoff(cfg.RetryBaseDelay, cfg.RetryMaxDelay, attempt)
+			log.Warn().Str("channel", "email").Str("smtp_server", cfg.SMTPServer).Int("attempt", attempt).Dur("backoff", backoff).Str("error", RedactURLPaths(lastErr.Error())).Msg("notification attempt failed, retrying")
 			time.Sleep(backoff)
 		}
 	}
 	defaultMetrics.Record("email", lastErr)
+	log.Error().Str("channel", "email").Str("smtp_server", cfg.SMTPServer).Int("attempts", RetryAttempts).Str("error", RedactURLPaths(lastErr.Error())).Str("dead_letter_dir", cfg.NotificationDeadLetterDir).Msg("notification not delivered")
 	writeDeadLetter(cfg.NotificationDeadLetterDir, "email", "", subj, lastErr, []byte(body))
 	return lastErr
 }
@@ -383,14 +389,17 @@ func SendWebhookWithRetry(ctx context.Context, client model.HTTPClient, cfg mode
 		return nil
 	}
 	var lastErr error
+	start := time.Now()
 	for attempt := 1; attempt <= RetryAttempts; attempt++ {
 		lastErr = SendWebhook(ctx, client, cfg, summary)
 		if lastErr == nil {
 			defaultMetrics.Record("webhook", nil)
+			log.Info().Str("channel", "webhook").Str("host", urlHost(cfg.WebhookURL)).Str("cluster", summary.Cluster).Int("attempts", attempt).Dur("took", time.Since(start)).Msg("notification delivered")
 			return nil
 		}
 		if attempt < RetryAttempts {
 			backoff := retryutil.JitteredBackoff(cfg.RetryBaseDelay, cfg.RetryMaxDelay, attempt)
+			log.Warn().Str("channel", "webhook").Str("host", urlHost(cfg.WebhookURL)).Int("attempt", attempt).Dur("backoff", backoff).Str("error", RedactURLPaths(lastErr.Error())).Msg("notification attempt failed, retrying")
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -399,6 +408,7 @@ func SendWebhookWithRetry(ctx context.Context, client model.HTTPClient, cfg mode
 		}
 	}
 	defaultMetrics.Record("webhook", lastErr)
+	log.Error().Str("channel", "webhook").Str("host", urlHost(cfg.WebhookURL)).Str("cluster", summary.Cluster).Int("attempts", RetryAttempts).Str("error", RedactURLPaths(lastErr.Error())).Str("dead_letter_dir", cfg.NotificationDeadLetterDir).Msg("notification not delivered")
 	if body, mErr := json.Marshal(summary); mErr == nil {
 		writeDeadLetter(cfg.NotificationDeadLetterDir, "webhook", summary.Cluster, "", lastErr, body)
 	}
@@ -496,14 +506,17 @@ func SendSlackWithRetry(ctx context.Context, client model.HTTPClient, cfg model.
 		return nil
 	}
 	var lastErr error
+	start := time.Now()
 	for attempt := 1; attempt <= RetryAttempts; attempt++ {
 		lastErr = SendSlack(ctx, client, cfg, summary)
 		if lastErr == nil {
 			defaultMetrics.Record("slack", nil)
+			log.Info().Str("channel", "slack").Str("host", urlHost(cfg.SlackWebhookURL)).Str("cluster", summary.Cluster).Int("attempts", attempt).Dur("took", time.Since(start)).Msg("notification delivered")
 			return nil
 		}
 		if attempt < RetryAttempts {
 			backoff := retryutil.JitteredBackoff(cfg.RetryBaseDelay, cfg.RetryMaxDelay, attempt)
+			log.Warn().Str("channel", "slack").Str("host", urlHost(cfg.SlackWebhookURL)).Int("attempt", attempt).Dur("backoff", backoff).Str("error", RedactURLPaths(lastErr.Error())).Msg("notification attempt failed, retrying")
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -512,8 +525,25 @@ func SendSlackWithRetry(ctx context.Context, client model.HTTPClient, cfg model.
 		}
 	}
 	defaultMetrics.Record("slack", lastErr)
+	log.Error().Str("channel", "slack").Str("host", urlHost(cfg.SlackWebhookURL)).Str("cluster", summary.Cluster).Int("attempts", RetryAttempts).Str("error", RedactURLPaths(lastErr.Error())).Str("dead_letter_dir", cfg.NotificationDeadLetterDir).Msg("notification not delivered")
 	if body, mErr := json.Marshal(summary); mErr == nil {
 		writeDeadLetter(cfg.NotificationDeadLetterDir, "slack", summary.Cluster, "", lastErr, body)
 	}
 	return lastErr
+}
+
+var reURLPath = regexp.MustCompile(`(https?://[^/\s"'?]+)[^\s"']*`)
+
+// RedactURLPaths keeps only scheme and host of URLs in s: webhook URLs carry
+// their secret in the path (Slack, Teams, …) and Go's HTTP errors quote them.
+func RedactURLPaths(s string) string {
+	return reURLPath.ReplaceAllString(s, "$1/…")
+}
+
+// urlHost is the host of a webhook URL, for logs.
+func urlHost(raw string) string {
+	if u, err := url.Parse(strings.TrimSpace(raw)); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return ""
 }

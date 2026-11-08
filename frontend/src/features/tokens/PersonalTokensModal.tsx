@@ -21,6 +21,7 @@ import { api } from "../../api/client";
 import type { CreatedToken, PersonalToken } from "../../api/types";
 import { notify, notifyError } from "../../notify";
 import { formatDateTime } from "../../utils/datetime";
+import { roleColor } from "../../auth/roleColor";
 
 const { Text, Paragraph } = Typography;
 
@@ -38,10 +39,6 @@ const fmtDate = (s?: string): string => formatDateTime(s);
 function fmtExpiry(s?: string): ReactNode {
   if (!s) return <Tag color="orange">Never</Tag>;
   return fmtDate(s);
-}
-
-function roleColor(role: string): string {
-  return role === "admin" ? "purple" : "default";
 }
 
 /**

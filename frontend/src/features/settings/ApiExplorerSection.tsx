@@ -33,6 +33,7 @@ import { CodeEditor } from "../../components/CodeEditor";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { notify } from "../../notify";
 import { ItemList, TitleIcon } from "../../ui";
+import { roleColor } from "../../auth/roleColor";
 
 type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
@@ -49,12 +50,6 @@ type RouteMeta = {
   description?: string;
   sample_body?: string;
   min_role?: string;
-};
-
-const ROLE_COLOR: Record<string, string> = {
-  admin: "red",
-  operator: "gold",
-  viewer: "green",
 };
 
 type OpenAPISpec = {
@@ -634,7 +629,7 @@ export function ApiExplorerSection({ onError }: Props) {
                   <Typography.Text code style={{ fontSize: 12 }}>{route.path}</Typography.Text>
                   {route.min_role ? (
                     <Tooltip title={`Requires the ${route.min_role} role (or higher)`}>
-                      <Tag color={ROLE_COLOR[route.min_role] || "default"} style={{ marginInlineEnd: 0 }}>
+                      <Tag color={roleColor(route.min_role)} style={{ marginInlineEnd: 0 }}>
                         {route.min_role}
                       </Tag>
                     </Tooltip>

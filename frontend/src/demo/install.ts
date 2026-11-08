@@ -44,6 +44,7 @@ type DemoState = {
   audit: AuditLogEntry[];
   environments: Record<string, EnvFile>;
   envSchedules: EnvironmentSchedule[];
+  logLevel: "debug" | "info" | "warn" | "error";
   /** GET answers replaced by a save (path → body). */
   saved: Record<string, unknown>;
 };
@@ -61,6 +62,7 @@ function freshState(): DemoState {
     audit: [],
     environments: Object.fromEntries(Object.entries(fx.ENVIRONMENT_FILES).map(([k, content]) => [k, { content, updated_at: fx.ENVIRONMENT_UPDATED }])),
     envSchedules: clone(fx.ENVIRONMENT_SCHEDULES),
+    logLevel: "info",
     saved: {},
   };
 }
@@ -194,25 +196,27 @@ function envSchedules() {
 const ALL_CLUSTERS = fx.CLUSTER_INVENTORY.clusters;
 
 function liveOutput(run: ActiveRun, elapsed: number): string {
-  const lines = [
-    `${new Date(run.startedAt).toISOString()} INFO  run ${run.id} started (${run.source ?? "manual"}, ${run.user}) for ${run.clusters.length} clusters` +
-      (run.environment ? ` from the ${run.environment} environment` : ""),
-  ];
+  const base = { run_id: run.id, run_source: run.source ?? "manual", ...(run.environment ? { environment: run.environment } : {}) };
+  const lines = [fx.runnerLine(run.startedAt, "info", "run started", { ...base, user: run.user, clusters: run.clusters.length })];
   const per = (RUN_SECONDS - 5) / run.clusters.length;
   run.clusters.forEach((c, i) => {
     const startAt = 2 + i * per * 0.5;
     const doneAt = startAt + per;
-    const at = (s: number) => new Date(run.startedAt + s * 1000).toISOString();
-    if (elapsed >= startAt) lines.push(`${at(startAt)} INFO  ${c}: running NCC health checks`);
+    const at = (s: number) => run.startedAt + s * 1000;
+    if (elapsed >= startAt) lines.push(fx.runnerLine(at(startAt), "info", "cluster run started", { ...base, cluster: c }));
     if (elapsed >= doneAt) {
       lines.push(
         c === "10.40.2.21"
-          ? `${at(doneAt)} ERROR ${c}: dial tcp ${c}:9440: i/o timeout`
-          : `${at(doneAt)} INFO  ${c}: NCC finished`,
+          ? fx.runnerLine(at(doneAt), "error", "cluster run failed", { ...base, cluster: c, error: `dial tcp ${c}:9440: i/o timeout`, error_class: "network", duration_s: Number(per.toFixed(1)) })
+          : fx.runnerLine(at(doneAt), "info", "cluster run completed", { ...base, cluster: c, duration_s: Number(per.toFixed(1)) }),
       );
     }
   });
   return lines.join("\n");
+}
+
+function runnerLogData() {
+  return state.active ? { ...fx.RUNNER_LOG, content: `${fx.RUNNER_LOG.content}\n${liveOutput(state.active, (Date.now() - state.active.startedAt) / 1000)}` } : fx.RUNNER_LOG;
 }
 
 function finishRun(run: ActiveRun, status: "partial" | "cancelled") {
@@ -393,8 +397,17 @@ const gets: Record<string, Handler> = {
   "/api/v1/artifacts": () => [],
   "/api/v1/report/data": () => ({ ...fx.REPORT, run_summary: latestSummary() }),
   "/api/v1/report/trends": () => fx.TRENDS,
-  "/api/v1/logs/runner": () =>
-    state.active ? { ...fx.RUNNER_LOG, content: `${fx.RUNNER_LOG.content}\n${liveOutput(state.active, (Date.now() - state.active.startedAt) / 1000)}` } : fx.RUNNER_LOG,
+  "/api/v1/logs/runner": () => runnerLogData(),
+  "/api/v1/logs": () => ({
+    sources: fx.LOG_SOURCES.filter((s) => !s.admin_only || state.user?.role === "admin"),
+    level: state.logLevel,
+  }),
+  "/api/v1/settings/logging": () => ({
+    level: state.logLevel,
+    server_log: "logs/ncc-api.log",
+    runner_log: "logs/ncc-runner.log",
+    persistence: "Lasts until the API server restarts. Set NCC_LOG_LEVEL to keep it.",
+  }),
   "/api/v1/audit": () => {
     const entries = [...state.audit, ...fx.AUDIT.entries];
     return { ...fx.AUDIT, entries, count: entries.length, mod_time: state.audit[0]?.ts ?? fx.AUDIT.mod_time };
@@ -621,6 +634,15 @@ async function write(method: string, path: string, url: URL, init?: RequestInit)
   // ---- admin only from here
   if (role !== "admin") return fail(403, "Only admins can change this. Sign in as demo to try it.", "NCC_API_FORBIDDEN");
 
+  if (path === "/api/v1/settings/logging" && method === "PUT") {
+    const lv = String(body.level ?? "").toLowerCase();
+    if (!["debug", "info", "warn", "error"].includes(lv)) return fail(400, "Pick debug, info, warn or error.");
+    state.logLevel = lv as DemoState["logLevel"];
+    audit("settings.logging.update");
+    save();
+    return ok({ level: state.logLevel, server_log: "logs/ncc-api.log", runner_log: "logs/ncc-runner.log", persistence: "Lasts until the API server restarts. Set NCC_LOG_LEVEL to keep it." });
+  }
+
   if (path === "/api/v1/settings/users" && method === "POST") {
     const username = String(body.username ?? "").trim();
     if (!username) return fail(400, "Enter a username.");
@@ -729,6 +751,15 @@ async function route(method: string, url: URL, init?: RequestInit): Promise<Resp
     }
     const data = fx.runById(id);
     return data ? ok(data) : fail(404, "Run not found.");
+  }
+  const logSrc = /^\/api\/v1\/logs\/([^/]+)$/.exec(path);
+  if (logSrc) {
+    const id = decodeURIComponent(logSrc[1]);
+    const src = fx.LOG_SOURCES.find((s) => s.id === id);
+    if (!src) return fail(404, `There is no ${id} log.`);
+    if (src.admin_only && state.user.role !== "admin") return fail(403, "Only admins can read this log.", "NCC_API_FORBIDDEN");
+    const data = id === "runner" ? runnerLogData() : id === "api" ? fx.API_LOG : id === "ui" ? fx.UI_LOG : fx.SUPERVISOR_LOG;
+    return ok({ ...data, source: id, format: src.format, size: data.content.length, mod_time: nowIso(), truncated: false });
   }
   const env = /^\/api\/v1\/settings\/environments\/([^/]+)$/.exec(path);
   if (env) {

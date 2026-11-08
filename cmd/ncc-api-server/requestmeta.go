@@ -43,10 +43,12 @@ func requestIDFromContext(ctx context.Context) string {
 	return v
 }
 
-// statusRecorder captures the status code for metrics.
+// statusRecorder captures the status code and size for metrics and the
+// request log.
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
+	bytes  int64
 }
 
 func (r *statusRecorder) WriteHeader(code int) {
@@ -60,7 +62,9 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	if r.status == 0 {
 		r.status = http.StatusOK
 	}
-	return r.ResponseWriter.Write(b)
+	n, err := r.ResponseWriter.Write(b)
+	r.bytes += int64(n)
+	return n, err
 }
 
 // Unwrap keeps http.ResponseController working (extendDeadlines).
@@ -84,12 +88,20 @@ func (s *apiServer) withRequestMeta(next http.Handler) http.Handler {
 		w.Header().Set(requestIDHeader, id)
 		rec := &statusRecorder{ResponseWriter: w}
 		start := time.Now()
-		next.ServeHTTP(rec, r.WithContext(context.WithValue(r.Context(), requestIDKey{}, id)))
-		status := rec.status
-		if status == 0 {
-			status = http.StatusOK
-		}
-		s.httpMetrics.observe(routeLabel(r.URL.Path), r.Method, status, time.Since(start))
+		info := &requestLogInfo{}
+		ctx := context.WithValue(context.WithValue(r.Context(), requestIDKey{}, id), requestLogInfoKey{}, info)
+		r = r.WithContext(ctx)
+		defer func() {
+			status := rec.status
+			if status == 0 {
+				status = http.StatusOK
+			}
+			d := time.Since(start)
+			s.httpMetrics.observe(routeLabel(r.URL.Path), r.Method, status, d)
+			logRequest(r, info, status, rec.bytes, d)
+		}()
+		defer recoverPanic(rec, r, rec)
+		next.ServeHTTP(rec, r)
 	})
 }
 
@@ -132,7 +144,7 @@ func buildRouteLabelIndex() {
 		routeExact[strings.TrimSuffix(rt.Path, "/")] = true
 	}
 	// Routers that take an ID segment after these prefixes.
-	for _, p := range []string{"/api/v1/runs", "/api/v1/alerts/ncc", "/api/v1/settings/users", "/api/v1/settings/tokens", "/api/v1/users/me/pats", "/api/v1/auth/tokens", "/api/v1/settings/password-resets", "/api/v1/artifacts", "/api/v1/settings/backups"} {
+	for _, p := range []string{"/api/v1/runs", "/api/v1/alerts/ncc", "/api/v1/settings/users", "/api/v1/settings/tokens", "/api/v1/users/me/pats", "/api/v1/auth/tokens", "/api/v1/settings/password-resets", "/api/v1/artifacts", "/api/v1/settings/backups", "/api/v1/logs", "/api/v1/settings/environments"} {
 		routePrefixes[p] = true
 	}
 }

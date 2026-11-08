@@ -43,6 +43,7 @@ import { SessionIdleGuard } from "./components/SessionIdleGuard";
 import { openSetupChecklist, SetupHeaderButton } from "./features/onboarding/SetupChecklist";
 import { CommandJump } from "./components/CommandJump";
 import { formatDateTime, formatTime, localDateKey, parseInstant } from "./utils/datetime";
+import { roleColor } from "./auth/roleColor";
 
 const OverviewPage = lazy(() => import("./pages/OverviewPage").then((m) => ({ default: m.OverviewPage })));
 const FindingsPage = lazy(() => import("./pages/FindingsPage").then((m) => ({ default: m.FindingsPage })));
@@ -444,7 +445,6 @@ function HeaderUserMenu({
   onAbout: () => void;
   canSeeSetup?: boolean;
 }) {
-  const roleColor = role === "admin" ? "purple" : "default";
   const items = [
     {
       key: "who",
@@ -488,7 +488,7 @@ function HeaderUserMenu({
     >
       <Button className="header-user-btn" icon={<UserOutlined />}>
         <span className="header-user-name">{username || "user"}</span>
-        <Tag color={roleColor} className="header-user-role">
+        <Tag color={roleColor(role)} className="header-user-role">
           {role || "user"}
         </Tag>
       </Button>

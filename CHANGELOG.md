@@ -55,6 +55,25 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 
 ### Added
 
+- **Detailed logs from every process, and a Logs page to read them.** The API
+  server writes a rotated JSON log (`logs/ncc-api.log`) with every request
+  (request ID, user, status, duration, error), each run's lifecycle (accepted,
+  queued, started with pid and command, cancelled, finished with output tail),
+  self-heal, schedules, backups, notification delivery, audit forwarding,
+  user-store reloads, the audit trail and panics with stack. The runner logs
+  each cluster step with run ID, environment and timings; notifications log
+  every attempt; the UI server logs failed, slow and write requests with the
+  API's request ID; the MCP server logs each tool call. Secrets, tokens and
+  webhook URL paths are redacted. System → Logs shows each source with level
+  filters, search, per-line details and live refresh: the runner log for
+  everyone, the server logs for admins, who can also change the log level at
+  run time. New flags `--log-level`, `--log-format`, `--server-log-path`
+  (`NCC_LOG_LEVEL`, `NCC_LOG_FORMAT`, `NCC_SERVER_LOG_PATH`); new endpoints
+  `GET /api/v1/logs`, `GET /api/v1/logs/<source>`, `GET|PUT
+  /api/v1/settings/logging`.
+- **Scrollbars follow the theme**, and role tags are back to admin gold,
+  operator blue, viewer plain everywhere (header, users, audit log, tokens,
+  API explorer).
 - **Environments: one main config, a runner file per dev / staging / prod.**
   Each environment is `configs/environments/<name>.yaml` and may hold only
   `description` and a `runner:` section (targets, credentials references,
@@ -459,6 +478,11 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 
 ### Fixed
 
+- **A self-heal retry of an environment run kept its environment.** The retry
+  now runs against the same environment file and keeps the run's source,
+  instead of falling back to the main config.
+- **The first-run admin password no longer reaches log files**; it is printed
+  to the console only.
 - **Frontend on the latest Ant Design and Vitest.** Ant Design 6.7.0,
   Vitest 5.1.0 (with coverage-v8), jsdom 31, Vite 8.3.6 and TanStack Query
   5.107.1. The pagination test that held these back clicked a page's `<li>`,

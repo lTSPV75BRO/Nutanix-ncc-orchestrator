@@ -1048,6 +1048,45 @@ export type RunnerLogData = {
   exists: boolean;
 };
 
+export type LogLevelName = "debug" | "info" | "warn" | "error";
+
+/** One log the Logs page can show (GET /api/v1/logs). */
+export type LogSource = {
+  id: string;
+  label: string;
+  description: string;
+  /** "json": one JSON object per line; "text": plain lines. */
+  format: "json" | "text";
+  /** Repo-relative files; the first is the current one. */
+  files: string[] | null;
+  admin_only: boolean;
+};
+
+export type LogSourcesData = {
+  sources: LogSource[];
+  /** The API server's current log level. */
+  level: LogLevelName;
+};
+
+export type LogFileData = {
+  source: string;
+  path: string;
+  content: string;
+  exists: boolean;
+  format: "json" | "text";
+  size?: number;
+  mod_time?: string;
+  /** Only the end of the file was returned. */
+  truncated?: boolean;
+};
+
+export type LoggingSettings = {
+  level: LogLevelName;
+  server_log?: string;
+  runner_log?: string;
+  persistence?: string;
+};
+
 export type ReportData = {
   run_summary: unknown;
   ncc_summary_counts?: Record<string, number>;
