@@ -259,7 +259,7 @@ func TestLDAPRouterAuthenticate(t *testing.T) {
 			t.Fatalf("got %q ok=%v err=%v", name, ok, err)
 		}
 		// No NetBIOS names claimed: the name is passed through unchanged.
-		r.authenticate(`CORP\jdoe`, "pw")
+		_, _, _, _, _ = r.authenticate(`CORP\jdoe`, "pw")
 		if got := dirs["default"].asked[1]; got != `CORP\jdoe` {
 			t.Fatalf("login passed as %q", got)
 		}
@@ -600,7 +600,7 @@ func TestLDAPShortNameOrderedLookup(t *testing.T) {
 	t.Run("an unclaimed domain still goes to the default directory only", func(t *testing.T) {
 		cfg, dirs := dc1AndDC2()
 		r := buildFakeRouter(t, cfg, dirs)
-		r.authenticateRouted("pat@elsewhere.org", "pw2")
+		_, _, _, _, _, _ = r.authenticateRouted("pat@elsewhere.org", "pw2")
 		if got := asked(dirs); !eq(got, []int{1, 0, 0}) {
 			t.Fatalf("asked %v", got)
 		}

@@ -7,8 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"log"
+	"log/slog"
 	"math"
 	"os"
 	"os/exec"
@@ -91,9 +91,9 @@ type runStartParams struct {
 	cfgPath     string
 	environment string
 	source      string
-	password  string
-	extraArgs []string
-	group     string
+	password    string
+	extraArgs   []string
+	group       string
 	// requested are the display-name clusters this run wants (post group/scope
 	// resolution, pre overlap subtraction). Empty means "run everything".
 	requested    []string
@@ -1185,4 +1185,3 @@ func (s *apiServer) logRunFinished(rec *runRecord, runErr error, output string) 
 		serverLog.Error("run finished", append(attrs, "result", "failed", "error", runErr.Error(), "output_tail", tailString(strings.TrimSpace(output), 2000))...)
 	}
 }
-

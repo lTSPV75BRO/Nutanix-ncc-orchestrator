@@ -14,13 +14,17 @@ const MIN_PASSWORD_LEN = 15;
 type ChangePasswordFormProps = {
   submitLabel?: string;
   onSuccess: () => void;
+  /** In a dialog: Cancel and submit at the bottom right, no field icons. */
+  onCancel?: () => void;
 };
 
 /**
  * Shared current/new/confirm password form. Used by both the forced full-screen
  * gate and the self-service modal so the dialog is identical in both places.
  */
-export function ChangePasswordForm({ submitLabel = "Change password", onSuccess }: ChangePasswordFormProps) {
+export function ChangePasswordForm({ submitLabel = "Change password", onSuccess, onCancel }: ChangePasswordFormProps) {
+  const inDialog = Boolean(onCancel);
+  const lock = inDialog ? undefined : <LockOutlined />;
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -44,7 +48,7 @@ export function ChangePasswordForm({ submitLabel = "Change password", onSuccess 
       ) : null}
       <Form layout="vertical" onFinish={handleFinish} requiredMark={false} disabled={submitting}>
         <Form.Item name="current" label="Current password" rules={[{ required: true, message: "Enter your current password" }]}>
-          <Input.Password prefix={<LockOutlined />} autoComplete="current-password" autoFocus />
+          <Input.Password prefix={lock} autoComplete="current-password" autoFocus />
         </Form.Item>
         <Form.Item
           name="next"
@@ -61,7 +65,7 @@ export function ChangePasswordForm({ submitLabel = "Change password", onSuccess 
             }),
           ]}
         >
-          <Input.Password prefix={<LockOutlined />} autoComplete="new-password" />
+          <Input.Password prefix={lock} autoComplete="new-password" />
         </Form.Item>
         <Form.Item
           name="confirm"
@@ -77,13 +81,24 @@ export function ChangePasswordForm({ submitLabel = "Change password", onSuccess 
             }),
           ]}
         >
-          <Input.Password prefix={<LockOutlined />} autoComplete="new-password" />
+          <Input.Password prefix={lock} autoComplete="new-password" />
         </Form.Item>
-        <Form.Item style={{ marginBottom: 0 }}>
-          <Button type="primary" htmlType="submit" block loading={submitting}>
-            {submitLabel}
-          </Button>
-        </Form.Item>
+        {inDialog ? (
+          <div className="dialog-actions">
+            <Button onClick={onCancel} disabled={false}>
+              Cancel
+            </Button>
+            <Button type="primary" htmlType="submit" loading={submitting}>
+              {submitLabel}
+            </Button>
+          </div>
+        ) : (
+          <Form.Item style={{ marginBottom: 0 }}>
+            <Button type="primary" htmlType="submit" block loading={submitting}>
+              {submitLabel}
+            </Button>
+          </Form.Item>
+        )}
       </Form>
     </>
   );
@@ -145,8 +160,12 @@ type ChangePasswordModalProps = {
  */
 export function ChangePasswordModal({ open, onClose, onSuccess }: ChangePasswordModalProps) {
   return (
-    <Modal title="Change password" open={open} onCancel={onClose} footer={null} destroyOnHidden>
+    <Modal title="Change password" open={open} onCancel={onClose} footer={null} centered width={440} destroyOnHidden>
+      <p className="dialog-intro">
+        You&apos;ll stay signed in here. Other sessions of your account are signed out.
+      </p>
       <ChangePasswordForm
+        onCancel={onClose}
         onSuccess={() => {
           onSuccess();
           onClose();

@@ -434,6 +434,10 @@ man-in-the-middle's). For self-signed or internal-CA Prism deployments, prefer:
   only if its SHA-256 fingerprint matches one you supply (colons optional),
   independent of the system trust store. A MITM presenting a different cert is
   rejected.
+- Import the internal CA into the operating system's trust store. Every
+  outbound connection (Prism, email, webhooks, OIDC/SAML, and LDAP when no
+  CA is pasted) then verifies against it; see
+  [HTTPS and certificates → Trust your CA in the operating system](setup/HTTPS.md#trust-your-ca-in-the-operating-system).
 
 Capture a fingerprint to pin with:
 

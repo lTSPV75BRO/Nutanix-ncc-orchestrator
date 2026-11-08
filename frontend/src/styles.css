@@ -2357,15 +2357,17 @@ html[data-theme="it-pro"] {
 /* About dialog (components/AboutDialog.tsx). */
 .about-head {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: var(--ui-space-3);
-  margin-bottom: var(--ui-space-4);
+  text-align: center;
+  gap: var(--ui-space-1);
+  padding: var(--ui-space-2) 0 var(--ui-space-3);
 }
 
 .about-logo {
-  width: 44px;
-  height: 44px;
-  flex-shrink: 0;
+  width: 52px;
+  height: 52px;
+  margin-bottom: var(--ui-space-1);
 }
 
 .about-title {
@@ -2378,22 +2380,27 @@ html[data-theme="it-pro"] {
 .about-subtitle {
   display: flex;
   align-items: center;
+  justify-content: center;
   flex-wrap: wrap;
   gap: var(--ui-space-2);
-  margin: 2px 0 0;
+  margin: 0;
   font-size: var(--ui-text-sm);
   color: var(--ui-text-secondary);
 }
 
 .about-text {
-  margin: 0 0 var(--ui-space-3);
+  margin: 0 0 var(--ui-space-2);
   font-size: var(--ui-text-sm);
   line-height: 1.55;
   color: var(--ui-text-secondary);
 }
 
+.about-head + .about-text {
+  text-align: center;
+}
+
 .about-section {
-  margin-top: var(--ui-space-4);
+  margin-top: var(--ui-space-3);
   padding-top: var(--ui-space-3);
   border-top: 1px solid var(--ui-border);
 }
@@ -2413,6 +2420,34 @@ html[data-theme="it-pro"] {
   color: var(--ui-text);
 }
 
+.about-section-head .ant-btn {
+  padding-inline: 0;
+}
+
+.about-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px var(--ui-space-4);
+  margin: 0;
+  font-size: var(--ui-text-sm);
+}
+
+.about-fact {
+  display: contents;
+}
+
+.about-fact dt {
+  color: var(--ui-text-secondary);
+}
+
+.about-fact dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ui-text);
+  font-variant-numeric: tabular-nums;
+}
+
 .about-license {
   max-height: 220px;
   overflow: auto;
@@ -2430,16 +2465,56 @@ html[data-theme="it-pro"] {
 .about-links {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--ui-space-2);
-  margin-top: var(--ui-space-4);
+  justify-content: center;
+  gap: var(--ui-space-3);
+  margin-top: var(--ui-space-3);
   padding-top: var(--ui-space-3);
   border-top: 1px solid var(--ui-border);
 }
 
 .about-fineprint {
-  margin: var(--ui-space-3) 0 0;
+  margin: var(--ui-space-2) 0 0;
+  text-align: center;
   font-size: var(--ui-text-xs);
   color: var(--ui-text-tertiary);
+}
+
+/* Session idle warning (components/SessionIdleGuard.tsx). */
+.idle-dialog-body {
+  display: flex;
+  gap: var(--ui-space-3);
+  align-items: flex-start;
+}
+
+.idle-dialog-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  font-size: 22px;
+  color: var(--ui-warn);
+}
+
+.idle-dialog-text {
+  margin: 0 0 var(--ui-space-3);
+  color: var(--ui-text-secondary);
+}
+
+.idle-dialog-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--ui-text);
+}
+
+/* Change / reset password dialogs. */
+.dialog-intro {
+  margin: 0 0 var(--ui-space-4);
+  font-size: var(--ui-text-sm);
+  color: var(--ui-text-secondary);
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--ui-space-2);
+  margin-top: var(--ui-space-4);
 }
 
 /* Run details → Checks: NCC detail text, two lines until expanded. */

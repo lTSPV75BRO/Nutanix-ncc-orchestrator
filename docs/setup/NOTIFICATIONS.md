@@ -208,7 +208,7 @@ outage doesn't lose them silently.
 | Problem | What to check |
 | --- | --- |
 | **Send test** is greyed out | Save first: tests use the saved settings. |
-| Email: `x509: certificate signed by unknown authority` | The relay uses an internal certificate. Set `smtp-insecure-skip-verify: true`, or add the CA to the server's trust store. |
+| Email: `x509: certificate signed by unknown authority` | The relay uses an internal certificate. Add the CA to the server's trust store ([how](HTTPS.md#trust-your-ca-in-the-operating-system)) and restart. `smtp-insecure-skip-verify: true` works too but accepts any certificate. |
 | Email: `535 authentication failed` | Wrong password, Microsoft 365 SMTP sign-in turned off, or Gmail needs an app password. |
 | Email: `554` / relay denied | The relay doesn't accept mail from this host or sender. Ask the mail team to allow the NCC host IP and sender address. |
 | Slack: `invalid_token` or `no_service` | The webhook was removed or the app uninstalled. Create a new webhook URL. |

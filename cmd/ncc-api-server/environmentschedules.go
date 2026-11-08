@@ -132,7 +132,7 @@ func nextEnvironmentRun(e environmentSchedule, loc *time.Location) time.Time {
 		return base.Add(every)
 	}
 	hh, mm := 0, 0
-	fmt.Sscanf(e.At, "%d:%d", &hh, &mm)
+	_, _ = fmt.Sscanf(e.At, "%d:%d", &hh, &mm) // At is validated as HH:MM on save
 	local := base.In(loc)
 	if e.LastRunAt == "" {
 		// First run: the next occurrence of At after the entry was created.

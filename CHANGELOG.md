@@ -502,6 +502,16 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 
 ### Changed
 
+- **Docs: trusting an internal CA.** [`docs/setup/HTTPS.md`](docs/setup/HTTPS.md#trust-your-ca-in-the-operating-system)
+  shows how to import a CA into the Windows, Linux and macOS trust store (and
+  what to do in containers), and which connections use the store, `ca-bundle`,
+  or a CA of their own.
+- **Standard dialogs for About, Change password, Reset password and the
+  idle warning.** Centered, with a title bar and Cancel/confirm at the bottom
+  right. The idle warning shows a countdown bar and puts focus on **Stay
+  signed in**, so pressing Enter no longer signs you out. About gets a Close
+  button and shows the same license text as `LICENSE` (a test keeps them
+  identical); the copyright now reads 2025-2026.
 - **One look across the web UI.** Every theme uses one purple accent, flat
   surfaces, one type scale (12–30 px) and weights of 400/600. Colours come
   from theme tokens (a test enforces it), and antd tag colours map onto five

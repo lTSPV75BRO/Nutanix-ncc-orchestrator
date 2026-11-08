@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Modal } from "antd";
+import { Modal, Progress } from "antd";
+import { ClockCircleOutlined } from "@ant-design/icons";
 import { api } from "../api/client";
 
 // Inactivity threshold before the warning dialog, and the grace period the user
@@ -82,18 +83,38 @@ export function SessionIdleGuard({ onLogout, onStayLoggedIn }: SessionIdleGuardP
   return (
     <Modal
       open={warning}
-      title="Session about to expire"
+      title="Are you still there?"
       okText="Stay signed in"
       cancelText="Sign out"
       onOk={handleStay}
       onCancel={onLogout}
+      okButtonProps={{ autoFocus: true }}
       confirmLoading={staying}
       closable={false}
       mask={{ closable: false }}
       keyboard={false}
+      centered
+      width={420}
     >
-      Your session has been inactive. For your security, you will be signed out in{" "}
-      <strong>{secondsLeft}</strong> second{secondsLeft === 1 ? "" : "s"}.
+      <div className="idle-dialog-body">
+        <ClockCircleOutlined className="idle-dialog-icon" aria-hidden />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <p className="idle-dialog-text">
+            You haven&apos;t used NCC Orchestrator for a while. For your security you&apos;ll be signed out in{" "}
+            <strong className="idle-dialog-count">
+              {secondsLeft} second{secondsLeft === 1 ? "" : "s"}
+            </strong>
+            .
+          </p>
+          <Progress
+            percent={(secondsLeft / COUNTDOWN_SEC) * 100}
+            showInfo={false}
+            size="small"
+            strokeColor={secondsLeft <= 10 ? "var(--ui-fail)" : "var(--ui-accent)"}
+            aria-label="Time left before sign-out"
+          />
+        </div>
+      </div>
     </Modal>
   );
 }

@@ -331,13 +331,13 @@ func (stdlogBridge) Write(p []byte) (int, error) {
 // requestLogInfo is filled in while a request is handled (by withAuth and the
 // error capture below) and read by the request log when it completes.
 type requestLogInfo struct {
-	mu        sync.Mutex
-	user      string
-	role      string
-	method    string
-	errMsg    string
-	errCode   string
-	attrs     []any
+	mu      sync.Mutex
+	user    string
+	role    string
+	method  string
+	errMsg  string
+	errCode string
+	attrs   []any
 }
 
 type requestLogInfoKey struct{}

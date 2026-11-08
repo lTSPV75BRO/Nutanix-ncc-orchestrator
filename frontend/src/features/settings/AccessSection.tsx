@@ -307,8 +307,10 @@ function UsersCard() {
       </Modal>
 
       <Modal
-        title={`Reset password — ${resetUser ?? ""}`}
+        title="Reset password"
         open={resetUser !== null}
+        centered
+        width={460}
         onCancel={() => {
           setResetUser(null);
           resetForm.resetFields();
@@ -319,31 +321,37 @@ function UsersCard() {
             : resetForm.submit()
         }
         confirmLoading={resetMut.isPending}
-        okText={resetIsAdmin ? "Generate & reset" : "Reset"}
+        okText={resetIsAdmin ? "Generate new password" : "Reset password"}
       >
         {resetIsAdmin ? (
-          <Typography.Paragraph type="secondary" style={{ fontSize: 13, marginBottom: 0 }}>
-            The built-in <code>admin</code> password will be reset to a new random value, following
-            the same workflow as first-run setup: the admin must change it on next login, all
-            existing admin sessions are signed out, and the new password is also written to the
-            server logs and the <code>.ncc-initial-admin-password</code> file. It will be shown once
-            here so you can share it securely.
-          </Typography.Paragraph>
+          <p className="dialog-intro" style={{ marginBottom: 0 }}>
+            The built-in <strong>admin</strong> account gets a new random password, as on first start. It is shown here
+            once and also written to the server log and the <code>.ncc-initial-admin-password</code> file. All admin
+            sessions are signed out, and the new password must be changed at the next sign-in.
+          </p>
         ) : (
-          <Form
-            form={resetForm}
-            layout="vertical"
-            onFinish={(v) => resetUser && resetMut.mutate({ username: resetUser, password: v.password })}
-          >
-            <Form.Item
-              name="password"
-              label="New temporary password"
-              rules={[{ required: true }, { min: 15, message: "Use at least 15 characters" }]}
-              extra="The user must change it on next login."
+          <>
+            <p className="dialog-intro">
+              Set a temporary password for <strong>{resetUser}</strong>. They must choose a new one at their next
+              sign-in.
+            </p>
+            <Form
+              form={resetForm}
+              layout="vertical"
+              requiredMark={false}
+              onFinish={(v) => resetUser && resetMut.mutate({ username: resetUser, password: v.password })}
             >
-              <Input.Password autoComplete="new-password" />
-            </Form.Item>
-          </Form>
+              <Form.Item
+                name="password"
+                label="Temporary password"
+                rules={[{ required: true, message: "Enter a temporary password" }, { min: 15, message: "Use at least 15 characters" }]}
+                extra="At least 15 characters. Share it with the user securely."
+                style={{ marginBottom: 0 }}
+              >
+                <Input.Password autoComplete="new-password" autoFocus />
+              </Form.Item>
+            </Form>
+          </>
         )}
       </Modal>
     </Card>
@@ -453,25 +461,36 @@ function PasswordResetRequestsCard() {
       )}
 
       <Modal
-        title={`Reset password — ${resetUser ?? ""}`}
+        title="Reset password"
         open={resetUser !== null}
-        onCancel={() => setResetUser(null)}
+        centered
+        width={460}
+        onCancel={() => {
+          setResetUser(null);
+          resetForm.resetFields();
+        }}
         onOk={() => resetForm.submit()}
         confirmLoading={resetMut.isPending}
-        okText="Reset"
+        okText="Reset password"
       >
+        <p className="dialog-intro">
+          Set a temporary password for <strong>{resetUser}</strong>. They must choose a new one at their next sign-in,
+          and the request is cleared.
+        </p>
         <Form
           form={resetForm}
           layout="vertical"
+          requiredMark={false}
           onFinish={(v) => resetUser && resetMut.mutate({ username: resetUser, password: v.password })}
         >
           <Form.Item
             name="password"
-            label="New temporary password"
-            rules={[{ required: true }, { min: 15, message: "Use at least 15 characters" }]}
-            extra="The user must change it on next login."
+            label="Temporary password"
+            rules={[{ required: true, message: "Enter a temporary password" }, { min: 15, message: "Use at least 15 characters" }]}
+            extra="At least 15 characters. Share it with the user securely."
+            style={{ marginBottom: 0 }}
           >
-            <Input.Password autoComplete="new-password" />
+            <Input.Password autoComplete="new-password" autoFocus />
           </Form.Item>
         </Form>
       </Modal>

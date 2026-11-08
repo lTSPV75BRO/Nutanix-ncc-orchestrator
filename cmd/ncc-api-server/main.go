@@ -442,8 +442,8 @@ type runTriggerRequest struct {
 	// are laid over the main config. Preferred over ConfigPath.
 	Environment string   `json:"environment,omitempty"`
 	ConfigPath  string   `json:"config_path,omitempty"`
-	Password   string   `json:"password,omitempty"`
-	ExtraArgs  []string `json:"extra_args,omitempty"`
+	Password    string   `json:"password,omitempty"`
+	ExtraArgs   []string `json:"extra_args,omitempty"`
 	// Group optionally scopes the run to a single cluster group (by name).
 	Group string `json:"group,omitempty"`
 	// Clusters optionally scopes the run to an explicit cluster subset. Both are
@@ -452,7 +452,7 @@ type runTriggerRequest struct {
 }
 
 type runPreflightRequest struct {
-	ConfigPath string `json:"config_path,omitempty"`
+	ConfigPath  string `json:"config_path,omitempty"`
 	Environment string `json:"environment,omitempty"`
 }
 

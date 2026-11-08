@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync/atomic"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 

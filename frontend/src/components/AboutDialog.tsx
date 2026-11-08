@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Button, Modal } from "antd";
 import { BookOutlined, CopyOutlined, GithubOutlined, TagOutlined } from "@ant-design/icons";
-import { KeyValueList } from "../ui";
 import { notify } from "../notify";
 
 export type AboutBuild = {
@@ -15,8 +14,9 @@ export type AboutBuild = {
 
 const REPO = "https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator";
 
-// Kept in step with LICENSE at the repository root.
-const LICENSE_HOLDER = "Copyright (c) 2025 Prajwal Vernekar";
+// Kept in step with LICENSE at the repository root (AboutDialog.test.tsx
+// compares them).
+const LICENSE_HOLDER = "Copyright (c) 2025-2026 Prajwal Vernekar";
 const MIT_TEXT = `Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
@@ -50,11 +50,16 @@ function buildLine(b: AboutBuild): string {
 
 /**
  * About NCC Orchestrator: what it is, the build that is running, the license
- * and where the project lives. Opened from the product name in the sidebar.
+ * and where the project lives. Opened from the user menu.
  */
 export function AboutDialog({ open, onClose, build }: { open: boolean; onClose: () => void; build: AboutBuild }) {
   const [showLicense, setShowLicense] = useState(false);
   const shortVersion = (build.version || "").split("-")[0];
+
+  const close = () => {
+    setShowLicense(false);
+    onClose();
+  };
 
   const copyBuild = async () => {
     try {
@@ -65,64 +70,68 @@ export function AboutDialog({ open, onClose, build }: { open: boolean; onClose: 
     }
   };
 
+  const facts: { label: string; value: string }[] = [
+    { label: "Version", value: build.version || "Unknown" },
+    { label: "Built", value: build.buildDate && build.buildDate !== "unknown" ? build.buildDate : "Unknown" },
+    ...(build.stream ? [{ label: "Release stream", value: build.stream }] : []),
+    ...(build.goVersion ? [{ label: "Go", value: build.goVersion }] : []),
+    ...(build.os || build.arch ? [{ label: "Platform", value: [build.os, build.arch].filter(Boolean).join(" / ") }] : []),
+  ];
+
   return (
     <Modal
       open={open}
-      onCancel={() => {
-        setShowLicense(false);
-        onClose();
-      }}
-      footer={null}
-      width={560}
-      title={null}
+      title="About NCC Orchestrator"
+      onCancel={close}
+      centered
+      width={480}
       className="about-dialog"
       destroyOnHidden
+      footer={
+        <Button type="primary" onClick={close}>
+          Close
+        </Button>
+      }
     >
       <div className="about-head">
         <img src="/logo.svg" alt="" className="about-logo" />
-        <div>
-          <h2 className="about-title">NCC Orchestrator</h2>
-          <p className="about-subtitle">
-            {shortVersion ? <span className="brand-version">v{shortVersion}</span> : null}
-            <span>Cluster health checks at fleet scale</span>
-          </p>
-        </div>
+        <h2 className="about-title">NCC Orchestrator</h2>
+        <p className="about-subtitle">
+          {shortVersion ? <span className="brand-version">v{shortVersion}</span> : null}
+          <span>Cluster health checks at fleet scale</span>
+        </p>
       </div>
 
       <p className="about-text">
         Runs Nutanix Cluster Check (NCC) on your Prism Element clusters in parallel, gathers every finding in one place,
-        and keeps track of how each alert is handled from run to run, with schedules, notifications and history.
+        and tracks how each alert is handled from run to run.
       </p>
 
       <section className="about-section" aria-labelledby="about-build">
         <div className="about-section-head">
           <h3 id="about-build">This installation</h3>
-          <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => void copyBuild()}>
-            Copy
+          <Button size="small" type="link" icon={<CopyOutlined />} onClick={() => void copyBuild()}>
+            Copy details
           </Button>
         </div>
-        <KeyValueList
-          items={[
-            { label: "Version", value: build.version || "Unknown" },
-            { label: "Built", value: build.buildDate && build.buildDate !== "unknown" ? build.buildDate : "Unknown" },
-            ...(build.stream ? [{ label: "Release stream", value: build.stream }] : []),
-            ...(build.goVersion ? [{ label: "Go", value: build.goVersion }] : []),
-            ...(build.os || build.arch ? [{ label: "Platform", value: [build.os, build.arch].filter(Boolean).join(" / ") }] : []),
-          ]}
-        />
+        <dl className="about-facts">
+          {facts.map((f) => (
+            <div key={f.label} className="about-fact">
+              <dt>{f.label}</dt>
+              <dd>{f.value}</dd>
+            </div>
+          ))}
+        </dl>
       </section>
 
       <section className="about-section" aria-labelledby="about-license">
         <div className="about-section-head">
           <h3 id="about-license">License</h3>
-          <Button size="small" type="text" onClick={() => setShowLicense((v) => !v)} aria-expanded={showLicense}>
+          <Button size="small" type="link" onClick={() => setShowLicense((v) => !v)} aria-expanded={showLicense}>
             {showLicense ? "Hide license" : "View license"}
           </Button>
         </div>
-        <p className="about-text">
-          MIT License. {LICENSE_HOLDER}. Free to use, copy, modify and distribute, provided the copyright and license
-          notice are kept.
-        </p>
+        <p className="about-text">MIT License. {LICENSE_HOLDER}.</p>
         {showLicense ? (
           <pre className="about-license" tabIndex={0} aria-label="MIT License text">
             {`MIT License\n\n${LICENSE_HOLDER}\n\n${MIT_TEXT}`}
@@ -131,18 +140,20 @@ export function AboutDialog({ open, onClose, build }: { open: boolean; onClose: 
       </section>
 
       <div className="about-links">
-        <Button icon={<GithubOutlined />} href={REPO} target="_blank" rel="noopener noreferrer">
+        <Button size="small" type="link" icon={<GithubOutlined />} href={REPO} target="_blank" rel="noopener noreferrer">
           Project
         </Button>
-        <Button icon={<TagOutlined />} href={`${REPO}/releases`} target="_blank" rel="noopener noreferrer">
+        <Button size="small" type="link" icon={<TagOutlined />} href={`${REPO}/releases`} target="_blank" rel="noopener noreferrer">
           Releases
         </Button>
-        <Button icon={<BookOutlined />} href={`${REPO}#readme`} target="_blank" rel="noopener noreferrer">
+        <Button size="small" type="link" icon={<BookOutlined />} href={`${REPO}#readme`} target="_blank" rel="noopener noreferrer">
           Documentation
         </Button>
       </div>
 
-      <p className="about-fineprint">Nutanix, Prism and NCC are trademarks of Nutanix, Inc.</p>
+      <p className="about-fineprint">
+        Independent open-source project. Nutanix, Prism and NCC are trademarks of Nutanix, Inc.
+      </p>
     </Modal>
   );
 }

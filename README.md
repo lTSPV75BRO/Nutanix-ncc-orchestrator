@@ -57,8 +57,8 @@ History, alert handling, scheduling, role-based access with SSO, and an API for 
 - **Web dashboard** with FAIL/WARN/ERR/INFO triage, Prism Central alerts, run history, trends, regressions, and flaky-check detection.
 - **Alert lifecycle**: acknowledge, resolve, and reopen NCC findings; every alert instance gets a UUID and an append-only history, and the dashboard shows how long it has been open and whether it keeps coming back.
 - **Integrations**: REST API with an OpenAPI 3 spec, personal access tokens, an incremental event feed for ticketing tools, Prometheus `/metrics`, email/webhook/Slack notifications, and an MCP server for AI assistants.
-- **Secure by default**: HTTPS UI, role-based access (viewer / operator / admin), local accounts, LDAP/AD, OpenID Connect and SAML SSO, encrypted backups, rate limiting, and strict security headers.
-- **Runs anywhere**: single binaries for Linux, macOS, and Windows; a self-healing supervisor; Docker Compose; Kubernetes (kustomize or Helm).
+- **Secure by default**: HTTPS UI, role-based access (viewer / operator / admin), local accounts, LDAP/AD (several domains or forests), OpenID Connect and SAML SSO, encrypted backups, rate limiting, and strict security headers.
+- **Runs anywhere**: single binaries for Linux, macOS, and Windows; a self-healing supervisor; in-app updates with a backup first and automatic rollback; Docker Compose; Kubernetes (kustomize or Helm).
 - **CI-friendly**: policy gates turn run results into exit codes.
 
 ## Try the live demo
@@ -341,11 +341,11 @@ security model.
 
 | Area | Default behavior |
 | --- | --- |
-| Sign-in | Local accounts (bcrypt, NIST SP 800-63B policy), LDAP / Active Directory, OpenID Connect (Entra ID, Okta, Google, Keycloak, …) and SAML SSO; first-run admin with a forced password change; offline recovery with `v2-reset-password` |
+| Sign-in | Local accounts (bcrypt, NIST SP 800-63B policy), LDAP / Active Directory (one directory per domain or forest), OpenID Connect (Entra ID, Okta, Google, Keycloak, …) and SAML SSO; first-run admin with a forced password change; offline recovery with `v2-reset-password` |
 | Sessions | httpOnly session cookies, `Secure` when served over HTTPS, CSRF protection on changes; `NCC_JWT_SECRET` shares sessions across API replicas |
 | Login protection | Rate limits per account, per source, and per account+source; progressive lockout; `X-Forwarded-For` honored only from `--trusted-proxy-cidrs` |
 | Transport | UI is HTTPS by default (self-signed or your own certificate, managed in **Settings → Access → HTTPS / TLS**); optional API TLS and mTLS |
-| Prism TLS | Verified by default; trust an internal CA with `--ca-bundle` or pin with `--pin-sha256` instead of `--insecure-skip-verify` |
+| Outbound TLS | Prism, mail, webhooks and sign-in providers are verified against the OS trust store ([import your CA once](docs/setup/HTTPS.md#trust-your-ca-in-the-operating-system)); for Prism also `--ca-bundle` or `--pin-sha256` instead of `--insecure-skip-verify` |
 | Backups | Encrypted (AES-256-GCM) by default; a backup key or passphrase is required unless `NCC_BACKUP_ENCRYPTION=optional` |
 | User store | Optional envelope encryption with a master key (`--require-encrypted-user-store` to enforce it) |
 | Hardening | Rate limiting on sensitive routes, request size and header limits, path confinement for file access, CORS allow-list (no wildcards), CSP, `X-Frame-Options: DENY`, HSTS on TLS |
@@ -365,7 +365,7 @@ Details: [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md) and the [Oct
 | Restart the stack | `ncc-orchestrator v2-restart` |
 | Start at boot (systemd, Windows Task Scheduler, or launchd) | `ncc-orchestrator v2-install-service` (`--print-only` to preview) |
 | Back up / restore config, users, tokens, and state | `ncc-orchestrator v2-backup` / `v2-restore` |
-| Update to the latest release | `ncc-orchestrator update --check`, then `update` (or **Settings → Access → Updates**) |
+| Update to the latest release | `ncc-orchestrator update --check`, then `update` (or **System → Updates & backups**) |
 | Recover a lost password | `ncc-orchestrator v2-reset-password --user admin` |
 | Shell completion | `ncc-orchestrator completion bash\|zsh\|fish\|powershell` |
 
