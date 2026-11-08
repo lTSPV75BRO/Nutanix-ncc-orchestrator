@@ -907,6 +907,9 @@ user's password.
 
 #### SAML SSO
 
+Step-by-step setup for every sign-in method, with Entra ID, Okta, Google,
+Keycloak and ADFS: [`setup/SIGN_IN.md`](setup/SIGN_IN.md).
+
 SAML can be configured two ways:
 
 1. **Startup flags** (read-only at runtime): `--saml-root-url`,

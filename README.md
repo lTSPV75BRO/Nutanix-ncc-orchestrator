@@ -211,6 +211,10 @@ go build -o ncc-mcp-server   ./cmd/ncc-mcp-server     # optional
 
 `go build ./...` only compile-checks; use `-o` as above to get the binaries. Release builds for every platform come from [`scripts/binaryGO.txt`](scripts/binaryGO.txt) (`bash scripts/binaryGO.txt`, or `scripts\binaryGO.cmd` on Windows); see [`docs/BUILD_FROM_SCRATCH.md`](docs/BUILD_FROM_SCRATCH.md).
 
+**Next:** the [setup guides](docs/setup/README.md) walk through connecting
+clusters, directory and SSO sign-in, HTTPS, notifications, schedules and
+backups, step by step.
+
 ---
 
 ## Configuration
@@ -427,6 +431,7 @@ Before upgrading, configure a backup key: backups are now **encrypted by default
 
 | Topic | Document |
 | --- | --- |
+| **Setup guides:** clusters, sign-in (AD/LDAP, OpenID Connect, SAML), HTTPS, notifications (email, Slack, webhooks, Teams), schedules and backups, integrations | [`docs/setup/`](docs/setup/README.md) |
 | Every config key, environment variable, and flag | [`docs/FEATURES_AND_CONFIG_FLAGS.md`](docs/FEATURES_AND_CONFIG_FLAGS.md) |
 | Build everything on a clean machine | [`docs/BUILD_FROM_SCRATCH.md`](docs/BUILD_FROM_SCRATCH.md) |
 | Architecture and engineering handover | [`docs/ARCHITECTURE_AND_HANDOVER.md`](docs/ARCHITECTURE_AND_HANDOVER.md) |

@@ -423,6 +423,8 @@ ncc-orchestrator \
 
 ### 2.11 Notifications (email/webhook/slack)
 
+Step-by-step setup in the dashboard: [`setup/NOTIFICATIONS.md`](setup/NOTIFICATIONS.md).
+
 Enable and configure one or more channels:
 
 ```bash
@@ -502,6 +504,8 @@ Pass `--metrics-public` to the api-server for token-free scraping on a private
 network. The on-disk `.prom` textfiles (`--prom-enabled`) still work unchanged.
 
 ### 2.11c RBAC, login, and SSO (admin / operator / viewer)
+
+Step-by-step setup for LDAP/AD, OpenID Connect and SAML: [`setup/SIGN_IN.md`](setup/SIGN_IN.md).
 
 The api-server enforces three ordered roles `viewer < operator < admin`:
 
