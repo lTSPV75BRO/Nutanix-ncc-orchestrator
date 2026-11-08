@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -21,8 +22,9 @@ const (
 
 type kubernetesCronJob struct {
 	Metadata struct {
-		Name        string            `json:"name"`
-		Annotations map[string]string `json:"annotations"`
+		Name            string            `json:"name"`
+		ResourceVersion string            `json:"resourceVersion"`
+		Annotations     map[string]string `json:"annotations"`
 	} `json:"metadata"`
 	Spec struct {
 		Schedule string `json:"schedule"`
@@ -111,6 +113,8 @@ func (s *apiServer) readKubernetesSchedule() (kubernetesSchedule, error) {
 			WithLock:  true,
 			TaskName:  job.Metadata.Name,
 			UpdatedAt: job.Metadata.Annotations[kubernetesScheduleUpdated],
+
+			ResourceVersion: job.Metadata.ResourceVersion,
 		},
 		Name:               job.Metadata.Name,
 		Suspended:          job.Spec.Suspend,
@@ -255,8 +259,14 @@ func (s *apiServer) updateKubernetesSchedule(st scheduleState) error {
 	default:
 		return badScheduleInput{fmt.Errorf("action %q is not supported for the Kubernetes CronJob; use create or remove (pause)", st.Action)}
 	}
+	metadata := map[string]interface{}{"annotations": annotations}
+	if v := strings.TrimSpace(st.ResourceVersion); v != "" {
+		// A resourceVersion in a merge patch is a precondition: the API
+		// server answers 409 if the CronJob changed since the form loaded it.
+		metadata["resourceVersion"] = v
+	}
 	body, err := json.Marshal(map[string]interface{}{
-		"metadata": map[string]interface{}{"annotations": annotations},
+		"metadata": metadata,
 		"spec":     spec,
 	})
 	if err != nil {
@@ -273,11 +283,17 @@ func (s *apiServer) updateKubernetesSchedule(st scheduleState) error {
 	if code == http.StatusUnprocessableEntity {
 		return badScheduleInput{apiError(code, response)}
 	}
+	if code == http.StatusConflict {
+		return errScheduleConflict
+	}
 	if code != http.StatusOK {
 		return s.cronJobError(code, response)
 	}
 	return nil
 }
+
+// errScheduleConflict: the CronJob changed after the form loaded it.
+var errScheduleConflict = errors.New("the schedule was changed by someone else (or with kubectl/Helm) after you opened it; reload to see the current schedule, then save again")
 
 // badScheduleInput marks errors caused by the request rather than the
 // cluster, so the handler answers 400 instead of 502.
@@ -292,11 +308,14 @@ func (s *apiServer) handleKubernetesScheduleUpdate(w http.ResponseWriter, r *htt
 		"action": st.Action, "cron": st.Cron, "every": st.Every,
 	})
 	if err != nil {
-		status := http.StatusBadGateway
+		status, code := http.StatusBadGateway, ""
 		if _, ok := err.(badScheduleInput); ok {
 			status = http.StatusBadRequest
 		}
-		writeJSON(w, status, envelope{Success: false, Error: err.Error()})
+		if errors.Is(err, errScheduleConflict) {
+			status, code = http.StatusConflict, "NCC_API_SCHEDULE_CONFLICT"
+		}
+		writeJSON(w, status, envelope{Success: false, Error: err.Error(), ErrorCode: code})
 		return
 	}
 	// Answer with what the CronJob now holds, not with what was asked for.

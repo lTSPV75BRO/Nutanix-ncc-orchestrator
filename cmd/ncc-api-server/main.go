@@ -416,6 +416,10 @@ type scheduleState struct {
 	TaskName  string `json:"task_name,omitempty"`
 	PrintOnly bool   `json:"print_only"`
 	UpdatedAt string `json:"updated_at"`
+	// ResourceVersion is the Kubernetes CronJob's resourceVersion when the
+	// schedule was read. Sent back on save, it makes the update conditional so
+	// two admins can't silently overwrite each other's change.
+	ResourceVersion string `json:"resource_version,omitempty"`
 }
 
 type scheduleUpdateRequest struct {
@@ -429,6 +433,8 @@ type scheduleUpdateRequest struct {
 	TaskName  string `json:"task_name,omitempty"`
 	PrintOnly *bool  `json:"print_only,omitempty"`
 	Apply     bool   `json:"apply"`
+	// ResourceVersion (Kubernetes only): the version the form was loaded from.
+	ResourceVersion string `json:"resource_version,omitempty"`
 }
 
 type runTriggerRequest struct {
@@ -2876,6 +2882,8 @@ func (s *apiServer) handleSchedule(w http.ResponseWriter, r *http.Request) {
 			PrintOnly: true,
 			WithLock:  true,
 			UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+
+			ResourceVersion: strings.TrimSpace(req.ResourceVersion),
 		}
 		if req.PrintOnly != nil {
 			st.PrintOnly = *req.PrintOnly

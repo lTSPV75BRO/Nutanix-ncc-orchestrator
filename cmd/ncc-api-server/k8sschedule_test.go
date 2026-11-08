@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"strconv"
 	"testing"
 )
 
@@ -75,7 +76,7 @@ type fakeCronJobAPI struct {
 
 func newFakeCronJobAPI(t *testing.T, name, schedule string) (*fakeCronJobAPI, *httptest.Server) {
 	f := &fakeCronJobAPI{name: name, obj: map[string]interface{}{
-		"metadata": map[string]interface{}{"name": name},
+		"metadata": map[string]interface{}{"name": name, "resourceVersion": "1"},
 		"spec":     map[string]interface{}{"schedule": schedule, "suspend": false},
 		"status":   map[string]interface{}{"lastScheduleTime": "2026-11-03T08:15:00Z", "lastSuccessfulTime": "2026-11-03T08:21:00Z"},
 	}}
@@ -103,7 +104,20 @@ func newFakeCronJobAPI(t *testing.T, name, schedule string) (*fakeCronJobAPI, *h
 				t.Errorf("bad patch: %v", err)
 			}
 			f.patches = append(f.patches, patch)
+			meta := f.obj["metadata"].(map[string]interface{})
+			if pm, _ := patch["metadata"].(map[string]interface{}); pm != nil {
+				if want, ok := pm["resourceVersion"]; ok {
+					if want != meta["resourceVersion"] {
+						w.WriteHeader(http.StatusConflict)
+						_, _ = w.Write([]byte(`{"kind":"Status","reason":"Conflict","message":"the object has been modified"}`))
+						return
+					}
+					delete(pm, "resourceVersion")
+				}
+			}
 			mergePatch(f.obj, patch)
+			n, _ := strconv.Atoi(meta["resourceVersion"].(string))
+			meta["resourceVersion"] = strconv.Itoa(n + 1)
 			if spec, _ := f.obj["spec"].(map[string]interface{}); spec["schedule"] == "" {
 				w.WriteHeader(http.StatusUnprocessableEntity)
 				_, _ = w.Write([]byte(`{"message":"spec.schedule: Required value"}`))
@@ -285,4 +299,42 @@ func TestKubernetesScheduleHealthReportsCronJobStatus(t *testing.T) {
 	if h := health(); h["configured"] != false || h["suspended"] != true {
 		t.Fatalf("suspended health %v", h)
 	}
+}
+
+// Two admins open the schedule; the second save must not silently undo the
+// first. The form sends back the resourceVersion it loaded.
+func TestKubernetesScheduleSaveIsConditional(t *testing.T) {
+	f, srv := newFakeCronJobAPI(t, "ncc-orchestrator", "0 */4 * * *")
+	s := newK8sScheduleServer(srv, "ncc-orchestrator")
+
+	opened := getSchedule(t, s).ResourceVersion
+	if opened == "" {
+		t.Fatal("schedule has no resource_version")
+	}
+	// Admin A saves from the version both opened.
+	code, env := putSchedule(t, s, `{"type":"auto","action":"create","every":"1h","config":"config.yaml","resource_version":"`+opened+`"}`)
+	if code != http.StatusOK {
+		t.Fatalf("first save: %d %+v", code, env)
+	}
+	// Admin B, still on the old version, is refused.
+	code, env = putSchedule(t, s, `{"type":"auto","action":"remove","config":"config.yaml","resource_version":"`+opened+`"}`)
+	if code != http.StatusConflict || env.ErrorCode != "NCC_API_SCHEDULE_CONFLICT" {
+		t.Fatalf("stale save: %d %+v", code, env)
+	}
+	if st := getSchedule(t, s); st.Action != "create" || st.Every != "1h" {
+		t.Fatalf("stale save changed the CronJob: %+v", st)
+	}
+	// After reloading, B's save goes through.
+	fresh := getSchedule(t, s).ResourceVersion
+	if fresh == opened {
+		t.Fatal("resource_version did not change after a save")
+	}
+	if code, env := putSchedule(t, s, `{"type":"auto","action":"remove","config":"config.yaml","resource_version":"`+fresh+`"}`); code != http.StatusOK {
+		t.Fatalf("save after reload: %d %+v", code, env)
+	}
+	// Older clients that send no version still work (last write wins).
+	if code, _ := putSchedule(t, s, `{"type":"auto","action":"create","every":"4h","config":"config.yaml"}`); code != http.StatusOK {
+		t.Fatalf("unconditional save: %d", code)
+	}
+	_ = f
 }

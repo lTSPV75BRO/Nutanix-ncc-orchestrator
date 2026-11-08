@@ -27,7 +27,7 @@ import {
   ReloadOutlined,
   SaveOutlined,
 } from "@ant-design/icons";
-import { api } from "../../api/client";
+import { api, ApiError } from "../../api/client";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { notify } from "../../notify";
 import { formatDateTime, relativeTime } from "../../utils/datetime";
@@ -197,6 +197,8 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
   const [withLock, setWithLock] = useLocalStorageState("settings.schedule.withLock", true);
   const [health, setHealth] = useState<ScheduleHealth | null>(null);
   const [healthLoading, setHealthLoading] = useState(false);
+  /** Kubernetes: CronJob version the form was loaded from (conditional save). */
+  const [resourceVersion, setResourceVersion] = useState<string | undefined>(undefined);
   // Kubernetes only: the CronJob's spec.suspend. Not kept in local storage;
   // the CronJob is the source of truth.
   const [paused, setPaused] = useState(false);
@@ -268,6 +270,7 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
   const baselineFor = (s: ScheduleState) => (isKubernetes || s.updated_at ? savedKey(s) : null);
 
   const applySaved = (s: ScheduleState) => {
+    setResourceVersion(s.resource_version);
     setType(s.type || "auto");
     setCron(s.cron || "");
     setConfig(s.config || backendConfigPath || "config.yaml");
@@ -351,7 +354,7 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
     }
     setSaving(true);
     try {
-      await api.saveSchedule({ ...payload, print_only: false, apply: true });
+      await api.saveSchedule({ ...payload, print_only: false, apply: true, ...(isKubernetes && resourceVersion ? { resource_version: resourceVersion } : {}) });
       if (isKubernetes) {
         applySaved(await api.loadSchedule());
         notify.success(paused ? "Scheduled runs paused." : "Schedule applied to the CronJob.");
@@ -361,7 +364,17 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
       }
       void loadHealth(true);
     } catch (e) {
-      onError(e);
+      if (isKubernetes && e instanceof ApiError && e.status === 409) {
+        // Someone else changed the CronJob since this form loaded: show theirs.
+        notify.warning("Someone else changed the schedule while you were editing. The form now shows the current schedule; make your change again.");
+        try {
+          applySaved(await api.loadSchedule());
+        } catch (reloadErr) {
+          onError(reloadErr);
+        }
+      } else {
+        onError(e);
+      }
     } finally {
       setSaving(false);
     }
