@@ -2,20 +2,7 @@ import { lazy, Suspense, useEffect } from "react";
 import type { ReactNode } from "react";
 import { Navigate, useSearchParams } from "react-router";
 import { Button, Space, Tabs, Tooltip } from "antd";
-import {
-  ApiOutlined,
-  AuditOutlined,
-  BellOutlined,
-  CalendarOutlined,
-  ControlOutlined,
-  FileTextOutlined,
-  CloudSyncOutlined,
-  HeartOutlined,
-  LinkOutlined,
-  ReloadOutlined,
-  SettingOutlined,
-  TeamOutlined,
-} from "@ant-design/icons";
+import { ApiOutlined, AuditOutlined, BellOutlined, CalendarOutlined, CloudSyncOutlined, CodeOutlined, ControlOutlined, FileTextOutlined, FolderOutlined, HeartOutlined, LinkOutlined, ReloadOutlined, SettingOutlined, TeamOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useLocalStorageState } from "../hooks/useLocalStorageState";
@@ -178,7 +165,7 @@ function ConnectionTab({
       </div>
 
       <div className="insights-grid">
-        <Panel title="Server paths" description="Files and folders this server uses. Hover for what each is; copy with the icon.">
+        <Panel title="Server paths" icon={<FolderOutlined />} description="Files and folders this server uses. Hover for what each is; copy with the icon.">
           <KeyValueList
             items={[
               pathItem("Config file", backendConfigPath, "The configuration file in use."),
@@ -189,7 +176,7 @@ function ConnectionTab({
             ]}
           />
         </Panel>
-        <Panel title="Run activity" description="Runs per day over the last 7 days, by outcome.">
+        <Panel title="Run activity" icon={<ThunderboltOutlined />} description="Runs per day over the last 7 days, by outcome.">
           <RunActivityChart />
         </Panel>
       </div>
@@ -221,9 +208,9 @@ function DeveloperTab({ onError }: { onError: (e: unknown) => void }) {
           setSearchParams(next, { replace: true });
         }}
         items={[
-          { key: "api", label: "API explorer", children: lazySection(<ApiExplorerSection onError={onError} />) },
-          { key: "json", label: "Saved reports", children: lazySection(<JsonOutputsSection onError={onError} />) },
-          { key: "raw", label: "Run files", children: lazySection(<RawOutputsSection onError={onError} />) },
+          { key: "api", icon: <ApiOutlined aria-hidden />, label: "API explorer", children: lazySection(<ApiExplorerSection onError={onError} />) },
+          { key: "json", icon: <CodeOutlined aria-hidden />, label: "Saved reports", children: lazySection(<JsonOutputsSection onError={onError} />) },
+          { key: "raw", icon: <FileTextOutlined aria-hidden />, label: "Run files", children: lazySection(<RawOutputsSection onError={onError} />) },
         ]}
       />
   );

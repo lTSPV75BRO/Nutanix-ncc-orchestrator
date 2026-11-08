@@ -993,6 +993,9 @@ a {
 }
 
 .config-section-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ui-space-3);
   margin-bottom: var(--ui-space-1);
 }
 
@@ -2541,6 +2544,131 @@ html[data-theme="it-pro"] {
 }
 
 /* ---- Shared components (src/ui) */
+/* Icon tile beside page, panel and card titles (IconTitle, Panel icon). */
+.ui-title-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ui-accent) 15%, transparent);
+  color: var(--ui-accent);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.ui-title-icon.is-lg {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  font-size: 18px;
+}
+
+.ui-icon-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-space-3);
+  min-width: 0;
+}
+
+.ui-icon-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ui-panel-head-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.ui-topbar-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-space-3);
+}
+
+.ui-topbar-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Tab labels with an icon (Insights, run details, Findings sources). */
+.ant-tabs-tab .ant-tabs-tab-icon {
+  color: inherit;
+}
+
+/* Long lists: scrolls, renders only the rows in view (VirtualList). */
+.ui-virtual-list {
+  max-height: var(--vl-max, 420px);
+}
+
+.ui-virtual-list.is-windowed {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.ui-virtual-list-track {
+  position: relative;
+}
+
+.ui-virtual-list.is-windowed .ui-virtual-list-row {
+  position: absolute;
+  top: var(--vl-top);
+  left: 0;
+  right: 0;
+}
+
+.ui-virtual-list:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: -2px;
+}
+
+.ui-virtual-list-row {
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.ui-virtual-list-row > * {
+  box-sizing: border-box;
+  height: 100%;
+}
+
+.ui-virtual-list-row + .ui-virtual-list-row {
+  border-top: 1px solid var(--ui-border);
+}
+
+.ui-list-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ui-space-2) var(--ui-space-3);
+  padding: var(--ui-space-3) var(--ui-space-5);
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.ui-list-toolbar-search {
+  flex: 1 1 200px;
+  max-width: 320px;
+}
+
+.ui-list-toolbar .ant-segmented {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.ui-list-toolbar-count {
+  margin-left: auto;
+  font-size: var(--ui-text-sm);
+  color: var(--ui-text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .ui-page-header {
   display: flex;
   flex-wrap: wrap;
@@ -2887,8 +3015,7 @@ html[data-theme="it-pro"] {
   gap: var(--ui-space-4);
 }
 
-.overview-severity,
-.overview-clusters {
+.overview-severity {
   list-style: none;
   margin: 0;
   padding: var(--ui-space-2) 0;
@@ -3330,15 +3457,14 @@ label.ui-field-inline {
 }
 
 .insights-findings li,
-.insights-ranking li {
+.insights-ranking-row {
   display: flex;
   flex-direction: column;
   gap: var(--ui-space-1);
   padding: var(--ui-space-3) var(--ui-space-5);
 }
 
-.insights-findings li + li,
-.insights-ranking li + li {
+.insights-findings li + li {
   border-top: 1px solid var(--ui-border);
 }
 
@@ -5042,11 +5168,13 @@ h5.ant-typography {
   color: inherit;
 }
 
-/* Panel titles are text only, like src/ui/Panel; icons in older card titles
-   are hidden rather than styled. */
-.ant-card-head-title .anticon,
-.ant-card-head-title .section-title-icon {
-  display: none;
+/* Icons in card titles: accent colour, sized to the title. Titles built
+   with IconTitle get the tile instead. */
+.ant-card-head-title > .anticon,
+.ant-card-head-title .section-title-icon,
+.ant-card-head-title .ant-space-item > .anticon {
+  color: var(--ui-accent);
+  font-size: 16px;
 }
 
 /* Health & repair → Checks (features/settings/SystemHealthSection.tsx) */
@@ -5096,4 +5224,38 @@ h5.ant-typography {
 .repair-healer-meta {
   display: block;
   font-size: var(--ui-text-xs);
+}
+
+/* TagList: a few tags, the rest in a searchable popover. */
+.ui-tag-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ui-tag-list .ant-tag {
+  margin-inline-end: 0;
+}
+
+.ui-tag-list-more {
+  cursor: pointer;
+  border-style: dashed;
+}
+
+.ui-tag-list-popover {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-2);
+  width: 280px;
+}
+
+.ui-tag-list-row {
+  display: flex;
+  align-items: center;
+  padding: 0 var(--ui-space-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--ui-text-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

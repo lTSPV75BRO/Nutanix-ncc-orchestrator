@@ -1,5 +1,6 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { Card, Skeleton, Space, Tabs } from "antd";
+import { CloudDownloadOutlined, DatabaseOutlined, SwapOutlined } from "@ant-design/icons";
 import { useSearchParams } from "react-router";
 import { MigrationsPanel } from "./MigrationsPanel";
 
@@ -53,9 +54,9 @@ export function UpdatesBackupsPage({ isKubernetes = false }: { isKubernetes?: bo
         setParams(p, { replace: true });
       }}
       items={[
-        { key: "updates", label: "Updates", children: <Lazy><Cards part="updates" isKubernetes={isKubernetes} /></Lazy> },
-        { key: "backups", label: "Backups", children: <Lazy><Cards part="backups" isKubernetes={isKubernetes} /></Lazy> },
-        { key: "migrations", label: "Migrations", children: <MigrationsPanel /> },
+        { key: "updates", icon: <CloudDownloadOutlined aria-hidden />, label: "Updates", children: <Lazy><Cards part="updates" isKubernetes={isKubernetes} /></Lazy> },
+        { key: "backups", icon: <DatabaseOutlined aria-hidden />, label: "Backups", children: <Lazy><Cards part="backups" isKubernetes={isKubernetes} /></Lazy> },
+        { key: "migrations", icon: <SwapOutlined aria-hidden />, label: "Migrations", children: <MigrationsPanel /> },
       ]}
     />
   );

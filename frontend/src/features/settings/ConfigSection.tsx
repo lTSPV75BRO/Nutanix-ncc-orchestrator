@@ -32,6 +32,7 @@ import {
   EyeOutlined,
   FileTextOutlined,
   KeyOutlined,
+  LinkOutlined,
   PlusOutlined,
   ReloadOutlined,
   RocketOutlined,
@@ -50,7 +51,7 @@ import type { ConfigBatchOperation, ConfigListItem, ConfigRelatedFileBatchOperat
 import { PolicyGateBuilderSection } from "./PolicyGateBuilderSection";
 import { SecretsMigrationModal } from "./SecretsMigrationModal";
 import { notify } from "../../notify";
-import { ItemList, SaveBar, middleEllipsis } from "../../ui";
+import { ItemList, SaveBar, TitleIcon, middleEllipsis } from "../../ui";
 import {
   ALL_FIELDS,
   SECTIONS,
@@ -429,8 +430,11 @@ function SectionForm({
   return (
     <Card id={`config-section-${section.id}`} className="page-card config-section-card">
       <div className="config-section-head">
-        <h3 className="ui-panel-title">{section.title}</h3>
-        <p className="ui-panel-desc">{section.description}</p>
+        <TitleIcon size="lg">{SECTION_ICONS[section.icon]}</TitleIcon>
+        <div>
+          <h3 className="ui-panel-title">{section.title}</h3>
+          <p className="ui-panel-desc">{section.description}</p>
+        </div>
       </div>
       {/* One <form> per section so password fields have a form ancestor;
           Enter is swallowed because saving happens from the page toolbar. */}
@@ -1047,13 +1051,18 @@ export function ConfigSection({ onError }: Props) {
       {/* Linked files */}
       <Card className="page-card">
         <Space style={{ width: "100%", justifyContent: "space-between" }} align="start" wrap>
-          <div>
+          <div className="config-section-head">
+            <TitleIcon size="lg">
+              <LinkOutlined />
+            </TitleIcon>
+            <div>
             <Typography.Title level={4} className="section-title">
               Linked files
             </Typography.Title>
             <Typography.Text type="secondary" className="section-subtitle">
               Files this config points to, such as a clusters list or secrets file. Open one to edit it here.
             </Typography.Text>
+            </div>
           </div>
           <Button size="small" icon={<ReloadOutlined />} onClick={() => refreshConfigFiles(activeFile)}>
             Refresh

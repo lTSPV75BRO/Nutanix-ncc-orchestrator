@@ -3,17 +3,7 @@ import { Link, useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, Button, Drawer, Skeleton, Table, Tabs, Tooltip } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import {
-  ArrowDownOutlined,
-  ArrowUpOutlined,
-  BarChartOutlined,
-  CheckCircleOutlined,
-  ExclamationCircleOutlined,
-  InfoCircleOutlined,
-  LinkOutlined,
-  MinusOutlined,
-  WarningOutlined,
-} from "@ant-design/icons";
+import { ApartmentOutlined, ArrowDownOutlined, ArrowUpOutlined, BarChartOutlined, BulbOutlined, CheckCircleOutlined, ClusterOutlined, DashboardOutlined, ExclamationCircleOutlined, FireOutlined, FlagOutlined, InfoCircleOutlined, LineChartOutlined, LinkOutlined, MinusOutlined, OrderedListOutlined, PieChartOutlined, ProfileOutlined, ReadOutlined, SafetyCertificateOutlined, SwapOutlined, WarningOutlined } from "@ant-design/icons";
 import {
   asArray,
   asRecord,
@@ -32,7 +22,7 @@ import { LifecycleInsightsCard } from "../features/report/LifecycleInsightsCard"
 import { SloPanel } from "../features/report/SloPanel";
 import { sectionHref } from "../navigation";
 import { notifyError } from "../notify";
-import { EmptyState, KeyValueList, Panel, StatTile, StatusBadge, toneFor, type Tone } from "../ui";
+import { EmptyState, KeyValueList, ListToolbar, matchesSearch, Panel, StatTile, StatusBadge, toneFor, VirtualList, type Tone } from "../ui";
 import { formatDateTime, relativeTime } from "../utils/datetime";
 import { formatDuration, freshness } from "../utils/freshness";
 import { nutanixKbUrl, safeExternalUrl } from "../utils/url";
@@ -143,6 +133,54 @@ const BRIEF_ICON: Record<Tone, React.ReactNode> = {
  * Insights: what the latest run says, per cluster, over time, and how
  * findings are being handled — one tab each (kept in the URL as ?tab=).
  */
+type RankedCluster = { address: string; name: string; health: number; fail: number; err: number; warn: number; info: number };
+
+/** Worst-first cluster health, searchable, rendering only the rows in view. */
+function ClusterRanking({ ranking, needsByName }: { ranking: RankedCluster[]; needsByName: Map<string, number> }) {
+  const [search, setSearch] = useState("");
+  const shown = useMemo(() => ranking.filter((c) => matchesSearch(search, c.name, c.address)), [ranking, search]);
+  return (
+    <>
+      {ranking.length > 8 ? <ListToolbar search={search} onSearch={setSearch} shown={shown.length} total={ranking.length} /> : null}
+      {shown.length === 0 ? (
+        <EmptyState title="No matching clusters" />
+      ) : (
+        <VirtualList
+          className="insights-ranking"
+          aria-label="Cluster health"
+          items={shown}
+          rowHeight={78}
+          maxHeight={546}
+          itemKey={(c) => c.address}
+          renderRow={(c) => {
+            const needs = needsByName.get(c.name) ?? 0;
+            const t = scoreTone(c.health) ?? "neutral";
+            return (
+              <div className="insights-ranking-row">
+                <div className="insights-ranking-head">
+                  <strong>{c.name}</strong>
+                  <span className={`insights-score tone-${t}`}>
+                    {c.health.toFixed(1)}% · {healthGrade(c.health)}
+                  </span>
+                </div>
+                <span className="overview-bar" aria-hidden="true">
+                  <span className={`overview-bar-fill tone-${t}`} style={{ width: `${Math.max(1, c.health)}%` }} />
+                </span>
+                <span className="ui-field-help">
+                  {[c.fail && `${c.fail} fail`, c.err && `${c.err} error`, c.warn && `${c.warn} warn`, c.info && `${c.info} info`]
+                    .filter(Boolean)
+                    .join(" · ") || "No findings"}
+                  {needs > 0 ? ` · ${needs} not yet handled` : ""}
+                </span>
+              </div>
+            );
+          }}
+        />
+      )}
+    </>
+  );
+}
+
 export function InsightsPage() {
   const features = useFeatureFlags();
   const insightsOff = features.data?.insights === false;
@@ -591,7 +629,7 @@ export function InsightsPage() {
 
   const summaryTab = (
     <div className="insights-tab">
-      <Panel title="What this run is saying" description="Highlights from this run and the one before it.">
+      <Panel title="What this run is saying" icon={<BulbOutlined />} description="Highlights from this run and the one before it.">
         <ul className="insights-brief">
           {briefing.map((item) => (
             <li key={item.text} className={`tone-${item.tone}`}>
@@ -605,7 +643,7 @@ export function InsightsPage() {
       </Panel>
 
       <Panel
-        title="Results"
+        title="Results" icon={<PieChartOutlined />}
         description={totalPlugins > 0 ? `${totalPlugins.toLocaleString()} checks in this run.` : "No check totals for this run."}
       >
         {totalPlugins > 0 ? (
@@ -641,7 +679,7 @@ export function InsightsPage() {
       </Panel>
 
       <div className="insights-grid">
-        <Panel title="Top failing checks" description="Most frequent problems. Select one for its clusters and output." flush>
+        <Panel title="Top failing checks" icon={<FireOutlined />} description="Most frequent problems. Select one for its clusters and output." flush>
           <Table
             size="middle"
             rowKey={(r) => `${r.name}|${r.severity}`}
@@ -653,7 +691,7 @@ export function InsightsPage() {
             locale={{ emptyText: <EmptyState title="No failures, errors or warnings" /> }}
           />
         </Panel>
-        <Panel title="Review first" description="The critical findings most worth a look." flush>
+        <Panel title="Review first" icon={<FlagOutlined />} description="The critical findings most worth a look." flush>
           {actionableFindings.length === 0 ? (
             <EmptyState title="No critical findings in this run" />
           ) : (
@@ -683,7 +721,7 @@ export function InsightsPage() {
       </div>
 
       {Object.keys(meta).length > 0 ? (
-        <Panel title="About this report">
+        <Panel title="About this report" icon={<InfoCircleOutlined />}>
           <KeyValueList
             items={[
               { label: "Orchestrator version", value: String(meta.version || "—") },
@@ -698,41 +736,19 @@ export function InsightsPage() {
     </div>
   );
 
+  const needsByName = new Map(triage.clusters.map((c) => [c.name, c.needs]));
+
   const clustersTab = (
     <div className="insights-tab">
       <div className="insights-grid">
-        <Panel title="Cluster health" description="Worst first, by weighted health." flush>
+        <Panel title="Cluster health" icon={<DashboardOutlined />} description="Worst first, by weighted health." flush>
           {clusterRanking.length === 0 ? (
             <EmptyState title="No per-cluster results" />
           ) : (
-            <ul className="insights-ranking">
-              {clusterRanking.map((c) => {
-                const open = triage.clusters.find((item) => item.name === c.name);
-                const t = scoreTone(c.health) ?? "neutral";
-                return (
-                  <li key={c.address}>
-                    <div className="insights-ranking-head">
-                      <strong>{c.name}</strong>
-                      <span className={`insights-score tone-${t}`}>
-                        {c.health.toFixed(1)}% · {healthGrade(c.health)}
-                      </span>
-                    </div>
-                    <span className="overview-bar" aria-hidden="true">
-                      <span className={`overview-bar-fill tone-${t}`} style={{ width: `${Math.max(1, c.health)}%` }} />
-                    </span>
-                    <span className="ui-field-help">
-                      {[c.fail && `${c.fail} fail`, c.err && `${c.err} error`, c.warn && `${c.warn} warn`, c.info && `${c.info} info`]
-                        .filter(Boolean)
-                        .join(" · ") || "No findings"}
-                      {open && open.needs > 0 ? ` · ${open.needs} not yet handled` : ""}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
+            <ClusterRanking ranking={clusterRanking} needsByName={needsByName} />
           )}
         </Panel>
-        <Panel title="Run reliability" description="Clusters that could not be checked, and versions seen.">
+        <Panel title="Run reliability" icon={<SafetyCertificateOutlined />} description="Clusters that could not be checked, and versions seen.">
           {failureClassEntries.length === 0 ? (
             <p className="insights-ok">
               <CheckCircleOutlined /> Every cluster completed this run.
@@ -767,7 +783,7 @@ export function InsightsPage() {
   const trendsTab = (
     <div className="insights-tab">
       <Panel
-        title="Failures over recent runs"
+        title="Failures over recent runs" icon={<LineChartOutlined />}
         description={
           recentTrends.length
             ? `Failing and error checks in the last ${recentTrends.length} runs.${
@@ -805,7 +821,7 @@ export function InsightsPage() {
         )}
       </Panel>
 
-      <Panel title="Compared with the previous run" description={previousTs ? `Previous run ${relativeTime(previousTs)}.` : "No earlier run to compare."}>
+      <Panel title="Compared with the previous run" icon={<SwapOutlined />} description={previousTs ? `Previous run ${relativeTime(previousTs)}.` : "No earlier run to compare."}>
         {previousTs ? (
           <div className="overview-stats">
             <StatTile label="Failing before" value={toNumber(regression.previous_fail_total)} />
@@ -836,7 +852,7 @@ export function InsightsPage() {
 
   const triageTab = (
     <div className="insights-tab">
-      <Panel title="Triage queue" description="Critical alerts and how they have been handled. Resolved alerts come back here if a later run finds them again.">
+      <Panel title="Triage queue" icon={<OrderedListOutlined />} description="Critical alerts and how they have been handled. Resolved alerts come back here if a later run finds them again.">
         <div className="overview-stats">
           <StatTile label="Need attention" value={triage.needsAttention} tone={triage.needsAttention > 0 ? "fail" : "ok"} />
           <StatTile label="Acknowledged, still open" value={triage.acknowledged} />
@@ -872,7 +888,7 @@ export function InsightsPage() {
       <LifecycleInsightsCard enabled={features.isFetched && !insightsOff} />
 
       {sharedChecks.length > 0 ? (
-        <Panel title="Same check, several clusters" description="The same critical check failing on more than one cluster." flush>
+        <Panel title="Same check, several clusters" icon={<ApartmentOutlined />} description="The same critical check failing on more than one cluster." flush>
           <Table
             size="middle"
             pagination={false}
@@ -891,7 +907,7 @@ export function InsightsPage() {
         </Panel>
       ) : null}
 
-      <Panel title="Knowledge base articles" description="Articles referenced by failing checks.">
+      <Panel title="Knowledge base articles" icon={<ReadOutlined />} description="Articles referenced by failing checks.">
         {kbIndex.length === 0 ? (
           <EmptyState title="No articles referenced in this run" />
         ) : (
@@ -960,10 +976,10 @@ export function InsightsPage() {
           setSearchParams(next, { replace: true });
         }}
         items={[
-          { key: "summary", label: "Summary", children: summaryTab },
-          { key: "clusters", label: "Clusters", children: clustersTab },
-          { key: "trends", label: "Trends", children: trendsTab },
-          { key: "triage", label: `Triage${triage.needsAttention ? ` (${triage.needsAttention})` : ""}`, children: triageTab },
+          { key: "summary", icon: <ProfileOutlined aria-hidden />, label: "Summary", children: summaryTab },
+          { key: "clusters", icon: <ClusterOutlined aria-hidden />, label: "Clusters", children: clustersTab },
+          { key: "trends", icon: <LineChartOutlined aria-hidden />, label: "Trends", children: trendsTab },
+          { key: "triage", icon: <OrderedListOutlined aria-hidden />, label: `Triage${triage.needsAttention ? ` (${triage.needsAttention})` : ""}`, children: triageTab },
         ]}
       />
 

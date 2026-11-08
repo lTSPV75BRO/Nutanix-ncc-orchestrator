@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Button, Segmented, Table } from "antd";
-import { DownloadOutlined, FileTextOutlined, ReloadOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { DownloadOutlined, FileTextOutlined, FolderOpenOutlined, HistoryOutlined, ReloadOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { api } from "../api/client";
 import type { ArtifactInfo, RunInfo } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
@@ -83,7 +83,7 @@ export function RunsPage() {
       <ActiveRuns />
 
       <Panel
-        title="History"
+        title="History" icon={<HistoryOutlined />}
         description={runs.data ? `${all.length} run${all.length === 1 ? "" : "s"}` : undefined}
         flush
         extra={
@@ -126,7 +126,7 @@ export function RunsPage() {
       </Panel>
 
       {!clusterRestricted && (artifacts.data?.length ?? 0) > 0 ? (
-        <Panel title="Files from the latest run" description="Reports and exports written by the most recent run." flush>
+        <Panel title="Files from the latest run" icon={<FolderOpenOutlined />} description="Reports and exports written by the most recent run." flush>
           <Table<ArtifactInfo>
             size="middle"
             rowKey="name"

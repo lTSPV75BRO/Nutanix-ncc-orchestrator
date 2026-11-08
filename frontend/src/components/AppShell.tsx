@@ -3,7 +3,8 @@ import { Button, Drawer, Grid, Menu, type MenuProps } from "antd";
 import { MenuFoldOutlined, MenuOutlined, MenuUnfoldOutlined } from "@ant-design/icons";
 import { Link, useLocation, useNavigate } from "react-router";
 import { useLocalStorageState } from "../hooks/useLocalStorageState";
-import { OVERVIEW_PATH, PAGES, SECTIONS, canOpenSection, pageTitle, type Viewer } from "../navigation";
+import { OVERVIEW_PATH, PAGES, SECTIONS, canOpenSection, pageIcon, pageTitle, type Viewer } from "../navigation";
+import { TitleIcon } from "../ui";
 import { PageErrorBoundary } from "./PageErrorBoundary";
 
 type MenuItem = Required<MenuProps>["items"][number];
@@ -94,6 +95,7 @@ export function AppShell({
     />
   );
   const title = pageTitle(location.pathname);
+  const icon = pageIcon(location.pathname);
 
   return (
     <div className="ui-shell">
@@ -142,7 +144,10 @@ export function AppShell({
             aria-label="Open navigation"
             onClick={() => setDrawerOpen(true)}
           />
-          <h1 className="ui-topbar-title">{title}</h1>
+          <h1 className="ui-topbar-title">
+            {icon && title ? <TitleIcon>{icon}</TitleIcon> : null}
+            <span className="ui-topbar-title-text">{title}</span>
+          </h1>
           <div className="ui-topbar-actions">{actions}</div>
         </header>
         <main className="ui-content" id="main-content" tabIndex={-1}>

@@ -18,23 +18,14 @@ import {
   Tooltip,
   Typography,
 } from "antd";
-import {
-  ApiOutlined,
-  CheckCircleFilled,
-  CloseCircleFilled,
-  DeleteOutlined,
-  MailOutlined,
-  PlusOutlined,
-  SendOutlined,
-  SlackOutlined,
-} from "@ant-design/icons";
+import { ApiOutlined, BellOutlined, CheckCircleFilled, ClockCircleOutlined, CloseCircleFilled, DeleteOutlined, FilterOutlined, MailOutlined, PlusOutlined, SendOutlined, SlackOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs, { type Dayjs } from "dayjs";
 import { api } from "../../api/client";
 import type { NotificationState } from "../../api/types";
 import { notify, notifyError } from "../../notify";
 import { formatDateTime, relativeTime } from "../../utils/datetime";
-import { SaveBar, StatusBadge } from "../../ui";
+import { IconTitle, SaveBar, StatusBadge } from "../../ui";
 import {
   alertSummary,
   channelErrors,
@@ -181,7 +172,7 @@ export function NotificationsSection() {
     );
   };
 
-  if (query.isLoading) return <Card className="page-card" loading title="Notifications" />;
+  if (query.isLoading) return <Card className="page-card" loading title={<IconTitle icon={<BellOutlined />}>Notifications</IconTitle>} />;
   if (query.isError) {
     return <Alert type="error" showIcon title="Couldn't load notification settings" description={String(query.error)} />;
   }
@@ -295,7 +286,7 @@ export function NotificationsSection() {
         />
       ) : null}
 
-      <Card className="page-card" title="Where to send">
+      <Card className="page-card" title={<IconTitle icon={<SendOutlined />}>Where to send</IconTitle>}>
         <div className="notif-channels">
           {channelCard("email", "Email", <MailOutlined />, "Through your SMTP server", (e) => (
             <div className="notif-grid">
@@ -358,7 +349,7 @@ export function NotificationsSection() {
         </div>
       </Card>
 
-      <Card className="page-card" title="What to send">
+      <Card className="page-card" title={<IconTitle icon={<FilterOutlined />}>What to send</IconTitle>}>
         <div className="notif-groups">
           <div className="notif-group">
             <Typography.Title level={5} className="notif-group-title">Alerts</Typography.Title>
@@ -442,7 +433,7 @@ export function NotificationsSection() {
         </div>
       </Card>
 
-      <Card className="page-card" title="Quiet times">
+      <Card className="page-card" title={<IconTitle icon={<ClockCircleOutlined />}>Quiet times</IconTitle>}>
         <div className="notif-groups">
           <div className="notif-group">
             <Typography.Title level={5} className="notif-group-title">Quiet hours</Typography.Title>

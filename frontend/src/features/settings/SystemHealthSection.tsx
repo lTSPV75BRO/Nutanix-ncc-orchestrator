@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useRunsActive } from "../../hooks/useRunsActive";
 import { Alert, App as AntApp, Button, Dropdown, Input, Popconfirm, Segmented, Space, Tag, Tooltip, Typography } from "antd";
 import type { MenuProps } from "antd";
-import { DownOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+import { CheckCircleOutlined, DownOutlined, ReloadOutlined, SearchOutlined, UnorderedListOutlined } from "@ant-design/icons";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router";
 import { sectionHref } from "../../navigation";
@@ -363,7 +363,7 @@ export function SystemHealthSection() {
         />
       ) : null}
 
-      <Panel title="Readiness" description="What this installation needs before it can be relied on." flush>
+      <Panel title="Readiness" icon={<CheckCircleOutlined />} description="What this installation needs before it can be relied on." flush>
         <ItemList
           items={readinessChecks}
           itemKey={(c) => c.key}
@@ -388,7 +388,7 @@ export function SystemHealthSection() {
       </Panel>
 
       <Panel
-        title="Checks"
+        title="Checks" icon={<UnorderedListOutlined />}
         description={
           isKubernetes
             ? "Configuration, shared storage, secrets, backups, runs, sign-in and HTTPS. Kubernetes manages the processes."

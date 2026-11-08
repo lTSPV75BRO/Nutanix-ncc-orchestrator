@@ -9,6 +9,7 @@ import {
   ReloadOutlined,
   SearchOutlined,
 } from "@ant-design/icons";
+import { TitleIcon } from "../../ui";
 import { api } from "../../api/client";
 import type { ArtifactInfo } from "../../api/types";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
@@ -117,7 +118,7 @@ export function RawOutputsSection({ onError }: Props) {
       className="page-card"
       title={
         <Space size={10} align="center">
-          <FileTextOutlined className="section-header-icon" />
+          <TitleIcon><FileTextOutlined /></TitleIcon>
           <Typography.Text strong>Run files</Typography.Text>
           <Tag color="default">{artifacts.length} files</Tag>
           <Tag color="default">{formatBytes(totalSize)}</Tag>

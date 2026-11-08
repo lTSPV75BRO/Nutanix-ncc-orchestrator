@@ -15,6 +15,7 @@ import {
   Typography,
 } from "antd";
 import { CopyOutlined, DeleteOutlined, KeyOutlined, PlusOutlined } from "@ant-design/icons";
+import { IconTitle } from "../../ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import type { CreatedToken, PersonalToken } from "../../api/types";
@@ -137,12 +138,7 @@ export function PersonalTokensModal({
   return (
     <>
       <Modal
-        title={
-          <Space>
-            <KeyOutlined />
-            Personal access tokens
-          </Space>
-        }
+        title={<IconTitle icon={<KeyOutlined />}>Personal access tokens</IconTitle>}
         open={open}
         onCancel={() => {
           setCreated(null);

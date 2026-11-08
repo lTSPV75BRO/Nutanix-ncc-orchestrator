@@ -1,5 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Alert, Button, Card, Skeleton, Space, Tag, Typography } from "antd";
+import { NodeIndexOutlined } from "@ant-design/icons";
+import { IconTitle } from "../../ui";
 import { api } from "../../api/client";
 import { formatDateTime, relativeTime } from "../../utils/datetime";
 import { formatSpan, NCC_ALERTS_QUERY_KEY, severityChanges, summarizeFinding } from "../../utils/alertLifecycle";
@@ -39,14 +41,14 @@ export function NCCLifecyclePanel({
 
   if (instances.isLoading) {
     return (
-      <Card size="small" title="Lifecycle">
+      <Card size="small" title={<IconTitle icon={<NodeIndexOutlined />}>Lifecycle</IconTitle>}>
         <Skeleton active paragraph={{ rows: 2 }} title={false} />
       </Card>
     );
   }
   if (instances.isError) {
     return (
-      <Card size="small" title="Lifecycle">
+      <Card size="small" title={<IconTitle icon={<NodeIndexOutlined />}>Lifecycle</IconTitle>}>
         <Typography.Text type="secondary">Lifecycle history is not available from this server.</Typography.Text>
       </Card>
     );
@@ -54,7 +56,7 @@ export function NCCLifecyclePanel({
   const active = summary.active;
   if (!active) {
     return (
-      <Card size="small" title="Lifecycle">
+      <Card size="small" title={<IconTitle icon={<NodeIndexOutlined />}>Lifecycle</IconTitle>}>
         <Typography.Text type="secondary">No lifecycle history yet. It is recorded within a minute of a run finishing.</Typography.Text>
       </Card>
     );
@@ -63,7 +65,7 @@ export function NCCLifecyclePanel({
   const stateLabel = active.state === "acknowledged" ? "acknowledged" : active.state === "resolved" ? "resolved" : "open";
 
   return (
-    <Card size="small" title="Lifecycle" className="ncc-lifecycle-card">
+    <Card size="small" title={<IconTitle icon={<NodeIndexOutlined />}>Lifecycle</IconTitle>} className="ncc-lifecycle-card">
       {summary.looksFixed ? (
         <Alert
           type="info"

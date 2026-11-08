@@ -11,7 +11,7 @@ import {
 import { api } from "../../api/client";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { CodeEditor } from "../../components/CodeEditor";
-import { middleEllipsis } from "../../ui";
+import { middleEllipsis, TitleIcon } from "../../ui";
 
 type Props = {
   onError: (e: unknown) => void;
@@ -119,7 +119,7 @@ export function LogsSection({ onError }: Props) {
       className="page-card"
       title={
         <Space size={10} align="center">
-          <FileTextOutlined className="section-header-icon" />
+          <TitleIcon><FileTextOutlined /></TitleIcon>
           <div style={{ display: "inline-flex", flexDirection: "column", lineHeight: 1.15 }}>
             <Typography.Text strong>Runner log</Typography.Text>
             <Typography.Text

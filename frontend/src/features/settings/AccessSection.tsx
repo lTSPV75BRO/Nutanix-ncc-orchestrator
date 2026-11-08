@@ -20,23 +20,7 @@ import {
   Upload,
 } from "antd";
 import { useSearchParams } from "react-router";
-import {
-  ApartmentOutlined,
-  ClockCircleOutlined,
-  CloudDownloadOutlined,
-  DatabaseOutlined,
-  DeleteOutlined,
-  DownloadOutlined,
-  KeyOutlined,
-  LogoutOutlined,
-  LockOutlined,
-  PlusOutlined,
-  ReloadOutlined,
-  RollbackOutlined,
-  SafetyCertificateOutlined,
-  SearchOutlined,
-  UploadOutlined,
-} from "@ant-design/icons";
+import { ApartmentOutlined, ClockCircleOutlined, CloudDownloadOutlined, ClusterOutlined, DatabaseOutlined, DeleteOutlined, DownloadOutlined, GlobalOutlined, KeyOutlined, LockOutlined, LoginOutlined, LogoutOutlined, PlusOutlined, ReloadOutlined, RollbackOutlined, SafetyCertificateOutlined, SafetyOutlined, SearchOutlined, TeamOutlined, UnlockOutlined, UploadOutlined, UserOutlined } from "@ant-design/icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { UPGRADE_QUERY_KEY, UpgradeProgress, upgradeActive } from "../updates/UpgradeProgress";
 import { api } from "../../api/client";
@@ -60,7 +44,7 @@ import type {
 } from "../../api/types";
 import { notify, notifyError } from "../../notify";
 import { formatDateTime } from "../../utils/datetime";
-import { KeyValueList, StatusBadge } from "../../ui";
+import { IconTitle, KeyValueList, StatusBadge, TagList } from "../../ui";
 
 const ROLE_OPTIONS = [
   { value: "admin", label: "admin — full access" },
@@ -185,7 +169,7 @@ function UsersCard() {
     <Card
       className="page-card"
       id="settings-users"
-      title="Local accounts"
+      title={<IconTitle icon={<UserOutlined />}>Local accounts</IconTitle>}
       extra={
         <Space>
           <Button icon={<ReloadOutlined />} onClick={() => refresh()} loading={usersQuery.isFetching}>
@@ -407,7 +391,7 @@ function PasswordResetRequestsCard() {
   return (
     <Card
       className="page-card"
-      title="Password reset requests"
+      title={<IconTitle icon={<UnlockOutlined />}>Password reset requests</IconTitle>}
       extra={
         <Space>
           <Tag color={requests.length > 0 ? "orange" : "default"}>{requests.length} pending</Tag>
@@ -634,7 +618,7 @@ function SSOCard({ embedded }: { embedded?: boolean }) {
   return (
     <Card
       className="page-card"
-      title="Single sign-on (SAML)"
+      title={<IconTitle icon={<SafetyOutlined />}>Single sign-on (SAML)</IconTitle>}
       extra={
         <Tag color={cfg?.enabled ? "green" : "default"}>{cfg?.enabled ? "enabled" : "disabled"}</Tag>
       }
@@ -676,11 +660,7 @@ function SessionCard() {
   return (
     <Card
       className="page-card"
-      title={
-        <Space>
-          <ClockCircleOutlined /> Session lifetime
-        </Space>
-      }
+      title={<IconTitle icon={<ClockCircleOutlined />}>Session lifetime</IconTitle>}
       extra={<Tag color={cfg?.source === "runtime" ? "blue" : "default"}>{cfg?.source === "runtime" ? "custom" : "server default"}</Tag>}
       loading={policyQuery.isLoading}
     >
@@ -1096,11 +1076,7 @@ export function BackupRestoreCard() {
     <Card
       className="page-card"
       id="settings-backup"
-      title={
-        <Space>
-          <DatabaseOutlined /> Backup &amp; restore
-        </Space>
-      }
+      title={<IconTitle icon={<DatabaseOutlined />}>Backup &amp; restore</IconTitle>}
       extra={
         <Space>
           {rollback ? (
@@ -1460,12 +1436,7 @@ export function ScheduledBackupCard() {
   return (
     <Card
       className="page-card"
-      title={
-        <Space>
-          <ClockCircleOutlined />
-          Scheduled backups
-        </Space>
-      }
+      title={<IconTitle icon={<ClockCircleOutlined />}>Scheduled backups</IconTitle>}
     >
       <Typography.Paragraph type="secondary" style={{ marginTop: -4 }}>
         Automatically take server-side snapshots on a fixed cadence. Backups run in-process, so
@@ -1817,7 +1788,7 @@ function LDAPCard({ embedded }: { embedded?: boolean }) {
   return (
     <Card
       className="page-card"
-      title="LDAP / Active Directory"
+      title={<IconTitle icon={<TeamOutlined />}>LDAP / Active Directory</IconTitle>}
       extra={<Tag color={cfg?.enabled ? "green" : "default"}>{cfg?.enabled ? "enabled" : "disabled"}</Tag>}
       loading={ldapQuery.isLoading}
     >
@@ -2015,7 +1986,7 @@ function OIDCCard({ embedded = false }: { embedded?: boolean }) {
   return (
     <Card
       className="page-card"
-      title="OpenID Connect"
+      title={<IconTitle icon={<LoginOutlined />}>OpenID Connect</IconTitle>}
       extra={<Tag color={cfg?.enabled ? "green" : "default"}>{cfg?.enabled ? "enabled" : "disabled"}</Tag>}
       loading={oidcQuery.isLoading}
     >
@@ -2034,7 +2005,7 @@ function ExternalAuthCard() {
   const [provider, setProvider] = useState<"oidc" | "saml" | "ldap">("oidc");
 
   return (
-    <Card className="page-card" id="settings-ldap" title="External authentication">
+    <Card className="page-card" id="settings-ldap" title={<IconTitle icon={<GlobalOutlined />}>External authentication</IconTitle>}>
       <Space orientation="vertical" size={16} style={{ width: "100%" }}>
         <div>
           <Space align="center" wrap>
@@ -2212,11 +2183,7 @@ function PrismCentralField({ value, onChange }: PrismCentralFieldProps) {
               title={`${pc}: ${results[pc].count} cluster(s)`}
               description={
                 results[pc].clusters && results[pc].clusters!.length > 0 ? (
-                  <Space size={[4, 4]} wrap>
-                    {results[pc].clusters!.map((c) => (
-                      <Tag key={c}>{c}</Tag>
-                    ))}
-                  </Space>
+                  <TagList items={results[pc].clusters!} max={12} noun="clusters" />
                 ) : undefined
               }
             />
@@ -2317,11 +2284,7 @@ function ClusterGroupsCard() {
         return (
           <Space orientation="vertical" size={2}>
             {clusters.length > 0 && (
-              <Space size={[4, 4]} wrap>
-                {clusters.map((x) => (
-                  <Tag key={x}>{x}</Tag>
-                ))}
-              </Space>
+              <TagList items={clusters} noun="clusters" />
             )}
             {pcs.length > 0 && (
               <span>
@@ -2399,7 +2362,7 @@ function ClusterGroupsCard() {
   return (
     <Card
       className="page-card"
-      title="Cluster groups"
+      title={<IconTitle icon={<ClusterOutlined />}>Cluster groups</IconTitle>}
       extra={
         <Space>
           <Button icon={<ReloadOutlined />} onClick={() => refresh()} loading={groupsQuery.isFetching}>
@@ -2458,6 +2421,7 @@ function ClusterGroupsCard() {
               showSearch
               optionFilterProp="label"
               placeholder="Select or type cluster names"
+              maxTagCount="responsive"
               options={inventory.map((c) => ({ value: c, label: c }))}
             />
           </Form.Item>
@@ -2529,12 +2493,7 @@ function TokensCard() {
   return (
     <Card
       className="page-card"
-      title={
-        <Space>
-          <KeyOutlined />
-          Personal access tokens
-        </Space>
-      }
+      title={<IconTitle icon={<KeyOutlined />}>Personal access tokens</IconTitle>}
       extra={
         <Space>
           <Tag color={tokens.length > 0 ? "blue" : "default"}>{tokens.length} active</Tag>
@@ -2713,11 +2672,7 @@ function TLSCard({ isKubernetes = false }: { isKubernetes?: boolean }) {
     <Card
       className="page-card"
       id="settings-tls"
-      title={
-        <Space>
-          <SafetyCertificateOutlined /> HTTPS / TLS
-        </Space>
-      }
+      title={<IconTitle icon={<SafetyCertificateOutlined />}>HTTPS / TLS</IconTitle>}
       extra={
         <Tag color={servingHTTPS || ingressManaged ? "green" : "default"}>
           {servingHTTPS || ingressManaged ? "HTTPS enabled" : "HTTP only"}
@@ -3094,7 +3049,7 @@ export function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }
   return (
     <Card
       className="page-card"
-      title="Software updates"
+      title={<IconTitle icon={<CloudDownloadOutlined />}>Software updates</IconTitle>}
       extra={
         <Button
           icon={<ReloadOutlined />}
@@ -3262,11 +3217,11 @@ export function AccessSection({ isKubernetes = false }: { isKubernetes?: boolean
         setParams(next, { replace: true });
       }}
       items={[
-        { key: "users", label: "Users & roles", children: stack(<UsersCard key="u" />, <PasswordResetRequestsCard key="p" />) },
-        { key: "signin", label: "Sign-in", children: stack(<ExternalAuthCard key="e" />, <SessionCard key="s" />) },
-        { key: "groups", label: "Cluster groups", children: <ClusterGroupsCard /> },
-        { key: "tokens", label: "API tokens", children: <TokensCard /> },
-        { key: "https", label: "HTTPS", children: <TLSCard isKubernetes={isKubernetes} /> },
+        { key: "users", icon: <UserOutlined aria-hidden />, label: "Users & roles", children: stack(<UsersCard key="u" />, <PasswordResetRequestsCard key="p" />) },
+        { key: "signin", icon: <LoginOutlined aria-hidden />, label: "Sign-in", children: stack(<ExternalAuthCard key="e" />, <SessionCard key="s" />) },
+        { key: "groups", icon: <ClusterOutlined aria-hidden />, label: "Cluster groups", children: <ClusterGroupsCard /> },
+        { key: "tokens", icon: <KeyOutlined aria-hidden />, label: "API tokens", children: <TokensCard /> },
+        { key: "https", icon: <SafetyCertificateOutlined aria-hidden />, label: "HTTPS", children: <TLSCard isKubernetes={isKubernetes} /> },
       ]}
     />
   );

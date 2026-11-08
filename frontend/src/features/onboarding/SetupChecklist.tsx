@@ -9,6 +9,7 @@ import {
   RocketOutlined,
   UndoOutlined,
 } from "@ant-design/icons";
+import { TitleIcon } from "../../ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
@@ -184,7 +185,9 @@ export function SetupChecklistCard() {
       className="page-card setup-card"
       title={
         <Space size={10}>
-          <RocketOutlined />
+          <TitleIcon>
+            <RocketOutlined />
+          </TitleIcon>
           <span>Finish setting up NCC Orchestrator</span>
         </Space>
       }

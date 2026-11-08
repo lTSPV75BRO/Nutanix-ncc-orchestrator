@@ -8,6 +8,7 @@ import {
   ReloadOutlined,
   SearchOutlined,
 } from "@ant-design/icons";
+import { TitleIcon } from "../../ui";
 import { api } from "../../api/client";
 import type { ReportData } from "../../api/types";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
@@ -117,7 +118,7 @@ export function JsonOutputsSection({ onError }: Props) {
       className="page-card"
       title={
         <Space size={10} align="center">
-          <CodeOutlined className="section-header-icon" />
+          <TitleIcon><CodeOutlined /></TitleIcon>
           <Typography.Text strong>Saved reports</Typography.Text>
         </Space>
       }

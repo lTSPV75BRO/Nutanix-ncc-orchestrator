@@ -1,15 +1,15 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, Button, Skeleton, Tooltip } from "antd";
-import { ArrowRightOutlined, ClusterOutlined, ReloadOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { ArrowRightOutlined, ClusterOutlined, HistoryOutlined, PieChartOutlined, ReloadOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { SetupBanner } from "../features/onboarding/SetupChecklist";
 import { RunsTable } from "../features/runs/RunsTable";
 import { useRunsActive } from "../hooks/useRunsActive";
 import { sectionHref } from "../navigation";
-import { EmptyState, Panel, StatTile, StatusBadge, type Tone } from "../ui";
+import { EmptyState, ListToolbar, matchesSearch, Panel, StatTile, StatusBadge, VirtualList, type Tone } from "../ui";
 import { formatDateTime, relativeTime } from "../utils/datetime";
 import { formatDuration, freshness } from "../utils/freshness";
 import { asArray, asRecord, buildClusterNameMap, resolveClusterName, toNumber, weightedHealthScore } from "../utils/report";
@@ -41,6 +41,76 @@ function clusterCounts(c: ClusterRow): string {
     c.warn ? `${c.warn} warn` : "",
   ].filter(Boolean);
   return parts.length ? parts.join(" · ") : "No findings";
+}
+
+type ClusterFilter = "all" | "fail" | "warn" | "down" | "ok";
+
+function clusterBucket(c: ClusterRow): Exclude<ClusterFilter, "all"> {
+  if (!c.ok) return "down";
+  if (c.fail > 0 || c.err > 0) return "fail";
+  if (c.warn > 0) return "warn";
+  return "ok";
+}
+
+/** Searchable, scrolling cluster list; renders only the rows in view. */
+function ClusterHealthList({ clusters }: { clusters: ClusterRow[] }) {
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<ClusterFilter>("all");
+  const counts = useMemo(() => {
+    const k = { fail: 0, warn: 0, down: 0, ok: 0 };
+    for (const c of clusters) k[clusterBucket(c)]++;
+    return k;
+  }, [clusters]);
+  const shown = useMemo(
+    () => clusters.filter((c) => (filter === "all" || clusterBucket(c) === filter) && matchesSearch(search, c.name, c.error)),
+    [clusters, filter, search],
+  );
+  const filters = [
+    { value: "all", label: "All" },
+    { value: "fail", label: "Failing", count: counts.fail },
+    { value: "warn", label: "Warnings", count: counts.warn },
+    ...(counts.down ? [{ value: "down", label: "Not checked", count: counts.down }] : []),
+    { value: "ok", label: "Healthy", count: counts.ok },
+  ];
+  return (
+    <>
+      {clusters.length > 8 ? (
+        <ListToolbar
+          search={search}
+          onSearch={setSearch}
+          filters={filters}
+          filter={filter}
+          onFilter={(v) => setFilter(v as ClusterFilter)}
+          shown={shown.length}
+          total={clusters.length}
+        />
+      ) : null}
+      {shown.length === 0 ? (
+        <EmptyState title="No matching clusters" description="Try another search or filter." />
+      ) : (
+        <VirtualList
+          className="overview-clusters"
+          aria-label="Clusters"
+          items={shown}
+          rowHeight={44}
+          maxHeight={396}
+          itemKey={(c) => c.name}
+          renderRow={(c) => {
+            const st = clusterStatus(c);
+            return (
+              <Link to={`/findings?clusters=${encodeURIComponent(c.name)}`} className="overview-cluster-row">
+                <span className="overview-cluster-name" title={c.error || c.name}>
+                  {c.name}
+                </span>
+                <span className="overview-cluster-counts">{c.ok ? clusterCounts(c) : c.error || "Unreachable"}</span>
+                <StatusBadge tone={st.tone}>{st.label}</StatusBadge>
+              </Link>
+            );
+          }}
+        />
+      )}
+    </>
+  );
 }
 
 function scoreTone(score: number | null): "ok" | "warn" | "fail" | undefined {
@@ -252,7 +322,7 @@ export function OverviewPage() {
 
           <div className="overview-grid">
             <Panel
-              title="Checks by result"
+              title="Checks by result" icon={<PieChartOutlined />}
               description="From the latest run. Select one to see those findings."
               flush
             >
@@ -288,34 +358,14 @@ export function OverviewPage() {
             </Panel>
 
             <Panel
-              title="Clusters"
+              title="Clusters" icon={<ClusterOutlined />}
               description={clusters.length ? `${clusters.length} in the latest run` : undefined}
               flush
             >
               {clusters.length === 0 ? (
                 <EmptyState icon={<ClusterOutlined />} title="No per-cluster results" description="The latest run did not record results per cluster." />
               ) : (
-                <ul className="overview-clusters">
-                  {clusters.slice(0, 8).map((c) => {
-                    const st = clusterStatus(c);
-                    return (
-                      <li key={c.name}>
-                        <Link to={`/findings?clusters=${encodeURIComponent(c.name)}`} className="overview-cluster-row">
-                          <span className="overview-cluster-name" title={c.error || c.name}>
-                            {c.name}
-                          </span>
-                          <span className="overview-cluster-counts">{c.ok ? clusterCounts(c) : c.error || "Unreachable"}</span>
-                          <StatusBadge tone={st.tone}>{st.label}</StatusBadge>
-                        </Link>
-                      </li>
-                    );
-                  })}
-                  {clusters.length > 8 ? (
-                    <li className="overview-more">
-                      <Link to="/findings">+{clusters.length - 8} more clusters in Findings</Link>
-                    </li>
-                  ) : null}
-                </ul>
+                <ClusterHealthList clusters={clusters} />
               )}
             </Panel>
           </div>
@@ -323,7 +373,7 @@ export function OverviewPage() {
       )}
 
       <Panel
-        title="Recent runs"
+        title="Recent runs" icon={<HistoryOutlined />}
         flush
         extra={
           <Link to={sectionHref("runs")}>

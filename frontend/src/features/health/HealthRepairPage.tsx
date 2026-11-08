@@ -1,11 +1,12 @@
 import { Alert, Badge, Card, Skeleton, Space, Table, Tabs, Tag, Typography } from "antd";
+import { CheckCircleOutlined, HistoryOutlined, MedicineBoxOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router";
 import { api } from "../../api/client";
 import type { AutoHealer, HealHistoryEntry } from "../../api/types";
 import { formatTime } from "../../utils/datetime";
 import { SystemHealthSection } from "../settings/SystemHealthSection";
-import { EmptyState, ItemList, Panel, StatusBadge, type Tone } from "../../ui";
+import { EmptyState, IconTitle, ItemList, Panel, StatusBadge, type Tone } from "../../ui";
 
 /**
  * Tabs of Health & repair, in order. Updates, backups and migrations moved to
@@ -48,7 +49,7 @@ export function AutoHealPanel() {
   const healers = q.data?.healers ?? [];
   return (
     <Panel
-      title="Automatic healing"
+      title="Automatic healing" icon={<MedicineBoxOutlined />}
       description="What repairs itself without anyone clicking Fix. Server flags are set when the API server starts; the rest are settings."
       flush
     >
@@ -117,7 +118,7 @@ export function HealHistoryPanel() {
       {data.unverified_7d > 0 ? (
         <Alert type="info" showIcon title={`${data.unverified_7d} fix${data.unverified_7d === 1 ? "" : "es"} this week did not pass the re-check`} description="The check still failed right after its fix. Open Checks for what is left." />
       ) : null}
-      <Card className="page-card" size="small" title={`Repairs (${data.total})`}>
+      <Card className="page-card" size="small" title={<IconTitle icon={<HistoryOutlined />}>{`Repairs (${data.total})`}</IconTitle>}>
         <Table<HealHistoryEntry>
           size="small"
           rowKey={(r) => `${r.at}-${r.id}`}
@@ -169,9 +170,9 @@ export function HealthRepairPage() {
         setParams(p, { replace: true });
       }}
       items={[
-        { key: "checks", label: label("Checks", issues, (diag.data?.summary.fail ?? 0) > 0), children: <SystemHealthSection /> },
-        { key: "automatic", label: label("Automatic healing"), children: <AutoHealPanel /> },
-        { key: "history", label: label("History"), children: <HealHistoryPanel /> },
+        { key: "checks", icon: <CheckCircleOutlined aria-hidden />, label: label("Checks", issues, (diag.data?.summary.fail ?? 0) > 0), children: <SystemHealthSection /> },
+        { key: "automatic", icon: <MedicineBoxOutlined aria-hidden />, label: label("Automatic healing"), children: <AutoHealPanel /> },
+        { key: "history", icon: <HistoryOutlined aria-hidden />, label: label("History"), children: <HealHistoryPanel /> },
       ]}
     />
   );

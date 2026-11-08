@@ -32,7 +32,7 @@ import {
 import { CodeEditor } from "../../components/CodeEditor";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { notify } from "../../notify";
-import { ItemList } from "../../ui";
+import { ItemList, TitleIcon } from "../../ui";
 
 type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
@@ -396,7 +396,7 @@ export function ApiExplorerSection({ onError }: Props) {
       className="page-card"
       title={
         <Space size={10} align="center">
-          <ApiOutlined className="section-header-icon" />
+          <TitleIcon><ApiOutlined /></TitleIcon>
           <Typography.Text strong>API</Typography.Text>
         </Space>
       }

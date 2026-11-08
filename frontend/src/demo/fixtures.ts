@@ -63,7 +63,7 @@ type DemoCluster = {
   errorClass?: string;
 };
 
-const CLUSTERS: DemoCluster[] = [
+const SAMPLE_CLUSTERS: DemoCluster[] = [
   { name: "prod-sjc-01", address: "10.20.1.11", aos: "7.3.1", ncc: "5.2.0" },
   { name: "prod-sjc-02", address: "10.20.1.12", aos: "7.3.1", ncc: "5.2.0" },
   { name: "prod-dfw-01", address: "10.30.1.11", aos: "7.3.0.5", ncc: "5.2.0" },
@@ -80,6 +80,49 @@ const CLUSTERS: DemoCluster[] = [
     errorClass: "network",
   },
 ];
+
+/**
+ * `?fleet=7000` (kept for the tab) swaps the eight sample clusters for a
+ * generated fleet of that size, to try the UI at scale.
+ */
+function fleetSize(): number {
+  const KEY = "ncc-demo-fleet";
+  let raw: string | null = null;
+  try {
+    raw = new URLSearchParams(window.location.search).get("fleet");
+    if (raw !== null) sessionStorage.setItem(KEY, raw);
+    else raw = sessionStorage.getItem(KEY);
+  } catch {
+    /* storage blocked: sample fleet */
+  }
+  const n = Math.floor(Number(raw));
+  return Number.isFinite(n) && n > SAMPLE_CLUSTERS.length ? Math.min(n, 10000) : 0;
+}
+
+function generatedFleet(count: number): DemoCluster[] {
+  const kinds = ["prod", "prod", "prod", "dr", "vdi", "dev"];
+  const sites = ["sjc", "dfw", "ams", "fra", "sin", "syd", "iad", "lhr", "nrt", "gru"];
+  const r = rng(7);
+  return Array.from({ length: count }, (_, i) => {
+    const kind = kinds[i % kinds.length];
+    const site = sites[Math.floor(i / kinds.length) % sites.length];
+    const address = `10.${20 + Math.floor(i / 62500)}.${Math.floor(i / 250) % 250}.${(i % 250) + 1}`;
+    const c: DemoCluster = {
+      name: `${kind}-${site}-${String(i + 1).padStart(4, "0")}`,
+      address,
+      aos: r() < 0.8 ? "7.3.1" : "7.0.1.7",
+      ncc: r() < 0.85 ? "5.2.0" : "5.1.2",
+    };
+    if (r() < 0.02) {
+      c.error = `dial tcp ${address}:9440: i/o timeout`;
+      c.errorClass = "network";
+    }
+    return c;
+  });
+}
+
+const FLEET = fleetSize();
+const CLUSTERS: DemoCluster[] = FLEET ? generatedFleet(FLEET) : SAMPLE_CLUSTERS;
 
 type CheckTemplate = { check: string; severity: "FAIL" | "WARN" | "ERR" | "INFO"; detail: (c: DemoCluster, n: number) => string };
 
@@ -142,13 +185,25 @@ function buildRows(): Row[] {
 
 export const AGG_ROWS = buildRows();
 
+const ROWS_BY_CLUSTER = new Map<string, Row[]>();
+for (const row of AGG_ROWS) {
+  const list = ROWS_BY_CLUSTER.get(row.cluster);
+  if (list) list.push(row);
+  else ROWS_BY_CLUSTER.set(row.cluster, [row]);
+}
+
+const COUNTS = new Map<string, { fail: number; warn: number; err: number; info: number }>();
+for (const row of AGG_ROWS) {
+  let k = COUNTS.get(row.cluster);
+  if (!k) COUNTS.set(row.cluster, (k = { fail: 0, warn: 0, err: 0, info: 0 }));
+  if (row.severity === "FAIL") k.fail++;
+  else if (row.severity === "WARN") k.warn++;
+  else if (row.severity === "ERR") k.err++;
+  else k.info++;
+}
+
 function countsFor(address: string) {
-  const mine = AGG_ROWS.filter((r) => r.cluster === address);
-  const n = (s: string) => mine.filter((r) => r.severity === s).length;
-  const fail = n("FAIL");
-  const warn = n("WARN");
-  const err = n("ERR");
-  const info = n("INFO");
+  const { fail, warn, err, info } = COUNTS.get(address) ?? { fail: 0, warn: 0, err: 0, info: 0 };
   const score = Math.max(40, 100 - fail * 9 - warn * 3 - err * 4);
   return { fail, warn, err, info, score };
 }
@@ -196,7 +251,7 @@ export const RUN_SUMMARY = {
   total_checks: okClusters.length * PLUGINS_PER_CLUSTER,
   avg_health_score: Math.round(scores.reduce((a, b) => a + b, 0) / scores.length),
   min_health_score: Math.min(...scores),
-  failure_classes: { network: 1 },
+  failure_classes: { network: CLUSTERS.filter((c) => c.error).length },
   source: "scheduled",
 };
 
@@ -209,7 +264,7 @@ const CHECKS_SNAPSHOT = {
     const k = countsFor(c.address);
     return {
       address: c.address,
-      checks: AGG_ROWS.filter((r) => r.cluster === c.address).map((r) => ({
+      checks: (ROWS_BY_CLUSTER.get(c.address) ?? []).map((r) => ({
         finding_id: findingId(r.cluster, r.check),
         check_name: r.check,
         severity: r.severity,
@@ -287,7 +342,19 @@ export const REPORT: ReportData = {
   },
   ncc_cluster_summary: CLUSTERS.filter((c) => !c.error).map((c) => {
     const k = countsFor(c.address);
-    return { cluster: c.address, cluster_name: c.name, pass: PLUGINS_PER_CLUSTER - k.fail - k.warn - k.err - k.info, fail: k.fail, warn: k.warn, error: k.err, info: k.info };
+    const pass = PLUGINS_PER_CLUSTER - k.fail - k.warn - k.err - k.info;
+    return {
+      address: c.address,
+      log_name: c.name,
+      pass,
+      fail: k.fail,
+      warn: k.warn,
+      error: k.err,
+      info: k.info,
+      unknown: 0,
+      total_plugins: PLUGINS_PER_CLUSTER,
+      health_rate: Math.round((pass / PLUGINS_PER_CLUSTER) * 1000) / 10,
+    };
   }),
   checks_snapshot: CHECKS_SNAPSHOT,
   drilldown_diff: DRILLDOWN,

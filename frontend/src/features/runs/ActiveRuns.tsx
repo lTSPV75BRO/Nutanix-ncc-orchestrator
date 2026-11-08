@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Alert, Button, Collapse, Space, Switch, Tag, Tooltip, Typography } from "antd";
-import { ClockCircleOutlined, StopOutlined } from "@ant-design/icons";
+import { ClockCircleOutlined, StopOutlined, SyncOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import type { ActiveRunEntry } from "../../api/types";
@@ -139,7 +139,7 @@ export function ActiveRuns() {
 
   return (
     <Panel
-      title="In progress"
+      title="In progress" icon={<SyncOutlined />}
       description={`${running.length} running${maxConcurrent ? ` of ${maxConcurrent} slots` : ""}${
         runs.length > running.length ? ` · ${runs.length - running.length} queued` : ""
       }`}

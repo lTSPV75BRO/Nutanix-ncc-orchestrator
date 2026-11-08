@@ -1,5 +1,6 @@
 import { Alert, Button, Card, Collapse, Descriptions, Empty, Popconfirm, Skeleton, Space, Table, Tag, Typography } from "antd";
-import { ReloadOutlined } from "@ant-design/icons";
+import { ApiOutlined, DeploymentUnitOutlined, DesktopOutlined, ReloadOutlined, UnorderedListOutlined } from "@ant-design/icons";
+import { IconTitle } from "../../ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
 import { api } from "../../api/client";
@@ -183,7 +184,7 @@ export function SupervisorPanel() {
     <Space orientation="vertical" size={16} style={{ width: "100%" }}>
       {intro}
       {!data?.running ? <Alert type="warning" showIcon title="Supervisor not running" description={data?.message} /> : null}
-      <Card size="small" className="page-card" title="Supervisor">
+      <Card size="small" className="page-card" title={<IconTitle icon={<DeploymentUnitOutlined />}>Supervisor</IconTitle>}>
         <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 3 }}>
           <Descriptions.Item label="PID">{st.pid}</Descriptions.Item>
           <Descriptions.Item label="Up for">{supUp == null ? "—" : formatDuration(supUp)}</Descriptions.Item>
@@ -205,7 +206,7 @@ export function SupervisorPanel() {
           onRestart={() => restart.mutate(c.name as "api" | "ui")}
         />
       ))}
-      <Card size="small" className="page-card" title="Recent events">
+      <Card size="small" className="page-card" title={<IconTitle icon={<UnorderedListOutlined />}>Recent events</IconTitle>}>
         {events.length ? (
           <Table<SupervisorEvent & { key: string }>
             size="small"
@@ -277,7 +278,7 @@ export function PlatformPanel() {
       {findings.map((f) => (
         <Alert key={f.text} type={f.type} showIcon title={f.text} />
       ))}
-      <Card size="small" className="page-card" title="Host">
+      <Card size="small" className="page-card" title={<IconTitle icon={<DesktopOutlined />}>Host</IconTitle>}>
         <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 3 }}>
           <Descriptions.Item label="Operating system">{OS_LABEL[host.os] ?? host.os}</Descriptions.Item>
           <Descriptions.Item label="Build">{ARCH_LABEL[host.arch.binary] ?? host.arch.binary}</Descriptions.Item>
@@ -308,7 +309,7 @@ export function PlatformPanel() {
           <Descriptions.Item label="Go">{host.go_version}</Descriptions.Item>
         </Descriptions>
       </Card>
-      <Card size="small" className="page-card" title="API server process">
+      <Card size="small" className="page-card" title={<IconTitle icon={<ApiOutlined />}>API server process</IconTitle>}>
         <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 3 }}>
           <Descriptions.Item label="Up for">{formatDuration(proc.uptime_seconds)}</Descriptions.Item>
           <Descriptions.Item label="Goroutines">{proc.goroutines}</Descriptions.Item>

@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { Alert, Button, Card, Collapse, Popconfirm, Skeleton, Space, Table, Tag, Typography } from "antd";
-import { ArrowRightOutlined, SwapOutlined } from "@ant-design/icons";
+import { ArrowRightOutlined, HistoryOutlined, LockOutlined, SwapOutlined } from "@ant-design/icons";
+import { IconTitle } from "../../ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
 import { parseDocument } from "yaml";
@@ -45,7 +46,7 @@ function ConfigLayoutCard() {
   const moved = res?.moved ?? [];
   const dups = res?.duplicates ?? [];
   return (
-    <Card className="page-card" size="small" title={<span><SwapOutlined /> Config file layout</span>}>
+    <Card className="page-card" size="small" title={<IconTitle icon={<SwapOutlined />}>Config file layout</IconTitle>}>
       {preview.isLoading ? <Skeleton active paragraph={{ rows: 3 }} /> : null}
       {preview.isError ? (
         <Alert type="error" showIcon title="Couldn't check the config file" description={String((preview.error as Error)?.message ?? "")} />
@@ -129,7 +130,7 @@ function SecretsCard() {
   const cfg = useQuery({ queryKey: ["health", "migrations", "secrets"], queryFn: () => api.loadConfig(), staleTime: 15_000 });
   const plain = useMemo(() => plaintextSecrets(cfg.data?.content ?? ""), [cfg.data?.content]);
   return (
-    <Card className="page-card" size="small" title="Secrets in the config file">
+    <Card className="page-card" size="small" title={<IconTitle icon={<LockOutlined />}>Secrets in the config file</IconTitle>}>
       {cfg.isLoading ? <Skeleton active paragraph={{ rows: 1 }} /> : null}
       {cfg.data ? (
         plain.length === 0 ? (
@@ -164,7 +165,7 @@ export function MigrationsPanel() {
     <Space orientation="vertical" size={16} style={{ width: "100%" }}>
       <ConfigLayoutCard />
       <SecretsCard />
-      <Card className="page-card" size="small" title="Upgrades and restores">
+      <Card className="page-card" size="small" title={<IconTitle icon={<HistoryOutlined />}>Upgrades and restores</IconTitle>}>
         <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
           Software upgrades take a backup first and can be rolled back from <Link to={sectionHref("updates", { tab: "updates" })}>Updates</Link>.
           After a restore, output paths, schedule files and the HTTPS certificate are repaired automatically before the services restart.

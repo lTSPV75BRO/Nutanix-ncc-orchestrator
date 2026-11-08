@@ -89,7 +89,10 @@ export function NewRunDrawer({ open, onClose, backendConfigPath }: { open: boole
       });
       notify.close(RUN_TOAST_KEY);
       const skipped = out.skipped_clusters ?? [];
-      const skippedNote = skipped.length > 0 ? ` ${skipped.length} cluster(s) already running elsewhere were skipped: ${skipped.join(", ")}.` : "";
+      const skippedNote =
+        skipped.length > 0
+          ? ` ${skipped.length} cluster(s) already running elsewhere were skipped: ${skipped.slice(0, 5).join(", ")}${skipped.length > 5 ? ` and ${skipped.length - 5} more` : ""}.`
+          : "";
       if (out.queued) {
         notify.info({
           message: `Run queued (position ${out.queue_position ?? "?"})`,
@@ -189,7 +192,7 @@ export function NewRunDrawer({ open, onClose, backendConfigPath }: { open: boole
             title="Limited to your cluster groups"
             description={
               allowedClusters.length > 0
-                ? `You can run ${allowedClusters.length} cluster(s): ${allowedClusters.join(", ")}.`
+                ? `You can run ${allowedClusters.length.toLocaleString()} cluster(s): ${allowedClusters.slice(0, 5).join(", ")}${allowedClusters.length > 5 ? ` and ${(allowedClusters.length - 5).toLocaleString()} more` : ""}.`
                 : "You are not in any cluster group. Ask an administrator to add you before starting a run."
             }
           />
@@ -228,6 +231,7 @@ export function NewRunDrawer({ open, onClose, backendConfigPath }: { open: boole
                 mode="multiple"
                 allowClear
                 placeholder="All clusters in your groups"
+                maxTagCount="responsive"
                 value={selectedClusters}
                 onChange={setSelectedClusters}
                 options={allowedClusters.map((c) => ({ value: c, label: c }))}

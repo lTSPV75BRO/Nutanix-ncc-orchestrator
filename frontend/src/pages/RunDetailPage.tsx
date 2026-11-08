@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, Button, Segmented, Skeleton, Table, Tabs, Tooltip, Typography } from "antd";
-import { ArrowLeftOutlined, DownloadOutlined, FileTextOutlined } from "@ant-design/icons";
+import { Alert, Button, Segmented, Skeleton, Table, Tabs, Tooltip, Typography, type TablePaginationConfig } from "antd";
+import { ArrowLeftOutlined, ClusterOutlined, DisconnectOutlined, DownloadOutlined, FileTextOutlined, FolderOpenOutlined, InfoCircleOutlined, SwapOutlined, WarningOutlined } from "@ant-design/icons";
 import { api, ApiError } from "../api/client";
 import { sectionHref } from "../navigation";
-import { EmptyState, KeyValueList, Panel, StatTile, StatusBadge, toneFor, type Tone } from "../ui";
+import { EmptyState, KeyValueList, ListToolbar, matchesSearch, Panel, StatTile, StatusBadge, toneFor, type Tone } from "../ui";
 import { formatDateTime, relativeTime } from "../utils/datetime";
 import { formatDuration } from "../utils/freshness";
 import { asArray, asRecord, toNumber } from "../utils/report";
@@ -26,6 +26,16 @@ type ClusterResult = {
 
 type CheckRow = { key: string; cluster: string; severity: string; check: string; detail: string };
 type SevFilter = "all" | "FAIL" | "ERR" | "WARN" | "INFO";
+type ClusterFilter = "all" | "fail" | "warn" | "down" | "ok";
+
+function clusterBucket(c: ClusterResult): Exclude<ClusterFilter, "all"> {
+  if (!c.ok) return "down";
+  if (c.fail + c.err > 0) return "fail";
+  if (c.warn > 0) return "warn";
+  return "ok";
+}
+
+const PAGE: TablePaginationConfig = { defaultPageSize: 50, pageSizeOptions: [25, 50, 100, 200], showSizeChanger: true, hideOnSinglePage: true };
 
 const SEV_ORDER: Record<string, number> = { FAIL: 0, ERR: 1, WARN: 2, INFO: 3 };
 
@@ -62,6 +72,9 @@ const FILE_LABELS: Record<string, string> = {
 export function RunDetailPage() {
   const { id = "" } = useParams();
   const [sev, setSev] = useState<SevFilter>("all");
+  const [clusterSearch, setClusterSearch] = useState("");
+  const [clusterFilter, setClusterFilter] = useState<ClusterFilter>("all");
+  const [checkSearch, setCheckSearch] = useState("");
   const q = useQuery({ queryKey: ["runs", "detail", id], queryFn: () => api.runById(id), enabled: Boolean(id), retry: false });
 
   const run = q.data?.run;
@@ -108,7 +121,24 @@ export function RunDetailPage() {
     return rows.sort((a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9) || a.cluster.localeCompare(b.cluster));
   }, [snapshot.clusters]);
 
-  const shownChecks = sev === "all" ? checks : checks.filter((c) => c.severity === sev);
+  const bucketCounts = useMemo(() => {
+    const k = { fail: 0, warn: 0, down: 0, ok: 0 };
+    for (const c of clusters) k[clusterBucket(c)]++;
+    return k;
+  }, [clusters]);
+  const shownClusters = useMemo(
+    () => clusters.filter((c) => (clusterFilter === "all" || clusterBucket(c) === clusterFilter) && matchesSearch(clusterSearch, c.address, c.error)),
+    [clusters, clusterFilter, clusterSearch],
+  );
+  const sevCounts = useMemo(() => {
+    const k: Record<string, number> = {};
+    for (const c of checks) k[c.severity] = (k[c.severity] ?? 0) + 1;
+    return k;
+  }, [checks]);
+  const shownChecks = useMemo(
+    () => checks.filter((c) => (sev === "all" || c.severity === sev) && matchesSearch(checkSearch, c.cluster, c.check, c.detail)),
+    [checks, sev, checkSearch],
+  );
 
   if (q.isLoading) {
     return (
@@ -188,20 +218,43 @@ export function RunDetailPage() {
         items={[
           {
             key: "clusters",
-            label: `Clusters${clusters.length ? ` (${clusters.length})` : ""}`,
+            icon: <ClusterOutlined aria-hidden />, label: `Clusters${clusters.length ? ` (${clusters.length})` : ""}`,
             children: (
               <Panel flush>
                 {clusters.length === 0 ? (
                   <EmptyState title="No per-cluster results" description="This run did not record results per cluster." />
                 ) : (
+                  <>
+                  <ListToolbar
+                    search={clusterSearch}
+                    onSearch={setClusterSearch}
+                    filter={clusterFilter}
+                    onFilter={(v) => setClusterFilter(v as ClusterFilter)}
+                    filters={[
+                      { value: "all", label: "All" },
+                      { value: "fail", label: "Failing", count: bucketCounts.fail },
+                      { value: "warn", label: "Warnings", count: bucketCounts.warn },
+                      ...(bucketCounts.down ? [{ value: "down", label: "Not checked", count: bucketCounts.down }] : []),
+                      { value: "ok", label: "Healthy", count: bucketCounts.ok },
+                    ]}
+                    shown={shownClusters.length}
+                    total={clusters.length}
+                  />
                   <Table<ClusterResult>
                     size="middle"
                     rowKey="address"
-                    dataSource={clusters}
-                    pagination={false}
+                    dataSource={shownClusters}
+                    pagination={PAGE}
                     scroll={{ x: 640 }}
+                    locale={{ emptyText: <EmptyState title="No matching clusters" description="Try another search or filter." /> }}
                     columns={[
-                      { title: "Cluster", dataIndex: "address", key: "address", render: (v: string) => <span className="mono">{v}</span> },
+                      {
+                        title: "Cluster",
+                        dataIndex: "address",
+                        key: "address",
+                        sorter: (a, b) => a.address.localeCompare(b.address),
+                        render: (v: string) => <span className="mono">{v}</span>,
+                      },
                       {
                         title: "Status",
                         key: "status",
@@ -221,20 +274,26 @@ export function RunDetailPage() {
                             : `${c.error || "Unreachable"}${c.errorClass ? ` (${c.errorClass})` : ""}`,
                       },
                       { title: "Checks", key: "total", render: (_: unknown, c) => (c.total ? c.total.toLocaleString() : "—") },
-                      { title: "Health", key: "score", render: (_: unknown, c) => (c.score == null ? "—" : c.score) },
+                      {
+                        title: "Health",
+                        key: "score",
+                        sorter: (a, b) => (a.score ?? -1) - (b.score ?? -1),
+                        render: (_: unknown, c) => (c.score == null ? "—" : c.score),
+                      },
                     ]}
                   />
+                  </>
                 )}
               </Panel>
             ),
           },
           {
             key: "checks",
-            label: `Checks${checks.length ? ` (${checks.length})` : ""}`,
+            icon: <WarningOutlined aria-hidden />, label: `Checks${checks.length ? ` (${checks.length})` : ""}`,
             children: (
               <Panel
                 flush
-                title="Checks that did not pass"
+                title="Checks that did not pass" icon={<WarningOutlined />}
                 extra={
                   <Segmented<SevFilter>
                     size="small"
@@ -243,16 +302,26 @@ export function RunDetailPage() {
                     aria-label="Filter by severity"
                     options={(["all", "FAIL", "ERR", "WARN", "INFO"] as SevFilter[]).map((s) => ({
                       value: s,
-                      label: s === "all" ? `All (${checks.length})` : `${s} (${checks.filter((c) => c.severity === s).length})`,
+                      label: s === "all" ? `All (${checks.length})` : `${s} (${sevCounts[s] ?? 0})`,
                     }))}
                   />
                 }
               >
+                {checks.length > 25 ? (
+                  <ListToolbar
+                    search={checkSearch}
+                    onSearch={setCheckSearch}
+                    placeholder="Search cluster, check or detail"
+                    shown={shownChecks.length}
+                    total={sev === "all" ? checks.length : (sevCounts[sev] ?? 0)}
+                    noun="checks"
+                  />
+                ) : null}
                 <Table<CheckRow>
                   size="middle"
                   rowKey="key"
                   dataSource={shownChecks}
-                  pagination={shownChecks.length > 25 ? { pageSize: 25, showSizeChanger: false } : false}
+                  pagination={PAGE}
                   scroll={{ x: 720 }}
                   locale={{
                     emptyText: (
@@ -286,10 +355,10 @@ export function RunDetailPage() {
           },
           {
             key: "details",
-            label: "Details",
+            icon: <InfoCircleOutlined aria-hidden />, label: "Details",
             children: (
               <div className="run-details">
-                <Panel title="Run">
+                <Panel title="Run" icon={<InfoCircleOutlined />}>
                   <KeyValueList
                     items={[
                       { label: "Run ID", value: run.id, mono: true, copy: run.id },
@@ -301,12 +370,12 @@ export function RunDetailPage() {
                   />
                 </Panel>
                 {failureClasses.length > 0 ? (
-                  <Panel title="Why clusters could not be checked">
+                  <Panel title="Why clusters could not be checked" icon={<DisconnectOutlined />}>
                     <KeyValueList items={failureClasses.map(([k, n]) => ({ label: k, value: `${toNumber(n)} cluster(s)` }))} />
                   </Panel>
                 ) : null}
                 {regression.previous_timestamp ? (
-                  <Panel title="Compared with the previous run">
+                  <Panel title="Compared with the previous run" icon={<SwapOutlined />}>
                     <KeyValueList
                       items={[
                         { label: "Previous run", value: formatDateTime(String(regression.previous_timestamp)) },
@@ -322,7 +391,7 @@ export function RunDetailPage() {
                     />
                   </Panel>
                 ) : null}
-                <Panel title="Saved files" description="JSON documents archived with this run." flush>
+                <Panel title="Saved files" icon={<FolderOpenOutlined />} description="JSON documents archived with this run." flush>
                   {Object.keys(files).length === 0 ? (
                     <EmptyState title="No files saved" />
                   ) : (

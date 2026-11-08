@@ -206,6 +206,14 @@ export function legacySettingsTarget(search: string, v: Viewer): string {
 }
 
 /** Title for the top bar. */
+/** The navigation icon of the page at `pathname`, for its title. */
+export function pageIcon(pathname: string): ReactNode {
+  if (/^\/runs\/[^/]+/.test(pathname)) return SECTIONS.find((s) => s.key === "runs")?.icon ?? null;
+  const s = sectionByPath(pathname);
+  if (s) return s.icon;
+  return PAGES.find((pg) => pg.path === (pathname.replace(/\/+$/, "") || "/"))?.icon ?? null;
+}
+
 export function pageTitle(pathname: string): string {
   if (/^\/runs\/[^/]+/.test(pathname)) return "Run details";
   const s = sectionByPath(pathname);

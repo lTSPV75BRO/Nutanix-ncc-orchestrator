@@ -1,6 +1,7 @@
 import { Card, Col, Empty, Progress, Row, Statistic, Table, Tag, Typography } from "antd";
+import { FallOutlined, MinusOutlined, RiseOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
-import { ItemList } from "../../ui";
+import { IconTitle, ItemList } from "../../ui";
 import { asArray, asRecord, resolveClusterName, toNumber, weightedHealthScore } from "../../utils/report";
 
 type Props = {
@@ -119,17 +120,17 @@ export function SloPanel({ sloDashboard, nccClusterSummary, regressionSummary, c
       <Typography.Title level={5}>Regression summary</Typography.Title>
       <Row gutter={[12, 12]}>
         <Col xs={24} md={8}>
-          <Card size="small" title="More failures">
+          <Card size="small" title={<IconTitle icon={<RiseOutlined />}>More failures</IconTitle>}>
             <ItemList items={increased} render={(item) => item} empty="None" />
           </Card>
         </Col>
         <Col xs={24} md={8}>
-          <Card size="small" title="Fewer failures">
+          <Card size="small" title={<IconTitle icon={<FallOutlined />}>Fewer failures</IconTitle>}>
             <ItemList items={decreased} render={(item) => item} empty="None" />
           </Card>
         </Col>
         <Col xs={24} md={8}>
-          <Card size="small" title="Unchanged">
+          <Card size="small" title={<IconTitle icon={<MinusOutlined />}>Unchanged</IconTitle>}>
             <ItemList items={unchanged} render={(item) => item} empty="None" />
           </Card>
         </Col>

@@ -1,5 +1,6 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { Card, Skeleton, Tabs } from "antd";
+import { DashboardOutlined, DeploymentUnitOutlined, DesktopOutlined } from "@ant-design/icons";
 import { useSearchParams } from "react-router";
 
 const SupervisorPanel = lazy(() => import("../health/SupervisorPanel").then((m) => ({ default: m.SupervisorPanel })));
@@ -36,9 +37,9 @@ export function StatusTabs({ isAdmin, overview }: { isAdmin: boolean; overview: 
         setParams(p, { replace: true });
       }}
       items={[
-        { key: "overview", label: "Overview", children: overview },
-        { key: "supervisor", label: "Supervisor", children: <Lazy><SupervisorPanel /></Lazy> },
-        { key: "platform", label: "Platform", children: <Lazy><PlatformPanel /></Lazy> },
+        { key: "overview", icon: <DashboardOutlined aria-hidden />, label: "Overview", children: overview },
+        { key: "supervisor", icon: <DeploymentUnitOutlined aria-hidden />, label: "Supervisor", children: <Lazy><SupervisorPanel /></Lazy> },
+        { key: "platform", icon: <DesktopOutlined aria-hidden />, label: "Platform", children: <Lazy><PlatformPanel /></Lazy> },
       ]}
     />
   );

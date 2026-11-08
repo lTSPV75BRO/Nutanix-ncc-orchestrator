@@ -1,10 +1,18 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Alert, Space, Switch, Tag, Typography } from "antd";
+import { AppstoreOutlined, LoginOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import type { ReactNode } from "react";
 import { api } from "../../api/client";
 import { notifyError } from "../../notify";
 import { ItemList, Panel } from "../../ui";
 import { FEATURE_CATALOG, FEATURE_GROUPS, type FeatureFlags, type FeatureKey } from "../features/featureCatalog";
 import { useFeatureFlags } from "../features/useFeatureFlags";
+
+const GROUP_ICONS: Record<string, ReactNode> = {
+  views: <AppstoreOutlined />,
+  actions: <ThunderboltOutlined />,
+  signin: <LoginOutlined />,
+};
 
 /** Settings → Features: one panel per group, one switch per feature. */
 export function FeaturesSection() {
@@ -29,7 +37,7 @@ export function FeaturesSection() {
         <Alert type="error" showIcon title="Couldn't load the features" description={String((flags.error as Error)?.message || "")} />
       ) : null}
       {FEATURE_GROUPS.map((group) => (
-        <Panel key={group.key} title={group.title} description={group.description} flush>
+        <Panel key={group.key} title={group.title} icon={GROUP_ICONS[group.key]} description={group.description} flush>
           <ItemList
             items={FEATURE_CATALOG.filter((spec) => (spec.group ?? "views") === group.key)}
             itemKey={(spec) => spec.key}

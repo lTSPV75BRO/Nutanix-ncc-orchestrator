@@ -16,17 +16,8 @@ import {
   Typography,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import {
-  CheckOutlined,
-  ClockCircleOutlined,
-  ClusterOutlined,
-  CopyOutlined,
-  ExpandAltOutlined,
-  ExportOutlined,
-  FullscreenExitOutlined,
-  FullscreenOutlined,
-  LinkOutlined,
-} from "@ant-design/icons";
+import { AimOutlined, CheckOutlined, ClockCircleOutlined, ClusterOutlined, CopyOutlined, ExpandAltOutlined, ExportOutlined, FileTextOutlined, FullscreenExitOutlined, FullscreenOutlined, HistoryOutlined, LinkOutlined, MessageOutlined, ReadOutlined, ToolOutlined } from "@ant-design/icons";
+import { IconTitle } from "../../ui";
 import type { NCCDisposition } from "../../api/types";
 import { asArray, asRecord, displayClusterName, nccDispositionKey, resolveClusterName } from "../../utils/report";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
@@ -384,14 +375,14 @@ function PCAlertInspector({
         </Card>
       ) : null}
 
-      <Card size="small" title="Alert message">
+      <Card size="small" title={<IconTitle icon={<MessageOutlined />}>Alert message</IconTitle>}>
         <Typography.Paragraph className="pc-alert-message" style={{ margin: 0 }}>
           {row.detail || "(no message)"}
         </Typography.Paragraph>
       </Card>
 
       {showRootCause ? (
-        <Card size="small" title="Root cause">
+        <Card size="small" title={<IconTitle icon={<AimOutlined />}>Root cause</IconTitle>}>
           <Typography.Paragraph className="pc-alert-message" style={{ margin: 0 }}>
             {row.rootCause}
           </Typography.Paragraph>
@@ -399,7 +390,7 @@ function PCAlertInspector({
       ) : null}
 
       {kbLinksOf(row).length > 0 ? (
-        <Card size="small" title="Knowledge base">
+        <Card size="small" title={<IconTitle icon={<ReadOutlined />}>Knowledge base</IconTitle>}>
           <Space size={[8, 8]} wrap>
             {kbLinksOf(row).map((url) => (
               <a key={url} href={url} target="_blank" rel="noreferrer">
@@ -587,7 +578,7 @@ function NCCAlertInspector({
         />
       ) : null}
 
-      <Card size="small" className="ncc-handling-card" title="Handling" extra={<Tag color={current.color}>{current.text}</Tag>}>
+      <Card size="small" className="ncc-handling-card" title={<IconTitle icon={<ToolOutlined />}>Handling</IconTitle>} extra={<Tag color={current.color}>{current.text}</Tag>}>
         {mark?.by && mark.status ? (
           <Typography.Paragraph className="ncc-handling-who">
             {current.text} by <Typography.Text strong>{mark.by}</Typography.Text>
@@ -673,7 +664,7 @@ function NCCAlertInspector({
       </div>
 
       {kbLinksOf(row).length > 0 ? (
-        <Card size="small" title="Knowledge base">
+        <Card size="small" title={<IconTitle icon={<ReadOutlined />}>Knowledge base</IconTitle>}>
           <Space size={[8, 8]} wrap>
             {kbLinksOf(row).map((url) => (
               <a key={url} href={url} target="_blank" rel="noreferrer">
@@ -684,14 +675,14 @@ function NCCAlertInspector({
         </Card>
       ) : null}
 
-      <Card size="small" title="Alert detail">
+      <Card size="small" title={<IconTitle icon={<FileTextOutlined />}>Alert detail</IconTitle>}>
         <Typography.Paragraph className="pc-alert-message" style={{ margin: 0 }}>
           {row.detail || "No additional detail."}
         </Typography.Paragraph>
       </Card>
 
       {history.length > 0 ? (
-        <Card size="small" title="History">
+        <Card size="small" title={<IconTitle icon={<HistoryOutlined />}>History</IconTitle>}>
           <ol className="ncc-handling-history">
             {history.map((event, index) => {
               const label = handlingLabel(event.status).text;
