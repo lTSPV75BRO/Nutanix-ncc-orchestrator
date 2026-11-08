@@ -1542,9 +1542,11 @@ function LDAPProfilesList() {
       <Typography.Paragraph type="secondary">
         Add a directory for each further domain or forest that has its own domain controllers.
         Signing in as <code>jdoe@&lt;suffix&gt;</code> or <code>&lt;NETBIOS&gt;\jdoe</code> asks only the
-        directory that claims that domain; any other name goes to the directory above. Users of
-        these directories are stored under their UPN (<code>jdoe@emea.corp.example.com</code>), so the
-        same short name in two forests stays two different people.
+        directory that claims that domain. A plain <code>jdoe</code> is looked up in order: the
+        directory above first, then these as listed, until one has the user; that directory alone
+        checks the password. Users of these directories are stored under their UPN
+        (<code>jdoe@emea.corp.example.com</code>), so the same short name in two forests stays two
+        different people.
       </Typography.Paragraph>
       <Form.List name="profiles">
         {(fields, { add, remove }) => (

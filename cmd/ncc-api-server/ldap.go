@@ -462,6 +462,9 @@ type ldapLookupResult struct {
 	name   string
 	upn    string
 	groups []string
+	// found is true when the directory has the user, even if the password
+	// was wrong; ordered short-name lookup moves on only when it is false.
+	found bool
 }
 
 // lookup verifies username/password against this one directory. ok is false
@@ -512,7 +515,7 @@ func (p *ldapProvider) lookup(username, password string) (ldapLookupResult, bool
 
 	// Verify the password by re-binding as the located user DN.
 	if err := conn.Bind(entry.DN, password); err != nil {
-		return ldapLookupResult{}, false, nil // wrong password
+		return ldapLookupResult{found: true}, false, nil // wrong password, or a locked/disabled account
 	}
 
 	canonical := strings.TrimSpace(entry.GetAttributeValue(p.usernameAttr))
@@ -525,5 +528,6 @@ func (p *ldapProvider) lookup(username, password string) (ldapLookupResult, bool
 		name:   canonical,
 		upn:    strings.TrimSpace(entry.GetAttributeValue("userPrincipalName")),
 		groups: groups,
+		found:  true,
 	}, true, nil
 }

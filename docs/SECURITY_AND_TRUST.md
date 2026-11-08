@@ -1026,11 +1026,26 @@ and NetBIOS domains (`EMEA`). The top-level config is the default profile; a
 config saved before profiles existed is exactly that, and needs no migration.
 The rules:
 
-- **Routing is by the login name only.** `user@suffix` goes to the profile
-  claiming the suffix, `NETBIOS\user` to the profile claiming the NetBIOS
-  domain (with `user` as the search name); anything else goes to the default
-  profile unchanged. Exactly one directory is asked, so a password is never
-  sent to a directory the name doesn't route to.
+- **A name with a domain is routed to one directory.** `user@suffix` goes
+  to the profile claiming the suffix, `NETBIOS\user` to the profile claiming
+  the NetBIOS domain (with `user` as the search name), and an unclaimed
+  domain to the default profile unchanged. No other directory is asked.
+- **A short name is looked up in order, and the first directory that has
+  the user decides.** The order is the default profile, then the profiles as
+  listed. The router moves on only when a directory's search finds no such
+  user. Once a directory finds the user, its bind result is final: a wrong
+  password, or a locked or disabled account (AD rejects those binds as
+  invalid credentials), fails the sign-in without trying later directories.
+  An operational error (unreachable server, failed service-account bind, a
+  search matching several entries) also stops the sequence. So a password is
+  sent to at most one directory that holds an account of that name, failed
+  attempts can't be multiplied into lockouts across forests, and an outage
+  never redirects a forest's users to another forest. The cost: the service
+  account of each earlier directory sees the searched short name (never the
+  password) before a later directory is reached. A user whose short name
+  also exists in an earlier directory signs in with the UPN or `NETBIOS\user`.
+  The login throttle counts one failure per attempt, whichever directory
+  answered.
 - **Claims are exclusive.** A suffix or NetBIOS domain can belong to one
   profile only (checked on save and on load), and profile names are unique.
 - **Canonical names are unique across directories.** A named profile's user

@@ -154,12 +154,34 @@ The default directory can claim its own domains too (for example `CORP`, so
 
 How a sign-in is routed:
 
-- `jdoe@<suffix>` goes to the directory that claims the suffix, and
-  `<NETBIOS>\jdoe` to the directory that claims the NetBIOS domain.
-- A short name (`jdoe`), or a domain no directory claims, goes to the default
-  directory, exactly as before profiles existed.
-- Only that one directory is asked; the password is never tried against the
-  others.
+- **With a domain, one directory only.** `jdoe@<suffix>` goes to the
+  directory that claims the suffix, and `<NETBIOS>\jdoe` to the directory
+  that claims the NetBIOS domain. No other directory is asked. A domain no
+  directory claims goes to the default directory, as before profiles existed.
+- **A short name (`jdoe`) follows the order of the directories:** the default
+  directory first, then the added ones from top to bottom. The app moves to
+  the next directory only when the current one has **no such user**. The
+  first directory that has the user checks the password and decides:
+  - right password: signed in;
+  - wrong password, or a locked or disabled account: the sign-in fails, and
+    the later directories are **not** tried. One password is never tried
+    against every forest, and a typo can't lock out the same name in other
+    forests;
+  - a directory that can't be reached (or whose service account fails) also
+    stops the sign-in, so its users' passwords aren't sent to the next
+    directory during an outage.
+
+Example: `user1@dc1.com` lives in the default directory and `user1@dc2.com`
+in an added `dc2` directory. Signing in as `user1` always means dc1's user1.
+dc2's user1 signs in as `user1@dc2.com` (or `DC2\user1`). A user who exists
+only in dc2, say `pat`, can sign in as plain `pat`: dc1 has no `pat`, so dc2
+is asked next.
+
+The order is the default directory, then the **Other domains or forests**
+list as shown. To change which forest wins a short name, make that forest
+the default directory or move it up the list (remove and re-add it). The
+**Server URL(s)** inside one directory are still failover servers for that
+same directory, tried in order.
 
 Names the app stores, so nobody in one forest can become someone in another:
 
@@ -175,7 +197,7 @@ Names the app stores, so nobody in one forest can become someone in another:
 
 Click **Test connection…** with each form of the name (`jdoe`,
 `jdoe@emea.corp.example.com`, `EMEA\jdoe`): the result names the directory
-that was asked and the name and role the user would get. Saving checks the
+that answered and the name and role the user would get. Saving checks the
 connection of every directory.
 
 In cluster groups, add users of other directories by their UPN (the AD
@@ -377,6 +399,7 @@ group still sees everything, and admins always see everything.
 | LDAP user gets `viewer` instead of `admin` | Run **Test connection…** and look at the groups found; copy the DN exactly into the mapping. Nested groups are not expanded, so map the group the user is directly in. |
 | LDAP: "matched 2 entries (tighten user_filter)" | The same short name exists in two domains. Sign in with the UPN, or set **Username attribute** to `userPrincipalName`, or give each domain its own directory (see [Several domains or forests](#several-domains-or-forests)). |
 | User of an added directory gets "invalid username or password" but the password is right | Their UPN's suffix isn't in that directory's **UPN suffixes**, or they have no UPN. The audit log shows `upn_suffix_unclaimed` or `upn_missing`; add the suffix. `directory_conflict` means a default-directory user's name ends in a suffix another directory claims. |
+| Plain `jdoe` fails, `jdoe@emea.corp.example.com` works | An earlier directory in the order also has a `jdoe`, so it checked the password. Use the UPN or `EMEA\jdoe`, or reorder the directories. |
 | `EMEA\jdoe` doesn't work | No directory claims the NetBIOS domain `EMEA`, so the name went to the default directory unchanged. Add `EMEA` to the right directory's **NetBIOS domains**. |
 | AD user gets "invalid username or password" but the password is right | A local account has the same name, and directory users can't take it. Rename or delete the local account, or switch to UPN usernames. The server log says "matches a local account". |
 | OIDC: "redirect URI mismatch" at the provider | The redirect URI must match exactly, including `https`, host, port and path. Fix **Dashboard URL** or the provider app. |

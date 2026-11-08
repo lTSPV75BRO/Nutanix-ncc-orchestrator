@@ -24,16 +24,23 @@ type fakeDirUser struct {
 type fakeDirectory struct {
 	users map[string]fakeDirUser // keyed by any login form it should find
 	asked []string
+	err   error // operational failure for every lookup
 }
 
 func (d *fakeDirectory) lookup(p *ldapProvider) func(string, string) (ldapLookupResult, bool, error) {
 	return func(username, password string) (ldapLookupResult, bool, error) {
 		d.asked = append(d.asked, username)
+		if d.err != nil {
+			return ldapLookupResult{}, false, d.err
+		}
 		u, ok := d.users[strings.ToLower(username)]
-		if !ok || u.password != password {
+		if !ok {
 			return ldapLookupResult{}, false, nil
 		}
-		return ldapLookupResult{role: p.roleFromGroups(u.groups), name: u.name, upn: u.upn, groups: u.groups}, true, nil
+		if u.password != password {
+			return ldapLookupResult{found: true}, false, nil
+		}
+		return ldapLookupResult{role: p.roleFromGroups(u.groups), name: u.name, upn: u.upn, groups: u.groups, found: true}, true, nil
 	}
 }
 
@@ -441,5 +448,190 @@ func TestClusterGroupForeignUPNNotMatchedByLocalPart(t *testing.T) {
 	}
 	if !principalInClusterGroup("jdoe", nil, grp, nil) {
 		t.Fatal("without profiles the local-part match is unchanged")
+	}
+}
+
+// dc1AndDC2 models the case "user1@dc1.com and user1@dc2.com": the default
+// directory is dc1, a profile "dc2" claims dc2.com, and a profile "dc3" is
+// listed after it.
+func dc1AndDC2() (*ldapPersisted, map[string]*fakeDirectory) {
+	cfg := &ldapPersisted{
+		Enabled:     true,
+		URL:         "ldaps://dc1.dc1.com:636",
+		BaseDN:      "DC=dc1,DC=com",
+		UPNSuffixes: []string{"dc1.com"},
+		Profiles: []ldapProfile{
+			{Name: "dc2", UPNSuffixes: []string{"dc2.com"}, NetBIOSNames: []string{"DC2"}, URL: "ldaps://dc1.dc2.com:636", BaseDN: "DC=dc2,DC=com"},
+			{Name: "dc3", UPNSuffixes: []string{"dc3.com"}, URL: "ldaps://dc1.dc3.com:636", BaseDN: "DC=dc3,DC=com"},
+		},
+	}
+	dirs := map[string]*fakeDirectory{
+		"default": {users: map[string]fakeDirUser{
+			"user1":         {password: "pw1", name: "user1", upn: "user1@dc1.com"},
+			"user1@dc1.com": {password: "pw1", name: "user1", upn: "user1@dc1.com"},
+		}},
+		"dc2": {users: map[string]fakeDirUser{
+			"user1":         {password: "pw2", name: "user1", upn: "user1@dc2.com"},
+			"user1@dc2.com": {password: "pw2", name: "user1", upn: "user1@dc2.com"},
+			"pat":           {password: "pw2", name: "pat", upn: "pat@dc2.com"},
+			"both":          {password: "pw2", name: "both", upn: "both@dc2.com"},
+		}},
+		"dc3": {users: map[string]fakeDirUser{
+			"both": {password: "pw3", name: "both", upn: "both@dc3.com"},
+			"kim":  {password: "pw3", name: "kim", upn: "kim@dc3.com"},
+		}},
+	}
+	return cfg, dirs
+}
+
+func TestLDAPShortNameOrderedLookup(t *testing.T) {
+	asked := func(dirs map[string]*fakeDirectory) []int {
+		return []int{len(dirs["default"].asked), len(dirs["dc2"].asked), len(dirs["dc3"].asked)}
+	}
+	eq := func(a, b []int) bool {
+		for i := range a {
+			if a[i] != b[i] {
+				return false
+			}
+		}
+		return true
+	}
+
+	t.Run("same short name in two directories: the first in order answers", func(t *testing.T) {
+		cfg, dirs := dc1AndDC2()
+		r := buildFakeRouter(t, cfg, dirs)
+		dir, _, name, _, ok, err := r.authenticateRouted("user1", "pw1")
+		if err != nil || !ok || dir != "default" || name != "user1" {
+			t.Fatalf("dir=%s name=%q ok=%v err=%v", dir, name, ok, err)
+		}
+		if got := asked(dirs); !eq(got, []int{1, 0, 0}) {
+			t.Fatalf("asked %v", got)
+		}
+	})
+
+	t.Run("wrong password in the first directory that has the user stops there", func(t *testing.T) {
+		cfg, dirs := dc1AndDC2()
+		r := buildFakeRouter(t, cfg, dirs)
+		// dc2's user1 password with the short name: dc1 has a user1, so dc1
+		// decides and dc2 is never sent the password.
+		dir, _, _, _, ok, err := r.authenticateRouted("user1", "pw2")
+		if err != nil || ok || dir != "default" {
+			t.Fatalf("dir=%s ok=%v err=%v", dir, ok, err)
+		}
+		if got := asked(dirs); !eq(got, []int{1, 0, 0}) {
+			t.Fatalf("asked %v", got)
+		}
+	})
+
+	t.Run("a domain picks that directory only", func(t *testing.T) {
+		for _, login := range []string{"user1@dc2.com", `DC2\user1`} {
+			cfg, dirs := dc1AndDC2()
+			r := buildFakeRouter(t, cfg, dirs)
+			dir, _, name, _, ok, err := r.authenticateRouted(login, "pw2")
+			if err != nil || !ok || dir != "dc2" || name != "user1@dc2.com" {
+				t.Fatalf("%s: dir=%s name=%q ok=%v err=%v", login, dir, name, ok, err)
+			}
+			if got := asked(dirs); !eq(got, []int{0, 1, 0}) {
+				t.Fatalf("%s: asked %v", login, got)
+			}
+		}
+		// The dc1 password with a dc2 name is not retried at dc1.
+		cfg, dirs := dc1AndDC2()
+		r := buildFakeRouter(t, cfg, dirs)
+		if _, _, _, _, ok, _ := r.authenticateRouted("user1@dc2.com", "pw1"); ok {
+			t.Fatal("dc2 name with dc1 password must fail")
+		}
+		if got := asked(dirs); !eq(got, []int{0, 1, 0}) {
+			t.Fatalf("asked %v", got)
+		}
+	})
+
+	t.Run("not found moves on in configured order and names by UPN", func(t *testing.T) {
+		cfg, dirs := dc1AndDC2()
+		r := buildFakeRouter(t, cfg, dirs)
+		dir, _, name, _, ok, err := r.authenticateRouted("pat", "pw2")
+		if err != nil || !ok || dir != "dc2" || name != "pat@dc2.com" {
+			t.Fatalf("dir=%s name=%q ok=%v err=%v", dir, name, ok, err)
+		}
+		if got := asked(dirs); !eq(got, []int{1, 1, 0}) {
+			t.Fatalf("asked %v", got)
+		}
+		// "both" is in dc2 and dc3; dc2 is listed first and decides.
+		cfg, dirs = dc1AndDC2()
+		r = buildFakeRouter(t, cfg, dirs)
+		if dir, _, _, _, ok, _ := r.authenticateRouted("both", "pw3"); ok || dir != "dc2" {
+			t.Fatalf("both/pw3: dir=%s ok=%v", dir, ok)
+		}
+		if got := asked(dirs); !eq(got, []int{1, 1, 0}) {
+			t.Fatalf("asked %v", got)
+		}
+		// kim is only in the last directory.
+		cfg, dirs = dc1AndDC2()
+		r = buildFakeRouter(t, cfg, dirs)
+		if dir, _, name, _, ok, _ := r.authenticateRouted("kim", "pw3"); !ok || dir != "dc3" || name != "kim@dc3.com" {
+			t.Fatalf("kim: dir=%s name=%q ok=%v", dir, name, ok)
+		}
+	})
+
+	t.Run("unknown everywhere asks every directory once", func(t *testing.T) {
+		cfg, dirs := dc1AndDC2()
+		r := buildFakeRouter(t, cfg, dirs)
+		if _, _, _, _, ok, err := r.authenticateRouted("nobody", "x"); ok || err != nil {
+			t.Fatalf("ok=%v err=%v", ok, err)
+		}
+		if got := asked(dirs); !eq(got, []int{1, 1, 1}) {
+			t.Fatalf("asked %v", got)
+		}
+	})
+
+	t.Run("an unreachable directory stops the sequence", func(t *testing.T) {
+		cfg, dirs := dc1AndDC2()
+		dirs["default"].err = errLDAPTest
+		r := buildFakeRouter(t, cfg, dirs)
+		_, _, _, _, ok, err := r.authenticateRouted("pat", "pw2")
+		if ok || err == nil || !strings.Contains(err.Error(), `directory "default"`) {
+			t.Fatalf("ok=%v err=%v", ok, err)
+		}
+		if got := asked(dirs); !eq(got, []int{1, 0, 0}) {
+			t.Fatalf("asked %v", got)
+		}
+	})
+
+	t.Run("an unclaimed domain still goes to the default directory only", func(t *testing.T) {
+		cfg, dirs := dc1AndDC2()
+		r := buildFakeRouter(t, cfg, dirs)
+		r.authenticateRouted("pat@elsewhere.org", "pw2")
+		if got := asked(dirs); !eq(got, []int{1, 0, 0}) {
+			t.Fatalf("asked %v", got)
+		}
+	})
+
+	t.Run("empty password never reaches a directory", func(t *testing.T) {
+		cfg, dirs := dc1AndDC2()
+		r := buildFakeRouter(t, cfg, dirs)
+		if _, _, _, _, ok, _ := r.authenticateRouted("pat", ""); ok {
+			t.Fatal("empty password accepted")
+		}
+		if got := asked(dirs); !eq(got, []int{0, 0, 0}) {
+			t.Fatalf("asked %v", got)
+		}
+	})
+}
+
+func TestHandleLoginShortNameOrderedLookup(t *testing.T) {
+	cfg, dirs := dc1AndDC2()
+	s, _ := newLDAPLoginTestServer(t, &fakeLDAP{})
+	s.ldap = buildFakeRouter(t, cfg, dirs)
+	code, data := loginRequest(t, s, "pat", "pw2")
+	if code != http.StatusOK || data["username"] != "pat@dc2.com" {
+		t.Fatalf("code=%d data=%+v", code, data)
+	}
+	code, data = loginRequest(t, s, "user1", "pw2")
+	if code != http.StatusUnauthorized || data["__error"] != "invalid username or password" {
+		t.Fatalf("code=%d data=%+v", code, data)
+	}
+	code, data = loginRequest(t, s, "user1@dc2.com", "pw2")
+	if code != http.StatusOK || data["username"] != "user1@dc2.com" {
+		t.Fatalf("code=%d data=%+v", code, data)
 	}
 }

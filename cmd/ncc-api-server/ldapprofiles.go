@@ -19,11 +19,13 @@ import (
 //   - "DOMAIN\user": the profile claiming NetBIOS name DOMAIN gets "user".
 //   - "user@suffix": the profile claiming suffix gets the name unchanged (the
 //     default user filter matches userPrincipalName).
-//   - anything else, or an unclaimed domain: the default profile gets the
-//     name exactly as typed (the pre-profile behaviour).
+//   - an unclaimed domain: the default profile gets the name exactly as typed
+//     (the pre-profile behaviour, e.g. a Global Catalog that knows it).
+//   - a short name ("jdoe"): every directory in configured order, default
+//     first, moving on only while a directory does not have the user. The
+//     first directory that has the user decides; see authenticateRouted.
 //
-// Only one directory is ever asked, so a password is never sent to a
-// directory the login name doesn't route to.
+// A name with a domain is sent to one directory only.
 //
 // Canonical (stored) usernames stay unique across directories:
 //
@@ -298,25 +300,59 @@ func (r *ldapRouter) authenticate(username, password string) (Role, string, []st
 	return role, canonical, groups, ok, err
 }
 
-// authenticateRouted is authenticate that also reports which directory was
-// asked (for the settings test).
-func (r *ldapRouter) authenticateRouted(username, password string) (string, Role, string, []string, bool, error) {
+// isShortName reports whether a login name carries no domain at all (no
+// "user@suffix", no "DOMAIN\user").
+func isShortName(username string) bool {
+	return !strings.ContainsAny(strings.TrimSpace(username), `@\`)
+}
+
+// candidates is the ordered list of directories a login name may be tried
+// against, with the name to search for. A name that gives a domain (claimed
+// or not) has exactly one candidate, from route. A short name is tried
+// against every directory in configured order: the default first, then the
+// profiles as listed.
+func (r *ldapRouter) candidates(username string) ([]*ldapProvider, string) {
+	if isShortName(username) {
+		return r.all(), strings.TrimSpace(username)
+	}
 	p, login := r.route(username)
-	res, ok, err := p.lookup(login, password)
-	if err != nil {
-		if len(r.profiles) > 0 {
-			err = fmt.Errorf("directory %q: %w", p.name, err)
+	return []*ldapProvider{p}, login
+}
+
+// authenticateRouted is authenticate that also reports which directory
+// answered (for the settings test).
+//
+// Ordered short-name lookup moves to the next directory only when the
+// current one does not have the user. It stops at the first directory that
+// has the user, whatever the outcome: a wrong password, or a locked or
+// disabled account (AD rejects those binds as invalid credentials), fails
+// there, so one password is never tried against every forest and account
+// lockouts are not multiplied. An operational error (unreachable server,
+// failed service bind, ambiguous search) also stops, so an outage of one
+// directory never sends its users' passwords to the next one.
+func (r *ldapRouter) authenticateRouted(username, password string) (string, Role, string, []string, bool, error) {
+	cands, login := r.candidates(username)
+	var p *ldapProvider
+	for _, p = range cands {
+		res, ok, err := p.lookup(login, password)
+		if err != nil {
+			if len(r.profiles) > 0 {
+				err = fmt.Errorf("directory %q: %w", p.name, err)
+			}
+			return p.name, RoleNone, "", nil, false, err
 		}
-		return p.name, RoleNone, "", nil, false, err
+		if ok {
+			canonical, err := r.canonicalName(p, res)
+			if err != nil {
+				return p.name, RoleNone, "", nil, false, err
+			}
+			return p.name, res.role, canonical, res.groups, true, nil
+		}
+		if res.found {
+			return p.name, RoleNone, "", nil, false, nil
+		}
 	}
-	if !ok {
-		return p.name, RoleNone, "", nil, false, nil
-	}
-	canonical, err := r.canonicalName(p, res)
-	if err != nil {
-		return p.name, RoleNone, "", nil, false, err
-	}
-	return p.name, res.role, canonical, res.groups, true, nil
+	return p.name, RoleNone, "", nil, false, nil
 }
 
 // canonicalName applies the uniqueness rules described at the top of the file.
