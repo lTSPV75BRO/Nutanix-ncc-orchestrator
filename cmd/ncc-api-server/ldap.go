@@ -42,6 +42,16 @@ type ldapPersisted struct {
 	GroupAttr          string `json:"group_attribute,omitempty"`
 	RoleMapRaw         string `json:"role_map,omitempty"` // group(CN or DN)=role, comma-separated
 	DefaultRole        string `json:"default_role,omitempty"`
+
+	// The fields above are the default directory profile. A config saved
+	// before directory profiles existed is exactly a default profile, so it
+	// needs no migration. UPNSuffixes/NetBIOSNames optionally claim login
+	// names for the default profile (so "CORP\jdoe" is accepted); Profiles
+	// adds further directories picked by the login name's domain part. See
+	// ldapprofiles.go.
+	UPNSuffixes  []string      `json:"upn_suffixes,omitempty"`
+	NetBIOSNames []string      `json:"netbios_names,omitempty"`
+	Profiles     []ldapProfile `json:"profiles,omitempty"`
 }
 
 // configured reports whether the persisted config is complete enough to enable.
@@ -78,10 +88,18 @@ type directoryEntry struct {
 	Name  string `json:"name"`  // display name (displayName/cn)
 	DN    string `json:"dn"`    // full distinguished name
 	UPN   string `json:"upn,omitempty"`
+	// Directory is the profile the entry came from; empty for the default.
+	Directory string `json:"directory,omitempty"`
 }
 
 // ldapProvider is the live, resolved LDAP/AD client built from ldapPersisted.
 type ldapProvider struct {
+	// name is the directory profile ("default" for the top-level config);
+	// upnSuffixes (lowercase) and netbiosNames (uppercase) are the login-name
+	// domains it claims. Set by buildLDAPRouter.
+	name         string
+	upnSuffixes  []string
+	netbiosNames []string
 	urls         []string
 	startTLS     bool
 	insecure     bool
@@ -95,6 +113,9 @@ type ldapProvider struct {
 	roleMap      map[string]Role // keys lowercased for case-insensitive AD matching
 	defaultRole  Role
 	timeout      time.Duration
+
+	// lookupOverride replaces the directory round trip in tests.
+	lookupOverride func(username, password string) (ldapLookupResult, bool, error)
 }
 
 // buildLDAPProvider resolves a persisted config into a live provider. The bool
@@ -125,6 +146,9 @@ func buildLDAPProvider(c *ldapPersisted) (*ldapProvider, bool, error) {
 		defaultRole = r
 	}
 	p := &ldapProvider{
+		name:         ldapDefaultProfileName,
+		upnSuffixes:  normalizeUPNSuffixes(c.UPNSuffixes),
+		netbiosNames: normalizeNetBIOSNames(c.NetBIOSNames),
 		urls:         urls,
 		startTLS:     c.StartTLS,
 		insecure:     c.InsecureSkipVerify,
@@ -283,7 +307,7 @@ func (s *apiServer) reloadLDAPFromStore(ctx context.Context) error {
 		return nil
 	}
 	cfg := s.users.getLDAP()
-	prov, enabled, err := buildLDAPProvider(cfg)
+	prov, enabled, err := buildLDAPRouter(cfg)
 	if err != nil {
 		return err
 	}
@@ -423,22 +447,49 @@ func (p *ldapProvider) searchDirectory(query, kind string, limit int) ([]directo
 // authenticate binds the service account, finds the user, then re-binds as that
 // user to verify the password, finally mapping group membership to a role.
 func (p *ldapProvider) authenticate(username, password string) (Role, string, []string, bool, error) {
+	r, ok, err := p.lookup(username, password)
+	if err != nil || !ok {
+		return RoleNone, "", nil, false, err
+	}
+	return r.role, r.name, r.groups, true, nil
+}
+
+// ldapLookupResult is a verified directory user: name is the username
+// attribute's value (the canonical name of a default-profile user), upn the
+// userPrincipalName (the canonical name of a named-profile user).
+type ldapLookupResult struct {
+	role   Role
+	name   string
+	upn    string
+	groups []string
+	// found is true when the directory has the user, even if the password
+	// was wrong; ordered short-name lookup moves on only when it is false.
+	found bool
+}
+
+// lookup verifies username/password against this one directory. ok is false
+// for an unknown user or wrong password (err nil); err is an operational
+// failure.
+func (p *ldapProvider) lookup(username, password string) (ldapLookupResult, bool, error) {
 	username = strings.TrimSpace(username)
 	// Reject empty credentials before binding: an empty password is an
 	// anonymous bind in LDAP and would otherwise look like a successful auth.
 	if username == "" || password == "" {
-		return RoleNone, "", nil, false, nil
+		return ldapLookupResult{}, false, nil
+	}
+	if p.lookupOverride != nil {
+		return p.lookupOverride(username, password)
 	}
 	conn, err := p.dial()
 	if err != nil {
-		return RoleNone, "", nil, false, err
+		return ldapLookupResult{}, false, err
 	}
 	defer conn.Close()
 
 	// Bind the read-only service account (or anonymously when no bind DN set).
 	if p.bindDN != "" {
 		if err := conn.Bind(p.bindDN, p.bindPassword); err != nil {
-			return RoleNone, "", nil, false, fmt.Errorf("ldap bind (service account): %w", err)
+			return ldapLookupResult{}, false, fmt.Errorf("ldap bind (service account): %w", err)
 		}
 	}
 
@@ -447,24 +498,24 @@ func (p *ldapProvider) authenticate(username, password string) (Role, string, []
 		p.baseDN,
 		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 2, int(p.timeout.Seconds()), false,
 		filter,
-		[]string{"dn", p.usernameAttr, p.groupAttr},
+		[]string{"dn", p.usernameAttr, p.groupAttr, "userPrincipalName"},
 		nil,
 	)
 	res, err := conn.Search(req)
 	if err != nil {
-		return RoleNone, "", nil, false, fmt.Errorf("ldap search: %w", err)
+		return ldapLookupResult{}, false, fmt.Errorf("ldap search: %w", err)
 	}
 	if len(res.Entries) == 0 {
-		return RoleNone, "", nil, false, nil // unknown user
+		return ldapLookupResult{}, false, nil // unknown user
 	}
 	if len(res.Entries) > 1 {
-		return RoleNone, "", nil, false, fmt.Errorf("ldap search for %q matched %d entries (tighten user_filter)", username, len(res.Entries))
+		return ldapLookupResult{}, false, fmt.Errorf("ldap search for %q matched %d entries (tighten user_filter)", username, len(res.Entries))
 	}
 	entry := res.Entries[0]
 
 	// Verify the password by re-binding as the located user DN.
 	if err := conn.Bind(entry.DN, password); err != nil {
-		return RoleNone, "", nil, false, nil // wrong password
+		return ldapLookupResult{found: true}, false, nil // wrong password, or a locked/disabled account
 	}
 
 	canonical := strings.TrimSpace(entry.GetAttributeValue(p.usernameAttr))
@@ -472,6 +523,11 @@ func (p *ldapProvider) authenticate(username, password string) (Role, string, []
 		canonical = username
 	}
 	groups := entry.GetAttributeValues(p.groupAttr)
-	role := p.roleFromGroups(groups)
-	return role, canonical, groups, true, nil
+	return ldapLookupResult{
+		role:   p.roleFromGroups(groups),
+		name:   canonical,
+		upn:    strings.TrimSpace(entry.GetAttributeValue("userPrincipalName")),
+		groups: groups,
+		found:  true,
+	}, true, nil
 }

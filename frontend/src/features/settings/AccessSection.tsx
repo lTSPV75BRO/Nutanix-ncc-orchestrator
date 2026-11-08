@@ -47,6 +47,7 @@ import { notify, notifyError } from "../../notify";
 import { formatDateTime } from "../../utils/datetime";
 import { IconTitle, KeyValueList, StatusBadge, TagList } from "../../ui";
 import { roleColor } from "../../auth/roleColor";
+import { ldapFormValues, ldapProfilePayload, NEW_LDAP_PROFILE, textList, type LDAPProfileFormValues } from "./ldapProfiles";
 
 const ROLE_OPTIONS = [
   { value: "admin", label: "admin — full access" },
@@ -1525,6 +1526,143 @@ export function ScheduledBackupCard() {
   );
 }
 
+const PROFILE_NAME_RULE = {
+  pattern: /^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$/,
+  message: "Letters, digits, '.', '_' or '-' (up to 63 characters)",
+};
+
+// LDAPProfilesList edits the named directory profiles (Form.List "profiles")
+// inside the LDAP form.
+function LDAPProfilesList() {
+  const form = Form.useFormInstance();
+  const profiles = Form.useWatch("profiles", { form, preserve: true }) as LDAPProfileFormValues[] | undefined;
+  return (
+    <>
+      <Typography.Title level={5}>Other domains or forests</Typography.Title>
+      <Typography.Paragraph type="secondary">
+        Add a directory for each further domain or forest that has its own domain controllers.
+        Signing in as <code>jdoe@&lt;suffix&gt;</code> or <code>&lt;NETBIOS&gt;\jdoe</code> asks only the
+        directory that claims that domain. A plain <code>jdoe</code> is looked up in order: the
+        directory above first, then these as listed, until one has the user; that directory alone
+        checks the password. Users of these directories are stored under their UPN
+        (<code>jdoe@emea.corp.example.com</code>), so the same short name in two forests stays two
+        different people.
+      </Typography.Paragraph>
+      <Form.List name="profiles">
+        {(fields, { add, remove }) => (
+          <>
+            {fields.map((field) => {
+              const pv = profiles?.[field.name];
+              return (
+                <Card
+                  key={field.key}
+                  size="small"
+                  style={{ marginBottom: 12 }}
+                  title={pv?.name?.trim() || "New directory"}
+                  extra={
+                    <Button size="small" danger icon={<DeleteOutlined />} onClick={() => remove(field.name)}>
+                      Remove
+                    </Button>
+                  }
+                >
+                  <Form.Item name={[field.name, "previous_name"]} hidden>
+                    <Input />
+                  </Form.Item>
+                  <Space size={24} wrap align="start">
+                    <Form.Item
+                      name={[field.name, "name"]}
+                      label="Name"
+                      rules={[{ required: true, message: "Name this directory" }, PROFILE_NAME_RULE]}
+                    >
+                      <Input placeholder="emea" />
+                    </Form.Item>
+                    <Form.Item
+                      name={[field.name, "upn_suffixes"]}
+                      label="UPN suffixes"
+                      extra="Every suffix its users' UPNs use."
+                      rules={[{ required: true, type: "array", min: 1, message: "Add at least one UPN suffix" }]}
+                    >
+                      <Select mode="tags" open={false} tokenSeparators={[",", " "]} placeholder="emea.corp.example.com" style={{ minWidth: 280 }} />
+                    </Form.Item>
+                    <Form.Item name={[field.name, "netbios_names"]} label="NetBIOS domains (optional)">
+                      <Select mode="tags" open={false} tokenSeparators={[",", " "]} placeholder="EMEA" style={{ minWidth: 160 }} />
+                    </Form.Item>
+                  </Space>
+                  <Form.Item
+                    name={[field.name, "url"]}
+                    label="Server URL(s)"
+                    extra="Domain controllers of this directory; comma-separate for failover."
+                    rules={[{ required: true, message: "Enter at least one server URL" }]}
+                  >
+                    <Input placeholder="ldaps://dc1.emea.corp.example.com:636" />
+                  </Form.Item>
+                  <Space size={24} wrap>
+                    <Form.Item name={[field.name, "start_tls"]} label="StartTLS (for ldap://)" valuePropName="checked">
+                      <Switch />
+                    </Form.Item>
+                    <Form.Item name={[field.name, "insecure_skip_verify"]} label="Skip TLS verification" valuePropName="checked">
+                      <Switch />
+                    </Form.Item>
+                  </Space>
+                  <Form.Item
+                    name={[field.name, "ca_cert_pem"]}
+                    label="CA certificate (PEM)"
+                    extra={pv?.has_ca_cert ? "A CA cert is stored; leave blank to keep it." : "Optional."}
+                  >
+                    <Input.TextArea rows={2} placeholder="-----BEGIN CERTIFICATE-----" />
+                  </Form.Item>
+                  <Space size={24} wrap align="start">
+                    <Form.Item name={[field.name, "bind_dn"]} label="Service account DN">
+                      <Input placeholder="CN=ncc-svc,OU=Service Accounts,DC=emea,DC=corp,DC=example,DC=com" style={{ minWidth: 320 }} />
+                    </Form.Item>
+                    <Form.Item
+                      name={[field.name, "bind_password"]}
+                      label="Service account password"
+                      extra={pv?.has_bind_password ? "A password is stored; leave blank to keep it." : undefined}
+                    >
+                      <Input.Password placeholder="••••••••" autoComplete="new-password" />
+                    </Form.Item>
+                  </Space>
+                  <Form.Item
+                    name={[field.name, "base_dn"]}
+                    label="Base DN"
+                    rules={[{ required: true, message: "Enter the user search base DN" }]}
+                  >
+                    <Input placeholder="DC=emea,DC=corp,DC=example,DC=com" />
+                  </Form.Item>
+                  <Space size={24} wrap>
+                    <Form.Item name={[field.name, "user_filter"]} label="User filter (optional)">
+                      <Input placeholder="(&(objectClass=user)(|(sAMAccountName=%s)(userPrincipalName=%s)))" style={{ minWidth: 320 }} />
+                    </Form.Item>
+                    <Form.Item name={[field.name, "group_attribute"]} label="Group attribute (optional)">
+                      <Input placeholder="memberOf" />
+                    </Form.Item>
+                  </Space>
+                  <Form.Item
+                    name={[field.name, "role_map"]}
+                    label="Group → role mapping"
+                    extra="This directory's own groups, one per line: group DN or CN = role."
+                  >
+                    <Input.TextArea rows={2} placeholder="CN=NCC-Admins,OU=Groups,DC=emea,DC=corp,DC=example,DC=com=admin" />
+                  </Form.Item>
+                  <Form.Item name={[field.name, "default_role"]} label="Default role (no mapping match)">
+                    <Select options={ROLE_OPTIONS} />
+                  </Form.Item>
+                </Card>
+              );
+            })}
+            <Form.Item>
+              <Button icon={<PlusOutlined />} onClick={() => add({ ...NEW_LDAP_PROFILE })}>
+                Add directory
+              </Button>
+            </Form.Item>
+          </>
+        )}
+      </Form.List>
+    </>
+  );
+}
+
 function LDAPCard({ embedded }: { embedded?: boolean }) {
   const qc = useQueryClient();
   const ldapQuery = useQuery({ queryKey: ["settings", "ldap"], queryFn: api.getLDAP });
@@ -1541,19 +1679,7 @@ function LDAPCard({ embedded }: { embedded?: boolean }) {
   // secrets (bind password, CA cert) are intentionally left untouched.
   useEffect(() => {
     if (!cfg) return;
-    form.setFieldsValue({
-      enabled: cfg.enabled ?? false,
-      url: cfg.url ?? "",
-      start_tls: cfg.start_tls ?? false,
-      insecure_skip_verify: cfg.insecure_skip_verify ?? false,
-      bind_dn: cfg.bind_dn ?? "",
-      base_dn: cfg.base_dn ?? "",
-      user_filter: cfg.user_filter ?? "",
-      username_attribute: cfg.username_attribute ?? "",
-      group_attribute: cfg.group_attribute ?? "",
-      role_map: cfg.role_map ?? "",
-      default_role: cfg.default_role ?? "viewer",
-    });
+    form.setFieldsValue(ldapFormValues(cfg));
   }, [cfg, form]);
 
   // Build the API payload from form values. The bind password and CA cert are
@@ -1575,6 +1701,9 @@ function LDAPCard({ embedded }: { embedded?: boolean }) {
       default_role: String(v.default_role ?? "viewer"),
       ...(bind ? { bind_password: bind } : {}),
       ...(ca ? { ca_cert_pem: ca } : {}),
+      upn_suffixes: textList(v.upn_suffixes),
+      netbios_names: textList(v.netbios_names),
+      profiles: (Array.isArray(v.profiles) ? (v.profiles as LDAPProfileFormValues[]) : []).map(ldapProfilePayload),
     };
   };
 
@@ -1590,7 +1719,7 @@ function LDAPCard({ embedded }: { embedded?: boolean }) {
 
   const handleTest = async () => {
     const tv = await testForm.validateFields();
-    const v = form.getFieldsValue(true);
+    const v = form.getFieldsValue(true) as Record<string, unknown>;
     setTesting(true);
     try {
       const res = await api.testLDAP({
@@ -1602,7 +1731,9 @@ function LDAPCard({ embedded }: { embedded?: boolean }) {
         title: "LDAP authentication succeeded",
         content: (
           <span>
-            Signed in as <b>{res.username}</b> with role <Tag color={roleColor(res.role)}>{res.role}</Tag>
+            Signed in as <b>{res.username}</b>
+            {res.directory ? <> through directory <b>{res.directory}</b></> : null} with role{" "}
+            <Tag color={roleColor(res.role)}>{res.role}</Tag>
           </span>
         ),
       });
@@ -1630,27 +1761,14 @@ function LDAPCard({ embedded }: { embedded?: boolean }) {
           showIcon
           style={{ marginBottom: 16 }}
           title="Users sign in on the normal login form with their AD credentials. Local accounts are tried first, then AD — so the built-in admin keeps working even if AD is unreachable."
+          description="With several domains or forests, the directory below is the default one; add the others under Other domains or forests."
         />
       )}
       <Form
         form={form}
         layout="vertical"
         disabled={managedByFlags}
-        initialValues={{
-          enabled: cfg?.enabled ?? false,
-          url: cfg?.url ?? "",
-          start_tls: cfg?.start_tls ?? false,
-          insecure_skip_verify: cfg?.insecure_skip_verify ?? false,
-          bind_dn: cfg?.bind_dn ?? "",
-          bind_password: "",
-          base_dn: cfg?.base_dn ?? "",
-          user_filter: cfg?.user_filter ?? "",
-          username_attribute: cfg?.username_attribute ?? "",
-          group_attribute: cfg?.group_attribute ?? "",
-          role_map: cfg?.role_map ?? "",
-          default_role: cfg?.default_role ?? "viewer",
-          ca_cert_pem: "",
-        }}
+        initialValues={{ ...ldapFormValues(cfg), bind_password: "", ca_cert_pem: "" }}
         onFinish={(v) => saveMut.mutate(v)}
       >
         <Form.Item name="enabled" label="Enable LDAP/AD login" valuePropName="checked">
@@ -1734,6 +1852,23 @@ function LDAPCard({ embedded }: { embedded?: boolean }) {
         <Form.Item name="default_role" label="Default role (no mapping match)">
           <Select options={ROLE_OPTIONS} />
         </Form.Item>
+        <Space size={24} wrap align="start">
+          <Form.Item
+            name="upn_suffixes"
+            label="UPN suffixes (optional)"
+            extra="Domains this directory owns, e.g. corp.example.com. Only needed alongside other directories."
+          >
+            <Select mode="tags" open={false} tokenSeparators={[",", " "]} placeholder="corp.example.com" style={{ minWidth: 280 }} />
+          </Form.Item>
+          <Form.Item
+            name="netbios_names"
+            label="NetBIOS domains (optional)"
+            extra={"Accept CORP\\jdoe as well as jdoe."}
+          >
+            <Select mode="tags" open={false} tokenSeparators={[",", " "]} placeholder="CORP" style={{ minWidth: 160 }} />
+          </Form.Item>
+        </Space>
+        {!managedByFlags ? <LDAPProfilesList /> : null}
         {!managedByFlags ? (
           <Form.Item>
             <Space>
@@ -1761,7 +1896,7 @@ function LDAPCard({ embedded }: { embedded?: boolean }) {
         </Typography.Paragraph>
         <Form form={testForm} layout="vertical">
           <Form.Item name="test_username" label="AD username" rules={[{ required: true }]}>
-            <Input placeholder="jdoe" autoComplete="off" />
+            <Input placeholder="jdoe, jdoe@emea.corp.example.com or EMEA\jdoe" autoComplete="off" />
           </Form.Item>
           <Form.Item name="test_password" label="AD password" rules={[{ required: true }]}>
             <Input.Password autoComplete="off" />
@@ -2066,7 +2201,7 @@ function DirectorySearchSelect({ kind, value, onChange, placeholder }: Directory
         setOptions(
           (res.results ?? []).map((e: DirectoryEntry) => ({
             value: e.value,
-            label: e.upn ? `${e.name} — ${e.upn}` : `${e.name} (${e.value})`,
+            label: (e.upn ? `${e.name} — ${e.upn}` : `${e.name} (${e.value})`) + (e.directory ? ` · ${e.directory}` : ""),
             title: e.dn || e.value,
           })),
         );

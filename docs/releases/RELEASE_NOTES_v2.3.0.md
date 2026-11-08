@@ -325,6 +325,19 @@ gets a "Sign in with <provider>" button, and MFA or conditional access set at
 the provider apply automatically. Setup notes per provider are in
 `docs/SECURITY_AND_TRUST.md`.
 
+### Active Directory across several domains or forests
+
+The LDAP settings keep your current directory as the default and add **Other
+domains or forests**: one entry per further domain or forest, each with its
+own domain controllers, base DN, service account, CA and role mapping, and
+the UPN suffixes and NetBIOS domains it owns. `jdoe@emea.corp.example.com` or
+`EMEA\jdoe` signs in against that directory only. Plain `jdoe` is looked up
+in order, default first, until a directory has the user; that directory
+alone checks the password, so a wrong password doesn't get tried in every
+forest. Users of added directories are stored under their UPN, so the same
+short name in two forests stays two people. Existing configs work unchanged.
+Guide: [Several domains or forests](../setup/SIGN_IN.md#several-domains-or-forests).
+
 ## Bug fixes
 
 - **User-store changes could be lost with several API replicas** (Helm default
@@ -443,8 +456,8 @@ the provider apply automatically. Setup notes per provider are in
 8. **AD/LDAP and SAML users named like a local account** can no longer sign
    in. Before upgrading, check **Settings → Access → Users & roles** for local
    accounts that share a name with directory users and rename or delete one
-   of them. With several AD domains, use a Global Catalog and
-   `userPrincipalName` usernames
+   of them. With several AD domains, use a Global Catalog with
+   `userPrincipalName` usernames or one directory per domain or forest
    ([guide](../setup/SIGN_IN.md#several-domains-or-forests)).
 
 ## Rollback

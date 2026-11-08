@@ -5,6 +5,7 @@ import (
 	crand "crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -662,6 +663,17 @@ func (s *apiServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// AD fallback: only when the local store didn't authenticate the user.
 	if !ok && ldapProv != nil {
 		ldapRole, canonical, groups, authed, err := ldapProv.authenticate(username, body.Password)
+		var refused *ldapRefusal
+		if errors.As(err, &refused) {
+			// The directory accepted the password but the resulting name would
+			// not be unique across directory profiles (see ldapprofiles.go).
+			// Handled like username_conflict: generic 401, audited by code.
+			log.Printf("LDAP sign-in refused for %q: %v", username, err)
+			s.loginFailureTotal.Add(1)
+			s.audit(r, "auth.login", false, map[string]interface{}{"username": username, "method": "ldap", "error": refused.code})
+			writeJSON(w, http.StatusUnauthorized, envelope{Success: false, Error: "invalid username or password"})
+			return
+		}
 		if err != nil {
 			// Operational failure (dial/bind/search): log it but keep the
 			// response generic so we don't leak directory topology.

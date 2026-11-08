@@ -117,13 +117,12 @@ attribute** to `userPrincipalName` (see below).
 
 ### Several domains or forests
 
-There is one directory connection. Several **Server URL(s)** are failover
-servers for the *same* directory, tried in order. The app does not pick a
-server by the `@domain` part of the name, and it does not accept
-`DOMAIN\user`.
+Several **Server URL(s)** in one directory are failover servers for the
+*same* directory, tried in order. For more than one domain or forest, pick
+one of these:
 
-**Child domains in one forest** (`corp.example.com`, `emea.corp.example.com`)
-work through a Global Catalog, which can find users in every domain:
+**Child domains in one forest, one Global Catalog.** A Global Catalog can
+find users in every domain of its forest, so one directory is enough:
 
 | Field | Value |
 | --- | --- |
@@ -138,9 +137,79 @@ people. If the same short name exists in two domains, signing in with just
 **universal** groups: a Global Catalog may not show global-group membership
 from other domains.
 
-**Separate forests** without a shared Global Catalog are not supported.
-Choose one forest, or use OpenID Connect or SAML through an identity provider
-that already federates them (Entra ID, Okta, ADFS).
+**Separate forests, or domains with their own servers: directory profiles.**
+The directory at the top of the form is the *default* directory. Under
+**Other domains or forests**, click **Add directory** once for each further
+domain or forest, and give it its own server URLs, base DN, service account,
+CA certificate and group → role mapping. Each directory claims the login
+domains that pick it:
+
+| Field | Example | Picks this directory for |
+| --- | --- | --- |
+| UPN suffixes | `emea.corp.example.com` | `jdoe@emea.corp.example.com` |
+| NetBIOS domains (optional) | `EMEA` | `EMEA\jdoe` |
+
+The default directory can claim its own domains too (for example `CORP`, so
+`CORP\jdoe` works as well as `jdoe`).
+
+How a sign-in is routed:
+
+- **With a domain, one directory only.** `jdoe@<suffix>` goes to the
+  directory that claims the suffix, and `<NETBIOS>\jdoe` to the directory
+  that claims the NetBIOS domain. No other directory is asked. A domain no
+  directory claims goes to the default directory, as before profiles existed.
+- **A short name (`jdoe`) follows the order of the directories:** the default
+  directory first, then the added ones from top to bottom. The app moves to
+  the next directory only when the current one has **no such user**. The
+  first directory that has the user checks the password and decides:
+  - right password: signed in;
+  - wrong password, or a locked or disabled account: the sign-in fails, and
+    the later directories are **not** tried. One password is never tried
+    against every forest, and a typo can't lock out the same name in other
+    forests;
+  - a directory that can't be reached (or whose service account fails) also
+    stops the sign-in, so its users' passwords aren't sent to the next
+    directory during an outage.
+
+Example: `user1@dc1.com` lives in the default directory and `user1@dc2.com`
+in an added `dc2` directory. Signing in as `user1` always means dc1's user1.
+dc2's user1 signs in as `user1@dc2.com` (or `DC2\user1`). A user who exists
+only in dc2, say `pat`, can sign in as plain `pat`: dc1 has no `pat`, so dc2
+is asked next.
+
+The order is the default directory, then the **Other domains or forests**
+list as shown. To change which forest wins a short name, make that forest
+the default directory or move it up the list (remove and re-add it). The
+**Server URL(s)** inside one directory are still failover servers for that
+same directory, tried in order.
+
+Names the app stores, so nobody in one forest can become someone in another:
+
+- Users of an added directory are stored under their **UPN** in lower case
+  (`jdoe@emea.corp.example.com`). Their UPN has to end in one of that
+  directory's UPN suffixes, so list every suffix its users have (alternative
+  UPN suffixes included); otherwise the sign-in is refused.
+- Users of the default directory keep the name they had before (their
+  `sAMAccountName`, or whatever **Username attribute** says), so existing
+  users, tokens and cluster groups keep working.
+- A suffix or NetBIOS domain can belong to one directory only; the save is
+  refused otherwise.
+
+Click **Test connection…** with each form of the name (`jdoe`,
+`jdoe@emea.corp.example.com`, `EMEA\jdoe`): the result names the directory
+that answered and the name and role the user would get. Saving checks the
+connection of every directory.
+
+In cluster groups, add users of other directories by their UPN (the AD
+search offers them that way) and groups by their full DN: two forests can
+each have a group called `NCC-Admins`, and a CN alone matches both.
+
+Directory profiles are set in the UI or `PUT /api/v1/settings/ldap`. The
+`--ldap-*` startup flags configure the default directory only.
+
+If you'd rather not run several directories here, an identity provider that
+already federates the forests (Entra ID, Okta, ADFS) works through OpenID
+Connect or SAML.
 
 **OpenLDAP and other directories:** set **User filter** (for example
 `(uid=%s)`), **Username attribute** (`uid`) and **Group attribute** to match
@@ -328,7 +397,10 @@ group still sees everything, and admins always see everything.
 | --- | --- |
 | LDAP test fails with a TLS error | Paste the DC's CA certificate, or check the DC name matches its certificate. |
 | LDAP user gets `viewer` instead of `admin` | Run **Test connection…** and look at the groups found; copy the DN exactly into the mapping. Nested groups are not expanded, so map the group the user is directly in. |
-| LDAP: "matched 2 entries (tighten user_filter)" | The same short name exists in two domains. Sign in with the UPN, or set **Username attribute** to `userPrincipalName` (see [Several domains or forests](#several-domains-or-forests)). |
+| LDAP: "matched 2 entries (tighten user_filter)" | The same short name exists in two domains. Sign in with the UPN, or set **Username attribute** to `userPrincipalName`, or give each domain its own directory (see [Several domains or forests](#several-domains-or-forests)). |
+| User of an added directory gets "invalid username or password" but the password is right | Their UPN's suffix isn't in that directory's **UPN suffixes**, or they have no UPN. The audit log shows `upn_suffix_unclaimed` or `upn_missing`; add the suffix. `directory_conflict` means a default-directory user's name ends in a suffix another directory claims. |
+| Plain `jdoe` fails, `jdoe@emea.corp.example.com` works | An earlier directory in the order also has a `jdoe`, so it checked the password. Use the UPN or `EMEA\jdoe`, or reorder the directories. |
+| `EMEA\jdoe` doesn't work | No directory claims the NetBIOS domain `EMEA`, so the name went to the default directory unchanged. Add `EMEA` to the right directory's **NetBIOS domains**. |
 | AD user gets "invalid username or password" but the password is right | A local account has the same name, and directory users can't take it. Rename or delete the local account, or switch to UPN usernames. The server log says "matches a local account". |
 | OIDC: "redirect URI mismatch" at the provider | The redirect URI must match exactly, including `https`, host, port and path. Fix **Dashboard URL** or the provider app. |
 | OIDC: everyone gets the default role | The token has no groups claim, or the names differ (Entra sends object IDs). Check the provider's groups claim settings. |

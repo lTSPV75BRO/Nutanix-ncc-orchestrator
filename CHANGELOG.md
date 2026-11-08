@@ -83,6 +83,26 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
 
 ### Added
 
+- **AD/LDAP across several domains or forests: directory profiles.**
+  Settings → Access → Sign-in → LDAP keeps the existing directory as the
+  default and adds **Other domains or forests**, each with its own server
+  URLs, base DN, service account, CA certificate and group → role mapping,
+  claiming UPN suffixes and NetBIOS domains. `jdoe@emea.corp.example.com` and
+  `EMEA\jdoe` are checked by that directory only. A plain `jdoe` is looked up
+  in order (default first, then the list) until a directory has the user;
+  that directory alone checks the password, so a wrong password or a locked
+  account stops there instead of being tried in every forest. Users of added
+  directories are stored under their UPN; default-directory users keep their
+  current names. Existing single-directory configs carry on unchanged as the
+  default. `GET/PUT /api/v1/settings/ldap` gain `upn_suffixes`,
+  `netbios_names` and `profiles` (omitted fields keep the stored values);
+  the test endpoint reports which directory answered. A cluster-group entry
+  `jdoe@<suffix of an added directory>` no longer also matches the default
+  directory's `jdoe`. See
+  [`docs/setup/SIGN_IN.md`](docs/setup/SIGN_IN.md#several-domains-or-forests).
+- **AD/LDAP: a CA certificate left blank on save is kept.** It was cleared,
+  although the form said "leave blank to keep it". Test connection also
+  reuses the stored CA.
 - **Detailed logs from every process, and a Logs page to read them.** The API
   server writes a rotated JSON log (`logs/ncc-api.log`) with every request
   (request ID, user, status, duration, error), each run's lifecycle (accepted,
@@ -504,8 +524,9 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   fails with an "algorithm not implemented" error. Assertions must also carry
   a NameID or the configured username attribute.
 - **AD/LDAP and SAML users named like a local account are refused.** Rename
-  or delete one of the two before upgrading. Several AD domains: use a Global
-  Catalog with `userPrincipalName` usernames
+  or delete one of the two before upgrading. Several AD domains: a Global
+  Catalog with `userPrincipalName` usernames, or one directory profile per
+  domain or forest
   ([`docs/setup/SIGN_IN.md`](docs/setup/SIGN_IN.md#several-domains-or-forests)).
 - A locked-out sole admin recovers on the host with
   `ncc-orchestrator v2-reset-password --user admin` (or
