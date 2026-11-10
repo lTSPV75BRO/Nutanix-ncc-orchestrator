@@ -6,7 +6,7 @@ description.
 
 | Version | Notes |
 | --- | --- |
-| 2.3.0 (unreleased) | [RELEASE_NOTES_v2.3.0.md](RELEASE_NOTES_v2.3.0.md) |
+| 2.4.0 (unreleased) | [RELEASE_NOTES_v2.4.0.md](RELEASE_NOTES_v2.4.0.md) |
 | 2.2.1 | [RELEASE_NOTES_v2.2.1.md](RELEASE_NOTES_v2.2.1.md) |
 | 2.2.0 | [RELEASE_NOTES_v2.2.0.md](RELEASE_NOTES_v2.2.0.md) |
 | 2.1.1 | [RELEASE_NOTES_v2.1.1.md](RELEASE_NOTES_v2.1.1.md) |
@@ -20,5 +20,5 @@ description.
 | 0.1.12 | [RELEASE_NOTES_v0.1.12.md](RELEASE_NOTES_v0.1.12.md) |
 
 Older notes describe the repository as it was at that release; build commands
-in them (for example `go build .` or `bash binaryGO.txt`) predate the 2.3.0
+in them (for example `go build .` or `bash binaryGO.txt`) predate the 2.4.0
 layout. Use the current [README](../../README.md) to build.

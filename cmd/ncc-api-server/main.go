@@ -60,7 +60,7 @@ var (
 
 func init() {
 	if Version == "" {
-		Version = "2.3.0"
+		Version = "2.4.0"
 	}
 	if BuildDate == "" {
 		BuildDate = "unknown"
@@ -4602,7 +4602,7 @@ func (s *apiServer) buildOpenAPISpecBase() map[string]interface{} {
 		"openapi": "3.0.3",
 		"info": map[string]interface{}{
 			"title":       "NCC Orchestrator API",
-			"version":     "2.3.0",
+			"version":     "2.4.0",
 			"description": "REST API for NCC orchestrator run control, artifacts, settings, and analytics.",
 		},
 		"servers": []map[string]interface{}{

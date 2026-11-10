@@ -1,6 +1,6 @@
 # Scaling to thousands of clusters
 
-Tested for v2.3.0 with **7,000 simulated clusters** and 30 findings each
+Tested for v2.4.0 with **7,000 simulated clusters** and 30 findings each
 (**210,000 findings per run**), running the real orchestrator, api-server
 and UI against [`tools/fakeprism`](../tools/fakeprism), a stand-in for Prism
 Element. Measured on one Windows 11 workstation; Linux servers are typically

@@ -1,6 +1,6 @@
 # Third-party dependency inventory
 
-This document maps the third-party packages used by NCC Orchestrator v2.3.0.
+This document maps the third-party packages used by NCC Orchestrator v2.4.0.
 It is derived from [`go.mod`](../go.mod), [`go.sum`](../go.sum),
 [`frontend/package.json`](../frontend/package.json), and
 [`frontend/package-lock.json`](../frontend/package-lock.json).

@@ -1,6 +1,6 @@
 # Third-party alert integrations (ServiceNow, Prometheus, and others)
 
-Applies to NCC Orchestrator **v2.3.0** and later. Everything in this guide is
+Applies to NCC Orchestrator **v2.4.0** and later. Everything in this guide is
 taken from the shipped API (`cmd/ncc-api-server`). Where an integration needs
 something the product does not provide yet, the section says so and labels it
 **Proposed enhancement**.

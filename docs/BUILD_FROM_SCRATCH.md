@@ -65,7 +65,7 @@ Environment/access prerequisites:
 ```bash
 git clone https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator.git
 cd Nutanix-ncc-orchestrator
-git checkout v2.3.0
+git checkout v2.4.0
 ```
 
 Sanity-check important paths:

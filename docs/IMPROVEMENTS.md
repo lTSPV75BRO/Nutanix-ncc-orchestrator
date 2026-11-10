@@ -3,7 +3,7 @@
 This is the active backlog for NCC Orchestrator. It contains proposed work that
 is not already shipped in v2.3.x. Completed work belongs in
 [`CHANGELOG.md`](../CHANGELOG.md) and the release notes
-([`v2.3.0`](releases/RELEASE_NOTES_v2.3.0.md)).
+([`v2.4.0`](releases/RELEASE_NOTES_v2.4.0.md)).
 
 Priorities are operational: P0 blocks scale or reliability, P1 improves
 security or operator experience, and P2 improves maintainability. Size is a
@@ -36,7 +36,7 @@ rough estimate: S, M, or L.
 | Item | Scope | Size |
 | --- | --- | --- |
 | Stale-report UX | Clearly show when stale data is being served, a refresh is in progress, or the UI has fallen back to a previous report. | S–M |
-| Notification delivery history | Every attempt is logged (System → Logs) and Settings → Notifications shows each channel's last attempt, last success, last error, tries and dead-letter count (v2.3.0). Remaining: a browsable history of past deliveries, and replaying dead-lettered messages from the UI. | S–M |
+| Notification delivery history | Every attempt is logged (System → Logs) and Settings → Notifications shows each channel's last attempt, last success, last error, tries and dead-letter count (v2.4.0). Remaining: a browsable history of past deliveries, and replaying dead-lettered messages from the UI. | S–M |
 | Operator-safe empty states | Give direct actions for missing config, missing clusters, failed first runs, missing schedules, and restricted cluster groups. | S |
 | Session and lockout clarity | Show remaining session time and actionable account-lockout countdowns without exposing sensitive details. | S–M |
 

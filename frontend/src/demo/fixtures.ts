@@ -37,7 +37,7 @@ import type {
   UserAccount,
 } from "../api/types";
 
-export const DEMO_VERSION = "2.3.0";
+export const DEMO_VERSION = "2.4.0";
 
 const NOW = Date.now();
 const MIN = 60_000;
@@ -887,7 +887,7 @@ export const API_LOG = {
   path: "logs/ncc-api.log",
   exists: true,
   content: [
-    apiLine(NOW - 3 * HOUR, "INFO", "ncc-api-server starting", { listen: ":8080", version: "v2.3.0", log_level: "info", auth: "local" }),
+    apiLine(NOW - 3 * HOUR, "INFO", "ncc-api-server starting", { listen: ":8080", version: "v2.4.0", log_level: "info", auth: "local" }),
     apiLine(NOW - 3 * HOUR + 1_000, "INFO", "self-heal timer armed", { interval: "6h0m0s" }),
     apiLine(LATEST_RUN_AT - 1_000, "INFO", "environment schedule fired", { environment: "prod", schedule: "0 */6 * * *" }),
     apiLine(LATEST_RUN_AT, "INFO", "run accepted", { run_id: LATEST_RUN_ID, source: "schedule", environment: "prod" }),

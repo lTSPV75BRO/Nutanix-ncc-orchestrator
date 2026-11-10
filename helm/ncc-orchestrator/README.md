@@ -20,9 +20,9 @@ HTTPS; Settings → Access can replace it with a BYO PEM pair.
 ```bash
 helm install ncc-orchestrator ./helm/ncc-orchestrator \
   --namespace ncc-orchestrator-v2 --create-namespace \
-  --set images.runner.tag=2.3.0 \
-  --set images.api.tag=2.3.0 \
-  --set images.ui.tag=2.3.0
+  --set images.runner.tag=2.4.0 \
+  --set images.api.tag=2.4.0 \
+  --set images.ui.tag=2.4.0
 ```
 
 Set `ui.origin`, `ingress.host`, `ingress.tlsSecret`, storage names, and

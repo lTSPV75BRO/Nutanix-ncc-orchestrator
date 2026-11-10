@@ -1,6 +1,6 @@
-# NIST CSF 2.0 Current Profile (v2.3.0)
+# NIST CSF 2.0 Current Profile (v2.4.0)
 
-Last reviewed **2026-10-31** for v2.3.0. This is NCC Orchestrator's *Current
+Last reviewed **2026-11-10** for v2.4.0. This is NCC Orchestrator's *Current
 Profile* in NIST Cybersecurity Framework 2.0 terms: which outcomes the product
 and project achieve today, with evidence for each. The machine-readable form is
 [`NIST_CSF_EVIDENCE_MANIFEST.json`](NIST_CSF_EVIDENCE_MANIFEST.json); a test
