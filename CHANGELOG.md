@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [2.4.0] - Unreleased
+
+Update checks now remain accurate when the GitHub REST API is rate limited.
+The public latest-release redirect is used to identify the current tag, while
+the UI marks the result as degraded and prevents installation until release
+asset metadata can be verified. A `GITHUB_TOKEN` can be supplied for a
+complete check and update.
+
+Release notes: [`RELEASE_NOTES_v2.4.0.md`](docs/releases/RELEASE_NOTES_v2.4.0.md).
+
 ## [2.3.0] - 2026-11-08
 
 Setup checklist, redesigned sign-in, HA-safe user store, transactional restore,
