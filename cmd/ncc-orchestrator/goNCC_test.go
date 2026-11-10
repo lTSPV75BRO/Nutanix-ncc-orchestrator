@@ -3515,6 +3515,32 @@ func TestNormalizeGitHubRepo(t *testing.T) {
 	}
 }
 
+func TestFetchLatestGitHubTagFollowsReleaseRedirect(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/owner/repo/releases/latest":
+			http.Redirect(w, r, "/owner/repo/releases/tag/v2.3.0", http.StatusFound)
+		case "/owner/repo/releases/tag/v2.3.0":
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	oldBase := githubWebBaseURL
+	githubWebBaseURL = srv.URL
+	defer func() { githubWebBaseURL = oldBase }()
+
+	got, err := fetchLatestGitHubTag("owner/repo", srv.Client())
+	if err != nil {
+		t.Fatalf("fetchLatestGitHubTag returned error: %v", err)
+	}
+	if got != "v2.3.0" {
+		t.Fatalf("fetchLatestGitHubTag = %q, want v2.3.0", got)
+	}
+}
+
 func TestEnforceMajorUpgradePolicy(t *testing.T) {
 	if err := enforceMajorUpgradePolicy("1.1.0", "1.9.0", false); err != nil {
 		t.Fatalf("same-major upgrade should be allowed, got err: %v", err)

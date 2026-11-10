@@ -232,6 +232,8 @@ func parseUpdateCheckJSON(out string, data map[string]interface{}) bool {
 			LatestOverall   string `json:"latest_overall"`
 			UpdateAvailable bool   `json:"update_available"`
 			HasPackage      bool   `json:"has_package"`
+			CheckDegraded   bool   `json:"check_degraded"`
+			CheckError      string `json:"check_error"`
 		}
 		if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
 			return false
@@ -247,6 +249,12 @@ func parseUpdateCheckJSON(out string, data map[string]interface{}) bool {
 		}
 		data["update_available"] = parsed.UpdateAvailable
 		data["has_package"] = parsed.HasPackage
+		if parsed.CheckDegraded {
+			data["check_degraded"] = true
+		}
+		if parsed.CheckError != "" {
+			data["check_error"] = parsed.CheckError
+		}
 		return true
 	}
 	return false

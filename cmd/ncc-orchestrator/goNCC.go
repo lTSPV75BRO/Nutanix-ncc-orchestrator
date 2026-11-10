@@ -7671,6 +7671,14 @@ type githubAsset struct {
 	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
+// These bases are variables so update-check fallback behavior can be tested
+// without contacting GitHub. The API endpoint provides release assets; the
+// browser endpoint is a rate-limit-resistant source for the latest tag only.
+var (
+	githubAPIBaseURL = "https://api.github.com"
+	githubWebBaseURL = "https://github.com"
+)
+
 type updateOptions struct {
 	CheckOnly          bool
 	AllowMajorUpgrade  bool
@@ -7802,12 +7810,13 @@ func pickLatestSemverRelease(releases []githubRelease, majorFilter int64) *githu
 }
 
 func fetchGitHubReleases(repo string, client *http.Client) ([]githubRelease, error) {
-	apiURL := "https://api.github.com/repos/" + repo + "/releases?per_page=100"
+	apiURL := strings.TrimRight(githubAPIBaseURL, "/") + "/repos/" + repo + "/releases?per_page=100"
 	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	req.Header.Set("User-Agent", "ncc-orchestrator/"+stripGoBuildGitSuffix(Version))
 	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -7817,7 +7826,7 @@ func fetchGitHubReleases(repo string, client *http.Client) ([]githubRelease, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == 403 && resp.Header.Get("X-RateLimit-Remaining") == "0" {
-		fmt.Fprintln(os.Stderr, "GitHub API rate limited. Set GITHUB_TOKEN for higher limits or try again later.")
+		return nil, fmt.Errorf("GitHub API rate limited (resets %s): set GITHUB_TOKEN for higher limits or try again later", githubRateLimitReset(resp))
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
@@ -7828,6 +7837,49 @@ func fetchGitHubReleases(repo string, client *http.Client) ([]githubRelease, err
 		return nil, fmt.Errorf("parse releases: %w", err)
 	}
 	return releases, nil
+}
+
+func githubRateLimitReset(resp *http.Response) string {
+	raw := strings.TrimSpace(resp.Header.Get("X-RateLimit-Reset"))
+	if unix, err := strconv.ParseInt(raw, 10, 64); err == nil && unix > 0 {
+		return time.Unix(unix, 0).UTC().Format(time.RFC3339)
+	}
+	return "later"
+}
+
+// fetchLatestGitHubTag follows GitHub's public /releases/latest redirect. It
+// does not require the REST API quota and is therefore useful when the API is
+// rate limited. It intentionally returns only the tag: assets still require
+// authenticated API metadata before an update can be applied.
+func fetchLatestGitHubTag(repo string, client *http.Client) (string, error) {
+	webURL := strings.TrimRight(githubWebBaseURL, "/") + "/" + repo + "/releases/latest"
+	req, err := http.NewRequest(http.MethodGet, webURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("create latest-release request: %w", err)
+	}
+	req.Header.Set("User-Agent", "ncc-orchestrator/"+stripGoBuildGitSuffix(Version))
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetch latest release page: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("latest release page returned %d", resp.StatusCode)
+	}
+	path := resp.Request.URL.Path
+	marker := "/releases/tag/"
+	idx := strings.Index(path, marker)
+	if idx == -1 {
+		return "", errors.New("latest release page did not identify a release tag")
+	}
+	tag := strings.Trim(strings.TrimPrefix(path[idx+len(marker):], "/"), " ")
+	if tag == "" {
+		return "", errors.New("latest release page returned an empty release tag")
+	}
+	if _, err := semver.NewVersion(strings.TrimPrefix(tag, "v")); err != nil {
+		return "", fmt.Errorf("latest release page returned invalid tag %q", tag)
+	}
+	return tag, nil
 }
 
 func pickAssetForCurrentPlatform(rel githubRelease) (downloadURL string, assetName string) {
@@ -12886,6 +12938,38 @@ func runUpdate(opts updateOptions) error {
 	}
 	releases, err := fetchGitHubReleases(repo, client)
 	if err != nil {
+		// GitHub's release-page redirect is not subject to the REST API
+		// rate-limit bucket. Preserve an accurate latest version for the UI,
+		// but mark the result degraded because assets cannot be selected safely
+		// without the API response. Never reuse an older/stale release value.
+		if opts.CheckOnly && strings.Contains(err.Error(), "GitHub API rate limited") {
+			if latestTag, pageErr := fetchLatestGitHubTag(repo, client); pageErr == nil {
+				latestOverall := strings.TrimPrefix(strings.TrimSpace(latestTag), "v")
+				targetVer := latestOverall
+				currentMajor, _ := parseVersionMajor(currentVer)
+				targetMajor, _ := parseVersionMajor(targetVer)
+				if !opts.AllowMajorUpgrade && currentMajor > 0 && currentMajor != targetMajor {
+					targetVer = currentVer
+				}
+				checkError := "GitHub API rate limited; latest release tag is " + latestTag + ", but release assets are unavailable. Set GITHUB_TOKEN for a complete update check."
+				if opts.JSONOut {
+					result := map[string]interface{}{
+						"current_version":  currentVer,
+						"latest_version":   targetVer,
+						"latest_overall":   latestOverall,
+						"update_available": versionLess(currentVer, targetVer),
+						"has_package":      false,
+						"check_degraded":   true,
+						"check_error":      checkError,
+					}
+					if b, marshalErr := json.Marshal(result); marshalErr == nil {
+						fmt.Fprintf(os.Stdout, "%s%s\n", updateCheckJSONPrefix, string(b))
+					}
+				}
+				fmt.Fprintln(os.Stderr, checkError)
+				return nil
+			}
+		}
 		return err
 	}
 	if len(releases) == 0 {

@@ -211,6 +211,8 @@ export type UpdateStatus = {
   update_available?: boolean;
   supported?: boolean;
   check_error?: string;
+  /** The latest tag was found, but release assets were unavailable (usually API rate limiting). */
+  check_degraded?: boolean;
   check_skipped?: string;
   /** Settings → Features "Update checks" is off: no release lookup or install. */
   disabled?: boolean;

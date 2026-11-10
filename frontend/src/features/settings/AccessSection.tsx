@@ -3289,7 +3289,7 @@ export function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }
           <Alert type="success" showIcon title="You're on the latest release." />
         ) : null}
 
-        {!isKubernetes && supported && !inProgress && !restarting && updateAvailable ? (
+        {!isKubernetes && supported && !inProgress && !restarting && !status?.check_error && updateAvailable ? (
           <Alert
             type="warning"
             showIcon
