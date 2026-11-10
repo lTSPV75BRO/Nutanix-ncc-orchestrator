@@ -56,7 +56,7 @@ func readLimits(root string) Limits {
 				l.CPULimit = quota / period
 			}
 		}
-		l.OOMKills = int(readKeyed(filepath.Join(root, "memory.events"), "oom_kill"))
+		l.OOMKills = uint64ToInt(readKeyed(filepath.Join(root, "memory.events"), "oom_kill"))
 		return l
 	}
 	// cgroup v1: per-controller hierarchies.
@@ -69,7 +69,7 @@ func readLimits(root string) Limits {
 			l.MemoryLimit = lim
 		}
 		l.MemoryUsage = readUintFile(filepath.Join(mem, "memory.usage_in_bytes"))
-		l.OOMKills = int(readKeyed(filepath.Join(mem, "memory.oom_control"), "oom_kill"))
+		l.OOMKills = uint64ToInt(readKeyed(filepath.Join(mem, "memory.oom_control"), "oom_kill"))
 		cpu := filepath.Join(root, "cpu")
 		quota, e1 := strconv.ParseFloat(readString(filepath.Join(cpu, "cpu.cfs_quota_us")), 64)
 		period, e2 := strconv.ParseFloat(readString(filepath.Join(cpu, "cpu.cfs_period_us")), 64)
@@ -132,6 +132,14 @@ func readUintFile(path string) uint64 {
 		return 0
 	}
 	return n
+}
+
+func uint64ToInt(n uint64) int {
+	maxInt := uint64(^uint(0) >> 1)
+	if n > maxInt {
+		return int(maxInt)
+	}
+	return int(n)
 }
 
 // readKeyed reads "key value" lines (memory.events, oom_control).

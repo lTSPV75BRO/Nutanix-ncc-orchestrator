@@ -14,6 +14,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Update fails if Github rate-limit is reached** Update checks now remain accurate when the GitHub REST API is rate limited. The public latest-release redirect is used to identify the current tag, while the UI marks the result as degraded and prevents installation until release asset metadata can be verified. A `GITHUB_TOKEN` can be supplied for a complete check and update.
 
+- CodeQL coverage now includes the React frontend alongside Go and GitHub
+  Actions. Runtime limit parsing is bounded before integer conversion, and the
+  OIDC cookie security policy is documented for CodeQL. The loopback-only
+  throwaway fake OIDC provider is excluded from production security scanning.
+
 Release notes: [`RELEASE_NOTES_v2.4.0.md`](docs/releases/RELEASE_NOTES_v2.4.0.md).
 
 ## [2.3.0] - 2026-11-08

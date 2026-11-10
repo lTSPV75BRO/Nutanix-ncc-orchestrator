@@ -1,5 +1,11 @@
 name: "ncc-orchestrator CodeQL config"
 
+# fakeoidc is a loopback-only throwaway test provider, not shipped in any
+# release. Its authorization endpoint must return the caller-supplied OAuth
+# redirect URI, so scanning it produces an intentional open-redirect finding.
+paths-ignore:
+  - tools/fakeoidc/**
+
 # ----------------------------------------------------------------------------
 # Why this file exists
 # ----------------------------------------------------------------------------

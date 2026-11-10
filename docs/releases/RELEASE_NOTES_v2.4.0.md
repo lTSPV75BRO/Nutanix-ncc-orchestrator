@@ -14,6 +14,14 @@ disabled until a complete, verifiable release response is available. Set
 `GITHUB_TOKEN` on the API/orchestrator process for higher GitHub API limits and
 normal update installation behavior.
 
+## CodeQL coverage
+
+CodeQL now analyzes the Go services, React frontend, and GitHub Actions
+workflows. Runtime cgroup counters are bounded before conversion to `int`, and
+the OIDC cookie security policy is explicit for the supported HTTP development
+and TLS-terminating proxy modes. The loopback-only throwaway fake OIDC provider
+is excluded from production security scanning.
+
 ## Validation
 
 - Go vet, tests, and builds pass.

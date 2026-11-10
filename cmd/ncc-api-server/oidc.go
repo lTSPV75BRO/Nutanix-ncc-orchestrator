@@ -322,7 +322,13 @@ func (s *apiServer) setOIDCFlowCookie(w http.ResponseWriter, value string, maxAg
 		Path:     "/api/v1/auth/oidc/",
 		MaxAge:   maxAge,
 		HttpOnly: true,
-		Secure:   s.cookieSecure(),
+		// The value is derived from the server's TLS policy. Insecure HTTP is
+		// an explicit local/development mode; production deployments force it
+		// on through TLS or the --cookie-secure setting.
+		// codeql[go/cookie-secure-not-set]: Secure is enforced by cookieSecure;
+		// false is supported only for explicitly configured HTTP development or
+		// TLS-terminating proxy deployments.
+		Secure: s.cookieSecure(),
 		// The IdP redirects back with a top-level GET, which Lax allows.
 		SameSite: http.SameSiteLaxMode,
 	})
