@@ -298,27 +298,6 @@ application** in the claim settings.
 To try OIDC without a real provider: `go run ./tools/fakeoidc` starts a test
 provider on `http://127.0.0.1:9800` with three test users.
 
-For a deployed SAML test provider, build `go run ./tools/fakesaml` with NCC's
-SP metadata URL:
-
-```bash
-go run ./tools/fakesaml \
-  -https \
-  -listen 0.0.0.0:9900 \
-  -issuer https://ncc.example.com:9900 \
-  -sp-metadata-url https://ncc.example.com/saml/metadata \
-  -launch-url https://ncc.example.com/saml/login \
-  -signing-cert /var/lib/ncc/fakesaml-signing.crt \
-  -signing-key /var/lib/ncc/fakesaml-signing.key
-```
-
-The provider's landing page has **Launch NCC login** and test users
-`alice`/`oscar`/`vera`, all with password `password`. This provider is for
-development only; use a trusted certificate or import its self-signed
-certificate into the NCC host and browser trust stores. Persist the signing
-certificate and key in a systemd deployment; otherwise every provider restart
-changes the signing certificate and NCC will reject assertions until its IdP
-metadata is reloaded.
 
 ## SAML
 
@@ -390,6 +369,30 @@ from the dashboard is safer.
   value e.g. `ncc-admins`. Keep **Role/group attribute** as `Role`.
 - IdP metadata URL:
   `https://<adfs-host>/FederationMetadata/2007-06/FederationMetadata.xml`.
+
+
+For a deployed SAML test provider, build `go run ./tools/fakesaml` with NCC's
+SP metadata URL:
+
+```bash
+go run ./tools/fakesaml \
+  -https \
+  -listen 0.0.0.0:9900 \
+  -issuer https://ncc.example.com:9900 \
+  -sp-metadata-url https://ncc.example.com/saml/metadata \
+  -launch-url https://ncc.example.com/saml/login \
+  -signing-cert /var/lib/ncc/fakesaml-signing.crt \
+  -signing-key /var/lib/ncc/fakesaml-signing.key
+```
+
+The provider's landing page has **Launch NCC login** and test users
+`alice`/`oscar`/`vera`, all with password `password`. This provider is for
+development only; use a trusted certificate or import its self-signed
+certificate into the NCC host and browser trust stores. Persist the signing
+certificate and key in a systemd deployment; otherwise every provider restart
+changes the signing certificate and NCC will reject assertions until its IdP
+metadata is reloaded.
+
 
 ## Limit people to some clusters
 
