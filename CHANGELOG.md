@@ -22,6 +22,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Go toolchain updated to 1.27.4** to address `GO-2026-6859`, an HTTP/1
   server crash caused by a `net/http` header race.
 
+- Added the separate `tools/fakesaml` test IdP. It registers NCC SP metadata,
+  seeds role-mapped users, serves a launch page for the NCC SAML login flow,
+  and supports HTTPS with a generated or supplied certificate. Its SAML
+  signing certificate and key can be persisted with `-signing-cert` and
+  `-signing-key`, preventing metadata trust failures after provider restarts.
+
 Release notes: [`RELEASE_NOTES_v2.4.0.md`](docs/releases/RELEASE_NOTES_v2.4.0.md).
 
 ## [2.3.0] - 2026-11-08

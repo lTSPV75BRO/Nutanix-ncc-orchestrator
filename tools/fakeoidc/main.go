@@ -14,16 +14,27 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
+	"errors"
 	"flag"
+	"fmt"
 	"html/template"
 	"log"
+	"math/big"
+	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,6 +62,8 @@ type grant struct {
 	expires   time.Time
 }
 
+const certificateSerialBits = 128
+
 var page = template.Must(template.New("login").Parse(`<!doctype html>
 <html><head><meta charset="utf-8"><title>fakeoidc sign-in</title>
 <style>body{font-family:system-ui,sans-serif;max-width:420px;margin:64px auto;padding:0 16px}
@@ -63,11 +76,27 @@ a:hover{background:#f3f3f3}small{color:#666}</style></head>
 
 func main() {
 	listen := flag.String("listen", "127.0.0.1:9800", "address to listen on")
-	issuer := flag.String("issuer", "", "issuer URL (default http://<listen>)")
+	https := flag.Bool("https", false, "serve HTTPS with a generated self-signed certificate")
+	certFile := flag.String("tls-cert", "", "PEM certificate file (HTTPS only; generated when omitted)")
+	keyFile := flag.String("tls-key", "", "PEM private key file (HTTPS only; generated when omitted)")
+	issuer := flag.String("issuer", "", "issuer URL (default scheme://advertised listen host)")
+	redirectHosts := flag.String("redirect-hosts", "", "comma-separated callback hostnames/IPs (default loopback plus issuer host)")
 	flag.Parse()
 	iss := *issuer
 	if iss == "" {
-		iss = "http://" + *listen
+		scheme := "http"
+		if *https {
+			scheme = "https"
+		}
+		iss = scheme + "://" + advertisedHost(*listen)
+	}
+	issuerURL, err := url.Parse(iss)
+	if err != nil || issuerURL.Scheme != "http" && issuerURL.Scheme != "https" || issuerURL.Hostname() == "" {
+		log.Fatalf("invalid issuer URL %q", iss)
+	}
+	allowedRedirectHosts := buildRedirectHostAllowlist(*redirectHosts, issuerURL.Hostname())
+	if len(allowedRedirectHosts) == 0 {
+		log.Fatal("redirect host allowlist cannot be empty")
 	}
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -98,7 +127,7 @@ func main() {
 	})
 	mux.HandleFunc("/authorize", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		redirect, err := url.Parse(q.Get("redirect_uri"))
+		redirect, err := validateRedirectURL(q.Get("redirect_uri"), allowedRedirectHosts)
 		if err != nil || q.Get("response_type") != "code" || q.Get("code_challenge_method") != "S256" {
 			http.Error(w, "need response_type=code, a redirect_uri and PKCE (S256)", http.StatusBadRequest)
 			return
@@ -162,5 +191,139 @@ func main() {
 	})
 	log.Printf("fakeoidc issuer %s (users: alice=ncc-admins, oscar=ncc-ops, vera=staff)", iss)
 	srv := &http.Server{Addr: *listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-	log.Fatal(srv.ListenAndServe())
+	if !*https {
+		log.Fatal(srv.ListenAndServe())
+	}
+
+	certificate, err := loadOrGenerateCertificate(*certFile, *keyFile, certificateNames(issuerURL, *listen))
+	if err != nil {
+		log.Fatal(err)
+	}
+	tlsListener, err := tls.Listen("tcp", *listen, &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{certificate},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("fakeoidc HTTPS enabled; certificate is self-signed (use -tls-cert/-tls-key for a trusted certificate)")
+	log.Fatal(srv.Serve(tlsListener))
+}
+
+func advertisedHost(listen string) string {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil || host == "" || host == "0.0.0.0" || host == "::" {
+		return "127.0.0.1:" + strings.TrimSpace(listenPort(listen))
+	}
+	return listen
+}
+
+func listenPort(listen string) string {
+	_, port, err := net.SplitHostPort(listen)
+	if err != nil || port == "" {
+		return "9800"
+	}
+	return port
+}
+
+func buildRedirectHostAllowlist(raw, issuerHost string) map[string]bool {
+	allowed := map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true}
+	if strings.TrimSpace(raw) == "" {
+		allowed[strings.ToLower(strings.TrimSpace(issuerHost))] = true
+		return allowed
+	}
+	for _, host := range strings.Split(raw, ",") {
+		host = strings.ToLower(strings.TrimSpace(host))
+		if host != "" {
+			allowed[host] = true
+		}
+	}
+	return allowed
+}
+
+func validateRedirectURL(raw string, allowedHosts map[string]bool) (*url.URL, error) {
+	redirect, err := url.Parse(raw)
+	if err != nil || redirect.Scheme != "http" && redirect.Scheme != "https" ||
+		redirect.Hostname() == "" || redirect.User != nil || redirect.Fragment != "" {
+		return nil, errors.New("redirect_uri must be an HTTP(S) URL without credentials or fragments")
+	}
+	if !allowedHosts[strings.ToLower(redirect.Hostname())] {
+		return nil, errors.New("redirect_uri host is not in the fakeoidc allowlist")
+	}
+	return redirect, nil
+}
+
+func certificateNames(issuer *url.URL, listen string) []string {
+	names := []string{"localhost", "127.0.0.1", "::1"}
+	if host := issuer.Hostname(); host != "" {
+		names = append(names, host)
+	}
+	if host, _, err := net.SplitHostPort(listen); err == nil && host != "" && host != "0.0.0.0" && host != "::" {
+		names = append(names, host)
+	}
+	return uniqueStrings(names)
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != "" && !seen[value] {
+			seen[value] = true
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func loadOrGenerateCertificate(certFile, keyFile string, names []string) (tls.Certificate, error) {
+	if (certFile == "") != (keyFile == "") {
+		return tls.Certificate{}, errors.New("-tls-cert and -tls-key must be provided together")
+	}
+	if certFile != "" {
+		certificate, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			return tls.Certificate{}, fmt.Errorf("load TLS certificate: %w", err)
+		}
+		return certificate, nil
+	}
+
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("generate TLS key: %w", err)
+	}
+	serialLimit := new(big.Int).Lsh(big.NewInt(1), certificateSerialBits)
+	serial, err := rand.Int(rand.Reader, serialLimit)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("generate certificate serial: %w", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: names[0]},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     nil,
+		IPAddresses:  nil,
+	}
+	for _, name := range names {
+		if ip := net.ParseIP(name); ip != nil {
+			template.IPAddresses = append(template.IPAddresses, ip)
+		} else {
+			template.DNSNames = append(template.DNSNames, name)
+		}
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &privateKey.PublicKey, privateKey)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("create self-signed certificate: %w", err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("marshal TLS key: %w", err)
+	}
+	return tls.X509KeyPair(
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}),
+	)
 }
