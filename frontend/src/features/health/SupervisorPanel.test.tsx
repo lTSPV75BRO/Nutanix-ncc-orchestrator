@@ -63,7 +63,7 @@ const PLATFORM: PlatformData = {
     arch: { binary: "amd64", native: "arm64", emulated: true, known: true },
     cpus: 8,
     gomaxprocs: 8,
-    go_version: "go1.27.3",
+    go_version: "go1.27.4",
     memory: { total_bytes: 16 << 30 },
     cgroup: {},
     kubernetes: false,

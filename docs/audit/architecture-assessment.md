@@ -20,7 +20,7 @@ operators' own identities.
 
 | Component | Path | Technology | Size |
 | --- | --- | --- | --- |
-| Runner (`ncc-orchestrator`) | `cmd/ncc-orchestrator/*.go` (`goNCC.go` + supporting files) | Go 1.27.3, cobra/viper, zerolog, OTel | `goNCC.go` alone is 18,028 lines, 338 functions, 31 cobra commands |
+| Runner (`ncc-orchestrator`) | `cmd/ncc-orchestrator/*.go` (`goNCC.go` + supporting files) | Go 1.27.4, cobra/viper, zerolog, OTel | `goNCC.go` alone is 18,028 lines, 338 functions, 31 cobra commands |
 | API server | `cmd/ncc-api-server` | Go `net/http`, no framework | `main.go` 5.9k lines, 79 routes |
 | UI server | `cmd/ncc-ui-server` | Go static host + `httputil.ReverseProxy` | 1.1k lines |
 | MCP server | `cmd/ncc-mcp-server` | `modelcontextprotocol/go-sdk`, stdio transport | 0.75k lines |
@@ -100,7 +100,7 @@ browser ──► ncc-ui-server (:8080/443) ──/api/v1/*──► ncc-api-ser
 ## 8. Baseline (before changes)
 
 Full detail in [`verification-results.md`](verification-results.md). In short,
-on Windows 11 / Go 1.27.3: build and vet pass; **13 Go tests failed** (Windows
+on Windows 11 / Go 1.27.4: build and vet pass; **13 Go tests failed** (Windows
 defects and non-portable tests); golangci-lint 0 issues; govulncheck 0
 reachable vulnerabilities; frontend `tsc` passes, Vitest 44/45 (one timeout
 flake), production build succeeds; osv-scanner reports 12 fixable advisories,

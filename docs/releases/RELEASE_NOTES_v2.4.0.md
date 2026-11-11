@@ -22,6 +22,11 @@ the OIDC cookie security policy is explicit for the supported HTTP development
 and TLS-terminating proxy modes. The loopback-only throwaway fake OIDC provider
 is excluded from production security scanning.
 
+## Security maintenance
+
+The Go toolchain requirement is now `1.27.4`, which fixes
+`GO-2026-6859` affecting HTTP/1 servers through a `net/http` header race.
+
 ## Validation
 
 - Go vet, tests, and builds pass.

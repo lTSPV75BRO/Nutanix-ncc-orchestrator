@@ -9,7 +9,7 @@ available.
 
 | Area | Status | Evidence / gap |
 | --- | --- | --- |
-| Reproducible builds | ✅ | `go.sum` verified (`go mod verify`), `npm ci` from lockfile, pinned toolchains (Go 1.27.3, Node 26.12.1), version stamped via ldflags |
+| Reproducible builds | ✅ | `go.sum` verified (`go mod verify`), `npm ci` from lockfile, pinned toolchains (Go 1.27.4, Node 26.12.1), version stamped via ldflags |
 | Artifact integrity & provenance | ✅ | SBOM + `attest-build-provenance` on release; `checksums.txt`; updater verifies checksums; release signing helper (`releasesign.go`) |
 | Container hardening | ✅ | Alpine 3.24, UID 10001, `runAsNonRoot`, `allowPrivilegeEscalation: false`, CA bundle upgraded at build; NetworkPolicies default-deny ingress + explicit egress; PDB |
 | Least-privilege CI | ✅ | `contents: read` default; release-only `id-token`/`attestations`; no `pull_request_target`; publishing job without caches |

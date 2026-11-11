@@ -1,6 +1,6 @@
 # Verification results
 
-Environment: Windows 11 Pro (10.0.26300), Go 1.27.3 windows/amd64, Git Bash.
+Environment: Windows 11 Pro (10.0.26300), Go 1.27.4 windows/amd64, Git Bash.
 Node: no standalone Node/npm installed; frontend commands ran on the Node
 **v24.18.1** runtime embedded in the Cursor editor (`ELECTRON_RUN_AS_NODE=1`)
 against the existing `frontend/node_modules`. CI pins Node 26.12.1, so frontend

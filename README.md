@@ -8,7 +8,7 @@ Run **Nutanix Cluster Check (NCC)** across many clusters in parallel, keep the r
 
 [![Version](https://img.shields.io/badge/version-2.4.0-7c3aed)](docs/releases/RELEASE_NOTES_v2.4.0.md)
 [![CI](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/actions/workflows/ci.yml)
-[![Go](https://img.shields.io/badge/go-1.27.3-00ADD8)](go.mod)
+[![Go](https://img.shields.io/badge/go-1.27.4-00ADD8)](go.mod)
 [![Node](https://img.shields.io/badge/node-26.12.1%2B-5FA04E)](frontend/package.json)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -193,7 +193,7 @@ Published images (Docker Hub): `prajwalnutant/nutanix-ncc-orchestrator`, `prajwa
 
 ### Build from source
 
-Requires **Go 1.27.3+** (the `go` directive in [`go.mod`](go.mod)) and **Node.js 26.12.1+** (the first 26.x with the CVE-2026-111497 fix).
+Requires **Go 1.27.4+** (the `go` directive in [`go.mod`](go.mod)) and **Node.js 26.12.1+** (the first 26.x with the CVE-2026-111497 fix).
 
 ```bash
 git clone https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator.git

@@ -9,7 +9,7 @@ deprecated on its registry. Lockfiles were not regenerated.
 
 | Item | Declared / pinned | Status |
 | --- | --- | --- |
-| Go | `go 1.27.3` (go.mod), `golang:1.27.3-alpine` builders | Current |
+| Go | `go 1.27.4` (go.mod), Go 1.27.4 builders | Current |
 | Node (build only) | `engines >=26`, CI and `Dockerfile.ui` pin `26.12.1` | Includes the 2026-10-21 security release (CVE-2026-111497). Runtime images contain no Node. |
 | Base image | `alpine:3.24` + `apk add --upgrade ca-certificates` | Supported |
 | golangci-lint | v2.15.0 (CI) | Current; first version that reads Go 1.27 export data |

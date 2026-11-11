@@ -19,6 +19,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   OIDC cookie security policy is documented for CodeQL. The loopback-only
   throwaway fake OIDC provider is excluded from production security scanning.
 
+- **Go toolchain updated to 1.27.4** to address `GO-2026-6859`, an HTTP/1
+  server crash caused by a `net/http` header race.
+
 Release notes: [`RELEASE_NOTES_v2.4.0.md`](docs/releases/RELEASE_NOTES_v2.4.0.md).
 
 ## [2.3.0] - 2026-11-08
