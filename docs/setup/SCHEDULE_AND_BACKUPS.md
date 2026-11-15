@@ -82,6 +82,14 @@ those on ([Notifications](NOTIFICATIONS.md)).
 file. Restoring on a different server keeps that server's own network and
 HTTPS settings, so you aren't locked out by an old address or certificate.
 
+Backups taken before an update also hold the program files, so **Rollback
+last update** can bring the previous version back. A restore puts program
+files back only when this server has run that exact version before;
+otherwise it restores the data and keeps the installed version, and you
+install the version you want from its release. This stops a tampered backup
+from running its own code on the server. If you trust a backup from another
+server, restore it on the command line with `--trust-stack`.
+
 From the command line:
 
 ```bash

@@ -4774,7 +4774,9 @@ func TestPreUpdateBackupRestoresSoftwareVersion(t *testing.T) {
 		t.Fatalf("v2-backup --include-stack: %v", err)
 	}
 
-	dst := t.TempDir()
+	// A rollback restores into the same install, where v2-backup recorded the
+	// old program files as trusted (SEC-07); the install has since moved on.
+	dst := src
 	mustDst := func(rel, content string) {
 		p := filepath.Join(dst, rel)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {

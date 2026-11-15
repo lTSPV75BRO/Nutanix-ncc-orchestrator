@@ -26,7 +26,6 @@ rough estimate: S, M, or L.
 | Narrow Kubernetes RBAC | Split user-store and CronJob permissions; remove unnecessary Job access and use a dedicated scheduler boundary. | M |
 | Secret rotation workflow | Document and optionally guide rotation of API tokens, JWT secrets, backup keys, and Prism credentials across replicas. | M |
 | Outbound URL policy | Provide an administrator-visible allowlist/policy for Prism Central, LDAP, OIDC, SMTP, webhook, and update-server destinations. | M |
-| Restore verifies release signatures (SEC-07) | A restore can replace stack binaries without checking them against the release checksums/signatures. | M |
 | Signed image and SBOM verification | Publish Cosign signatures/SBOMs and optionally verify image provenance during deployment. | M |
 | Kubernetes failure alerts | Provide PrometheusRule examples for failed CronJobs, stale reports, unavailable API replicas, PVC pressure, and version skew. | S |
 | Isolated backup verification | Validate archive contents, secrets, report paths, and version compatibility without changing the live install. | M |

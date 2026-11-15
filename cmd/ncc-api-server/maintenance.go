@@ -234,6 +234,7 @@ func (s *apiServer) handleRestore(w http.ResponseWriter, r *http.Request) {
 	if !restarting {
 		msg = "Backup restored. Restart the stack (v2-stop then v2-start) for the restored config, accounts, and token to take effect."
 	}
+	msg += restoreStackNote(out)
 	writeJSON(w, http.StatusOK, envelope{
 		Success: true,
 		Message: msg,

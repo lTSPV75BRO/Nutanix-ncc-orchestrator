@@ -51,6 +51,16 @@ func isBackupArchiveName(name string) bool {
 	return strings.HasSuffix(name, backupFileSuffix) || strings.HasSuffix(name, backupEncSuffix)
 }
 
+// restoreStackNote explains, after a successful restore, that the backup's
+// program files were left out because this server never installed them
+// (v2-restore prints "program files not trusted"; SEC-07).
+func restoreStackNote(out string) string {
+	if !strings.Contains(out, "stack restored: no (program files not trusted)") {
+		return ""
+	}
+	return " The backup's program files were not installed because this server has never run that version; your data was restored and the current version keeps running. To go back to that version, install it from its release."
+}
+
 // backupArchiveIncludesStack reports whether a plaintext backup also holds
 // stack binaries or frontend-dist (so rollback can restore the software
 // version). Encrypted archives are skipped — they are not a readable gzip.
@@ -469,6 +479,7 @@ func (s *apiServer) handleBackupRestoreNamed(w http.ResponseWriter, r *http.Requ
 			msg = "Previous software version and configuration restored. Restart the stack (v2-stop then v2-start) to load them."
 		}
 	}
+	msg += restoreStackNote(out)
 	writeJSON(w, http.StatusOK, envelope{
 		Success: true,
 		Message: msg,

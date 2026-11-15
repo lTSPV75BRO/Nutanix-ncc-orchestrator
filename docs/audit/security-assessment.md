@@ -112,7 +112,17 @@ are now flattened and RFC 2047-encoded, and envelope addresses containing
 CR/LF are rejected. Test: `TestSendEmailFlattensSubjectAndSkipsAuthWithoutUser`
 (fake SMTP server asserts no injected header reaches the message).
 
-### SEC-07 — Restore can replace stack binaries · Medium · P2 · verified (code) · open
+### SEC-07 — Restore can replace stack binaries · Medium · P2 · verified (code) · **fixed** (v2.4.0)
+
+**Fix (v2.4.0):** release checksums cover only the release archives, not the
+individual files in a backup, so the restore checks against what this host
+has itself run instead: `.ncc-trusted-stack.json` records the SHA-256 of each
+installed stack set (on start, supervised upgrade and every `v2-backup`).
+The stack is restored only when every file matches it or the installed file;
+otherwise only data is restored. The ledger is never backed up or restored;
+`v2-restore --trust-stack` is a command-line override the API never passes.
+Tests: `trustedstack_test.go`.
+
 
 A backup that contains `bin/` (stack snapshots) makes `v2-restore` write and
 `chmod +x` new runner/API/UI binaries, which then run as the service account

@@ -1412,6 +1412,7 @@ single run's worth of report data.
 | `v2-restore` | `--force` | `false` | Overwrite existing files / proceed even if the stack is running. |
 | `v2-restore` | `--restart` | `false` | Force a stack restart/start after restore even if it looks stopped (restart is automatic when the stack is running). |
 | `v2-restore` | `--no-restart` | `false` | Suppress the automatic post-restore restart (e.g. staging a host for later). |
+| `v2-restore` | `--trust-stack` | `false` | Also restore the backup's program files (`bin/ncc-*`, `frontend-dist/`) when this server has never installed them. Without it they are restored only when every file matches a version this server installed before (`.ncc-trusted-stack.json`) or the file installed now; otherwise only data is restored. Command line only; the API never sets it. |
 | `v2-restart` | `--install-dir` | auto-detect (`.ncc-v2`) | Stop and re-start the stack (`v2-stop` then `v2-start --detach`), performed by the binary. |
 | `v2-reset-password` | `--user` | `admin` | Local account to reset. |
 | `v2-reset-password` | `--users-db` / `--users-db-secret[-namespace]` | `<install-dir>/.ncc-api-users.json` | User store to reset against (file or Kubernetes Secret). |

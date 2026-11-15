@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -92,5 +93,17 @@ func TestScheduledBackupFileFromOutput(t *testing.T) {
 	}
 	if got := scheduledBackupFileFromOutput("no marker here"); got != "" {
 		t.Fatalf("expected empty, got %q", got)
+	}
+}
+
+func TestRestoreStackNote(t *testing.T) {
+	if restoreStackNote("Restored 3 file(s)\nstack restored: no\n") != "" {
+		t.Fatal("a plain data restore needs no note")
+	}
+	if restoreStackNote("stack restored: yes (ncc-orchestrator 2.3.0)") != "" {
+		t.Fatal("a trusted stack restore needs no note")
+	}
+	if !strings.Contains(restoreStackNote("stack restored: no (program files not trusted)\n"), "not installed") {
+		t.Fatal("skipped program files should be explained")
 	}
 }

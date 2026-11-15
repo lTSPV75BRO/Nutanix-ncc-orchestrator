@@ -25,7 +25,7 @@ No Critical or P0 findings were identified.
 | SEC-04 | MCP `create_schedule` installed arbitrary commands | Medium | P2 | verified | 0.25 d | — | **verified** |
 | SEC-05 | MCP passed Prism password on the command line | Medium | P2 | verified | 0.25 d | — | **verified** |
 | SEC-06 | Runner email header injection via templated subject | Medium | P2 | verified | 0.25 d | — | **verified** |
-| SEC-07 | Restore can replace stack binaries without release-signature check | Medium | P2 | verified (code) | 2 d | DATA-02 | not started |
+| SEC-07 | Restore can replace stack binaries without release-signature check | Medium | P2 | verified (code) | 2 d | DATA-02 | **verified** (v2.4.0: stack restored only when every file matches the host's `.ncc-trusted-stack.json` ledger or the installed file; `--trust-stack` on the CLI) |
 | SEC-08 | UI→API transport honours `HTTP(S)_PROXY` (admin token via proxy) | Low-Medium | P2 | verified (code) | 0.25 d | — | **verified** (UI→API transport ignores proxy env) |
 | REL-04 | Readiness probe does not check dependencies | Medium | P2 | verified (code) | 0.5 d | — | **verified** (`/api/v1/health/ready`; k8s/Helm readiness probes updated) |
 | OBS-01 | No request/correlation IDs | Medium | P2 | verified (code) | 1 d | — | **verified** (X-Request-ID in responses, audit, errors, UI toasts) |

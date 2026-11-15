@@ -9297,6 +9297,10 @@ type v2RestoreOptions struct {
 	// ignores them.
 	KeyFile    string
 	Passphrase string
+	// TrustStack restores the backup's program files (bin/ncc-*,
+	// frontend-dist/) even when this host has never installed them. Command
+	// line only: the API never passes it (see trustedstack.go).
+	TrustStack bool
 }
 
 // Backup archive limits, shared by the verifier and the restorer so the two
@@ -9873,6 +9877,9 @@ func runV2Backup(opts v2BackupOptions) error {
 	if st, err := os.Stat(installDir); err != nil || !st.IsDir() {
 		return fmt.Errorf("install dir not found: %s", installDir)
 	}
+	// Record the installed program files as trusted, so restoring this
+	// backup (or a pre-update rollback point) may put them back.
+	recordTrustedStackQuiet(installDir, "backup")
 	entries, skipped := collectBackupEntries(installDir, opts.IncludeStack)
 	if len(entries) == 0 {
 		return fmt.Errorf("nothing to back up under %s (no config.yaml, user database, or state files found)", installDir)
@@ -10127,6 +10134,50 @@ func runV2Restore(opts v2RestoreOptions) error {
 		return fmt.Errorf("archive contains no files to restore")
 	}
 
+	// The trust ledger is this host's record, never taken from an archive.
+	{
+		kept := files[:0]
+		for _, p := range files {
+			if isTrustedStackLedger(p.rel) {
+				fmt.Printf("Skipped %s from the archive (this host's own record).\n", p.rel)
+				continue
+			}
+			kept = append(kept, p)
+		}
+		files = kept
+	}
+	// Program files are restored only when this host has installed them
+	// before (SEC-07): otherwise a crafted backup could run its own code.
+	// All or nothing, so the UI and the servers never mix versions.
+	var untrustedStack []string
+	if !opts.TrustStack {
+		var stackRels []string
+		for _, p := range files {
+			if backupRelIsStack(p.rel) {
+				stackRels = append(stackRels, p.rel)
+			}
+		}
+		if len(stackRels) > 0 {
+			bad, err := untrustedStackFiles(installDir, in, stackRels)
+			if err != nil {
+				return fmt.Errorf("check the program files in the backup: %w", err)
+			}
+			if len(bad) > 0 {
+				untrustedStack = bad
+				kept := files[:0]
+				for _, p := range files {
+					if !backupRelIsStack(p.rel) {
+						kept = append(kept, p)
+					}
+				}
+				files = kept
+			}
+		}
+	}
+	if len(files) == 0 {
+		return fmt.Errorf("the backup holds only program files (ncc-orchestrator %s) that this server has never installed, so nothing was restored; install that version from its release instead, or re-run on the server with --trust-stack", defaultStr(manifest.Version, "?"))
+	}
+
 	// Detect overwrites up front so a non-forced restore fails before writing
 	// anything.
 	var existing []string
@@ -10147,7 +10198,7 @@ func runV2Restore(opts v2RestoreOptions) error {
 		return err
 	}
 
-	includesStack := manifest.IncludesStack
+	includesStack := manifest.IncludesStack && len(untrustedStack) == 0
 	for _, p := range files {
 		if backupRelIsStack(p.rel) {
 			includesStack = true
@@ -10286,9 +10337,15 @@ func runV2Restore(opts v2RestoreOptions) error {
 	for _, p := range files {
 		fmt.Printf("  - %s\n", p.rel)
 	}
-	if includesStack {
+	switch {
+	case includesStack:
 		fmt.Printf("stack restored: yes (ncc-orchestrator %s)\n", defaultStr(manifest.Version, "?"))
-	} else {
+	case len(untrustedStack) > 0:
+		fmt.Printf("stack restored: no (program files not trusted)\n")
+		fmt.Printf("\nThe backup's program files (ncc-orchestrator %s, %d file(s)) were NOT restored: this server has never installed them, so they could be anything. Only data was restored, and the installed version keeps running.\n",
+			defaultStr(manifest.Version, "?"), len(untrustedStack))
+		fmt.Println("To run that version, install it from its release (the in-app update, or the download page). If you trust this backup, re-run v2-restore on the server with --trust-stack.")
+	default:
 		fmt.Printf("stack restored: no\n")
 	}
 	fmt.Printf("\nSource backup: tool=%s version=%s stream=%s built=%s created_at=%s install_dir=%s\n",
@@ -11767,6 +11824,7 @@ func runV2Start(opts v2StartOptions) error {
 	if err := writeV2StartState(installDir, opts); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not persist v2-start settings: %v\n", err)
 	}
+	recordTrustedStackQuiet(installDir, "start")
 	apiOnly := opts.APIOnly
 	var (
 		apiBin      string
@@ -18136,10 +18194,12 @@ with --input-file or as the first positional argument.`,
 			verifyOnly, _ := cmd.Flags().GetBool("verify-only")
 			keyFile, _ := cmd.Flags().GetString("key-file")
 			passphrase, _ := cmd.Flags().GetString("passphrase")
+			trustStack, _ := cmd.Flags().GetBool("trust-stack")
 			if strings.TrimSpace(inputFile) == "" && len(args) > 0 {
 				inputFile = args[0]
 			}
 			return runV2Restore(v2RestoreOptions{
+				TrustStack: trustStack,
 				InstallDir: installDir,
 				InputFile:  inputFile,
 				Force:      force,
@@ -18153,6 +18213,7 @@ with --input-file or as the first positional argument.`,
 	}
 	v2RestoreCmd.Flags().String("install-dir", "", "Installation directory to restore into (default: auto-detect, fallback .ncc-v2)")
 	v2RestoreCmd.Flags().String("input-file", "", "Backup archive to restore (or pass as the first positional argument)")
+	v2RestoreCmd.Flags().Bool("trust-stack", false, "Also restore the backup's program files (bin/ncc-*, frontend-dist) when this server has never installed them. Only for backups you trust: they run as the service account")
 	v2RestoreCmd.Flags().Bool("verify-only", false, "Validate the archive (gzip+tar integrity, manifest, confined paths) and report, without restoring")
 	v2RestoreCmd.Flags().String("passphrase", "", "Passphrase to decrypt an encrypted backup (or NCC_BACKUP_PASSPHRASE)")
 	v2RestoreCmd.Flags().String("key-file", "", "Key file to decrypt a key-encrypted backup (or NCC_BACKUP_KEY_FILE/NCC_BACKUP_KEY)")

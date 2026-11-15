@@ -713,6 +713,27 @@ kubectl -n ncc-orchestrator-v2 get secret ncc-v2-users \
 kubectl -n ncc-orchestrator-v2 logs deploy/ncc-v2-api | grep -A4 "FIRST-RUN ADMIN"
 ```
 
+#### Restored program files (SEC-07)
+
+Pre-update rollback points also hold the program files (`bin/ncc-*` and
+`frontend-dist/`). A restore writes them back, and they then run as the
+service account, so a crafted archive would be a way from "can restore a
+backup" (an admin, or anyone holding the backup key) to code execution on the
+host. To close that, the install dir keeps `.ncc-trusted-stack.json`: the
+SHA-256 of every stack file set this host has installed or run, recorded when
+the stack or supervisor starts, after a supervised upgrade, and on every
+`v2-backup` (so rollback points are always covered). It keeps the newest 20
+sets, is written `0600`, is never included in a backup and is never taken
+from one.
+
+On restore the stack is put back only when **every** file matches the ledger
+or the file installed now. Otherwise no program file is restored (so the UI
+and the servers never mix versions): the data is restored, the installed
+version keeps running, and the output says so (`stack restored: no (program
+files not trusted)`; the UI adds a note). Trusting files the host already ran
+adds no code it was not running. An operator with a shell on the server can
+override with `v2-restore --trust-stack`; the API never passes that flag.
+
 #### Backup archive encryption
 
 A backup is a **secrets bundle** — it bundles the API token, bcrypt/PAT hashes,

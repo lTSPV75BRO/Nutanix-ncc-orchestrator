@@ -123,6 +123,7 @@ func runV2Supervise(cfg superviseConfig) error {
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return fmt.Errorf("supervisor: prepare log dir: %w", err)
 	}
+	recordTrustedStackQuiet(cfg.installDir, "supervisor")
 	unlock, err := acquireSupervisorLock(filepath.Join(runDir, "v2-supervisor.lock"))
 	if err != nil {
 		return fmt.Errorf("supervisor: another instance is already running: %w", err)

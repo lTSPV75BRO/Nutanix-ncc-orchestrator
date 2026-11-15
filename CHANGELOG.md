@@ -10,6 +10,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [2.4.0] - Unreleased
 
+### Security
+
+- **Restore no longer installs program files this server has never run
+  (SEC-07).** A backup's `bin/ncc-*` and `frontend-dist/` files are restored
+  only when every one matches a version this server installed or ran before
+  (recorded in `.ncc-trusted-stack.json` on start, supervised upgrade and
+  every `v2-backup`) or the installed file. Otherwise only data is restored
+  and the current version keeps running, so a crafted backup can no longer
+  run its own code on the host after the restart. Update rollback points are
+  covered automatically. `v2-restore --trust-stack` (command line only)
+  restores them anyway; the ledger is never backed up or restored.
+
 ### Added
 
 - **Data freshness on the Overview.** Each cluster shows when it was last

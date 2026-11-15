@@ -369,6 +369,7 @@ func (u *upgrader) restartAndVerify(ctx context.Context, since time.Time) {
 	}
 	u.step(upgVerifying, "Running the safe self-heal checks for the new version")
 	u.postUpgradeDoctor()
+	recordTrustedStackQuiet(u.installDir, "upgrade")
 	u.removeSnapshot()
 	u.mu.Lock()
 	u.job.SupervisorRestartPending = stripGoBuildGitSuffix(Version) != stripGoBuildGitSuffix(u.job.ToVersion) && u.job.ToVersion != ""

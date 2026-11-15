@@ -22,6 +22,21 @@ looking current. The Overview now makes both visible:
 
 Automation can read the same data from `GET /api/v1/freshness`.
 
+## Safer restores
+
+Backups taken before an update include the program files, so a rollback can
+bring the previous version back. A restore now puts program files back only
+when this server has run that exact version before. Otherwise it restores the
+data, keeps the installed version running, and says so; install the version
+you want from its release. This stops a tampered backup from running its own
+code on the server after the restart. **Rollback last update** keeps working,
+because the backup taken before the update records the old version as
+trusted.
+
+Moving to a new server: data restores as before; install the version you
+want there. If you trust a backup from another server, restore it on the
+command line with `v2-restore --trust-stack`.
+
 ## Update-check reliability
 
 When the GitHub REST API is rate limited, update checks now resolve the latest
