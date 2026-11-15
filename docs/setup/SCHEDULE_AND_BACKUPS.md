@@ -28,6 +28,12 @@ The top of the page shows the next run, the last run and its outcome. **Pause
 scheduled runs** stops them without removing the schedule (on Kubernetes it
 suspends the CronJob). **Remove** takes the entry off the server.
 
+If a schedule stops (the timer was disabled, the server was down, the task
+was deleted by hand), the **Overview** shows **Scheduled runs have stopped**
+once two intervals pass without a run, and each cluster shows how long ago it
+was last checked. Custom cron expressions that are not a plain interval are
+not checked.
+
 **Several environments** (for example `prod` and `lab` clusters with
 different settings) can each have their own timetable under **Environment
 schedules** on the same page.

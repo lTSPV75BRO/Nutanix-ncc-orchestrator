@@ -2,6 +2,26 @@
 
 **Status:** Unreleased.
 
+## See how old the data is
+
+The dashboard keeps showing a cluster's findings from its last good run when
+a later run can't reach it, and a stopped schedule leaves yesterday's results
+looking current. The Overview now makes both visible:
+
+- Every cluster shows when it was last checked; the time turns amber once it
+  is more than a day old.
+- A cluster the latest run couldn't reach says how old its data is, for
+  example "connection refused · data from 3d ago". Hover the time to see when
+  it last returned data and how many runs in a row failed.
+- Clusters the latest run didn't include (another environment's) appear with
+  results from their own newest run, so filtering by environment works even
+  when that environment didn't run last.
+- **Scheduled runs have stopped:** when a schedule (the main one or an
+  environment's) goes two intervals without a run, a banner says which one
+  and when it last ran. Operators get a link to the schedule.
+
+Automation can read the same data from `GET /api/v1/freshness`.
+
 ## Update-check reliability
 
 When the GitHub REST API is rate limited, update checks now resolve the latest

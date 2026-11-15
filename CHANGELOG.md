@@ -10,6 +10,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [2.4.0] - Unreleased
 
+### Added
+
+- **Data freshness on the Overview.** Each cluster shows when it was last
+  checked (amber once that is over a day ago). A cluster the last run could
+  not reach says how old its data is ("connection refused · data from 3d
+  ago") and, on hover, how many runs in a row failed. Clusters the latest run
+  did not include, such as another environment's, are listed from their own
+  newest run, so the environment filter no longer comes up empty.
+- **"Scheduled runs have stopped" banner.** When the main schedule or an
+  environment schedule goes two intervals (plus 10 minutes) without a run,
+  the Overview says so, with a link to the schedule for operators. Paused,
+  removed or preview-only schedules and custom cron expressions that are not
+  a plain interval are not checked.
+- `GET /api/v1/freshness` (viewer+): per cluster `last_checked_at`, `ok`,
+  `last_success_at`, `failed_runs` and the counts from its newest successful
+  run; per active schedule `every`, `last_run_at`, `overdue` and
+  `missed_runs`; and `schedule_overdue`. It reads the newest 200 runs, drops
+  clusters not checked for 30 days, and limits clusters to the caller's
+  cluster groups.
+
 ### Fixed
 
 - **Update fails if Github rate-limit is reached** Update checks now remain accurate when the GitHub REST API is rate limited. The public latest-release redirect is used to identify the current tag, while the UI marks the result as degraded and prevents installation until release asset metadata can be verified. A `GITHUB_TOKEN` can be supplied for a complete check and update.

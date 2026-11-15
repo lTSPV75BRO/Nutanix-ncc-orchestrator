@@ -30,6 +30,7 @@ import type {
   ScheduleSaveResult,
   ScheduleState,
   ScheduleHealthData,
+  FreshnessData,
   DiagnosticsData,
   AutoHealer,
   PlatformData,
@@ -361,6 +362,7 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   scheduleHealth: () => callApi<ScheduleHealthData>("/api/v1/schedule/health"),
+  freshness: () => callApi<FreshnessData>("/api/v1/freshness"),
   diagnostics: () => callApi<DiagnosticsData>("/api/v1/health/diagnostics"),
   healDiagnostics: (payload?: { check_ids?: string[]; verify_after_fix?: boolean; no_disruptive?: boolean; allow_disruptive?: boolean }) =>
     callApi<DiagnosticsData>("/api/v1/health/diagnostics", {

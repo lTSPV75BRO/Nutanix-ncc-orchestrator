@@ -4501,6 +4501,7 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/settings/notifications/status", Methods: []string{http.MethodGet}, Description: "Operator+: per-channel delivery status shared by the runner and this server: state (ok, failing, never), last attempt and last success times, the last URL-redacted error, attempts on the last delivery, and how many undelivered messages wait in notification-deadletter-dir."},
 		{Path: "/api/v1/schedule", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET viewer+: read scheduler state; PUT operator+: create/update/apply a recurring run", SampleBody: "{\n  \"type\": \"cron\",\n  \"action\": \"create\",\n  \"cron\": \"15 */4 * * *\",\n  \"config\": \"config.yaml\",\n  \"print_only\": true,\n  \"apply\": false\n}"},
 		{Path: "/api/v1/schedule/health", Methods: []string{http.MethodGet}, Description: "Scheduler health snapshot (last run/success/error hints)"},
+		{Path: "/api/v1/freshness", Methods: []string{http.MethodGet}, Description: "Data freshness from the run history: per cluster, when it was last checked, when it last returned data and how many runs in a row failed; per active schedule (main and environment), whether two intervals passed without a run (schedule_overdue). Clusters are limited to the caller's cluster groups."},
 		{Path: "/api/v1/artifacts", Methods: []string{http.MethodGet}, Description: "List available artifacts"},
 		{Path: "/api/v1/artifacts/{name}", Methods: []string{http.MethodGet}, Description: "Read artifact by name"},
 		{Path: "/api/v1/runs", Methods: []string{http.MethodGet}, Description: "List historical runs with metrics (limit, source, since filters; merges archived runs, latest summary, and audit triggers)"},
@@ -5046,6 +5047,9 @@ func (s *apiServer) buildOpenAPISpecBase() map[string]interface{} {
 			},
 			"/api/v1/schedule/health": map[string]interface{}{
 				"get": map[string]interface{}{"summary": "Read scheduler health snapshot"},
+			},
+			"/api/v1/freshness": map[string]interface{}{
+				"get": map[string]interface{}{"summary": "Per-cluster data age (last checked, last successful data, failed runs in a row) and overdue schedules"},
 			},
 			"/api/v1/artifacts": map[string]interface{}{
 				"get": map[string]interface{}{"summary": "List available artifacts"},
@@ -6072,6 +6076,7 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/api/v1/settings/notifications/status", s.handleNotificationsStatus)
 	mux.HandleFunc("/api/v1/schedule", s.handleSchedule)
 	mux.HandleFunc("/api/v1/schedule/health", s.handleScheduleHealth)
+	mux.HandleFunc("/api/v1/freshness", s.handleFreshness)
 	mux.HandleFunc("/api/v1/health/diagnostics", s.handleHealthDiagnostics)
 	mux.HandleFunc("/api/v1/health/diagnostics/support-bundle", s.handleHealthSupportBundle)
 	mux.HandleFunc("/api/v1/health/history", s.handleHealHistory)

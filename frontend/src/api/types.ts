@@ -950,6 +950,47 @@ export type ConfigMigrationResult = {
   message: string;
 };
 
+/** One cluster's data age, from GET /api/v1/freshness. */
+export type ClusterFreshness = {
+  address: string;
+  /** Newest run that tried the cluster. */
+  last_checked_at: string;
+  /** That run's result for the cluster. */
+  ok: boolean;
+  error?: string;
+  error_class?: string;
+  /** "" = main config. */
+  environment?: string;
+  /** Newest run that returned data; missing when none did. */
+  last_success_at?: string;
+  /** Newest consecutive runs that failed for it. */
+  failed_runs?: number;
+  fail_count: number;
+  warn_count: number;
+  err_count: number;
+  health_score?: number;
+};
+
+export type ScheduleFreshness = {
+  kind: "main" | "environment";
+  id?: string;
+  environment?: string;
+  every: string;
+  interval_s: number;
+  last_run_at?: string;
+  since?: string;
+  overdue: boolean;
+  missed_runs?: number;
+  overdue_by_s?: number;
+};
+
+export type FreshnessData = {
+  generated_at: string;
+  clusters: ClusterFreshness[];
+  schedules: ScheduleFreshness[];
+  schedule_overdue: boolean;
+};
+
 export type ScheduleHealthData = {
   configured: boolean;
   saved?: boolean;

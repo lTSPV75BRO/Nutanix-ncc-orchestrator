@@ -423,6 +423,7 @@ const gets: Record<string, Handler> = {
   "/api/v1/alerts/ncc-dispositions": () => ({ items: dispositions() }),
   "/api/v1/schedule": () => fx.SCHEDULE,
   "/api/v1/schedule/health": () => fx.SCHEDULE_HEALTH,
+  "/api/v1/freshness": () => fx.FRESHNESS,
   "/api/v1/health/diagnostics": () => fx.DIAGNOSTICS,
   "/api/v1/health/history": () => fx.HEAL_HISTORY,
   "/api/v1/health/autoheal": () => fx.AUTOHEAL,

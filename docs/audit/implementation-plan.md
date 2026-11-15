@@ -33,7 +33,7 @@ No Critical or P0 findings were identified.
 | UX-01 | Health pill showed red 0.0% with no data | Medium | P2 | verified (live) | 0.25 d | — | **verified** (incl. live) |
 | UX-02 | Setup step titles broke mid-word | Low | P3 | verified (live) | 0.1 d | — | **verified** (live) |
 | UX-05 | Run-arguments builder (F1) | Low | P2 | — | 3 d | COR-02 | **verified** (`GET /runs/extra-args` + Runs page controls) |
-| UX-06/07 | Per-cluster freshness; stale-schedule banner (F3) | Medium | P2 | verified (code) | 2–3 d | — | not started |
+| UX-06/07 | Per-cluster freshness; stale-schedule banner (F3) | Medium | P2 | verified (code) | 2–3 d | — | **verified** (v2.4.0: `/api/v1/freshness`, Overview data age and "Scheduled runs have stopped" banner) |
 | UX-10 | axe-core accessibility checks + keyboard walkthrough | Medium | P2 | unverified | 2 d | — | not started |
 | OPS-02 | Dependabot; advisory full `npm audit` | Low | P2 | verified | 0.1 d | — | **implemented** |
 | OPS-03 | Secret scanning in CI (gitleaks / push protection) | Low | P2 | — | 0.25 d | — | not started (manual scan done: clean) |

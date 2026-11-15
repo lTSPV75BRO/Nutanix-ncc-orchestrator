@@ -3111,7 +3111,7 @@ html[data-theme="it-pro"] {
 }
 
 .overview-cluster-row {
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto 56px auto;
 }
 
 a.overview-severity-row:hover,
@@ -3175,6 +3175,20 @@ a.overview-cluster-row:focus-visible {
   white-space: nowrap;
 }
 
+/* When the cluster was last checked; amber once that is over a day ago. */
+.overview-cluster-age {
+  font-size: var(--ui-text-sm);
+  color: var(--ui-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.overview-cluster-age.is-old {
+  color: var(--ui-warn);
+  font-weight: 600;
+}
+
 .overview-more {
   padding: var(--ui-space-2) var(--ui-space-5);
   font-size: var(--ui-text-sm);
@@ -3213,6 +3227,9 @@ a.overview-cluster-row:focus-visible {
   }
   .overview-cluster-counts {
     display: none;
+  }
+  .overview-cluster-row {
+    grid-template-columns: minmax(0, 1fr) auto auto;
   }
 }
 

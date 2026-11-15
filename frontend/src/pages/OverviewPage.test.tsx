@@ -23,9 +23,10 @@ function ok(data: unknown) {
   } as Response;
 }
 
-function renderOverview(report: unknown, runs: unknown[] = []) {
+function renderOverview(report: unknown, runs: unknown[] = [], freshness: unknown = {}, auth: AuthValue = admin) {
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.includes("/api/v1/freshness")) return ok(freshness);
     if (url.includes("/api/v1/report/data")) return ok(report);
     if (url.includes("/api/v1/runs/active")) return ok({ active: false });
     if (url.includes("/api/v1/runs")) return ok(runs);
@@ -35,7 +36,7 @@ function renderOverview(report: unknown, runs: unknown[] = []) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <AuthContext.Provider value={admin}>
+      <AuthContext.Provider value={auth}>
         <MemoryRouter>
           <OverviewPage />
         </MemoryRouter>
@@ -95,5 +96,55 @@ describe("OverviewPage", () => {
     expect(within(clusters[0]).getByText("Not checked")).toBeInTheDocument();
 
     expect(await screen.findByText("Partial")).toBeInTheDocument();
+  });
+
+  it("shows how old each cluster's data is and adds clusters from other environments", async () => {
+    const hoursAgo = (h: number) => new Date(Date.now() - h * 3600_000).toISOString();
+    renderOverview(report, [], {
+      generated_at: recent,
+      schedules: [],
+      schedule_overdue: false,
+      clusters: [
+        { address: "10.0.0.1", last_checked_at: recent, ok: true, last_success_at: recent, fail_count: 0, warn_count: 2, err_count: 0 },
+        { address: "10.0.0.3", last_checked_at: recent, ok: false, error: "connection refused", last_success_at: hoursAgo(72), failed_runs: 4, fail_count: 0, warn_count: 0, err_count: 0 },
+        { address: "dev-pe", environment: "dev", last_checked_at: hoursAgo(30), ok: true, last_success_at: hoursAgo(30), fail_count: 1, warn_count: 0, err_count: 0 },
+      ],
+    });
+    const row = async (name: string) =>
+      (await screen.findAllByRole("link")).find((a) => a.getAttribute("href") === `/findings?clusters=${encodeURIComponent(name)}`)!;
+
+    const down = await row("10.0.0.3");
+    expect(within(down).getByText("connection refused · data from 3d ago")).toBeInTheDocument();
+    expect(down.querySelector(".overview-cluster-age")?.getAttribute("title")).toMatch(/The last 4 runs could not check it/);
+
+    const dev = await row("dev-pe");
+    expect(within(dev).getByText("1 fail")).toBeInTheDocument();
+    const age = dev.querySelector(".overview-cluster-age");
+    expect(age).toHaveTextContent("1d ago");
+    expect(age).toHaveClass("is-old");
+    expect(screen.getByText("4 clusters, each from its newest run")).toBeInTheDocument();
+    expect(screen.queryByText("Scheduled runs have stopped")).not.toBeInTheDocument();
+  });
+
+  it("warns when a schedule has stopped", async () => {
+    const freshness = {
+      generated_at: recent,
+      clusters: [],
+      schedule_overdue: true,
+      schedules: [
+        { kind: "main", every: "4h", interval_s: 14400, last_run_at: new Date(Date.now() - 13 * 3600_000).toISOString(), overdue: true },
+        { kind: "environment", environment: "prod", every: "1d", interval_s: 86400, overdue: false },
+      ],
+    };
+    renderOverview(report, [], freshness);
+    expect(await screen.findByText("Scheduled runs have stopped")).toBeInTheDocument();
+    expect(screen.getByText(/The schedule runs every 4 hours, but the last run was 13h ago\./)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Check the schedule" })).toHaveAttribute("href", "/settings/schedule");
+    cleanup();
+
+    const viewer: AuthValue = { ...admin, role: "viewer", isAdmin: false, canOperate: false };
+    renderOverview(report, [], freshness, viewer);
+    expect(await screen.findByText("Scheduled runs have stopped")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Check the schedule" })).not.toBeInTheDocument();
   });
 });

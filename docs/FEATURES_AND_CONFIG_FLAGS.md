@@ -1514,6 +1514,22 @@ Large payload control for report endpoint:
 
 Machine-readable API errors:
 
+Data freshness endpoint:
+
+- `GET /api/v1/freshness` (viewer+)
+- Built from the newest 200 runs (`runs/<id>/run-summary.json` and the latest
+  `run-summary.json`), cached for a minute or until a run finishes.
+- `clusters[]`: `address`, `last_checked_at`, `ok`, `error`, `error_class`,
+  `environment`, `last_success_at` (missing when no scanned run returned
+  data), `failed_runs` (newest consecutive failures), and `fail_count`,
+  `warn_count`, `err_count`, `health_score` from the newest successful run.
+  Clusters not checked for 30 days are left out; cluster groups apply.
+- `schedules[]`: one entry per active schedule (`kind` `main` or
+  `environment`): `every`, `interval_s`, `last_run_at` (newest run of that
+  config or environment, from any source), `since`, `overdue` (more than two
+  intervals plus 10 minutes since `since`), `missed_runs`, `overdue_by_s`.
+- `schedule_overdue`: any schedule is overdue.
+
 Scheduler health endpoint:
 
 - `GET /api/v1/schedule/health` (viewer+)

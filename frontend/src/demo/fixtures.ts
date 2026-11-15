@@ -13,6 +13,7 @@ import type {
   DiagnosticsData,
   ExtraArgOption,
   FeatureFlags,
+  FreshnessData,
   HealHistoryData,
   HealthData,
   MeData,
@@ -643,6 +644,21 @@ export const SCHEDULE: ScheduleState = {
   task_name: "ncc-orchestrator-scan",
   print_only: false,
   updated_at: iso(NOW - 20 * DAY),
+};
+
+/** Unreachable clusters last returned data the day before (one failed run). */
+export const FRESHNESS: FreshnessData = {
+  generated_at: iso(NOW),
+  clusters: clusterSummaries.map((c) => ({
+    address: c.address,
+    last_checked_at: iso(LATEST_RUN_AT),
+    ok: c.ok,
+    ...(c.ok
+      ? { last_success_at: iso(LATEST_RUN_AT), fail_count: c.fail_count ?? 0, warn_count: c.warn_count ?? 0, err_count: c.err_count ?? 0, health_score: c.health_score }
+      : { error: c.error, error_class: c.error_class, last_success_at: iso(LATEST_RUN_AT - DAY), failed_runs: 1, fail_count: 0, warn_count: 0, err_count: 0 }),
+  })),
+  schedules: [{ kind: "main", every: "1d", interval_s: 86400, last_run_at: iso(LATEST_RUN_AT), since: iso(LATEST_RUN_AT), overdue: false }],
+  schedule_overdue: false,
 };
 
 export const SCHEDULE_HEALTH: ScheduleHealthData = {

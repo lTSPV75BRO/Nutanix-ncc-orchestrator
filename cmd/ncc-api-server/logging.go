@@ -387,6 +387,7 @@ var quietPaths = map[string]bool{
 	"/api/v1/auth/refresh":          true,
 	"/api/v1/logs":                  true,
 	"/api/v1/schedule/health":       true,
+	"/api/v1/freshness":             true,
 	"/api/v1/environment-schedules": true,
 	"/api/v1/features":              true,
 	"/api/v1/tls/public":            true,
