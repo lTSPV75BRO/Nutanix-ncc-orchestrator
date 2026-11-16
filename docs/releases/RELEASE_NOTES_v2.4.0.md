@@ -33,7 +33,11 @@ closed recently. Operators can rerun just that cluster from there.
 Other detail views were tidied to match:
 
 - The finding details drawer uses the same panels as the rest of the app,
-  starting with what was found and how to fix it.
+  starting with what was found and a row of actions: open the KB article,
+  open the cluster in Prism or on its page, or show the same check on every
+  cluster.
+- Pressing Enter on the sign-in form signs in when SAML or OIDC buttons are
+  also shown.
 - Run details show cluster names next to addresses, and the "some clusters
   could not be checked" banner lists which ones and why.
 - Insights reports a partial run as "Partial · exit 3", as Runs does, and a

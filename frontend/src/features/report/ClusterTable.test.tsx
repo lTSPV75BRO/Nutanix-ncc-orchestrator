@@ -178,8 +178,32 @@ describe("ClusterTable alert sources", () => {
     expect(screen.getByText("CVM disk /home is 92% full")).toBeInTheDocument();
     expect(within(document.querySelector(".finding-inspector") as HTMLElement).getByText("Last occurred")).toBeInTheDocument();
     expect(screen.getByText("Stargate")).toBeInTheDocument();
-    expect(screen.getAllByText("KB 1234").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Open in Prism").length).toBeGreaterThan(0);
+    const drawer = within(document.querySelector(".finding-inspector") as HTMLElement);
+    expect(drawer.getByRole("link", { name: /Open KB 1234/ })).toHaveAttribute("href", "https://portal.nutanix.com/kb/1234");
+    expect(drawer.getByRole("link", { name: /Open in Prism/ })).toHaveAttribute("href", "https://10.1.2.3:9440");
+    expect(drawer.getByRole("button", { name: /Cluster page/ })).toBeInTheDocument();
+  });
+
+  it("puts the KB article and cluster actions in an NCC finding's details", () => {
+    render(
+      <ClusterTable
+        {...baseProps}
+        alertSource="NCC"
+        aggRows={[
+          { cluster: "10.1.2.3", check: "disk_usage_check", severity: "FAIL", detail: "Disk full. See https://portal.nutanix.com/kb/5678" },
+          { cluster: "10.1.2.4", check: "ntp_check", severity: "WARN", detail: "Clock drift" },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("disk_usage_check"));
+    const drawer = within(document.querySelector(".finding-inspector") as HTMLElement);
+    expect(drawer.getByRole("link", { name: /Open KB 5678/ })).toHaveAttribute("href", "https://portal.nutanix.com/kb/5678");
+    expect(drawer.getByRole("link", { name: /Open in Prism/ })).toBeInTheDocument();
+    expect(drawer.getByRole("button", { name: /This check on all clusters/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("ntp_check"));
+    expect(within(document.querySelector(".finding-inspector") as HTMLElement).getByText("No KB article in this result")).toBeInTheDocument();
   });
 
   it("fills the page under the header and keeps the alerts toolbar", () => {

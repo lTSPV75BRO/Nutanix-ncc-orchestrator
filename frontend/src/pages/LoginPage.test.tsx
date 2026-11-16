@@ -124,4 +124,16 @@ describe("LoginPage sign-in", () => {
     fireEvent.click(screen.getByRole("button", { name: /Sign in/ }));
     await waitFor(() => expect(onSuccess).toHaveBeenCalled());
   });
+
+  it("signs in once when Enter is pressed with SAML and OIDC buttons on the page", async () => {
+    mockFetch((url) => (url.includes("/auth/login") ? { status: 200, body: { success: true, data: { username: "admin" } } } : undefined));
+    const onSuccess = vi.fn();
+    renderLogin({ onSuccess, samlEnabled: true, oidcEnabled: true });
+    fireEvent.change(screen.getByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "right-password" } });
+    fireEvent.keyDown(screen.getByLabelText("Password"), { key: "Enter", code: "Enter", keyCode: 13 });
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1));
+    const logins = vi.mocked(globalThis.fetch).mock.calls.filter(([u]) => String(u).includes("/auth/login"));
+    expect(logins).toHaveLength(1);
+  });
 });

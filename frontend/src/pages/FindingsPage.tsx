@@ -851,6 +851,10 @@ export function FindingsPage() {
           flakyKeys={(reportData.flaky_keys || NO_FLAGS) as Record<string, unknown>}
           nccLogs={Array.isArray(reportData.ncc_logs) ? reportData.ncc_logs : NO_LOGS}
           filterText={filterText}
+          onShowCheck={(check) => {
+            setFilterText(check);
+            setSelectedClusters([]);
+          }}
           selectedClusters={selectedClusters}
           environmentClusters={alertSource === "NCC" ? environmentClusters : null}
           clusterNameMap={clusterNameMap}

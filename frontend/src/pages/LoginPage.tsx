@@ -198,6 +198,14 @@ export function LoginPage({
   const [forgotOpen, setForgotOpen] = useState(false);
   const [forgotSubmitting, setForgotSubmitting] = useState(false);
   const [forgotForm] = Form.useForm<{ username: string }>();
+  const [loginForm] = Form.useForm<{ username: string; password: string }>();
+  // Enter submits from either field. preventDefault stops the browser's own
+  // implicit submission so the request is sent once.
+  const submitOnEnter = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.nativeEvent.isComposing) return;
+    e.preventDefault();
+    if (!submitting) loginForm.submit();
+  };
   const [restoreOpen, setRestoreOpen] = useState(false);
   const httpInsecure = isNonLocalHTTP();
   const tlsQuery = useQuery({ queryKey: ["tls-public"], queryFn: api.tlsPublic, staleTime: 60_000, retry: 0 });
@@ -309,7 +317,7 @@ export function LoginPage({
       </div>
 
       {passwordLogin ? (
-        <Form layout="vertical" onFinish={handleFinish} requiredMark={false} disabled={submitting} className="auth-form">
+        <Form form={loginForm} layout="vertical" onFinish={handleFinish} requiredMark={false} disabled={submitting} className="auth-form">
           <Form.Item
             name="username"
             extra={ldapEnabled ? "Directory users: your usual Windows/AD username (e.g. jdoe)." : undefined}
@@ -323,6 +331,7 @@ export function LoginPage({
               aria-label="Username"
               autoComplete="username"
               autoFocus
+              onPressEnter={submitOnEnter}
             />
           </Form.Item>
           <Form.Item
@@ -337,6 +346,7 @@ export function LoginPage({
               placeholder="Password"
               aria-label="Password"
               autoComplete="current-password"
+              onPressEnter={submitOnEnter}
               onKeyUp={trackCapsLock}
               onKeyDown={trackCapsLock}
             />

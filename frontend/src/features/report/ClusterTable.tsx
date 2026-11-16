@@ -15,8 +15,8 @@ import {
   Typography,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { AimOutlined, CheckOutlined, ClockCircleOutlined, CopyOutlined, ExpandAltOutlined, ExportOutlined, FileTextOutlined, FullscreenExitOutlined, FullscreenOutlined, HistoryOutlined, LinkOutlined, MessageOutlined, ToolOutlined } from "@ant-design/icons";
-import { Link } from "react-router";
+import { AimOutlined, CheckOutlined, ClockCircleOutlined, ClusterOutlined, CopyOutlined, ExpandAltOutlined, ExportOutlined, FileTextOutlined, FullscreenExitOutlined, FullscreenOutlined, HistoryOutlined, MessageOutlined, ReadOutlined, SearchOutlined, ToolOutlined } from "@ant-design/icons";
+import { Link, useNavigate } from "react-router";
 import { KeyValueList, Panel, StatusBadge, type KeyValueItem } from "../../ui";
 import { clusterPath } from "../../navigation";
 import type { NCCDisposition } from "../../api/types";
@@ -34,6 +34,8 @@ type Props = {
   flakyKeys?: Record<string, unknown>;
   nccLogs?: Array<{ name: string; path: string }>;
   filterText: string;
+  /** Search the table for one check across every cluster (the drawer's "This check on all clusters"). */
+  onShowCheck?: (check: string) => void;
   selectedClusters: string[];
   /** Only rows on these clusters (an environment's list); null for all. */
   environmentClusters?: string[] | null;
@@ -285,6 +287,62 @@ function previewDetail(detail: string): string {
     .slice(0, 220);
 }
 
+/**
+ * What can be done from a finding: read the KB article (the main action when
+ * there is one), open the cluster in Prism or on its own page, and, for NCC,
+ * see the same check on every cluster.
+ */
+function FindingActions({
+  row,
+  clusterNameMap,
+  onShowCheck,
+}: {
+  row: RowRecord;
+  clusterNameMap: Record<string, string>;
+  /** Shows this check on every cluster in place; without it the link opens Findings. */
+  onShowCheck?: (check: string) => void;
+}) {
+  const navigate = useNavigate();
+  const kbLinks = kbLinksOf(row);
+  const prismURL = clusterPrismURL(row.cluster, clusterNameMap, row.clusterName);
+  return (
+    <div className="finding-actions">
+      {kbLinks.length > 0 ? (
+        kbLinks.map((url, i) => (
+          <Button
+            key={url}
+            type={i === 0 ? "primary" : "default"}
+            icon={<ReadOutlined />}
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Open {kbLabel(url)}
+          </Button>
+        ))
+      ) : (
+        <span className="finding-actions-note">No KB article in this result</span>
+      )}
+      {prismURL ? (
+        <Button icon={<ExportOutlined />} href={prismURL} target="_blank" rel="noopener noreferrer">
+          Open in Prism
+        </Button>
+      ) : null}
+      <Button icon={<ClusterOutlined />} onClick={() => navigate(clusterPath(row.cluster))}>
+        Cluster page
+      </Button>
+      {row.source === "NCC" ? (
+        <Button
+          icon={<SearchOutlined />}
+          onClick={() => (onShowCheck ? onShowCheck(row.alert) : navigate(`/findings?q=${encodeURIComponent(row.alert)}`))}
+        >
+          This check on all clusters
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 function PCAlertInspector({
   row,
   clusterNameMap,
@@ -292,7 +350,6 @@ function PCAlertInspector({
   row: RowRecord;
   clusterNameMap: Record<string, string>;
 }) {
-  const prismURL = clusterPrismURL(row.cluster, clusterNameMap, row.clusterName);
   const clusterSubtitle = row.clusterIP && row.clusterIP !== row.clusterName ? row.clusterIP : "";
   const showRootCause = Boolean(row.rootCause) && row.rootCause !== row.detail;
   const timeline = [
@@ -302,7 +359,6 @@ function PCAlertInspector({
     { label: "Resolved", value: row.resolvedAt },
   ].filter((item) => item.value && item.value !== "—");
 
-  const kbLinks = kbLinksOf(row);
   const status = row.status !== "—" ? row.status : row.resolved === "Yes" ? "Resolved" : "Open";
   const facts: KeyValueItem[] = [
     { label: "Status", value: status },
@@ -341,21 +397,7 @@ function PCAlertInspector({
             <Typography.Paragraph className="finding-message">{row.rootCause}</Typography.Paragraph>
           </>
         ) : null}
-        {kbLinks.length > 0 ? (
-          <div className="finding-kb">
-            <Typography.Text type="secondary">How to fix it:</Typography.Text>
-            {kbLinks.map((url) => (
-              <a key={url} href={url} target="_blank" rel="noreferrer">
-                <LinkOutlined /> {kbLabel(url)}
-              </a>
-            ))}
-          </div>
-        ) : null}
-        {prismURL ? (
-          <a href={prismURL} target="_blank" rel="noreferrer" className="finding-prism-link">
-            <ExportOutlined /> Open the cluster in Prism
-          </a>
-        ) : null}
+        <FindingActions row={row} clusterNameMap={clusterNameMap} />
       </Panel>
 
       <Panel title="Details" icon={<ClockCircleOutlined />}>
@@ -387,8 +429,8 @@ function ClusterCell({ row, url, subtitle }: { row: RowRecord; url?: string; sub
       <span className="alerts-cluster-name-line">
         <Link
           to={clusterPath(row.cluster)}
-          className="cluster-link kb-like-link"
-          title={`Open ${row.clusterName}`}
+          className="alerts-cluster-link"
+          title={`Open the ${row.clusterName} cluster page`}
           onClick={(e) => e.stopPropagation()}
         >
           {row.clusterName}
@@ -500,6 +542,8 @@ function handlingLabel(status: string): { text: string; color: string } {
 
 function NCCAlertInspector({
   row,
+  clusterNameMap,
+  onShowCheck,
   mark,
   note,
   onNote,
@@ -508,6 +552,8 @@ function NCCAlertInspector({
   readOnlyReason,
 }: {
   row: RowRecord;
+  clusterNameMap: Record<string, string>;
+  onShowCheck?: (check: string) => void;
   mark?: NCCDisposition;
   note: string;
   onNote: (value: string) => void;
@@ -519,7 +565,6 @@ function NCCAlertInspector({
   const current = handlingLabel(mark?.status || "");
   const history = [...(mark?.history || [])].reverse();
   const hasMark = mark?.status === "acknowledged" || mark?.status === "resolved" || mark?.status === "reopened";
-  const kbLinks = kbLinksOf(row);
   const address = row.clusterIP || (row.cluster !== row.clusterName ? row.cluster : "");
   const facts: KeyValueItem[] = [
     {
@@ -560,16 +605,7 @@ function NCCAlertInspector({
         }
       >
         <Typography.Paragraph className="finding-message">{row.detail || "The check reported no detail."}</Typography.Paragraph>
-        {kbLinks.length > 0 ? (
-          <div className="finding-kb">
-            <Typography.Text type="secondary">How to fix it:</Typography.Text>
-            {kbLinks.map((url) => (
-              <a key={url} href={url} target="_blank" rel="noreferrer">
-                <LinkOutlined /> {kbLabel(url)}
-              </a>
-            ))}
-          </div>
-        ) : null}
+        <FindingActions row={row} clusterNameMap={clusterNameMap} onShowCheck={onShowCheck} />
         <KeyValueList items={facts} />
       </Panel>
 
@@ -662,6 +698,7 @@ export function ClusterTable({
   flakyKeys,
   nccLogs,
   filterText,
+  onShowCheck,
   selectedClusters,
   environmentClusters = null,
   clusterNameMap,
@@ -1082,7 +1119,7 @@ export function ClusterTable({
           title="Open the Nutanix KB article"
           onClick={(e) => e.stopPropagation()}
         >
-          <LinkOutlined aria-hidden />
+          <ReadOutlined aria-hidden />
           {kbLabel(kbOf(row))}
         </a>
       ) : <span className="alerts-empty-cell">—</span>,
@@ -1450,21 +1487,6 @@ export function ClusterTable({
               >
                 {copyState === "copied" ? "Copied" : drawerRow.source === "PC" ? "Copy alert" : "Copy detail"}
               </Button>
-              {drawerRow.source === "PC" && clusterPrismURL(drawerRow.cluster, clusterNameMap, drawerRow.clusterName) ? (
-                <Button
-                  icon={<ExportOutlined />}
-                  href={clusterPrismURL(drawerRow.cluster, clusterNameMap, drawerRow.clusterName)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  Open in Prism
-                </Button>
-              ) : null}
-              {drawerRow.source === "PC" && kbOf(drawerRow) ? (
-                <Button type="primary" icon={<LinkOutlined />} href={kbOf(drawerRow)} target="_blank" rel="noopener noreferrer">
-                  {kbLabel(kbOf(drawerRow))}
-                </Button>
-              ) : null}
             </Space>
           ) : null
         }
@@ -1475,6 +1497,15 @@ export function ClusterTable({
           ) : (
             <NCCAlertInspector
               row={drawerRow}
+              clusterNameMap={clusterNameMap}
+              onShowCheck={
+                onShowCheck
+                  ? (check) => {
+                      setDrawerRow(null);
+                      onShowCheck(check);
+                    }
+                  : undefined
+              }
               mark={markFor(drawerRow)}
               note={handlingNote}
               onNote={setHandlingNote}

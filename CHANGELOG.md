@@ -70,6 +70,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   fix it, cluster link, AOS and NCC), Handling, Lifecycle and Handling
   history. Prism Central alerts get "What Prism Central reports" and a
   Details list with created, last occurred, updated and resolved times.
+  Both open with a row of actions: **Open KB nnnn** (one per article, the
+  first highlighted; "No KB article in this result" otherwise), Open in
+  Prism, Cluster page and, for NCC, **This check on all clusters**, which
+  closes the drawer and searches the table for that check.
+- **Findings table links.** Cluster names read as text and show the link
+  colour and underline on hover; the Prism icon gets a hover target; the KB
+  column is a pill like the app's badges.
+- **Enter signs in when SSO is offered.** Enter in the username or password
+  field submits the form directly (once), instead of relying on the
+  browser's implicit form submission beside the SAML and OIDC buttons.
 - **Run details name clusters.** Clusters and checks show the cluster name
   with its address and link to the cluster page. When some clusters could not
   be checked, the banner lists up to 10 of them with the reason.
