@@ -65,9 +65,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Findings toolbar at narrow widths.** The environment picker no longer
   truncates to "All environme…"; below 900 px the search box takes its own
   row and the pickers share the next one evenly.
+- **Finding details drawer redesigned.** It uses the same panels and
+  label/value lists as the rest of the app: "What it found" (detail, how to
+  fix it, cluster link, AOS and NCC), Handling, Lifecycle and Handling
+  history. Prism Central alerts get "What Prism Central reports" and a
+  Details list with created, last occurred, updated and resolved times.
+- **Run details name clusters.** Clusters and checks show the cluster name
+  with its address and link to the cluster page. When some clusters could not
+  be checked, the banner lists up to 10 of them with the reason.
+- **Insights agrees with the rest of the app.** The newest run reads
+  "Partial · exit 3" as on Runs instead of "Failed (exit 3)"; health bars
+  are green from 75% so a "Good" score is no longer orange; NCC results are
+  called findings; cluster names link to the cluster page.
+- **Prism Central empty state.** With no PC alerts and no filters set, the
+  Findings page says Prism Central reports no alerts instead of suggesting
+  clearing filters.
 
 ### Added
 
+- **Cluster page** (`/clusters/<name or address>`). Shows health, failing
+  checks, warnings and data age; why the last run could not reach it; open
+  findings with a needs-attention/acknowledged filter; versions, environment
+  and last-checked times; and recently closed findings. Operators can rerun
+  just that cluster. Cluster names on the Overview, Findings, Run details and
+  Insights link here.
 - **Data freshness on the Overview.** Each cluster shows when it was last
   checked (amber once that is over a day ago). A cluster the last run could
   not reach says how old its data is ("connection refused · data from 3d

@@ -1,9 +1,8 @@
-import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Button,
   Card,
-  Descriptions,
   Drawer,
   Empty,
   Grid,
@@ -16,8 +15,10 @@ import {
   Typography,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { AimOutlined, CheckOutlined, ClockCircleOutlined, ClusterOutlined, CopyOutlined, ExpandAltOutlined, ExportOutlined, FileTextOutlined, FullscreenExitOutlined, FullscreenOutlined, HistoryOutlined, LinkOutlined, MessageOutlined, ReadOutlined, ToolOutlined } from "@ant-design/icons";
-import { IconTitle } from "../../ui";
+import { AimOutlined, CheckOutlined, ClockCircleOutlined, CopyOutlined, ExpandAltOutlined, ExportOutlined, FileTextOutlined, FullscreenExitOutlined, FullscreenOutlined, HistoryOutlined, LinkOutlined, MessageOutlined, ToolOutlined } from "@ant-design/icons";
+import { Link } from "react-router";
+import { KeyValueList, Panel, StatusBadge, type KeyValueItem } from "../../ui";
+import { clusterPath } from "../../navigation";
 import type { NCCDisposition } from "../../api/types";
 import { asArray, asRecord, displayClusterName, nccDispositionKey, resolveClusterName } from "../../utils/report";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
@@ -284,15 +285,6 @@ function previewDetail(detail: string): string {
     .slice(0, 220);
 }
 
-function PCMetric({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="pc-alert-metric">
-      <div className="pc-alert-metric-label">{label}</div>
-      <div className="pc-alert-metric-value">{children}</div>
-    </div>
-  );
-}
-
 function PCAlertInspector({
   row,
   clusterNameMap,
@@ -310,114 +302,65 @@ function PCAlertInspector({
     { label: "Resolved", value: row.resolvedAt },
   ].filter((item) => item.value && item.value !== "—");
 
+  const kbLinks = kbLinksOf(row);
+  const status = row.status !== "—" ? row.status : row.resolved === "Yes" ? "Resolved" : "Open";
+  const facts: KeyValueItem[] = [
+    { label: "Status", value: status },
+    { label: "Resolved", value: row.autoResolved ? "Automatically" : row.resolved },
+    { label: "Acknowledged", value: row.acknowledged },
+  ];
+  if (row.impactType !== "—") facts.push({ label: "Impact", value: row.impactType.replace(/_/g, " ") });
+  if (row.entityName && row.entityName !== "—") {
+    facts.push({ label: "Affects", value: row.entityType !== "—" ? `${row.entityName} (${row.entityType})` : row.entityName });
+  }
+  facts.push({
+    label: "Cluster",
+    value: (
+      <Link to={clusterPath(row.cluster)} className="drawer-cluster-link">
+        {row.clusterName}
+        {clusterSubtitle ? <span className="mono drawer-cluster-address">{clusterSubtitle}</span> : null}
+      </Link>
+    ),
+    title: row.clusterName,
+  });
+  if (row.clusterUUID) facts.push({ label: "Cluster UUID", value: row.clusterUUID, mono: true, copy: row.clusterUUID });
+  timeline.forEach((item) => facts.push({ label: item.label, value: formatStamp(item.value) }));
+  if (row.alertType !== "—") facts.push({ label: "Alert type", value: row.alertType, mono: true });
+  if (row.serviceName) facts.push({ label: "Service", value: row.serviceName });
+  if (row.extId) facts.push({ label: "Alert ID", value: row.extId, mono: true, copy: row.extId });
+
   return (
-    <div className="pc-alert-inspector">
-      <div className="pc-alert-metric-grid">
-        <PCMetric label="Status">{row.status !== "—" ? row.status : row.resolved === "Yes" ? "Resolved" : "Open"}</PCMetric>
-        <PCMetric label="Resolved">
-          <Tag color={row.resolved === "Yes" ? "success" : "processing"} style={{ margin: 0 }}>
-            {row.autoResolved ? "Auto resolved" : row.resolved}
-          </Tag>
-        </PCMetric>
-        <PCMetric label="Acknowledged">
-          <Tag color={row.acknowledged === "Yes" ? "success" : "default"} style={{ margin: 0 }}>
-            {row.acknowledged}
-          </Tag>
-        </PCMetric>
-        <PCMetric label="Impact">{row.impactType !== "—" ? row.impactType.replace(/_/g, " ") : "—"}</PCMetric>
-      </div>
-
-      <div className="pc-alert-pair">
-        <Card size="small" className="pc-alert-entity-card" title={<Space size={6}><ClusterOutlined /> Entity</Space>}>
-          <Typography.Text strong>{row.entityName || "—"}</Typography.Text>
-          <div>
-            <Typography.Text type="secondary">{row.entityType !== "—" ? row.entityType : "Unknown type"}</Typography.Text>
-          </div>
-        </Card>
-        <Card size="small" className="pc-alert-entity-card" title={<Space size={6}><ExportOutlined /> Cluster</Space>}>
-          {prismURL ? (
-            <a href={prismURL} target="_blank" rel="noreferrer">
-              {row.clusterName}
-            </a>
-          ) : (
-            <Typography.Text strong>{row.clusterName}</Typography.Text>
-          )}
-          {clusterSubtitle ? (
-            <div>
-              <Typography.Text type="secondary" className="mono">
-                {clusterSubtitle}
-              </Typography.Text>
-            </div>
-          ) : null}
-          {row.clusterUUID ? (
-            <Typography.Paragraph type="secondary" copyable={{ text: row.clusterUUID }} style={{ margin: "6px 0 0", fontSize: 12 }}>
-              {row.clusterUUID}
-            </Typography.Paragraph>
-          ) : null}
-          {prismURL ? (
-            <div style={{ marginTop: 8 }}>
-              <a href={prismURL} target="_blank" rel="noreferrer">
-                Open in Prism
-              </a>
-            </div>
-          ) : null}
-        </Card>
-      </div>
-
-      {timeline.length > 0 ? (
-        <Card size="small" title={<Space size={6}><ClockCircleOutlined /> Timeline</Space>}>
-          <div className="pc-alert-timeline">
-            {timeline.map((item) => (
-              <div key={item.label} className="pc-alert-timeline-item">
-                <div className="pc-alert-metric-label">{item.label}</div>
-                <div>{formatStamp(item.value)}</div>
-              </div>
-            ))}
-          </div>
-        </Card>
-      ) : null}
-
-      <Card size="small" title={<IconTitle icon={<MessageOutlined />}>Alert message</IconTitle>}>
-        <Typography.Paragraph className="pc-alert-message" style={{ margin: 0 }}>
-          {row.detail || "(no message)"}
-        </Typography.Paragraph>
-      </Card>
-
-      {showRootCause ? (
-        <Card size="small" title={<IconTitle icon={<AimOutlined />}>Root cause</IconTitle>}>
-          <Typography.Paragraph className="pc-alert-message" style={{ margin: 0 }}>
-            {row.rootCause}
-          </Typography.Paragraph>
-        </Card>
-      ) : null}
-
-      {kbLinksOf(row).length > 0 ? (
-        <Card size="small" title={<IconTitle icon={<ReadOutlined />}>Knowledge base</IconTitle>}>
-          <Space size={[8, 8]} wrap>
-            {kbLinksOf(row).map((url) => (
-              <a key={url} href={url} target="_blank" rel="noreferrer">
-                <Tag color="processing" icon={<LinkOutlined />} style={{ margin: 0 }}>
-                  {kbLabel(url)}
-                </Tag>
-              </a>
-            ))}
-          </Space>
-        </Card>
-      ) : null}
-
-      <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }} title="Identifiers">
-        <Descriptions.Item label="Alert type">{row.alertType !== "—" ? row.alertType : "—"}</Descriptions.Item>
-        <Descriptions.Item label="Service">{row.serviceName || "—"}</Descriptions.Item>
-        <Descriptions.Item label="Alert ID">
-          {row.extId ? (
-            <Typography.Text copyable={{ text: row.extId }} className="mono">
-              {row.extId}
+    <div className="finding-inspector">
+      <Panel title="What Prism Central reports" icon={<MessageOutlined />}>
+        <Typography.Paragraph className="finding-message">{row.detail || "Prism Central sent no message."}</Typography.Paragraph>
+        {showRootCause ? (
+          <>
+            <Typography.Text type="secondary" className="finding-subhead">
+              <AimOutlined /> Root cause
             </Typography.Text>
-          ) : (
-            "—"
-          )}
-        </Descriptions.Item>
-      </Descriptions>
+            <Typography.Paragraph className="finding-message">{row.rootCause}</Typography.Paragraph>
+          </>
+        ) : null}
+        {kbLinks.length > 0 ? (
+          <div className="finding-kb">
+            <Typography.Text type="secondary">How to fix it:</Typography.Text>
+            {kbLinks.map((url) => (
+              <a key={url} href={url} target="_blank" rel="noreferrer">
+                <LinkOutlined /> {kbLabel(url)}
+              </a>
+            ))}
+          </div>
+        ) : null}
+        {prismURL ? (
+          <a href={prismURL} target="_blank" rel="noreferrer" className="finding-prism-link">
+            <ExportOutlined /> Open the cluster in Prism
+          </a>
+        ) : null}
+      </Panel>
+
+      <Panel title="Details" icon={<ClockCircleOutlined />}>
+        <KeyValueList items={facts} />
+      </Panel>
     </div>
   );
 }
@@ -441,22 +384,29 @@ function ClusterCell({ row, url, subtitle }: { row: RowRecord; url?: string; sub
   const sub = subtitle && subtitle !== row.clusterName ? subtitle : "";
   return (
     <div className="alerts-cluster-cell">
-      {url ? (
-        <a
-          href={url}
-          target="_blank"
-          rel="noreferrer"
+      <span className="alerts-cluster-name-line">
+        <Link
+          to={clusterPath(row.cluster)}
           className="cluster-link kb-like-link"
-          title={row.clusterName}
+          title={`Open ${row.clusterName}`}
           onClick={(e) => e.stopPropagation()}
         >
           {row.clusterName}
-        </a>
-      ) : (
-        <span className="alerts-cluster-name" title={row.clusterName}>
-          {row.clusterName}
-        </span>
-      )}
+        </Link>
+        {url ? (
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            className="alerts-cluster-prism"
+            aria-label={`Open ${row.clusterName} in Prism`}
+            title="Open in Prism"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <ExportOutlined />
+          </a>
+        ) : null}
+      </span>
       {sub ? (
         <span className="alerts-cluster-meta" title={sub}>
           {sub}
@@ -569,8 +519,25 @@ function NCCAlertInspector({
   const current = handlingLabel(mark?.status || "");
   const history = [...(mark?.history || [])].reverse();
   const hasMark = mark?.status === "acknowledged" || mark?.status === "resolved" || mark?.status === "reopened";
+  const kbLinks = kbLinksOf(row);
+  const address = row.clusterIP || (row.cluster !== row.clusterName ? row.cluster : "");
+  const facts: KeyValueItem[] = [
+    {
+      label: "Cluster",
+      value: (
+        <Link to={clusterPath(row.cluster)} className="drawer-cluster-link">
+          {row.clusterName}
+          {address && address !== row.clusterName ? <span className="mono drawer-cluster-address">{address}</span> : null}
+        </Link>
+      ),
+      title: row.clusterName,
+    },
+    { label: "AOS", value: row.clusterVersion || "Not reported" },
+    { label: "NCC", value: row.nccVersion || "Not reported" },
+  ];
+  if (row.logName) facts.push({ label: "Run log", value: row.logName, mono: true, title: row.logPath || row.logName });
   return (
-    <div className="ncc-alert-inspector">
+    <div className="finding-inspector">
       {mark?.status === "reopened" ? (
         <Alert
           type="warning"
@@ -580,7 +547,33 @@ function NCCAlertInspector({
         />
       ) : null}
 
-      <Card size="small" className="ncc-handling-card" title={<IconTitle icon={<ToolOutlined />}>Handling</IconTitle>} extra={<Tag color={current.color}>{current.text}</Tag>}>
+      <Panel
+        title="What it found"
+        icon={<FileTextOutlined />}
+        extra={
+          row.isChanged || row.isFlaky ? (
+            <Space size={4}>
+              {row.isChanged ? <StatusBadge tone="warn">Changed since last run</StatusBadge> : null}
+              {row.isFlaky ? <StatusBadge tone="info">Flaky</StatusBadge> : null}
+            </Space>
+          ) : undefined
+        }
+      >
+        <Typography.Paragraph className="finding-message">{row.detail || "The check reported no detail."}</Typography.Paragraph>
+        {kbLinks.length > 0 ? (
+          <div className="finding-kb">
+            <Typography.Text type="secondary">How to fix it:</Typography.Text>
+            {kbLinks.map((url) => (
+              <a key={url} href={url} target="_blank" rel="noreferrer">
+                <LinkOutlined /> {kbLabel(url)}
+              </a>
+            ))}
+          </div>
+        ) : null}
+        <KeyValueList items={facts} />
+      </Panel>
+
+      <Panel title="Handling" icon={<ToolOutlined />} extra={<Tag color={current.color}>{current.text}</Tag>}>
         {mark?.by && mark.status ? (
           <Typography.Paragraph className="ncc-handling-who">
             {current.text} by <Typography.Text strong>{mark.by}</Typography.Text>
@@ -589,7 +582,7 @@ function NCCAlertInspector({
           </Typography.Paragraph>
         ) : (
           <Typography.Paragraph type="secondary" className="ncc-handling-who">
-            Nobody has acknowledged or resolved this alert yet.
+            Nobody has acknowledged or resolved this finding yet.
           </Typography.Paragraph>
         )}
         {mark?.note ? <Typography.Paragraph className="ncc-handling-note">{mark.note}</Typography.Paragraph> : null}
@@ -621,15 +614,15 @@ function NCCAlertInspector({
               ) : null}
             </Space>
             <Typography.Paragraph type="secondary" className="ncc-handling-hint">
-              Acknowledge notes that you have seen it. Resolve marks it done until a later run finds the same alert.
+              Acknowledge notes that you have seen it. Resolve marks it done until a later run finds it again.
             </Typography.Paragraph>
           </>
         ) : (
           <Typography.Paragraph type="secondary" className="ncc-handling-hint">
-            {readOnlyReason || "Alert handling is turned off under Settings → Features, so marks are read-only."}
+            {readOnlyReason || "Finding handling is turned off under Settings → Features, so marks are read-only."}
           </Typography.Paragraph>
         )}
-      </Card>
+      </Panel>
 
       <NCCLifecyclePanel
         cluster={row.cluster}
@@ -638,53 +631,8 @@ function NCCAlertInspector({
         onResolve={onAction ? () => onAction("resolve") : undefined}
       />
 
-      <div className="pc-alert-metric-grid">
-        <div className="pc-alert-metric">
-          <div className="pc-alert-metric-label">Cluster</div>
-          <div className="pc-alert-metric-value">{row.clusterName}</div>
-          {row.cluster && row.cluster !== row.clusterName ? (
-            <Typography.Text type="secondary" className="mono">{row.cluster}</Typography.Text>
-          ) : null}
-        </div>
-        <div className="pc-alert-metric">
-          <div className="pc-alert-metric-label">Versions</div>
-          <div className="pc-alert-metric-value">{row.clusterVersion || "AOS not reported"}</div>
-          <Typography.Text type="secondary">{row.nccVersion ? `NCC ${row.nccVersion}` : "NCC not reported"}</Typography.Text>
-        </div>
-        <div className="pc-alert-metric">
-          <div className="pc-alert-metric-label">Status</div>
-          <Space size={4} wrap>
-            {row.isChanged ? <Tag color="gold">Changed</Tag> : null}
-            {row.isFlaky ? <Tag color="purple">Flaky</Tag> : null}
-            {!row.isChanged && !row.isFlaky ? <Typography.Text type="secondary">None</Typography.Text> : null}
-          </Space>
-        </div>
-        <div className="pc-alert-metric">
-          <div className="pc-alert-metric-label">Log</div>
-          <div className="pc-alert-metric-value">{row.logName || "—"}</div>
-        </div>
-      </div>
-
-      {kbLinksOf(row).length > 0 ? (
-        <Card size="small" title={<IconTitle icon={<ReadOutlined />}>Knowledge base</IconTitle>}>
-          <Space size={[8, 8]} wrap>
-            {kbLinksOf(row).map((url) => (
-              <a key={url} href={url} target="_blank" rel="noreferrer">
-                <Tag color="processing" icon={<LinkOutlined />} style={{ margin: 0 }}>{kbLabel(url)}</Tag>
-              </a>
-            ))}
-          </Space>
-        </Card>
-      ) : null}
-
-      <Card size="small" title={<IconTitle icon={<FileTextOutlined />}>Alert detail</IconTitle>}>
-        <Typography.Paragraph className="pc-alert-message" style={{ margin: 0 }}>
-          {row.detail || "No additional detail."}
-        </Typography.Paragraph>
-      </Card>
-
       {history.length > 0 ? (
-        <Card size="small" title={<IconTitle icon={<HistoryOutlined />}>History</IconTitle>}>
+        <Panel title="Handling history" icon={<HistoryOutlined />}>
           <ol className="ncc-handling-history">
             {history.map((event, index) => {
               const label = handlingLabel(event.status).text;
@@ -701,7 +649,7 @@ function NCCAlertInspector({
               );
             })}
           </ol>
-        </Card>
+        </Panel>
       ) : null}
     </div>
   );
@@ -1395,10 +1343,22 @@ export function ClusterTable({
           description={
             <Space orientation="vertical" size={2} align="center">
               <Typography.Text strong>
-                {totalRows > 0 ? "No findings in this handling view" : "No findings match the current filters"}
+                {totalRows > 0
+                  ? "No findings in this handling view"
+                  : baseRows.length === 0
+                    ? alertSource === "PC"
+                      ? "Prism Central reports no alerts"
+                      : "No findings in the latest run"
+                    : "No findings match the current filters"}
               </Typography.Text>
               <Typography.Text type="secondary">
-                {totalRows > 0 ? "Choose All to see acknowledged and resolved rows again." : "Try clearing severity chips or the cluster filter."}
+                {totalRows > 0
+                  ? "Choose All to see acknowledged and resolved rows again."
+                  : baseRows.length === 0
+                    ? alertSource === "PC"
+                      ? "Nothing is open on the Prism Central instances in this report."
+                      : "Every check passed on the clusters in this report."
+                    : "Try clearing severity chips or the cluster filter."}
               </Typography.Text>
             </Space>
           }
@@ -1457,11 +1417,11 @@ export function ClusterTable({
         open={Boolean(drawerRow)}
         title={
           drawerRow ? (
-            <Space orientation="vertical" size={4} style={{ width: "100%" }}>
-              <Typography.Text type="secondary" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                {drawerRow.source === "PC" ? "Prism Central alert" : "NCC alert"}
+            <Space orientation="vertical" size={4} className="finding-drawer-head">
+              <Typography.Text type="secondary" className="finding-drawer-eyebrow">
+                {drawerRow.source === "PC" ? "Prism Central alert" : "NCC finding"} · {drawerRow.clusterName}
               </Typography.Text>
-              <Typography.Title level={4} style={{ margin: 0, paddingRight: 24 }}>
+              <Typography.Title level={4} className="finding-drawer-title">
                 {drawerRow.alert}
               </Typography.Title>
               <Space size={6} wrap>

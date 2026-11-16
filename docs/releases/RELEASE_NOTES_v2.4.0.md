@@ -22,6 +22,23 @@ looking current. The Overview now makes both visible:
 
 Automation can read the same data from `GET /api/v1/freshness`.
 
+## A page for each cluster
+
+Click a cluster name on the Overview, Findings, Run details or Insights to
+open its page: health, failing checks, warnings and data age; why the last
+run couldn't reach it; its open findings (filter to needs attention or
+acknowledged); versions, environment and when it was last checked; and what
+closed recently. Operators can rerun just that cluster from there.
+
+Other detail views were tidied to match:
+
+- The finding details drawer uses the same panels as the rest of the app,
+  starting with what was found and how to fix it.
+- Run details show cluster names next to addresses, and the "some clusters
+  could not be checked" banner lists which ones and why.
+- Insights reports a partial run as "Partial · exit 3", as Runs does, and a
+  "Good" health score is green rather than orange.
+
 ## Safer restores
 
 Backups taken before an update include the program files, so a rollback can

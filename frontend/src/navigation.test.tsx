@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   aliasRedirect,
+  clusterPath,
   findingsRedirect,
   legacySettingsTarget,
   pageTitle,
@@ -79,6 +80,8 @@ describe("navigation", () => {
 
   it("names pages for the top bar", () => {
     expect(pageTitle("/findings")).toBe("Findings");
+    expect(pageTitle("/clusters/10.0.0.1")).toBe("Cluster");
+    expect(clusterPath(" lab a ")).toBe("/clusters/lab%20a");
     expect(pageTitle("/runs/20261029T0940Z")).toBe("Run details");
     expect(pageTitle("/overview")).toBe("Overview");
     expect(pageTitle("/system/status")).toBe("System status");

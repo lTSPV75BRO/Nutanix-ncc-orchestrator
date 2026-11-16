@@ -10,6 +10,7 @@ import {
   BellOutlined,
   CalendarOutlined,
   CloudSyncOutlined,
+  ClusterOutlined,
   CodeOutlined,
   ControlOutlined,
   DashboardOutlined,
@@ -79,6 +80,11 @@ export const PAGES = [
   { path: "/findings", label: "Findings", title: "Findings", icon: <AlertOutlined /> },
   { path: "/insights", label: "Insights", title: "Insights", icon: <BarChartOutlined /> },
 ] as const;
+
+/** A cluster's own page. `key` is its address (or its name, which the page resolves). */
+export function clusterPath(key: string): string {
+  return `/clusters/${encodeURIComponent(key.trim())}`;
+}
 
 /** Query keys of a shared findings view (the former Dashboard's link format). */
 export const FINDINGS_SHARE_KEYS = ["q", "sev", "clusters", "mode", "source", "resolved"] as const;
@@ -209,6 +215,7 @@ export function legacySettingsTarget(search: string, v: Viewer): string {
 /** The navigation icon of the page at `pathname`, for its title. */
 export function pageIcon(pathname: string): ReactNode {
   if (/^\/runs\/[^/]+/.test(pathname)) return SECTIONS.find((s) => s.key === "runs")?.icon ?? null;
+  if (/^\/clusters\/[^/]+/.test(pathname)) return <ClusterOutlined />;
   const s = sectionByPath(pathname);
   if (s) return s.icon;
   return PAGES.find((pg) => pg.path === (pathname.replace(/\/+$/, "") || "/"))?.icon ?? null;
@@ -216,6 +223,7 @@ export function pageIcon(pathname: string): ReactNode {
 
 export function pageTitle(pathname: string): string {
   if (/^\/runs\/[^/]+/.test(pathname)) return "Run details";
+  if (/^\/clusters\/[^/]+/.test(pathname)) return "Cluster";
   const s = sectionByPath(pathname);
   if (s) return s.title;
   const p = PAGES.find((pg) => pg.path === (pathname.replace(/\/+$/, "") || "/"));

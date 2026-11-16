@@ -49,6 +49,7 @@ const OverviewPage = lazy(() => import("./pages/OverviewPage").then((m) => ({ de
 const FindingsPage = lazy(() => import("./pages/FindingsPage").then((m) => ({ default: m.FindingsPage })));
 const RunsPage = lazy(() => import("./pages/RunsPage").then((m) => ({ default: m.RunsPage })));
 const RunDetailPage = lazy(() => import("./pages/RunDetailPage").then((m) => ({ default: m.RunDetailPage })));
+const ClusterPage = lazy(() => import("./pages/ClusterPage").then((m) => ({ default: m.ClusterPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 const InsightsPage = lazy(() => import("./pages/InsightsPage").then((m) => ({ default: m.InsightsPage })));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage").then((m) => ({ default: m.NotFoundPage })));
@@ -773,6 +774,7 @@ export default function App() {
               <Route path="/insights" element={<InsightsPage />} />
               <Route path="/runs" element={<RunsPage />} />
               <Route path="/runs/:id" element={<RunDetailPage />} />
+              <Route path="/clusters/:key" element={<ClusterPage />} />
               <Route path="/settings" element={<LegacySettingsRedirect viewer={viewer} />} />
               <Route path="/settings/:section" element={<SectionRoute viewer={viewer} />} />
               <Route path="/system/:section" element={<SectionRoute viewer={viewer} />} />

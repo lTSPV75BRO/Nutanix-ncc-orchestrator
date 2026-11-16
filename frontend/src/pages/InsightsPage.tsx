@@ -20,7 +20,7 @@ import { DrilldownDiffPanel } from "../features/report/DrilldownDiffPanel";
 import { FlakyChecksPanel } from "../features/report/FlakyChecksPanel";
 import { LifecycleInsightsCard } from "../features/report/LifecycleInsightsCard";
 import { SloPanel } from "../features/report/SloPanel";
-import { sectionHref } from "../navigation";
+import { clusterPath, sectionHref } from "../navigation";
 import { notifyError } from "../notify";
 import { EmptyState, KeyValueList, ListToolbar, matchesSearch, Panel, StatTile, StatusBadge, toneFor, VirtualList, type Tone } from "../ui";
 import { formatDateTime, relativeTime } from "../utils/datetime";
@@ -76,9 +76,20 @@ function kbUrl(row: Record<string, unknown>): string {
 
 function scoreTone(score: number | null): "ok" | "warn" | "fail" | undefined {
   if (score == null) return undefined;
-  if (score >= 90) return "ok";
+  if (score >= 75) return "ok";
   if (score >= 60) return "warn";
   return "fail";
+}
+
+/**
+ * The newest run's outcome in the words Runs and Run details use: exit 3
+ * means some clusters could not be checked ("Partial").
+ */
+function runOutcome(runSummary: Record<string, unknown>): string {
+  const exit = toNumber(runSummary.exit_code);
+  if (exit === 0) return "Completed";
+  if (exit === 3) return `Partial · exit ${exit}`;
+  return `Failed · exit ${exit}`;
 }
 
 function healthGrade(score: number): string {
@@ -159,7 +170,9 @@ function ClusterRanking({ ranking, needsByName }: { ranking: RankedCluster[]; ne
             return (
               <div className="insights-ranking-row">
                 <div className="insights-ranking-head">
-                  <strong>{c.name}</strong>
+                  <Link to={clusterPath(c.address || c.name)} className="cluster-page-link">
+                    <strong>{c.name}</strong>
+                  </Link>
                   <span className={`insights-score tone-${t}`}>
                     {c.health.toFixed(1)}% · {healthGrade(c.health)}
                   </span>
@@ -528,14 +541,14 @@ export function InsightsPage() {
   if (triage.returned > 0) {
     briefing.push({
       tone: "warn",
-      text: `${triage.returned} resolved ${triage.returned === 1 ? "alert was" : "alerts were"} found again on this run.`,
+      text: `${triage.returned} resolved ${triage.returned === 1 ? "finding was" : "findings were"} found again on this run.`,
     });
   }
   if (triage.needsAttention > 0) {
     const hottest = triage.clusters.find((c) => c.needs > 0);
     briefing.push({
       tone: "warn",
-      text: `${triage.needsAttention} critical ${triage.needsAttention === 1 ? "alert has" : "alerts have"} not been acknowledged or resolved.${hottest ? ` ${hottest.name} still has ${hottest.needs}.` : ""}`,
+      text: `${triage.needsAttention} critical ${triage.needsAttention === 1 ? "finding has" : "findings have"} not been acknowledged or resolved.${hottest ? ` ${hottest.name} still has ${hottest.needs}.` : ""}`,
     });
   }
   if (sharedChecks.length > 0) {
@@ -548,7 +561,7 @@ export function InsightsPage() {
   if (triage.missingKb > 0) {
     briefing.push({
       tone: "info",
-      text: `${triage.missingKb} critical ${triage.missingKb === 1 ? "alert has" : "alerts have"} no knowledge-base article.`,
+      text: `${triage.missingKb} critical ${triage.missingKb === 1 ? "finding has" : "findings have"} no knowledge-base article.`,
     });
   }
   if (triage.nccVersions.length > 1) {
@@ -561,8 +574,8 @@ export function InsightsPage() {
     briefing.push({
       tone: "ok",
       text: previousTs
-        ? "Every cluster completed, there are no new failures since the previous run, and no critical alerts are waiting."
-        : "Every cluster completed, and no critical alerts are waiting. There is no earlier run to compare.",
+        ? "Every cluster completed, there are no new failures since the previous run, and no critical findings are waiting."
+        : "Every cluster completed, and no critical findings are waiting. There is no earlier run to compare.",
     });
   }
 
@@ -761,7 +774,7 @@ export function InsightsPage() {
             items={[
               { label: "Clusters completed", value: String(clustersOk) },
               { label: "Clusters not completed", value: String(clustersFailed) },
-              { label: "Run result", value: toNumber(runSummary.exit_code) === 0 ? "Completed" : `Failed (exit ${toNumber(runSummary.exit_code)})` },
+              { label: "Run result", value: runOutcome(runSummary) },
               ...(triage.nccVersions.length
                 ? [{ label: "NCC versions", value: triage.nccVersions.map((v) => `${v.version} (${v.clusters.length})`).join(", ") }]
                 : []),
@@ -853,16 +866,16 @@ export function InsightsPage() {
 
   const triageTab = (
     <div className="insights-tab">
-      <Panel title="Triage queue" icon={<OrderedListOutlined />} description="Critical alerts and how they have been handled. Resolved alerts come back here if a later run finds them again.">
+      <Panel title="Triage queue" icon={<OrderedListOutlined />} description="Critical findings and how they have been handled. Resolved findings come back here if a later run finds them again.">
         <div className="overview-stats">
           <StatTile label="Need attention" value={triage.needsAttention} tone={triage.needsAttention > 0 ? "fail" : "ok"} />
           <StatTile label="Acknowledged, still open" value={triage.acknowledged} />
           <StatTile label="Resolved" value={triage.resolved} />
-          <StatTile label="Most acknowledgements" value={triage.topOwner || "—"} hint={triage.topCount > 0 ? `${triage.topCount} alerts` : undefined} />
+          <StatTile label="Most acknowledgements" value={triage.topOwner || "—"} hint={triage.topCount > 0 ? `${triage.topCount} ${triage.topCount === 1 ? "finding" : "findings"}` : undefined} />
         </div>
         {triage.returned > 0 ? (
           <p className="ui-field-help">
-            {triage.returned} resolved {triage.returned === 1 ? "alert was" : "alerts were"} found again on this run.
+            {triage.returned} resolved {triage.returned === 1 ? "finding was" : "findings were"} found again on this run.
           </p>
         ) : null}
         {triage.clusters.some((c) => c.needs > 0) ? (
@@ -873,14 +886,23 @@ export function InsightsPage() {
             rowKey="name"
             dataSource={triage.clusters.filter((c) => c.needs > 0).slice(0, 8)}
             columns={[
-              { title: "Cluster", dataIndex: "name", key: "name" },
+              {
+                title: "Cluster",
+                dataIndex: "name",
+                key: "name",
+                render: (v: string) => (
+                  <Link to={clusterPath(v)} className="cluster-page-link">
+                    {v}
+                  </Link>
+                ),
+              },
               { title: "Need attention", dataIndex: "needs", key: "needs", width: 150, align: "right" },
               { title: "Acknowledged", dataIndex: "acknowledged", key: "acknowledged", width: 140, align: "right" },
               { title: "Resolved", dataIndex: "resolved", key: "resolved", width: 120, align: "right" },
             ]}
           />
         ) : null}
-        {triage.missingKb > 0 ? <p className="ui-field-help">{triage.missingKb} of these alerts have no knowledge-base article.</p> : null}
+        {triage.missingKb > 0 ? <p className="ui-field-help">{triage.missingKb} of these findings have no knowledge-base article.</p> : null}
         <Link to="/findings">
           <Button>Work through them in Findings</Button>
         </Link>

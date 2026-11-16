@@ -8,7 +8,7 @@ import { useAuth } from "../auth/AuthContext";
 import { SetupBanner } from "../features/onboarding/SetupChecklist";
 import { RunsTable } from "../features/runs/RunsTable";
 import { useRunsActive } from "../hooks/useRunsActive";
-import { sectionHref } from "../navigation";
+import { clusterPath, sectionHref } from "../navigation";
 import { EmptyState, ListToolbar, matchesSearch, Panel, StatTile, StatusBadge, VirtualList, type Tone } from "../ui";
 import { ageMs, formatDateTime, relativeTime } from "../utils/datetime";
 import { formatDuration, freshness, mergeFreshness, overdueScheduleText, type OverviewClusterRow as ClusterRow } from "../utils/freshness";
@@ -123,7 +123,7 @@ function ClusterHealthList({ clusters }: { clusters: ClusterRow[] }) {
             const st = clusterStatus(c);
             const old = c.checkedAt ? ageMs(c.checkedAt) > DAY_MS : false;
             return (
-              <Link to={`/findings?clusters=${encodeURIComponent(c.name)}`} className="overview-cluster-row">
+              <Link to={clusterPath(c.address || c.name)} className="overview-cluster-row">
                 <span className="overview-cluster-name" title={c.error || c.name}>
                   {c.name}
                 </span>

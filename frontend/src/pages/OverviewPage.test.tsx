@@ -87,8 +87,8 @@ describe("OverviewPage", () => {
     expect(screen.getByRole("link", { name: /Fail\s*3/ })).toHaveAttribute("href", "/findings?sev=FAIL");
 
     // Unreachable first, then the cluster with failures, then warnings.
-    const clusters = screen.getAllByRole("link").filter((a) => a.getAttribute("href")?.startsWith("/findings?clusters="));
-    expect(clusters.map((a) => decodeURIComponent(a.getAttribute("href")!.split("=")[1]))).toEqual([
+    const clusters = screen.getAllByRole("link").filter((a) => a.getAttribute("href")?.startsWith("/clusters/"));
+    expect(clusters.map((a) => decodeURIComponent(a.getAttribute("href")!.slice("/clusters/".length)))).toEqual([
       "10.0.0.3",
       "10.0.0.2",
       "10.0.0.1",
@@ -111,7 +111,7 @@ describe("OverviewPage", () => {
       ],
     });
     const row = async (name: string) =>
-      (await screen.findAllByRole("link")).find((a) => a.getAttribute("href") === `/findings?clusters=${encodeURIComponent(name)}`)!;
+      (await screen.findAllByRole("link")).find((a) => a.getAttribute("href") === `/clusters/${encodeURIComponent(name)}`)!;
 
     const down = await row("10.0.0.3");
     expect(within(down).getByText("connection refused · data from 3d ago")).toBeInTheDocument();

@@ -417,7 +417,15 @@ const gets: Record<string, Handler> = {
   "/api/v1/alerts": () => fx.PC_ALERTS,
   "/api/v1/alerts/ncc": (u) => {
     const includeClosed = u.searchParams.get("include_closed") === "true";
-    const items = alerts().filter((a) => includeClosed || a.state !== "resolved");
+    // Like the API: cluster matches the address or the name, check the check name.
+    const cluster = (u.searchParams.get("cluster") || "").toLowerCase();
+    const check = (u.searchParams.get("check") || "").toLowerCase();
+    const items = alerts().filter(
+      (a) =>
+        (includeClosed || a.state !== "resolved") &&
+        (!cluster || a.cluster.toLowerCase() === cluster || (a.cluster_name ?? "").toLowerCase() === cluster) &&
+        (!check || a.check.toLowerCase() === check),
+    );
     return { items, count: items.length, next_cursor: "", last_run: latestSummary().timestamp };
   },
   "/api/v1/alerts/ncc-dispositions": () => ({ items: dispositions() }),

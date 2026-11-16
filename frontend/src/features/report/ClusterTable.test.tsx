@@ -1,13 +1,19 @@
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it } from "vitest";
 import { ClusterTable } from "./ClusterTable";
 
-// The alert drawer loads lifecycle history through React Query.
+// The alert drawer loads lifecycle history through React Query, and cluster
+// names link to the cluster page.
 function render(ui: ReactNode) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return rtlRender(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+  return rtlRender(
+    <MemoryRouter>
+      <QueryClientProvider client={client}>{ui}</QueryClientProvider>
+    </MemoryRouter>,
+  );
 }
 
 const baseProps = {
@@ -45,6 +51,12 @@ describe("ClusterTable alert sources", () => {
     expect(screen.queryByText("PC finding")).not.toBeInTheDocument();
     expect(screen.getByText("Finding")).toBeInTheDocument();
     expect(screen.queryByText("Source")).not.toBeInTheDocument();
+  });
+
+  it("says Prism Central has nothing open instead of blaming filters", () => {
+    render(<ClusterTable {...baseProps} alertSource="PC" pcAlerts={[]} />);
+    expect(screen.getByText("Prism Central reports no alerts")).toBeInTheDocument();
+    expect(screen.queryByText("No findings match the current filters")).not.toBeInTheDocument();
   });
 
   it("filters rows by the selected source", () => {
@@ -160,11 +172,11 @@ describe("ClusterTable alert sources", () => {
     );
 
     fireEvent.click(screen.getByText("Disk almost full"));
-    expect(screen.getByText("Alert message")).toBeInTheDocument();
+    expect(screen.getByText("What Prism Central reports")).toBeInTheDocument();
     expect(screen.getByText("Capacity is high")).toBeInTheDocument();
     expect(screen.getByText("Root cause")).toBeInTheDocument();
     expect(screen.getByText("CVM disk /home is 92% full")).toBeInTheDocument();
-    expect(screen.getByText("Timeline")).toBeInTheDocument();
+    expect(within(document.querySelector(".finding-inspector") as HTMLElement).getByText("Last occurred")).toBeInTheDocument();
     expect(screen.getByText("Stargate")).toBeInTheDocument();
     expect(screen.getAllByText("KB 1234").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Open in Prism").length).toBeGreaterThan(0);
