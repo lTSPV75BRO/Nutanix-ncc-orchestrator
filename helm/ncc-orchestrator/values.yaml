@@ -66,6 +66,31 @@ resources:
 # GOMEMLIMIT for the api-server, e.g. "1800MiB" with a 2Gi limit. Empty = unset.
 apiGoMemLimit: ""
 
+# NetworkPolicies (same as k8s/networkpolicy-*.yaml). Ingress rules are on by
+# default: default-deny, the UI port from uiIngressFrom and in-cluster
+# namespaces, and the API only from UI pods.
+networkPolicy:
+  enabled: true
+  uiIngressFrom: ["0.0.0.0/0"]
+  # Extra peers allowed to reach the API on 8081 (e.g. a Prometheus
+  # namespace), as NetworkPolicy `from` entries.
+  apiIngressFrom: []
+  # Egress restriction is opt-in: it must allow every destination the stack
+  # talks to. Add 389/636 for LDAP and your webhook ports as needed.
+  egress:
+    enabled: false
+    cidrs: ["0.0.0.0/0"]
+    ports: [443, 9440, 587]
+    # The API needs the Kubernetes API. "auto" adds a CiliumNetworkPolicy
+    # when Cilium is installed; without Cilium add the API server address to
+    # cidrs and its port (443 or 6443) to ports.
+    ciliumKubeAPI: auto
+
+# PodDisruptionBudgets for the API and UI (only when replicas > 1).
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
 configMapName: ncc-orchestrator-config
 pvcName: ncc-orchestrator-output
 secretName: ncc-orchestrator-credentials

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"goncc/internal/plural"
 )
 
 // selfHealReport is the parsed output of the orchestrator's `doctor --json`.
@@ -188,7 +190,7 @@ func (s *apiServer) runSelfHealOnceWithOptions(ctx context.Context, opts selfHea
 				}
 			}
 		}
-		s.notifyOperationalFailure("selfheal_failure", fmt.Sprintf("NCC self-heal found %d failing check(s)", rep.Summary["fail"]), map[string]interface{}{
+		s.notifyOperationalFailure("selfheal_failure", "NCC self-heal found "+plural.Count(int(rep.Summary["fail"]), "failing check"), map[string]interface{}{
 			"fail":   rep.Summary["fail"],
 			"warn":   rep.Summary["warn"],
 			"ok":     rep.Summary["ok"],

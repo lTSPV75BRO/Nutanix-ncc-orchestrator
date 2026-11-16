@@ -585,7 +585,7 @@ func (s *apiServer) spawnDetachedRestart(installDir string) bool {
 	if !useSystemd && base[0] == "go" {
 		return false
 	}
-	go func() {
+	go guard("in-app restart", func() {
 		// Give the response time to reach the client before we tear down.
 		time.Sleep(2 * time.Second)
 		logf := filepath.Join(installDir, "logs", "v2-restart.log")
@@ -634,7 +634,7 @@ func (s *apiServer) spawnDetachedRestart(installDir string) bool {
 		}
 		// Release so we don't wait on it; it continues after we exit.
 		_ = cmd.Process.Release()
-	}()
+	})
 	return true
 }
 
@@ -649,10 +649,10 @@ func (s *apiServer) ensureApplyUpdateWatcher() {
 	if !hasSystemdStackService() {
 		return
 	}
-	go func() {
+	go guard("update watcher install", func() {
 		_, _ = s.runOrchestrator([]string{
 			"v2-install-update-watcher",
 			"--install-dir", s.maintenanceInstallDir(),
 		}, 45*time.Second)
-	}()
+	})
 }

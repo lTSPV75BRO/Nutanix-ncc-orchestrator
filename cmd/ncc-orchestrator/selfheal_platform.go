@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"goncc/internal/hostinfo"
+	"goncc/internal/plural"
 	"goncc/internal/runtimetune"
 )
 
@@ -691,7 +692,7 @@ func checkCgroupLimits(hc *healContext) healResult {
 	}
 	if l.OOMKills > 0 {
 		res.Status = healWarn
-		res.Message += fmt.Sprintf("; the kernel killed processes for memory %d time(s)", l.OOMKills)
+		res.Message += "; the kernel killed processes for memory " + plural.Count(int(l.OOMKills), "time")
 		hints = append(hints, "raise the memory limit or lower runner concurrency")
 	}
 	if len(hints) > 0 {

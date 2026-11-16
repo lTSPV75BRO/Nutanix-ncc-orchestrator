@@ -25,6 +25,39 @@ func TestGuardRecoversAndCounts(t *testing.T) {
 	}
 }
 
+// A run whose launch or finalization panicked must not stay "running" for
+// ever: it is finished as failed, its process is stopped and its clusters
+// are released. A second call (the run already left) does nothing.
+func TestFailRunAfterPanicReleasesRun(t *testing.T) {
+	captureServerLog(t, slog.LevelDebug)
+	dir := t.TempDir()
+	cancelled := 0
+	rec := &runRecord{id: "r1", status: "running", liveOut: newTailBuffer(1024), outDir: dir, cancel: func() { cancelled++ }, startedAt: time.Now()}
+	s := &apiServer{
+		repoRoot:             dir,
+		outputDir:            dir,
+		runAutoRetryDisabled: true,
+		runs:                 map[string]*runRecord{"r1": rec},
+		runOrder:             []string{"r1"},
+		clusterOwners:        map[string]string{"c1": "r1", "c2": "other"},
+	}
+	s.failRunAfterPanic(rec)
+	s.mu.Lock()
+	_, still := s.runs["r1"]
+	owner1, owner2 := s.clusterOwners["c1"], s.clusterOwners["c2"]
+	s.mu.Unlock()
+	if still || owner1 != "" || owner2 != "other" {
+		t.Fatalf("run not released: active=%v owners=%q,%q", still, owner1, owner2)
+	}
+	if rec.status != "done" || !strings.Contains(rec.errStr, "internal error") || cancelled != 1 {
+		t.Fatalf("status=%q err=%q cancelled=%d", rec.status, rec.errStr, cancelled)
+	}
+	s.failRunAfterPanic(rec)
+	if s.runsCompletedTotal.Load() != 1 {
+		t.Fatalf("finished twice: %d", s.runsCompletedTotal.Load())
+	}
+}
+
 // A refresh that panics must not leave the entry stuck in "loading": the old
 // value keeps being served and the next request retries.
 func TestDerivedAsyncSurvivesPanic(t *testing.T) {

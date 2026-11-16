@@ -166,7 +166,7 @@ shared:
 | `resolved` | PC resolved filter (`No` / `Yes` / `all`) |
 
 **Copy link** copies that URL. **⌘K / Ctrl+K** jumps to Settings cards via
-`/settings?tab=&focus=`. The Alerts table grows with leftover viewport
+`/settings?tab=&focus=`. The Findings table grows with leftover viewport
 height; pagination sits under the table (not clipped) and slices the
 virtual `dataSource` so changing page actually changes rows. Expanding a
 PC alert opens the inspector (status, entity/cluster, timeline, message,

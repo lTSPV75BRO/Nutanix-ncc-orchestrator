@@ -435,10 +435,10 @@ func migrateConfigToNested(raw []byte) ([]byte, configMigrationResult, error) {
 	res.Content = string(out)
 	parts := []string{}
 	if n := len(res.Moved); n > 0 {
-		parts = append(parts, fmt.Sprintf("%d setting%s moved to the nested layout", n, plural(n)))
+		parts = append(parts, fmt.Sprintf("%d setting%s moved to the nested layout", n, pluralS(n)))
 	}
 	if n := len(res.Removed); n > 0 {
-		parts = append(parts, fmt.Sprintf("%d duplicate spelling%s removed", n, plural(n)))
+		parts = append(parts, fmt.Sprintf("%d duplicate spelling%s removed", n, pluralS(n)))
 	}
 	if len(parts) == 0 {
 		parts = append(parts, "added schema-version: 1")
@@ -447,7 +447,7 @@ func migrateConfigToNested(raw []byte) ([]byte, configMigrationResult, error) {
 	return out, res, nil
 }
 
-func plural(n int) string {
+func pluralS(n int) string {
 	if n == 1 {
 		return ""
 	}

@@ -27,6 +27,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Prism Central discovery responses are capped at 64 MiB per page; the SAML
   clock-skew check no longer follows redirects; run ids containing a
   backslash are rejected.
+- **Certificate pins hold on resumed TLS sessions.** `pin-sha256` is now
+  checked in `VerifyConnection`, which runs on every handshake, instead of
+  `VerifyPeerCertificate`, which a resumed session skips.
+- **Helm chart NetworkPolicies and PodDisruptionBudgets**, matching `k8s/`:
+  default-deny ingress, the UI port open, the API reachable only from UI
+  pods (`networkPolicy.*`), and a PDB per component with more than one
+  replica (`podDisruptionBudget.*`). Both are on by default. The egress
+  policy is opt-in (`networkPolicy.egress.enabled`) because it must also
+  allow your LDAP, webhook and Kubernetes API destinations; with Cilium the
+  Kubernetes API rule is added automatically.
+- **CI:** a gosec job (high severity and confidence; reviewed exceptions are
+  marked `#nosec` with a reason) and gitleaks over the full history
+  (reviewed false positives in `.gitleaksignore`). Workflow checkouts no
+  longer keep the job token, and every action is pinned by commit SHA.
 
 ### Fixed
 
@@ -39,7 +53,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   as unsaved changes over the saved schedule. It now loads the saved
   schedule unless that browser really has an unsaved draft.
 - Screen readers get a name for the Findings "open details" button and the
-  per-user role picker. "1 cluster(s)" style wording is gone from the UI.
+  per-user role picker. "1 cluster(s)" style wording is gone from the UI,
+  the setup checklist, API messages and self-heal check results.
+- **A panic while starting or finishing a run** no longer leaves it
+  "running" for ever with its clusters locked: it is finished as failed and
+  its process stopped. A panic while merging results can no longer block
+  every later run. The in-app restart and update-watcher helpers recover too.
+- **Findings page wording.** The table is titled Findings and counts, search,
+  empty states and filters say "finding"; "alert" is kept for Prism Central
+  alerts and NCC alert fields.
+- **Findings toolbar at narrow widths.** The environment picker no longer
+  truncates to "All environme…"; below 900 px the search box takes its own
+  row and the pickers share the next one evenly.
 
 ### Added
 

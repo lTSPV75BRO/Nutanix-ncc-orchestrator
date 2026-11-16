@@ -169,7 +169,7 @@ func fetchSPMetadata(rawURL string) (*saml.EntityDescriptor, []byte, error) {
 	client := &http.Client{
 		Timeout: 15 * time.Second,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // test provider only
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // #nosec G402 -- test provider only
 		},
 	}
 	resp, err := client.Get(rawURL)

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	yaml "go.yaml.in/yaml/v3"
+	"goncc/internal/plural"
 	"goncc/internal/selfsigned"
 )
 
@@ -832,7 +833,7 @@ func checkRecentRunHealth(hc *healContext) healResult {
 	}
 	if sum.ClustersFailed == 0 {
 		res.Status = healOK
-		res.Message = fmt.Sprintf("last run %s: %d cluster(s) OK, 0 failed", sum.Timestamp, sum.ClustersOK)
+		res.Message = fmt.Sprintf("last run %s: %s OK, 0 failed", sum.Timestamp, plural.Count(int(sum.ClustersOK), "cluster"))
 		return res
 	}
 	// Identify the dominant failure class to advise the right mitigation.
@@ -1231,7 +1232,7 @@ func checkBackupStaleness(hc *healContext) healResult {
 		}
 	}
 	age := time.Since(newest)
-	res.Message = fmt.Sprintf("%d backup(s); newest %s is %s old", len(matches), newestName, humanDuration(age))
+	res.Message = fmt.Sprintf("%s; newest %s is %s old", plural.Count(len(matches), "backup"), newestName, humanDuration(age))
 	if age > staleAfter {
 		if hc.Fix {
 			if out, err := selfHealCreateBackup(hc.InstallDir); err == nil {
@@ -1315,7 +1316,7 @@ func checkBackupRestorable(hc *healContext) healResult {
 		return res
 	}
 	res.Status = healOK
-	res.Message = fmt.Sprintf("%s verified: %d file(s), created by %s at %s", filepath.Base(newest), vr.DataFiles, vr.Manifest.Version, vr.Manifest.CreatedAt)
+	res.Message = fmt.Sprintf("%s verified: %s, created by %s at %s", filepath.Base(newest), plural.Count(int(vr.DataFiles), "file"), vr.Manifest.Version, vr.Manifest.CreatedAt)
 	return res
 }
 

@@ -54,6 +54,19 @@ func pinVerifier(pins []string) func([][]byte, [][]*x509.Certificate) error {
 	}
 }
 
+// pinConnectionVerifier is pinVerifier as a tls.Config.VerifyConnection hook,
+// so the pin is checked on every handshake including session resumption.
+func pinConnectionVerifier(pins []string) func(tls.ConnectionState) error {
+	verify := pinVerifier(pins)
+	return func(cs tls.ConnectionState) error {
+		raw := make([][]byte, 0, len(cs.PeerCertificates))
+		for _, c := range cs.PeerCertificates {
+			raw = append(raw, c.Raw)
+		}
+		return verify(raw, nil)
+	}
+}
+
 // loadCABundle returns a cert pool seeded with the system roots plus the PEM
 // certificates in path. A nil pool (with err) means the caller should fall
 // back to defaults.
@@ -242,13 +255,15 @@ func New(cfg model.Config) *http.Client {
 		// Certificate pinning: skip chain validation but accept only the
 		// pinned leaf fingerprint(s). Safer than blanket InsecureSkipVerify
 		// because a MITM with a different cert is still rejected.
-		tlsCfg.InsecureSkipVerify = true
-		tlsCfg.VerifyPeerCertificate = pinVerifier(cfg.PinSHA256)
+		// The check is in VerifyConnection, which also runs on resumed TLS
+		// sessions (VerifyPeerCertificate does not).
+		tlsCfg.InsecureSkipVerify = true // #nosec G402 -- replaced by the pin check below
+		tlsCfg.VerifyConnection = pinConnectionVerifier(cfg.PinSHA256)
 	case cfg.InsecureSkipVerify:
 		// When insecure mode is on, use a custom verifier that accepts any cert so we bypass
 		// strict x509 "not standards compliant" checks that some Prism certs trigger.
-		tlsCfg.InsecureSkipVerify = true
-		tlsCfg.VerifyPeerCertificate = func([][]byte, [][]*x509.Certificate) error { return nil }
+		tlsCfg.InsecureSkipVerify = true                                                          // #nosec G402 -- operator opted in (insecure_skip_verify)
+		tlsCfg.VerifyPeerCertificate = func([][]byte, [][]*x509.Certificate) error { return nil } // #nosec G123 -- accepts everything by design
 	case cfg.CABundle != "":
 		// Verify against system roots plus the operator-supplied CA bundle.
 		if pool, err := loadCABundle(cfg.CABundle); err != nil {

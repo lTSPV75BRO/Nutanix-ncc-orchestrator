@@ -79,10 +79,10 @@ const HANDLING_FILTERS: Array<{
   hint: string;
   tone: string;
 }> = [
-  { value: "all", label: "All", hint: "Every alert that matches the current filters.", tone: "all" },
-  { value: "open", label: "Needs attention", hint: "Open alerts that still need a decision.", tone: "open" },
+  { value: "all", label: "All", hint: "Every finding that matches the current filters.", tone: "all" },
+  { value: "open", label: "Needs attention", hint: "Open findings that still need a decision.", tone: "open" },
   { value: "acknowledged", label: "Acknowledged", hint: "Noted, and still open.", tone: "acked" },
-  { value: "resolved", label: "Resolved", hint: "Marked done. If a later run finds the same alert, it moves to Returned.", tone: "resolved" },
+  { value: "resolved", label: "Resolved", hint: "Marked done. If a later run finds it again, it moves to Returned.", tone: "resolved" },
   { value: "returned", label: "Returned", hint: "Resolved earlier, then found again on a later run.", tone: "returned" },
 ];
 
@@ -575,7 +575,7 @@ function NCCAlertInspector({
         <Alert
           type="warning"
           showIcon
-          title="This alert came back"
+          title="This finding came back"
           description={mark.reason || "It was resolved, then found again on a later run."}
         />
       ) : null}
@@ -1046,7 +1046,7 @@ export function ClusterTable({
   const severityRank: Record<Severity, number> = { FAIL: 5, WARN: 4, ERR: 3, INFO: 2, UNKNOWN: 1 };
 
   const titleColumn = {
-    title: "Alert",
+    title: "Finding",
     dataIndex: "alert",
     key: "alert",
     width: 210,
@@ -1166,7 +1166,7 @@ export function ClusterTable({
         }
         if (mark?.status === "reopened") {
           return (
-            <Tooltip title={mark.reason || "This alert was resolved, then found again on a later run."}>
+            <Tooltip title={mark.reason || "This finding was resolved, then found again on a later run."}>
               <HandlingStatus tone="returned" label="Returned" />
             </Tooltip>
           );
@@ -1257,7 +1257,7 @@ export function ClusterTable({
     try {
       await navigator.clipboard.writeText(text);
       setCopyState("copied");
-      notify.success("Alert copied to clipboard.");
+      notify.success("Copied to clipboard.");
       setTimeout(() => setCopyState("idle"), 1600);
     } catch {
       notify.warning("Couldn't copy to the clipboard.");
@@ -1287,10 +1287,10 @@ export function ClusterTable({
       <div className="alerts-header">
         <div>
           <Typography.Title level={4} className="tile-title">
-            Alerts
+            Findings
           </Typography.Title>
           <Typography.Text type="secondary" className="tile-subtitle">
-            {shownRows.length.toLocaleString()} {shownRows.length === 1 ? "alert" : "alerts"} shown
+            {shownRows.length.toLocaleString()} {shownRows.length === 1 ? "finding" : "findings"} shown
             {shownRows.length !== totalRows ? ` · ${totalRows.toLocaleString()} match the dashboard filters` : ""}
           </Typography.Text>
         </div>
@@ -1304,10 +1304,10 @@ export function ClusterTable({
               {density === "compact" ? "Compact" : "Comfortable"}
             </Button>
           </Tooltip>
-          <Tooltip title={expanded ? "Leave full page (Esc)" : "Show the alert list across the page. Filters and details stay available."}>
+          <Tooltip title={expanded ? "Leave full page (Esc)" : "Show the findings across the page. Filters and details stay available."}>
             <Button
               size="small"
-              aria-label={expanded ? "Exit full page" : "Expand alerts"}
+              aria-label={expanded ? "Exit full page" : "Expand findings"}
               icon={expanded ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
               onClick={() => setExpanded(!expanded)}
             >
@@ -1328,7 +1328,7 @@ export function ClusterTable({
                     type="button"
                     role="radio"
                     aria-checked={selected}
-                    aria-label={`${item.label}, ${count} ${count === 1 ? "alert" : "alerts"}`}
+                    aria-label={`${item.label}, ${count} ${count === 1 ? "finding" : "findings"}`}
                     className={`alerts-handling-chip alerts-handling-chip-${item.tone}${selected ? " is-selected" : ""}${count === 0 && item.value !== "all" ? " is-empty" : ""}`}
                     onClick={() => setHandling(item.value)}
                   >
@@ -1341,8 +1341,8 @@ export function ClusterTable({
           </div>
           <Typography.Text type="secondary" className="alerts-handling-hint">
             {handlingCounts.returned > 0
-              ? `${handlingCounts.returned} resolved ${handlingCounts.returned === 1 ? "alert was" : "alerts were"} found again`
-              : "Resolved alerts return here if a later run finds them again"}
+              ? `${handlingCounts.returned} resolved ${handlingCounts.returned === 1 ? "finding was" : "findings were"} found again`
+              : "Resolved findings return here if a later run finds them again"}
           </Typography.Text>
         </div>
       ) : null}
@@ -1395,7 +1395,7 @@ export function ClusterTable({
           description={
             <Space orientation="vertical" size={2} align="center">
               <Typography.Text strong>
-                {totalRows > 0 ? "No alerts in this handling view" : "No alerts match the current filters"}
+                {totalRows > 0 ? "No findings in this handling view" : "No findings match the current filters"}
               </Typography.Text>
               <Typography.Text type="secondary">
                 {totalRows > 0 ? "Choose All to see acknowledged and resolved rows again." : "Try clearing severity chips or the cluster filter."}

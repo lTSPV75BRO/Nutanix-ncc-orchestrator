@@ -110,7 +110,7 @@ func TestCheckOutputRetentionAppliesPolicy(t *testing.T) {
 	}
 	hc := &healContext{InstallDir: dir, CfgLoaded: true, Cfg: Config{OutputDirFiltered: out, ArtifactRetainDays: 30}}
 	res := checkOutputRetention(hc)
-	if res.Status != healWarn || !strings.Contains(res.Message, "2 report file(s)") {
+	if res.Status != healWarn || !strings.Contains(res.Message, "2 report files") {
 		t.Fatalf("read-only: %+v", res)
 	}
 	hc.Fix = true

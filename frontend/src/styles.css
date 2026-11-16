@@ -847,12 +847,40 @@ a {
 
 .findings-toolbar-select.ant-select {
   width: 140px;
+  flex: 0 0 auto;
+}
+
+/* Fits "All environments" without truncating. */
+.findings-toolbar-select-wide.ant-select {
+  width: 172px;
 }
 
 .findings-toolbar-actions {
   display: flex;
   gap: var(--ui-space-1);
   margin-left: auto;
+}
+
+/* Narrow windows: search gets its own row, the pickers share the next rows
+   evenly instead of wrapping one by one. */
+@media (max-width: 900px) {
+  .findings-toolbar-search {
+    flex-basis: 100%;
+  }
+
+  .findings-toolbar-clusters {
+    flex: 2 1 220px;
+  }
+
+  .findings-toolbar-select.ant-select {
+    flex: 1 1 150px;
+    width: auto;
+    min-width: 150px;
+  }
+
+  .findings-toolbar-actions {
+    margin-left: 0;
+  }
 }
 
 .ide-editor-wrap {

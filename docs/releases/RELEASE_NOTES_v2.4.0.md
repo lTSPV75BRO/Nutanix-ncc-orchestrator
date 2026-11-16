@@ -51,6 +51,15 @@ vulnerability, and fixed these:
 - The Schedule page shows the saved schedule in a new browser instead of
   the form defaults as "unsaved changes".
 - Better screen-reader names on Findings and Users & roles.
+- A crash while starting or finishing a run fails that run instead of
+  leaving it "running" with its clusters locked.
+- Certificate pins (`pin-sha256`) are checked on resumed TLS sessions too.
+- The Helm chart gets the same NetworkPolicies and PodDisruptionBudgets as
+  `k8s/` (ingress rules and PDBs on by default, egress opt-in).
+- CI adds gosec and gitleaks, drops the job token from checkouts and pins
+  every action by commit SHA.
+- The Findings page says "finding" throughout, and its toolbar fits at
+  800 px.
 
 ## Update-check reliability
 

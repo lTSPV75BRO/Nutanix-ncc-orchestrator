@@ -17,7 +17,6 @@ rough estimate: S, M, or L.
 | Server-side report pagination | Build only the requested `checks_snapshot`/`agg_rows` page instead of loading and filtering the complete report before slicing. | M |
 | Version-skew protection | Host installs already flag mismatched components (`consistent` in the update status, with a warning on Updates) and supervised upgrades check versions before finishing. Remaining: compare container image versions in Kubernetes and block incompatible combinations. | S–M |
 | Kubernetes HA integration test | Exercise two API replicas, shared PVC access, CronJob execution, schedule updates, and pod rescheduling on separate nodes. | L |
-| Panic-proof run workers | API background work now recovers from panics (`guard`, `ncc_api_background_panics_total`). Remaining: the same for the run manager's wait goroutine and the detached restart helper, plus an alert rule on the counter. | S |
 | Report retention | Run history (`retain-last`, `retain-days`) and generated artifacts (`artifact-retain-days`, `artifact-retain-max-files`) already prune. Remaining: raw NCC logs, and a dry-run preview of what would be removed. | M |
 
 ## P1 — security and operations
@@ -28,12 +27,9 @@ rough estimate: S, M, or L.
 | Secret rotation workflow | Document and optionally guide rotation of API tokens, JWT secrets, backup keys, and Prism credentials across replicas. | M |
 | Outbound URL policy | Provide an administrator-visible allowlist/policy for Prism Central, LDAP, OIDC, SMTP, webhook, and update-server destinations. | M |
 | Signed image and SBOM verification | Publish Cosign signatures/SBOMs and optionally verify image provenance during deployment. | M |
-| Kubernetes failure alerts | Provide PrometheusRule examples for failed CronJobs, stale reports, unavailable API replicas, PVC pressure, and version skew. | S |
+| Kubernetes failure alerts | Provide PrometheusRule examples for failed CronJobs, stale reports, unavailable API replicas, PVC pressure, version skew, and any increase in `ncc_api_background_panics_total`. | S |
 | Isolated backup verification | Validate archive contents, secrets, report paths, and version compatibility without changing the live install. | M |
 | Signed trust for restored program files | Restore accepts program files only when this host ran them before (v2.4.0, `.ncc-trusted-stack.json`). Remaining: publish per-file SHA-256 in the signed release checksums so a backup from another server can be verified without `--trust-stack`. | M |
-| Helm parity with `k8s/` | The Kustomize manifests ship NetworkPolicies (default-deny, API/UI ingress, egress, kube-API) and a PodDisruptionBudget; the Helm chart has neither. Add both, on by default. | S–M |
-| CI credential hygiene | `ci.yml` checkouts keep the job token in `.git/config` (the other workflows set `persist-credentials: false`). Set it there too, and pin first-party `actions/*` and `github/codeql-action` by commit SHA like the third-party actions. | S |
-| Second static analyser in CI | CI runs golangci-lint, govulncheck, CodeQL and Trivy. Add gosec (or the golangci `gosec` linter) and secret scanning (gitleaks) so a regression in file permissions, `exec` or TLS settings fails the build. | S |
 | GitHub token scope | `GITHUB_TOKEN` is now sent only over HTTPS to `github.com` / `githubusercontent.com` hosts (v2.4.0). Remaining: document that a fine-grained, read-only public-repo token is enough, and warn at startup when the token has more scope. | S |
 
 ## P1 — operator experience
@@ -44,12 +40,11 @@ rough estimate: S, M, or L.
 | Notification delivery history | Every attempt is logged (System → Logs) and Settings → Notifications shows each channel's last attempt, last success, last error, tries and dead-letter count (v2.4.0). Remaining: a browsable history of past deliveries, and replaying dead-lettered messages from the UI. | S–M |
 | Operator-safe empty states | Give direct actions for missing config, missing clusters, failed first runs, missing schedules, and restricted cluster groups. | S |
 | Session and lockout clarity | Show remaining session time and actionable account-lockout countdowns without exposing sensitive details. | S–M |
-| One name for findings | The page is **Findings**, but its table is titled "Alerts" with "alerts shown", "Search alerts" and "Acknowledged/Resolved alerts". Pick one word for NCC results (keep "alerts" for Prism Central) and use it in the UI, docs and API descriptions. | S |
+| One name for findings | The Findings page now says "finding" throughout and keeps "alert" for Prism Central alerts and NCC alert fields (v2.4.0). Remaining: the OpenAPI descriptions and the user guides still call NCC results "alerts". | S |
 | Freshness beyond the Overview | Per-cluster data age and the stopped-schedule banner are on the Overview (v2.4.0). Remaining: the same age on Findings rows and the cluster filter, on Insights → Clusters, in the run report email, and as Prometheus gauges (`ncc_cluster_last_success_timestamp`, `ncc_schedule_overdue`). | M |
 | Drafts that can't overwrite | The Schedule form now loads the saved schedule unless this browser holds an unsaved draft (v2.4.0). Remaining: the same rule for the other forms that keep drafts in local storage, and a "changed by someone else since you opened it" check on host schedule saves (Kubernetes already has it). | S–M |
 | Accessibility checks in CI (UX-10) | A scripted pass found an icon-only button in every Findings row and unnamed role pickers (both fixed in v2.4.0). Add axe-core to the frontend tests for each page and a keyboard walkthrough, so these are caught before release; add a table view for the trend and SLO charts (F7). | M |
-| Narrow-width toolbars | At ~800 px the Findings environment picker truncates to "All environme…" and the filter row wraps unevenly. Give toolbar selects a minimum width or move secondary filters into a "Filters" popover below 900 px. | S |
-| Plural wording from the server | The UI no longer prints "cluster(s)" (v2.4.0), but setup-checklist details and some API messages still do (`onboarding.go`). Return counts and let the UI word them, or pluralise in Go. | S |
+| Plural wording in CLI output | The UI, setup checklist, API messages and self-heal checks word counts properly (v2.4.0, `internal/plural`). Remaining: `ncc-orchestrator` command output (backup, restore, run summaries) still prints "file(s)" and "cluster(s)". | S |
 
 ## P2 — engineering and test coverage
 
@@ -59,6 +54,7 @@ rough estimate: S, M, or L.
 | Race and load test profile | Run race tests plus concurrent report, alert, login, and schedule requests against a representative large report. | M |
 | Report package extraction | Move the remaining renderers from `goNCC.go` into focused `internal/report` packages with benchmarks. | L |
 | Split the three largest files | `goNCC.go` (18.7k lines), API `main.go` (6.3k) and `AccessSection.tsx` (3.4k) make review and ownership hard and slow the test loop. Extract by area when touching it: Prism client, reporting, install/update and backup from the runner; route table, OpenAPI and report handlers from the API; one file per sign-in provider in the UI. | L |
+| Path handling review (gosec G703) | CI now fails on high-severity gosec findings, except G703: its 80+ path-taint hits are paths from the server's own config and validated names. Review them by area, move request-derived paths to `os.Root`, mark the rest `#nosec G703 -- reason`, then drop the exclusion. | M |
 | Bounded reads everywhere | Prism Central discovery responses are now capped (v2.4.0). Add a lint rule (forbid bare `io.ReadAll` on network bodies) so new call sites cannot regress. | S |
 | Support-bundle: Kubernetes state | The bundle (downloadable from Health & repair) has the doctor report, every process log, and redacted config and environment files. Remaining: Kubernetes events, CronJob/PVC state, and component versions per pod. | S–M |
 

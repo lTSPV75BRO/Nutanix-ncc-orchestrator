@@ -25,8 +25,22 @@ helm install ncc-orchestrator ./helm/ncc-orchestrator \
   --set images.ui.tag=2.4.0
 ```
 
-Set `ui.origin`, `ingress.host`, `ingress.tlsSecret`, storage names, and
-destination-specific NetworkPolicies in an environment values file. Pin
+Set `ui.origin`, `ingress.host`, `ingress.tlsSecret` and storage names in
+an environment values file.
+
+NetworkPolicies match `k8s/`: by default all ingress is denied except the
+UI port (from `networkPolicy.uiIngressFrom` and in-cluster namespaces) and
+the API from UI pods; add other API clients such as Prometheus with
+`networkPolicy.apiIngressFrom`. Egress restriction is opt-in
+(`networkPolicy.egress.enabled: true`): list your destinations in
+`networkPolicy.egress.cidrs` and `ports` (add 389/636 for LDAP). The API
+must reach the Kubernetes API; with Cilium installed a CiliumNetworkPolicy
+for it is added automatically (`ciliumKubeAPI: auto`), otherwise add the API
+server address and port yourself. Set `networkPolicy.enabled: false` if your
+CNI does not enforce NetworkPolicy or you manage policies elsewhere.
+
+A PodDisruptionBudget (`minAvailable: 1`) is created for the API and the UI
+when they run more than one replica (`podDisruptionBudget.enabled`). Pin
 production images by digest where supported. Never commit credentials or
 private TLS keys.
 

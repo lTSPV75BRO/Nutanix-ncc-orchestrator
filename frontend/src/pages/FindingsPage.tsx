@@ -225,7 +225,7 @@ export function FindingsPage() {
         queryClient.invalidateQueries({ queryKey: [NCC_ALERTS_QUERY_KEY] }),
       ]);
       const count = variables.items?.length ?? 1;
-      const noun = count === 1 ? "alert" : `${count} alerts`;
+      const noun = count === 1 ? "the finding" : `${count} findings`;
       if (variables.action === "resolve") {
         notify.success(`Resolved ${noun}. A later run that generates the same check clears the mark.`);
       } else if (variables.action === "acknowledge") {
@@ -234,7 +234,7 @@ export function FindingsPage() {
         notify.success(`Reopened ${noun}.`);
       }
     },
-    onError: (err) => notifyError(err, "Couldn't update the NCC alert"),
+    onError: (err) => notifyError(err, "Couldn't update the finding"),
   });
 
   const features = useFeatureFlags();
@@ -620,12 +620,12 @@ export function FindingsPage() {
             <Input
               id="alerts-search"
               name="alerts-search"
-              aria-label="Search alerts"
+              aria-label="Search findings"
               allowClear
               prefix={<SearchOutlined className="filter-control-icon" />}
               value={filterText}
               onChange={(e) => setFilterText(e.target.value)}
-              placeholder="Search alerts (e.g. cluster:10.1)"
+              placeholder="Search findings (e.g. cluster:10.1)"
               autoComplete="off"
               suffix={
                 <Tooltip title={<div style={{ fontSize: 12 }}><strong>Supported tokens:</strong><br /><code>sev:FAIL</code> <code>cluster:10.1</code> <code>changed:true</code> <code>flaky:true</code></div>}>
@@ -637,7 +637,7 @@ export function FindingsPage() {
           {filterableEnvironments.length > 0 && alertSource === "NCC" ? (
             <Select
               aria-label="Filter by environment"
-              className="findings-toolbar-select"
+              className="findings-toolbar-select findings-toolbar-select-wide"
               value={environment}
               onChange={setEnvironment}
               popupMatchSelectWidth={false}
@@ -650,7 +650,7 @@ export function FindingsPage() {
           <div className="findings-toolbar-clusters">
             <Select
               id="dashboard-cluster-filter"
-              aria-label="Filter alerts by cluster"
+              aria-label="Filter findings by cluster"
               mode="multiple"
               allowClear
               placeholder="All clusters"

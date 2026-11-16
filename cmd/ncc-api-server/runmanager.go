@@ -246,7 +246,7 @@ func (s *apiServer) submitRun(p runStartParams) runSubmitResult {
 		running := res.runningCount + 1
 		s.mu.Unlock()
 		serverLog.Info("run accepted", rec.logAttrs("running_runs", running, "skipped", skipped)...)
-		go s.launchRun(rec)
+		s.startRunAsync(rec)
 		return res
 	}
 
@@ -285,6 +285,39 @@ func (s *apiServer) refreshLegacyRunStateLocked() {
 	s.lastCmd = latest.cmd
 	s.lastCwd = latest.cwd
 	s.lastEnv = latest.env
+}
+
+// errRunInternal is the error recorded for a run whose launch or
+// finalization panicked.
+var errRunInternal = errors.New("internal error while running (logged as \"background task panic\" in the server log)")
+
+// startRunAsync launches rec in its own goroutine. A panic while starting it
+// is recovered and the run is finished as failed, so it can't stay "running"
+// for ever holding its clusters and a concurrency slot.
+func (s *apiServer) startRunAsync(rec *runRecord) {
+	go func() {
+		if guard("run launch", func() { s.launchRun(rec) }) {
+			s.failRunAfterPanic(rec)
+		}
+	}()
+}
+
+// failRunAfterPanic finishes rec as failed after a recovered panic, unless it
+// already left the active registry. It stops the process if one started and
+// skips the result merge, which may be what panicked.
+func (s *apiServer) failRunAfterPanic(rec *runRecord) {
+	s.mu.Lock()
+	_, active := s.runs[rec.id]
+	cancel := rec.cancel
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if !active {
+		return
+	}
+	rec.outDir = ""
+	guard("run finish after panic", func() { s.finishRun(rec, errRunInternal, "") })
 }
 
 // launchRun starts the orchestrator process for rec (already marked running) and
@@ -376,8 +409,27 @@ func (s *apiServer) launchRun(rec *runRecord) {
 		case ctx.Err() == context.DeadlineExceeded:
 			err = fmt.Errorf("run timed out after %s", s.runTimeout)
 		}
-		s.finishRun(rec, err, runOut.String())
+		if guard("run finish", func() { s.finishRun(rec, err, runOut.String()) }) {
+			s.failRunAfterPanic(rec)
+		}
 	}()
+}
+
+// mergeRunOutput merges rec's per-cluster artifacts into the canonical
+// output dir. The unlock is deferred so a panic here can't leave every later
+// run waiting on mergeMu.
+func (s *apiServer) mergeRunOutput(rec *runRecord) {
+	s.mergeMu.Lock()
+	defer s.mergeMu.Unlock()
+	canonicalOut := s.absPath(s.outputDir)
+	owned := ownedClusterSet(rec, rec.outDir)
+	mergeStart := time.Now()
+	if err := mergeRunIntoCanonical(canonicalOut, rec.outDir, owned); err != nil {
+		serverLog.Error("run results could not be merged into the dashboard", rec.logAttrs("error", err.Error())...)
+	} else {
+		serverLog.Debug("run results merged", rec.logAttrs("owned_clusters", len(owned), "took_ms", time.Since(mergeStart).Milliseconds())...)
+	}
+	mergeRunLogs(rec.logDir, s.absPath(s.logDir))
 }
 
 // finishRun merges a completed run's artifacts into the canonical output dir,
@@ -387,19 +439,11 @@ func (s *apiServer) finishRun(rec *runRecord, runErr error, output string) {
 	// Merge per-cluster artifacts into the canonical dir so every group's
 	// dashboard reflects the latest result for its clusters regardless of which
 	// run produced them. Serialized to avoid concurrent canonical writes.
+	// A panic in either step is logged and counted; the run is still
+	// finalized below so its clusters and slot are released.
 	if rec.outDir != "" {
-		s.mergeMu.Lock()
-		canonicalOut := s.absPath(s.outputDir)
-		owned := ownedClusterSet(rec, rec.outDir)
-		mergeStart := time.Now()
-		if err := mergeRunIntoCanonical(canonicalOut, rec.outDir, owned); err != nil {
-			serverLog.Error("run results could not be merged into the dashboard", rec.logAttrs("error", err.Error())...)
-		} else {
-			serverLog.Debug("run results merged", rec.logAttrs("owned_clusters", len(owned), "took_ms", time.Since(mergeStart).Milliseconds())...)
-		}
-		mergeRunLogs(rec.logDir, s.absPath(s.logDir))
-		s.mergeMu.Unlock()
-		s.archiveRunDir(rec.outDir, rec.id, rec.startedAt, runErr, rec.environment)
+		guard("run merge", func() { s.mergeRunOutput(rec) })
+		guard("run archive", func() { s.archiveRunDir(rec.outDir, rec.id, rec.startedAt, runErr, rec.environment) })
 		_ = os.RemoveAll(filepath.Dir(rec.outDir)) // .runs-live/<id>
 	}
 
@@ -476,7 +520,7 @@ func (s *apiServer) finishRun(rec *runRecord, runErr error, output string) {
 	s.logRunFinished(rec, runErr, output)
 	for _, q := range toStart {
 		serverLog.Info("queued run starting", q.logAttrs("waited_s", int(time.Since(q.queuedAt).Seconds()))...)
-		go s.launchRun(q)
+		s.startRunAsync(q)
 	}
 
 	if healDecision.Retry {
@@ -489,10 +533,10 @@ func (s *apiServer) finishRun(rec *runRecord, runErr error, output string) {
 			"mitigation":  strings.Join(healDecision.Mitigation, " "),
 			"retry_count": retryParams.retryCount,
 		})
-		go s.submitRun(retryParams)
+		go guard("run auto-retry", func() { s.submitRun(retryParams) })
 	}
 
-	go s.notifyRunFinished(runErr)
+	go guard("run notification", func() { s.notifyRunFinished(runErr) })
 }
 
 // dequeueRunnableLocked promotes queued runs that can now start (caller holds
@@ -572,7 +616,7 @@ func (s *apiServer) cancelRunByID(id string) (*runRecord, bool) {
 	serverLog.Info("queued run cancelled before it started", rec.logAttrs()...)
 	for _, q := range toStart {
 		serverLog.Info("queued run starting", q.logAttrs("waited_s", int(time.Since(q.queuedAt).Seconds()))...)
-		go s.launchRun(q)
+		s.startRunAsync(q)
 	}
 	return rec, true
 }

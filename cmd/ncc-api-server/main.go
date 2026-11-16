@@ -37,6 +37,7 @@ import (
 	"goncc/internal/ai"
 	"goncc/internal/auth"
 	"goncc/internal/graceful"
+	"goncc/internal/plural"
 	"goncc/internal/promtext"
 	"goncc/internal/runtimecaps"
 	"goncc/internal/runtimetune"
@@ -2199,7 +2200,7 @@ func (s *apiServer) handleConfigBatch(w http.ResponseWriter, r *http.Request) {
 		}
 		results = append(results, res)
 	}
-	msg := fmt.Sprintf("processed %d operation(s): %d succeeded, %d failed", len(req.Operations), okCount, failCount)
+	msg := fmt.Sprintf("processed %s: %d succeeded, %d failed", plural.Count(len(req.Operations), "operation"), okCount, failCount)
 	writeJSON(w, http.StatusOK, envelope{Success: true, Message: msg, Data: map[string]interface{}{
 		"total":   len(req.Operations),
 		"ok":      okCount,
@@ -2846,7 +2847,7 @@ func (s *apiServer) handleConfigFilesBatch(w http.ResponseWriter, r *http.Reques
 		}
 		results = append(results, res)
 	}
-	msg := fmt.Sprintf("processed %d operation(s): %d succeeded, %d failed", len(req.Operations), okCount, failCount)
+	msg := fmt.Sprintf("processed %s: %d succeeded, %d failed", plural.Count(len(req.Operations), "operation"), okCount, failCount)
 	writeJSON(w, http.StatusOK, envelope{Success: true, Message: msg, Data: map[string]interface{}{
 		"total":   len(req.Operations),
 		"ok":      okCount,
@@ -3776,7 +3777,7 @@ func (s *apiServer) cancelActiveRun(w http.ResponseWriter, r *http.Request) {
 	s.audit(r, "runs.cancel", true, map[string]interface{}{"cancelled": n})
 	writeJSON(w, http.StatusAccepted, envelope{
 		Success: true,
-		Message: fmt.Sprintf("cancellation signalled for %d run(s)", n),
+		Message: "cancellation signalled for " + plural.Count(n, "run"),
 		Data: map[string]interface{}{
 			"cancelled":     n,
 			"poll_endpoint": "/api/v1/runs/active",
@@ -5335,10 +5336,12 @@ func (s *apiServer) makeOrchestratorCommand(ctx context.Context, args ...string)
 	name := full[0]
 	rest := full[1:]
 	var cmd *exec.Cmd
+	// The program is the configured orchestrator binary (or `go run` in a
+	// source checkout); arguments are passed as argv, never through a shell.
 	if ctx == nil {
-		cmd = exec.Command(name, rest...)
+		cmd = exec.Command(name, rest...) // #nosec G702 -- configured binary, argv only
 	} else {
-		cmd = exec.CommandContext(ctx, name, rest...)
+		cmd = exec.CommandContext(ctx, name, rest...) // #nosec G702 -- configured binary, argv only
 	}
 	// Never hand the user-store master key to an orchestrator child; it copies
 	// the (already-sealed) user DB as opaque bytes and has no need for the key.

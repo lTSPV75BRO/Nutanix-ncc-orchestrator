@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"goncc/internal/plural"
 )
 
 // More self-heal checks: duplicate settings, leftover temporary files, report
@@ -38,7 +40,7 @@ func checkConfigLayout(hc *healContext) healResult {
 		case "flat":
 			res.Message = "flat layout; every setting is set once. Updates & backups → Migrations can convert it to the nested layout."
 		case "mixed":
-			res.Message = fmt.Sprintf("nested layout with %d top-level flat key(s); every setting is set once", len(mig.Moved))
+			res.Message = fmt.Sprintf("nested layout with %s; every setting is set once", plural.Count(len(mig.Moved), "top-level flat key"))
 		default:
 			res.Message = "every setting is set once"
 		}
@@ -55,7 +57,7 @@ func checkConfigLayout(hc *healContext) healResult {
 		}
 	}
 	res.Status = healWarn
-	res.Message = fmt.Sprintf("%d setting(s) are set more than once, %d with different values: %s", len(mig.Duplicates), differ, strings.Join(parts, "; "))
+	res.Message = fmt.Sprintf("%s set more than once, %d with different values: %s", plural.Count(len(mig.Duplicates), "setting is", "settings are"), differ, strings.Join(parts, "; "))
 	if !hc.Fix {
 		res.Hint = "Heal keeps the value the runner uses now and removes the other spelling (the original file is kept as a .bak)."
 		return res
@@ -190,12 +192,12 @@ func checkTempFiles(hc *healContext) healResult {
 	if len(names) == 0 {
 		res.Status = healOK
 		res.Fixed = true
-		res.FixMsg = fmt.Sprintf("removed %d leftover(s), freed %s: %s", len(removed), humanBytes(uint64(freed)), strings.Join(removed, ", "))
+		res.FixMsg = fmt.Sprintf("removed %s, freed %s: %s", plural.Count(len(removed), "leftover"), humanBytes(uint64(freed)), strings.Join(removed, ", "))
 		res.Message = "leftover temporary files removed"
 		return res
 	}
 	res.Status = healWarn
-	res.Message = fmt.Sprintf("%d leftover(s) older than %s using %s: %s", len(left), humanDuration(tempFileAge), humanBytes(uint64(total)), strings.Join(names, ", "))
+	res.Message = fmt.Sprintf("%s older than %s using %s: %s", plural.Count(len(left), "leftover"), humanDuration(tempFileAge), humanBytes(uint64(total)), strings.Join(names, ", "))
 	res.Hint = "Left by an interrupted backup, restore or update. Heal deletes them."
 	return res
 }
@@ -255,21 +257,21 @@ func checkOutputRetention(hc *healContext) healResult {
 			if err == nil && herr == nil {
 				res.Status = healOK
 				res.Fixed = true
-				res.FixMsg = fmt.Sprintf("applied your retention settings: removed %d report file(s) and %d run snapshot(s)", deleted, len(snapshots))
+				res.FixMsg = fmt.Sprintf("applied your retention settings: removed %s and %s", plural.Count(deleted, "report file"), plural.Count(len(snapshots), "run snapshot"))
 				res.Message = "reports and run history are within retention"
 				return res
 			}
 			res.Hint = fmt.Sprintf("Retention could not finish: %v %v", err, herr)
 		}
 		res.Status = healWarn
-		res.Message = fmt.Sprintf("%d report file(s) and %d run snapshot(s) are past your retention settings", len(artifacts), len(snapshots))
+		res.Message = fmt.Sprintf("%s and %s are past your retention settings", plural.Count(len(artifacts), "report file"), plural.Count(len(snapshots), "run snapshot"))
 		if res.Hint == "" {
 			res.Hint = "Runs prune these when they finish; heal prunes them now with the same rules."
 		}
 		return res
 	}
 	bytes, files, capped := dirUsage(cfg.OutputDirFiltered)
-	usage := fmt.Sprintf("%s in %d file(s)", humanBytes(uint64(bytes)), files)
+	usage := fmt.Sprintf("%s in %s", humanBytes(uint64(bytes)), plural.Count(int(files), "file"))
 	if capped {
 		usage = fmt.Sprintf("over %s in more than %d files", humanBytes(uint64(bytes)), files)
 	}
