@@ -49,9 +49,14 @@ func (s *apiServer) startSelfHealLoop(ctx context.Context) {
 			return
 		case <-first.C:
 		}
-		if _, err := s.runSelfHealOnce(ctx, s.selfHealAutoFix); err != nil {
-			serverLog.Error("self-heal check failed to run", "error", err.Error())
+		runOnce := func() {
+			guard("self-heal", func() {
+				if _, err := s.runSelfHealOnce(ctx, s.selfHealAutoFix); err != nil {
+					serverLog.Error("self-heal check failed to run", "error", err.Error())
+				}
+			})
 		}
+		runOnce()
 		ticker := time.NewTicker(s.selfHealInterval)
 		defer ticker.Stop()
 		for {
@@ -59,9 +64,7 @@ func (s *apiServer) startSelfHealLoop(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if _, err := s.runSelfHealOnce(ctx, s.selfHealAutoFix); err != nil {
-					serverLog.Error("self-heal check failed to run", "error", err.Error())
-				}
+				runOnce()
 			}
 		}
 	}()

@@ -224,12 +224,14 @@ func (s *apiServer) startAlertLifecycleSyncLoop(ctx context.Context) {
 		for {
 			// Warm the report first: pages need it, and ingesting a new run's
 			// alerts can take longer at fleet scale.
-			s.warmReportCache()
-			if n, err := s.syncNCCAlertLifecycle(); err != nil {
-				log.Printf("alert lifecycle sync: %v", err)
-			} else if n > 0 {
-				s.auditEvent("alerts.ncc.sync", true, map[string]interface{}{"changes": n})
-			}
+			guard("alert lifecycle sync", func() {
+				s.warmReportCache()
+				if n, err := s.syncNCCAlertLifecycle(); err != nil {
+					log.Printf("alert lifecycle sync: %v", err)
+				} else if n > 0 {
+					s.auditEvent("alerts.ncc.sync", true, map[string]interface{}{"changes": n})
+				}
+			})
 			select {
 			case <-ctx.Done():
 				return

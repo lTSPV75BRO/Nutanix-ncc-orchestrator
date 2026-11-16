@@ -272,7 +272,7 @@ func (s *apiServer) startEnvironmentScheduleLoop(ctx context.Context) {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for {
-			s.runDueEnvironmentSchedules(time.Now())
+			guard("environment schedules", func() { s.runDueEnvironmentSchedules(time.Now()) })
 			select {
 			case <-ctx.Done():
 				return

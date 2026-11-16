@@ -21,6 +21,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   run its own code on the host after the restart. Update rollback points are
   covered automatically. `v2-restore --trust-stack` (command line only)
   restores them anyway; the ledger is never backed up or restored.
+- **`GITHUB_TOKEN` is sent only to GitHub.** The update check attached the
+  token to any URL containing "github"; it now requires HTTPS and a
+  `github.com` or `githubusercontent.com` host.
+- Prism Central discovery responses are capped at 64 MiB per page; the SAML
+  clock-skew check no longer follows redirects; run ids containing a
+  backslash are rejected.
+
+### Fixed
+
+- **A panic in a background job no longer takes the API server down.**
+  Scheduled backups, environment schedules, the digest, alert sync, the
+  self-heal timer, user-store reload, report-cache refresh and Prism Central
+  discovery now recover, log the stack and count in
+  `ncc_api_background_panics_total`.
+- **Schedule page in a new browser** showed the form defaults ("Every 4h")
+  as unsaved changes over the saved schedule. It now loads the saved
+  schedule unless that browser really has an unsaved draft.
+- Screen readers get a name for the Findings "open details" button and the
+  per-user role picker. "1 cluster(s)" style wording is gone from the UI.
 
 ### Added
 

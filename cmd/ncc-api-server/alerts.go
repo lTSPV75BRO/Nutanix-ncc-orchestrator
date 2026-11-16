@@ -111,7 +111,13 @@ func (s *apiServer) handleAlerts(w http.ResponseWriter, r *http.Request) {
 		wg.Add(1)
 		go func(target string) {
 			defer wg.Done()
-			rows, fetchErr := fetchPCAlerts(client, target, apiVersion, clientCfg.Username, clientCfg.Password, resolvedFilter)
+			var rows []map[string]interface{}
+			var fetchErr error
+			if guard("Prism Central alerts "+target, func() {
+				rows, fetchErr = fetchPCAlerts(client, target, apiVersion, clientCfg.Username, clientCfg.Password, resolvedFilter)
+			}) {
+				rows, fetchErr = nil, errors.New("fetching alerts failed unexpectedly; see the server log")
+			}
 			results <- targetResult{target: target, rows: rows, err: fetchErr}
 		}(target)
 	}

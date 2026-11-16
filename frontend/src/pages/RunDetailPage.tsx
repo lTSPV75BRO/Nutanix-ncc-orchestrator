@@ -12,6 +12,7 @@ import { formatDateTime, relativeTime } from "../utils/datetime";
 import { formatDuration } from "../utils/freshness";
 import { asArray, asRecord, toNumber } from "../utils/report";
 import { runStatusTone } from "../utils/runStatus";
+import { plural } from "../utils/text";
 
 type ClusterResult = {
   address: string;
@@ -411,7 +412,7 @@ export function RunDetailPage() {
                 </Panel>
                 {failureClasses.length > 0 ? (
                   <Panel title="Why clusters could not be checked" icon={<DisconnectOutlined />}>
-                    <KeyValueList items={failureClasses.map(([k, n]) => ({ label: k, value: `${toNumber(n)} cluster(s)` }))} />
+                    <KeyValueList items={failureClasses.map(([k, n]) => ({ label: k, value: plural(toNumber(n), "cluster") }))} />
                   </Panel>
                 ) : null}
                 {regression.previous_timestamp ? (

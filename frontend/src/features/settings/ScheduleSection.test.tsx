@@ -152,4 +152,39 @@ describe("ScheduleSection on a host", () => {
     expect((await screen.findAllByText("Weekdays at 02:00")).length).toBeGreaterThan(0);
     expect(screen.getByText(/Next runs:/)).toBeInTheDocument();
   });
+
+  /** A host with a saved daily cron schedule. */
+  function fakeSavedHostApi() {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      let data: unknown = {};
+      if (url.includes("/api/v1/schedule/health")) data = { installed: true, saved: true, detector: "crontab", type: "cron" };
+      else if (url.includes("/api/v1/runs/configs")) data = { items: [{ path: "config.yaml", is_active: true }], default_path: "config.yaml" };
+      else if (url.includes("/api/v1/schedule"))
+        data = { type: "cron", action: "create", cron: "0 2 * * *", config: "config.yaml", log_path: "logs/ncc-scheduler.log", with_lock: true, task_name: "ncc-orchestrator", print_only: false, updated_at: "2026-11-01T00:00:00Z" };
+      return { ok: true, status: 200, statusText: "OK", headers: new Headers({ "content-type": "application/json" }), json: async () => ({ success: true, data }) };
+    }) as unknown as typeof fetch;
+  }
+
+  it("shows the saved schedule in a new browser instead of form defaults as unsaved changes", async () => {
+    fakeSavedHostApi();
+    renderWithQuery(<ScheduleSection backendConfigPath="config.yaml" onError={vi.fn()} />);
+    await waitFor(() => expect(screen.getByLabelText("Custom cron expression")).toHaveValue("0 2 * * *"));
+    expect(screen.queryByText("The schedule differs from the saved one.")).toBeNull();
+    await waitFor(() => expect(localStorage.getItem("settings.schedule.hasDraft")).toBe("false"));
+  });
+
+  it("keeps this browser's unsaved draft across visits", async () => {
+    fakeSavedHostApi();
+    renderWithQuery(<ScheduleSection backendConfigPath="config.yaml" onError={vi.fn()} />);
+    await waitFor(() => expect(screen.getByLabelText("Custom cron expression")).toHaveValue("0 2 * * *"));
+    fireEvent.change(screen.getByLabelText("Custom cron expression"), { target: { value: "30 3 * * *" } });
+    expect(await screen.findByText("The schedule differs from the saved one.")).toBeInTheDocument();
+    await waitFor(() => expect(localStorage.getItem("settings.schedule.hasDraft")).toBe("true"));
+    cleanup();
+
+    renderWithQuery(<ScheduleSection backendConfigPath="config.yaml" onError={vi.fn()} />);
+    expect(await screen.findByText("The schedule differs from the saved one.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Custom cron expression")).toHaveValue("30 3 * * *");
+  });
 });

@@ -330,7 +330,7 @@ func (s *apiServer) startUserDBReloadLoop(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				s.users.refreshIfStale()
+				guard("user store reload", func() { s.users.refreshIfStale() })
 			}
 		}
 	}()

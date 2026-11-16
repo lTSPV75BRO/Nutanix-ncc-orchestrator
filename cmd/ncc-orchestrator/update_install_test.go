@@ -223,3 +223,30 @@ func assertNoStagingLeftovers(t *testing.T, root string) {
 		return nil
 	})
 }
+
+func TestGithubTokenAllowed(t *testing.T) {
+	for u, want := range map[string]bool{
+		"https://api.github.com/repos/o/r/releases/latest":       true,
+		"https://github.com/o/r/releases/download/v1/x.tar.gz":   true,
+		"https://objects.githubusercontent.com/abc":              true,
+		"http://github.com/o/r":                                  false, // not HTTPS
+		"https://github.com.example.net/o/r":                     false,
+		"https://example.net/github.com/x":                       false,
+		"https://notgithub.com/x":                                false,
+		"https://evil.example/?u=githubusercontent.com":          false,
+		"::bad":                                                  false,
+	} {
+		if got := githubTokenAllowed(u); got != want {
+			t.Errorf("githubTokenAllowed(%q) = %v, want %v", u, got, want)
+		}
+	}
+}
+
+func TestReadBounded(t *testing.T) {
+	if b, err := readBounded(strings.NewReader("12345"), 5); err != nil || string(b) != "12345" {
+		t.Fatalf("at the limit: %q %v", b, err)
+	}
+	if _, err := readBounded(strings.NewReader("123456"), 5); err == nil {
+		t.Fatal("over the limit should fail, not truncate")
+	}
+}

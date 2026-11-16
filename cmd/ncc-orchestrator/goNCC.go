@@ -8012,7 +8012,7 @@ func downloadBinaryURL(client *http.Client, downloadURL string) ([]byte, error) 
 	if err != nil {
 		return nil, fmt.Errorf("create download request: %w", err)
 	}
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" && (strings.Contains(downloadURL, "github.com") || strings.Contains(downloadURL, "githubusercontent.com")) {
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" && githubTokenAllowed(downloadURL) {
 		dlReq.Header.Set("Authorization", "Bearer "+token)
 	}
 	dlResp, err := client.Do(dlReq)
@@ -13143,12 +13143,47 @@ func runUpdate(opts updateOptions) error {
 	return installDownloadedBinary(body, targetVer)
 }
 
+// maxDiscoveryResponseBytes caps one Prism Central discovery page. A page of
+// a few thousand clusters is a few MiB; a broken or hostile endpoint must not
+// be able to exhaust memory.
+const maxDiscoveryResponseBytes = 64 << 20
+
+// readBounded reads r up to limit bytes and fails, rather than truncating,
+// when there is more.
+func readBounded(r io.Reader, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("response is larger than %d bytes", limit)
+	}
+	return data, nil
+}
+
+// githubTokenAllowed reports whether GITHUB_TOKEN may be sent to rawURL: only
+// over HTTPS to github.com, githubusercontent.com or their subdomains. A
+// substring test would also match hosts such as github.com.example.net.
+func githubTokenAllowed(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || !strings.EqualFold(u.Scheme, "https") {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	for _, d := range []string{"github.com", "githubusercontent.com"} {
+		if host == d || strings.HasSuffix(host, "."+d) {
+			return true
+		}
+	}
+	return false
+}
+
 func fetchURL(url string, client *http.Client) ([]byte, error) {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" && strings.Contains(url, "github") {
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" && githubTokenAllowed(url) {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := client.Do(req)
@@ -13312,7 +13347,7 @@ func fetchPCClustersV3(pcURL, username, password string, insecure bool) ([]strin
 		return nil, fmt.Errorf("request to Prism Central: %w", err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	data, err := readBounded(resp.Body, maxDiscoveryResponseBytes)
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
@@ -13365,7 +13400,7 @@ func fetchPCClustersV4(pcURL, username, password string, insecure bool, v4APIVer
 		if err != nil {
 			return nil, fmt.Errorf("request to Prism Central: %w", err)
 		}
-		data, err := io.ReadAll(resp.Body)
+		data, err := readBounded(resp.Body, maxDiscoveryResponseBytes)
 		_ = resp.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("read response: %w", err)
@@ -13490,7 +13525,7 @@ func fetchDiscoverClusterRowsV4(pcURL, username, password string, insecure bool,
 		if err != nil {
 			return nil, fmt.Errorf("request to Prism Central: %w", err)
 		}
-		data, err := io.ReadAll(resp.Body)
+		data, err := readBounded(resp.Body, maxDiscoveryResponseBytes)
 		_ = resp.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("read response: %w", err)
@@ -13551,7 +13586,7 @@ func fetchDiscoverClusterRowsV3(pcURL, username, password string, insecure bool)
 		return nil, fmt.Errorf("request to Prism Central: %w", err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	data, err := readBounded(resp.Body, maxDiscoveryResponseBytes)
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}

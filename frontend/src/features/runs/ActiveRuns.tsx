@@ -11,6 +11,7 @@ import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { notify, notifyError } from "../../notify";
 import { Panel, StatusBadge } from "../../ui";
 import { formatDuration } from "../../utils/freshness";
+import { plural } from "../../utils/text";
 
 const RUN_TOAST_KEY = "ncc-run-active";
 
@@ -44,7 +45,7 @@ export function ActiveRuns() {
       notify.close(RUN_TOAST_KEY);
       notify.success({
         message: "Cancellation requested",
-        description: id ? `Run ${out.run_id ?? id} will stop shortly.` : `${out.cancelled ?? 0} run(s) asked to stop.`,
+        description: id ? `Run ${out.run_id ?? id} will stop shortly.` : `${plural(out.cancelled ?? 0, "run")} asked to stop.`,
         duration: 5,
       });
       await queryClient.invalidateQueries({ queryKey: RUNS_ACTIVE_QUERY_KEY });

@@ -183,6 +183,16 @@ function formatRun(d: Date, utc: boolean): string {
   });
 }
 
+const DRAFT_FLAG = "settings.schedule.hasDraft";
+
+function hasStoredDraft(): boolean {
+  try {
+    return window.localStorage.getItem(DRAFT_FLAG) === "true";
+  } catch {
+    return false;
+  }
+}
+
 const STATUS_TONE: Record<string, Tone> = { success: "ok", warning: "warn", error: "fail", default: "neutral" };
 
 export function ScheduleSection({ backendConfigPath, onError, isKubernetes = false }: Props) {
@@ -250,6 +260,19 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
   const [saving, setSaving] = useState(false);
   const dirty = baseline !== null && scheduleKey(payload) !== baseline;
 
+  // Whether this browser holds an unsaved draft. The form keeps its fields
+  // in local storage, but without this flag a new browser (or another admin)
+  // showed the form defaults as an "unsaved change" over the real schedule,
+  // one click away from overwriting it.
+  useEffect(() => {
+    if (baseline === null) return;
+    try {
+      window.localStorage.setItem(DRAFT_FLAG, JSON.stringify(dirty));
+    } catch {
+      // ignore storage errors
+    }
+  }, [baseline, dirty]);
+
   /** The saved state with the same defaults the form applies. */
   const savedKey = (s: ScheduleState) =>
     scheduleKey({
@@ -309,6 +332,20 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
   const loadBaseline = async () => {
     try {
       setBaseline(baselineFor(await api.loadSchedule()));
+    } catch {
+      setBaseline(null);
+    }
+  };
+
+  /**
+   * On mount: show the saved schedule, unless this browser has an unsaved
+   * draft of its own, which is kept (with the unsaved-changes bar).
+   */
+  const loadInitial = async () => {
+    try {
+      const saved = await api.loadSchedule();
+      if (saved.updated_at && !hasStoredDraft()) applySaved(saved);
+      else setBaseline(baselineFor(saved));
     } catch {
       setBaseline(null);
     }
@@ -418,7 +455,7 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
       void discard();
     } else {
       void loadConfigOptions(true);
-      void loadBaseline();
+      void loadInitial();
     }
   }, []);
 

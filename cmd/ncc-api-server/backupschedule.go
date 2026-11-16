@@ -240,7 +240,7 @@ func (s *apiServer) startBackupScheduleLoop(ctx context.Context) {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for {
-			s.maybeRunScheduledBackup(ctx)
+			guard("scheduled backup", func() { s.maybeRunScheduledBackup(ctx) })
 			select {
 			case <-ctx.Done():
 				return

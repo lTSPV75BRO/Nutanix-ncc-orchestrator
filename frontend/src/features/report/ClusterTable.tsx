@@ -1088,6 +1088,7 @@ export function ClusterTable({
         <Button
           type="text"
           size="small"
+          aria-label={`Open details for ${row.alert} on ${row.clusterName || row.cluster}`}
           icon={<ExpandAltOutlined />}
           onClick={(e) => {
             e.stopPropagation();

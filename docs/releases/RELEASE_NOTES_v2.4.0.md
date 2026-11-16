@@ -37,6 +37,21 @@ Moving to a new server: data restores as before; install the version you
 want there. If you trust a backup from another server, restore it on the
 command line with `v2-restore --trust-stack`.
 
+## Hardening from the November audit
+
+A full pass over the code, deployment files and UI (details in
+[`IMPROVEMENTS.md`](../IMPROVEMENTS.md#audit-of-2026-11-16-v240)) found no
+vulnerability, and fixed these:
+
+- A crash in a background job (scheduled backup, environment schedule,
+  digest and others) no longer stops the API server; it is logged and
+  counted in `ncc_api_background_panics_total`.
+- The GitHub token used for update checks is only ever sent to GitHub.
+- Very large Prism Central discovery responses can't exhaust memory.
+- The Schedule page shows the saved schedule in a new browser instead of
+  the form defaults as "unsaved changes".
+- Better screen-reader names on Findings and Users & roles.
+
 ## Update-check reliability
 
 When the GitHub REST API is rate limited, update checks now resolve the latest

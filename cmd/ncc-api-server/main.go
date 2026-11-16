@@ -1566,6 +1566,9 @@ func (s *apiServer) handlePrometheusMetrics(w http.ResponseWriter, r *http.Reque
 	fmt.Fprintf(w, "# TYPE ncc_runs_failed_total counter\n")
 	fmt.Fprintf(w, "ncc_runs_failed_total %d\n", s.runsFailedTotal.Load())
 
+	fmt.Fprintf(w, "# HELP ncc_api_background_panics_total Panics recovered in background work (schedulers, cache refresh, discovery). Any value above 0 is a bug worth reporting; the server log has the stack.\n")
+	fmt.Fprintf(w, "# TYPE ncc_api_background_panics_total counter\n")
+	fmt.Fprintf(w, "ncc_api_background_panics_total %d\n", backgroundPanicTotal.Load())
 	fmt.Fprintf(w, "# HELP ncc_run_auto_retries_total Cumulative count of self-heal auto-retries triggered after a recoverable run failure (rate-limit/timeout/network).\n")
 	fmt.Fprintf(w, "# TYPE ncc_run_auto_retries_total counter\n")
 	fmt.Fprintf(w, "ncc_run_auto_retries_total %d\n", s.runAutoRetriesTotal.Load())
@@ -3474,7 +3477,9 @@ func (s *apiServer) handleRunsRouter(w http.ResponseWriter, r *http.Request) {
 	}
 	// Reserved sub-routes are claimed by their explicit registrations above;
 	// anything else is treated as an archived run ID lookup.
-	if strings.Contains(tail, "/") || strings.Contains(tail, "..") {
+	// Backslash too: it is a path separator on Windows. Colons stay allowed:
+	// trigger row ids carry a timestamp.
+	if strings.ContainsAny(tail, `/\`) || strings.Contains(tail, "..") {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "invalid run id"})
 		return
 	}

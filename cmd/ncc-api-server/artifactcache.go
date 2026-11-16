@@ -200,7 +200,14 @@ func (c *artifactCache) derivedAsync(key string, sources []string, ttl time.Dura
 	e.mu.Unlock()
 
 	go func() {
-		v := compute()
+		var v interface{}
+		if guard("report cache refresh "+key, func() { v = compute() }) {
+			// Keep serving the previous value; the next request retries.
+			e.mu.Lock()
+			e.loading = false
+			e.mu.Unlock()
+			return
+		}
 		e.mu.Lock()
 		e.stamp, e.value, e.loaded, e.expires, e.loading = sig, v, true, time.Now().Add(ttl), false
 		e.mu.Unlock()

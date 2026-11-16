@@ -147,6 +147,15 @@ func certExpiryStatus(remaining time.Duration) diagStatus {
 // Date response header of the metadata URL). SAML assertions are time-sensitive,
 // so material skew silently breaks logins. Returns ok=false (skipped) when there
 // is no remote IdP metadata URL to probe.
+// clockSkewProbeClient reads only the Date header of the IdP metadata URL.
+// It never follows redirects (the Date of the first answer is what matters,
+// and an admin-set URL should not be a way to reach other hosts) and has its
+// own timeout rather than relying on http.DefaultClient.
+var clockSkewProbeClient = &http.Client{
+	Timeout:       6 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
+
 func (s *apiServer) diagSAMLClockSkew() (diagResult, bool) {
 	res := diagResult{ID: "clock-skew", Title: "Clock skew (SAML-sensitive)", Category: "sso"}
 	var metaURL string
@@ -164,7 +173,7 @@ func (s *apiServer) diagSAMLClockSkew() (diagResult, bool) {
 	if err != nil {
 		return res, false
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := clockSkewProbeClient.Do(req)
 	if err != nil {
 		res.Status = diagWarn
 		res.Message = "could not reach IdP metadata URL to check clock skew: " + err.Error()

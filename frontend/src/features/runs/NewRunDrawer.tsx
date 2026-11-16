@@ -10,6 +10,7 @@ import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { notify, notifyError } from "../../notify";
 import { StatusBadge } from "../../ui";
 import { buildExtraArgs, describeExtraArgs, type RunOptionValues } from "../../utils/runOptions";
+import { plural } from "../../utils/text";
 
 const RUN_TOAST_KEY = "ncc-run-active";
 
@@ -133,7 +134,7 @@ export function NewRunDrawer({
       const skipped = out.skipped_clusters ?? [];
       const skippedNote =
         skipped.length > 0
-          ? ` ${skipped.length} cluster(s) already running elsewhere were skipped: ${skipped.slice(0, 5).join(", ")}${skipped.length > 5 ? ` and ${skipped.length - 5} more` : ""}.`
+          ? ` ${plural(skipped.length, "cluster")} already running elsewhere ${skipped.length === 1 ? "was" : "were"} skipped: ${skipped.slice(0, 5).join(", ")}${skipped.length > 5 ? ` and ${skipped.length - 5} more` : ""}.`
           : "";
       if (out.queued) {
         notify.info({
@@ -151,7 +152,7 @@ export function NewRunDrawer({
         const ran = out.clusters ?? [];
         notify.success({
           message: "Run started",
-          description: `${ran.length > 0 ? `Checking ${ran.length} cluster(s).` : "Checking all clusters."}${skippedNote}`,
+          description: `${ran.length > 0 ? `Checking ${plural(ran.length, "cluster")}.` : "Checking all clusters."}${skippedNote}`,
           duration: 6,
         });
       }
@@ -238,7 +239,7 @@ export function NewRunDrawer({
             title="Limited to your cluster groups"
             description={
               allowedClusters.length > 0
-                ? `You can run ${allowedClusters.length.toLocaleString()} cluster(s): ${allowedClusters.slice(0, 5).join(", ")}${allowedClusters.length > 5 ? ` and ${(allowedClusters.length - 5).toLocaleString()} more` : ""}.`
+                ? `You can run ${plural(allowedClusters.length, "cluster")}: ${allowedClusters.slice(0, 5).join(", ")}${allowedClusters.length > 5 ? ` and ${(allowedClusters.length - 5).toLocaleString()} more` : ""}.`
                 : "You are not in any cluster group. Ask an administrator to add you before starting a run."
             }
           />

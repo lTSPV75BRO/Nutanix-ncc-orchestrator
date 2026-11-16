@@ -48,6 +48,7 @@ import { formatDateTime } from "../../utils/datetime";
 import { IconTitle, KeyValueList, StatusBadge, TagList } from "../../ui";
 import { roleColor } from "../../auth/roleColor";
 import { ldapFormValues, ldapProfilePayload, NEW_LDAP_PROFILE, textList, type LDAPProfileFormValues } from "./ldapProfiles";
+import { plural } from "../../utils/text";
 
 const ROLE_OPTIONS = [
   { value: "admin", label: "admin — full access" },
@@ -211,6 +212,7 @@ function UsersCard() {
               const select = (
                 <Select
                   size="small"
+                  aria-label={`Role for ${rec.username}`}
                   value={rec.role}
                   disabled={locked}
                   style={{ width: 130 }}
@@ -2320,7 +2322,7 @@ function PrismCentralField({ value, onChange }: PrismCentralFieldProps) {
               key={pc}
               type="success"
               showIcon
-              title={`${pc}: ${results[pc].count} cluster(s)`}
+              title={`${pc}: ${plural(results[pc].count ?? 0, "cluster")}`}
               description={
                 results[pc].clusters && results[pc].clusters!.length > 0 ? (
                   <TagList items={results[pc].clusters!} max={12} noun="clusters" />

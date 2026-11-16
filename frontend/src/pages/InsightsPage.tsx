@@ -26,6 +26,7 @@ import { EmptyState, KeyValueList, ListToolbar, matchesSearch, Panel, StatTile, 
 import { formatDateTime, relativeTime } from "../utils/datetime";
 import { formatDuration, freshness } from "../utils/freshness";
 import { nutanixKbUrl, safeExternalUrl } from "../utils/url";
+import { plural } from "../utils/text";
 
 // ---------- helpers ----------
 
@@ -754,7 +755,7 @@ export function InsightsPage() {
               <CheckCircleOutlined /> Every cluster completed this run.
             </p>
           ) : (
-            <KeyValueList items={failureClassEntries.map((e) => ({ label: e.name.replace(/_/g, " "), value: `${e.count} cluster(s)` }))} />
+            <KeyValueList items={failureClassEntries.map((e) => ({ label: e.name.replace(/_/g, " "), value: plural(e.count, "cluster") }))} />
           )}
           <KeyValueList
             items={[
@@ -956,7 +957,7 @@ export function InsightsPage() {
           tone={scoreTone(weightedHealth)}
           hint={weightedHealth == null ? "No completed checks" : `${healthGrade(weightedHealth)} · pass rate ${rawPassRate.toFixed(1)}%`}
         />
-        <StatTile label="Checks" value={totalPlugins.toLocaleString()} hint={`${clusterSummary.length} cluster(s)`} />
+        <StatTile label="Checks" value={totalPlugins.toLocaleString()} hint={plural(clusterSummary.length, "cluster")} />
         <StatTile
           label="Clusters at risk"
           value={`${affectedClusters.length}/${clusterSummary.length}`}

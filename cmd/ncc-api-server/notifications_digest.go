@@ -33,7 +33,7 @@ func (s *apiServer) startNotificationDigestLoop(ctx context.Context) {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for {
-			s.maybeSendDigest(ctx)
+			guard("notification digest", func() { s.maybeSendDigest(ctx) })
 			select {
 			case <-ctx.Done():
 				return
