@@ -578,7 +578,7 @@ func main() {
 	flag.BoolVar(&s.auditForwardHTTPSplunk, "audit-forward-http-splunk", false, "Wrap each forwarded audit event as a Splunk HEC payload {\"event\": ...}")
 	flag.StringVar(&s.auditForwardSyslog, "audit-forward-syslog", "", "Forward each audit event as an RFC5424 syslog message to host:port (e.g. siem.example.com:514). Empty disables.")
 	flag.StringVar(&s.auditForwardSyslogNet, "audit-forward-syslog-network", "udp", "Transport for --audit-forward-syslog: udp or tcp")
-	flag.IntVar(&s.alertHistoryRetainDay, "alert-history-retain-days", alertDefaultHistoryRetainDy, "Days to keep closed NCC alert instances and their lifecycle events (active alerts are never pruned; 0 keeps forever)")
+	flag.IntVar(&s.alertHistoryRetainDay, "alert-history-retain-days", alertDefaultHistoryRetainDy, "Days to keep closed NCC finding instances and their lifecycle events (active alerts are never pruned; 0 keeps forever)")
 	flag.IntVar(&s.loginLockThreshold, "login-lockout-threshold", 5, "Failed logins per account before a temporary lockout (0 disables)")
 	flag.IntVar(&s.loginLockAccountThreshold, "login-lockout-account-threshold", 0, "Failed logins for one account from any source before an account-wide lockout (0 = 4x --login-lockout-threshold)")
 	flag.IntVar(&s.loginLockSourceThreshold, "login-lockout-source-threshold", 0, "Failed logins from one client IP across all accounts before that source is locked (0 = 4x --login-lockout-threshold)")
@@ -810,7 +810,7 @@ func main() {
 			if err := db.importSeed(seed); err != nil {
 				log.Fatalf("import users seed: %v", err)
 			}
-			log.Printf("imported %d local account(s) from seed %s into %s", db.count(), filepath.Clean(s.usersFilePath), db.location())
+			log.Printf("imported %s from seed %s into %s", plural.Count(db.count(), "local account"), filepath.Clean(s.usersFilePath), db.location())
 		}
 		if db.count() == 0 {
 			pw, created, err := db.bootstrapAdminIfEmpty("admin")
@@ -840,7 +840,7 @@ func main() {
 			log.Fatalf("load users file: %v", err)
 		}
 		s.users = db
-		log.Printf("loaded %d local account(s) from %s (read-only)", db.count(), filepath.Clean(s.usersFilePath))
+		log.Printf("loaded %s from %s (read-only)", plural.Count(db.count(), "local account"), filepath.Clean(s.usersFilePath))
 	}
 
 	// SAML: startup flags take precedence (and lock the runtime SSO settings
@@ -3228,8 +3228,7 @@ func (s *apiServer) handleArtifactByName(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer f.Close()
-	limited := io.LimitReader(f, artifactInlineMaxBytes+1)
-	b, readErr := io.ReadAll(limited)
+	b, readErr := io.ReadAll(io.LimitReader(f, artifactInlineMaxBytes+1))
 	if readErr != nil {
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: readErr.Error()})
 		return
@@ -4439,10 +4438,10 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/tls/public", Methods: []string{http.MethodGet}, Description: "Public: UI certificate SHA-256 fingerprint and PEM (no private key) so the login page can offer download/trust for self-signed HTTPS"},
 		{Path: "/api/v1/components", Methods: []string{http.MethodGet}, Description: "Viewer+: report orchestrator, API server, and UI server versions"},
 		{Path: "/api/v1/alerts", Methods: []string{http.MethodGet}, Description: "Viewer+: fetch normalized Prism Central alerts with bounded caching and per-source errors"},
-		{Path: "/api/v1/alerts/ncc-dispositions", Methods: []string{http.MethodGet, http.MethodPost}, Description: "GET viewer+: NCC acknowledge/resolve marks (v2.2.0-compatible view of the persistent alert lifecycle; items include id, finding_id, detection). POST operator+: acknowledge, resolve, or reopen one alert or a list (by cluster+check or id). A newer run that still finds a resolved check opens a new linked instance (status reopened).", SampleBody: "{\n  \"cluster\": \"prod-a\",\n  \"check\": \"CVM memory\",\n  \"action\": \"acknowledge\",\n  \"note\": \"Watching this run\"\n}"},
-		{Path: "/api/v1/alerts/ncc", Methods: []string{http.MethodGet}, Description: "Viewer+: NCC alert instances with persistent lifecycle state (open/acknowledged/resolved), detection (detected/not_detected), unique UUIDv4 ids, stable finding_id, first/last seen and actor timestamps. Filters: state, detection, cluster, check, finding_id, updated_since, include_closed; cursor paging via limit + cursor (next_cursor). Cluster-group scoped."},
-		{Path: "/api/v1/alerts/ncc/events", Methods: []string{http.MethodGet}, Description: "Viewer+: append-only NCC alert lifecycle events (detected, redetected, not_detected, severity_changed, acknowledged, resolved, reopened, recurred, closed) ordered by seq. Incremental sync: pass next_cursor back as cursor. Optional alert_id filter. Cluster-group scoped."},
-		{Path: "/api/v1/alerts/ncc/{id}", Methods: []string{http.MethodGet}, Description: "Viewer+: one NCC alert instance with its full event history and the other instances (earlier/later episodes) of the same finding"},
+		{Path: "/api/v1/alerts/ncc-dispositions", Methods: []string{http.MethodGet, http.MethodPost}, Description: "GET viewer+: NCC acknowledge/resolve marks (v2.2.0-compatible view of the persistent finding lifecycle; items include id, finding_id, detection). POST operator+: acknowledge, resolve, or reopen one finding or a list (by cluster+check or id). A newer run that still finds a resolved check opens a new linked instance (status reopened).", SampleBody: "{\n  \"cluster\": \"prod-a\",\n  \"check\": \"CVM memory\",\n  \"action\": \"acknowledge\",\n  \"note\": \"Watching this run\"\n}"},
+		{Path: "/api/v1/alerts/ncc", Methods: []string{http.MethodGet}, Description: "Viewer+: NCC finding instances with persistent lifecycle state (open/acknowledged/resolved), detection (detected/not_detected), unique UUIDv4 ids, stable finding_id, first/last seen and actor timestamps. Filters: state, detection, cluster, check, finding_id, updated_since, include_closed; cursor paging via limit + cursor (next_cursor). Cluster-group scoped."},
+		{Path: "/api/v1/alerts/ncc/events", Methods: []string{http.MethodGet}, Description: "Viewer+: append-only NCC finding lifecycle events (detected, redetected, not_detected, severity_changed, acknowledged, resolved, reopened, recurred, closed) ordered by seq. Incremental sync: pass next_cursor back as cursor. Optional alert_id filter. Cluster-group scoped."},
+		{Path: "/api/v1/alerts/ncc/{id}", Methods: []string{http.MethodGet}, Description: "Viewer+: one NCC finding instance with its full event history and the other instances (earlier/later episodes) of the same finding"},
 		{Path: "/api/v1/alerts/ncc/{id}/{action}", Methods: []string{http.MethodPost}, Description: "Operator+: action is acknowledge, resolve, or reopen. Optional JSON body {\"note\": \"...\"} (max 500 chars). Idempotent: repeating the current state with the same note records nothing new.", SampleBody: "{\n  \"note\": \"Vendor case 12345 opened\"\n}"},
 		{Path: "/api/v1/onboarding", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET operator+: the setup checklist, derived from the install's real state (clusters configured, first successful run, schedule, backups, notifications, team access). PUT admin-only: dismissed hides or shows the Overview banner, skip_step/unskip_step marks a step as not applicable (it counts as done), finished completes setup with steps left.", SampleBody: "{\n  \"skip_step\": \"notifications\"\n}"},
 		{Path: "/api/v1/features", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET viewer+: which optional views are on. PUT admin-only: turn Insights, Prism Central alerts, discovery, comparison, flaky checks, SLO, or the log index on or off.", SampleBody: "{\n  \"insights\": false,\n  \"pc_alerts\": false\n}"},
@@ -5017,7 +5016,7 @@ func (s *apiServer) buildOpenAPISpecBase() map[string]interface{} {
 			},
 			"/api/v1/settings/notifications/test": map[string]interface{}{
 				"post": map[string]interface{}{
-					"summary": "Send test notification(s)",
+					"summary": "Send test notifications",
 					"requestBody": map[string]interface{}{
 						"required": true,
 						"content": map[string]interface{}{
@@ -5380,7 +5379,7 @@ func readTailFile(path string, maxBytes int64) (string, error) {
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return "", err
 	}
-	b, err := io.ReadAll(f)
+	b, err := io.ReadAll(io.LimitReader(f, maxBytes)) // the file can grow after Stat
 	if err != nil {
 		return "", err
 	}

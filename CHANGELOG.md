@@ -89,12 +89,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   "Partial · exit 3" as on Runs instead of "Failed (exit 3)"; health bars
   are green from 75% so a "Good" score is no longer orange; NCC results are
   called findings; cluster names link to the cluster page.
+- **Findings wording in the API and guides.** OpenAPI summaries and tags
+  ("NCC findings"), API messages ("NCC finding updated"), metric help, the
+  `--alert-history-retain-days` help, the README and the guides call NCC
+  results findings. Paths (`/api/v1/alerts/ncc`) and field names are
+  unchanged.
+- **Plurals in command output.** Backup, restore, run, schedule and
+  self-heal output says "1 file", "3 clusters" instead of "file(s)".
 - **Prism Central empty state.** With no PC alerts and no filters set, the
   Findings page says Prism Central reports no alerts instead of suggesting
   clearing filters.
 
 ### Added
 
+- **Kubernetes alert rules.** The Helm chart renders a `PrometheusRule` with
+  `prometheusRule.enabled: true`: failed runner Job, no successful run or no
+  new report for `staleReportHours` (26), no or too few API replicas, data
+  volume below `pvcFreeRatio` free (10%), API replicas on different
+  versions, and any recovered background-job panic. See
+  `docs/PROMETHEUS.md`.
+- **Bounded-read guard.** A test (`internal/readguard`) fails the build when
+  a new `io.ReadAll` reads without `io.LimitReader` or
+  `http.MaxBytesReader`, unless the line says why with `bounded-read:`. The
+  two remaining unwrapped reads (inline artifacts, log tail) are wrapped.
+- **GitHub token scope warning.** When GitHub reports that `GITHUB_TOKEN`
+  carries scopes, the update check prints a warning naming them; a
+  fine-grained token with public read-only access, or a classic token with
+  no scopes, is enough. The release-list request now also sends the token
+  only to GitHub hosts over HTTPS.
 - **Cluster page** (`/clusters/<name or address>`). Shows health, failing
   checks, warnings and data age; why the last run could not reach it; open
   findings with a needs-attention/acknowledged filter; versions, environment

@@ -44,6 +44,16 @@ when they run more than one replica (`podDisruptionBudget.enabled`). Pin
 production images by digest where supported. Never commit credentials or
 private TLS keys.
 
+With the Prometheus Operator, `prometheusRule.enabled: true` adds alert
+rules for a failed runner Job, no successful run (or no new report) for
+`staleReportHours` (26 by default), no or too few API replicas, the data
+volume below `pvcFreeRatio` free (10%), API replicas on different versions,
+and any recovered background-job panic. The Kubernetes rules need
+kube-state-metrics and kubelet volume stats; the `ncc_*` rules need
+Prometheus to scrape the API's `/metrics` with a `namespace` label. Add
+`prometheusRule.labels` if your Prometheus selects rules by label. The rules
+are listed in [`docs/PROMETHEUS.md`](../../docs/PROMETHEUS.md).
+
 Keep `images.api.tag`, `images.ui.tag`, and `images.runner.tag` in lockstep.
 The API reports installed-component versions from those tags
 (`NCC_IMAGE_TAG` / `NCC_ORCHESTRATOR_IMAGE_TAG` / `NCC_UI_IMAGE_TAG`).

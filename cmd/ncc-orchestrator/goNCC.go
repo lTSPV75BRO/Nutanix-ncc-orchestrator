@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"goncc/internal/plural"
 	"html"
 	"html/template"
 	"io"
@@ -7817,14 +7818,19 @@ func fetchGitHubReleases(repo string, client *http.Client) ([]githubRelease, err
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 	req.Header.Set("User-Agent", "ncc-orchestrator/"+stripGoBuildGitSuffix(Version))
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+	sentToken := false
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" && githubTokenAllowed(apiURL) {
 		req.Header.Set("Authorization", "Bearer "+token)
+		sentToken = true
 	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch releases: %w", err)
 	}
 	defer resp.Body.Close()
+	if sentToken {
+		warnGitHubTokenScopes(resp.Header)
+	}
 	if resp.StatusCode == 403 && resp.Header.Get("X-RateLimit-Remaining") == "0" {
 		return nil, fmt.Errorf("GitHub API rate limited (resets %s): set GITHUB_TOKEN for higher limits or try again later", githubRateLimitReset(resp))
 	}
@@ -7837,6 +7843,34 @@ func fetchGitHubReleases(repo string, client *http.Client) ([]githubRelease, err
 		return nil, fmt.Errorf("parse releases: %w", err)
 	}
 	return releases, nil
+}
+
+var githubScopeWarnOnce sync.Once
+
+// githubTokenScopeWarning returns a warning when GitHub reports that
+// GITHUB_TOKEN carries scopes. Update checks read public releases only, so a
+// classic token needs no scope and a fine-grained token needs only public
+// read access. GitHub sends X-OAuth-Scopes for classic tokens (empty when
+// the token has none) and leaves it out for fine-grained tokens.
+func githubTokenScopeWarning(h http.Header) string {
+	var scopes []string
+	for _, s := range strings.Split(h.Get("X-OAuth-Scopes"), ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			scopes = append(scopes, s)
+		}
+	}
+	if len(scopes) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("warning: GITHUB_TOKEN has %s (%s) but update checks only read public releases. "+
+		"Use a fine-grained token with public repository read-only access, or a classic token with no scopes.",
+		plural.Count(len(scopes), "scope"), strings.Join(scopes, ", "))
+}
+
+func warnGitHubTokenScopes(h http.Header) {
+	if msg := githubTokenScopeWarning(h); msg != "" {
+		githubScopeWarnOnce.Do(func() { fmt.Fprintln(os.Stderr, msg) })
+	}
 }
 
 func githubRateLimitReset(resp *http.Response) string {
@@ -9962,7 +9996,7 @@ func runV2Backup(opts v2BackupOptions) error {
 		encrypted = true
 	}
 	fmt.Printf("Backup written: %s\n", out)
-	fmt.Printf("verified:       %d file(s) readable from archive (%s uncompressed)\n", vr.DataFiles, humanBytes(uint64(vr.Bytes)))
+	fmt.Printf("verified:       %s readable from archive (%s uncompressed)\n", plural.Count(vr.DataFiles, "file"), humanBytes(uint64(vr.Bytes)))
 	if encrypted {
 		fmt.Printf("encrypted:      yes (AES-256-GCM) — restore needs the same passphrase/key\n")
 	}
@@ -9984,7 +10018,7 @@ func runV2Backup(opts v2BackupOptions) error {
 	}
 	if opts.Retain > 0 {
 		if pruned, perr := pruneOldBackups(filepath.Dir(out), opts.Retain); perr == nil && len(pruned) > 0 {
-			fmt.Printf("retention:      kept newest %d, pruned %d older backup(s): %s\n", opts.Retain, len(pruned), strings.Join(pruned, ", "))
+			fmt.Printf("retention:      kept newest %d, pruned %s: %s\n", opts.Retain, plural.Count(len(pruned), "older backup"), strings.Join(pruned, ", "))
 		}
 	}
 	if encrypted {
@@ -10191,7 +10225,7 @@ func runV2Restore(opts v2RestoreOptions) error {
 		for _, e := range existing {
 			fmt.Printf("  - %s\n", e)
 		}
-		return fmt.Errorf("refusing to overwrite %d existing file(s); re-run with --force", len(existing))
+		return fmt.Errorf("refusing to overwrite %s; re-run with --force", plural.Count(len(existing), "existing file"))
 	}
 
 	if err := os.MkdirAll(installDir, 0o755); err != nil {
@@ -10333,7 +10367,7 @@ func runV2Restore(opts v2RestoreOptions) error {
 	txn.commit()
 	committed = true
 
-	fmt.Printf("Restored %d file(s) into %s\n", len(files), installDir)
+	fmt.Printf("Restored %s into %s\n", plural.Count(len(files), "file"), installDir)
 	for _, p := range files {
 		fmt.Printf("  - %s\n", p.rel)
 	}
@@ -10342,8 +10376,8 @@ func runV2Restore(opts v2RestoreOptions) error {
 		fmt.Printf("stack restored: yes (ncc-orchestrator %s)\n", defaultStr(manifest.Version, "?"))
 	case len(untrustedStack) > 0:
 		fmt.Printf("stack restored: no (program files not trusted)\n")
-		fmt.Printf("\nThe backup's program files (ncc-orchestrator %s, %d file(s)) were NOT restored: this server has never installed them, so they could be anything. Only data was restored, and the installed version keeps running.\n",
-			defaultStr(manifest.Version, "?"), len(untrustedStack))
+		fmt.Printf("\nThe backup's program files (ncc-orchestrator %s, %s) were NOT restored: this server has never installed them, so they could be anything. Only data was restored, and the installed version keeps running.\n",
+			defaultStr(manifest.Version, "?"), plural.Count(len(untrustedStack), "file"))
 		fmt.Println("To run that version, install it from its release (the in-app update, or the download page). If you trust this backup, re-run v2-restore on the server with --trust-stack.")
 	default:
 		fmt.Printf("stack restored: no\n")
@@ -10381,7 +10415,7 @@ func runV2Restore(opts v2RestoreOptions) error {
 	// Best-effort — it never fails the restore.
 	if healed, warns := healRestoredConfigPaths(installDir, defaultStr(manifest.InstallDir, "")); len(healed) > 0 || len(warns) > 0 {
 		if len(healed) > 0 {
-			fmt.Printf("\nAdjusted %d config path(s) for this host: %s\n", len(healed), strings.Join(healed, ", "))
+			fmt.Printf("\nAdjusted %s for this host: %s\n", plural.Count(len(healed), "config path"), strings.Join(healed, ", "))
 		}
 		for _, wmsg := range warns {
 			fmt.Printf("  ! %s\n", wmsg)
@@ -10815,7 +10849,7 @@ func runV2Doctor(opts v2DoctorOptions) error {
 		}
 		fmt.Println(string(out))
 		if hr.Worst() == healFail {
-			return fmt.Errorf("self-heal found %d failing check(s)", hr.Summary["fail"])
+			return fmt.Errorf("self-heal found %s", plural.Count(hr.Summary["fail"], "failing check"))
 		}
 		return nil
 	}
@@ -13701,7 +13735,7 @@ func runDiscoverClusters(cmd *cobra.Command, args []string) error {
 			if err := os.WriteFile(outPath, []byte(content), 0644); err != nil {
 				return fmt.Errorf("write %s: %w", outPath, err)
 			}
-			fmt.Fprintf(os.Stderr, "Wrote %d cluster(s) to %s\n", len(rows), outPath)
+			fmt.Fprintf(os.Stderr, "Wrote %s to %s\n", plural.Count(len(rows), "cluster"), outPath)
 			return nil
 		}
 		fmt.Print(content)
@@ -14094,7 +14128,7 @@ func installWindowsSchedule(taskName, runCmd string, every time.Duration) error 
 	if err != nil {
 		return fmt.Errorf("create scheduled task: %v (%s)", err, strings.TrimSpace(string(out)))
 	}
-	fmt.Printf("Created/updated Windows Scheduled Task %q (every %d minute(s))\n", taskName, minutes)
+	fmt.Printf("Created/updated Windows Scheduled Task %q (every %s)\n", taskName, plural.Count(minutes, "minute"))
 	return nil
 }
 
@@ -17040,7 +17074,7 @@ Run 'ncc-orchestrator --help' for a full list of options.
 					break
 				}
 				log.Warn().Int("clusters", len(retry)).Int("attempt", attempt).Msg("retrying clusters that failed with a timeout, network error or rate limit")
-				fmt.Fprintf(os.Stderr, "\n↻ Retrying %d cluster(s) that failed with a timeout, network error or rate limit (attempt %d of %d)\n", len(retry), attempt, cfg.RetryFailedClusters)
+				fmt.Fprintf(os.Stderr, "\n↻ Retrying %s that failed with a timeout, network error or rate limit (attempt %d of %d)\n", plural.Count(len(retry), "cluster"), attempt, cfg.RetryFailedClusters)
 				select {
 				case <-ctx.Done():
 				case <-time.After(time.Duration(attempt) * 10 * time.Second):
@@ -17374,7 +17408,7 @@ Run 'ncc-orchestrator --help' for a full list of options.
 				printFailureResolutionHints(failureCounts)
 				if len(clusterFiles) > 0 {
 					log.Warn().Strs("failedClusters", failed).Int("succeeded", len(clusterFiles)).Msg("some clusters failed; aggregated report written for successful clusters")
-					fmt.Fprintf(os.Stderr, "Some clusters failed: %v (report written for %d successful cluster(s)). Exit code 3.\n", failed, len(clusterFiles))
+					fmt.Fprintf(os.Stderr, "Some clusters failed: %v (report written for %s). Exit code 3.\n", failed, plural.Count(len(clusterFiles), "successful cluster"))
 					return exitPartial(fmt.Errorf("some clusters failed: %v", failed))
 				}
 				log.Error().Strs("failedClusters", failed).Msg("all clusters failed")

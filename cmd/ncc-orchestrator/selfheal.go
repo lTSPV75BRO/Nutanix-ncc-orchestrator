@@ -316,10 +316,10 @@ func checkStalePIDs(hc *healContext) healResult {
 		res.Fixed = true
 		parts := []string{}
 		if len(cleaned) > 0 {
-			parts = append(parts, "removed stale pid file(s): "+strings.Join(cleaned, ", "))
+			parts = append(parts, "removed stale "+plural.Word(len(cleaned), "pid file")+": "+strings.Join(cleaned, ", "))
 		}
 		if len(reconciled) > 0 {
-			parts = append(parts, "reconciled live pid file(s): "+strings.Join(reconciled, ", "))
+			parts = append(parts, "reconciled live "+plural.Word(len(reconciled), "pid file")+": "+strings.Join(reconciled, ", "))
 		}
 		res.FixMsg = strings.Join(parts, "; ")
 		res.Message = "stale pid files cleaned/reconciled"
@@ -327,7 +327,7 @@ func checkStalePIDs(hc *healContext) healResult {
 		res.Status = healWarn
 		issues := append([]string{}, stale...)
 		issues = append(issues, malformed...)
-		res.Message = "stale/invalid pid file(s): " + strings.Join(issues, ", ")
+		res.Message = "stale or invalid " + plural.Word(len(issues), "pid file") + ": " + strings.Join(issues, ", ")
 		res.Hint = "Re-run with --fix to remove them so the stack can restart cleanly."
 	}
 	return res
@@ -532,7 +532,7 @@ func checkRuntimeModeDrift(hc *healContext) healResult {
 		}
 		if len(updated) > 0 {
 			res.Fixed = true
-			res.FixMsg = "reconciled runtime pid file(s): " + strings.Join(updated, ", ")
+			res.FixMsg = "reconciled runtime " + plural.Word(len(updated), "pid file") + ": " + strings.Join(updated, ", ")
 		}
 	}
 
@@ -740,7 +740,7 @@ func checkSELinuxExecContext(hc *healContext) healResult {
 		}
 	}
 	res.Status = healWarn
-	res.Message = "unexpected SELinux context on executable(s): " + strings.Join(bad, ", ")
+	res.Message = "unexpected SELinux context on " + plural.Word(len(bad), "executable") + ": " + strings.Join(bad, ", ")
 	res.Hint = "Set context to bin_t (e.g. `chcon -t bin_t <binary>`), then restart the service."
 	return res
 }
@@ -776,11 +776,11 @@ func checkLogSizes(hc *healContext) healResult {
 	case len(big) == 0:
 		res.Status = healOK
 		res.Fixed = true
-		res.FixMsg = "rotated oversized log(s): " + strings.Join(rotated, ", ")
+		res.FixMsg = "rotated oversized " + plural.Word(len(rotated), "log") + ": " + strings.Join(rotated, ", ")
 		res.Message = "oversized logs rotated"
 	default:
 		res.Status = healWarn
-		res.Message = "oversized log file(s): " + strings.Join(big, ", ")
+		res.Message = "oversized " + plural.Word(len(big), "log file") + ": " + strings.Join(big, ", ")
 		res.Hint = "Re-run with --fix to rotate them (renames to <name>.1)."
 	}
 	return res
@@ -1049,7 +1049,7 @@ func checkConfigOutputRouting(hc *healContext) healResult {
 		return res
 	}
 	res.Status = healWarn
-	res.Message = fmt.Sprintf("relative output dir(s) %s resolve against the working directory; scheduled runs may write elsewhere", strings.Join(rel, ", "))
+	res.Message = fmt.Sprintf("relative output %s %s %s against the working directory; scheduled runs may write elsewhere", plural.Word(len(rel), "directory", "directories"), strings.Join(rel, ", "), plural.Word(len(rel), "resolves", "resolve"))
 	if !hc.Fix {
 		res.Hint = "Re-run with --fix to rewrite them as absolute paths anchored to the config directory."
 		return res

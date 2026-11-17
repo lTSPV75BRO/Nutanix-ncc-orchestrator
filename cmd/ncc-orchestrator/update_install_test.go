@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -226,18 +227,48 @@ func assertNoStagingLeftovers(t *testing.T, root string) {
 
 func TestGithubTokenAllowed(t *testing.T) {
 	for u, want := range map[string]bool{
-		"https://api.github.com/repos/o/r/releases/latest":       true,
-		"https://github.com/o/r/releases/download/v1/x.tar.gz":   true,
-		"https://objects.githubusercontent.com/abc":              true,
-		"http://github.com/o/r":                                  false, // not HTTPS
-		"https://github.com.example.net/o/r":                     false,
-		"https://example.net/github.com/x":                       false,
-		"https://notgithub.com/x":                                false,
-		"https://evil.example/?u=githubusercontent.com":          false,
-		"::bad":                                                  false,
+		"https://api.github.com/repos/o/r/releases/latest":     true,
+		"https://github.com/o/r/releases/download/v1/x.tar.gz": true,
+		"https://objects.githubusercontent.com/abc":            true,
+		"http://github.com/o/r":                                false, // not HTTPS
+		"https://github.com.example.net/o/r":                   false,
+		"https://example.net/github.com/x":                     false,
+		"https://notgithub.com/x":                              false,
+		"https://evil.example/?u=githubusercontent.com":        false,
+		"::bad": false,
 	} {
 		if got := githubTokenAllowed(u); got != want {
 			t.Errorf("githubTokenAllowed(%q) = %v, want %v", u, got, want)
+		}
+	}
+}
+
+func TestGitHubTokenScopeWarning(t *testing.T) {
+	cases := []struct {
+		header string
+		set    bool
+		want   string
+	}{
+		{set: false},               // fine-grained token: no header
+		{header: "", set: true},    // classic token without scopes
+		{header: " , ", set: true}, // nothing but separators
+		{header: "repo", set: true, want: "1 scope (repo)"},
+		{header: "repo, workflow", set: true, want: "2 scopes (repo, workflow)"},
+	}
+	for _, c := range cases {
+		h := http.Header{}
+		if c.set {
+			h.Set("X-OAuth-Scopes", c.header)
+		}
+		got := githubTokenScopeWarning(h)
+		if c.want == "" {
+			if got != "" {
+				t.Errorf("header %q: want no warning, got %q", c.header, got)
+			}
+			continue
+		}
+		if !strings.Contains(got, c.want) || !strings.Contains(got, "fine-grained") {
+			t.Errorf("header %q: got %q, want it to mention %q", c.header, got, c.want)
 		}
 	}
 }

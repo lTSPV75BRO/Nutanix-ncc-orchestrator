@@ -73,7 +73,7 @@ const PRESETS: EndpointPreset[] = [
   },
   { label: "NCC handling", method: "GET", path: "/api/v1/alerts/ncc-dispositions" },
   {
-    label: "Acknowledge NCC alert",
+    label: "Acknowledge NCC finding",
     method: "POST",
     path: "/api/v1/alerts/ncc-dispositions",
     body: JSON.stringify({ cluster: "", check: "", action: "acknowledge", note: "" }, null, 2),

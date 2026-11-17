@@ -715,7 +715,7 @@ export function FindingsPage() {
           type="warning"
           showIcon
           message="Prism Central alerts unavailable"
-          description="NCC alerts remain available. Check the configured Prism Central URL, credentials, and TLS settings."
+          description="NCC findings remain available. Check the configured Prism Central URL, credentials, and TLS settings."
         />
       ) : null}
 

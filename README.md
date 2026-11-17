@@ -269,7 +269,7 @@ Themes: Light, Dark, IT Pro, or match the system. The UI is keyboard friendly an
 
 ## Alerts and integrations
 
-**NCC alert lifecycle.** Each NCC finding becomes an alert instance with a server-generated UUIDv4. Acknowledge, resolve, and reopen actions, plus run-driven events (detected, no longer reported, severity changed, came back), are kept in an append-only history. If a resolved finding is detected again, the old instance is closed and a new one opens, linked to it. The store is `.ncc-api-alert-lifecycle.json` in the install folder — outside `outputfiles/`, so report retention never deletes it — and is included in `v2-backup`. `outputfiles/ncc-alert-dispositions.json` is kept only as a mirror for rolling back to v2.2.0.
+**NCC finding lifecycle.** Each NCC finding becomes an instance with a server-generated UUIDv4. Acknowledge, resolve, and reopen actions, plus run-driven events (detected, no longer reported, severity changed, came back), are kept in an append-only history. If a resolved finding is detected again, the old instance is closed and a new one opens, linked to it. The store is `.ncc-api-alert-lifecycle.json` in the install folder — outside `outputfiles/`, so report retention never deletes it — and is included in `v2-backup`. `outputfiles/ncc-alert-dispositions.json` is kept only as a mirror for rolling back to v2.2.0.
 
 **Prism Central alerts.** Configure `pcs` or `prism-central-url` and pick **PC · Beta** on the dashboard. Alerts are fetched on demand, cached briefly (`pc-alerts-cache-ttl`, default `5m`), and keep their own status in Prism Central.
 
@@ -290,7 +290,7 @@ The full route list is at `GET /api/v1/meta/routes`, the OpenAPI 3 spec at `GET 
 | `/api/v1/jobs/{id}` | GET, DELETE | Poll or cancel a long-running job with phase, progress, and typed errors |
 | `/api/v1/runs/preflight` | POST | Preflight check with machine-readable remediation codes |
 | `/api/v1/report/data`, `/report/trends` | GET | Report data (paged with `limit`/`offset`) and trends |
-| `/api/v1/alerts/ncc` | GET | NCC alert instances; filter by `state`, `detection`, `cluster`, `check`, `updated_since`; cursor paging |
+| `/api/v1/alerts/ncc` | GET | NCC finding instances; filter by `state`, `detection`, `cluster`, `check`, `updated_since`; cursor paging |
 | `/api/v1/alerts/ncc/events` | GET | Append-only lifecycle events; pass `next_cursor` back to get only new ones |
 | `/api/v1/alerts/ncc/{id}` | GET | One alert with its full history and related instances |
 | `/api/v1/alerts/ncc/{id}/{action}` | POST | `acknowledge`, `resolve`, or `reopen` (operator+) |
@@ -417,7 +417,7 @@ Written to `outputfiles/`:
 - `<cluster>.html` / `.csv` / `.json` / `.md` / `.sarif` — per-cluster reports
 - `feature-flags.json` — views an admin turned off
 
-Raw NCC output goes to `nccfiles/`, runner logs to `logs/ncc-runner.log`, and the NCC alert history to `.ncc-api-alert-lifecycle.json` in the install folder.
+Raw NCC output goes to `nccfiles/`, runner logs to `logs/ncc-runner.log`, and the NCC finding history to `.ncc-api-alert-lifecycle.json` in the install folder.
 
 ---
 

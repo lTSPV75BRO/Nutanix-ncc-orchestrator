@@ -1231,7 +1231,7 @@ func filterAlerts(alerts []nccAlert, q alertQuery, permits func(cluster, cluster
 func (s *apiServer) writeAlertLifecycleMetrics(w io.Writer) {
 	doc, err := s.alerts().read()
 	if err != nil {
-		fmt.Fprintf(w, "# HELP ncc_alerts_store_up 1 if the NCC alert lifecycle store is readable.\n# TYPE ncc_alerts_store_up gauge\nncc_alerts_store_up 0\n")
+		fmt.Fprintf(w, "# HELP ncc_alerts_store_up 1 if the NCC finding lifecycle store is readable.\n# TYPE ncc_alerts_store_up gauge\nncc_alerts_store_up 0\n")
 		return
 	}
 	type key struct{ state, detection, severity string }
@@ -1259,8 +1259,8 @@ func (s *apiServer) writeAlertLifecycleMetrics(w io.Writer) {
 		}
 		return keys[i].severity < keys[j].severity
 	})
-	fmt.Fprintf(w, "# HELP ncc_alerts_store_up 1 if the NCC alert lifecycle store is readable.\n# TYPE ncc_alerts_store_up gauge\nncc_alerts_store_up 1\n")
-	fmt.Fprintf(w, "# HELP ncc_alerts_active Active (not closed) NCC alert instances by operator state, detection and severity.\n# TYPE ncc_alerts_active gauge\n")
+	fmt.Fprintf(w, "# HELP ncc_alerts_store_up 1 if the NCC finding lifecycle store is readable.\n# TYPE ncc_alerts_store_up gauge\nncc_alerts_store_up 1\n")
+	fmt.Fprintf(w, "# HELP ncc_alerts_active Active (not closed) NCC finding instances by operator state, detection and severity.\n# TYPE ncc_alerts_active gauge\n")
 	for _, k := range keys {
 		fmt.Fprintf(w, "ncc_alerts_active{state=%q,detection=%q,severity=%q} %d\n", k.state, k.detection, k.severity, counts[k])
 	}

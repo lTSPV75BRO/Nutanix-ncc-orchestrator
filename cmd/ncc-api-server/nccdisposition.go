@@ -298,14 +298,14 @@ func (s *apiServer) handleNCCDispositions(w http.ResponseWriter, r *http.Request
 
 func (s *apiServer) handleGetNCCDispositions(w http.ResponseWriter, r *http.Request) {
 	if n, err := s.syncNCCAlertLifecycle(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not update NCC alert history from the latest run: " + sanitizeErr(err)})
+		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not update NCC finding history from the latest run: " + sanitizeErr(err)})
 		return
 	} else if n > 0 {
 		s.audit(r, "alerts.ncc.sync", true, map[string]interface{}{"changes": n})
 	}
 	doc, err := s.alerts().read()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not read NCC alert marks: " + sanitizeErr(err)})
+		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not read NCC finding marks: " + sanitizeErr(err)})
 		return
 	}
 	permits := s.alertPermits(r)
@@ -381,7 +381,7 @@ func (s *apiServer) handlePostNCCDispositions(w http.ResponseWriter, r *http.Req
 	} else {
 		t := alertActionTarget{ID: strings.TrimSpace(req.ID), Cluster: strings.TrimSpace(req.Cluster), Check: strings.TrimSpace(req.Check)}
 		if t.ID == "" && (t.Cluster == "" || t.Check == "") {
-			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "Choose an NCC alert before marking it. Cluster and check name are both required."})
+			writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "Choose an NCC finding before marking it. Cluster and check name are both required."})
 			return
 		}
 		targets = append(targets, t)
@@ -393,7 +393,7 @@ func (s *apiServer) handlePostNCCDispositions(w http.ResponseWriter, r *http.Req
 	// Bring the lifecycle up to date first so the mark lands on the current
 	// instance rather than one a newer run is about to supersede.
 	if _, err := s.syncNCCAlertLifecycle(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not update NCC alert history from the latest run: " + sanitizeErr(err)})
+		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not update NCC finding history from the latest run: " + sanitizeErr(err)})
 		return
 	}
 	actor := actorFromRequest(r)
@@ -411,7 +411,7 @@ func (s *apiServer) handlePostNCCDispositions(w http.ResponseWriter, r *http.Req
 			status = http.StatusServiceUnavailable
 		}
 		s.audit(r, "alerts.ncc."+action, false, map[string]interface{}{"count": len(targets), "error": sanitizeErr(err)})
-		writeJSON(w, status, envelope{Success: false, Error: "could not save the NCC alert mark: " + sanitizeErr(err)})
+		writeJSON(w, status, envelope{Success: false, Error: "could not save the NCC finding mark: " + sanitizeErr(err)})
 		return
 	}
 	auditFields := map[string]interface{}{
@@ -435,10 +435,10 @@ func (s *apiServer) handlePostNCCDispositions(w http.ResponseWriter, r *http.Req
 		out = append(out, dispositionFromAlert(a))
 	}
 	if len(out) == 1 {
-		writeJSON(w, http.StatusOK, envelope{Success: true, Message: "NCC alert updated", Data: out[0]})
+		writeJSON(w, http.StatusOK, envelope{Success: true, Message: "NCC finding updated", Data: out[0]})
 		return
 	}
-	writeJSON(w, http.StatusOK, envelope{Success: true, Message: "NCC alerts updated", Data: map[string]interface{}{
+	writeJSON(w, http.StatusOK, envelope{Success: true, Message: "NCC findings updated", Data: map[string]interface{}{
 		"items": out,
 		"count": len(out),
 	}})
@@ -579,12 +579,12 @@ func (s *apiServer) handleListNCCAlerts(w http.ResponseWriter, r *http.Request) 
 	}
 	query.Cursor = cur
 	if _, err := s.syncNCCAlertLifecycle(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not update NCC alert history: " + sanitizeErr(err)})
+		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not update NCC finding history: " + sanitizeErr(err)})
 		return
 	}
 	doc, err := s.alerts().read()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not read NCC alert history: " + sanitizeErr(err)})
+		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not read NCC finding history: " + sanitizeErr(err)})
 		return
 	}
 	items, next := filterAlerts(doc.Alerts, query, s.alertPermits(r))
@@ -614,12 +614,12 @@ func (s *apiServer) handleNCCAlertEvents(w http.ResponseWriter, r *http.Request)
 	}
 	alertID := strings.TrimSpace(q.Get("alert_id"))
 	if _, err := s.syncNCCAlertLifecycle(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not update NCC alert history: " + sanitizeErr(err)})
+		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not update NCC finding history: " + sanitizeErr(err)})
 		return
 	}
 	doc, err := s.alerts().read()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not read NCC alert history: " + sanitizeErr(err)})
+		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not read NCC finding history: " + sanitizeErr(err)})
 		return
 	}
 	permits := s.alertPermits(r)
@@ -657,12 +657,12 @@ func (s *apiServer) handleNCCAlertEvents(w http.ResponseWriter, r *http.Request)
 
 func (s *apiServer) handleGetNCCAlert(w http.ResponseWriter, r *http.Request, id string) {
 	if _, err := s.syncNCCAlertLifecycle(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not update NCC alert history: " + sanitizeErr(err)})
+		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not update NCC finding history: " + sanitizeErr(err)})
 		return
 	}
 	doc, err := s.alerts().read()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not read NCC alert history: " + sanitizeErr(err)})
+		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not read NCC finding history: " + sanitizeErr(err)})
 		return
 	}
 	idx := findAlertIndex(doc, id)
@@ -736,5 +736,5 @@ func (s *apiServer) handleNCCAlertAction(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	s.audit(r, "alerts.ncc."+action, true, map[string]interface{}{"alert_id": id, "by": actor, "run_at": runAt, "cluster": saved[0].Cluster, "check": saved[0].Check})
-	writeJSON(w, http.StatusOK, envelope{Success: true, Message: "NCC alert updated", Data: saved[0]})
+	writeJSON(w, http.StatusOK, envelope{Success: true, Message: "NCC finding updated", Data: saved[0]})
 }

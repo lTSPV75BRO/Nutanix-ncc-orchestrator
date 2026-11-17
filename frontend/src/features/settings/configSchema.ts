@@ -378,7 +378,7 @@ export const SECTIONS: SectionDef[] = [
         path: R("filtering", "exclude-alert-titles"),
         group: "What to report",
         wide: true,
-        help: "NCC alert titles to drop from reports.",
+        help: "NCC check titles to drop from reports.",
       },
       { key: "exclude-alert-titles-file", label: "Leave-out list file", type: "string", path: R("filtering", "exclude-alert-titles-file"), group: "What to report", help: "One title per line.", placeholder: "exclusions.txt" },
       {

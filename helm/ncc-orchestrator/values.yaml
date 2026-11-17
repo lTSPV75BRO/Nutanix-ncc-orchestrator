@@ -91,6 +91,18 @@ podDisruptionBudget:
   enabled: true
   minAvailable: 1
 
+# Alert rules for the Prometheus Operator (PrometheusRule). Needs the
+# monitoring.coreos.com CRDs and kube-state-metrics; the ncc_* rules need
+# Prometheus to scrape the API's /metrics. See docs/PROMETHEUS.md.
+prometheusRule:
+  enabled: false
+  # Extra labels, e.g. the release label your Prometheus selects rules by.
+  labels: {}
+  # Warn when no run has succeeded, or no report arrived, for this long.
+  staleReportHours: 26
+  # Warn when the data volume has less than this fraction free.
+  pvcFreeRatio: 0.1
+
 configMapName: ncc-orchestrator-config
 pvcName: ncc-orchestrator-output
 secretName: ncc-orchestrator-credentials

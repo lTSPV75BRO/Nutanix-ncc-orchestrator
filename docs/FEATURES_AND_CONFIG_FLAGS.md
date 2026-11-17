@@ -1300,7 +1300,7 @@ These are runtime flags for v2 services (`cmd/ncc-api-server`, `cmd/ncc-ui-serve
 | `ncc-api-server` | `--log-format` | `text` | Console log format (`text` or `json`); the log file is always JSON. Env `NCC_LOG_FORMAT`. |
 | `ncc-api-server` | `--server-log-path` | `logs/ncc-api.log` | Rotated JSON log of every request, run and background job. Env `NCC_SERVER_LOG_PATH`. |
 | `ncc-api-server` | `--trusted-proxy-cidrs` | `private,loopback` | Peers whose `X-Forwarded-For` is honored (CIDRs, `loopback`, `private`, `none`); parsed right-to-left. Env `NCC_TRUSTED_PROXY_CIDRS`. Narrow to your proxy/ingress/UI-pod CIDRs. |
-| `ncc-api-server` | `--alert-history-retain-days` | `365` | Days to keep closed NCC alert instances and their events (active alerts are never pruned; `0` keeps forever). |
+| `ncc-api-server` | `--alert-history-retain-days` | `365` | Days to keep closed NCC finding instances and their events (active findings are never pruned; `0` keeps forever). |
 | `ncc-api-server` | `--audit-log-keep` | `10` | Rotated audit log generations kept (`<path>.1` … `<path>.N`). |
 | `ncc-api-server` | `--require-encrypted-user-store` | `false` | Refuse to start unless the user store is envelope-encrypted (`NCC_MASTER_KEY` / `--users-db-key-file`). Env `NCC_REQUIRE_ENCRYPTED_USER_STORE=true`. |
 | `ncc-api-server` | env `NCC_BACKUP_ENCRYPTION` | `required` | `required`: refuse plaintext backups (needs a passphrase or `NCC_BACKUP_KEY_FILE`/`NCC_BACKUP_KEY`/`NCC_BACKUP_PASSPHRASE`); `optional`: legacy behavior. |

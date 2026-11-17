@@ -32,6 +32,8 @@ See **`outputfiles/run-summary.json`** for `exit_code` and per-cluster `clusters
 ## GitHub `--update` rate limits
 
 - Set **`GITHUB_TOKEN`** in the environment for higher API rate limits when calling `GET /repos/.../releases/latest`.
+- The token only reads public releases. Use a **fine-grained token with public repository read-only access** (no repository or account permissions), or a classic token with **no scopes**. If GitHub reports that the token carries scopes (for example `repo` or `workflow`), the update check prints a warning naming them; replace the token with a narrower one.
+- The token is sent only over HTTPS to `api.github.com`, `github.com` and `githubusercontent.com` hosts.
 
 ## v2 web stack: login, HTTPS, and SSO
 
@@ -101,7 +103,7 @@ See **`outputfiles/run-summary.json`** for `exit_code` and per-cluster `clusters
   on the page itself (`PUT /api/v1/features`). Health checks keep running
   while the view is off.
 
-### A resolved NCC alert came back
+### A resolved NCC finding came back
 
 - **Expected:** A later run that still reports the same cluster and check
   clears the resolve mark and moves the row to **Returned**

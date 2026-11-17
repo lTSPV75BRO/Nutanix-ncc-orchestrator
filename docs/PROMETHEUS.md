@@ -60,11 +60,11 @@ Prometheus's counter semantics):
 | `ncc_update_applied_total` / `ncc_update_failed_total` | counter | In-app software-update outcomes |
 | `ncc_ratelimit_allowed_total` / `ncc_ratelimit_blocked_total` | counter | Rate-limiter decisions (when enabled) |
 
-#### NCC alert lifecycle metrics (v2.2.1+)
+#### NCC finding lifecycle metrics (v2.2.1+)
 
 | Metric | Type | Description |
 | --- | --- | --- |
-| `ncc_alerts_active{state,detection,severity}` | gauge | Active NCC alert instances by operator state (`open`/`acknowledged`/`resolved`), detection (`detected`/`not_detected`/`unknown`) and severity |
+| `ncc_alerts_active{state,detection,severity}` | gauge | Active NCC finding instances by operator state (`open`/`acknowledged`/`resolved`), detection (`detected`/`not_detected`/`unknown`) and severity |
 | `ncc_alerts_store_up` | gauge | `1` when the alert lifecycle store is readable |
 | `ncc_alerts_last_ingested_run_timestamp_seconds` | gauge | Run timestamp last applied to the lifecycle |
 | `ncc_alerts_events_total` | gauge | Lifecycle events retained in history |
@@ -205,6 +205,29 @@ Typical pattern:
 - Prometheus scrapes node_exporter target(s).
 
 If v2 API is exposed in-cluster, also collect `/api/v1/metrics/rate-limit` through your API monitoring path.
+
+### Kubernetes alert rules
+
+The Helm chart renders a `PrometheusRule` when `prometheusRule.enabled: true`
+(Prometheus Operator CRDs required). Thresholds come from
+`prometheusRule.staleReportHours` (default 26) and
+`prometheusRule.pvcFreeRatio` (default 0.1).
+
+| Alert | Fires when | Needs |
+| --- | --- | --- |
+| `NCCRunnerJobFailed` | A runner Job (`ncc-orchestrator-*`) has failed pods for 5 minutes. | kube-state-metrics |
+| `NCCRunnerNoRecentSuccess` | The `ncc-orchestrator` CronJob has not succeeded for `staleReportHours`. | kube-state-metrics |
+| `NCCApiUnavailable` | `ncc-v2-api` has no available replica for 5 minutes (critical). | kube-state-metrics |
+| `NCCApiReplicasDegraded` | Fewer available API replicas than requested for 15 minutes. | kube-state-metrics |
+| `NCCDataVolumeFilling` | The data PVC has less than `pvcFreeRatio` free for 30 minutes. | kubelet volume stats |
+| `NCCVersionSkew` | API replicas report different `ncc_build_info` versions for 30 minutes. | API `/metrics` |
+| `NCCBackgroundPanic` | `ncc_api_background_panics_total` increased in the last 15 minutes. | API `/metrics` |
+| `NCCReportStale` | `ncc_alerts_last_ingested_run_timestamp_seconds` is older than `staleReportHours`. | API `/metrics`, alert lifecycle on |
+
+The `ncc_*` rules match on a `namespace` label, which Prometheus adds when it
+discovers the API pods (ServiceMonitor or pod discovery). Without the
+operator, copy the expressions from
+`helm/ncc-orchestrator/templates/prometheusrule.yaml` into a rule file.
 
 ## Prometheus scrape baseline
 
