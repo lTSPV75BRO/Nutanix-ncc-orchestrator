@@ -69,6 +69,19 @@ Prometheus's counter semantics):
 | `ncc_alerts_last_ingested_run_timestamp_seconds` | gauge | Run timestamp last applied to the lifecycle |
 | `ncc_alerts_events_total` | gauge | Lifecycle events retained in history |
 
+#### Report cache metrics (v2.4.0+)
+
+The api-server keeps the parsed current report in memory and rebuilds the
+NCC log summaries in the background after a run, serving the previous report
+meanwhile. The same state is returned as `cache` by `GET /api/v1/report/data`.
+
+| Metric | Type | Description |
+| --- | --- | --- |
+| `ncc_report_cache_state{state}` | gauge | `1` for the current state, `0` for the others: `cold` (nothing built yet), `warm` (matches the report on disk), `refreshing` (a newer report is being built), `stale` (the report files changed; no rebuild started yet), `failed` (the last rebuild failed; the previous report is served, retried after 30 s) |
+| `ncc_report_cache_age_seconds` | gauge | Seconds since the oldest part of the served report was built (absent while `cold`) |
+
+Example alert: `ncc_report_cache_state{state="failed"} == 1` for 10 minutes.
+
 See [`docs/integrations/third-party-alert-integrations.md`](integrations/third-party-alert-integrations.md#11-prometheus) for scrape authentication with a viewer PAT and example alerting rules.
 
 A starter Grafana dashboard wiring these up (run throughput, run duration,

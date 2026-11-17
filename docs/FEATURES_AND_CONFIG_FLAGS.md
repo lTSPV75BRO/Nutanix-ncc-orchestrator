@@ -1512,6 +1512,16 @@ Large payload control for report endpoint:
 
 - `GET /api/v1/report/data?limit=<n>&offset=<m>`
 - Applies to large array fields (`checks_snapshot`, `agg_rows`) and returns per-field pagination metadata.
+- Every response carries a `cache` object describing the server's report cache:
+  `state` (`cold`, `warm`, `refreshing`, `stale` or `failed`), `built_at` (when
+  the oldest part of the served report was built), `refresh_started_at` while a
+  newer report is being built, `last_error` and `failed_at` after a failed
+  rebuild, and `source_run_id` / `source_run_time` from the served
+  `run-summary.json`. Existing fields are unchanged. The Overview and Findings
+  pages show a one-line notice when the state is not `warm` and check again
+  every 5 s while a newer report is being built (once a minute after a
+  failure). Prometheus: `ncc_report_cache_state`, `ncc_report_cache_age_seconds`
+  (see `docs/PROMETHEUS.md`).
 
 Machine-readable API errors:
 

@@ -6,6 +6,7 @@ import { ArrowRightOutlined, ClusterOutlined, HistoryOutlined, PieChartOutlined,
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { SetupBanner } from "../features/onboarding/SetupChecklist";
+import { ReportCacheNotice, reportRefetchInterval } from "../features/report/ReportCacheNotice";
 import { RunsTable } from "../features/runs/RunsTable";
 import { useRunsActive } from "../hooks/useRunsActive";
 import { clusterPath, sectionHref } from "../navigation";
@@ -159,6 +160,8 @@ export function OverviewPage() {
     queryKey: ["report-data", "preview", PREVIEW_LIMIT],
     queryFn: () => api.reportDataWithPagination({ limit: PREVIEW_LIMIT }),
     staleTime: 30_000,
+    // While the server builds a newer report, check back until it is ready.
+    refetchInterval: (q) => reportRefetchInterval(q.state.data),
   });
   const runs = useQuery({
     queryKey: ["runs", "recent"],
@@ -282,6 +285,7 @@ export function OverviewPage() {
     <div className="overview">
       <SetupBanner />
       {header}
+      <ReportCacheNotice cache={data?.cache} />
 
       {report.isError && !data ? (
         <Alert type="error" showIcon title="Couldn't load the latest results" description="Refresh to try again." />

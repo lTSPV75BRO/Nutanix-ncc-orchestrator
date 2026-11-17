@@ -39,6 +39,7 @@ import { notify, notifyError } from "../notify";
 import { FeatureDisabled } from "../features/features/FeatureDisabled";
 import { useFeatureFlags } from "../features/features/useFeatureFlags";
 import { ClusterTable } from "../features/report/ClusterTable";
+import { ReportCacheNotice, reportRefetchInterval } from "../features/report/ReportCacheNotice";
 import {
   asArray,
   asRecord,
@@ -210,7 +211,25 @@ export function FindingsPage() {
     queryFn: () => api.reportDataWithPagination({ limit: PREVIEW_LIMIT }),
     staleTime: 30_000,
     enabled: !fullReport.data,
+    // While the server builds a newer report, check back until it is ready.
+    refetchInterval: (q) => reportRefetchInterval(q.state.data),
   });
+
+  // The full report is large, so while the server builds a newer one a
+  // one-row request watches the cache, and the full report is fetched again
+  // once the newer one is ready.
+  const fullCacheState = fullReport.data?.cache?.state;
+  const cacheWatch = useQuery({
+    queryKey: ["report-data", "cache-watch"],
+    queryFn: () => api.reportDataWithPagination({ limit: 1 }),
+    enabled: Boolean(fullReport.data) && reportRefetchInterval(fullReport.data) !== false,
+    refetchInterval: (q) => reportRefetchInterval(q.state.data ?? fullReport.data),
+  });
+  const watchedState = cacheWatch.data?.cache?.state;
+  const refetchFull = fullReport.refetch;
+  useEffect(() => {
+    if (watchedState === "warm" && fullCacheState && fullCacheState !== "warm") void refetchFull();
+  }, [watchedState, fullCacheState, refetchFull]);
 
   const nccDispositionsQuery = useQuery({
     queryKey: ["ncc-dispositions"],
@@ -543,6 +562,13 @@ export function FindingsPage() {
 
   return (
     <div className="dashboard-page">
+      <ReportCacheNotice
+        cache={
+          fullReport.data && cacheWatch.data && cacheWatch.dataUpdatedAt > fullReport.dataUpdatedAt
+            ? cacheWatch.data.cache
+            : reportData.cache
+        }
+      />
       {/* Which run these findings come from, and how many of each severity. */}
       <div className="findings-summary">
         <Tooltip title={runTimestamp ? formatDateTime(runTimestamp) : "No completed run yet"}>

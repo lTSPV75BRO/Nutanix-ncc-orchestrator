@@ -1210,6 +1210,24 @@ export type LoggingSettings = {
   persistence?: string;
 };
 
+/** State of the server's report cache (GET /api/v1/report/data `cache`). */
+export type ReportCacheState = "cold" | "warm" | "refreshing" | "stale" | "failed";
+
+export type ReportCacheInfo = {
+  state: ReportCacheState;
+  /** When the oldest part of the served report was built. */
+  built_at?: string;
+  /** Set while a newer report is being built. */
+  refresh_started_at?: string;
+  /** Why the last refresh failed (state "failed"). */
+  last_error?: string;
+  failed_at?: string;
+  source_run_id?: string;
+  source_run_time?: string;
+  /** Set by the client when /report/data failed and the report was read from the saved files instead. */
+  fallback?: boolean;
+};
+
 export type ReportData = {
   run_summary: unknown;
   ncc_summary_counts?: Record<string, number>;
@@ -1227,6 +1245,8 @@ export type ReportData = {
   artifact_links?: Record<string, string>;
   report_meta?: Record<string, unknown>;
   ncc_logs?: Array<{ name: string; path: string }>;
+  /** Report cache state (absent from servers before v2.4.0). */
+  cache?: ReportCacheInfo;
   pagination?: Record<
     string,
     {
