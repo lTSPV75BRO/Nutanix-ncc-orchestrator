@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import { Alert, Button, Collapse, Divider, Form, Input, Modal, Space, Typography } from "antd";
 import {
   CloudUploadOutlined,
@@ -16,8 +16,31 @@ import type { PublicTLSInfo } from "../api/types";
 import { AuthShell } from "../components/AuthShell";
 import { RestoreBackupDialog } from "../features/backup/RestoreBackupDialog";
 import { notify } from "../notify";
+import { useSecondsUntil } from "../hooks/useNow";
+import { formatCountdown } from "../utils/sessionTime";
 
 const { Title, Text, Paragraph } = Typography;
+
+/** Deadline (epoch ms) from a 429 that says how long to wait, else null. */
+function retryDeadline(e: unknown): number | null {
+  return e instanceof ApiError && e.status === 429 && e.retryAfterSec ? Date.now() + e.retryAfterSec * 1000 : null;
+}
+
+/**
+ * A live "Try again in 0:42" clock. role="timer" keeps screen readers from
+ * announcing every tick inside the polite alert region.
+ */
+function RetryCountdown({ seconds }: { seconds: number }) {
+  return (
+    <>
+      Try again in{" "}
+      <strong role="timer" aria-live="off" className="auth-retry-count">
+        {formatCountdown(seconds)}
+      </strong>
+      .
+    </>
+  );
+}
 
 /** One-shot message for the next login screen (session expired, signed out). */
 export type LoginNotice = { type: "info" | "warning"; text: string };
@@ -199,12 +222,30 @@ export function LoginPage({
   const [forgotSubmitting, setForgotSubmitting] = useState(false);
   const [forgotForm] = Form.useForm<{ username: string }>();
   const [loginForm] = Form.useForm<{ username: string; password: string }>();
+  // A 429 that says how long to wait pauses sign-in (and the reset request)
+  // until then, with a live countdown. The wait is the server's; the page
+  // never says whether the account exists or how many attempts remain.
+  const [lockedUntil, setLockedUntil] = useState<number | null>(null);
+  const [forgotLockedUntil, setForgotLockedUntil] = useState<number | null>(null);
+  const lockSeconds = useSecondsUntil(lockedUntil);
+  const forgotLockSeconds = useSecondsUntil(forgotLockedUntil);
+  const locked = lockedUntil !== null && lockSeconds > 0;
+  const forgotLocked = forgotLockedUntil !== null && forgotLockSeconds > 0;
+  useEffect(() => {
+    if (lockedUntil !== null && lockSeconds <= 0) {
+      setLockedUntil(null);
+      setError(null);
+    }
+  }, [lockedUntil, lockSeconds]);
+  useEffect(() => {
+    if (forgotLockedUntil !== null && forgotLockSeconds <= 0) setForgotLockedUntil(null);
+  }, [forgotLockedUntil, forgotLockSeconds]);
   // Enter submits from either field. preventDefault stops the browser's own
   // implicit submission so the request is sent once.
   const submitOnEnter = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.nativeEvent.isComposing) return;
     e.preventDefault();
-    if (!submitting) loginForm.submit();
+    if (!submitting && !locked) loginForm.submit();
   };
   const [restoreOpen, setRestoreOpen] = useState(false);
   const httpInsecure = isNonLocalHTTP();
@@ -241,20 +282,27 @@ export function LoginPage({
       setForgotOpen(false);
       forgotForm.resetFields();
     } catch (e) {
-      notify.error(e instanceof ApiError ? e.message : "Request failed");
+      const until = retryDeadline(e);
+      if (until !== null) setForgotLockedUntil(until);
+      else notify.error(e instanceof ApiError ? e.message : "Request failed");
     } finally {
       setForgotSubmitting(false);
     }
   };
 
   const handleFinish = async (values: { username: string; password: string }) => {
+    if (locked) return;
     setSubmitting(true);
     setError(null);
     try {
       await api.login(values.username.trim(), values.password);
       onSuccess();
     } catch (e) {
-      if (e instanceof ApiError) {
+      const until = retryDeadline(e);
+      if (until !== null) {
+        setLockedUntil(until);
+        setError({ text: "", throttled: true });
+      } else if (e instanceof ApiError) {
         setError({ text: e.message, throttled: e.status === 429 });
       } else {
         setError({ text: "Sign-in failed. Check your connection and try again.", throttled: false });
@@ -309,8 +357,16 @@ export function LoginPage({
             type={error.throttled ? "warning" : "error"}
             showIcon
             title={error.throttled ? "Too many attempts" : "Couldn't sign you in"}
-            description={error.text}
-            closable
+            description={
+              locked ? (
+                <span>
+                  Sign-in is paused for a short while. <RetryCountdown seconds={lockSeconds} />
+                </span>
+              ) : (
+                error.text
+              )
+            }
+            closable={!locked}
             onClose={() => setError(null)}
           />
         ) : null}
@@ -351,7 +407,15 @@ export function LoginPage({
               onKeyDown={trackCapsLock}
             />
           </Form.Item>
-          <Button type="primary" htmlType="submit" size="large" block loading={submitting} icon={<LoginOutlined />}>
+          <Button
+            type="primary"
+            htmlType="submit"
+            size="large"
+            block
+            loading={submitting}
+            disabled={locked}
+            icon={<LoginOutlined />}
+          >
             Sign in
           </Button>
           <div className="auth-form-links">
@@ -468,9 +532,21 @@ export function LoginPage({
         }}
         okText="Send request"
         confirmLoading={forgotSubmitting}
-        onOk={() => forgotForm.submit()}
+        okButtonProps={{ disabled: forgotLocked }}
+        onOk={() => {
+          if (!forgotLocked) forgotForm.submit();
+        }}
         destroyOnHidden
       >
+        {forgotLocked ? (
+          <Alert
+            type="warning"
+            showIcon
+            title="Too many requests"
+            description={<RetryCountdown seconds={forgotLockSeconds} />}
+            style={{ marginBottom: 12 }}
+          />
+        ) : null}
         <Paragraph type="secondary" style={{ fontSize: 13 }}>
           An administrator will be asked to reset your password and give you a temporary one to
           change at next sign-in. No email is sent.

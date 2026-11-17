@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LoginPage, setLoginNotice } from "./LoginPage";
 import { isEncryptedBackupName } from "../features/backup/RestoreBackupDialog";
@@ -10,7 +10,7 @@ vi.mock("../notify", () => ({
   NotifyBridge: () => null,
 }));
 
-type Reply = { status: number; body: unknown };
+type Reply = { status: number; body: unknown; headers?: Record<string, string> };
 
 function mockFetch(route: (url: string, init?: RequestInit) => Reply | undefined) {
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -20,7 +20,7 @@ function mockFetch(route: (url: string, init?: RequestInit) => Reply | undefined
       ok: r.status >= 200 && r.status < 300,
       status: r.status,
       statusText: "",
-      headers: new Headers({ "content-type": "application/json" }),
+      headers: new Headers({ "content-type": "application/json", ...(r.headers ?? {}) }),
       json: async () => r.body,
       text: async () => JSON.stringify(r.body),
     } as Response;
@@ -87,6 +87,88 @@ describe("LoginPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /Sign in/ }));
     expect(await screen.findByText("Too many attempts")).toBeInTheDocument();
     expect(screen.getByText(/try again in about 60s/)).toBeInTheDocument();
+  });
+
+  describe("with a retry time from the server", () => {
+    // Fake only the clock and intervals; promises and waitFor use real timeouts.
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+    const tick = (ms: number) =>
+      act(() => {
+        vi.advanceTimersByTime(ms);
+      });
+
+    it("counts down a lockout, keeps Sign in disabled, then re-enables it", async () => {
+      mockFetch((url) =>
+        url.includes("/auth/login")
+          ? {
+              status: 429,
+              body: {
+                success: false,
+                error: "too many failed sign-in attempts; try again in about 42s.",
+                retry_after_seconds: 42,
+              },
+            }
+          : undefined,
+      );
+      renderLogin();
+      fireEvent.change(screen.getByLabelText("Username"), { target: { value: "someone" } });
+      fireEvent.change(screen.getByLabelText("Password"), { target: { value: "nope" } });
+      fireEvent.click(screen.getByRole("button", { name: /Sign in/ }));
+      expect(await screen.findByText("Too many attempts")).toBeInTheDocument();
+      expect(screen.getByRole("timer")).toHaveTextContent("0:42");
+      const signIn = screen.getByRole("button", { name: /Sign in/ });
+      await waitFor(() => expect(signIn).toBeDisabled());
+      // No account details: the page shows its own generic text, not counts.
+      expect(screen.queryByText(/about 42s/)).not.toBeInTheDocument();
+
+      tick(12_000);
+      expect(screen.getByRole("timer")).toHaveTextContent("0:30");
+      // Enter does not send another attempt while paused.
+      fireEvent.keyDown(screen.getByLabelText("Password"), { key: "Enter", code: "Enter", keyCode: 13 });
+      const logins = () => vi.mocked(globalThis.fetch).mock.calls.filter(([u]) => String(u).includes("/auth/login"));
+      expect(logins()).toHaveLength(1);
+
+      tick(30_000);
+      await waitFor(() => expect(screen.getByRole("button", { name: /Sign in/ })).toBeEnabled());
+      expect(screen.queryByText("Too many attempts")).not.toBeInTheDocument();
+    });
+
+    it("uses the Retry-After header when the body has no retry time (per-client rate limit)", async () => {
+      mockFetch((url) =>
+        url.includes("/auth/login")
+          ? { status: 429, body: { success: false, error: "rate limit exceeded" }, headers: { "Retry-After": "75" } }
+          : undefined,
+      );
+      renderLogin();
+      fireEvent.change(screen.getByLabelText("Username"), { target: { value: "someone" } });
+      fireEvent.change(screen.getByLabelText("Password"), { target: { value: "nope" } });
+      fireEvent.click(screen.getByRole("button", { name: /Sign in/ }));
+      expect(await screen.findByRole("timer")).toHaveTextContent("1:15");
+      expect(screen.queryByText(/rate limit exceeded/)).not.toBeInTheDocument();
+    });
+
+    it("counts down a rate-limited password reset request", async () => {
+      mockFetch((url) =>
+        url.includes("/auth/forgot-password")
+          ? { status: 429, body: { success: false, error: "rate limit exceeded", retry_after_seconds: 20 } }
+          : undefined,
+      );
+      renderLogin();
+      fireEvent.click(screen.getByRole("button", { name: /Forgot password/ }));
+      fireEvent.change(within(await screen.findByRole("dialog")).getByRole("textbox"), { target: { value: "someone" } });
+      fireEvent.click(screen.getByRole("button", { name: /Send request/ }));
+      expect(await screen.findByText("Too many requests")).toBeInTheDocument();
+      expect(screen.getByRole("timer")).toHaveTextContent("0:20");
+      await waitFor(() => expect(screen.getByRole("button", { name: /Send request/ })).toBeDisabled());
+      tick(20_000);
+      await waitFor(() => expect(screen.getByRole("button", { name: /Send request/ })).toBeEnabled());
+      expect(screen.queryByText("Too many requests")).not.toBeInTheDocument();
+    });
   });
 
   it("shows a one-shot notice left by the app (e.g. session ended)", () => {

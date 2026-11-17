@@ -639,10 +639,14 @@ func (s *apiServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.loginFailureTotal.Add(1)
 		w.Header().Set("Retry-After", strconv.Itoa(secs))
 		s.audit(r, "auth.login", false, map[string]interface{}{"username": username, "error": "throttled", "locked": true})
+		// Same shape and wording for every username (known or not); the
+		// retry time comes only from the guard's per-key failure history.
 		writeJSON(w, http.StatusTooManyRequests, envelope{
-			Success:   false,
-			Error:     fmt.Sprintf("too many failed sign-in attempts; try again in about %ds.", secs),
-			ErrorCode: "NCC_API_ACCOUNT_LOCKED",
+			Success:           false,
+			Error:             fmt.Sprintf("too many failed sign-in attempts; try again in about %ds.", secs),
+			ErrorCode:         "NCC_API_ACCOUNT_LOCKED",
+			Retryable:         true,
+			RetryAfterSeconds: secs,
 		})
 		return
 	}
@@ -867,7 +871,9 @@ func (s *apiServer) handleAuthRefresh(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "no refreshable session (sign in first)"})
 		return
 	}
-	token, exp, err := s.issueRoleSessionToken(cleanClientIP(r), p.subject, p.role)
+	// Carry the directory groups over: without them a refreshed AD/SAML
+	// session would lose its cluster-group access.
+	token, exp, err := s.issueRoleSessionTokenWithGroups(cleanClientIP(r), p.subject, p.role, p.groups)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: err.Error()})
 		return

@@ -91,13 +91,30 @@ export class ApiError extends Error {
   data: unknown;
   /** Server-assigned X-Request-ID, when the API returned one. */
   requestId?: string;
-  constructor(message: string, status: number, data: unknown, requestId?: string) {
+  /** Seconds to wait before retrying (429 lockout / rate limit), when the API said. */
+  retryAfterSec?: number;
+  constructor(message: string, status: number, data: unknown, requestId?: string, retryAfterSec?: number) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.data = data;
     this.requestId = requestId || undefined;
+    this.retryAfterSec = retryAfterSec && retryAfterSec > 0 ? retryAfterSec : undefined;
   }
+}
+
+/**
+ * Retry time from a 429: the envelope's retry_after_seconds, the older
+ * data.retry_after_sec, or a numeric Retry-After header.
+ */
+function retryAfterFrom(response: Response, payload: { retry_after_seconds?: number; data?: unknown }): number | undefined {
+  if (response.status !== 429 && response.status !== 503) return undefined;
+  const fromBody = payload.retry_after_seconds;
+  if (typeof fromBody === "number" && fromBody > 0) return Math.ceil(fromBody);
+  const legacy = (payload.data as { retry_after_sec?: unknown } | undefined)?.retry_after_sec;
+  if (typeof legacy === "number" && legacy > 0) return Math.ceil(legacy);
+  const header = Number.parseInt(response.headers?.get?.("retry-after") ?? "", 10);
+  return Number.isFinite(header) && header > 0 ? header : undefined;
 }
 
 // readCookie returns the value of a document cookie by name, or "" if absent.
@@ -255,6 +272,7 @@ async function requestJSON<T>(path: string, init?: RequestInit, timeoutMs = 30_0
       response.status,
       payload.data,
       payload.request_id ?? response.headers.get("x-request-id") ?? undefined,
+      retryAfterFrom(response, payload),
     );
   }
   return payload;

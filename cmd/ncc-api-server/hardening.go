@@ -855,8 +855,10 @@ func (s *apiServer) withRateLimit(next http.Handler) http.Handler {
 		}
 		w.Header().Set("Retry-After", strconv.Itoa(retrySeconds))
 		writeJSON(w, http.StatusTooManyRequests, envelope{
-			Success: false,
-			Error:   "rate limit exceeded",
+			Success:           false,
+			Error:             "rate limit exceeded",
+			Retryable:         true,
+			RetryAfterSeconds: retrySeconds,
 			Data: map[string]interface{}{
 				"retry_after_sec": retrySeconds,
 				"path":            r.URL.Path,
