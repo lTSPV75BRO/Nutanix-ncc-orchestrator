@@ -66,6 +66,7 @@ import type {
   BackupEntry,
   BackupScheduleResponse,
   BackupScheduleState,
+  BackupVerifyReport,
   NotificationState,
   NotificationStatusResponse,
   PCAlertsData,
@@ -706,7 +707,7 @@ export const api = {
     }),
   verifyNamedBackup: (name: string, passphrase?: string) => {
     const pass = (passphrase ?? "").trim();
-    return callApiEnvelope<{ output?: string }>(
+    return callApiEnvelope<{ output?: string; report?: BackupVerifyReport }>(
       "/api/v1/settings/backups/verify",
       {
         method: "POST",

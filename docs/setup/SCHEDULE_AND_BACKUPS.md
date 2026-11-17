@@ -90,10 +90,31 @@ install the version you want from its release. This stops a tampered backup
 from running its own code on the server. If you trust a backup from another
 server, restore it on the command line with `--trust-stack`.
 
+**Check a backup before you rely on it.** **Verify** next to a snapshot (an
+encrypted one asks for the passphrase) checks it without restoring anything
+and lists each check as Pass, Warn or Fail:
+
+| Check | What it looks at |
+| --- | --- |
+| Decryption | The archive decrypts with the key or passphrase you gave |
+| Archive | Every file can be read (no damaged or cut-off archive) |
+| Paths | Every file stays inside the install folder (`manifest.json` plus `data/`) |
+| Manifest | `manifest.json` is present and valid |
+| Contents | Files match the manifest list and their checksums, so a changed file shows up. Backups made before checksums were added get a warning |
+| Config files | `config.yaml` and the other YAML and JSON files parse |
+| Secrets | Which secrets the backup holds (names only, never values), and whether `secret://` references in the config are in its secrets file |
+| Report paths | Files the config points at (clusters, secrets, exclusions) are in the backup, and the latest reports are there |
+| Version | Same major version: compatible. A newer minor version: warning. Another major version: fail |
+
+On the command line, add `--verify-only` to `v2-restore`. It never writes to
+the install folder and exits non-zero when a check fails. `--json` prints the
+checks as JSON.
+
 From the command line:
 
 ```bash
 ncc-orchestrator v2-backup --install-dir .ncc-v2 --output-file ncc-backup.tar.gz
+ncc-orchestrator v2-restore ncc-backup.tar.gz --verify-only
 ncc-orchestrator v2-restore ncc-backup.tar.gz --install-dir .ncc-v2 --force --restart
 ```
 

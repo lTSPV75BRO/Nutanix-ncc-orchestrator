@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"goncc/internal/plural"
 )
 
 // Server-side backup management lives under <install>/backups. Two producers
@@ -532,14 +534,77 @@ func (s *apiServer) handleBackupVerifyNamed(w http.ResponseWriter, r *http.Reque
 	if passphrase != "" {
 		extraEnv = []string{"NCC_BACKUP_PASSPHRASE=" + passphrase}
 	}
-	out, err := s.runOrchestratorEnv([]string{"v2-restore", "--input-file", archivePath, "--verify-only"}, 2*time.Minute, extraEnv)
-	if err != nil {
+	out, err := s.runOrchestratorEnv([]string{"v2-restore", "--input-file", archivePath, "--verify-only", "--json"}, 2*time.Minute, extraEnv)
+	report, parsed := parseBackupVerifyReport(out)
+	data := map[string]interface{}{"output": strings.TrimSpace(out)}
+	if parsed {
+		data = map[string]interface{}{"report": report}
+	}
+	if err != nil || (parsed && !report.OK) {
 		s.audit(r, "settings.backup.verify", false, map[string]interface{}{"name": filepath.Base(archivePath)})
-		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "verification failed: " + firstNonEmptyLine(out, err.Error()), Data: map[string]interface{}{"output": strings.TrimSpace(out)}})
+		msg := firstNonEmptyLine(out, "verification failed")
+		if parsed {
+			msg = "the backup failed " + plural.Count(report.failed(), "check")
+		} else if err != nil {
+			msg = firstNonEmptyLine(out, err.Error())
+		}
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "verification failed: " + msg, Data: data})
 		return
 	}
 	s.audit(r, "settings.backup.verify", true, map[string]interface{}{"name": filepath.Base(archivePath)})
-	writeJSON(w, http.StatusOK, envelope{Success: true, Message: "Backup verified: the archive is intact and restorable.", Data: map[string]interface{}{"output": strings.TrimSpace(out)}})
+	msg := "Backup verified: the archive is intact and restorable."
+	if parsed && report.warnings() > 0 {
+		msg = "Backup verified with " + plural.Count(report.warnings(), "warning") + "."
+	}
+	writeJSON(w, http.StatusOK, envelope{Success: true, Message: msg, Data: data})
+}
+
+// backupVerifyCheck / backupVerifyReport mirror the JSON that
+// `v2-restore --verify-only --json` prints (cmd/ncc-orchestrator/backupverify.go).
+type backupVerifyCheck struct {
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
+type backupVerifyReport struct {
+	Archive        string              `json:"archive"`
+	Encrypted      bool                `json:"encrypted"`
+	BackupVersion  string              `json:"backup_version,omitempty"`
+	RunningVersion string              `json:"running_version"`
+	CreatedAt      string              `json:"created_at,omitempty"`
+	Files          int                 `json:"files"`
+	Bytes          int64               `json:"bytes"`
+	Secrets        []string            `json:"secrets"`
+	Checks         []backupVerifyCheck `json:"checks"`
+	OK             bool                `json:"ok"`
+}
+
+func (r backupVerifyReport) count(status string) int {
+	n := 0
+	for _, c := range r.Checks {
+		if c.Status == status {
+			n++
+		}
+	}
+	return n
+}
+
+func (r backupVerifyReport) failed() int   { return r.count("fail") }
+func (r backupVerifyReport) warnings() int { return r.count("warn") }
+
+// parseBackupVerifyReport pulls the JSON report out of the orchestrator's
+// combined output (stderr may add an error line after it).
+func parseBackupVerifyReport(out string) (backupVerifyReport, bool) {
+	var rep backupVerifyReport
+	i := strings.Index(out, "{")
+	if i < 0 {
+		return rep, false
+	}
+	if err := json.NewDecoder(strings.NewReader(out[i:])).Decode(&rep); err != nil || len(rep.Checks) == 0 {
+		return backupVerifyReport{}, false
+	}
+	return rep, true
 }
 
 // handleBackupDelete removes a server-side backup archive by name.

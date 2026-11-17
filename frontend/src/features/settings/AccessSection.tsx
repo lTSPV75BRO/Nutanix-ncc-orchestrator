@@ -27,6 +27,7 @@ import { api } from "../../api/client";
 import { triggerBlobDownload } from "../../utils/download";
 import type {
   BackupEntry,
+  BackupVerifyReport,
   ClusterGroup,
   ComponentsData,
   DirectoryEntry,
@@ -46,6 +47,7 @@ import type {
 import { notify, notifyError } from "../../notify";
 import { formatDateTime } from "../../utils/datetime";
 import { IconTitle, KeyValueList, StatusBadge, TagList } from "../../ui";
+import { BackupVerifyChecks, backupVerifyReportFrom } from "./BackupVerifyChecks";
 import { roleColor } from "../../auth/roleColor";
 import { ldapFormValues, ldapProfilePayload, NEW_LDAP_PROFILE, textList, type LDAPProfileFormValues } from "./ldapProfiles";
 import { plural } from "../../utils/text";
@@ -796,6 +798,7 @@ export function BackupRestoreCard() {
   const [verifyEntry, setVerifyEntry] = useState<BackupEntry | null>(null);
   const [verifyPass, setVerifyPass] = useState("");
   const [verifyName, setVerifyName] = useState<string | null>(null);
+  const [verifyResult, setVerifyResult] = useState<{ name: string; report: BackupVerifyReport } | null>(null);
 
   const backups = (backupsQuery.data?.backups ?? []) as BackupEntry[];
   const encPolicy = backupsQuery.data?.encryption_policy;
@@ -969,12 +972,25 @@ export function BackupRestoreCard() {
       const res = await api.verifyNamedBackup(name, passphrase);
       setVerifyEntry(null);
       setVerifyPass("");
-      Modal.success({
-        title: "Backup verified",
-        content: res.message ?? "The archive is intact and restorable.",
-      });
+      const report = backupVerifyReportFrom(res.data);
+      if (report) {
+        setVerifyResult({ name, report });
+      } else {
+        Modal.success({
+          title: "Backup verified",
+          content: res.message ?? "The archive is intact and restorable.",
+        });
+      }
     } catch (e) {
-      notifyError(e, "Verification failed");
+      // A failed check still returns the check list: show it instead of a toast.
+      const report = backupVerifyReportFrom((e as { data?: unknown })?.data);
+      if (report) {
+        setVerifyEntry(null);
+        setVerifyPass("");
+        setVerifyResult({ name, report });
+      } else {
+        notifyError(e, "Verification failed");
+      }
     } finally {
       setVerifyName(null);
     }
@@ -1376,9 +1392,9 @@ export function BackupRestoreCard() {
         destroyOnHidden
       >
         <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
-          Checks that <b>{verifyEntry?.name}</b> is intact and restorable (gzip/tar integrity,
-          manifest, confined paths) without touching the live stack. Because it&apos;s encrypted,
-          enter the passphrase — a successful verify also confirms the passphrase decrypts it.
+          Checks <b>{verifyEntry?.name}</b> without restoring it or touching the live stack:
+          decryption, every file readable, safe paths, checksums, config, secrets, report paths,
+          and version. It&apos;s encrypted, so enter the passphrase.
         </Typography.Paragraph>
         <Input.Password
           autoFocus
@@ -1390,6 +1406,17 @@ export function BackupRestoreCard() {
           }}
           allowClear
         />
+      </Modal>
+
+      <Modal
+        title={verifyResult ? `Backup check: ${verifyResult.name}` : "Backup check"}
+        open={verifyResult !== null}
+        onCancel={() => setVerifyResult(null)}
+        footer={null}
+        width={680}
+        destroyOnHidden
+      >
+        {verifyResult ? <BackupVerifyChecks report={verifyResult.report} /> : null}
       </Modal>
     </Card>
   );

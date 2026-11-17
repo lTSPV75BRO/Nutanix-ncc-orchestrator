@@ -1412,6 +1412,8 @@ single run's worth of report data.
 | `v2-restore` | `--force` | `false` | Overwrite existing files / proceed even if the stack is running. |
 | `v2-restore` | `--restart` | `false` | Force a stack restart/start after restore even if it looks stopped (restart is automatic when the stack is running). |
 | `v2-restore` | `--no-restart` | `false` | Suppress the automatic post-restore restart (e.g. staging a host for later). |
+| `v2-restore` | `--verify-only` | `false` | Check the archive without restoring or writing to the install dir: decryption, every entry readable, safe paths, manifest list and SHA-256 checksums (`sha256` in `manifest.json`), YAML/JSON config parses, secrets present (names only), config-referenced files and reports present, version compatibility (same major passes, newer minor warns, other major fails). Prints Pass/Warn/Fail per check and exits non-zero on a fail. See [Check a backup](setup/SCHEDULE_AND_BACKUPS.md#back-up-and-restore). |
+| `v2-restore` | `--json` | `false` | With `--verify-only`, print the checks as JSON. |
 | `v2-restore` | `--trust-stack` | `false` | Also restore the backup's program files (`bin/ncc-*`, `frontend-dist/`) when this server has never installed them. Without it they are restored only when every file matches a version this server installed before (`.ncc-trusted-stack.json`) or the file installed now; otherwise only data is restored. Command line only; the API never sets it. |
 | `v2-restart` | `--install-dir` | auto-detect (`.ncc-v2`) | Stop and re-start the stack (`v2-stop` then `v2-start --detach`), performed by the binary. |
 | `v2-reset-password` | `--user` | `admin` | Local account to reset. |

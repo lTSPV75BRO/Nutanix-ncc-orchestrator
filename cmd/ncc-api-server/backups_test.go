@@ -154,3 +154,32 @@ func TestApiRouteCatalogInOpenAPI(t *testing.T) {
 		}
 	}
 }
+
+// TestParseBackupVerifyReport pins that the verify endpoint reads the JSON
+// check list from `v2-restore --verify-only --json`, even with the CLI's
+// error line after it, and counts failures and warnings.
+func TestParseBackupVerifyReport(t *testing.T) {
+	out := `{
+  "archive": "manual-x.tar.gz",
+  "running_version": "2.4.0",
+  "secrets": [".ncc-api-token"],
+  "checks": [
+    {"name": "Archive", "status": "pass", "message": "ok"},
+    {"name": "Secrets", "status": "warn", "message": "w"},
+    {"name": "Version", "status": "fail", "message": "Different major versions are not compatible."}
+  ],
+  "ok": false
+}
+Error: backup verification failed: Version: Different major versions are not compatible.
+`
+	rep, ok := parseBackupVerifyReport(out)
+	if !ok {
+		t.Fatal("report not parsed")
+	}
+	if rep.OK || rep.failed() != 1 || rep.warnings() != 1 || len(rep.Secrets) != 1 {
+		t.Fatalf("unexpected report: %+v", rep)
+	}
+	if _, ok := parseBackupVerifyReport("Archive OK: old text output\n"); ok {
+		t.Fatal("plain text must not parse as a report")
+	}
+}
