@@ -9,6 +9,7 @@ import { useAuth } from "../auth/AuthContext";
 import { ActiveRuns } from "../features/runs/ActiveRuns";
 import { NewRunDrawer, type RunPreset } from "../features/runs/NewRunDrawer";
 import { RunsTable } from "../features/runs/RunsTable";
+import { SetupEmptyState } from "../features/onboarding/SetupEmptyState";
 import { useRunsActive } from "../hooks/useRunsActive";
 import { EmptyState, Panel } from "../ui";
 import { formatDateTime } from "../utils/datetime";
@@ -35,11 +36,13 @@ export function RunsPage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const location = useLocation();
   const [preset, setPreset] = useState<RunPreset | null>(null);
-  // A run's page sends { rerun: RunPreset } to start the failed clusters again.
+  // A run's page sends { rerun: RunPreset } to start the failed clusters again;
+  // an empty state's "Start a run" sends { newRun: true }.
   useEffect(() => {
-    const rerun = (location.state as { rerun?: RunPreset } | null)?.rerun;
-    if (!rerun || !canOperate) return;
-    setPreset(rerun);
+    const state = location.state as { rerun?: RunPreset; newRun?: boolean } | null;
+    const rerun = state?.rerun;
+    if ((!rerun && !state?.newRun) || !canOperate) return;
+    if (rerun) setPreset(rerun);
     setDrawerOpen(true);
     // Drop the state so a reload or Back doesn't reopen the drawer.
     navigate(location.pathname + location.search, { replace: true, state: null });
@@ -150,18 +153,7 @@ export function RunsPage() {
             filter === "problems" ? (
               <EmptyState title="No runs with problems" description="Every recorded run finished cleanly." />
             ) : (
-              <EmptyState
-                icon={<ThunderboltOutlined />}
-                title="No runs yet"
-                description="Start a run, or set up a schedule, and it appears here."
-                actions={
-                  canOperate ? (
-                    <Button type="primary" onClick={() => setDrawerOpen(true)}>
-                      New run
-                    </Button>
-                  ) : null
-                }
-              />
+              <SetupEmptyState onStartRun={() => setDrawerOpen(true)} />
             )
           }
         />

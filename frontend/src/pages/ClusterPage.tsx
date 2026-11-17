@@ -13,6 +13,7 @@ import {
 import { api } from "../api/client";
 import type { NCCAlert } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
+import { SetupEmptyState, seesNoClusters } from "../features/onboarding/SetupEmptyState";
 import type { RunPreset } from "../features/runs/NewRunDrawer";
 import { useClusterDirectory } from "../hooks/useClusterDirectory";
 import { OVERVIEW_PATH, sectionHref } from "../navigation";
@@ -46,7 +47,7 @@ function closeLabel(a: NCCAlert): string {
 export function ClusterPage() {
   const { key = "" } = useParams<{ key: string }>();
   const navigate = useNavigate();
-  const { canOperate } = useAuth();
+  const { canOperate, isAdmin, me } = useAuth();
   const dir = useClusterDirectory();
   const entry = dir.find(key);
   const address = entry?.address ?? key;
@@ -103,11 +104,30 @@ export function ClusterPage() {
       <div className="runs-page">
         {back}
         <Panel>
-          <EmptyState
-            title="Cluster not found"
-            description={`No run has reported a cluster called "${key}". Check the name, or add it under Clusters & config.`}
-            actions={<Button onClick={() => navigate(OVERVIEW_PATH)}>Go to the Overview</Button>}
-          />
+          {seesNoClusters(me, isAdmin) ? (
+            <SetupEmptyState gap={{ kind: "restricted" }} />
+          ) : (
+            <EmptyState
+              title="Cluster not found"
+              description={
+                isAdmin
+                  ? `No run has reported a cluster called "${key}". Check the name, or add it under Clusters & config.`
+                  : me?.cluster_access_unrestricted === false
+                    ? `No run has reported a cluster called "${key}" in your cluster groups. Ask an administrator if you need it.`
+                    : `No run has reported a cluster called "${key}". Check the name, or ask an administrator to add it.`
+              }
+              actions={
+                <>
+                  {isAdmin ? (
+                    <Button type="primary" onClick={() => navigate(sectionHref("config"))}>
+                      Add clusters
+                    </Button>
+                  ) : null}
+                  <Button onClick={() => navigate(OVERVIEW_PATH)}>Go to the Overview</Button>
+                </>
+              }
+            />
+          )}
         </Panel>
       </div>
     );

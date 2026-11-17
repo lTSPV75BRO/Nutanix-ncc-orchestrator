@@ -34,6 +34,7 @@ import {
 import type { AlertSource, MeData } from "../api/types";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { SetupEmptyState, seesNoClusters } from "../features/onboarding/SetupEmptyState";
 import { NCC_ALERTS_QUERY_KEY } from "../utils/alertLifecycle";
 import { notify, notifyError } from "../notify";
 import { FeatureDisabled } from "../features/features/FeatureDisabled";
@@ -259,7 +260,7 @@ export function FindingsPage() {
 
   const features = useFeatureFlags();
   // Viewers see handling marks but cannot change them (the API answers 403).
-  const { canOperate } = useAuth();
+  const { canOperate, isAdmin } = useAuth();
   const pcAlertsOn = !features.isSuccess || features.data.pc_alerts !== false;
   const pcBlocked = alertSource === "PC" && features.data?.pc_alerts === false;
   const pcUnresolvedAlertsQuery = useQuery({
@@ -789,6 +790,10 @@ export function FindingsPage() {
             const priorRunWasSuccessful =
               hasPriorRun && (runSummary.success === true || (failCount === 0 && errorCount === 0 && warnCount === 0));
 
+            // An account whose cluster groups hold no clusters sees nothing,
+            // whatever ran: say so instead of "all clean".
+            if (seesNoClusters(me ?? null, isAdmin)) return <SetupEmptyState gap={{ kind: "restricted" }} />;
+
             if (runActive) {
               const startedAt = runActiveQuery.data?.started_at
                 ? formatTime(runActiveQuery.data.started_at)
@@ -833,7 +838,11 @@ export function FindingsPage() {
               );
             }
 
-            // Either no run yet, or last run produced an error before any
+            // No run yet: say which setup step is missing, with the next step
+            // this viewer may take.
+            if (!hasPriorRun) return <SetupEmptyState />;
+
+            // The last run produced an error before any
             // alerts were collected (e.g. orchestrator failed pre-flight).
             const sourceLabel =
               runSource === "scheduled" ? "scheduled run" : runSource === "manual" ? "manual run" : "latest run";
@@ -849,38 +858,19 @@ export function FindingsPage() {
               <Empty
                 description={
                   <Space orientation="vertical" size={4} align="center">
-                    <Typography.Text strong>
-                      {hasPriorRun ? "Latest run produced no alerts data" : "No alerts yet"}
-                    </Typography.Text>
+                    <Typography.Text strong>The latest run saved no findings</Typography.Text>
                     <Typography.Text type="secondary">
-                      {hasPriorRun
-                        ? likelyEarlyFailure
-                          ? `The ${sourceLabel} finished before any check results were saved. ${summaryHint}${errorHint} Start it again from Runs and review the live output.`
-                          : artifactGap
-                            ? `The ${sourceLabel} summary is available, but the check results are missing. Open Runs, review the latest run, then start it again.`
-                            : `The ${sourceLabel} completed without check results. Start it again from Runs.`
-                        : "Start a run from Runs. Add clusters or Prism Central under Clusters & config first."}
+                      {likelyEarlyFailure
+                        ? `The ${sourceLabel} finished before any check results were saved. ${summaryHint}${errorHint} Start it again from Runs and review the live output.`
+                        : artifactGap
+                          ? `The ${sourceLabel} summary is available, but the check results are missing. Open Runs, review the latest run, then start it again.`
+                          : `The ${sourceLabel} completed without check results. Start it again from Runs.`}
                     </Typography.Text>
-                    {hasPriorRun ? (
-                      <Link to={sectionHref("runs")}>
-                        <Button size="small" type="link">
-                          Open Runs →
-                        </Button>
-                      </Link>
-                    ) : (
-                      <Space>
-                        <Link to={sectionHref("config")}>
-                          <Button size="small" type="primary">
-                            Open config
-                          </Button>
-                        </Link>
-                        <Link to={sectionHref("runs")}>
-                          <Button size="small">
-                            Open Runs
-                          </Button>
-                        </Link>
-                      </Space>
-                    )}
+                    <Link to={sectionHref("runs")}>
+                      <Button size="small" type="link">
+                        Open Runs →
+                      </Button>
+                    </Link>
                   </Space>
                 }
               />

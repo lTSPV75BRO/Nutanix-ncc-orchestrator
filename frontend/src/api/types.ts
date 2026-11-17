@@ -789,7 +789,7 @@ export type ScheduleState = {
   task_name?: string;
   print_only: boolean;
   updated_at: string;
-  /** Kubernetes: the CronJob version the schedule was read at; sent back on save so a stale form can't overwrite a newer change (409). */
+  /** The version the schedule was read at (Kubernetes: the CronJob resourceVersion; host: a hash of the saved file, "none" when nothing is saved). Sent back on save so a stale form cannot overwrite a newer change (409). */
   resource_version?: string;
 };
 

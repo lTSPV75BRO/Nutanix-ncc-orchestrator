@@ -423,9 +423,10 @@ type scheduleState struct {
 	TaskName  string `json:"task_name,omitempty"`
 	PrintOnly bool   `json:"print_only"`
 	UpdatedAt string `json:"updated_at"`
-	// ResourceVersion is the Kubernetes CronJob's resourceVersion when the
-	// schedule was read. Sent back on save, it makes the update conditional so
-	// two admins can't silently overwrite each other's change.
+	// ResourceVersion is the Kubernetes CronJob's resourceVersion (or, on a
+	// host, a hash of the saved schedule file) when the schedule was read.
+	// Sent back on save, it makes the update conditional so two admins can't
+	// silently overwrite each other's change.
 	ResourceVersion string `json:"resource_version,omitempty"`
 }
 
@@ -440,7 +441,9 @@ type scheduleUpdateRequest struct {
 	TaskName  string `json:"task_name,omitempty"`
 	PrintOnly *bool  `json:"print_only,omitempty"`
 	Apply     bool   `json:"apply"`
-	// ResourceVersion (Kubernetes only): the version the form was loaded from.
+	// ResourceVersion: the version the form was loaded from (the CronJob's
+	// resourceVersion on Kubernetes, a hash of the saved file on a host).
+	// Optional; when set, a save over a newer schedule answers 409.
 	ResourceVersion string `json:"resource_version,omitempty"`
 }
 
@@ -2935,10 +2938,21 @@ func (s *apiServer) handleSchedule(w http.ResponseWriter, r *http.Request) {
 		// replace the saved (and possibly installed) schedule.
 		preview := req.Apply && st.PrintOnly
 		if !preview {
-			if err := s.saveSchedule(st); err != nil {
+			// The version the form was loaded from (empty from older clients,
+			// which keeps their saves unconditional).
+			version, err := s.saveHostScheduleIfCurrent(st, st.ResourceVersion)
+			if errors.Is(err, errHostScheduleConflict) {
+				s.audit(r, "schedule.update", false, map[string]interface{}{"applied": false, "conflict": true})
+				writeJSON(w, http.StatusConflict, envelope{Success: false, Error: err.Error(), ErrorCode: "NCC_API_SCHEDULE_CONFLICT"})
+				return
+			}
+			if err != nil {
 				writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: err.Error()})
 				return
 			}
+			st.ResourceVersion = version
+		} else {
+			st.ResourceVersion = ""
 		}
 		resp := map[string]interface{}{"schedule": st, "applied": false, "preview": preview}
 		applyErr := error(nil)
@@ -4524,7 +4538,7 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/settings/notifications", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/write notification channels (slack/webhook/email), events, and delivery controls — quiet hours, maintenance windows, dedup/rate-limit throttle, the scheduled health digest, and run_reports (per_run, only_on_regression: how the runner reports each run, config.yaml notify-digest / notify-on-regression). Failures (run/backup/self-heal) reuse the run_failure toggle.", SampleBody: "{\n  \"enabled\": true,\n  \"events\": {\"run_failure\": true, \"run_success\": false, \"policy_violations\": true},\n  \"email\": {\"enabled\": true, \"smtp_host\": \"smtp.example.com\", \"smtp_port\": 587, \"from\": \"ncc@example.com\", \"to\": \"sre@example.com\"},\n  \"quiet\": {\"enabled\": true, \"start\": \"22:00\", \"end\": \"07:00\", \"timezone\": \"UTC\", \"allow_failures\": true},\n  \"maintenance\": [{\"start\": \"2026-07-01T01:00:00Z\", \"end\": \"2026-07-01T03:00:00Z\", \"note\": \"patching\"}],\n  \"throttle\": {\"dedup_window_sec\": 300, \"min_interval_sec\": 30},\n  \"digest\": {\"enabled\": true, \"every\": \"24h\"}\n}"},
 		{Path: "/api/v1/settings/notifications/test", Methods: []string{http.MethodPost}, Description: "Operator+: send a test message to one channel, or to every enabled channel (all); kind digest sends the health digest now. Uses the saved settings; delivery errors are URL-redacted.", SampleBody: "{\n  \"channel\": \"all\"\n}"},
 		{Path: "/api/v1/settings/notifications/status", Methods: []string{http.MethodGet}, Description: "Operator+: per-channel delivery status shared by the runner and this server: state (ok, failing, never), last attempt and last success times, the last URL-redacted error, attempts on the last delivery, and how many undelivered messages wait in notification-deadletter-dir."},
-		{Path: "/api/v1/schedule", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET viewer+: read scheduler state; PUT operator+: create/update/apply a recurring run", SampleBody: "{\n  \"type\": \"cron\",\n  \"action\": \"create\",\n  \"cron\": \"15 */4 * * *\",\n  \"config\": \"config.yaml\",\n  \"print_only\": true,\n  \"apply\": false\n}"},
+		{Path: "/api/v1/schedule", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET viewer+: read scheduler state; PUT operator+: create/update/apply a recurring run. GET returns resource_version; send it back on PUT and a save over a newer schedule answers 409 NCC_API_SCHEDULE_CONFLICT (omit it for an unconditional save)", SampleBody: "{\n  \"type\": \"cron\",\n  \"action\": \"create\",\n  \"cron\": \"15 */4 * * *\",\n  \"config\": \"config.yaml\",\n  \"print_only\": true,\n  \"apply\": false\n}"},
 		{Path: "/api/v1/schedule/health", Methods: []string{http.MethodGet}, Description: "Scheduler health snapshot (last run/success/error hints)"},
 		{Path: "/api/v1/freshness", Methods: []string{http.MethodGet}, Description: "Data freshness from the run history: per cluster, when it was last checked, when it last returned data and how many runs in a row failed; per active schedule (main and environment), whether two intervals passed without a run (schedule_overdue). Clusters are limited to the caller's cluster groups."},
 		{Path: "/api/v1/artifacts", Methods: []string{http.MethodGet}, Description: "List available artifacts"},
@@ -5245,6 +5259,8 @@ func (s *apiServer) loadSchedule() (scheduleState, error) {
 				WithLock:  true,
 				PrintOnly: true,
 				UpdatedAt: "",
+
+				ResourceVersion: hostScheduleNone,
 			}, nil
 		}
 		return scheduleState{}, err
@@ -5256,6 +5272,7 @@ func (s *apiServer) loadSchedule() (scheduleState, error) {
 	if strings.TrimSpace(st.LogPath) == "" {
 		st.LogPath = "logs/ncc-scheduler.log"
 	}
+	st.ResourceVersion = hostScheduleVersion(b)
 	return st, nil
 }
 
