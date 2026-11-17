@@ -179,9 +179,9 @@ describe("ClusterTable alert sources", () => {
     expect(within(document.querySelector(".finding-inspector") as HTMLElement).getByText("Last occurred")).toBeInTheDocument();
     expect(screen.getByText("Stargate")).toBeInTheDocument();
     const drawer = within(document.querySelector(".finding-inspector") as HTMLElement);
-    expect(drawer.getByRole("link", { name: /Open KB 1234/ })).toHaveAttribute("href", "https://portal.nutanix.com/kb/1234");
+    expect(drawer.getByRole("link", { name: /KB 1234/ })).toHaveAttribute("href", "https://portal.nutanix.com/kb/1234");
     expect(drawer.getByRole("link", { name: /Open in Prism/ })).toHaveAttribute("href", "https://10.1.2.3:9440");
-    expect(drawer.getByRole("button", { name: /Cluster page/ })).toBeInTheDocument();
+    expect(drawer.getByRole("link", { name: /Cluster page/ }).getAttribute("href")).toMatch(/^\/clusters\//);
   });
 
   it("puts the KB article and cluster actions in an NCC finding's details", () => {
@@ -198,12 +198,12 @@ describe("ClusterTable alert sources", () => {
 
     fireEvent.click(screen.getByText("disk_usage_check"));
     const drawer = within(document.querySelector(".finding-inspector") as HTMLElement);
-    expect(drawer.getByRole("link", { name: /Open KB 5678/ })).toHaveAttribute("href", "https://portal.nutanix.com/kb/5678");
+    expect(drawer.getByRole("link", { name: /KB 5678/ })).toHaveAttribute("href", "https://portal.nutanix.com/kb/5678");
     expect(drawer.getByRole("link", { name: /Open in Prism/ })).toBeInTheDocument();
-    expect(drawer.getByRole("button", { name: /This check on all clusters/ })).toBeInTheDocument();
+    expect(drawer.getByRole("link", { name: /This check on all clusters/ })).toHaveAttribute("href", "/findings?q=disk_usage_check");
 
     fireEvent.click(screen.getByText("ntp_check"));
-    expect(within(document.querySelector(".finding-inspector") as HTMLElement).getByText("No KB article in this result")).toBeInTheDocument();
+    expect(within(document.querySelector(".finding-inspector") as HTMLElement).getByText("No KB article")).toBeInTheDocument();
   });
 
   it("fills the page under the header and keeps the alerts toolbar", () => {

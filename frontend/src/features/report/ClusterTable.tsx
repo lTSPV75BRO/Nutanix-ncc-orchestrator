@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Alert,
   Button,
@@ -15,8 +15,8 @@ import {
   Typography,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { AimOutlined, CheckOutlined, ClockCircleOutlined, ClusterOutlined, CopyOutlined, ExpandAltOutlined, ExportOutlined, FileTextOutlined, FullscreenExitOutlined, FullscreenOutlined, HistoryOutlined, MessageOutlined, ReadOutlined, SearchOutlined, ToolOutlined } from "@ant-design/icons";
-import { Link, useNavigate } from "react-router";
+import { AimOutlined, CheckOutlined, ClockCircleOutlined, ClusterOutlined, CopyOutlined, ExpandAltOutlined, ExportOutlined, FileTextOutlined, FullscreenExitOutlined, FullscreenOutlined, HistoryOutlined, MessageOutlined, ReadOutlined, RightOutlined, SearchOutlined, ToolOutlined } from "@ant-design/icons";
+import { Link } from "react-router";
 import { KeyValueList, Panel, StatusBadge, type KeyValueItem } from "../../ui";
 import { clusterPath } from "../../navigation";
 import type { NCCDisposition } from "../../api/types";
@@ -302,44 +302,62 @@ function FindingActions({
   /** Shows this check on every cluster in place; without it the link opens Findings. */
   onShowCheck?: (check: string) => void;
 }) {
-  const navigate = useNavigate();
   const kbLinks = kbLinksOf(row);
   const prismURL = clusterPrismURL(row.cluster, clusterNameMap, row.clusterName);
+  const card = (icon: ReactNode, title: string, sub: string, trail: ReactNode) => (
+    <>
+      <span className="finding-link-icon" aria-hidden="true">
+        {icon}
+      </span>
+      <span className="finding-link-body">
+        <span className="finding-link-title">{title}</span>
+        <span className="finding-link-sub">{sub}</span>
+      </span>
+      <span className="finding-link-trail" aria-hidden="true">
+        {trail}
+      </span>
+    </>
+  );
+  const checkHref = `/findings?q=${encodeURIComponent(row.alert)}`;
   return (
-    <div className="finding-actions">
+    <nav className="finding-links" aria-label="Next steps">
       {kbLinks.length > 0 ? (
         kbLinks.map((url, i) => (
-          <Button
+          <a
             key={url}
-            type={i === 0 ? "primary" : "default"}
-            icon={<ReadOutlined />}
+            className={`finding-link${i === 0 ? " is-primary" : ""}`}
             href={url}
             target="_blank"
             rel="noopener noreferrer"
           >
-            Open {kbLabel(url)}
-          </Button>
+            {card(<ReadOutlined />, kbLabel(url), "Nutanix knowledge base", <ExportOutlined />)}
+          </a>
         ))
       ) : (
-        <span className="finding-actions-note">No KB article in this result</span>
+        <div className="finding-link is-empty">
+          {card(<ReadOutlined />, "No KB article", "This result names no article", null)}
+        </div>
       )}
       {prismURL ? (
-        <Button icon={<ExportOutlined />} href={prismURL} target="_blank" rel="noopener noreferrer">
-          Open in Prism
-        </Button>
+        <a className="finding-link" href={prismURL} target="_blank" rel="noopener noreferrer">
+          {card(<ExportOutlined />, "Open in Prism", prismURL.replace(/^https?:\/\//, ""), <ExportOutlined />)}
+        </a>
       ) : null}
-      <Button icon={<ClusterOutlined />} onClick={() => navigate(clusterPath(row.cluster))}>
-        Cluster page
-      </Button>
+      <Link className="finding-link" to={clusterPath(row.cluster)}>
+        {card(<ClusterOutlined />, "Cluster page", row.clusterName, <RightOutlined />)}
+      </Link>
       {row.source === "NCC" ? (
-        <Button
-          icon={<SearchOutlined />}
-          onClick={() => (onShowCheck ? onShowCheck(row.alert) : navigate(`/findings?q=${encodeURIComponent(row.alert)}`))}
-        >
-          This check on all clusters
-        </Button>
+        onShowCheck ? (
+          <button type="button" className="finding-link" onClick={() => onShowCheck(row.alert)}>
+            {card(<SearchOutlined />, "This check on all clusters", "Search the findings table", <RightOutlined />)}
+          </button>
+        ) : (
+          <Link className="finding-link" to={checkHref}>
+            {card(<SearchOutlined />, "This check on all clusters", "Open in Findings", <RightOutlined />)}
+          </Link>
+        )
       ) : null}
-    </div>
+    </nav>
   );
 }
 

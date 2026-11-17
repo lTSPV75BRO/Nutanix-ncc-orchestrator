@@ -1630,21 +1630,170 @@ html.alerts-expanded .alerts-pagination {
   font-size: 12px;
 }
 
-/* What can be done from a finding: KB first, then cluster actions. */
-.finding-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
+/* Next steps from a finding: a grid of link cards, the KB article first. */
+.finding-links {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ui-space-2);
   margin: 0 0 var(--ui-space-4);
-  padding-bottom: var(--ui-space-4);
-  border-bottom: 1px solid var(--ui-border);
 }
 
-.finding-actions-note {
-  margin-right: 4px;
-  color: var(--ui-text-secondary);
+.finding-link {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-3);
+  min-width: 0;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: transparent;
+  color: var(--ui-text);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    border-color var(--anim-fast, 150ms) var(--anim-ease, ease),
+    background var(--anim-fast, 150ms) var(--anim-ease, ease);
+}
+
+a.finding-link,
+a.finding-link:hover {
+  color: var(--ui-text);
+}
+
+.finding-link:hover,
+.finding-link:focus-visible {
+  border-color: color-mix(in srgb, var(--link-color) 50%, var(--ui-border));
+  background: var(--ui-surface-hover);
+}
+
+.finding-link:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--link-color) 60%, transparent);
+  outline-offset: 1px;
+}
+
+.finding-link.is-primary {
+  border-color: color-mix(in srgb, var(--link-color) 45%, var(--ui-border));
+  background: color-mix(in srgb, var(--link-color) 8%, transparent);
+}
+
+.finding-link.is-primary:hover,
+.finding-link.is-primary:focus-visible {
+  background: color-mix(in srgb, var(--link-color) 14%, transparent);
+}
+
+.finding-link.is-empty {
+  cursor: default;
+  border-style: dashed;
+}
+
+.finding-link.is-empty:hover {
+  border-color: var(--ui-border);
+  background: transparent;
+}
+
+.finding-link-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--ui-radius-sm);
+  font-size: 15px;
+  color: var(--link-color);
+  background: color-mix(in srgb, var(--link-color) 12%, transparent);
+}
+
+.finding-link.is-empty .finding-link-icon {
+  color: var(--ui-text-tertiary);
+  background: color-mix(in srgb, var(--ui-neutral) 12%, transparent);
+}
+
+.finding-link-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.finding-link-title {
+  overflow: hidden;
+  font-weight: 600;
   font-size: var(--ui-text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.finding-link.is-primary .finding-link-title {
+  color: var(--link-color);
+}
+
+.finding-link.is-empty .finding-link-title {
+  color: var(--ui-text-secondary);
+}
+
+.finding-link-sub {
+  overflow: hidden;
+  color: var(--ui-text-secondary);
+  font-size: var(--ui-text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.finding-link-trail {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--ui-text-tertiary);
+  transition: color var(--anim-fast, 150ms) var(--anim-ease, ease), transform var(--anim-fast, 150ms) var(--anim-ease, ease);
+}
+
+.finding-link:hover .finding-link-trail {
+  color: var(--link-color);
+  transform: translateX(2px);
+}
+
+@media (max-width: 560px) {
+  .finding-links {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* One style for every link that opens a cluster (tables, drawer, Insights,
+   run details): accent text, underline on hover. */
+.ui-link,
+.alerts-table a.alerts-cluster-link,
+a.drawer-cluster-link,
+a.cluster-page-link,
+.run-cluster-link .cluster-page-link {
+  color: var(--link-color);
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: text-decoration-color var(--anim-fast, 150ms) var(--anim-ease, ease);
+}
+
+.ui-link:hover,
+.ui-link:focus-visible,
+.alerts-table a.alerts-cluster-link:hover,
+.alerts-table a.alerts-cluster-link:focus-visible,
+a.drawer-cluster-link:hover,
+a.cluster-page-link:hover,
+a.cluster-page-link:focus-visible,
+.run-cluster-link:hover .cluster-page-link,
+.run-cluster-link:focus-visible .cluster-page-link {
+  color: var(--link-color);
+  text-decoration-color: color-mix(in srgb, var(--link-color) 70%, transparent);
+}
+
+a.drawer-cluster-link:hover .drawer-cluster-address,
+.run-cluster-link:hover .run-cluster-address {
+  text-decoration: none;
 }
 
 .drawer-cluster-link {
@@ -1762,25 +1911,6 @@ html.alerts-expanded .alerts-pagination {
   white-space: nowrap;
 }
 
-/* Cluster names read as text and show they are links on hover, so a page
-   of rows is not a wall of accent colour. */
-.alerts-table a.alerts-cluster-link {
-  color: var(--ui-text);
-  font-weight: 600;
-  text-decoration: underline;
-  text-decoration-color: transparent;
-  text-underline-offset: 3px;
-  text-decoration-thickness: 1px;
-  transition:
-    color var(--anim-fast, 150ms) var(--anim-ease, ease),
-    text-decoration-color var(--anim-fast, 150ms) var(--anim-ease, ease);
-}
-
-.alerts-table a.alerts-cluster-link:hover,
-.alerts-table a.alerts-cluster-link:focus-visible {
-  color: var(--link-color);
-  text-decoration-color: color-mix(in srgb, var(--link-color) 60%, transparent);
-}
 
 /* Prism link beside the name: quiet until the row or link is hovered. */
 .alerts-cluster-prism {
@@ -5799,11 +5929,6 @@ h5.ant-typography {
   .cluster-page-grid {
     grid-template-columns: minmax(0, 1fr);
   }
-}
-
-/* A cluster name that opens its page, inside tables and lists. */
-.cluster-page-link {
-  font-weight: 600;
 }
 
 .run-cluster-link {
