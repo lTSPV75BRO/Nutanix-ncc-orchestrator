@@ -17348,6 +17348,12 @@ Run 'ncc-orchestrator --help' for a full list of options.
 					}
 					subj := fmt.Sprintf("NCC Run: OK=%d FAIL=%d", len(clusterFiles), len(failed))
 					bodyEmail := overview + "\n\nIndex report: " + indexPath
+					// How old the data is for each cluster this run could not reach.
+					if cfg.RunHistoryEnabled {
+						if lines := unreachedClusterLines(cfg.RunHistoryDir, failed, time.Now()); len(lines) > 0 {
+							bodyEmail += "\n\nData age:\n  - " + strings.Join(lines, "\n  - ")
+						}
+					}
 					attachPath := ""
 					if cfg.EmailAttachHTML {
 						if _, err := os.Stat(indexPath); err == nil {

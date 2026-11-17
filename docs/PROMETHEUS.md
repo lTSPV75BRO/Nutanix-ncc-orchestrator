@@ -60,6 +60,33 @@ Prometheus's counter semantics):
 | `ncc_update_applied_total` / `ncc_update_failed_total` | counter | In-app software-update outcomes |
 | `ncc_ratelimit_allowed_total` / `ncc_ratelimit_blocked_total` | counter | Rate-limiter decisions (when enabled) |
 
+#### Data freshness metrics
+
+Computed from the run history, the same data as the Overview's data age and
+stopped-schedule banner (`GET /api/v1/freshness`). Refreshed at most once a
+minute. Like the other per-cluster series, these cover every cluster: `/metrics`
+is not limited to a user's cluster groups.
+
+| Metric | Type | Description |
+| --- | --- | --- |
+| `ncc_cluster_last_success_timestamp_seconds{cluster}` | gauge | Unix time of the newest run that returned data for the cluster; `0` when no run in the history did. Clusters not checked for 30 days drop off |
+| `ncc_schedule_overdue{schedule,environment}` | gauge | `1` when an active schedule has gone two intervals without a run, else `0`. `schedule` is `main` for the `config.yaml` schedule, or the environment schedule's ID |
+
+Example alerts:
+
+```yaml
+- alert: NCCClusterDataStale
+  expr: time() - ncc_cluster_last_success_timestamp_seconds > 86400
+  for: 15m
+  annotations:
+    summary: "No NCC data for {{ $labels.cluster }} in over a day"
+- alert: NCCScheduleOverdue
+  expr: ncc_schedule_overdue == 1
+  for: 15m
+  annotations:
+    summary: "NCC schedule {{ $labels.schedule }} has stopped running"
+```
+
 #### NCC finding lifecycle metrics (v2.2.1+)
 
 | Metric | Type | Description |

@@ -328,14 +328,8 @@ func (s *apiServer) handleFreshness(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
-	outDir := s.absPath(s.outputDir)
-	sources := []string{filepath.Join(outDir, "runs"), filepath.Join(outDir, "run-summary.json")}
-	runs, _ := reportArtifacts.derived("freshness:"+outDir, sources, time.Minute, 1<<20, func() interface{} {
-		return freshnessHistory(outDir)
-	}).([]freshnessRun)
-
-	now := time.Now().UTC()
-	clusters := clusterFreshness(runs, now)
+	data := s.freshnessSnapshot(time.Now().UTC())
+	clusters := data.Clusters
 	if p, ok := principalFromContext(r.Context()); ok {
 		if access := s.allowedClusters(p); !access.unrestricted {
 			kept := clusters[:0]
@@ -347,15 +341,34 @@ func (s *apiServer) handleFreshness(w http.ResponseWriter, r *http.Request) {
 			clusters = kept
 		}
 	}
+	data.Clusters = clusters
+	writeJSON(w, http.StatusOK, envelope{Success: true, Data: data})
+}
+
+// freshnessRuns is the run history, cached until the runs directory or the
+// latest summary changes (at most a minute).
+func (s *apiServer) freshnessRuns() []freshnessRun {
+	outDir := s.absPath(s.outputDir)
+	sources := []string{filepath.Join(outDir, "runs"), filepath.Join(outDir, "run-summary.json")}
+	runs, _ := reportArtifacts.derived("freshness:"+outDir, sources, time.Minute, 1<<20, func() interface{} {
+		return freshnessHistory(outDir)
+	}).([]freshnessRun)
+	return runs
+}
+
+// freshnessSnapshot is every cluster's data age and every schedule's state,
+// not filtered by cluster group. Callers that serve users filter it.
+func (s *apiServer) freshnessSnapshot(now time.Time) freshnessData {
+	runs := s.freshnessRuns()
 	schedules := s.freshnessSchedules(runs, now)
 	overdue := false
 	for _, sch := range schedules {
 		overdue = overdue || sch.Overdue
 	}
-	writeJSON(w, http.StatusOK, envelope{Success: true, Data: freshnessData{
+	return freshnessData{
 		GeneratedAt:     now.Format(time.RFC3339),
-		Clusters:        clusters,
+		Clusters:        clusterFreshness(runs, now),
 		Schedules:       schedules,
 		ScheduleOverdue: overdue,
-	}})
+	}
 }

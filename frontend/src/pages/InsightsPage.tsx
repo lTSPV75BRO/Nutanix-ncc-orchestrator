@@ -24,7 +24,8 @@ import { clusterPath, sectionHref } from "../navigation";
 import { notifyError } from "../notify";
 import { EmptyState, KeyValueList, ListToolbar, matchesSearch, Panel, StatTile, StatusBadge, toneFor, VirtualList, type Tone } from "../ui";
 import { formatDateTime, relativeTime } from "../utils/datetime";
-import { formatDuration, freshness } from "../utils/freshness";
+import { clusterDataAges, formatDuration, freshness, lookupDataAge, type ClusterDataAge } from "../utils/freshness";
+import { useFreshness } from "../hooks/useClusterDirectory";
 import { nutanixKbUrl, safeExternalUrl } from "../utils/url";
 import { plural } from "../utils/text";
 
@@ -148,7 +149,16 @@ const BRIEF_ICON: Record<Tone, React.ReactNode> = {
 type RankedCluster = { address: string; name: string; health: number; fail: number; err: number; warn: number; info: number };
 
 /** Worst-first cluster health, searchable, rendering only the rows in view. */
-function ClusterRanking({ ranking, needsByName }: { ranking: RankedCluster[]; needsByName: Map<string, number> }) {
+function ClusterRanking({
+  ranking,
+  needsByName,
+  ages,
+}: {
+  ranking: RankedCluster[];
+  needsByName: Map<string, number>;
+  /** Data age per cluster (clusterDataAges). */
+  ages?: Map<string, ClusterDataAge>;
+}) {
   const [search, setSearch] = useState("");
   const shown = useMemo(() => ranking.filter((c) => matchesSearch(search, c.name, c.address)), [ranking, search]);
   return (
@@ -167,6 +177,7 @@ function ClusterRanking({ ranking, needsByName }: { ranking: RankedCluster[]; ne
           renderRow={(c) => {
             const needs = needsByName.get(c.name) ?? 0;
             const t = scoreTone(c.health) ?? "neutral";
+            const age = lookupDataAge(ages, c.address, c.name);
             return (
               <div className="insights-ranking-row">
                 <div className="insights-ranking-head">
@@ -185,6 +196,14 @@ function ClusterRanking({ ranking, needsByName }: { ranking: RankedCluster[]; ne
                     .filter(Boolean)
                     .join(" · ") || "No findings"}
                   {needs > 0 ? ` · ${needs} not yet handled` : ""}
+                  {age ? (
+                    <>
+                      {" · "}
+                      <span className={`insights-ranking-age${age.old ? " is-old" : ""}`} title={age.title}>
+                        {age.text}
+                      </span>
+                    </>
+                  ) : null}
                 </span>
               </div>
             );
@@ -248,6 +267,12 @@ export function InsightsPage() {
         regressionSummary: data.regression_summary,
       }),
     [data],
+  );
+  // Each cluster's data age, shared with the Overview and Findings.
+  const freshnessQuery = useFreshness(features.isFetched && !insightsOff);
+  const clusterAges = useMemo(
+    () => clusterDataAges(freshnessQuery.data?.clusters, (address) => resolveClusterName(address, clusterNameMap)),
+    [freshnessQuery.data, clusterNameMap],
   );
 
   const trendPoints = asArray(asRecord(trends.data || {}).points).map((p) => asRecord(p));
@@ -759,7 +784,7 @@ export function InsightsPage() {
           {clusterRanking.length === 0 ? (
             <EmptyState title="No per-cluster results" />
           ) : (
-            <ClusterRanking ranking={clusterRanking} needsByName={needsByName} />
+            <ClusterRanking ranking={clusterRanking} needsByName={needsByName} ages={clusterAges} />
           )}
         </Panel>
         <Panel title="Run reliability" icon={<SafetyCertificateOutlined />} description="Clusters that could not be checked, and versions seen.">

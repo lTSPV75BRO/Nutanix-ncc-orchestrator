@@ -1943,6 +1943,39 @@ tr:hover .alerts-cluster-prism,
   color: var(--ui-text-secondary);
 }
 
+/* How old the cluster's data is; amber when over a day or not reached. */
+.alerts-cluster-age {
+  font-family: var(--app-font-family);
+  color: var(--ui-text-tertiary);
+}
+
+.alerts-cluster-age.is-old,
+.insights-ranking-age.is-old,
+.cluster-filter-age.is-old {
+  color: var(--ui-warn);
+  font-weight: 600;
+}
+
+/* Data age beside a cluster in the Findings cluster filter. */
+.cluster-filter-option {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--ui-space-2);
+  min-width: 0;
+}
+
+.cluster-filter-option > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cluster-filter-age {
+  flex-shrink: 0;
+  font-size: var(--ui-text-xs);
+  color: var(--ui-text-tertiary);
+}
+
 .alerts-pagination {
   flex-shrink: 0;
   display: flex;

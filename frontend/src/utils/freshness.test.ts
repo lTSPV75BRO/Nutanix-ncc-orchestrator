@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { everyLabel, mergeFreshness, overdueScheduleText, type OverviewClusterRow } from "./freshness";
+import { clusterDataAge, clusterDataAges, everyLabel, lookupDataAge, mergeFreshness, overdueScheduleText, type OverviewClusterRow } from "./freshness";
 
 const row = (address: string, ok = true): OverviewClusterRow => ({ name: address, address, ok, error: ok ? "" : "down", fail: 0, warn: 0, err: 0, score: null });
 
@@ -44,5 +44,42 @@ describe("mergeFreshness", () => {
     expect(out[1]).toMatchObject({ name: "Cluster B", ok: true, fail: 1, warn: 2, err: 3, score: 70 });
     // A cluster that failed has no current counts.
     expect(out[2]).toMatchObject({ name: "pe-c", ok: false, error: "401", fail: 0, score: null });
+  });
+});
+
+describe("clusterDataAge", () => {
+  const hoursAgo = (h: number) => new Date(Date.now() - h * 3600_000).toISOString();
+  const base = { fail_count: 0, warn_count: 0, err_count: 0 };
+
+  it("words the age like the Overview and turns amber after a day", () => {
+    expect(clusterDataAge({ ...base, address: "a", ok: true, last_checked_at: hoursAgo(2), last_success_at: hoursAgo(2) })).toMatchObject({
+      text: "data from 2h ago",
+      notReached: false,
+      old: false,
+    });
+    expect(clusterDataAge({ ...base, address: "a", ok: true, last_checked_at: hoursAgo(30), last_success_at: hoursAgo(30) })).toMatchObject({
+      text: "data from 1d ago",
+      old: true,
+    });
+  });
+
+  it("marks clusters the newest run could not reach", () => {
+    const age = clusterDataAge({ ...base, address: "a", ok: false, last_checked_at: hoursAgo(1), last_success_at: hoursAgo(3), failed_runs: 2 });
+    expect(age).toMatchObject({ text: "Not reached · data from 3h ago", notReached: true, old: true });
+    expect(age.title).toMatch(/The last 2 runs could not check it/);
+    expect(clusterDataAge({ ...base, address: "a", ok: false, last_checked_at: hoursAgo(1) }).text).toBe("Not reached · no data yet");
+  });
+});
+
+describe("clusterDataAges", () => {
+  it("looks clusters up by address or display name, case-insensitively", () => {
+    const ages = clusterDataAges(
+      [{ address: "10.0.0.1", ok: true, last_checked_at: "2026-11-15T10:00:00Z", last_success_at: "2026-11-15T10:00:00Z", fail_count: 0, warn_count: 0, err_count: 0 }],
+      (a) => (a === "10.0.0.1" ? "PE-East" : a),
+    );
+    expect(lookupDataAge(ages, "10.0.0.1")).toBeDefined();
+    expect(lookupDataAge(ages, "missing", "pe-east")).toBe(lookupDataAge(ages, "10.0.0.1"));
+    expect(lookupDataAge(ages, "other")).toBeUndefined();
+    expect(lookupDataAge(undefined, "10.0.0.1")).toBeUndefined();
   });
 });

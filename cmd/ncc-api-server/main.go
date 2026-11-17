@@ -1748,6 +1748,9 @@ func (s *apiServer) handlePrometheusMetrics(w http.ResponseWriter, r *http.Reque
 	// Report data cache state (see reportcachestate.go).
 	writeReportCacheMetrics(w, focusedReportCacheStatus(), now)
 
+	// Per-cluster data age and overdue schedules (see freshness_report.go).
+	s.writeFreshnessMetrics(w)
+
 	// Per-route request counts and latency (see requestmeta.go).
 	s.httpMetrics.write(w)
 }
