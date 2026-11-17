@@ -140,8 +140,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `missed_runs`; and `schedule_overdue`. It reads the newest 200 runs, drops
   clusters not checked for 30 days, and limits clusters to the caller's
   cluster groups.
+- **Version-skew protection.** Updates lists components whose version
+  differs, using the live runner CronJob image, and Run returns 409
+  `NCC_API_VERSION_SKEW` while the runner's major.minor differs from the API.
+  `/components` entries carry a `message`.
+- **Report cache visibility.** `/report/data` returns a `cache` object;
+  metrics `ncc_report_cache_state{state}` and `ncc_report_cache_age_seconds`; the Overview and Findings say when data is
+  being rebuilt or could not be refreshed, and reload when it is ready.
+- **Session and lockout clarity.** The user menu shows time left in the
+  session, a notice offers "Stay signed in" before it ends, 429 responses
+  carry `retry_after_seconds`, and sign-in and password-reset requests show a
+  live lockout countdown.
+- **Backup verification.** `v2-restore --verify-only` prints each check,
+  with `--json` and a non-zero exit on failure; manifests record a `sha256` per file; the
+  Settings Verify button lists each check.
+- **Data freshness beyond the Overview.** Findings rows and the cluster
+  filter, and Insights → Clusters, show data age; notifications include a
+  "Data age" line; metrics `ncc_cluster_last_success_timestamp_seconds{cluster}`
+  and `ncc_schedule_overdue{schedule,environment}`.
+- **Setup-aware empty states.** Overview, Findings, Insights, Runs and the
+  cluster page say what is missing (no clusters, no runs yet) and offer only
+  the next step the user's role allows.
+- **Safe schedule drafts.** A saved schedule draft is restored only if the
+  schedule has not changed since; host schedule saves carry
+  `resource_version` and return 409 `NCC_API_SCHEDULE_CONFLICT` when someone
+  saved first.
+- **Raw log retention.** `raw-log-retain-days` (default 0, keep) removes old
+  raw run logs separately from reports. `ncc-orchestrator retention --dry-run
+  [--json]` and `GET /api/v1/settings/retention/preview` (admin) list what
+  would be removed; Settings has a "Preview what would be removed" button.
+
+### Changed
+
+- **Narrower Kubernetes RBAC.** The API's Role is split into two: get/patch
+  on the `ncc-v2-users` Secret only (plus create), and get/patch on the
+  runner CronJob only. The namespace-wide Secret `get` and `update` are
+  removed.
+- A failed report-cache refresh is retried after 30 seconds.
 
 ### Fixed
+
+- "Stay signed in" (`/auth/refresh`) no longer drops a directory user's group
+  access.
 
 - **Update fails if Github rate-limit is reached** Update checks now remain accurate when the GitHub REST API is rate limited. The public latest-release redirect is used to identify the current tag, while the UI marks the result as degraded and prevents installation until release asset metadata can be verified. A `GITHUB_TOKEN` can be supplied for a complete check and update.
 

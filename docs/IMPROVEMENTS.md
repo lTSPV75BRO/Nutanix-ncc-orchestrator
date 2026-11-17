@@ -13,33 +13,24 @@ rough estimate: S, M, or L.
 
 | Item | Scope | Size |
 | --- | --- | --- |
-| Report-cache observability | Expose cache state (`cold`, `warm`, `refreshing`, `stale`, `failed`) in `/report/data` and Prometheus; refetch when async refresh completes. | M |
 | Server-side report pagination | Build only the requested `checks_snapshot`/`agg_rows` page instead of loading and filtering the complete report before slicing. | M |
-| Version-skew protection | Host installs already flag mismatched components (`consistent` in the update status, with a warning on Updates) and supervised upgrades check versions before finishing. Remaining: compare container image versions in Kubernetes and block incompatible combinations. | S–M |
 | Kubernetes HA integration test | Exercise two API replicas, shared PVC access, CronJob execution, schedule updates, and pod rescheduling on separate nodes. | L |
-| Report retention | Run history (`retain-last`, `retain-days`) and generated artifacts (`artifact-retain-days`, `artifact-retain-max-files`) already prune. Remaining: raw NCC logs, and a dry-run preview of what would be removed. | M |
 
 ## P1 — security and operations
 
 | Item | Scope | Size |
 | --- | --- | --- |
-| Narrow Kubernetes RBAC | Split user-store and CronJob permissions; remove unnecessary Job access and use a dedicated scheduler boundary. | M |
 | Secret rotation workflow | Document and optionally guide rotation of API tokens, JWT secrets, backup keys, and Prism credentials across replicas. | M |
 | Outbound URL policy | Provide an administrator-visible allowlist/policy for Prism Central, LDAP, OIDC, SMTP, webhook, and update-server destinations. | M |
 | Signed image and SBOM verification | Publish Cosign signatures/SBOMs and optionally verify image provenance during deployment. | M |
-| Isolated backup verification | Validate archive contents, secrets, report paths, and version compatibility without changing the live install. | M |
 | Signed trust for restored program files | Restore accepts program files only when this host ran them before (v2.4.0, `.ncc-trusted-stack.json`). Remaining: publish per-file SHA-256 in the signed release checksums so a backup from another server can be verified without `--trust-stack`. | M |
 
 ## P1 — operator experience
 
 | Item | Scope | Size |
 | --- | --- | --- |
-| Stale-report UX | Clearly show when stale data is being served, a refresh is in progress, or the UI has fallen back to a previous report. | S–M |
 | Notification delivery history | Every attempt is logged (System → Logs) and Settings → Notifications shows each channel's last attempt, last success, last error, tries and dead-letter count (v2.4.0). Remaining: a browsable history of past deliveries, and replaying dead-lettered messages from the UI. | S–M |
-| Operator-safe empty states | Give direct actions for missing config, missing clusters, failed first runs, missing schedules, and restricted cluster groups. | S |
-| Session and lockout clarity | Show remaining session time and actionable account-lockout countdowns without exposing sensitive details. | S–M |
-| Freshness beyond the Overview | Per-cluster data age and the stopped-schedule banner are on the Overview (v2.4.0). Remaining: the same age on Findings rows and the cluster filter, on Insights → Clusters, in the run report email, and as Prometheus gauges (`ncc_cluster_last_success_timestamp`, `ncc_schedule_overdue`). | M |
-| Drafts that can't overwrite | The Schedule form now loads the saved schedule unless this browser holds an unsaved draft (v2.4.0). Remaining: the same rule for the other forms that keep drafts in local storage, and a "changed by someone else since you opened it" check on host schedule saves (Kubernetes already has it). | S–M |
+| Overdue schedules in the digest email | Data age is shown on the Overview, Findings, Insights and in notifications, with Prometheus gauges (v2.4.0). Remaining: an overdue-schedule line in the runner digest email. | S |
 | Accessibility checks in CI (UX-10) | A scripted pass found an icon-only button in every Findings row and unnamed role pickers (both fixed in v2.4.0). Add axe-core to the frontend tests for each page and a keyboard walkthrough, so these are caught before release; add a table view for the trend and SLO charts (F7). | M |
 
 ## P2 — engineering and test coverage
@@ -104,6 +95,16 @@ Already covered through v2.4.0 and therefore tracked elsewhere:
   test), and a `GITHUB_TOKEN` with scopes is reported.
 - Directory profiles for several AD domains or forests, and refusal of
   directory/SAML users named like a local account.
+- Report-cache state in `/report/data`, metrics and a UI notice.
+- Version-skew check (live CronJob image) that blocks Run on a major.minor
+  mismatch.
+- Raw-log retention (`raw-log-retain-days`) and a retention dry-run preview.
+- Two narrow Kubernetes Roles for the user Secret and runner CronJob.
+- `v2-restore --verify-only` with per-file SHA-256 in the manifest.
+- Session time left, "Stay signed in" notice and lockout countdowns.
+- Data age on Findings, Insights and notifications, with Prometheus gauges.
+- Setup-aware empty states; schedule drafts and host schedule saves that
+  cannot overwrite a newer save.
 
 ## Audit of 2026-11-16 (v2.4.0)
 
