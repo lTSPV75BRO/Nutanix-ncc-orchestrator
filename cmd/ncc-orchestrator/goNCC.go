@@ -9270,6 +9270,9 @@ type backupManifest struct {
 	// IncludesStack is true when the archive also holds stack binaries and/or
 	// frontend-dist, so restore can roll the software version back.
 	IncludesStack bool `json:"includes_stack,omitempty"`
+	// Checksums maps each data/ file (archive-relative) to its SHA-256, so
+	// `v2-restore --verify-only` can tell a file changed after the backup.
+	Checksums map[string]string `json:"sha256,omitempty"`
 }
 
 // authSummary records which authentication providers a backed-up user database
@@ -9324,9 +9327,13 @@ type v2RestoreOptions struct {
 	Force      bool
 	Restart    bool
 	NoRestart  bool
-	// VerifyOnly validates the archive (gzip+tar integrity, manifest present,
-	// confined paths) and reports, without extracting anything.
+	// VerifyOnly runs the isolated backup check (backupverify.go) and reports
+	// pass/warn/fail per check, without extracting anything.
 	VerifyOnly bool
+	// JSON prints the VerifyOnly report as JSON (used by the API server).
+	JSON bool
+	// Out receives the VerifyOnly report (default os.Stdout).
+	Out io.Writer
 	// KeyFile/Passphrase decrypt an encrypted backup; an unencrypted archive
 	// ignores them.
 	KeyFile    string
@@ -9775,6 +9782,12 @@ func summarizeAuthProviders(usersDBPath string) *authSummary {
 	if err != nil {
 		return nil
 	}
+	return summarizeAuthProvidersBytes(data)
+}
+
+// summarizeAuthProvidersBytes is summarizeAuthProviders for in-memory content
+// (the backup verifier reads the user database straight from the archive).
+func summarizeAuthProvidersBytes(data []byte) *authSummary {
 	var db struct {
 		Users []json.RawMessage `json:"users"`
 		SAML  *struct {
@@ -9866,6 +9879,16 @@ func writeBackupArchive(out string, manifest backupManifest, entries []backupEnt
 	defer f.Close()
 	gz := gzip.NewWriter(f)
 	tw := tar.NewWriter(gz)
+	if manifest.Checksums == nil {
+		manifest.Checksums = make(map[string]string, len(entries))
+		for _, e := range entries {
+			sum, err := sha256File(e.Abs)
+			if err != nil {
+				return fmt.Errorf("read %s: %w", e.Abs, err)
+			}
+			manifest.Checksums[e.Rel] = sum
+		}
+	}
 	mb, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return err
@@ -10056,6 +10079,16 @@ func runV2Restore(opts v2RestoreOptions) error {
 	if abs, err := filepath.Abs(in); err == nil {
 		in = abs
 	}
+	// --verify-only: isolated check of the archive (decrypt, entries, paths,
+	// manifest, config, secrets, report paths, version). It reads the archive
+	// in memory and never writes into the install dir.
+	if opts.VerifyOnly {
+		out := opts.Out
+		if out == nil {
+			out = os.Stdout
+		}
+		return runBackupVerify(out, in, opts.KeyFile, opts.Passphrase, opts.JSON)
+	}
 	// Transparently decrypt an encrypted backup (v2-backup --encrypt) into a
 	// temp .tar.gz before the rest of the flow runs. An unencrypted archive is
 	// untouched. The decrypted temp file is removed when we return.
@@ -10068,17 +10101,8 @@ func runV2Restore(opts v2RestoreOptions) error {
 		in = dec
 	}
 	// Restore preflight: validate the archive before touching the install dir.
-	// --verify-only stops here and just reports.
-	vr, verr := verifyBackupArchive(in)
-	if verr != nil {
+	if _, verr := verifyBackupArchive(in); verr != nil {
 		return fmt.Errorf("backup archive failed verification: %w", verr)
-	}
-	if opts.VerifyOnly {
-		fmt.Printf("Archive OK: %s\n", in)
-		fmt.Printf("  created by:  ncc-orchestrator %s (%s, built %s)\n", vr.Manifest.Version, vr.Manifest.Stream, vr.Manifest.BuildDate)
-		fmt.Printf("  created at:  %s\n", vr.Manifest.CreatedAt)
-		fmt.Printf("  data files:  %d (%s uncompressed)\n", vr.DataFiles, humanBytes(uint64(vr.Bytes)))
-		return nil
 	}
 	// Capture this host's environment-specific start settings BEFORE the archive
 	// overwrites the start-state file. A backup is portable across hosts, so its
@@ -18261,6 +18285,7 @@ with --input-file or as the first positional argument.`,
 			restart, _ := cmd.Flags().GetBool("restart")
 			noRestart, _ := cmd.Flags().GetBool("no-restart")
 			verifyOnly, _ := cmd.Flags().GetBool("verify-only")
+			asJSON, _ := cmd.Flags().GetBool("json")
 			keyFile, _ := cmd.Flags().GetString("key-file")
 			passphrase, _ := cmd.Flags().GetString("passphrase")
 			trustStack, _ := cmd.Flags().GetBool("trust-stack")
@@ -18275,6 +18300,7 @@ with --input-file or as the first positional argument.`,
 				Restart:    restart,
 				NoRestart:  noRestart,
 				VerifyOnly: verifyOnly,
+				JSON:       asJSON,
 				KeyFile:    keyFile,
 				Passphrase: passphrase,
 			})
@@ -18283,7 +18309,8 @@ with --input-file or as the first positional argument.`,
 	v2RestoreCmd.Flags().String("install-dir", "", "Installation directory to restore into (default: auto-detect, fallback .ncc-v2)")
 	v2RestoreCmd.Flags().String("input-file", "", "Backup archive to restore (or pass as the first positional argument)")
 	v2RestoreCmd.Flags().Bool("trust-stack", false, "Also restore the backup's program files (bin/ncc-*, frontend-dist) when this server has never installed them. Only for backups you trust: they run as the service account")
-	v2RestoreCmd.Flags().Bool("verify-only", false, "Validate the archive (gzip+tar integrity, manifest, confined paths) and report, without restoring")
+	v2RestoreCmd.Flags().Bool("verify-only", false, "Check the archive without restoring or writing to the install dir: decryption, every entry readable, safe paths, manifest and checksums, config files parse, secrets (names only), report paths, version compatibility. Exits non-zero when a check fails")
+	v2RestoreCmd.Flags().Bool("json", false, "With --verify-only, print the check list as JSON")
 	v2RestoreCmd.Flags().String("passphrase", "", "Passphrase to decrypt an encrypted backup (or NCC_BACKUP_PASSPHRASE)")
 	v2RestoreCmd.Flags().String("key-file", "", "Key file to decrypt a key-encrypted backup (or NCC_BACKUP_KEY_FILE/NCC_BACKUP_KEY)")
 	v2RestoreCmd.Flags().Bool("force", false, "Overwrite existing files and proceed even if the stack appears to be running")

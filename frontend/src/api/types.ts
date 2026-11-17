@@ -269,6 +269,27 @@ export type BackupEntry = {
   includes_stack?: boolean;
 };
 
+/** One check from POST /settings/backups/verify (v2-restore --verify-only). */
+export type BackupVerifyCheck = {
+  name: string;
+  status: "pass" | "warn" | "fail";
+  message: string;
+};
+
+/** The verify endpoint's report: checks, secret names (never values), versions. */
+export type BackupVerifyReport = {
+  archive: string;
+  encrypted: boolean;
+  backup_version?: string;
+  running_version: string;
+  created_at?: string;
+  files: number;
+  bytes: number;
+  secrets: string[];
+  checks: BackupVerifyCheck[];
+  ok: boolean;
+};
+
 export type BackupScheduleState = {
   enabled: boolean;
   every: string;

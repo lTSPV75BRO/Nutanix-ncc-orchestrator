@@ -5990,3 +5990,39 @@ h5.ant-typography {
   align-items: baseline;
   gap: 4px 12px;
 }
+
+/* Backup check list (Settings > Updates & backups > Verify) */
+.backup-verify-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+}
+.backup-verify-row {
+  display: grid;
+  grid-template-columns: 64px 110px 1fr;
+  gap: 8px;
+  align-items: baseline;
+  padding: 8px 12px;
+  font-size: var(--ui-text-sm);
+}
+.backup-verify-row + .backup-verify-row {
+  border-top: 1px solid var(--ui-border);
+}
+.backup-verify-name {
+  font-weight: 500;
+  color: var(--ui-text);
+}
+.backup-verify-msg {
+  color: var(--ui-text-secondary);
+  overflow-wrap: anywhere;
+}
+@media (max-width: 560px) {
+  .backup-verify-row {
+    grid-template-columns: 64px 1fr;
+  }
+  .backup-verify-msg {
+    grid-column: 1 / -1;
+  }
+}
