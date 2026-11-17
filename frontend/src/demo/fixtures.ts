@@ -333,6 +333,7 @@ const nonPass = AGG_ROWS.length;
 
 export const REPORT: ReportData = {
   run_summary: RUN_SUMMARY,
+  cache: { state: "warm", built_at: RUN_SUMMARY.timestamp, source_run_time: RUN_SUMMARY.timestamp },
   ncc_summary_counts: {
     total_plugins: nccTotal,
     pass: nccTotal - nonPass,

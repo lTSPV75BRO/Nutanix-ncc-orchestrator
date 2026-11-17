@@ -289,7 +289,7 @@ The full route list is at `GET /api/v1/meta/routes`, the OpenAPI 3 spec at `GET 
 | `/api/v1/runs/active` | GET, DELETE | Current run; `DELETE` cancels it |
 | `/api/v1/jobs/{id}` | GET, DELETE | Poll or cancel a long-running job with phase, progress, and typed errors |
 | `/api/v1/runs/preflight` | POST | Preflight check with machine-readable remediation codes |
-| `/api/v1/report/data`, `/report/trends` | GET | Report data (paged with `limit`/`offset`) and trends |
+| `/api/v1/report/data`, `/report/trends` | GET | Report data (paged with `limit`/`offset`; `cache` gives the report cache state) and trends |
 | `/api/v1/alerts/ncc` | GET | NCC finding instances; filter by `state`, `detection`, `cluster`, `check`, `updated_since`; cursor paging |
 | `/api/v1/alerts/ncc/events` | GET | Append-only lifecycle events; pass `next_cursor` back to get only new ones |
 | `/api/v1/alerts/ncc/{id}` | GET | One alert with its full history and related instances |

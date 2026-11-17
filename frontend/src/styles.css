@@ -3278,6 +3278,15 @@ html[data-theme="it-pro"] {
   color: var(--ui-text-secondary);
 }
 
+.report-cache-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ui-space-2);
+  font-size: var(--ui-text-sm);
+  color: var(--ui-text-secondary);
+}
+
 .overview-runline-actions {
   display: flex;
   gap: var(--ui-space-2);

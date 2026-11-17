@@ -318,6 +318,7 @@ async function loadReportDataFallback(): Promise<ReportData> {
     regression_summary: await readArtifactJSON("regression-summary.json", {}),
     slo_dashboard: await readArtifactJSON("slo-dashboard.json", {}),
     policy_violations: policyViolations,
+    cache: { state: "failed", fallback: true },
   };
 }
 

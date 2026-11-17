@@ -3,6 +3,7 @@ package main
 import (
 	"container/list"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,6 +48,10 @@ type artifactEntry struct {
 	expires time.Time
 	loading bool
 	elem    *list.Element
+	// st is the entry's observable state (see reportcachestate.go). It is
+	// guarded by the cache-wide mutex, not e.mu, so status reads never wait
+	// for a parse in progress.
+	st entryState
 }
 
 type artifactCache struct {
@@ -55,16 +60,37 @@ type artifactCache struct {
 	lru     *list.List // front = most recently used
 	weight  int64
 	budget  int64
+	// retryAfter holds off a new background refresh of a derivedAsync value
+	// for this long after one failed, so the failure stays visible (and a
+	// refresh that always fails does not run on every request).
+	retryAfter time.Duration
 }
 
 // reportArtifacts holds parsed report files. The budget is in bytes of source
 // file; parsed values are a few times larger, so 768 MiB of files is the
 // order of 1–2 GiB of heap at the very top end — comfortably more than one
 // 7,000-cluster run plus a couple of run-history snapshots.
-var reportArtifacts = newArtifactCache(768 << 20)
+var reportArtifacts = func() *artifactCache {
+	c := newArtifactCache(768 << 20)
+	c.retryAfter = 30 * time.Second
+	return c
+}()
 
 func newArtifactCache(budget int64) *artifactCache {
 	return &artifactCache{entries: map[string]*artifactEntry{}, lru: list.New(), budget: budget}
+}
+
+// sourceSig combines the size and modification time of every source path.
+// Directories count too: adding or removing a file changes their time.
+func sourceSig(sources []string) fileStamp {
+	var sig fileStamp
+	for _, p := range sources {
+		if info, err := os.Stat(p); err == nil {
+			sig.size = sig.size*31 + info.Size()
+			sig.mod = sig.mod*31 + info.ModTime().UnixNano()
+		}
+	}
+	return sig
 }
 
 func (c *artifactCache) entry(key string) *artifactEntry {
@@ -125,8 +151,10 @@ func (c *artifactCache) file(key, path string, parse func([]byte) (interface{}, 
 	if e.loaded && e.stamp == stamp {
 		return e.value, e.value != nil
 	}
+	c.noteBuildStart(e, []string{path})
 	b, err := os.ReadFile(path)
 	if err != nil {
+		c.noteBuildEnd(e, false, fileStamp{})
 		return nil, false
 	}
 	// Stamp again after reading: a writer that finished in between gets
@@ -139,6 +167,7 @@ func (c *artifactCache) file(key, path string, parse func([]byte) (interface{}, 
 		v = nil
 	}
 	e.stamp, e.value, e.loaded = stamp, v, true
+	c.noteBuildEnd(e, true, stamp)
 	c.setWeight(e, int64(len(b)))
 	return v, ok
 }
@@ -146,14 +175,7 @@ func (c *artifactCache) file(key, path string, parse func([]byte) (interface{}, 
 // derived caches compute() under key until any of the source files changes
 // or ttl passes — for values built from a directory of files.
 func (c *artifactCache) derived(key string, sources []string, ttl time.Duration, weight int64, compute func() interface{}) interface{} {
-	var sig fileStamp
-	for _, p := range sources {
-		// Directories count too: adding or removing a file changes their time.
-		if info, err := os.Stat(p); err == nil {
-			sig.size = sig.size*31 + info.Size()
-			sig.mod = sig.mod*31 + info.ModTime().UnixNano()
-		}
-	}
+	sig := sourceSig(sources)
 	e := c.entry(key)
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -161,8 +183,17 @@ func (c *artifactCache) derived(key string, sources []string, ttl time.Duration,
 	if e.loaded && e.stamp == sig && now.Before(e.expires) {
 		return e.value
 	}
+	c.noteBuildStart(e, sources)
+	built := false
+	defer func() {
+		if !built {
+			c.noteBuildEnd(e, false, fileStamp{})
+		}
+	}()
 	v := compute()
 	e.stamp, e.value, e.loaded, e.expires = sig, v, true, now.Add(ttl)
+	built = true
+	c.noteBuildEnd(e, true, sig)
 	c.setWeight(e, weight)
 	return v
 }
@@ -171,13 +202,7 @@ func (c *artifactCache) derived(key string, sources []string, ttl time.Duration,
 // expired/missing derived value in the background. This keeps report requests
 // responsive while large log directories on shared storage are parsed.
 func (c *artifactCache) derivedAsync(key string, sources []string, ttl time.Duration, weight int64, compute func() interface{}) interface{} {
-	var sig fileStamp
-	for _, p := range sources {
-		if info, err := os.Stat(p); err == nil {
-			sig.size = sig.size*31 + info.Size()
-			sig.mod = sig.mod*31 + info.ModTime().UnixNano()
-		}
-	}
+	sig := sourceSig(sources)
 	e := c.entry(key)
 	e.mu.Lock()
 	if e.loaded && e.stamp == sig && time.Now().Before(e.expires) {
@@ -196,20 +221,38 @@ func (c *artifactCache) derivedAsync(key string, sources []string, ttl time.Dura
 		e.mu.Unlock()
 		return c.derived(key, sources, ttl, weight, compute)
 	}
+	if c.holdRetry(e) {
+		// The last refresh failed moments ago: keep serving the previous
+		// value (and reporting the failure) before trying again.
+		e.mu.Unlock()
+		return stale
+	}
 	e.loading = true
+	c.noteRefreshStart(e, sources, sig)
 	e.mu.Unlock()
 
 	go func() {
 		var v interface{}
-		if guard("report cache refresh "+key, func() { v = compute() }) {
-			// Keep serving the previous value; the next request retries.
+		reason := ""
+		if guard("report cache refresh "+key, func() {
+			defer func() {
+				if p := recover(); p != nil {
+					reason = fmt.Sprint(p)
+					panic(p) // guard logs it and reports the failure
+				}
+			}()
+			v = compute()
+		}) {
+			// Keep serving the previous value; a later request retries.
 			e.mu.Lock()
 			e.loading = false
+			c.noteRefreshFailed(e, reason)
 			e.mu.Unlock()
 			return
 		}
 		e.mu.Lock()
 		e.stamp, e.value, e.loaded, e.expires, e.loading = sig, v, true, time.Now().Add(ttl), false
+		c.noteBuildEnd(e, true, sig)
 		e.mu.Unlock()
 		c.setWeight(e, weight)
 	}()
@@ -431,12 +474,13 @@ func reportStampSources(outDir string) []string {
 // Each step is a no-op when its files are unchanged.
 func (s *apiServer) warmReportCache() {
 	outDir := s.selectBestReportOutDir()
+	flags := s.loadFeatureFlags()
+	s.focusReportCache(outDir, flags)
 	_ = readRunSummaryCached(outDir)
 	if len(readAggRowsCached(outDir)) > 0 {
 		_ = slimChecksSnapshotCached(outDir)
 	}
 	_ = loadReportMeta(outDir)
-	flags := s.loadFeatureFlags()
 	_ = nccLogsForReport(s, flags, outDir)
 	_ = nccSummaryForReport(s, flags, outDir)
 	_ = nccClusterSummaryForReport(s, flags, clusterAccess{unrestricted: true}, outDir)

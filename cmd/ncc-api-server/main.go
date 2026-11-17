@@ -1739,6 +1739,9 @@ func (s *apiServer) handlePrometheusMetrics(w http.ResponseWriter, r *http.Reque
 	// NCC alert lifecycle gauges (persistent store; see alertlifecycle.go).
 	s.writeAlertLifecycleMetrics(w)
 
+	// Report data cache state (see reportcachestate.go).
+	writeReportCacheMetrics(w, focusedReportCacheStatus(), now)
+
 	// Per-route request counts and latency (see requestmeta.go).
 	s.httpMetrics.write(w)
 }
@@ -4132,6 +4135,8 @@ func (s *apiServer) handleReportData(w http.ResponseWriter, r *http.Request) {
 		"trends":              trendsForReport(flags, outDir),
 		"report_source_dir":   s.pathForCaller(r, outDir),
 		"pagination":          pagination,
+		// Built last, after the reads above started any background refresh.
+		"cache": s.reportCacheStatusFor(outDir, flags),
 	}})
 }
 
@@ -4447,7 +4452,7 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/features", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET viewer+: which optional views are on. PUT admin-only: turn Insights, Prism Central alerts, discovery, comparison, flaky checks, SLO, or the log index on or off.", SampleBody: "{\n  \"insights\": false,\n  \"pc_alerts\": false\n}"},
 		{Path: "/api/v1/audit", Methods: []string{http.MethodGet}, Description: "Read recent audit log entries (limit, action, failures filters)"},
 		{Path: "/api/v1/metrics/rate-limit", Methods: []string{http.MethodGet}, Description: "Rate limiter configuration and counters"},
-		{Path: "/metrics", Methods: []string{http.MethodGet}, Description: "Prometheus exposition (run/auth/update counters, build info, self-heal, backup inventory gauges, update-availability, audit-forward drops)"},
+		{Path: "/metrics", Methods: []string{http.MethodGet}, Description: "Prometheus exposition (run/auth/update counters, build info, self-heal, backup inventory gauges, update-availability, audit-forward drops, report cache state)"},
 		{Path: "/api/v1/health/diagnostics", Methods: []string{http.MethodGet, http.MethodPost}, Description: "Admin-only: GET runs a read-only self-heal scan (doctor checks + live LDAP/SAML/clock probes) returning a ranked diagnostics list with an overall status; POST supports targeted fixes (check_ids), guardrails (no_disruptive), and post-fix verification."},
 		{Path: "/api/v1/health/diagnostics/support-bundle", Methods: []string{http.MethodGet, http.MethodPost}, Description: "Admin-only: POST generates a redacted support bundle (doctor report, every process log, redacted config and environment files) and returns its path and name; GET ?name=<name> downloads it."},
 		{Path: "/api/v1/health/history", Methods: []string{http.MethodGet}, Description: "Admin-only: fixes applied by self-heal (background loop, Heal now, CLI doctor --fix), newest first, with per-check 24h/7d counts and recurring flags. ?limit=1..1000 (default 100)."},
@@ -4517,7 +4522,7 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/runs/extra-args", Methods: []string{http.MethodGet}, Description: "Run options accepted in extra_args by POST /runs/trigger, with labels, allowed values and examples (generated from the server allowlist)."},
 		{Path: "/api/v1/runs/trigger", Methods: []string{http.MethodPost}, Description: "Trigger an orchestrator run. Concurrent runs are allowed; clusters already being refreshed by another active run are skipped (reported in skipped_clusters) and the run executes only the remainder. When all concurrency slots are busy the run is queued and starts automatically.", SampleBody: "{\n  \"config_path\": \"config.yaml\",\n  \"password\": \"\",\n  \"group\": \"\",\n  \"clusters\": [],\n  \"extra_args\": [\"--outputs\", \"csv,json\"]\n}"},
 		{Path: "/api/v1/jobs/{id}", Methods: []string{http.MethodGet, http.MethodDelete}, Description: "Read or cancel an asynchronous NCC job. GET returns phase, progress, result linkage, and stable error information; DELETE requests cancellation."},
-		{Path: "/api/v1/report/data", Methods: []string{http.MethodGet}, Description: "Aggregated report payload (supports optional limit/offset pagination for large arrays)"},
+		{Path: "/api/v1/report/data", Methods: []string{http.MethodGet}, Description: "Aggregated report payload (supports optional limit/offset pagination for large arrays; `cache` reports the report cache state)"},
 		{Path: "/api/v1/report/trends", Methods: []string{http.MethodGet}, Description: "Historical trends from run summaries"},
 		{Path: "/api/v1/logs/runner", Methods: []string{http.MethodGet}, Description: "Read tail of runner log"},
 		{Path: "/api/v1/logs", Methods: []string{http.MethodGet}, Description: "Log sources the caller may read (runner for everyone; API server, UI server, supervisor and scheduler for admins) and the current server log level"},
@@ -5121,7 +5126,8 @@ func (s *apiServer) buildOpenAPISpecBase() map[string]interface{} {
 			},
 			"/api/v1/report/data": map[string]interface{}{
 				"get": map[string]interface{}{
-					"summary": "Aggregated report payload",
+					"summary":     "Aggregated report payload",
+					"description": "The `cache` object reports the report cache state (cold, warm, refreshing, stale or failed), when the served report was built (built_at), refresh_started_at while a newer one is built, last_error and failed_at after a failed refresh, and the source run (source_run_id, source_run_time).",
 					"parameters": []map[string]interface{}{
 						{"name": "limit", "in": "query", "required": false, "schema": map[string]interface{}{"type": "integer", "minimum": 0, "maximum": 5000}},
 						{"name": "offset", "in": "query", "required": false, "schema": map[string]interface{}{"type": "integer", "minimum": 0}},
