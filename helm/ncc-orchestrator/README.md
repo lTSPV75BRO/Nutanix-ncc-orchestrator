@@ -56,7 +56,21 @@ are listed in [`docs/PROMETHEUS.md`](../../docs/PROMETHEUS.md).
 
 Keep `images.api.tag`, `images.ui.tag`, and `images.runner.tag` in lockstep.
 The API reports installed-component versions from those tags
-(`NCC_IMAGE_TAG` / `NCC_ORCHESTRATOR_IMAGE_TAG` / `NCC_UI_IMAGE_TAG`).
+(`NCC_IMAGE_TAG` / `NCC_ORCHESTRATOR_IMAGE_TAG` / `NCC_UI_IMAGE_TAG`), using
+the live CronJob's runner image when it can read it. Settings → Updates
+lists any difference, and **Run now** is refused (HTTP 409,
+`NCC_API_VERSION_SKEW`) while the runner's major.minor differs from the API
+server's. A patch difference or a non-version tag such as `latest` does not
+block runs.
+
+RBAC gives the API service account two narrow Roles and nothing else:
+`ncc-v2-users-secret` (`get`/`patch` on Secret `ncc-v2-users` for the user
+database, plus `create` on Secrets for the first start, which Kubernetes
+cannot limit to a name) and `ncc-v2-runner-cronjob` (`get`/`patch` on the
+`ncc-orchestrator` CronJob for Settings → Schedule and the version check).
+The API never lists, watches or deletes resources and never creates Jobs or
+Pods; the runner service account has no API token. `helm upgrade` from an
+earlier chart removes the old single `ncc-v2-api` Role.
 
 HTTPS is terminated by the UI LoadBalancer (self-signed on first start, BYO
 from Settings). Ingress is off by default (`ingress.enabled: false`). To add

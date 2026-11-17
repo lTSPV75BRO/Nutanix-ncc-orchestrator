@@ -128,6 +128,7 @@ Applying `k8s/` creates:
 | `configmap.yaml` | Runtime `config.yaml` consumed by runner/API |
 | `secret.yaml` | `prism-password`, `api-token`, and required `jwt-secret` (shared HS256 key for stateless session JWTs across API replicas) |
 | `pvc.yaml` | Shared RWX storage for logs/artifacts/history |
+| `rbac.yaml` | Service accounts and the API server's two narrow Roles (see [RBAC](#rbac)) |
 | `runner-cronjob.yaml` | Scheduled NCC runs |
 | `api-deployment.yaml` | Backend API server (2 replicas, `--cookie-secure`, required `jwt-secret`) |
 | `api-service.yaml` | Internal API service (`ClusterIP`) |
@@ -201,7 +202,29 @@ every two seconds. Scheduled backups flock `/data/backups/.ncc-backup.lock`.
 
 Keep API, UI, and runner **image tags in lockstep**. The API reports component
 versions from `NCC_IMAGE_TAG` / `NCC_ORCHESTRATOR_IMAGE_TAG` /
-`NCC_UI_IMAGE_TAG`; it does not exec `ncc-ui-server` from the API image.
+`NCC_UI_IMAGE_TAG`; it does not exec `ncc-ui-server` from the API image. For
+the runner it prefers the image tag of the live runner CronJob (read with the
+same `get` that Settings → Schedule uses, cached for a minute). When the
+versions differ, Settings → Updates shows which component runs which version.
+**Run now** is refused (HTTP 409, `NCC_API_VERSION_SKEW`) while the runner's
+major.minor version differs from the API server's; a patch difference, or a
+tag that is not a version such as `latest`, does not block runs.
+
+### RBAC
+
+`rbac.yaml` gives the API service account two Roles, each limited to what
+the API server actually calls:
+
+| Role | Rules | Used for |
+| ---- | ----- | -------- |
+| `ncc-v2-users-secret` | `get`, `patch` on Secret `ncc-v2-users`; `create` on Secrets | Loading and saving the user database. `create` is only used on first start, when that Secret is missing; Kubernetes cannot limit `create` to a name, so pre-create the Secret and drop that rule if you want no namespace-wide verb. |
+| `ncc-v2-runner-cronjob` | `get`, `patch` on CronJob `ncc-v2-runner` | Settings → Schedule, and the runner version check. |
+
+The API does not list, watch or delete anything and never creates Jobs or
+Pods: **Run now** runs the orchestrator inside the API pod. The runner
+service account has no API token. If you rename the user Secret
+(`--users-db-secret`) or the CronJob (`NCC_RUNNER_CRONJOB`), change the
+`resourceNames` to match.
 
 ### TLS certificates
 

@@ -144,6 +144,9 @@ type apiServer struct {
 	// runnerCronJob names the Kubernetes CronJob that Settings > Schedule
 	// reads and patches (--runner-cronjob, NCC_RUNNER_CRONJOB).
 	runnerCronJob string
+	// runnerImage caches the runner CronJob's image tag for the version-skew
+	// check (versionskew.go).
+	runnerImage runnerImageCache
 	// onboardingMu serializes read-modify-write of the setup checklist state.
 	onboardingMu sync.Mutex
 	// scheduleK8sClient builds the Kubernetes API client for the schedule;
@@ -3867,6 +3870,12 @@ func (s *apiServer) handleRunTrigger(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := requireJSONContentType(r); err != nil {
 		writeJSON(w, http.StatusUnsupportedMediaType, envelope{Success: false, Error: err.Error()})
+		return
+	}
+	// Kubernetes: a runner image on another major.minor release could write
+	// data this API server cannot read, so refuse until the rollout matches.
+	if err := s.runnerVersionSkewError(); err != nil {
+		writeJSON(w, http.StatusConflict, envelope{Success: false, Error: err.Error(), ErrorCode: errorCodeVersionSkew})
 		return
 	}
 	var req runTriggerRequest

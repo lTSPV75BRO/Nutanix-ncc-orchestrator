@@ -1252,6 +1252,8 @@ export type ComponentsData = {
     "api-server": ComponentStatus;
     "ui-server": ComponentStatus;
     consistent: boolean;
+    /** Which components differ from the API server, when not consistent. */
+    message?: string;
   };
 };
 

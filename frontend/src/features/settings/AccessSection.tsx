@@ -3265,9 +3265,14 @@ export function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }
                 showIcon
                 title="Installed components are out of sync"
                 description={
-                  isKubernetes
-                    ? "The image tags differ. Roll out matching tags with Helm or Kustomize."
-                    : "The orchestrator, API server and UI server must run the same version. Apply the update to bring them in line."
+                  [
+                    components.message,
+                    isKubernetes
+                      ? "Roll out matching image tags with Helm or Kustomize. Run now is blocked while the runner is on a different minor version."
+                      : "The orchestrator, API server and UI server must run the same version. Apply the update to bring them in line.",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")
                 }
               />
             ) : null}
