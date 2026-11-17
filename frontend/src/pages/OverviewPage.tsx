@@ -2,10 +2,11 @@ import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, Button, Select, Skeleton, Tooltip } from "antd";
-import { ArrowRightOutlined, ClusterOutlined, HistoryOutlined, PieChartOutlined, ReloadOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { ArrowRightOutlined, ClusterOutlined, HistoryOutlined, PieChartOutlined, ReloadOutlined } from "@ant-design/icons";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
-import { SetupBanner } from "../features/onboarding/SetupChecklist";
+import { SetupBanner, useOnboarding } from "../features/onboarding/SetupChecklist";
+import { SetupEmptyState } from "../features/onboarding/SetupEmptyState";
 import { RunsTable } from "../features/runs/RunsTable";
 import { useRunsActive } from "../hooks/useRunsActive";
 import { clusterPath, sectionHref } from "../navigation";
@@ -173,6 +174,11 @@ export function OverviewPage() {
   });
   const active = useRunsActive();
   const running = active.data?.active === true;
+  const onboarding = useOnboarding(isAdmin || canOperate);
+  // No schedule, and the setup banner (which would say so) is hidden.
+  const scheduleStep = onboarding.data?.steps.find((s) => s.id === "schedule");
+  const scheduleMissing =
+    canOperate && Boolean(onboarding.data?.completed || onboarding.data?.dismissed) && Boolean(scheduleStep && !scheduleStep.done && !scheduleStep.skipped);
 
   const data = report.data;
   const counts = asRecord(data?.ncc_summary_counts);
@@ -315,6 +321,18 @@ export function OverviewPage() {
           }
         />
       ) : null}
+      {scheduleMissing && !noRunYet && overdueSchedules.length === 0 ? (
+        <Alert
+          type="info"
+          showIcon
+          title="No schedule: NCC runs only when someone starts it"
+          action={
+            <Link to={sectionHref("schedule")}>
+              <Button size="small">Set a schedule</Button>
+            </Link>
+          }
+        />
+      ) : null}
       {regression.has_regression ? (
         <Alert
           type="error"
@@ -346,29 +364,7 @@ export function OverviewPage() {
 
       {noRunYet ? (
         <Panel>
-          <EmptyState
-            icon={<ThunderboltOutlined />}
-            title={running ? "The first run is in progress" : "No results yet"}
-            description={
-              running
-                ? "Results appear here as soon as it finishes."
-                : "Run NCC across your clusters to see their health, findings and trends here."
-            }
-            actions={
-              running ? (
-                <Button onClick={() => navigate(sectionHref("runs"))}>Watch the run</Button>
-              ) : (
-                <>
-                  {canOperate ? (
-                    <Button type="primary" onClick={() => navigate(sectionHref("runs"))}>
-                      Start a run
-                    </Button>
-                  ) : null}
-                  {isAdmin ? <Button onClick={() => navigate(sectionHref("config"))}>Configure clusters</Button> : null}
-                </>
-              )
-            }
-          />
+          <SetupEmptyState />
         </Panel>
       ) : (
         <>

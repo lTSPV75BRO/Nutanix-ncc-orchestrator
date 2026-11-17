@@ -16,6 +16,7 @@ import {
 import { api } from "../api/client";
 import { FeatureDisabled } from "../features/features/FeatureDisabled";
 import { useFeatureFlags } from "../features/features/useFeatureFlags";
+import { SetupEmptyState } from "../features/onboarding/SetupEmptyState";
 import { DrilldownDiffPanel } from "../features/report/DrilldownDiffPanel";
 import { FlakyChecksPanel } from "../features/report/FlakyChecksPanel";
 import { LifecycleInsightsCard } from "../features/report/LifecycleInsightsCard";
@@ -486,6 +487,10 @@ export function InsightsPage() {
     return (
       <div className="insights-page">
         <Panel>
+          {!runTimestamp ? (
+            // No run yet: say what setup step is missing.
+            <SetupEmptyState />
+          ) : (
           <EmptyState
             icon={<BarChartOutlined />}
             title="Nothing to analyse yet"
@@ -496,6 +501,7 @@ export function InsightsPage() {
               </Link>
             }
           />
+          )}
         </Panel>
       </div>
     );

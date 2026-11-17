@@ -29,6 +29,7 @@ import {
 } from "@ant-design/icons";
 import { api, ApiError } from "../../api/client";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
+import { draftIsCurrent, storedDraftBase, useDraftBase } from "../../hooks/useDraftBase";
 import { notify } from "../../notify";
 import { formatDateTime, relativeTime } from "../../utils/datetime";
 import type { ConfigListItem, ScheduleSaveResult, ScheduleState } from "../../api/types";
@@ -185,13 +186,8 @@ function formatRun(d: Date, utc: boolean): string {
 
 const DRAFT_FLAG = "settings.schedule.hasDraft";
 
-function hasStoredDraft(): boolean {
-  try {
-    return window.localStorage.getItem(DRAFT_FLAG) === "true";
-  } catch {
-    return false;
-  }
-}
+/** The saved schedule's version: the server's resource_version, or its save time from older servers. */
+const scheduleVersion = (s: ScheduleState) => s.resource_version || s.updated_at || "";
 
 const STATUS_TONE: Record<string, Tone> = { success: "ok", warning: "warn", error: "fail", default: "neutral" };
 
@@ -207,8 +203,12 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
   const [withLock, setWithLock] = useLocalStorageState("settings.schedule.withLock", true);
   const [health, setHealth] = useState<ScheduleHealth | null>(null);
   const [healthLoading, setHealthLoading] = useState(false);
-  /** Kubernetes: CronJob version the form was loaded from (conditional save). */
+  /** Version the form was loaded from, sent back on save so a stale form can't overwrite a newer one (409). */
   const [resourceVersion, setResourceVersion] = useState<string | undefined>(undefined);
+  /** Saved version this form's draft is based on (resource_version, or updated_at from older servers). */
+  const [draftBase, setDraftBase] = useState("");
+  /** The server refused a save because someone else saved first (host). */
+  const [conflict, setConflict] = useState<string | null>(null);
   // Kubernetes only: the CronJob's spec.suspend. Not kept in local storage;
   // the CronJob is the source of truth.
   const [paused, setPaused] = useState(false);
@@ -260,18 +260,12 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
   const [saving, setSaving] = useState(false);
   const dirty = baseline !== null && scheduleKey(payload) !== baseline;
 
-  // Whether this browser holds an unsaved draft. The form keeps its fields
-  // in local storage, but without this flag a new browser (or another admin)
-  // showed the form defaults as an "unsaved change" over the real schedule,
-  // one click away from overwriting it.
-  useEffect(() => {
-    if (baseline === null) return;
-    try {
-      window.localStorage.setItem(DRAFT_FLAG, JSON.stringify(dirty));
-    } catch {
-      // ignore storage errors
-    }
-  }, [baseline, dirty]);
+  // Whether this browser holds an unsaved draft, and which saved version it
+  // was made from. The form keeps its fields in local storage; without this
+  // a new browser (or a draft older than another admin's save) showed stale
+  // values as an "unsaved change" over the real schedule, one click away
+  // from overwriting it.
+  useDraftBase(DRAFT_FLAG, baseline === null ? null : dirty, draftBase);
 
   /** The saved state with the same defaults the form applies. */
   const savedKey = (s: ScheduleState) =>
@@ -292,8 +286,15 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
   // A CronJob always has a live schedule, so on Kubernetes it is the baseline.
   const baselineFor = (s: ScheduleState) => (isKubernetes || s.updated_at ? savedKey(s) : null);
 
-  const applySaved = (s: ScheduleState) => {
+  /** Record which saved version the form is now based on. */
+  const setLoadedVersion = (s: ScheduleState) => {
     setResourceVersion(s.resource_version);
+    setDraftBase(scheduleVersion(s));
+    setConflict(null);
+  };
+
+  const applySaved = (s: ScheduleState) => {
+    setLoadedVersion(s);
     setType(s.type || "auto");
     setCron(s.cron || "");
     setConfig(s.config || backendConfigPath || "config.yaml");
@@ -331,7 +332,9 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
   // Install now covers it.
   const loadBaseline = async () => {
     try {
-      setBaseline(baselineFor(await api.loadSchedule()));
+      const saved = await api.loadSchedule();
+      setLoadedVersion(saved);
+      setBaseline(baselineFor(saved));
     } catch {
       setBaseline(null);
     }
@@ -339,13 +342,21 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
 
   /**
    * On mount: show the saved schedule, unless this browser has an unsaved
-   * draft of its own, which is kept (with the unsaved-changes bar).
+   * draft made from that same saved version, which is kept (with the
+   * unsaved-changes bar). A draft made before someone else's save is dropped.
    */
   const loadInitial = async () => {
     try {
       const saved = await api.loadSchedule();
-      if (saved.updated_at && !hasStoredDraft()) applySaved(saved);
-      else setBaseline(baselineFor(saved));
+      if (saved.updated_at && !draftIsCurrent(DRAFT_FLAG, scheduleVersion(saved))) {
+        if (storedDraftBase(DRAFT_FLAG) !== null) {
+          notify.info("The schedule was saved again since your unsaved changes, so they were dropped. The form shows the current schedule.");
+        }
+        applySaved(saved);
+      } else {
+        setLoadedVersion(saved);
+        setBaseline(baselineFor(saved));
+      }
     } catch {
       setBaseline(null);
     }
@@ -391,11 +402,12 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
     }
     setSaving(true);
     try {
-      await api.saveSchedule({ ...payload, print_only: false, apply: true, ...(isKubernetes && resourceVersion ? { resource_version: resourceVersion } : {}) });
+      const result = await api.saveSchedule({ ...payload, print_only: false, apply: true, ...(resourceVersion ? { resource_version: resourceVersion } : {}) });
       if (isKubernetes) {
         applySaved(await api.loadSchedule());
         notify.success(paused ? "Scheduled runs paused." : "Schedule applied to the CronJob.");
       } else {
+        if (result?.schedule) setLoadedVersion(result.schedule);
         setBaseline(scheduleKey(payload));
         notify.success("Schedule saved and installed.");
       }
@@ -409,6 +421,10 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
         } catch (reloadErr) {
           onError(reloadErr);
         }
+      } else if (e instanceof ApiError && e.status === 409) {
+        // Host: someone else saved since this form loaded. Keep this form's
+        // values on screen and offer to load theirs.
+        setConflict(e.message || "Someone else changed the schedule after you opened it.");
       } else {
         onError(e);
       }
@@ -437,12 +453,13 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
   const removeSchedule = async () => {
     setRemoving(true);
     try {
-      await api.saveSchedule({ ...payload, action: "remove", print_only: false, apply: true });
+      await api.saveSchedule({ ...payload, action: "remove", print_only: false, apply: true, ...(resourceVersion ? { resource_version: resourceVersion } : {}) });
       notify.success("Schedule removed from the host scheduler.");
       await loadBaseline();
       await loadHealth(true);
     } catch (e) {
-      onError(e);
+      if (e instanceof ApiError && e.status === 409) setConflict(e.message || "Someone else changed the schedule after you opened it.");
+      else onError(e);
     } finally {
       setRemoving(false);
     }
@@ -923,6 +940,21 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
         {preview?.apply_error ? <Alert type="error" showIcon title={preview.apply_error} style={{ marginBottom: 12 }} /> : null}
         <pre className="schedule-preview-output">{preview?.output || "(no output)"}</pre>
       </Modal>
+
+      {conflict ? (
+        <Alert
+          type="warning"
+          showIcon
+          role="alert"
+          title="Someone else changed the schedule after you opened it"
+          description={conflict}
+          action={
+            <Button size="small" onClick={() => void discard()}>
+              Load the current schedule
+            </Button>
+          }
+        />
+      ) : null}
 
       <SaveBar
         dirty={dirty}

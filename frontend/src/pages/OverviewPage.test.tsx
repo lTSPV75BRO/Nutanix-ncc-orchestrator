@@ -23,14 +23,16 @@ function ok(data: unknown) {
   } as Response;
 }
 
-function renderOverview(report: unknown, runs: unknown[] = [], freshness: unknown = {}, auth: AuthValue = admin) {
+const DONE_SETUP = { steps: [], required_done: 0, required_total: 0, completed: true, dismissed: false };
+
+function renderOverview(report: unknown, runs: unknown[] = [], freshness: unknown = {}, auth: AuthValue = admin, onboarding: unknown = DONE_SETUP) {
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes("/api/v1/freshness")) return ok(freshness);
     if (url.includes("/api/v1/report/data")) return ok(report);
     if (url.includes("/api/v1/runs/active")) return ok({ active: false });
     if (url.includes("/api/v1/runs")) return ok(runs);
-    if (url.includes("/api/v1/onboarding")) return ok({ steps: [], required_done: 0, required_total: 0, completed: true, dismissed: false });
+    if (url.includes("/api/v1/onboarding")) return ok(onboarding);
     return ok({});
   }) as typeof fetch;
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -72,8 +74,26 @@ describe("OverviewPage", () => {
     renderOverview({ run_summary: {}, ncc_summary_counts: {}, checks_snapshot: [] });
     expect(await screen.findByText("No results yet")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start a run" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Configure clusters" })).toBeInTheDocument();
     expect(screen.queryByText("0%")).not.toBeInTheDocument();
+  });
+
+  it("sends an admin to add clusters before the first run", async () => {
+    const setup = {
+      ...DONE_SETUP,
+      completed: false,
+      steps: [{ id: "clusters", title: "Connect your clusters", description: "", done: false, detail: "No clusters yet — the configuration still has the sample value.", tab: "config", action_label: "Open configuration", admin_only: true }],
+    };
+    renderOverview({ run_summary: {}, ncc_summary_counts: {}, checks_snapshot: [] }, [], {}, admin, setup);
+    expect(await screen.findByText("No clusters are set up yet")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Add clusters" }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "Start a run" })).not.toBeInTheDocument();
+  });
+
+  it("offers to set a schedule once setup is otherwise done", async () => {
+    const setup = { ...DONE_SETUP, steps: [{ id: "schedule", title: "Schedule recurring runs", description: "", done: false, tab: "schedule", action_label: "Open schedule" }] };
+    renderOverview(report, [], {}, admin, setup);
+    expect(await screen.findByText(/No schedule/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Set a schedule" })).toHaveAttribute("href", "/settings/schedule");
   });
 
   it("summarises the latest run and links into Findings", async () => {

@@ -66,7 +66,7 @@ describe("InsightsPage", () => {
 
   it("does not show a 0% score when there is nothing to analyse", async () => {
     renderInsights({ run_summary: {}, ncc_summary_counts: {}, agg_rows: [], checks_snapshot: [] });
-    expect(await screen.findByText("Nothing to analyse yet")).toBeInTheDocument();
+    expect(await screen.findByText("No results yet")).toBeInTheDocument();
     expect(screen.queryByText(/0%/)).not.toBeInTheDocument();
   });
 
