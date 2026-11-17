@@ -99,6 +99,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Prism Central empty state.** With no PC alerts and no filters set, the
   Findings page says Prism Central reports no alerts instead of suggesting
   clearing filters.
+- "Stay signed in" (`/auth/refresh`) no longer drops a directory user's group
+  access.
+- **Update fails if Github rate-limit is reached** Update checks now remain accurate when the GitHub REST API is rate limited. The public latest-release redirect is used to identify the current tag, while the UI marks the result as degraded and prevents installation until release asset metadata can be verified. A `GITHUB_TOKEN` can be supplied for a complete check and update.
+- CodeQL coverage now includes the React frontend alongside Go and GitHub
+  Actions. Runtime limit parsing is bounded before integer conversion, and the
+  OIDC cookie security policy is documented for CodeQL. The loopback-only
+  throwaway fake OIDC provider is excluded from production security scanning.
+- **Go toolchain updated to 1.27.4** to address `GO-2026-6859`, an HTTP/1
+  server crash caused by a `net/http` header race.
+- Added the separate `tools/fakesaml` test IdP. It registers NCC SP metadata,
+  seeds role-mapped users, serves a launch page for the NCC SAML login flow,
+  and supports HTTPS with a generated or supplied certificate. Its SAML
+  signing certificate and key can be persisted with `-signing-cert` and
+  `-signing-key`, preventing metadata trust failures after provider restarts.
 
 ### Added
 
@@ -177,27 +191,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   runner CronJob only. The namespace-wide Secret `get` and `update` are
   removed.
 - A failed report-cache refresh is retried after 30 seconds.
-
-### Fixed
-
-- "Stay signed in" (`/auth/refresh`) no longer drops a directory user's group
-  access.
-
-- **Update fails if Github rate-limit is reached** Update checks now remain accurate when the GitHub REST API is rate limited. The public latest-release redirect is used to identify the current tag, while the UI marks the result as degraded and prevents installation until release asset metadata can be verified. A `GITHUB_TOKEN` can be supplied for a complete check and update.
-
-- CodeQL coverage now includes the React frontend alongside Go and GitHub
-  Actions. Runtime limit parsing is bounded before integer conversion, and the
-  OIDC cookie security policy is documented for CodeQL. The loopback-only
-  throwaway fake OIDC provider is excluded from production security scanning.
-
-- **Go toolchain updated to 1.27.4** to address `GO-2026-6859`, an HTTP/1
-  server crash caused by a `net/http` header race.
-
-- Added the separate `tools/fakesaml` test IdP. It registers NCC SP metadata,
-  seeds role-mapped users, serves a launch page for the NCC SAML login flow,
-  and supports HTTPS with a generated or supplied certificate. Its SAML
-  signing certificate and key can be persisted with `-signing-cert` and
-  `-signing-key`, preventing metadata trust failures after provider restarts.
 
 Release notes: [`RELEASE_NOTES_v2.4.0.md`](docs/releases/RELEASE_NOTES_v2.4.0.md).
 
