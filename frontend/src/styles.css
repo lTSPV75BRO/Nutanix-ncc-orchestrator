@@ -2708,6 +2708,29 @@ html[data-theme="it-pro"] {
   color: var(--ui-text);
 }
 
+/* Non-blocking notice shortly before the session itself expires. */
+.session-expiry-notice {
+  position: fixed;
+  right: var(--ui-space-4);
+  bottom: var(--ui-space-4);
+  z-index: 1000;
+  width: min(380px, calc(100vw - 2 * var(--ui-space-4)));
+  box-shadow: 0 8px 24px var(--shadow-color);
+  border-radius: var(--ui-radius-md);
+}
+
+.session-expiry-notice [role="timer"],
+.auth-retry-count {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Session time left in the user menu. */
+.header-user-session {
+  display: block;
+  font-size: var(--ui-text-xs);
+  color: var(--ui-text-secondary);
+}
+
 /* Change / reset password dialogs. */
 .dialog-intro {
   margin: 0 0 var(--ui-space-4);

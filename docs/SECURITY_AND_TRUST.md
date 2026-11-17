@@ -914,7 +914,11 @@ Login attempts are protected at two layers. The global per-IP rate limiter
 throttles bursts, and a **per-account lockout** (`--login-lockout-threshold`,
 default 5 within `--login-lockout-window` 15m) temporarily locks an account for
 `--login-lockout-duration` (15m), returning `429 NCC_API_ACCOUNT_LOCKED` with a
-`Retry-After` header. Because it keys on the username rather than the IP, it
+`Retry-After` header. Both 429s (lockout and rate limit) also carry
+`retry_after_seconds` in the JSON body; the sign-in page uses it to count down
+and re-enable the Sign in button. The lockout response has the same shape and
+wording for existing and unknown usernames, and never reports attempts left.
+Because it keys on the username rather than the IP, it
 stops an attacker who rotates source IPs while grinding one account — something
 the IP limiter alone cannot. A successful login or any password reset clears the
 lockout; set the threshold to `0` to disable. The built-in `admin` is not

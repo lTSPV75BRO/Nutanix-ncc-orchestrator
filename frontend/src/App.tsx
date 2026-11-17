@@ -39,7 +39,8 @@ import { AuthContext, useAuth, type AuthValue } from "./auth/AuthContext";
 import { LoginPage, setLoginNotice } from "./pages/LoginPage";
 import { ChangePasswordPage, ChangePasswordModal } from "./pages/ChangePasswordPage";
 import { PersonalTokensModal } from "./features/tokens/PersonalTokensModal";
-import { SessionIdleGuard } from "./components/SessionIdleGuard";
+import { SessionIdleGuard, SessionTimeLeft } from "./components/SessionIdleGuard";
+import { sessionDeadline } from "./utils/sessionTime";
 import { openSetupChecklist, SetupHeaderButton } from "./features/onboarding/SetupChecklist";
 import { CommandJump } from "./components/CommandJump";
 import { formatDateTime, formatTime, localDateKey, parseInstant } from "./utils/datetime";
@@ -433,7 +434,10 @@ function HeaderUserMenu({
   onLogoutEverywhere,
   onAbout,
   canSeeSetup,
+  sessionEndsAt,
 }: {
+  /** When the session ends (epoch ms); null for sessions without a known end. */
+  sessionEndsAt?: number | null;
   username: string;
   role: UserRole;
   canChangePassword: boolean;
@@ -452,6 +456,7 @@ function HeaderUserMenu({
       label: (
         <span>
           Signed in as <strong>{username || "user"}</strong>
+          {sessionEndsAt ? <SessionTimeLeft expiresAt={sessionEndsAt} /> : null}
         </span>
       ),
       disabled: true,
@@ -524,6 +529,8 @@ export default function App() {
     refetchOnWindowFocus: true,
   });
   const me = meQuery.data as MeData | undefined;
+  // When this session ends, measured from when /auth/me answered.
+  const sessionEndsAt = me?.authenticated ? sessionDeadline(me, meQuery.dataUpdatedAt) : null;
   const loginEnabled = Boolean(me?.login_enabled);
   const authenticated = Boolean(me?.authenticated);
   const role: UserRole = (me?.role as UserRole) ?? "";
@@ -733,6 +740,7 @@ export default function App() {
               onLogoutEverywhere={handleLogoutEverywhere}
               onAbout={() => setAboutOpen(true)}
               canSeeSetup={appReady && canSeeSettings}
+              sessionEndsAt={sessionEndsAt}
             />
           ) : (
             // No user menu without sign-in: theme and About get a small menu.
@@ -794,6 +802,7 @@ export default function App() {
         <SessionIdleGuard
           onLogout={handleLogout}
           onStayLoggedIn={() => void meQuery.refetch()}
+          expiresAt={sessionEndsAt}
         />
       ) : null}
       <AboutDialog

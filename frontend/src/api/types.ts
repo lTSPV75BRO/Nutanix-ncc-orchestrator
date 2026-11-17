@@ -6,6 +6,8 @@ export type Envelope<T> = {
   error_code?: string;
   /** Set on errors; quote it to an administrator to find the matching log/audit line. */
   request_id?: string;
+  /** On 429s (sign-in lockout, rate limit): seconds until a retry can succeed. */
+  retry_after_seconds?: number;
 };
 
 export type HealthData = {

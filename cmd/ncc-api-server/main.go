@@ -328,6 +328,9 @@ type envelope struct {
 	Retryable   bool                   `json:"retryable,omitempty"`
 	Remediation string                 `json:"remediation,omitempty"`
 	Details     map[string]interface{} `json:"details,omitempty"`
+	// RetryAfterSeconds mirrors the Retry-After header on 429 responses
+	// (sign-in lockout, per-client rate limit) so the UI can count down.
+	RetryAfterSeconds int `json:"retry_after_seconds,omitempty"`
 }
 
 type routeMeta struct {
