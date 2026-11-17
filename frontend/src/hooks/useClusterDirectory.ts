@@ -27,6 +27,21 @@ export type ClusterEntry = {
 };
 
 /**
+ * GET /api/v1/freshness (each cluster's data age, overdue schedules): one
+ * cache entry shared by every page.
+ */
+export function useFreshness(enabled = true) {
+  return useQuery({
+    queryKey: ["freshness"],
+    queryFn: api.freshness,
+    enabled,
+    staleTime: 30_000,
+    // Older API servers have no freshness endpoint; pages work without it.
+    retry: false,
+  });
+}
+
+/**
  * Every known cluster, keyed by address, with its display name, latest
  * result, versions and data age. Built from the report preview and
  * GET /api/v1/freshness, which other pages already load.
@@ -37,13 +52,7 @@ export function useClusterDirectory() {
     queryFn: () => api.reportDataWithPagination({ limit: REPORT_PREVIEW_LIMIT }),
     staleTime: 30_000,
   });
-  const freshness = useQuery({
-    queryKey: ["freshness"],
-    queryFn: api.freshness,
-    staleTime: 30_000,
-    // Older API servers have no freshness endpoint; the page works without it.
-    retry: false,
-  });
+  const freshness = useFreshness();
 
   const directory = useMemo(() => {
     const data = report.data;

@@ -1739,6 +1739,9 @@ func (s *apiServer) handlePrometheusMetrics(w http.ResponseWriter, r *http.Reque
 	// NCC alert lifecycle gauges (persistent store; see alertlifecycle.go).
 	s.writeAlertLifecycleMetrics(w)
 
+	// Per-cluster data age and overdue schedules (see freshness_report.go).
+	s.writeFreshnessMetrics(w)
+
 	// Per-route request counts and latency (see requestmeta.go).
 	s.httpMetrics.write(w)
 }

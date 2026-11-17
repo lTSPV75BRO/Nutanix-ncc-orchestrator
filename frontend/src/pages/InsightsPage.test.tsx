@@ -25,10 +25,11 @@ function Where() {
   return <div data-testid="where">{l.pathname + l.search}</div>;
 }
 
-function renderInsights(report: unknown, path = "/insights") {
+function renderInsights(report: unknown, path = "/insights", freshness: unknown = {}) {
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes("/api/v1/features")) return ok({ insights: true });
+    if (url.includes("/api/v1/freshness")) return ok(freshness);
     if (url.includes("/api/v1/report/trends")) return ok({ points: [] });
     if (url.includes("/api/v1/report/data")) return ok(report);
     if (url.includes("/api/v1/alerts/ncc-dispositions")) return ok({ items: [] });
@@ -87,6 +88,42 @@ describe("InsightsPage", () => {
     expect(await screen.findByText("Check output")).toBeInTheDocument();
     // The same text is also listed under "Review first"; check it in the drawer.
     expect(within(screen.getByRole("dialog")).getByText(/Disk offline/)).toBeInTheDocument();
+  });
+
+  it("shows each cluster's data age on the Clusters tab", async () => {
+    const hour = 3600_000;
+    const freshness = {
+      generated_at: new Date().toISOString(),
+      schedules: [],
+      schedule_overdue: false,
+      clusters: [
+        {
+          address: "10.0.0.1",
+          ok: true,
+          last_checked_at: new Date(Date.now() - 2 * hour).toISOString(),
+          last_success_at: new Date(Date.now() - 2 * hour).toISOString(),
+          fail_count: 0,
+          warn_count: 0,
+          err_count: 0,
+        },
+        {
+          address: "10.0.0.2",
+          ok: false,
+          last_checked_at: new Date(Date.now() - hour).toISOString(),
+          last_success_at: new Date(Date.now() - 74 * hour).toISOString(),
+          failed_runs: 3,
+          fail_count: 1,
+          warn_count: 4,
+          err_count: 0,
+        },
+      ],
+    };
+    renderInsights(report, "/insights?tab=clusters", freshness);
+    const fresh = await screen.findByText("data from 2h ago");
+    expect(fresh).not.toHaveClass("is-old");
+    const stale = await screen.findByText("Not reached · data from 3d ago");
+    expect(stale).toHaveClass("is-old");
+    expect(stale.getAttribute("title")).toMatch(/The last 3 runs could not check it/);
   });
 
   it("opens the tab named in the URL", async () => {

@@ -1,5 +1,63 @@
 import type { ClusterFreshness, ScheduleFreshness } from "../api/types";
-import { ageMs, relativeTime } from "./datetime";
+import { ageMs, formatDateTime, relativeTime } from "./datetime";
+
+const DAY_MS = 24 * 3600_000;
+
+/** How old a cluster's data is, worded as on the Overview. */
+export type ClusterDataAge = {
+  /** "data from 3h ago", "Not reached · data from 3d ago", "Not reached · no data yet". */
+  text: string;
+  /** The newest run that tried the cluster could not reach it. */
+  notReached: boolean;
+  /** Not reached, or data older than a day: shown in amber. */
+  old: boolean;
+  /** Tooltip with the exact times. */
+  title: string;
+};
+
+export function clusterDataAge(f: ClusterFreshness): ClusterDataAge {
+  const notReached = !f.ok;
+  const data = f.last_success_at ? `data from ${relativeTime(f.last_success_at)}` : "no data yet";
+  const title = [
+    f.last_success_at ? `Data from ${formatDateTime(f.last_success_at)}.` : "No run has returned data for it yet.",
+    notReached ? `The last run to try it (${formatDateTime(f.last_checked_at)}) could not reach it.` : "",
+    notReached && (f.failed_runs ?? 0) > 1 ? `The last ${f.failed_runs} runs could not check it.` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return {
+    text: notReached ? `Not reached · ${data}` : data,
+    notReached,
+    old: notReached || !f.last_success_at || ageMs(f.last_success_at) > DAY_MS,
+    title,
+  };
+}
+
+/**
+ * Data age per cluster, keyed by lower-cased address and display name, so
+ * tables can look a row up without a request or a scan per row.
+ */
+export function clusterDataAges(fresh: ClusterFreshness[] | undefined, nameOf?: (address: string) => string): Map<string, ClusterDataAge> {
+  const out = new Map<string, ClusterDataAge>();
+  for (const f of fresh ?? []) {
+    const age = clusterDataAge(f);
+    const address = f.address.trim().toLowerCase();
+    if (address) out.set(address, age);
+    const name = nameOf?.(f.address)?.trim().toLowerCase();
+    if (name && name !== "-" && !out.has(name)) out.set(name, age);
+  }
+  return out;
+}
+
+/** The age for the first key (address or name) that has one. */
+export function lookupDataAge(ages: Map<string, ClusterDataAge> | undefined, ...keys: Array<string | undefined>): ClusterDataAge | undefined {
+  if (!ages || ages.size === 0) return undefined;
+  for (const k of keys) {
+    const age = k ? ages.get(k.trim().toLowerCase()) : undefined;
+    if (age) return age;
+  }
+  return undefined;
+}
 
 export type Freshness = { label: "Fresh" | "Recent" | "Aging" | "Stale" | "Unknown"; color: string; tone: "ok" | "info" | "warn" | "fail" | "neutral" };
 

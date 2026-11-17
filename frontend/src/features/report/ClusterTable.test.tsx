@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render as rtlRender, screen, within } from "@testin
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it } from "vitest";
 import { ClusterTable } from "./ClusterTable";
+import { clusterDataAges } from "../../utils/freshness";
 
 // The alert drawer loads lifecycle history through React Query, and cluster
 // names link to the cluster page.
@@ -308,5 +309,45 @@ describe("ClusterTable alert sources", () => {
     expect(screen.queryByText(/Settings → Features/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Acknowledge" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Resolve" })).not.toBeInTheDocument();
+  });
+
+  it("shows each NCC row's data age under the cluster name", () => {
+    const hour = 3600_000;
+    const ages = clusterDataAges([
+      {
+        address: "10.0.0.5",
+        ok: true,
+        last_checked_at: new Date(Date.now() - hour).toISOString(),
+        last_success_at: new Date(Date.now() - hour).toISOString(),
+        fail_count: 0,
+        warn_count: 0,
+        err_count: 0,
+      },
+      {
+        address: "10.0.0.6",
+        ok: false,
+        last_checked_at: new Date(Date.now() - hour).toISOString(),
+        last_success_at: new Date(Date.now() - 74 * hour).toISOString(),
+        fail_count: 0,
+        warn_count: 0,
+        err_count: 0,
+      },
+    ]);
+    render(
+      <ClusterTable
+        {...baseProps}
+        alertSource="NCC"
+        clusterAges={ages}
+        aggRows={[
+          { cluster: "10.0.0.5", check: "Fresh check", severity: "WARN" },
+          { cluster: "10.0.0.6", check: "Stale check", severity: "FAIL" },
+        ]}
+      />,
+    );
+    const fresh = screen.getByText("data from 1h ago");
+    expect(fresh).toHaveClass("alerts-cluster-age");
+    expect(fresh).not.toHaveClass("is-old");
+    const stale = screen.getByText("Not reached · data from 3d ago");
+    expect(stale).toHaveClass("is-old");
   });
 });

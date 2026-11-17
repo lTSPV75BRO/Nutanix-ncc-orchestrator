@@ -161,5 +161,12 @@ func (s *apiServer) buildDigest() (title, body string) {
 			lines = append(lines, fmt.Sprintf("  … and %d more", len(viol)-max))
 		}
 	}
+	// Clusters the newest run could not reach and overdue schedules.
+	if notes := s.freshnessNotice(); len(notes) > 0 {
+		lines = append(lines, "", "Data age:")
+		for _, n := range notes {
+			lines = append(lines, "  - "+n)
+		}
+	}
 	return title, strings.Join(lines, "\n")
 }
