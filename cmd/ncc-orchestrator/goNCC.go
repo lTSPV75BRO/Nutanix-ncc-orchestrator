@@ -1231,6 +1231,9 @@ func validateConfig(cfg Config) error {
 	if cfg.ArtifactRetainMaxFiles < 0 {
 		return errors.New("artifact-retain-max-files must be >= 0")
 	}
+	if cfg.RawLogRetainDays < 0 {
+		return errors.New("raw-log-retain-days must be >= 0")
+	}
 	if cfg.RunHistoryEnabled && strings.TrimSpace(cfg.RunHistoryDir) == "" {
 		return errors.New("run-history-dir cannot be empty when run-history is enabled")
 	}
@@ -1373,6 +1376,7 @@ retain-last: 0                            # Keep last N snapshots (0 = unlimited
 retain-days: 0                            # Keep snapshots newer than N days (0 = unlimited)
 artifact-retain-days: 0                   # Remove generated artifacts older than N days (0 = unlimited)
 artifact-retain-max-files: 0              # Keep only N newest generated artifacts (0 = unlimited)
+raw-log-retain-days: 0                    # Remove raw NCC logs older than N days (0 = unlimited)
 notify-on-regression: false               # Notify only when FAIL count increases
 adaptive-parallelism: true                # Reduce/increase effective concurrency on 429s
 policy-gates: ""                          # e.g. new-fails>0,fail-rate>2,min-health-score<90,flaky-checks>0,timeout-clusters>0,auth-failures>0
@@ -1475,6 +1479,7 @@ secrets-file: ""                          # YAML/JSON key-value map when secrets
   "retain-days": 0,
   "artifact-retain-days": 0,
   "artifact-retain-max-files": 0,
+  "raw-log-retain-days": 0,
   "notify-on-regression": false,
   "adaptive-parallelism": true,
   "policy-gates": "",
@@ -1744,7 +1749,7 @@ func validateConfigFileRawTypes() error {
 		"username": true, "password": true, "ncc-api-version": true, "nutanix-v4-api-version": true, "pc-alerts-cache-ttl": true,
 		"insecure-skip-verify": true, "ca-bundle": true, "pin-sha256": true, "timeout": true, "request-timeout": true, "poll-interval": true, "poll-jitter": true,
 		"max-parallel": true, "outputs": true, "output-dir-logs": true, "output-dir-filtered": true,
-		"single-report": true, "run-history": true, "run-history-dir": true, "retain-last": true, "retain-days": true, "artifact-retain-days": true, "artifact-retain-max-files": true,
+		"single-report": true, "run-history": true, "run-history-dir": true, "retain-last": true, "retain-days": true, "artifact-retain-days": true, "artifact-retain-max-files": true, "raw-log-retain-days": true,
 		"notify-on-regression": true, "adaptive-parallelism": true, "retry-failed-clusters": true, "resume": true,
 		"policy-gates": true, "quiet-hours": true, "maintenance-windows": true,
 		"flaky-lookback-runs": true, "flaky-min-transitions": true,
@@ -1814,7 +1819,7 @@ func validateConfigFileRawTypes() error {
 	}
 	intKeys := []string{
 		"schema-version", "max-parallel", "retry-failed-clusters", "retry-max-attempts", "retry-circuit-breaker", "max-idle-conns", "max-idle-conns-per-host",
-		"max-conns-per-host", "smtp-port", "retain-last", "retain-days", "artifact-retain-days", "artifact-retain-max-files", "gen-test-agg",
+		"max-conns-per-host", "smtp-port", "retain-last", "retain-days", "artifact-retain-days", "artifact-retain-max-files", "raw-log-retain-days", "gen-test-agg",
 		"flaky-lookback-runs", "flaky-min-transitions",
 	}
 	for _, key := range intKeys {
@@ -1992,6 +1997,7 @@ func canonicalConfigMappings() map[string]string {
 		"runner.history.retain-days":                 "retain-days",
 		"runner.history.artifact-retain-days":        "artifact-retain-days",
 		"runner.history.artifact-retain-max-files":   "artifact-retain-max-files",
+		"runner.history.raw-log-retain-days":         "raw-log-retain-days",
 		"runner.policy.gates":                        "policy-gates",
 		"runner.policy.notify-on-regression":         "notify-on-regression",
 		"runner.http-pool.max-idle-conns":            "max-idle-conns",
@@ -2187,6 +2193,7 @@ func bindConfig() (Config, error) {
 		RetainDays:                viper.GetInt("retain-days"),
 		ArtifactRetainDays:        viper.GetInt("artifact-retain-days"),
 		ArtifactRetainMaxFiles:    viper.GetInt("artifact-retain-max-files"),
+		RawLogRetainDays:          viper.GetInt("raw-log-retain-days"),
 		SingleReport:              viper.GetBool("single-report"),
 		NotifyOnRegression:        viper.GetBool("notify-on-regression"),
 		AdaptiveParallelism:       viper.GetBool("adaptive-parallelism"),
@@ -14398,6 +14405,7 @@ func configJSONSchema() map[string]interface{} {
 		"retain-days":               map[string]interface{}{"type": "integer", "minimum": 0},
 		"artifact-retain-days":      map[string]interface{}{"type": "integer", "minimum": 0},
 		"artifact-retain-max-files": map[string]interface{}{"type": "integer", "minimum": 0},
+		"raw-log-retain-days":       map[string]interface{}{"type": "integer", "minimum": 0},
 		"notify-on-regression":      map[string]interface{}{"type": "boolean"},
 		"adaptive-parallelism":      map[string]interface{}{"type": "boolean"},
 		"retry-failed-clusters":     map[string]interface{}{"type": "integer", "minimum": 0, "maximum": 5},
@@ -17297,6 +17305,11 @@ Run 'ncc-orchestrator --help' for a full list of options.
 			} else if deleted > 0 {
 				log.Info().Int("deleted", deleted).Int("retain_days", cfg.ArtifactRetainDays).Int("retain_max_files", cfg.ArtifactRetainMaxFiles).Msg("artifact retention applied")
 			}
+			if deleted, err := applyRawLogRetention(cfg.OutputDirLogs, cfg.OutputDirFiltered, cfg.RawLogRetainDays, time.Now()); err != nil {
+				log.Error().Err(err).Msg("raw log retention failed (non-fatal)")
+			} else if deleted > 0 {
+				log.Info().Int("deleted", deleted).Int("retain_days", cfg.RawLogRetainDays).Msg("raw log retention applied")
+			}
 
 			if cfg.NotifyDigest {
 				if cfg.NotifyOnRegression && !regression.HasRegression {
@@ -17507,6 +17520,7 @@ Run 'ncc-orchestrator --help' for a full list of options.
 	cmd.Flags().Int("retain-days", 0, "When run-history is enabled, keep runs newer than N days (0 = unlimited)")
 	cmd.Flags().Int("artifact-retain-days", 0, "Remove generated artifacts older than N days from output-dir-filtered (0 = unlimited)")
 	cmd.Flags().Int("artifact-retain-max-files", 0, "Keep only N newest generated artifacts in output-dir-filtered (0 = unlimited)")
+	cmd.Flags().Int("raw-log-retain-days", 0, "Remove raw NCC logs older than N days from output-dir-logs; the newest log and the latest report's clusters are kept (0 = unlimited)")
 	cmd.Flags().Bool("notify-on-regression", false, "Only send notifications when FAIL count increases vs previous run-summary")
 	cmd.Flags().Bool("adaptive-parallelism", true, "Dynamically reduce/increase effective concurrency based on HTTP 429 responses")
 	cmd.Flags().String("policy-gates", "", "Comma-separated policy gates (e.g. new-fails>0,fail-rate>2,min-health-score<90,flaky-checks>0,timeout-clusters>0,auth-failures>0)")
@@ -17588,6 +17602,7 @@ Run 'ncc-orchestrator --help' for a full list of options.
 	_ = viper.BindPFlag("retain-days", cmd.Flags().Lookup("retain-days"))
 	_ = viper.BindPFlag("artifact-retain-days", cmd.Flags().Lookup("artifact-retain-days"))
 	_ = viper.BindPFlag("artifact-retain-max-files", cmd.Flags().Lookup("artifact-retain-max-files"))
+	_ = viper.BindPFlag("raw-log-retain-days", cmd.Flags().Lookup("raw-log-retain-days"))
 	_ = viper.BindPFlag("notify-on-regression", cmd.Flags().Lookup("notify-on-regression"))
 	_ = viper.BindPFlag("adaptive-parallelism", cmd.Flags().Lookup("adaptive-parallelism"))
 	_ = viper.BindPFlag("policy-gates", cmd.Flags().Lookup("policy-gates"))
@@ -18737,6 +18752,8 @@ and can apply safe self-healing actions for common setup issues.`,
 	}
 	configSchemaCmd.Flags().String("output", "", "Write schema JSON to file (default: stdout)")
 	cmd.AddCommand(configSchemaCmd)
+
+	cmd.AddCommand(newRetentionCmd())
 
 	validateConfigCmd := &cobra.Command{
 		Use:   "validate-config",

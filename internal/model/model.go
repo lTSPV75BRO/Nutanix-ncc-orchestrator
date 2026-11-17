@@ -70,9 +70,12 @@ type Config struct {
 	RetainDays             int
 	ArtifactRetainDays     int
 	ArtifactRetainMaxFiles int
-	SingleReport           bool
-	NotifyOnRegression     bool
-	AdaptiveParallelism    bool
+	// RawLogRetainDays removes raw NCC logs in OutputDirLogs older than N days
+	// (0 keeps them forever).
+	RawLogRetainDays    int
+	SingleReport        bool
+	NotifyOnRegression  bool
+	AdaptiveParallelism bool
 	// RetryFailedClusters is how many extra passes re-run clusters that failed
 	// with a transient error (timeout, network, rate limit) in the same run.
 	RetryFailedClusters int

@@ -450,6 +450,17 @@ const gets: Record<string, Handler> = {
   "/api/v1/settings/notifications/status": () => state.saved["/api/v1/settings/notifications/status"] ?? fx.NOTIFICATION_STATUS,
   "/api/v1/settings/backups": () => ({ ...fx.BACKUPS, backups: state.backups }),
   "/api/v1/settings/backups/schedule": () => fx.BACKUP_SCHEDULE,
+  "/api/v1/settings/retention/preview": () => ({
+    dry_run: true,
+    generated_at: new Date().toISOString(),
+    rules: [
+      { id: "runs", title: "Run history", dir: "outputfiles/runs", enabled: true, settings: { "retain-last": 500, "retain-days": 30 }, count: 0, bytes: 0, items: [] },
+      { id: "artifacts", title: "Report files", dir: "outputfiles", enabled: false, settings: { "artifact-retain-days": 0, "artifact-retain-max-files": 0 }, count: 0, bytes: 0, items: [] },
+      { id: "raw-logs", title: "Raw NCC logs", dir: "nccfiles", enabled: false, settings: { "raw-log-retain-days": 0 }, count: 0, bytes: 0, items: [] },
+    ],
+    total_count: 0,
+    total_bytes: 0,
+  }),
   "/api/v1/settings/update": () => fx.UPDATE_STATUS,
   "/api/v1/settings/sso": () => ({ enabled: false }),
   "/api/v1/settings/oidc": () => ({ enabled: false }),

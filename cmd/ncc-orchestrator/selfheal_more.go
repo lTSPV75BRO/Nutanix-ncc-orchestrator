@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -247,24 +248,32 @@ func checkOutputRetention(hc *healContext) healResult {
 	if cfg.RunHistoryEnabled && cfg.RunHistoryDir != "" {
 		snapshots, _ = historyRetentionCandidates(cfg.RunHistoryDir, cfg.RetainLastRuns, cfg.RetainDays, now)
 	}
-	if len(artifacts)+len(snapshots) > 0 {
+	rawLogs, _ := rawLogRetentionCandidates(cfg.OutputDirLogs, cfg.OutputDirFiltered, cfg.RawLogRetainDays, now)
+	rawText := func(n int) string {
+		if n == 0 {
+			return ""
+		}
+		return " and " + plural.Count(n, "raw NCC log")
+	}
+	if len(artifacts)+len(snapshots)+len(rawLogs) > 0 {
 		if hc.Fix {
 			deleted, err := applyArtifactRetentionPolicies(cfg.OutputDirFiltered, cfg.ArtifactRetainDays, cfg.ArtifactRetainMaxFiles, now)
 			herr := error(nil)
 			if len(snapshots) > 0 {
 				herr = applyRunHistoryRetention(cfg.RunHistoryDir, cfg.RetainLastRuns, cfg.RetainDays, now)
 			}
-			if err == nil && herr == nil {
+			rawDeleted, rerr := applyRawLogRetention(cfg.OutputDirLogs, cfg.OutputDirFiltered, cfg.RawLogRetainDays, now)
+			if err == nil && herr == nil && rerr == nil {
 				res.Status = healOK
 				res.Fixed = true
-				res.FixMsg = fmt.Sprintf("applied your retention settings: removed %s and %s", plural.Count(deleted, "report file"), plural.Count(len(snapshots), "run snapshot"))
+				res.FixMsg = fmt.Sprintf("applied your retention settings: removed %s and %s%s", plural.Count(deleted, "report file"), plural.Count(len(snapshots), "run snapshot"), rawText(rawDeleted))
 				res.Message = "reports and run history are within retention"
 				return res
 			}
-			res.Hint = fmt.Sprintf("Retention could not finish: %v %v", err, herr)
+			res.Hint = fmt.Sprintf("Retention could not finish: %v", errors.Join(err, herr, rerr))
 		}
 		res.Status = healWarn
-		res.Message = fmt.Sprintf("%s and %s are past your retention settings", plural.Count(len(artifacts), "report file"), plural.Count(len(snapshots), "run snapshot"))
+		res.Message = fmt.Sprintf("%s and %s%s are past your retention settings", plural.Count(len(artifacts), "report file"), plural.Count(len(snapshots), "run snapshot"), rawText(len(rawLogs)))
 		if res.Hint == "" {
 			res.Hint = "Runs prune these when they finish; heal prunes them now with the same rules."
 		}

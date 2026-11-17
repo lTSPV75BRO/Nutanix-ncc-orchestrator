@@ -224,7 +224,7 @@ More checks, each fixed by `doctor --fix` (or **Heal** in the UI):
 |---|---|---|
 | `config-layout` | A setting spelled twice (flat and nested, or two nested spellings); only one is used | Keeps the value in use, removes the other spelling; original kept as `.bak` |
 | `temp-files` | Leftovers of interrupted backups, restores and updates older than 6 hours (system temp, install dir, logs, output dir) | Deletes them. Never touches a `ncc-backup-*.tar.gz` file |
-| `output-retention` | Report files and run snapshots past `artifact-retain-*` / `retain-*`; unbounded growth when no retention is set | Applies your retention now (runs do the same when they finish) |
+| `output-retention` | Report files, run snapshots and raw NCC logs past `artifact-retain-*` / `retain-*` / `raw-log-retain-days`; unbounded growth when no retention is set | Applies your retention now (runs do the same when they finish) |
 | `runtime-tuning` | Settings that slow runs or fail them early: request timeout not below the cluster timeout, very short polling, inverted retry backoff, one connection per host, HTTP or debug logging | None: reports the current and a suggested value |
 | `supervisor-health` | A server in cooldown (down after too many quick restarts), restarting, restarted twice or more recently, or answering health probes slowly; quotes the panic or error line from its log. Also a state file left by a supervisor that is gone | Asks the supervisor to start a cooled-down server now; removes a stale state file |
 | `service-config` | The boot service lacks this release's settings. Linux: `StartLimitIntervalSec=0`, `Restart=always`, `LimitNOFILE`. Windows: the 72-hour task time limit, no restart on failure, battery stop. macOS: `KeepAlive`, file limit. Fails when the service starts a binary that no longer exists. Services of another install are ignored | Linux: adds the missing lines (others kept) and reloads systemd. Windows: re-registers the task (needs Administrator). macOS: reports the command to run |
@@ -929,6 +929,7 @@ Highest to lowest precedence:
 | `retain-days` | int | `0` | `14` |
 | `artifact-retain-days` | int | `0` | `14` |
 | `artifact-retain-max-files` | int | `0` | `200` |
+| `raw-log-retain-days` | int | `0` | `30` |
 | `notify-on-regression` | bool | `false` | `true` |
 | `adaptive-parallelism` | bool | `true` | `false` |
 | `policy-gates` | csv string | — | `"new-fails>0,fail-rate>2"` |
@@ -1047,6 +1048,9 @@ ncc-orchestrator [flags]
 | `--skip-preflight-check` | bool | `true`, `false` | `false` | Skips default preflight validation before run. Useful only for controlled/debug scenarios; not recommended for production runs. |
 | `--artifact-retain-days` | int | Integer `>= 0` | `0` | Deletes generated artifacts older than N days from `output-dir-filtered` (`0` disables age-based deletion). |
 | `--artifact-retain-max-files` | int | Integer `>= 0` | `0` | Keeps only the N newest generated artifacts in `output-dir-filtered` (`0` disables count-based deletion). |
+| `--raw-log-retain-days` | int | Integer `>= 0` | `0` | Deletes raw NCC logs (`<cluster>.log` in `output-dir-logs`) older than N days when a run finishes. The newest log and the logs of every cluster in the latest report (`run-summary.json`) are always kept, and nothing is deleted when `output-dir-logs` is the report folder. `0` keeps raw logs forever (the default, so upgrades change nothing). Nested key: `runner.history.raw-log-retain-days`. |
+
+**Retention preview (dry run).** `ncc-orchestrator retention --config config.yaml --dry-run` lists what every retention rule (run history, report files, raw NCC logs) would delete now, with sizes and totals, and deletes nothing. Add `--json` for machine-readable output; `--output-dir-filtered`, `--output-dir-logs` and `--run-history-dir` override the config's folders. Without `--dry-run` the command applies the same rules immediately. The API server exposes the same preview to admins at `GET /api/v1/settings/retention/preview` (it runs the command against its config and its report and raw log folders), and **Settings → Clusters & config → Reports & history** has a "Preview what would be removed" button.
 | `--secrets-file` | string | Path to YAML/JSON key-value map | none | Secret map source when `--secrets-provider=file` is selected. |
 | `--secrets-provider` | string | `env`, `file` | none | Enables `secret://` value resolution from process environment or file-backed key map. |
 | `--severity-filter` | string | CSV subset of `FAIL,WARN,ERR,INFO` | empty (all) | Limits output rows/artifacts to selected severities. Useful for alert-focused reports but can hide context. |

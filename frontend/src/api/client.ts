@@ -65,6 +65,7 @@ import type {
   UpdateJob,
   BackupEntry,
   BackupScheduleResponse,
+  RetentionPreview,
   BackupScheduleState,
   NotificationState,
   NotificationStatusResponse,
@@ -692,6 +693,7 @@ export const api = {
       "/api/v1/settings/notifications/test",
       { method: "POST", body: JSON.stringify(kind === "digest" ? { channel, kind } : { channel }) },
     ),
+  retentionPreview: () => callApi<RetentionPreview>("/api/v1/settings/retention/preview", undefined, 75_000),
   getBackupSchedule: () => callApi<BackupScheduleResponse>("/api/v1/settings/backups/schedule"),
   updateBackupSchedule: (payload: {
     enabled: boolean;

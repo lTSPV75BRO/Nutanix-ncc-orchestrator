@@ -51,6 +51,7 @@ import { CodeEditor, inferEditorLanguage } from "../../components/CodeEditor";
 import type { ConfigRelatedFileBatchOperation, ConfigRelatedFileInfo } from "../../api/types";
 import { EnvironmentsModal } from "./EnvironmentsModal";
 import { PolicyGateBuilderSection } from "./PolicyGateBuilderSection";
+import { RetentionPreviewPanel } from "./RetentionPreviewPanel";
 import { SecretsMigrationModal } from "./SecretsMigrationModal";
 import { notify } from "../../notify";
 import { ItemList, SaveBar, TitleIcon, middleEllipsis } from "../../ui";
@@ -976,6 +977,10 @@ export function ConfigSection({ onError }: Props) {
                             ready={loaded}
                             onApplyPolicyGates={(csv) => edit("policy-gates", csv)}
                           />
+                        </Card>
+                      ) : section.id === "outputs" && show === "all" && !query ? (
+                        <Card size="small" className="config-subcard">
+                          <RetentionPreviewPanel />
                         </Card>
                       ) : null
                     }
