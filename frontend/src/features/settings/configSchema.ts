@@ -345,6 +345,7 @@ export const SECTIONS: SectionDef[] = [
       { key: "retain-days", label: "Keep runs for (days)", type: "int", path: R("history", "retain-days"), group: "Run history", defaultValue: "0", min: 0, help: "0 means no age limit." },
       { key: "artifact-retain-days", label: "Keep report files for (days)", type: "int", path: R("history", "artifact-retain-days"), group: "Run history", defaultValue: "0", min: 0, help: "0 means no age limit." },
       { key: "artifact-retain-max-files", label: "Most report files to keep", type: "int", path: R("history", "artifact-retain-max-files"), group: "Run history", defaultValue: "0", min: 0, help: "0 means no limit." },
+      { key: "raw-log-retain-days", label: "Keep raw NCC logs for (days)", type: "int", path: R("history", "raw-log-retain-days"), group: "Run history", defaultValue: "0", min: 0, help: "0 keeps them. The newest log and the clusters in the latest report are always kept." },
       { key: "prom-enabled", label: "Write Prometheus metrics", type: "boolean", path: ["prometheus", "enabled"], group: "Prometheus", defaultValue: "false", help: "A metrics file after each run, for the node exporter's textfile collector." },
       { key: "prom-dir", label: "Metrics folder", type: "string", path: ["storage", "prom-dir"], group: "Prometheus", defaultValue: "promfiles" },
     ],

@@ -1515,3 +1515,33 @@ export type ExtraArgOption = {
   admin_only?: boolean;
   advanced?: boolean;
 };
+
+/** One file or run folder a retention rule would remove. */
+export type RetentionPreviewItem = {
+  path: string;
+  name: string;
+  bytes: number;
+  modified?: string;
+};
+
+/** GET /api/v1/settings/retention/preview: one rule's settings and what is past it. */
+export type RetentionPreviewRule = {
+  id: "runs" | "artifacts" | "raw-logs" | string;
+  title: string;
+  dir: string;
+  enabled: boolean;
+  settings: Record<string, number>;
+  count: number;
+  bytes: number;
+  items: RetentionPreviewItem[];
+  error?: string;
+};
+
+export type RetentionPreview = {
+  dry_run: boolean;
+  generated_at: string;
+  rules: RetentionPreviewRule[];
+  total_count: number;
+  total_bytes: number;
+  errors?: string[];
+};
