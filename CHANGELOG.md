@@ -116,6 +116,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Findings views and resizable columns.** The NCC findings have a view
+  switch: Table (every column), Focused (the finding with its detail,
+  cluster, KB and status), By check (one row per check with the clusters it
+  fails on and how many are still open; expand for each cluster) and List
+  (each finding as a short sentence). The choice is remembered. Drag a column
+  edge (or focus it and use the arrow keys) to resize; double-click or
+  **Reset columns** restores the defaults. Prism Central alerts keep the
+  table.
 - **Integrations page** (`/integrations`). Step-by-step guides for
   ServiceNow, Prometheus & Grafana, Splunk/Elastic and other log tools,
   Slack/email/webhooks, AI assistants (MCP) and your own scripts. Each guide
@@ -192,6 +200,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The findings table no longer has an expand-icon column: click a row or the
+  finding name (a button, so it works from the keyboard) to open its details.
 - The Findings table and cluster filter no longer show each cluster's data
   age, keeping the table about the findings themselves; data age stays on
   the Overview, the cluster page and Insights.

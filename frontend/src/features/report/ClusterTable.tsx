@@ -1,13 +1,15 @@
-import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type ThHTMLAttributes } from "react";
 import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Drawer,
   Empty,
   Grid,
   Input,
   Pagination,
+  Segmented,
   Space,
   Table,
   Tag,
@@ -15,7 +17,7 @@ import {
   Typography,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { AimOutlined, CheckOutlined, ClockCircleOutlined, ClusterOutlined, CopyOutlined, ExpandAltOutlined, ExportOutlined, FileTextOutlined, FullscreenExitOutlined, FullscreenOutlined, HistoryOutlined, MessageOutlined, ReadOutlined, RightOutlined, SearchOutlined, ToolOutlined } from "@ant-design/icons";
+import { AimOutlined, AppstoreOutlined, BarsOutlined, CheckOutlined, ClockCircleOutlined, CloseCircleOutlined, ClusterOutlined, ColumnWidthOutlined, CopyOutlined, DownOutlined, ExclamationCircleOutlined, ExportOutlined, FileTextOutlined, FullscreenExitOutlined, FullscreenOutlined, HistoryOutlined, InfoCircleOutlined, MessageOutlined, ProfileOutlined, QuestionCircleOutlined, ReadOutlined, RightOutlined, SearchOutlined, TableOutlined, ToolOutlined, WarningOutlined } from "@ant-design/icons";
 import { Link } from "react-router";
 import { KeyValueList, Panel, StatusBadge, type KeyValueItem } from "../../ui";
 import { clusterPath } from "../../navigation";
@@ -511,6 +513,112 @@ function VersionsCell({ row }: { row: RowRecord }) {
   );
 }
 
+/** How the NCC findings are laid out; PC alerts always use the table. */
+type FindingsView = "table" | "focused" | "grouped" | "list";
+
+const VIEW_OPTIONS: Array<{ value: FindingsView; label: string; icon: ReactNode; hint: string }> = [
+  { value: "table", label: "Table", icon: <TableOutlined />, hint: "Every column, including versions and detail." },
+  { value: "focused", label: "Focused", icon: <ProfileOutlined />, hint: "Fewer columns: the finding with its detail, cluster, KB and status." },
+  { value: "grouped", label: "By check", icon: <AppstoreOutlined />, hint: "One row per check, with the clusters it fails on." },
+  { value: "list", label: "List", icon: <BarsOutlined />, hint: "Each finding as a short sentence, easiest to scan." },
+];
+const VIEW_KEYS = new Set<string>(VIEW_OPTIONS.map((v) => v.value));
+
+const SEVERITY_RANK: Record<Severity, number> = { FAIL: 5, WARN: 4, ERR: 3, INFO: 2, UNKNOWN: 1 };
+
+function severityOf(row: RowRecord): Severity {
+  return row.isUnknownSeverity ? "UNKNOWN" : row.severity;
+}
+
+function SeverityIcon({ severity }: { severity: Severity }) {
+  const icon =
+    severity === "FAIL" ? <CloseCircleOutlined /> :
+    severity === "WARN" ? <WarningOutlined /> :
+    severity === "ERR" ? <ExclamationCircleOutlined /> :
+    severity === "INFO" ? <InfoCircleOutlined /> :
+    <QuestionCircleOutlined />;
+  return (
+    <span className={`findings-sev-icon sev-${severity.toLowerCase()}`} role="img" aria-label={severity}>
+      {icon}
+    </span>
+  );
+}
+
+const COLUMN_MIN_WIDTH = 64;
+const COLUMN_MAX_WIDTH = 900;
+
+type ResizableHeaderProps = ThHTMLAttributes<HTMLTableCellElement> & {
+  onResize?: (width: number) => void;
+  onResetWidth?: () => void;
+  resizeLabel?: string;
+};
+
+/**
+ * Table header cell with a drag handle on its right edge. Drag (or focus it
+ * and use the arrow keys) to resize; double-click puts the default back.
+ */
+function ResizableHeaderCell({ onResize, onResetWidth, resizeLabel, children, className, ...rest }: ResizableHeaderProps) {
+  if (!onResize) {
+    return (
+      <th className={className} {...rest}>
+        {children}
+      </th>
+    );
+  }
+  const clamp = (w: number) => Math.min(COLUMN_MAX_WIDTH, Math.max(COLUMN_MIN_WIDTH, Math.round(w)));
+  const startDrag = (event: ReactPointerEvent<HTMLSpanElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const th = event.currentTarget.parentElement;
+    if (!th) return;
+    const startX = event.clientX;
+    const startWidth = th.getBoundingClientRect().width;
+    const move = (e: PointerEvent) => onResize(clamp(startWidth + e.clientX - startX));
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      document.body.classList.remove("is-col-resizing");
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    document.body.classList.add("is-col-resizing");
+  };
+  const onKey = (event: ReactKeyboardEvent<HTMLSpanElement>) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const th = event.currentTarget.parentElement;
+    const current = th ? th.getBoundingClientRect().width : 120;
+    onResize(clamp(current + (event.key === "ArrowRight" ? 16 : -16)));
+  };
+  return (
+    <th className={`${className ?? ""} is-resizable`} {...rest}>
+      {children}
+      <span
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={resizeLabel}
+        tabIndex={0}
+        title="Drag to resize · double-click to reset"
+        className="alerts-col-resizer"
+        onPointerDown={startDrag}
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          onResetWidth?.();
+        }}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={onKey}
+      />
+    </th>
+  );
+}
+
+const TABLE_COMPONENTS = { header: { cell: ResizableHeaderCell } };
+
+/** Distinct checks among rows (the By check view pages by check). */
+function groupCountFor(rows: RowRecord[]): number {
+  return new Set(rows.map((r) => r.alert)).size;
+}
+
 const SELECTION_COLUMN_WIDTH = 42;
 const DETAIL_MIN_WIDTH = 220;
 const PC_WIDE_ONLY_COLUMNS = new Set(["entityType", "impactType"]);
@@ -745,12 +853,16 @@ export function ClusterTable({
   const [handling, setHandling] = useLocalStorageState<HandlingFilter>("dashboard.alerts.handling", "all");
   const [legacyNeeds, setLegacyNeeds] = useLocalStorageState("dashboard.alerts.needsAttention", false);
   const [drawerRow, setDrawerRow] = useState<RowRecord | null>(null);
+  const [view, setView] = useLocalStorageState<FindingsView>("dashboard.alerts.view", "table");
+  const [columnWidths, setColumnWidths] = useLocalStorageState<Record<string, number>>("dashboard.alerts.columnWidths", {});
+  const [openGroups, setOpenGroups] = useState<string[]>([]);
   const [handlingNote, setHandlingNote] = useState("");
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
   const screens = Grid.useBreakpoint();
   // NCC rows can be marked unless alert handling is off (no onDisposition).
   const canHandle = alertSource !== "PC" && Boolean(onDisposition);
+  const activeView: FindingsView = alertSource === "PC" || !VIEW_KEYS.has(view) ? "table" : view;
 
   // Rows are built once per data change; typing in search only re-filters
   // them (below). The search text is deferred so the input stays responsive
@@ -1023,21 +1135,54 @@ export function ClusterTable({
   }, [expanded, drawerRow, setExpanded]);
 
   const pageSize = Math.max(1, rowsPerPage);
-  const pageCount = Math.max(1, Math.ceil(shownRows.length / pageSize) || 1);
+  const pageCount = Math.max(1, Math.ceil((activeView === "grouped" ? groupCountFor(shownRows) : shownRows.length) / pageSize) || 1);
   const currentPage = Math.min(page, pageCount);
+  // The list and grouped views have no column sorters: worst first.
+  const orderedRows = useMemo(() => {
+    if (activeView === "table" || activeView === "focused") return shownRows;
+    return [...shownRows].sort(
+      (a, b) =>
+        SEVERITY_RANK[severityOf(b)] - SEVERITY_RANK[severityOf(a)] ||
+        a.alert.localeCompare(b.alert) ||
+        a.clusterName.localeCompare(b.clusterName),
+    );
+  }, [shownRows, activeView]);
+  // By check: one group per check, worst and most widespread first.
+  const groups = useMemo(() => {
+    if (activeView !== "grouped") return [];
+    const byCheck = new Map<string, RowRecord[]>();
+    for (const row of orderedRows) {
+      const list = byCheck.get(row.alert);
+      if (list) list.push(row);
+      else byCheck.set(row.alert, [row]);
+    }
+    return Array.from(byCheck, ([check, rows]) => {
+      const severity = rows.reduce<Severity>((worst, r) => (SEVERITY_RANK[severityOf(r)] > SEVERITY_RANK[worst] ? severityOf(r) : worst), "UNKNOWN");
+      const open = rows.filter((r) => {
+        const st = handlingStatus(r);
+        return st !== "acknowledged" && st !== "resolved";
+      }).length;
+      return { check, rows, severity, open };
+    }).sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || b.rows.length - a.rows.length || a.check.localeCompare(b.check));
+  }, [orderedRows, activeView, dispositionByKey]);
+  const pagerTotal = activeView === "grouped" ? groups.length : shownRows.length;
   const pagedRows = useMemo(() => {
     const start = (currentPage - 1) * pageSize;
-    return shownRows.slice(start, start + pageSize);
-  }, [shownRows, currentPage, pageSize]);
+    return orderedRows.slice(start, start + pageSize);
+  }, [orderedRows, currentPage, pageSize]);
+  const pagedGroups = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return groups.slice(start, start + pageSize);
+  }, [groups, currentPage, pageSize]);
 
   useEffect(() => {
     if (page > pageCount) setPage(pageCount);
   }, [page, pageCount]);
 
   useEffect(() => {
-    const body = hostRef.current?.querySelector(".ant-table-body");
+    const body = hostRef.current?.querySelector(".ant-table-body") ?? hostRef.current;
     if (body) body.scrollTop = 0;
-  }, [currentPage, pageSize, hostRef]);
+  }, [currentPage, pageSize, hostRef, activeView]);
 
   const severityCounts = useMemo(() => {
     const counts: Record<Severity, number> = { FAIL: 0, WARN: 0, ERR: 0, INFO: 0, UNKNOWN: 0 };
@@ -1052,7 +1197,87 @@ export function ClusterTable({
   // check is generally more actionable than an unclassified runtime error),
   // then ERR, then INFO, then UNKNOWN lowest. Keep in sync with
   // DashboardPage's SEVERITY_META ordering.
-  const severityRank: Record<Severity, number> = { FAIL: 5, WARN: 4, ERR: 3, INFO: 2, UNKNOWN: 1 };
+  const severityRank = SEVERITY_RANK;
+
+  const openDetails = (row: RowRecord) => setDrawerRow(row);
+  // The finding name opens its details (row clicks do too); it is a real
+  // button so keyboard users get there without a separate icon column.
+  const findingButton = (row: RowRecord, className = "alerts-title") => (
+    <button
+      type="button"
+      className={`${className} alerts-title-button`}
+      title={row.alert}
+      aria-label={`Open details for ${row.alert} on ${row.clusterName || row.cluster}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        openDetails(row);
+      }}
+    >
+      {row.alert}
+    </button>
+  );
+  const flagsFor = (row: RowRecord) =>
+    row.isChanged || row.isFlaky ? (
+      <span className="alerts-title-flags">
+        {row.isChanged ? <Tag color="gold" bordered={false}>changed</Tag> : null}
+        {row.isFlaky ? <Tag color="purple" bordered={false}>flaky</Tag> : null}
+      </span>
+    ) : null;
+  const kbLink = (row: RowRecord) => {
+    const kb = kbOf(row);
+    return kb ? (
+      <a
+        className="alerts-kb-link"
+        href={kb}
+        target="_blank"
+        rel="noreferrer"
+        title="Open the Nutanix KB article"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <ReadOutlined aria-hidden />
+        {kbLabel(kb)}
+      </a>
+    ) : null;
+  };
+  const statusFor = (row: RowRecord) => {
+    const mark = markFor(row);
+    if (mark?.status === "acknowledged") return <HandlingStatus tone="ack" label="Acknowledged" />;
+    if (mark?.status === "resolved") return <HandlingStatus tone="resolved" label="Resolved" />;
+    if (mark?.status === "reopened") {
+      return (
+        <Tooltip title={mark.reason || "This finding was resolved, then found again on a later run."}>
+          <HandlingStatus tone="returned" label="Returned" />
+        </Tooltip>
+      );
+    }
+    return <HandlingStatus tone="open" label="Open" />;
+  };
+  const isSelected = (key: string) => selectedKeys.includes(key);
+  const setSelected = (keys: string[], on: boolean) =>
+    setSelectedKeys((prev) => (on ? Array.from(new Set([...prev, ...keys])) : prev.filter((k) => !keys.includes(k))));
+
+  const clusterColumn = {
+    title: "Cluster",
+    dataIndex: "clusterName",
+    key: "clusterName",
+    width: 170,
+    sorter: (a: RowRecord, b: RowRecord) => a.clusterName.localeCompare(b.clusterName),
+    render: (_: unknown, row: RowRecord) => (
+      <ClusterCell row={row} url={clusterPrismURL(row.cluster, clusterNameMap)} subtitle={row.cluster} />
+    ),
+  };
+  const kbColumn = {
+    title: "KB",
+    key: "kb",
+    width: 92,
+    render: (_: unknown, row: RowRecord) => kbLink(row) ?? <span className="alerts-empty-cell">—</span>,
+  };
+  const handlingColumn = {
+    title: "Handling",
+    key: "handling",
+    width: 120,
+    render: (_: unknown, row: RowRecord) => statusFor(row),
+  };
 
   const titleColumn = {
     title: "Finding",
@@ -1060,17 +1285,10 @@ export function ClusterTable({
     key: "alert",
     width: 210,
     sorter: (a: RowRecord, b: RowRecord) => a.alert.localeCompare(b.alert),
-    render: (value: string, row: RowRecord) => (
+    render: (_: string, row: RowRecord) => (
       <div className="alerts-title-cell">
-        <span className="alerts-title" title={value}>
-          {value}
-        </span>
-        {row.isChanged || row.isFlaky ? (
-          <span className="alerts-title-flags">
-            {row.isChanged ? <Tag color="gold" bordered={false}>changed</Tag> : null}
-            {row.isFlaky ? <Tag color="purple" bordered={false}>flaky</Tag> : null}
-          </span>
-        ) : null}
+        {findingButton(row)}
+        {flagsFor(row)}
       </div>
     ),
   };
@@ -1087,43 +1305,9 @@ export function ClusterTable({
       return <Tag className={className} color={SEVERITY_TAG_COLOR[sev]}>{sev}</Tag>;
     },
   };
-  const actionColumn = {
-    title: " ",
-    key: "actions",
-    width: 44,
-    align: "center" as const,
-    render: (_: unknown, row: RowRecord) => (
-      <Tooltip title="Open details">
-        <Button
-          type="text"
-          size="small"
-          aria-label={`Open details for ${row.alert} on ${row.clusterName || row.cluster}`}
-          icon={<ExpandAltOutlined />}
-          onClick={(e) => {
-            e.stopPropagation();
-            setDrawerRow(row);
-          }}
-        />
-      </Tooltip>
-    ),
-  };
-
   const nccColumns: ColumnsType<RowRecord> = [
     severityColumn,
-    {
-      title: "Cluster",
-      dataIndex: "clusterName",
-      key: "clusterName",
-      width: 170,
-      sorter: (a, b) => a.clusterName.localeCompare(b.clusterName),
-      render: (_, row) => (
-        <ClusterCell
-          row={row}
-          url={clusterPrismURL(row.cluster, clusterNameMap)}
-          subtitle={row.cluster}
-        />
-      ),
-    },
+    clusterColumn,
     {
       title: "Versions",
       key: "versions",
@@ -1134,24 +1318,7 @@ export function ClusterTable({
       render: (_, row) => <VersionsCell row={row} />,
     },
     titleColumn,
-    {
-      title: "KB",
-      key: "kb",
-      width: 92,
-      render: (_, row) => kbOf(row) ? (
-        <a
-          className="alerts-kb-link"
-          href={kbOf(row)}
-          target="_blank"
-          rel="noreferrer"
-          title="Open the Nutanix KB article"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <ReadOutlined aria-hidden />
-          {kbLabel(kbOf(row))}
-        </a>
-      ) : <span className="alerts-empty-cell">—</span>,
-    },
+    kbColumn,
     {
       title: "Detail",
       dataIndex: "detail",
@@ -1165,29 +1332,46 @@ export function ClusterTable({
         );
       },
     },
+    handlingColumn,
+  ];
+
+  // Focused: the finding and its detail in one cell, a severity edge
+  // instead of a severity column, and no versions (they are in the drawer).
+  const focusedColumns: ColumnsType<RowRecord> = [
     {
-      title: "Handling",
-      key: "handling",
-      width: 120,
+      title: <span className="sr-only">Severity</span>,
+      key: "severityEdge",
+      width: 28,
+      sorter: (a, b) => SEVERITY_RANK[severityOf(a)] - SEVERITY_RANK[severityOf(b)],
+      defaultSortOrder: "descend",
+      render: (_, row) => (
+        <span className={`alerts-sev-edge sev-${severityOf(row).toLowerCase()}`} title={severityOf(row)} role="img" aria-label={severityOf(row)} />
+      ),
+    },
+    {
+      title: "Finding",
+      key: "finding",
+      sorter: (a, b) => a.alert.localeCompare(b.alert),
       render: (_, row) => {
-        const mark = markFor(row);
-        if (mark?.status === "acknowledged") {
-          return <HandlingStatus tone="ack" label="Acknowledged" />;
-        }
-        if (mark?.status === "resolved") {
-          return <HandlingStatus tone="resolved" label="Resolved" />;
-        }
-        if (mark?.status === "reopened") {
-          return (
-            <Tooltip title={mark.reason || "This finding was resolved, then found again on a later run."}>
-              <HandlingStatus tone="returned" label="Returned" />
-            </Tooltip>
-          );
-        }
-        return <HandlingStatus tone="open" label="Open" />;
+        const text = previewDetail(row.detail);
+        return (
+          <div className="alerts-focus-cell">
+            <span className="alerts-focus-title">
+              {findingButton(row, "alerts-focus-name")}
+              {flagsFor(row)}
+            </span>
+            {text !== "—" ? (
+              <span className="alerts-focus-detail" title={text}>
+                {text}
+              </span>
+            ) : null}
+          </div>
+        );
       },
     },
-    actionColumn,
+    { ...clusterColumn, width: 190 },
+    kbColumn,
+    { ...handlingColumn, title: "Status" },
   ];
 
   const pcColumns: ColumnsType<RowRecord> = [
@@ -1197,6 +1381,7 @@ export function ClusterTable({
       key: "title",
       width: 250,
       sorter: (a, b) => a.alert.localeCompare(b.alert),
+      render: (_, row) => findingButton(row),
     },
     severityColumn,
     {
@@ -1253,14 +1438,40 @@ export function ClusterTable({
       key: "impactType",
       width: 130,
     },
-    actionColumn,
   ];
   // Below 1600px (a 14" laptop) the PC table drops the two least-used
   // columns rather than scroll sideways; both stay in the details drawer.
-  const columns =
+  const baseColumns =
     alertSource === "PC"
       ? pcColumns.filter((c) => screens.xxl || !PC_WIDE_ONLY_COLUMNS.has(String(c.key)))
-      : nccColumns;
+      : activeView === "focused"
+        ? focusedColumns
+        : nccColumns;
+  // Widths the user dragged, per source and view; the rest keep defaults.
+  const widthKey = (key: string) => `${alertSource}.${activeView}.${key}`;
+  const hasCustomWidths = Object.keys(columnWidths).some((k) => k.startsWith(`${alertSource}.${activeView}.`));
+  const columns: ColumnsType<RowRecord> = baseColumns.map((c) => {
+    const key = String(c.key);
+    const width = columnWidths[widthKey(key)] ?? c.width;
+    const label = typeof c.title === "string" ? c.title : key === "severityEdge" ? "Severity" : key;
+    return {
+      ...c,
+      width,
+      onHeaderCell: () =>
+        ({
+          onResize: (w: number) => setColumnWidths((prev) => ({ ...prev, [widthKey(key)]: w })),
+          onResetWidth: () =>
+            setColumnWidths((prev) => {
+              const next = { ...prev };
+              delete next[widthKey(key)];
+              return next;
+            }),
+          resizeLabel: `Resize the ${label} column`,
+        }) as ResizableHeaderProps,
+    };
+  });
+  const resetColumnWidths = () =>
+    setColumnWidths((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => !k.startsWith(`${alertSource}.${activeView}.`))));
   // Fixed columns plus room for the flexible Detail column (and checkboxes).
   const scrollX =
     columns.reduce((sum, c) => sum + (typeof c.width === "number" ? c.width : DETAIL_MIN_WIDTH), 0) +
@@ -1309,6 +1520,33 @@ export function ClusterTable({
         </div>
         {/* Severity totals sit above the filters; no second copy here. */}
         <Space size={[8, 8]} wrap className="alerts-summary-pills">
+          {alertSource !== "PC" ? (
+            <Segmented<FindingsView>
+              size="small"
+              aria-label="Findings view"
+              className="alerts-view-switch"
+              value={activeView}
+              onChange={(v) => setView(v)}
+              options={VIEW_OPTIONS.map((o) => ({
+                value: o.value,
+                label: (
+                  <Tooltip title={o.hint}>
+                    <span className="alerts-view-option">
+                      {o.icon}
+                      <span>{o.label}</span>
+                    </span>
+                  </Tooltip>
+                ),
+              }))}
+            />
+          ) : null}
+          {hasCustomWidths && (activeView === "table" || activeView === "focused") ? (
+            <Tooltip title="Put every column back to its default width">
+              <Button size="small" icon={<ColumnWidthOutlined />} onClick={resetColumnWidths}>
+                Reset columns
+              </Button>
+            </Tooltip>
+          ) : null}
           <Tooltip title={density === "compact" ? "Switch to comfortable rows" : "Switch to compact rows"}>
             <Button
               size="small"
@@ -1430,8 +1668,155 @@ export function ClusterTable({
         />
       ) : (
         <>
+          {activeView === "list" ? (
+            <div className="alerts-table-host alerts-view-host" ref={hostRef}>
+              <ul className="findings-list" aria-label="Findings">
+                {pagedRows.map((row) => {
+                  const sev = severityOf(row);
+                  const text = previewDetail(row.detail);
+                  return (
+                    <li
+                      key={row.key}
+                      className={`findings-list-item sev-${sev.toLowerCase()}${isSelected(row.key) ? " is-selected" : ""}`}
+                      onClick={(e) => {
+                        if ((e.target as HTMLElement).closest("a, button, .ant-checkbox-wrapper")) return;
+                        openDetails(row);
+                      }}
+                    >
+                      {canHandle ? (
+                        <Checkbox
+                          checked={isSelected(row.key)}
+                          onChange={(e) => setSelected([row.key], e.target.checked)}
+                          aria-label={`Select ${row.alert} on ${row.clusterName}`}
+                        />
+                      ) : null}
+                      <SeverityIcon severity={sev} />
+                      <div className="findings-list-main">
+                        <div className="findings-list-title">
+                          {findingButton(row, "findings-list-name")}
+                          <span className="findings-list-on">on</span>
+                          <ClusterNameLine row={row} url={clusterPrismURL(row.cluster, clusterNameMap)} />
+                          {flagsFor(row)}
+                        </div>
+                        {text !== "—" ? (
+                          <div className="findings-list-detail" title={text}>
+                            {text}
+                          </div>
+                        ) : null}
+                      </div>
+                      <div className="findings-list-side">
+                        {kbLink(row)}
+                        {statusFor(row)}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ) : activeView === "grouped" ? (
+            <div className="alerts-table-host alerts-view-host" ref={hostRef}>
+              <div className="findings-groups">
+                {pagedGroups.map((g) => {
+                  const open = openGroups.includes(g.check);
+                  const keys = g.rows.map((r) => r.key);
+                  const chosen = keys.filter((k) => isSelected(k)).length;
+                  const toggle = () => setOpenGroups((prev) => (open ? prev.filter((c) => c !== g.check) : [...prev, g.check]));
+                  const kbRow = g.rows.find((r) => kbOf(r));
+                  const detail = previewDetail(g.rows[0].detail);
+                  const shownClusters = g.rows.slice(0, 3);
+                  return (
+                    <section key={g.check} className={`findings-group sev-${g.severity.toLowerCase()}${open ? " is-open" : ""}`}>
+                      <div className="findings-group-head" onClick={(e) => {
+                        if ((e.target as HTMLElement).closest("a, button, .ant-checkbox-wrapper")) return;
+                        toggle();
+                      }}>
+                        <button
+                          type="button"
+                          className="findings-group-toggle"
+                          aria-expanded={open}
+                          aria-label={`${open ? "Hide" : "Show"} the clusters for ${g.check}`}
+                          onClick={toggle}
+                        >
+                          {open ? <DownOutlined /> : <RightOutlined />}
+                        </button>
+                        {canHandle ? (
+                          <Checkbox
+                            checked={chosen === keys.length}
+                            indeterminate={chosen > 0 && chosen < keys.length}
+                            onChange={(e) => setSelected(keys, e.target.checked)}
+                            aria-label={`Select every cluster for ${g.check}`}
+                          />
+                        ) : null}
+                        <Tag className="severity-pill" color={SEVERITY_TAG_COLOR[g.severity]}>{g.severity}</Tag>
+                        <div className="findings-group-main">
+                          <span className="findings-group-name" title={g.check}>{g.check}</span>
+                          {detail !== "—" ? <span className="findings-group-detail" title={detail}>{detail}</span> : null}
+                        </div>
+                        <div className="findings-group-clusters" aria-label="Clusters">
+                          {shownClusters.map((r) => (
+                            <Link key={r.key} to={clusterPath(r.cluster)} className="findings-group-chip" title={`Open the ${r.clusterName} cluster page`}>
+                              {r.clusterName}
+                            </Link>
+                          ))}
+                          {g.rows.length > shownClusters.length ? (
+                            <span className="findings-group-chip is-more">+{g.rows.length - shownClusters.length}</span>
+                          ) : null}
+                        </div>
+                        <span className="findings-group-count" title="Clusters where this check still needs attention">
+                          <b>{g.open}</b> of {g.rows.length} open
+                        </span>
+                        {kbRow ? kbLink(kbRow) : <span className="findings-group-kb-empty" />}
+                      </div>
+                      {open ? (
+                        <ul className="findings-group-rows">
+                          {g.rows.map((row) => {
+                            const text = previewDetail(row.detail);
+                            return (
+                              <li
+                                key={row.key}
+                                className={isSelected(row.key) ? "is-selected" : undefined}
+                                onClick={(e) => {
+                                  if ((e.target as HTMLElement).closest("a, button, .ant-checkbox-wrapper")) return;
+                                  openDetails(row);
+                                }}
+                              >
+                                {canHandle ? (
+                                  <Checkbox
+                                    checked={isSelected(row.key)}
+                                    onChange={(e) => setSelected([row.key], e.target.checked)}
+                                    aria-label={`Select ${row.alert} on ${row.clusterName}`}
+                                  />
+                                ) : null}
+                                <SeverityIcon severity={severityOf(row)} />
+                                <ClusterCell row={row} url={clusterPrismURL(row.cluster, clusterNameMap)} subtitle={row.cluster} />
+                                <span className="findings-group-versions">
+                                  {[row.clusterVersion && `AOS ${row.clusterVersion}`, row.nccVersion && `NCC ${row.nccVersion}`].filter(Boolean).join(" · ") || "—"}
+                                </span>
+                                <span className="findings-group-row-detail" title={text}>{text}</span>
+                                {statusFor(row)}
+                                <button
+                                  type="button"
+                                  className="findings-group-open"
+                                  aria-label={`Open details for ${row.alert} on ${row.clusterName || row.cluster}`}
+                                  onClick={() => openDetails(row)}
+                                >
+                                  Details
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      ) : null}
+                    </section>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
           <div className="alerts-table-host" ref={hostRef} data-scroll-y={tableY}>
             <Table<RowRecord>
+              key={`${alertSource}-${activeView}`}
+              components={TABLE_COMPONENTS}
               virtual
               className="alerts-table"
               tableLayout="fixed"
@@ -1462,14 +1847,17 @@ export function ClusterTable({
               scroll={{ x: scrollX, y: tableY }}
             />
           </div>
+          )}
           <Pagination
             className="alerts-pagination"
             current={currentPage}
             pageSize={pageSize}
-            total={shownRows.length}
+            total={pagerTotal}
             showSizeChanger
             pageSizeOptions={[50, 100, 200, 500]}
-            showTotal={(total, range) => `${range[0].toLocaleString()}–${range[1].toLocaleString()} of ${total.toLocaleString()}`}
+            showTotal={(total, range) =>
+              `${range[0].toLocaleString()}–${range[1].toLocaleString()} of ${total.toLocaleString()}${activeView === "grouped" ? (total === 1 ? " check" : " checks") : ""}`
+            }
             onChange={(nextPage, nextPageSize) => {
               setPage(nextPage);
               if (nextPageSize && nextPageSize !== rowsPerPage) setRowsPerPage(nextPageSize);
