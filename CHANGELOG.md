@@ -200,6 +200,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Overview's Clusters list and the Findings "By check" view keep their
+  columns lined up from row to row: the counts, last-checked time, status,
+  severity and Details columns have fixed or shared widths instead of each
+  row sizing them to its own text.
+- File locations are no longer shown in the UI: the finding drawer drops
+  its "Run log" field, the log viewer, audit log and scheduler status no
+  longer print log file paths, and support-bundle messages no longer name
+  the server folder. Settings where you choose a log file are unchanged.
 - The live demo uses real NCC check names and KB numbers (storage pool and
   volume group usage, remote site config, NGT certificates, recovery plans,
   licence expiry and more) with NCC's own message layout: a "Node" line per

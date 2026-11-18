@@ -101,8 +101,8 @@ export function SystemHealthSection() {
     },
     onSuccess: ({ made, downloaded }) =>
       downloaded
-        ? notify.success(`Support bundle downloaded (${made.name}). A copy is kept on the server in logs/.`)
-        : notify.success(`Support bundle saved to ${made.path}`),
+        ? notify.success(`Support bundle downloaded (${made.name}).`)
+        : notify.success("Support bundle saved on the server."),
     onError: (e) => notifyError(e, "Couldn't create the support bundle"),
   });
 

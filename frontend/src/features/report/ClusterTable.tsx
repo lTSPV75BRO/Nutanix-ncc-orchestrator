@@ -34,7 +34,6 @@ type Props = {
   aggRows?: unknown[];
   diffFlags?: Record<string, unknown>;
   flakyKeys?: Record<string, unknown>;
-  nccLogs?: Array<{ name: string; path: string }>;
   filterText: string;
   /** Search the table for one check across every cluster (the drawer's "This check on all clusters"). */
   onShowCheck?: (check: string) => void;
@@ -124,8 +123,6 @@ type RowRecord = {
   nccVersion: string;
   isChanged: boolean;
   isFlaky: boolean;
-  logName: string;
-  logPath: string;
   /** Lower-cased "name address severity alert", built once for search. */
   searchText: string;
   /** Lower-cased display name and resolved address name, for the cluster filter. */
@@ -255,28 +252,6 @@ function clusterPrismURL(
       candidates.some((candidate) => name.trim().toLowerCase() === candidate.toLowerCase()),
   )?.[0];
   return mappedIP ? `https://${normalizeClusterHost(mappedIP)}:9440` : "";
-}
-
-type NCCLog = { name: string; path: string };
-
-/**
- * Builds a cluster → raw NCC log lookup. Logs are named "<cluster>.log", so
- * an exact name is found directly; anything else falls back to the substring
- * match, once per cluster. Scanning every log for every row was 7,000 × 200,000
- * comparisons at fleet scale and froze the page.
- */
-function logLookup(logs: NCCLog[]): (cluster: string) => NCCLog | undefined {
-  const byName = new Map<string, NCCLog>();
-  for (const l of logs) byName.set(l.name.replace(/\.log$/i, "").trim(), l);
-  const seen = new Map<string, NCCLog | undefined>();
-  return (cluster: string) => {
-    const key = (cluster || "").trim();
-    if (!key) return undefined;
-    if (seen.has(key)) return seen.get(key);
-    const found = byName.get(key) ?? logs.find((l) => l.name.includes(key) || l.path.includes(key));
-    seen.set(key, found);
-    return found;
-  };
 }
 
 function previewDetail(detail: string): string {
@@ -712,7 +687,6 @@ function NCCAlertInspector({
     { label: "AOS", value: row.clusterVersion || "Not reported" },
     { label: "NCC", value: row.nccVersion || "Not reported" },
   ];
-  if (row.logName) facts.push({ label: "Run log", value: row.logName, mono: true, title: row.logPath || row.logName });
   return (
     <div className="finding-inspector">
       {mark?.status === "reopened" ? (
@@ -828,7 +802,6 @@ export function ClusterTable({
   aggRows,
   diffFlags,
   flakyKeys,
-  nccLogs,
   filterText,
   onShowCheck,
   selectedClusters,
@@ -868,7 +841,6 @@ export function ClusterTable({
   // them (below). The search text is deferred so the input stays responsive
   // while 200k rows are filtered.
   const baseRows = useMemo<RowRecord[]>(() => {
-    const findLog = logLookup(nccLogs || []);
     const dflags = diffFlags || {};
     const fkeys = flakyKeys || {};
     const pickDiff = (cluster: string, alert: string) => {
@@ -930,7 +902,6 @@ export function ClusterTable({
       const diff = pickDiff(cluster, alert);
       const isChanged = Boolean(diff.new_fail || diff.resolved_fail || diff.severity_changed);
       const isFlaky = Boolean(fkeys[rowKey(cluster, alert)]);
-      const log = findLog(cluster);
       const clusterName = nameOf(displayClusterName(raw));
       return {
         key: `${cluster}-${alert}-${idx}`,
@@ -969,8 +940,6 @@ export function ClusterTable({
         nccVersion: String(raw.nccVersion || raw.ncc_version || ""),
         isChanged,
         isFlaky,
-        logName: log?.name || "",
-        logPath: log?.path || "",
       };
     };
 
@@ -1009,7 +978,7 @@ export function ClusterTable({
       }
     }
     return built;
-  }, [checksSnapshot, aggRows, diffFlags, flakyKeys, nccLogs, clusterNameMap, pcAlerts, alertSource]);
+  }, [checksSnapshot, aggRows, diffFlags, flakyKeys, clusterNameMap, pcAlerts, alertSource]);
 
   const deferredFilterText = useDeferredValue(filterText);
   const rows = useMemo<RowRecord[]>(() => {
@@ -1726,7 +1695,7 @@ export function ClusterTable({
                   const shownClusters = g.rows.slice(0, 3);
                   return (
                     <section key={g.check} className={`findings-group sev-${g.severity.toLowerCase()}${open ? " is-open" : ""}`}>
-                      <div className="findings-group-head" onClick={(e) => {
+                      <div className={`findings-group-head${canHandle ? " has-select" : ""}`} onClick={(e) => {
                         if ((e.target as HTMLElement).closest("a, button, .ant-checkbox-wrapper")) return;
                         toggle();
                       }}>
@@ -1774,7 +1743,7 @@ export function ClusterTable({
                             return (
                               <li
                                 key={row.key}
-                                className={isSelected(row.key) ? "is-selected" : undefined}
+                                className={[canHandle ? "has-select" : "", isSelected(row.key) ? "is-selected" : ""].filter(Boolean).join(" ") || undefined}
                                 onClick={(e) => {
                                   if ((e.target as HTMLElement).closest("a, button, .ant-checkbox-wrapper")) return;
                                   openDetails(row);

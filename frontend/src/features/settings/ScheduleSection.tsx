@@ -550,16 +550,15 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
         {health.last_updated_at ? formatDateTime(health.last_updated_at) : "—"}
       </Descriptions.Item>
       {!isKubernetes ? (
-        <Descriptions.Item label="Log file">
+        <Descriptions.Item label="Scheduler log">
           <Space orientation="vertical" size={2}>
-            <Typography.Text className="mono" copyable={health.log_path ? { text: health.log_path } : false}>
-              {health.log_path || "—"}
-            </Typography.Text>
             {health.log_exists ? (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {formatBytes(health.log_size)} · modified {relativeTime(health.log_mod_time)}
+              <Typography.Text>
+                {formatBytes(health.log_size)} · updated {relativeTime(health.log_mod_time)}
               </Typography.Text>
-            ) : null}
+            ) : (
+              <Typography.Text type="secondary">Not written yet</Typography.Text>
+            )}
             {health.last_run ? (
               <Typography.Text type="secondary" style={{ fontSize: 12 }} ellipsis={{ tooltip: health.last_run }}>
                 Last line: {health.last_run}

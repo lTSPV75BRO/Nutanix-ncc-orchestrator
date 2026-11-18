@@ -3353,8 +3353,15 @@ html[data-theme="it-pro"] {
   grid-template-columns: 96px minmax(0, 1fr) 64px;
 }
 
+/* Fixed columns: each row is its own grid, so auto widths would follow
+   each row's text and the counts, ages and badges would not line up. */
 .overview-cluster-row {
-  grid-template-columns: minmax(0, 1fr) auto 56px auto;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 4.5rem 6.5rem;
+}
+
+.overview-cluster-row > .ui-status-badge,
+.overview-cluster-row > :last-child {
+  justify-self: start;
 }
 
 a.overview-severity-row:hover,
@@ -3413,8 +3420,12 @@ a.overview-cluster-row:focus-visible {
 }
 
 .overview-cluster-counts {
+  overflow: hidden;
   font-size: var(--ui-text-sm);
   color: var(--ui-text-secondary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -3472,7 +3483,7 @@ a.overview-cluster-row:focus-visible {
     display: none;
   }
   .overview-cluster-row {
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-columns: minmax(0, 1fr) 4rem 6.5rem;
   }
 }
 
@@ -6785,16 +6796,23 @@ body.is-col-resizing * {
   border-top: 1px solid var(--ui-border);
 }
 
+/* Fixed widths for the toggle, checkbox, severity, count and KB columns so
+   every group (a grid of its own) lines up with the next. */
 .findings-group-head {
   display: grid;
-  grid-template-columns: auto auto auto minmax(0, 1.4fr) minmax(0, 1fr) auto 92px;
+  grid-template-columns: 28px 52px minmax(0, 1.4fr) minmax(0, 1fr) 7.5rem 92px;
   align-items: center;
   gap: 10px;
   padding: 10px 14px 10px 8px;
   cursor: pointer;
 }
 
+.findings-group-head.has-select {
+  grid-template-columns: 28px 16px 52px minmax(0, 1.4fr) minmax(0, 1fr) 7.5rem 92px;
+}
+
 .findings-group-head .ant-tag {
+  justify-self: start;
   margin: 0;
 }
 
@@ -6881,12 +6899,24 @@ a.findings-group-chip:hover {
 
 .findings-group-rows li {
   display: grid;
-  grid-template-columns: auto auto minmax(140px, 0.9fr) minmax(120px, 0.7fr) minmax(0, 1.6fr) auto auto;
+  grid-template-columns: 16px minmax(140px, 0.9fr) minmax(120px, 0.7fr) minmax(0, 1.6fr) 7.5rem 72px;
   align-items: center;
   gap: 12px;
   padding: 8px 14px 8px 44px;
   border-top: 1px solid var(--ui-border);
   cursor: pointer;
+}
+
+.findings-group-rows li.has-select {
+  grid-template-columns: 16px 16px minmax(140px, 0.9fr) minmax(120px, 0.7fr) minmax(0, 1.6fr) 7.5rem 72px;
+}
+
+.findings-group-rows li > :nth-last-child(2) {
+  justify-self: start;
+}
+
+.findings-group-rows li > :last-child {
+  justify-self: end;
 }
 
 .findings-group-versions {
@@ -6898,7 +6928,11 @@ a.findings-group-chip:hover {
 
 @media (max-width: 900px) {
   .findings-group-head {
-    grid-template-columns: auto auto auto minmax(0, 1fr) auto;
+    grid-template-columns: 28px 52px minmax(0, 1fr) 6.5rem;
+  }
+
+  .findings-group-head.has-select {
+    grid-template-columns: 28px 16px 52px minmax(0, 1fr) 6.5rem;
   }
 
   .findings-group-clusters,
@@ -6908,8 +6942,12 @@ a.findings-group-chip:hover {
   }
 
   .findings-group-rows li {
-    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    grid-template-columns: 16px minmax(0, 1fr) 6.5rem 64px;
     padding-left: 14px;
+  }
+
+  .findings-group-rows li.has-select {
+    grid-template-columns: 16px 16px minmax(0, 1fr) 6.5rem 64px;
   }
 
   .findings-group-versions,

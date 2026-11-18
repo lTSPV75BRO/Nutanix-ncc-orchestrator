@@ -349,13 +349,6 @@ export function AuditLogSection({ onError }: Props) {
         <Tag>{filtered.length} shown</Tag>
         <Tag>{successCount} succeeded</Tag>
         <Tag color={failureCount > 0 ? "error" : undefined}>{failureCount} failed</Tag>
-        {data?.path ? (
-          <Tooltip title={data.path}>
-            <Tag>
-              File: <Typography.Text className="mono" style={{ fontSize: 11 }} copyable={{ text: data.path }}>{data.path}</Typography.Text>
-            </Tag>
-          </Tooltip>
-        ) : null}
         {data ? <Tag>Size: {formatBytes(data.size || 0)}</Tag> : null}
         {data?.mod_time ? (
           <Tooltip title={formatDateTime(data.mod_time)}>

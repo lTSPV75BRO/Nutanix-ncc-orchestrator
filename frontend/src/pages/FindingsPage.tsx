@@ -75,7 +75,6 @@ const SEVERITY_META: Array<{ key: Severity; color: string; label: string; icon: 
 // would make it rebuild every row (200k at fleet scale) on every render.
 const NO_ROWS: unknown[] = [];
 const NO_FLAGS: Record<string, unknown> = {};
-const NO_LOGS: Array<{ name: string; path: string }> = [];
 
 /**
  * Findings: every NCC (and, in beta, Prism Central) alert from the latest run,
@@ -865,7 +864,6 @@ export function FindingsPage() {
           }
           diffFlags={(reportData.diff_flags || NO_FLAGS) as Record<string, unknown>}
           flakyKeys={(reportData.flaky_keys || NO_FLAGS) as Record<string, unknown>}
-          nccLogs={Array.isArray(reportData.ncc_logs) ? reportData.ncc_logs : NO_LOGS}
           filterText={filterText}
           onShowCheck={(check) => {
             setFilterText(check);

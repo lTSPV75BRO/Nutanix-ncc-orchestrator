@@ -129,7 +129,7 @@ function ClusterHealthList({ clusters }: { clusters: ClusterRow[] }) {
                 <span className="overview-cluster-name" title={c.error || c.name}>
                   {c.name}
                 </span>
-                <span className="overview-cluster-counts">{clusterDetail(c)}</span>
+                <span className="overview-cluster-counts" title={clusterDetail(c)}>{clusterDetail(c)}</span>
                 <span className={`overview-cluster-age${old ? " is-old" : ""}`} title={clusterAgeTitle(c)}>
                   {c.checkedAt ? relativeTime(c.checkedAt) : ""}
                 </span>
