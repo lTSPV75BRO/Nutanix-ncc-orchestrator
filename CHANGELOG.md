@@ -200,6 +200,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The live demo uses real NCC check names and KB numbers (storage pool and
+  volume group usage, remote site config, NGT certificates, recovery plans,
+  licence expiry and more) with NCC's own message layout: a "Node" line per
+  CVM and the "Refer to KB" line, so each finding's drawer links its KB
+  article. All clusters, addresses, VMs and names are still made up.
+- `internal/nccparse` has a test that parses NCC summaries laid out like
+  real Prism Element and Prism Central output (several nodes per check, an
+  `ERR :` line before a `WARN:` line, wrapped VM lists) and checks every
+  block's severity and KB line. The sample logs contain no real data.
 - The findings table no longer has an expand-icon column: click a row or the
   finding name (a button, so it works from the keyboard) to open its details.
 - The Findings table and cluster filter no longer show each cluster's data
