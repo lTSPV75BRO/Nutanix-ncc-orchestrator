@@ -257,11 +257,11 @@ Metrics: `new-fails`, `resolved-fails`, `fail-rate`, `clusters-failed`, `regress
 
 The sidebar has three groups.
 
-- **Overview, Findings, Insights, Runs.** Overview shows the latest run at a glance. Findings lists NCC results and, optionally, live Prism Central alerts; filters live in the URL, so **Copy link** shares the exact view. Open an NCC finding to acknowledge, resolve or reopen it and to see its history: how long it has been open, when a run last reported it, and how often it came back. Insights covers trends, regressions, flaky checks, run-to-run diffs, alert aging and the triage queue. Runs starts, follows and cancels runs and keeps their history.
+- **Overview, Findings, Insights, Integrations, Runs.** Overview shows the latest run at a glance. Findings lists NCC results and, optionally, live Prism Central alerts; filters live in the URL, so **Copy link** shares the exact view. Open an NCC finding to acknowledge, resolve or reopen it and to see its history: how long it has been open, when a run last reported it, and how often it came back. Insights covers trends, regressions, flaky checks, run-to-run diffs, alert aging and the triage queue. Integrations has step-by-step guides for connecting ServiceNow, Prometheus & Grafana, Splunk/Elastic, Slack/email/webhooks, AI assistants and scripts. Runs starts, follows and cancels runs and keeps their history.
 - **Settings:** Clusters & config (form or YAML), Schedule, Notifications, Access (users, sign-in with LDAP/AD, OpenID Connect or SAML, cluster groups, API tokens, HTTPS) and Features.
 - **System:** Status, Health & repair, Updates & backups, Logs, Audit log and Developer (API explorer, saved reports, run files).
 
-Operators see Overview, Findings, Insights, Runs, Schedule, Status, Logs and Audit log. **Ctrl+K / ⌘K** jumps to any page or setting.
+Operators see Overview, Findings, Insights, Integrations, Runs, Schedule, Status, Logs and Audit log. **Ctrl+K / ⌘K** jumps to any page or setting.
 
 Themes: Light, Dark, IT Pro, or match the system. The UI is keyboard friendly and runs under a strict Content Security Policy (`script-src 'self'`). An admin can turn optional parts off (Insights, Prism Central alerts, run comparison, flaky checks, SLO, NCC log index and more) in **Settings → Features**.
 
@@ -273,7 +273,7 @@ Themes: Light, Dark, IT Pro, or match the system. The UI is keyboard friendly an
 
 **Prism Central alerts.** Configure `pcs` or `prism-central-url` and pick **PC · Beta** on the dashboard. Alerts are fetched on demand, cached briefly (`pc-alerts-cache-ttl`, default `5m`), and keep their own status in Prism Central.
 
-**Third-party tools.** ServiceNow, SIEMs, and scripts can poll `GET /api/v1/alerts/ncc` and the incremental `GET /api/v1/alerts/ncc/events` feed with a viewer [personal access token](#http-api), and write back with `POST /api/v1/alerts/ncc/{id}/resolve`. The OpenAPI spec includes typed schemas for these endpoints. Step-by-step guide, field mappings, and examples: [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/third-party-alert-integrations.md). Prometheus setup: [`Prometheus.md`](docs/PROMETHEUS.md).
+**Third-party tools.** ServiceNow, SIEMs, and scripts can poll `GET /api/v1/alerts/ncc` and the incremental `GET /api/v1/alerts/ncc/events` feed with a viewer [personal access token](#http-api), and write back with `POST /api/v1/alerts/ncc/{id}/resolve`. The OpenAPI spec includes typed schemas for these endpoints. In the app, **Integrations** walks through each setup. Full reference, field mappings, and examples: [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/third-party-alert-integrations.md). Prometheus setup: [`Prometheus.md`](docs/PROMETHEUS.md).
 
 ---
 

@@ -105,6 +105,8 @@ Already covered through v2.4.0 and therefore tracked elsewhere:
 - Data age on Findings, Insights and notifications, with Prometheus gauges.
 - Setup-aware empty states; schedule drafts and host schedule saves that
   cannot overwrite a newer save.
+- An Integrations page with guided setups for ServiceNow, Prometheus &
+  Grafana, log tools, chat/email/webhooks, MCP and scripts.
 
 ## Audit of 2026-11-16 (v2.4.0)
 

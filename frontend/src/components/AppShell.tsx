@@ -31,6 +31,7 @@ function navItems(viewer: Viewer): MenuItem[] {
 /** Menu key for the current location: the page/section path (a run's detail page belongs to Runs). */
 function selectedKey(pathname: string): string {
   const p = pathname.replace(/\/+$/, "") || "/";
+  if (p.startsWith("/integrations/")) return "/integrations";
   return p.startsWith("/runs/") ? "/runs" : p;
 }
 

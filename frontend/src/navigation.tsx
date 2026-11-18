@@ -4,6 +4,7 @@
 import type { ReactNode } from "react";
 import {
   AlertOutlined,
+  AppstoreAddOutlined,
   ApiOutlined,
   AuditOutlined,
   BarChartOutlined,
@@ -79,6 +80,7 @@ export const PAGES = [
   { path: OVERVIEW_PATH, label: "Overview", title: "Overview", icon: <DashboardOutlined /> },
   { path: "/findings", label: "Findings", title: "Findings", icon: <AlertOutlined /> },
   { path: "/insights", label: "Insights", title: "Insights", icon: <BarChartOutlined /> },
+  { path: "/integrations", label: "Integrations", title: "Integrations", icon: <AppstoreAddOutlined /> },
 ] as const;
 
 /** A cluster's own page. `key` is its address (or its name, which the page resolves). */
@@ -216,6 +218,7 @@ export function legacySettingsTarget(search: string, v: Viewer): string {
 export function pageIcon(pathname: string): ReactNode {
   if (/^\/runs\/[^/]+/.test(pathname)) return SECTIONS.find((s) => s.key === "runs")?.icon ?? null;
   if (/^\/clusters\/[^/]+/.test(pathname)) return <ClusterOutlined />;
+  if (/^\/integrations\/[^/]+/.test(pathname)) return <AppstoreAddOutlined />;
   const s = sectionByPath(pathname);
   if (s) return s.icon;
   return PAGES.find((pg) => pg.path === (pathname.replace(/\/+$/, "") || "/"))?.icon ?? null;
@@ -224,6 +227,7 @@ export function pageIcon(pathname: string): ReactNode {
 export function pageTitle(pathname: string): string {
   if (/^\/runs\/[^/]+/.test(pathname)) return "Run details";
   if (/^\/clusters\/[^/]+/.test(pathname)) return "Cluster";
+  if (/^\/integrations\/[^/]+/.test(pathname)) return "Integrations";
   const s = sectionByPath(pathname);
   if (s) return s.title;
   const p = PAGES.find((pg) => pg.path === (pathname.replace(/\/+$/, "") || "/"));

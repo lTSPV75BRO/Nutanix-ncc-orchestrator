@@ -53,6 +53,7 @@ const RunDetailPage = lazy(() => import("./pages/RunDetailPage").then((m) => ({ 
 const ClusterPage = lazy(() => import("./pages/ClusterPage").then((m) => ({ default: m.ClusterPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 const InsightsPage = lazy(() => import("./pages/InsightsPage").then((m) => ({ default: m.InsightsPage })));
+const IntegrationsPage = lazy(() => import("./pages/IntegrationsPage").then((m) => ({ default: m.IntegrationsPage })));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage").then((m) => ({ default: m.NotFoundPage })));
 
 /** A Settings/System section route; sends viewers who may not open it to their landing. */
@@ -780,6 +781,8 @@ export default function App() {
               <Route path="/findings" element={<FindingsPage />} />
               <Route path="/login" element={<Navigate to={OVERVIEW_PATH} replace />} />
               <Route path="/insights" element={<InsightsPage />} />
+              <Route path="/integrations" element={<IntegrationsPage />} />
+              <Route path="/integrations/:id" element={<IntegrationsPage />} />
               <Route path="/runs" element={<RunsPage />} />
               <Route path="/runs/:id" element={<RunDetailPage />} />
               <Route path="/clusters/:key" element={<ClusterPage />} />

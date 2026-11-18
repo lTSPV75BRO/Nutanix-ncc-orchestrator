@@ -52,8 +52,7 @@ import {
 } from "../utils/report";
 import { useLocalStorageState } from "../hooks/useLocalStorageState";
 import { formatDateTime, formatTime, relativeTime } from "../utils/datetime";
-import { clusterDataAges, freshness, lookupDataAge } from "../utils/freshness";
-import { useFreshness } from "../hooks/useClusterDirectory";
+import { freshness } from "../utils/freshness";
 import { ArcSpinner, GridLoader } from "../components/Loaders";
 
 type Severity = "FAIL" | "WARN" | "ERR" | "INFO";
@@ -423,14 +422,6 @@ export function FindingsPage() {
       .map((name) => ({ label: name, value: name }));
   }, [reportData.run_summary, filteredAggRows, filteredChecksSnapshot, clusterNameMap]);
 
-  // Each cluster's data age (GET /api/v1/freshness, shared with the
-  // Overview), looked up by address or name for table rows and filter options.
-  const freshnessQuery = useFreshness();
-  const clusterAges = useMemo(
-    () => clusterDataAges(freshnessQuery.data?.clusters, (address) => resolveClusterName(address, clusterNameMap)),
-    [freshnessQuery.data, clusterNameMap],
-  );
-
   // ----------------- RUN SUMMARY -----------------
 
   const summaryCounts = asRecord(reportData.ncc_summary_counts);
@@ -695,20 +686,6 @@ export function FindingsPage() {
               value={selectedClusters}
               onChange={(values) => setSelectedClusters(values)}
               options={clusterOptions}
-              optionRender={(option) => {
-                const name = String(option.value ?? "");
-                const age = lookupDataAge(clusterAges, name);
-                return (
-                  <span className="cluster-filter-option">
-                    <span>{option.label}</span>
-                    {age ? (
-                      <span className={`cluster-filter-age${age.old ? " is-old" : ""}`} title={age.title}>
-                        {age.text}
-                      </span>
-                    ) : null}
-                  </span>
-                );
-              }}
             />
           </div>
           {alertSource === "PC" && !pcBlocked ? (
@@ -897,7 +874,6 @@ export function FindingsPage() {
           selectedClusters={selectedClusters}
           environmentClusters={alertSource === "NCC" ? environmentClusters : null}
           clusterNameMap={clusterNameMap}
-          clusterAges={clusterAges}
           severityFilters={severityFilters}
           alertSource={alertSource}
           pcResolvedFilter={pcResolvedFilter}

@@ -24,7 +24,6 @@ import { asArray, asRecord, displayClusterName, nccDispositionKey, resolveCluste
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { notify } from "../../notify";
 import { formatDateTime, relativeTime } from "../../utils/datetime";
-import { lookupDataAge, type ClusterDataAge } from "../../utils/freshness";
 import { safeExternalUrl } from "../../utils/url";
 import { NCCLifecyclePanel } from "./NCCLifecyclePanel";
 
@@ -41,8 +40,6 @@ type Props = {
   /** Only rows on these clusters (an environment's list); null for all. */
   environmentClusters?: string[] | null;
   clusterNameMap: Record<string, string>;
-  /** Data age per cluster (clusterDataAges), shown under NCC rows' cluster names. */
-  clusterAges?: Map<string, ClusterDataAge>;
   severityFilters: Array<"FAIL" | "WARN" | "ERR" | "INFO">;
   pcAlerts?: unknown[];
   alertSource: "NCC" | "PC";
@@ -441,24 +438,10 @@ function displayPCStatus(raw: Record<string, unknown>): string {
 /**
  * Cluster name (linked to Prism when known) over one muted line with the
  * address and versions, so a row stays two lines tall. Both lines truncate
- * with the full text on hover. With `age` (NCC rows) the muted line starts
- * with how old the cluster's data is, amber when over a day or not reached.
+ * with the full text on hover.
  */
-function ClusterCell({ row, url, subtitle, age }: { row: RowRecord; url?: string; subtitle?: string; age?: ClusterDataAge }) {
+function ClusterCell({ row, url, subtitle }: { row: RowRecord; url?: string; subtitle?: string }) {
   const sub = subtitle && subtitle !== row.clusterName ? subtitle : "";
-  if (age) {
-    // Data age first so it stays visible when the line truncates; the
-    // address follows and is in the tooltip.
-    return (
-      <div className="alerts-cluster-cell">
-        <ClusterNameLine row={row} url={url} />
-        <span className="alerts-cluster-meta" title={[age.title, sub].filter(Boolean).join(" ")}>
-          <span className={`alerts-cluster-age${age.old ? " is-old" : ""}`}>{age.text}</span>
-          {sub ? ` · ${sub}` : ""}
-        </span>
-      </div>
-    );
-  }
   return (
     <div className="alerts-cluster-cell">
       <ClusterNameLine row={row} url={url} />
@@ -743,7 +726,6 @@ export function ClusterTable({
   selectedClusters,
   environmentClusters = null,
   clusterNameMap,
-  clusterAges,
   severityFilters,
   pcAlerts,
   alertSource,
@@ -1139,7 +1121,6 @@ export function ClusterTable({
           row={row}
           url={clusterPrismURL(row.cluster, clusterNameMap)}
           subtitle={row.cluster}
-          age={lookupDataAge(clusterAges, row.cluster, row.clusterName)}
         />
       ),
     },

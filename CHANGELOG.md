@@ -116,6 +116,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Integrations page** (`/integrations`). Step-by-step guides for
+  ServiceNow, Prometheus & Grafana, Splunk/Elastic and other log tools,
+  Slack/email/webhooks, AI assistants (MCP) and your own scripts. Each guide
+  says what you get and need, explains the terms, fills the API server's
+  address into copy-ready settings and scripts, links to the NCC screens it
+  uses, checks that NCC is answering, and remembers which steps are done.
 - **Kubernetes alert rules.** The Helm chart renders a `PrometheusRule` with
   `prometheusRule.enabled: true`: failed runner Job, no successful run or no
   new report for `staleReportHours` (26), no or too few API replicas, data
@@ -168,8 +174,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Backup verification.** `v2-restore --verify-only` prints each check,
   with `--json` and a non-zero exit on failure; manifests record a `sha256` per file; the
   Settings Verify button lists each check.
-- **Data freshness beyond the Overview.** Findings rows and the cluster
-  filter, and Insights → Clusters, show data age; notifications include a
+- **Data freshness beyond the Overview.** Insights → Clusters shows data
+  age; notifications include a
   "Data age" line; metrics `ncc_cluster_last_success_timestamp_seconds{cluster}`
   and `ncc_schedule_overdue{schedule,environment}`.
 - **Setup-aware empty states.** Overview, Findings, Insights, Runs and the
@@ -186,6 +192,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The Findings table and cluster filter no longer show each cluster's data
+  age, keeping the table about the findings themselves; data age stays on
+  the Overview, the cluster page and Insights.
 - **Narrower Kubernetes RBAC.** The API's Role is split into two: get/patch
   on the `ncc-v2-users` Secret only (plus create), and get/patch on the
   runner CronJob only. The namespace-wide Secret `get` and `update` are
