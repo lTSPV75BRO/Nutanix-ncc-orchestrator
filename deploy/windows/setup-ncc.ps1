@@ -43,6 +43,14 @@ try {
     New-Item -ItemType Directory -Path $configDir -Force | Out-Null
     New-Item -ItemType Directory -Path "$InstallDir\outputfiles" -Force | Out-Null
     New-Item -ItemType Directory -Path "$InstallDir\logs" -Force | Out-Null
+
+    # Restrict the install directory to SYSTEM and Administrators. Under
+    # C:\ProgramData the inherited ACL lets every local user create files in
+    # subfolders, which would let them replace the binaries the SYSTEM task
+    # starts, or read the API token and user database. SIDs keep this
+    # independent of the Windows display language.
+    & icacls.exe $InstallDir /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Could not restrict permissions on $InstallDir" }
     @"
 schema-version: 1
 runner:
