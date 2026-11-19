@@ -116,6 +116,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Environment test results** for the v2.4.0 cluster and Rocky Linux run
+  (`docs/audit/environment-test-results.md`): what passed on a multi-node
+  Cilium cluster and a SELinux host, and the failures (user-store replica
+  drift, CronJob `logs/` permission denied, 500 instead of 409 on store
+  conflict).
 - **Findings views and resizable columns.** The NCC findings have a view
   switch: Table (every column), Focused (the finding with its detail,
   cluster, KB and status), By check (one row per check with the clusters it
