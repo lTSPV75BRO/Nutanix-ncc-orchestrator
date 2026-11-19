@@ -63,6 +63,17 @@ No Critical or P0 findings were identified.
 | PERF-01 | Authenticated `/health` 18 ms on Windows (path resolution per call) | Low | P3 | verified (measured) | 0.25 d | — | **verified** (0.8 ms) |
 | A11Y-01 | WCAG A/AA failures found with axe in a real browser (contrast, label-in-name, ARIA role, headings, target size, scroll focus) | Medium | P1 | verified (live) | 1 d | — | **verified** (0 violations, 16 routes x 3 themes, empty-data pages) |
 | TEST-02 | `SessionIdleGuard` test failed once under load | Low | P3 | strongly suspected (flake) | 0.25 d | — | not started |
+| ENV-01 | User create on a replica returned HTTP 500 for a store conflict | Medium | P1 | verified (cluster test, code) | 0.25 d | — | **verified** (unit; retried once, then 409) |
+| ENV-02 | Admin user list / PUT on a replica missed users another replica had just written | Medium | P1 | verified (cluster test) | 0.25 d | — | **verified** (unit; refresh before account-management requests). Staleness was bounded by the 2 s reload loop, so rated Medium, not High |
+| ENV-03 | Helm runner CronJob failed `mkdir logs: permission denied` (image WORKDIR not writable) | High | P0 | verified (cluster test) | 0.25 d | — | **implemented** (rendered and tested by manifest test; not re-run on a cluster) |
+| ENV-04 | Helm PVC had no `storageClassName`/access mode values | Medium | P1 | verified (cluster test) | 0.25 d | — | **implemented** (values `persistence.*`; rendered) |
+| ENV-05 | Backups need `backup-key` or a passphrase on Kubernetes (HTTP 412 otherwise) | Low | P2 | verified | 0.1 d | — | **implemented** (documented in the chart README) |
+| ENV-06 | cloud-init `tar` kept foreign owner ids | Low | P2 | verified | 0.1 d | — | **implemented** (`--no-same-owner`) |
+| ENV-07 | systemd unit runs as root, unsandboxed (LIN-01) | Medium | P2 | verified (inspection) | 1.5 d | Linux test host | not started |
+| ENV-08 | `ncc-log-maintenance.timer` missing on `v2-install-service` hosts | Low | P2 | verified | 0.25 d | — | **implemented** (unit text tested; not run under systemd) |
+| ENV-09 | kube-linter: read-only root fs, default resources, PDB eviction policy | Low | P2 | verified | 1 d | cluster test | PDB policy **implemented**; rest not started (HARD-01) |
+| ENV-10 | `helm upgrade` (Helm 4 server-side apply) conflicts with the API-edited CronJob schedule and a `kubectl apply`-ed ConfigMap | Low | P2 | verified (cluster test) | 0.25 d | — | documented in the chart README; no code change |
+| ENV-11 | Topology spread did not keep both API replicas on different nodes through a rollout surge | Low | P3 | verified once (cluster test) | 0.5 d | cluster test | not started |
 | MAINT-01 | Split `goNCC.go` / API `main.go` incrementally | Medium | P3 | verified | ongoing | — | not started |
 
 | ONB-01 | First-time setup modal: browser-local state, shown to viewers, manual checkboxes, broken restore detection, full-page reloads | Medium | P1 | verified (live) | 2 d | — | **verified** (server-derived setup checklist) |

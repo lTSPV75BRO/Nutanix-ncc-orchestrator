@@ -206,10 +206,12 @@ New open items from this pass:
 | P2 | Flaky test | `SessionIdleGuard.test.tsx` ("offers Sign in again when the session cannot be extended") failed once in a loaded full run. Use fake timers. | S |
 | P2 | Password hashing cost | bcrypt uses the library default (10); raise it and rehash on next sign-in. | S |
 
-Checks that still need an environment this audit did not have (multi-node
-Kubernetes with RWX storage and an enforcing CNI, a Rocky Linux systemd
-host, a full Windows install, a screen reader, a large fleet) are collected
-in [`docs/audit/environment-test-prompt.md`](audit/environment-test-prompt.md).
+A multi-node cluster and Rocky Linux pass was run afterwards (results in
+`docs/audit/verification-results.md`); its findings ENV-01 to ENV-09 are in
+the implementation plan, and the changelog lists the fixes. Still not run: a
+node drain, a 7,000-cluster data set with memory figures, read-only root with
+restore and runs, egress NetworkPolicy, a reboot and `kill -9` of supervisor
+children, LDAP on Linux, ZAP, a screen reader.
 
 See [`docs/FEATURES_AND_CONFIG_FLAGS.md`](FEATURES_AND_CONFIG_FLAGS.md),
 [`docs/SECURITY_AND_TRUST.md`](SECURITY_AND_TRUST.md),

@@ -117,15 +117,15 @@ certificates. Use `-signing-cert` and `-signing-key` to persist the IdP
 signing pair; this keeps the certificate published in metadata aligned with
 assertions after a provider restart.
 
-## Environment tests (cluster and Linux host)
+## Fixes from environment testing
 
-A follow-up pass on a multi-node Cilium cluster (`ncc-test` only) and a Rocky
-Linux 10 host with SELinux enforcing is recorded in
-[`docs/audit/environment-test-results.md`](../audit/environment-test-results.md).
-Default Helm install, NetworkPolicy, RBAC, version-skew 409, and rolling
-update via the Service stayed up. Open issues: API replicas can serve a stale
-user list, store conflicts return HTTP 500 instead of 409, and the runner
-CronJob cannot write `logs/` in `/workspace`.
+A pass on a multi-node Kubernetes cluster and a Rocky Linux host with SELinux
+enforcing, and an end-to-end Windows install, found and fixed: the Helm API pod
+crash-loop and the runner CronJob `mkdir logs: permission denied`, stale user
+lists and HTTP 500 instead of 409 on account changes across API replicas, an
+invalid generated `config.yaml` and an install-wiping re-run on Windows, LDAP
+outages counting toward the lockout, and the missing log maintenance timer on
+`v2-install-service` hosts. See the changelog for the full list.
 
 ## Validation
 

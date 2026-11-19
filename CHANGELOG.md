@@ -44,6 +44,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Helm chart: the API pod crash-looped on first start.** Kubernetes `args`
+  replace the image's `CMD`, the chart passed only some path flags, and the
+  container layout made the stack-aware defaults point log, token and user
+  database paths at `/usr/local` (this also affected the published 2.3.0
+  image). The chart now passes the full flag set, and
+  `--users-db-secret`, `NCC_USERS_DB_SECRET` and `NCC_USERS_DB` suppress the
+  `--users-db` default.
+- **Helm chart: the runner CronJob failed with "mkdir logs: permission
+  denied".** It ran from the image's read-only `/workspace`; it now runs from
+  `/data` with the same explicit paths and `--skip-preflight-check` as
+  `k8s/runner-cronjob.yaml`. The PVC takes `persistence.accessMode`,
+  `persistence.storageClass` and `persistence.size`; PodDisruptionBudgets set
+  `unhealthyPodEvictionPolicy: AlwaysAllow` on Kubernetes 1.27 and later; the
+  API pod has a non-root, `fsGroup` and seccomp security context.
+- **Account management on a stale API replica.** The user list, `PUT` and
+  `POST` now reload the shared store first, so a user another replica just
+  created is visible instead of returning 404, and a store conflict on create
+  is retried once and then answered with HTTP 409 instead of 500.
+- **LDAP sign-in no longer counts directory outages toward the lockout.** A
+  dropped or busy directory during the final password check used to count as
+  a wrong password.
+- **Windows installer.** The generated `config.yaml` was invalid YAML
+  (backslash paths in double quotes); the install directory under
+  `ProgramData` was writable by every local user while the stack runs as
+  SYSTEM; and re-running the installer deleted backups and left a half-removed
+  install. It now writes valid single-quoted paths, restricts the directory to
+  SYSTEM and Administrators, and refuses to touch an existing install unless
+  `NCC_FORCE_CLEAN=1`.
+- **Restore no longer moves nested config keys to the top level.**
+  `upsertYAMLScalar` dropped indentation (post-restore path healing and the
+  CLI config helpers).
+- **`v2-install-service` installs the log maintenance timer** that only the
+  cloud-init path used to create; cloud-init extracts with `--no-same-owner`.
+- **Accessibility:** colour contrast, label-in-name, ARIA role, heading order,
+  target size and keyboard focus failures found with axe-core in a browser.
+- **Publishing workflows** disable dependency caches explicitly.
+- **`/api/v1/health` for signed-in callers** no longer resolves about ten
+  paths on every call (18 ms to under 1 ms on Windows).
+- Troubleshooting logs for LDAP steps, sign-in failures, backup and restore
+  errors, unreadable run summaries and runner version-skew refusals.
+
 - **A panic in a background job no longer takes the API server down.**
   Scheduled backups, environment schedules, the digest, alert sync, the
   self-heal timer, user-store reload, report-cache refresh and Prism Central
@@ -116,11 +157,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **Environment test results** for the v2.4.0 cluster and Rocky Linux run
-  (`docs/audit/environment-test-results.md`): what passed on a multi-node
-  Cilium cluster and a SELinux host, and the failures (user-store replica
-  drift, CronJob `logs/` permission denied, 500 instead of 409 on store
-  conflict).
 - **Findings views and resizable columns.** The NCC findings have a view
   switch: Table (every column), Focused (the finding with its detail,
   cluster, KB and status), By check (one row per check with the clusters it
