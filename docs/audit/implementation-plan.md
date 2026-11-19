@@ -53,8 +53,10 @@ No Critical or P0 findings were identified.
 | SEC-10 | Public `meta/routes`, `openapi.json` and `metrics/rate-limit` | Low | P3 | verified (live) | 0.1 d | — | not started |
 | K8S-02 | Helm API pod crash-looped on first start (stack-aware defaults vs container layout; chart args incomplete) | High | P0 | verified (live, kind) | 0.5 d | — | **verified** (kind cluster) |
 | WIN-01 | Windows installer: install dir under ProgramData writable by any local user, run as SYSTEM | Medium | P1 | verified (this machine) | 0.25 d | — | **implemented** (ACL command tested on scratch dir; full install not run) |
+| WIN-04 | Windows installer wrote `config.yaml` with backslash paths in double quotes (invalid YAML escapes) | High | P1 | verified (live, Windows) | 0.1 d | — | **verified** |
+| COR-09 | `upsertYAMLScalar` dropped indentation; restore moved nested config keys to the top level | Medium | P1 | verified (live, unit) | 0.25 d | — | **verified** |
 | WIN-02 | Product sets no Windows ACLs on token/user DB/backups for non-installer installs | Medium | P2 | verified (code) | 1 d | — | not started |
-| WIN-03 | Installers delete the install dir on re-run; checksum from same origin, no attestation check | Low | P3 | verified (code) | 0.5 d | — | not started |
+| WIN-03 | Windows installer deleted the install dir on re-run, failing half way and losing backups; checksum from same origin, no attestation check | Medium | P1 | verified (live, Windows) | 0.25 d | — | **verified** (Windows: refuses unless `NCC_FORCE_CLEAN=1`); cloud-init script and attestation check not started |
 | LIN-01 | systemd unit runs as root, no sandboxing | Medium | P2 | verified (code) | 1.5 d | Linux test host | not started |
 | CI-01 | Cache poisoning exposure in publishing workflows | Low-Medium | P2 | verified (zizmor) | 0.1 d | — | **implemented** |
 | SEC-11 | Default plain-HTTP host install: session cookie not `Secure` | Low | P3 | verified (live) | — | TLS setup | not started |

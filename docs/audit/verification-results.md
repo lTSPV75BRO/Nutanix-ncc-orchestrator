@@ -155,3 +155,7 @@ Still not run: Docker image build and image scan (Docker Desktop daemon not runn
 Changed files outside `docs/audit`: Go (`ldap.go`, `auth.go`, `backups.go`, `freshness.go`, `versionskew.go`, `main.go`, `healthpaths.go` and tests), `helm/.../api.yaml`, `deploy/windows/setup-ncc.ps1`, two workflows, frontend components/theme/styles/tests, `frontend/package.json` and lockfile (axe-core), `go.mod`/`go.sum` (test-only dependencies). Nothing committed.
 
 Still not run: runner image build; NetworkPolicy enforcement; a real multi-replica RWX install; Windows full installer run; Linux systemd install; a screen reader; populated-data accessibility scan; large-fleet load test.
+
+### Windows installer test, 2026-11-19
+
+Ran `setup-ncc.ps1` elevated against a locally built stack archive (see security-assessment.md, "Windows installer, end to end"). Install, ACLs, SYSTEM scheduled tasks, firewall rules, health and readiness, `doctor`, encrypted backup, verify-only (including wrong passphrase and a corrupted file), restore, refusal to overwrite a live install, and task stop/start recovery all behaved as described there. Two installer defects (WIN-04, WIN-03) and one config-editing defect (COR-09) were found and fixed; after the fixes the same sequence passed with a valid generated config. After the fixes: `go build`, `go vet`, `golangci-lint` (0 issues), `gosec`, `go test -race ./...` all pass. Not run: a reboot, Sysprep/Unattend, upgrade from an older release.

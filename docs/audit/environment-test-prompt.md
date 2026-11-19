@@ -59,6 +59,9 @@ could not run.
   --security-opt no-new-privileges --tmpfs /tmp` and only `/data` writable.
 - Authenticated `/api/v1/health` answers in under 1 ms after caching
   (it was 18 ms on Windows).
+- The Windows installer was run end to end on a Windows 11 machine (install,
+  ACLs, SYSTEM tasks, backup, verify, restore, re-run refusal). Windows is not
+  part of this prompt.
 
 ### Part A: Kubernetes (multi-node, RWX storage, a CNI that enforces NetworkPolicy)
 

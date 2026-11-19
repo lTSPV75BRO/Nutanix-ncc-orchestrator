@@ -173,6 +173,12 @@ Fixed in this pass:
 - **Accessibility (A11Y-01).** Contrast, label-in-name, invalid ARIA role,
   heading order, target size and keyboard focus failures found with axe in a
   browser; 0 violations on 16 routes in all three themes (empty-data pages).
+- **Windows installer (WIN-03, WIN-04) and config editing (COR-09).** Run
+  end to end on Windows: the generated `config.yaml` was invalid YAML
+  (backslash paths in double quotes), a re-run of the installer deleted
+  backups and left a half-removed install (it now refuses unless
+  `NCC_FORCE_CLEAN=1`), and `upsertYAMLScalar` dropped indentation so a
+  restore moved nested config keys to the top level.
 - **Publishing workflows (CI-01).** Dependency caches are explicitly off in
   `docker-publish.yml` and `release.yml`.
 - **`/api/v1/health` cost (PERF-01).** Display paths are cached for 30 s
@@ -189,7 +195,7 @@ New open items from this pass:
 | P0 | Chart storage options | `pvc.yaml` hard-codes `ReadWriteMany`, so the chart cannot run on RWO-only storage (kind, many default classes). Add `persistence.accessMode` and `persistence.storageClass`, with a documented single-replica RWO mode. | S |
 | P1 | systemd hardening (LIN-01) | The unit written by `v2-install-service` runs as root with no sandboxing. Add a dedicated user and `NoNewPrivileges`, `ProtectSystem`, `PrivateTmp`, `ProtectKernel*`, `RestrictSUIDSGID`, `LockPersonality`; check `chcon`, `systemctl restart` and restore still work. Add `--no-same-owner` to the cloud-init `tar`. | M |
 | P1 | Windows file ACLs in the product (WIN-02) | Apply a restrictive ACL from `v2-start` to the token file, user database, backups and config, so manual installs are covered as well as the installer. | M |
-| P1 | Safer installers (WIN-03) | Do not delete the install directory when it holds a user database or backups; verify the SLSA attestation (`gh attestation verify`) or a cosign signature, not only a checksum fetched from the same release URL. | M |
+| P1 | Safer installers (WIN-03, remaining) | The Windows installer no longer deletes an existing install. Apply the same guard to the cloud-init script (`rm -rf` of the install directory), and verify the SLSA attestation (`gh attestation verify`) or a cosign signature in both, not only a checksum fetched from the same release URL. | M |
 | P1 | Container hardening defaults (HARD-01) | `readOnlyRootFilesystem: true` with `emptyDir` for `/tmp` (the API image already runs read-only with only `/data` writable), default CPU and memory requests, pod anti-affinity for the two-replica deployments, `unhealthyPodEvictionPolicy` on the PDBs. Test runs, backup and restore under it. | M |
 | P1 | Secure cookie by default | Plain-HTTP host installs send a session cookie without `Secure`. Prefer auto-TLS (`--auto-tls-dir`) or a first-run warning in the UI. | M |
 | P1 | Browser accessibility in CI | Run axe (including contrast) against the demo build in Playwright for every route and theme, with populated data; add keyboard-only and 400% zoom checks. Today only jsdom tests run in CI, which cannot see contrast. | M |
