@@ -4831,23 +4831,22 @@ html[data-theme="light"] .site-intro-skip {
   color: var(--ui-text-secondary);
 }
 
-/* Minimal: no filled track, a hairline baseline, slim muted bars. */
 .run-activity-track {
   position: relative;
   display: flex;
   align-items: flex-end;
-  justify-content: center;
-  height: 104px;
-  border-bottom: 1px solid var(--ui-border);
+  height: 112px;
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-hover);
 }
 
 .run-activity-bar {
   display: flex;
   flex-direction: column;
-  width: min(100%, 28px);
+  width: 100%;
   min-height: 0;
   overflow: hidden;
-  border-radius: 3px 3px 0 0;
+  border-radius: var(--ui-radius-sm);
 }
 
 .run-activity-bar > span {
@@ -4855,23 +4854,22 @@ html[data-theme="light"] .site-intro-skip {
   min-height: 3px;
 }
 
-/* Scoped to the bars and the legend. These rules used to match every .is-ok in
-   the chart, including the "Succeeded" figure above it, which got a solid green
-   background and hid its number. Fills are softened (70%) but stay above 3:1
-   against the page in every theme. */
+/* Scoped to the bars and the legend. These rules used to be `.run-activity
+   .is-ok`, which also matched the "Succeeded" figure above the chart and gave
+   it a solid green background that hid its number. */
 .run-activity-bar > .is-ok,
 .run-activity-legend .is-ok {
-  background: color-mix(in srgb, var(--ui-ok) 70%, transparent);
+  background: var(--ui-ok);
 }
 
 .run-activity-bar > .is-problem,
 .run-activity-legend .is-problem {
-  background: color-mix(in srgb, var(--ui-fail) 75%, transparent);
+  background: var(--ui-fail);
 }
 
 .run-activity-bar > .is-unknown,
 .run-activity-legend .is-unknown {
-  background: color-mix(in srgb, var(--ui-neutral) 70%, transparent);
+  background: var(--ui-neutral);
 }
 
 .run-activity-label {
@@ -4894,7 +4892,7 @@ html[data-theme="light"] .site-intro-skip {
 }
 
 .run-activity-day.is-today .run-activity-track {
-  border-bottom-color: var(--ui-border-strong);
+  box-shadow: inset 0 0 0 1px var(--ui-border-strong);
 }
 
 .run-activity-foot {
