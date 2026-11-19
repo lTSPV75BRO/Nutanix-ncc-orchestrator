@@ -690,7 +690,7 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
 
       {/* Editor */}
       <Card className="page-card">
-        <Typography.Title level={4} className="section-title">
+        <Typography.Title level={2} className="section-title">
           When to run
         </Typography.Title>
         <Typography.Text type="secondary" className="section-subtitle">

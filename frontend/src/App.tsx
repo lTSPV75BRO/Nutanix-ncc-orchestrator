@@ -142,20 +142,24 @@ function HeaderHealthPill({
         ? `API through this UI · auth: ${health.authMode}`
         : "API through this UI. Click to refresh.";
   return (
-    <Tooltip title={title}>
-      <button
-        type="button"
-        className={`header-health-pill ${health.state}`}
-        role="status"
-        aria-live="polite"
-        aria-label={`${health.label}. Retry API health.`}
-        onClick={() => onRetry?.()}
-      >
-        <span className="header-health-dot" />
-        <WifiOutlined className="header-health-icon" />
-        <span className="header-health-label">{health.label}</span>
-      </button>
-    </Tooltip>
+    <>
+      <Tooltip title={title}>
+        <button
+          type="button"
+          className={`header-health-pill ${health.state}`}
+          aria-label={`${health.label}. Retry API health.`}
+          onClick={() => onRetry?.()}
+        >
+          <span className="header-health-dot" />
+          <WifiOutlined className="header-health-icon" />
+          <span className="header-health-label">{health.label}</span>
+        </button>
+      </Tooltip>
+      {/* A button may not carry role="status"; announce changes from a separate live region. */}
+      <span className="visually-hidden" role="status" aria-live="polite">
+        {health.label}
+      </span>
+    </>
   );
 }
 

@@ -55,11 +55,11 @@ describe("IntegrationsPage", () => {
   it("lists every integration and filters by search", () => {
     renderAt("/integrations");
     for (const i of INTEGRATIONS) {
-      expect(screen.getByRole("link", { name: new RegExp(`^${i.name.replace(/[()&]/g, ".")}:`) })).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: new RegExp(`^${i.name.replace(/[()&]/g, ".")}`) })).toBeInTheDocument();
     }
     fireEvent.change(screen.getByLabelText("Search integrations"), { target: { value: "splunk" } });
     expect(screen.getByRole("link", { name: /^Splunk/ })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /^ServiceNow:/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /^ServiceNow/ })).not.toBeInTheDocument();
   });
 
   it("fills the API address into a guide's snippets", () => {

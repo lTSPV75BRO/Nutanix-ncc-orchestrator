@@ -269,7 +269,7 @@ export function AuditLogSection({ onError }: Props) {
   return (
     <Card className="page-card">
       <div className="config-section-head">
-        <h3 className="ui-panel-title">Recorded changes</h3>
+        <h2 className="ui-panel-title">Recorded changes</h2>
         <p className="ui-panel-desc">Config saves, schedule changes, sign-ins and run triggers, newest first.</p>
       </div>
 

@@ -440,7 +440,7 @@ function SectionForm({
       <div className="config-section-head">
         <TitleIcon size="lg">{SECTION_ICONS[section.icon]}</TitleIcon>
         <div>
-          <h3 className="ui-panel-title">{section.title}</h3>
+          <h2 className="ui-panel-title">{section.title}</h2>
           <p className="ui-panel-desc">{section.description}</p>
         </div>
       </div>
@@ -1032,7 +1032,7 @@ export function ConfigSection({ onError }: Props) {
               <LinkOutlined />
             </TitleIcon>
             <div>
-            <Typography.Title level={4} className="section-title">
+            <Typography.Title level={3} className="section-title">
               Linked files
             </Typography.Title>
             <Typography.Text type="secondary" className="section-subtitle">

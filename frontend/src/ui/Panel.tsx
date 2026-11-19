@@ -32,7 +32,7 @@ export function Panel({
         <div className="ui-panel-head">
           {icon && title ? <TitleIcon>{icon}</TitleIcon> : null}
           <div className="ui-panel-head-text">
-            {title ? <h3 className="ui-panel-title">{title}</h3> : null}
+            {title ? <h2 className="ui-panel-title">{title}</h2> : null}
             {description ? <p className="ui-panel-desc">{description}</p> : null}
           </div>
           {extra ? <div className="ui-panel-extra">{extra}</div> : null}

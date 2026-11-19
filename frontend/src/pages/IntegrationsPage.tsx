@@ -157,7 +157,7 @@ function IntegrationCard({ integration: i }: { integration: Integration }) {
   const total = i.steps.length;
   const count = i.steps.filter((s) => done.includes(s.id)).length;
   return (
-    <Link to={`/integrations/${i.id}`} className="integration-card" aria-label={`${i.name}: ${i.summary}`}>
+    <Link to={`/integrations/${i.id}`} className="integration-card">
       <div className="integration-card-head">
         <span className="integration-card-icon" aria-hidden>
           {i.icon}
@@ -244,7 +244,7 @@ function IntegrationGuide({
       <div className="integration-layout">
         <div className="integration-main">
           <div className="integration-progress" aria-live="polite">
-            <Progress percent={Math.round((count / i.steps.length) * 100)} showInfo={false} size="small" />
+            <Progress percent={Math.round((count / i.steps.length) * 100)} showInfo={false} size="small" aria-label={`${count} of ${i.steps.length} setup steps done`} />
             <span>
               {requiredDone ? (
                 <>
@@ -416,7 +416,7 @@ function CodeSnippet({ snippet, address }: { snippet: Snippet; address: ApiAddre
           {copied ? "Copied" : "Copy"}
         </Button>
       </figcaption>
-      <pre>
+      <pre tabIndex={0}>
         <code>{code}</code>
       </pre>
       {snippet.note ? <p className="integration-hint">{snippet.note}</p> : null}

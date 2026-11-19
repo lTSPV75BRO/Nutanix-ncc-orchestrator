@@ -584,13 +584,13 @@ export function FindingsPage() {
               className={`severity-total-pill${severityFilters.includes(sm.key) ? " is-active" : ""}`}
               style={{ borderColor: sm.color }}
               aria-pressed={severityFilters.includes(sm.key)}
-              aria-label={`${sm.label}: ${displayedSevTotals[sm.key]}. Filter by ${sm.label}.`}
+              aria-label={`${sm.label} ${displayedSevTotals[sm.key].toLocaleString()}. Filter by ${sm.label}.`}
               onClick={() => toggleSeverity(sm.key)}
             >
               <Badge color={sm.color} />
               <Typography.Text strong style={{ color: sm.color }}>
                 {sm.label}
-              </Typography.Text>
+              </Typography.Text>{" "}
               <Typography.Text strong>{displayedSevTotals[sm.key].toLocaleString()}</Typography.Text>
             </button>
           ))}

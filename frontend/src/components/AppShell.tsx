@@ -42,11 +42,12 @@ function selectedKey(pathname: string): string {
  */
 function Brand({ brand, onNavigate }: { brand?: ReactNode; onNavigate?: () => void }) {
   return (
-    <Link to={OVERVIEW_PATH} className="ui-sidebar-brand" aria-label="NCC Orchestrator home" onClick={onNavigate}>
+    <Link to={OVERVIEW_PATH} className="ui-sidebar-brand" onClick={onNavigate}>
       <img src="/logo.svg" alt="" />
       <span className="ui-sidebar-brand-text">
-        <span className="ui-sidebar-brand-name">NCC Orchestrator</span>
+        <span className="ui-sidebar-brand-name">NCC Orchestrator</span>{" "}
         {brand}
+        <span className="visually-hidden"> home</span>
       </span>
     </Link>
   );
@@ -147,7 +148,7 @@ export function AppShell({
           />
           <h1 className="ui-topbar-title">
             {icon && title ? <TitleIcon>{icon}</TitleIcon> : null}
-            <span className="ui-topbar-title-text">{title}</span>
+            <span className="ui-topbar-title-text">{title || "Page not found"}</span>
           </h1>
           <div className="ui-topbar-actions">{actions}</div>
         </header>

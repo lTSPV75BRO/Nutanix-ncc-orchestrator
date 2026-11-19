@@ -3168,6 +3168,16 @@ html[data-theme="it-pro"] {
   margin: 0;
   font-size: var(--ui-text-lg);
   font-weight: 600;
+  color: var(--ui-text);
+}
+
+/* WCAG 2.2 target size (2.5.8): antd's password show/hide icon is 14px. */
+.ant-input-password-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
 }
 
 .ui-empty-desc {
@@ -5110,6 +5120,8 @@ html[data-theme="light"] .site-intro-skip {
 
 .notif-group-title.ant-typography {
   margin: 0;
+  /* Rendered as an h2 (the page has only an h1 above it); keep the old h5 size. */
+  font-size: 14px;
 }
 
 .notif-group-desc {
@@ -5563,6 +5575,14 @@ h5.ant-typography {
 .ant-tag.ant-tag-yellow {
   --ui-tag-color: var(--ui-warn);
   --ui-tag-text: var(--ui-warn-text);
+}
+/* antd's preset gold text (#d48806) is 2.75:1 on its own tint in the light
+   theme; use the theme's warning text colour (WCAG 1.4.3). */
+html .ant-tag.ant-tag-gold:not(.ant-tag-disabled):not(.ant-tag-solid),
+html .ant-tag.ant-tag-orange:not(.ant-tag-disabled):not(.ant-tag-solid),
+html .ant-tag.ant-tag-warning:not(.ant-tag-disabled):not(.ant-tag-solid),
+html .ant-tag.ant-tag-yellow:not(.ant-tag-disabled):not(.ant-tag-solid) {
+  color: var(--ui-tag-text);
 }
 .ant-tag.ant-tag-red,
 .ant-tag.ant-tag-error,

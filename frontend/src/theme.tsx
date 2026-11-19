@@ -47,12 +47,16 @@ const SHARED_TOKENS = {
   boxShadowSecondary: "0 8px 24px rgba(0, 0, 0, 0.18)",
 } as const;
 
-function sharedComponents(surface: string, raised: string, border: string): ThemeConfig["components"] {
+// accentText is the purple used for selected menu items and tabs. The
+// primary fill (#7c3aed / #8b5cf6) is only 2.4:1 against the selected menu
+// background, so text uses a variant that reaches 4.5:1 (WCAG 1.4.3).
+function sharedComponents(surface: string, raised: string, border: string, accentText: string): ThemeConfig["components"] {
   return {
     Card: { headerBg: surface, headerFontSize: 16, headerFontSizeSM: 14, headerHeight: 52, headerHeightSM: 44 },
     Table: { headerBg: raised, rowHoverBg: raised, headerSplitColor: "transparent", borderColor: border, cellFontSize: 14 },
     Layout: { bodyBg: "transparent", headerBg: surface },
-    Tabs: { titleFontSize: 14, horizontalItemGutter: 24 },
+    Tabs: { titleFontSize: 14, horizontalItemGutter: 24, itemSelectedColor: accentText, itemActiveColor: accentText, itemHoverColor: accentText },
+    Menu: { itemSelectedColor: accentText },
     Tag: { defaultBg: raised },
     Alert: { withDescriptionPadding: "12px 16px", withDescriptionIconSize: 16, defaultPadding: "8px 12px" },
     Typography: { titleMarginBottom: 8, titleMarginTop: 0 },
@@ -85,7 +89,7 @@ function toAntThemeConfig(theme: AppThemeKey): ThemeConfig {
         colorBorder: "#e4e4e7",
         colorBorderSecondary: "#f4f4f5",
       },
-      components: sharedComponents("#ffffff", "#fafafa", "#e4e4e7"),
+      components: sharedComponents("#ffffff", "#fafafa", "#e4e4e7", "#6d28d9"),
     };
   }
   if (theme === "it-pro") {
@@ -109,7 +113,7 @@ function toAntThemeConfig(theme: AppThemeKey): ThemeConfig {
         colorBorder: "#24324a",
         colorBorderSecondary: "#1b2840",
       },
-      components: sharedComponents("#111b2e", "#172540", "#24324a"),
+      components: sharedComponents("#111b2e", "#172540", "#24324a", "#c4b5fd"),
     };
   }
   return {
@@ -133,7 +137,7 @@ function toAntThemeConfig(theme: AppThemeKey): ThemeConfig {
       colorBorder: "#262626",
       colorBorderSecondary: "#1f1f1f",
     },
-    components: sharedComponents("#111111", "#1a1a1a", "#262626"),
+    components: sharedComponents("#111111", "#1a1a1a", "#262626", "#c4b5fd"),
   };
 }
 
