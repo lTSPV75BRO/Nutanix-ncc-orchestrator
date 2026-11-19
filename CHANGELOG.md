@@ -1793,14 +1793,122 @@ Seven tests / twenty sub-cases added covering the package selector, install-dir 
 
 ---
 
-## [0.1.11] and earlier
+## [0.1.11] - 2026-01-19
 
-See git history and [Releases](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases) for prior versions.
+Reconstructed from git history: this version was not tagged and had no release
+notes.
+
+### Changed
+
+- Reworked error handling and context management in the webhook and file
+  processing code paths.
+
+### Added
+
+- More configuration options and validation in the runner.
 
 ---
 
+## [0.1.10] - 2026-01-13
+
+Reconstructed from git history; no release notes were written for versions up to
+0.1.11.
+
+### Added
+
+- Cluster Name column in the per-cluster HTML report.
+- More settings can be supplied through environment variables.
+
+### Changed
+
+- Refreshed the HTML report styling (two passes).
+- Removed the per-cluster summary block from the HTML report.
+
+---
+
+## [0.1.9] - 2025-12-24
+
+### Added
+
+- **Email and webhook notifications** for run results.
+- Author information in the README; updated example `config.yaml`.
+
+---
+
+## [0.1.8] - 2025-12-23
+
+### Changed
+
+- Prometheus metrics fixes and a rewritten `Prometheus.md` (including the metrics
+  table).
+- Release stream switched to `beta`.
+
+---
+
+## [0.1.7] - 2025-12-11
+
+### Changed
+
+- Go toolchain bumped; documentation updated; `.gitignore` adjusted.
+
+---
+
+## [0.1.6] - 2025-12-10
+
+### Added
+
+- **Prometheus monitoring support**: the runner writes textfile metrics for use
+  with the node exporter.
+
+### Fixed
+
+- The severity pattern now accepts values containing spaces.
+- Build values (version and stream) are injected correctly.
+
+---
+
+## [0.1.5] - 2025-10-24
+
+### Security
+
+- Fixed a code-scanning finding (incorrect conversion between integer types).
+- Built with Go 1.25.3, which carried a security update.
+
+### Changed
+
+- Updated the LICENSE and `.gitignore`.
+
+---
+
+## [0.1.4] - 2025-10-01
+
+First public version: the NCC Orchestrator command-line tool, which runs Nutanix
+Cluster Check against clusters and collects the results. Added the README,
+LICENSE and CONTRIBUTING guide.
+
+---
+
+Before 0.1.4 there were no tagged versions. The oldest commits are the initial
+import on 2025-10-01.
+
+---
+
+[2.3.0]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.3.0
+[2.2.1]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.2.1
+[2.2.0]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.2.0
+[2.1.1]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.1.1
+[2.1.0]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.1.0
+[2.0.2]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.0.2
+[2.0.1]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.0.1
 [2.0.0]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.0.0
 [1.1.0]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v1.1.0
 [1.0.0]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v1.0.0
 [0.1.13]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v0.1.13
 [0.1.12]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v0.1.12
+[0.1.10]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v0.1.10
+[0.1.9]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v0.1.9
+[0.1.8]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v0.1.8
+[0.1.7]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v0.1.7
+[0.1.6]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/0.1.6
+[0.1.5]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/0.1.5
+[0.1.4]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/0.1.4
