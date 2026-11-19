@@ -15121,10 +15121,14 @@ func quickstartPromptChoice(reader *bufio.Reader, prompt string, defaultValue st
 
 func upsertYAMLScalar(content string, key string, value string) string {
 	quoted := fmt.Sprintf("%s: %q", key, value)
-	pattern := fmt.Sprintf(`(?m)^\s*%s:\s*.*$`, regexp.QuoteMeta(key))
+	// Keep the line's own indentation: the canonical config is nested
+	// (schema version 1), and dropping it moved keys such as
+	// storage.run-history-dir to the top level. Horizontal whitespace only, so
+	// the match cannot reach back over blank lines either.
+	pattern := fmt.Sprintf(`(?m)^([ \t]*)%s:[ \t]*.*$`, regexp.QuoteMeta(key))
 	re := regexp.MustCompile(pattern)
 	if re.MatchString(content) {
-		return re.ReplaceAllString(content, quoted)
+		return re.ReplaceAllString(content, "${1}"+strings.ReplaceAll(quoted, "$", "$$"))
 	}
 	if !strings.HasSuffix(content, "\n") {
 		content += "\n"
