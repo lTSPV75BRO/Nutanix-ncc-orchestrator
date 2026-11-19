@@ -81,3 +81,11 @@ readiness endpoint; request IDs and per-route HTTP metrics.
 
 See the prioritized backlog in [`implementation-plan.md`](implementation-plan.md)
 and the optional features in [`feature-roadmap.md`](feature-roadmap.md).
+
+## v2.4.0 re-audit (2026-11-19)
+
+Phases 1-9 were re-examined against `v2.4.0` at `ea76376c`; each phase document has a "v2.4.0 re-audit" section saying what was run and what was not. Result: no Critical or High findings. One Medium defect found and fixed (COR-08, LDAP re-bind errors counted toward lockout), two Low notes (FRESH-01, SEC-07 mixing), one unfixable upstream advisory (DEP-03, contained). Logging for troubleshooting was extended (LOG-01).
+
+Production readiness is not established by this pass: no race, end-to-end, accessibility, performance-latency or deployment testing was done, and Helm was not rendered. Changes are uncommitted.
+
+Update 2026-11-19 (final): the follow-up security, deployment and accessibility passes found and fixed three more real defects beyond COR-08: **K8S-02** (the Helm chart's API pod crash-looped on first start; present in v2.3.0 too), **WIN-01** (Windows installer left the SYSTEM-run install directory writable by any local user), and a set of **WCAG A/AA failures** that only a real browser shows (contrast, label-in-name, ARIA, headings, target size). Also fixed: cache-poisoning exposure in the publishing workflows (CI-01) and a 20x slower-than-needed authenticated `/health` on Windows (PERF-01). Open recommendations: LIN-01 (systemd unit runs as root, unsandboxed), HARD-01 (read-only root filesystem, resource limits, anti-affinity), WIN-02, WIN-03, SEC-10, SEC-11. The earlier statement that GO-2026-6909 had no fix is corrected (reviewed false positive). Production readiness still cannot be fully established from here, mainly because multi-replica RWX, NetworkPolicy enforcement, the runner image, Linux/Windows full installs and a large-fleet load test were not run.

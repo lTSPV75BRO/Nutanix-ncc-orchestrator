@@ -84,3 +84,74 @@ frontend build, driven in the built-in browser:
   RequireTLS, header encoding, no-AUTH relay).
 * Frontend on Node 26.12.1 (CI).
 * npm dev-dependency updates and a clean `npm audit`.
+
+## Delta audit, 2026-11-19 (branch v2.4.0 at ea76376c)
+
+Run from the `.claude/worktrees/v2.4.0` worktree; no source code changed.
+
+| Check | Result |
+| --- | --- |
+| `go build ./...`, `go vet ./...` | exit 0 |
+| `go test ./...` | exit 0 (no `-race`: no gcc on this host) |
+| Frontend `tsc -p tsconfig.app.json --noEmit` | exit 0 |
+| Frontend `vitest run` (v5.1.0) | 48 files, 396 tests, all passed |
+| `govulncheck ./...` | 1 reachable: GO-2026-6909 in `crewjam/saml` v0.6.3, no fixed version (see DEP-03). 1 module-level advisory in `x/crypto/openpgp`, not called |
+| `osv-scanner` on `go.mod` and `frontend/package-lock.json` | 300 packages; only GO-2026-6909; 0 npm advisories |
+| `gitleaks detect` (full history, 264 commits) | no leaks |
+
+Not run: `go test -race`, end-to-end/browser tests, axe-core accessibility
+checks (UX-10 still open), performance measurements, container image scan.
+Reviewed by reading: `cmd/ncc-orchestrator/retention.go` (raw-log retention
+skips symlinks, the newest log, logs of clusters in the latest report, and does
+nothing when the log folder is the report folder); no defect found.
+
+### Re-audit additions, 2026-11-19
+
+| Check | Result |
+| --- | --- |
+| `golangci-lint` v2.15.0 `run ./...` | 0 issues |
+| `gosec` v2.30.0, high/high, G703 excluded (CI flags) | exit 0 |
+| `go build`, `go vet`, `go test ./...` after changes | all exit 0 |
+| `vite build` | built in 12.6 s; initial JS 1,305,862 B raw (about 428,543 B gzip), CSS 116,497 B raw |
+| New test | `TestLDAPUserBindIsOperational` passes |
+
+Code changed (uncommitted): `cmd/ncc-api-server/ldap.go`, `auth.go`, `backups.go`, `freshness.go`, `versionskew.go`, new `ldap_bind_test.go`. The frontend suite was not re-run after these Go-only changes. Still not run: `-race`, e2e, accessibility, live LDAP, load or latency tests.
+
+### Tools installed and extra checks, 2026-11-19
+
+Installed with the user's go-ahead: WinLibs gcc 16.2 and Helm 4.3.2 and Trivy (winget); `kubeconform`, `kube-linter` (`go install`); `axe-core` 4.14.1 (npm dev dependency, MPL-2.0).
+
+| Check | Result |
+| --- | --- |
+| `go test -race -count=1 ./...` | exit 0, no data races |
+| Frontend `tsc` and `vitest run` | tsc exit 0; 50 files, 402 tests pass (6 new axe tests) |
+| `npm audit` | 0 vulnerabilities |
+| `helm lint` / `helm template` / `kubeconform -strict` | chart lints; 17 resources valid (before and after the K8S-01 fix) |
+| `kube-linter` on the rendered chart | 21 findings before the fix (see below); the missing `runAsNonRoot` finding is gone after it |
+| `trivy fs` (vuln, secret, misconfig; HIGH and CRITICAL) | 0 vulnerabilities, 0 secrets; misconfigurations: `readOnlyRootFilesystem` unset (KSV-0014, 11), default security context in Helm API (KSV-0118, fixed), placeholder `secret://` reference in `k8s/configmap.yaml` (KSV-0109, a reference not a secret) |
+| Live probe: API built from this tree, run locally (hybrid auth, scratch dir) | see security-assessment.md |
+| Latency (40 sequential requests each, empty install, token auth, localhost) | `/health` p50 21 ms p95 23 ms; `/freshness` p50 7 ms p95 9 ms; `/report/data` p50 18 ms p95 22 ms; `/settings/clusters` p50 4 ms p95 5 ms |
+
+New log line confirmed live: `sign-in failed` with request ID, user, client IP and lock state.
+
+Still not run: Docker image build and image scan (Docker Desktop daemon not running), browser colour-contrast and keyboard checks, live LDAP, load testing at fleet scale, deployment to a cluster.
+
+### Final run, 2026-11-19 (after all changes in this session)
+
+| Check | Result |
+| --- | --- |
+| `go build`, `go vet` | pass |
+| `golangci-lint` v2.15.0 | 0 issues |
+| `gosec` high/high (CI flags) | exit 0 |
+| `go test -race -count=1 ./...` | pass |
+| `govulncheck` | only GO-2026-6909 (reviewed false positive) |
+| `helm lint`, `helm template`, `kubeconform -strict` | pass, 17 resources valid |
+| Frontend `tsc`, `vitest` | tsc clean; 51 files, 403 tests pass |
+| `npm audit` | 0 vulnerabilities |
+| axe-core in a real browser, 16 routes x 3 themes | 0 violations (empty-data pages) |
+| kind deployment of the fixed chart | API pod Running, health and readiness OK |
+| `zizmor` | 1 finding left (`workflow_run` in pages.yml, reviewed) |
+
+Changed files outside `docs/audit`: Go (`ldap.go`, `auth.go`, `backups.go`, `freshness.go`, `versionskew.go`, `main.go`, `healthpaths.go` and tests), `helm/.../api.yaml`, `deploy/windows/setup-ncc.ps1`, two workflows, frontend components/theme/styles/tests, `frontend/package.json` and lockfile (axe-core), `go.mod`/`go.sum` (test-only dependencies). Nothing committed.
+
+Still not run: runner image build; NetworkPolicy enforcement; a real multi-replica RWX install; Windows full installer run; Linux systemd install; a screen reader; populated-data accessibility scan; large-fleet load test.

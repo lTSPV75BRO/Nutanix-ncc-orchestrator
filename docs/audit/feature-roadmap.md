@@ -82,3 +82,7 @@ with the CLI recovery instructions), so admins know which recovery path applies.
 * Rewriting the runner monolith in one step: split `goNCC.go` incrementally
   (Prism client, reporting, install/update, backup) when touching those areas.
 * Server-Sent Events for live runs: polling is already consolidated and cheap.
+
+## v2.4.0 delta (2026-11-19)
+
+Not re-assessed on v2.4.0: the content above is the 2026-10-26 review of v2.2.1. Several roadmap items (freshness F3, run-arguments builder F1) shipped; see implementation-plan.md.

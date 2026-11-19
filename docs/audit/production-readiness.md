@@ -49,3 +49,11 @@ replicas**, on Linux or Windows, once the npm dev-tool updates are applied and
 the deployment-time checks above are done. This rests on code review, unit and
 integration tests, and local smoke tests; it is not a substitute for a staging
 soak, a restore drill, and a multi-replica test in the target environment.
+
+## v2.4.0 delta (2026-11-19)
+
+Helm adds NetworkPolicy, PDB and PrometheusRule; k8s RBAC narrowed. None rendered with `helm template` or deployed here. Windows CI job (COR-01/OPS-01) has not run on GitHub as far as this audit knows. No `v2.4.0` tag exists yet.
+
+Update 2026-11-19: Helm chart now renders (`helm template`) and validates (`kubeconform -strict`, 17 resources). K8S-01 fixed in the chart. Open: `readOnlyRootFilesystem`, default resource requests/limits, pod anti-affinity (kube-linter, Trivy). Not deployed to a cluster; Docker images not scanned (Docker daemon was not running).
+
+Update 2026-11-19 (later): the chart was deployed to a kind cluster (Kubernetes in Docker) with images built from this branch. First install exposed K8S-02 (API pod crash-loop, present in v2.3.0 as well); after the fixes the API pod ran as uid 1000, passed readiness, and created its Secret-backed user store through the narrowed RBAC. Test setup differences from a real install: single replica, `ReadWriteOnce` storage (the chart hard-codes `ReadWriteMany`, so it needs an RWX storage class; there is no values override), pre-created ConfigMap and Secret. NetworkPolicies were not enforced (kind's default CNI), the runner CronJob was not run (no runner image), and the UI pod was only checked as Running. Windows installer ACL fix (WIN-01) tested on a scratch folder only, not as a full install. Docker images (API, UI) scanned clean.

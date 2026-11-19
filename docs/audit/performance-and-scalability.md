@@ -63,3 +63,19 @@ cold run is what exposed the Monaco test timeout, fixed).
    gzip; targets LCP < 2.5 s and INP < 200 ms on a mid-range laptop.
 3. Runner: timed run against a cluster simulator with 50–200 clusters to
    validate `max-parallel` and adaptive backoff under Prism 429s.
+
+## v2.4.0 re-audit (2026-11-19, HEAD ea76376c + uncommitted changes)
+
+Phase 5. Evidence: production build (`vite build`, measured 2026-11-19 on this machine).
+
+* Initial load: 37 JS chunks in `index.html`, 1,305,862 bytes raw, about 428,543 bytes gzip (gzip -9 estimate); CSS 116,497 bytes raw, about 20,335 bytes gzip.
+* Monaco (`MonacoCodeEditor` 1.21 MB and `editor.api` 2.74 MB raw) is not in the initial load; it is lazy. Pages are code-split (27 `lazy()` uses).
+* Largest eager chunks: `react-vendor` 256 kB, `ContextIsolator` 199 kB, `table` 196 kB, `index` 186 kB, `ui` 121 kB (raw).
+* Not measured: Core Web Vitals, API latency, query cost, memory, behaviour at many clusters. The freshness history is cached for up to one minute per run directory, but its cost was not measured.
+
+Update 2026-11-19: measured API latency on an empty local install (40 sequential requests per endpoint): `/health` p50 21 ms / p95 23 ms, `/freshness` 7 / 9 ms, `/report/data` 18 / 22 ms, `/settings/clusters` 4 / 5 ms. This says nothing about large fleets; no load or concurrency test was run.
+
+Update 2026-11-19 (Windows, localhost, empty install):
+
+* **PERF-01 (Low, measured, fixed).** Authenticated `GET /api/v1/health` took p50 18.2 ms against 0.8 ms anonymous, because every call resolved about ten display paths with symlink evaluation. The UI polls this endpoint. The resolved paths are now cached for 30 s (`healthpaths.go`; file access still resolves and confines paths on every call). After: p50 0.8 ms; under 50 concurrent clients for 8 s throughput rose from 261 to 46,861 requests/s (p95 2.3 ms). Linux was not measured and probably showed a smaller gain.
+* Load (50 concurrent clients, 10 s, static token, empty install, before the fix): `/report/data` 254 req/s (p95 295 ms), `/freshness` 756 req/s (p95 136 ms). No errors or 429s. No test with a large fleet's data was run.

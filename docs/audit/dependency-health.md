@@ -76,3 +76,14 @@ tooling (2026-11-04: `npm audit` clean across the previous 256).
 * License check: dependencies are MIT/BSD/Apache-2.0/ISC (Go modules and the
   main npm packages). A full license inventory (e.g. from the release SBOM)
   was not produced here.
+
+## v2.4.0 re-audit (2026-11-19, HEAD ea76376c + uncommitted changes)
+
+Phase 4. Evidence: `govulncheck`, `osv-scanner` on `go.mod` and `frontend/package-lock.json` (300 packages), `go.mod`/lockfile reading.
+
+* Go: only GO-2026-6909 (`crewjam/saml`, no fix). `golang.org/x/crypto/openpgp` is flagged at module level (GO-2026-5932) but never called.
+* npm: 232 packages, 0 advisories; DEP-02 closed.
+* Toolchain: Go 1.27.4 builds; frontend Vite 8, Vitest 5.1.0, Ant Design 6.7 (per the earlier upgrade).
+* Not done: license review, latest-version comparison, unused-package detection.
+
+Update 2026-11-19: added `axe-core` ^4.14.1 (dev only, MPL-2.0 licence, 0 advisories). `npm install` normalised key order in `frontend/package-lock.json` for several existing entries (funding and licence fields), so that diff is larger than the one added package; no version changed.

@@ -98,3 +98,12 @@ files removed) on Windows, so Active Runs under-reported in-progress work.
 | RPO/RTO | Not defined | Suggested: RPO 24 h (daily scheduled backup), RTO 1 h (restore + restart); test quarterly with `/backups/verify` and a real restore into a scratch install |
 | Kubernetes | PVC + Secret | Volume snapshots of the PVC; etcd encryption for Secrets (prior assessment A2) |
 | Run artifacts | Regenerable; retention-pruned | Keep `run-history` enabled where trend continuity matters |
+
+## v2.4.0 re-audit (2026-11-19, HEAD ea76376c + uncommitted changes)
+
+Phase 6. Evidence: reading `freshness.go` and `retention.go`.
+
+* v2.4.0 shows data age per cluster and a stopped-schedule banner, which addresses showing stale data as current. Correctness end to end was not verified.
+* **Fix (logging only):** a run summary that is unreadable, not JSON or lacks a timestamp is silently skipped for data age. It now logs a warning with the file name, so a missing "last checked" time can be traced.
+* Retention previews and applies from the same plan code; backups and restore rely on the earlier DATA-02 and SEC-07 work.
+* Not verified: reconciliation of counts between report and run history, timezone handling in freshness, backup restore on a real archive.

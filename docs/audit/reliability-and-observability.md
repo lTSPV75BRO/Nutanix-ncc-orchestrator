@@ -82,3 +82,17 @@ their original description for reference.
 | Audit forwarding loss | `ncc_audit_forward_dropped_total` > 0 | warn |
 | Rate limiter saturation | `ncc_ratelimit_blocked_total` | info |
 | API 5xx / latency | OBS-02 (to add) | warn |
+
+## v2.4.0 re-audit (2026-11-19, HEAD ea76376c + uncommitted changes)
+
+Phase 8. Evidence: reading `logging.go`, `auth.go`, `ldap.go`, `backups.go`, `versionskew.go`; tests.
+
+Existing logging is solid: JSON file log with rotation, secret redaction, request IDs, per-request log lines, panic recovery with stack, audit entries mirrored to the server log, subprocess outcomes (`logSubprocess`), runtime level control. Gaps found and filled (LOG-01):
+
+* LDAP sign-in logged nothing for unreachable server, service-account bind failure, search failure, unknown user (debug), ambiguous filter, rejected user bind (with the server diagnostic, for example AD "data 775" locked) or success timing.
+* Sign-in failures had only an audit entry; a structured warning now records user, client IP, whether a local account and a directory were tried, and whether the account locked.
+* Directory outages during sign-in log a warning with the error.
+* Backup create and restore failures now put a trimmed, path-redacted error into the audit entry.
+* Freshness read errors and the Kubernetes runner version-skew refusal are logged.
+
+Level control is unchanged (`debug` shows the new LDAP debug lines). Not assessed: metrics completeness, alert rules, circuit breakers, retry policies beyond earlier REL items.

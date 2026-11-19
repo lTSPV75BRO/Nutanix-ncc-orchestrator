@@ -117,3 +117,13 @@ Path confinement (`normalizeAndConfinePath`: abs, `Rel`, symlink walk,
 live role/deletion re-resolution, fail-closed expiry parsing); CSRF on every
 cookie-authenticated mutation including the JWT cookie; JSON body limits and
 `DisallowUnknownFields`; SMTP header construction in the API sender.
+
+## v2.4.0 re-audit (2026-11-19, HEAD ea76376c + uncommitted changes)
+
+Phase 2. Evidence: reading `ldap.go`, the login handler in `auth.go`, `retention.go`, `trustedstack.go`, `freshness.go`; lint and tests.
+
+**COR-08 (Medium, verified by reading, fixed).** `ldapProvider.lookup` treated every failure of the final bind as the user (`conn.Bind(entry.DN, password)`) as "wrong password". A dropped connection or a busy directory during sign-in therefore counted as a failed attempt and fed the account lockout, and nothing was logged. Reproduction: any network error between the service-account search and the user bind. Fix: `ldapUserBindIsOperational` separates I/O errors and network/busy/unavailable/time-limit result codes from credential rejections; operational failures return an error (sign-in answers the same generic 401 and records `ldap_unavailable`, with no lockout count). Regression test: `cmd/ncc-api-server/ldap_bind_test.go`. The bind itself against a live directory was not exercised.
+
+Other checks: `retention.go` skips symlinks, the newest log and logs of clusters in the latest report; no defect found. `trustedstack.go` reviewed under security. Not reviewed line by line: `backupverify.go`, `reportcachestate.go`, `versionskew.go`, the rest of the 34 commits. No race detector run (no gcc).
+
+Update 2026-11-19: COR-08 now has a behavioural test against a real LDAP conversation (`ldap_wire_test.go`, using `github.com/jimlambrt/gldap` as a test-only dependency): a refused user bind counts as a wrong password, a "busy" directory is an operational error, a refused service-account bind is an operational error, an unknown user is not found. New finding **K8S-02** (see security-assessment.md) was a startup defect: stack-aware defaults overriding the user-database backend.

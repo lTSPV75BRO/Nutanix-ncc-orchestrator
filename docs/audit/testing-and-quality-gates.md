@@ -65,3 +65,16 @@ golangci-lint; govulncheck; Vitest; `tsc -b`; `vite build`;
 `npm audit --omit=dev`; Trivy (HIGH/CRITICAL, fixed only).
 Advisory: full `npm audit`; CodeQL; gitleaks (to add).
 Branch protection should require the blocking jobs and one review.
+
+## v2.4.0 re-audit (2026-11-19, HEAD ea76376c + uncommitted changes)
+
+Phase 9. Evidence: test runs on 2026-11-19.
+
+* Go: `go test ./...` passes; `golangci-lint` 0 issues; `gosec` exit 0.
+* Frontend: 48 files, 396 tests pass; `tsc -p tsconfig.app.json --noEmit` exit 0.
+* Added: `cmd/ncc-api-server/ldap_bind_test.go` (regression for COR-08).
+* Gaps: no `-race` run (no gcc), no end-to-end or accessibility tests, no tests for the new logging lines, no live LDAP integration test.
+
+Update 2026-11-19: `go test -race` now runs here and passes. Added `LoginPage.a11y.test.tsx` and `OverviewPage.a11y.test.tsx` (axe-core, WCAG 2.0-2.2 A/AA and best-practice rules, with a negative control proving the helper fails on an unlabelled input). Colour contrast and keyboard order are not covered (jsdom has no layout). Totals: 50 frontend files, 402 tests. Other pages (Findings, Runs, Settings, Cluster, Integrations) still have no axe test.
+
+Update 2026-11-19 (later): totals are 51 frontend files / 403 tests and the full Go suite under `-race`. Added: `ldap_wire_test.go` (real LDAP wire protocol via a test-only gldap server), `healthpaths_test.go`, `deploy_manifests_test.go` (Helm and `k8s/` API args), the stack-aware regression, `Panel.a11y.test.tsx`. `SessionIdleGuard.test.tsx` ("offers Sign in again when the session cannot be extended") failed once in a full run under load and passed on three isolated reruns and the next full run: a timing flake, not investigated (TEST-02, Low). New Go test-only dependencies: `jimlambrt/gldap`, `hashicorp/go-hclog`, `fatih/color`.

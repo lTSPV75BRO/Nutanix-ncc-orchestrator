@@ -105,3 +105,13 @@ defects and non-portable tests); golangci-lint 0 issues; govulncheck 0
 reachable vulnerabilities; frontend `tsc` passes, Vitest 44/45 (one timeout
 flake), production build succeeds; osv-scanner reports 12 fixable advisories,
 all in frontend dev tooling.
+
+## v2.4.0 re-audit (2026-11-19, HEAD ea76376c + uncommitted changes)
+
+Phase 1. Evidence: file and line counts, route and handler reading, build.
+
+* Size: Go about 86k lines (API server 44.8k in 143 files, orchestrator 37.0k in 58 files, MCP server 2.3k, UI server 1.6k) plus 19 packages under `internal/`; frontend 163 TypeScript files.
+* Four binaries as before: `ncc-orchestrator` (runner/CLI), `ncc-api-server`, `ncc-ui-server`, `ncc-mcp-server`. The orchestrator runs as a subprocess of the API server (backup, restore, retention preview, runs).
+* New in v2.4.0 (read, not fully traced): freshness (`freshness*.go`), report-cache state, runner version-skew check (`versionskew.go`), retention command and preview, isolated backup verification (`backupverify.go`), trusted-stack ledger (`trustedstack.go`), Integrations page, narrower Kubernetes RBAC, Helm NetworkPolicy/PDB/PrometheusRule.
+* Weaknesses unchanged: `goNCC.go` (18.9k lines) and API `main.go` (6.3k lines) are very large single files (MAINT-01). Dead code and circular dependency checks were not run.
+* Baseline: `go build`, `go vet`, `go test ./...`, `golangci-lint` (0 issues) and the frontend type-check and tests all pass.

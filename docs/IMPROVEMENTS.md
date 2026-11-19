@@ -146,10 +146,69 @@ Fixed in this pass:
 
 Everything else found is listed in the tables above.
 
+## Audit of 2026-11-19 (v2.4.0, second pass)
+
+Full write-up: [`docs/audit/`](audit/executive-summary.md). This pass added
+scanners (gosec, golangci-lint, govulncheck, osv-scanner, gitleaks, trivy,
+kubeconform, kube-linter, zizmor), the race detector, axe-core in a real
+browser (with colour contrast), a live authorization probe, a kind cluster
+deployment and a load test. The earlier note that GO-2026-6909 was open is
+withdrawn: it is a reviewed false positive (`crewjam/saml` v0.6.3 has the
+fix).
+
+Fixed in this pass:
+
+- **Helm chart crash-loop (K8S-02).** The API pod died on first start because
+  the chart passed only some path flags and the container layout triggered
+  the stack-aware defaults (also true for the published v2.3.0 image). The
+  chart now passes the full flag set; `--users-db-secret`,
+  `NCC_USERS_DB_SECRET` and `NCC_USERS_DB` suppress the `--users-db` default.
+- **Helm API pod security context (K8S-01).** The `seed-config` init
+  container ran as root; the pod now sets non-root, `fsGroup` and seccomp.
+- **Windows installer (WIN-01).** The install directory under `ProgramData`
+  was writable by every local user while the stack runs as SYSTEM; the
+  installer now restricts it to SYSTEM and Administrators.
+- **LDAP sign-in (COR-08).** A dropped or busy directory during the final
+  password check counted as a wrong password and fed the account lockout.
+- **Accessibility (A11Y-01).** Contrast, label-in-name, invalid ARIA role,
+  heading order, target size and keyboard focus failures found with axe in a
+  browser; 0 violations on 16 routes in all three themes (empty-data pages).
+- **Publishing workflows (CI-01).** Dependency caches are explicitly off in
+  `docker-publish.yml` and `release.yml`.
+- **`/api/v1/health` cost (PERF-01).** Display paths are cached for 30 s
+  (18 ms to 0.8 ms per authenticated call on Windows).
+- **Troubleshooting logs (LOG-01).** LDAP steps, sign-in failures, backup and
+  restore errors, unreadable run summaries and version-skew refusals are now
+  logged with the user, client address and request id (never passwords).
+
+New open items from this pass:
+
+| Priority | Item | Scope | Size |
+| --- | --- | --- | --- |
+| P0 | Helm install smoke test in CI | Install the chart on a kind cluster from images built in the job and wait for the API and UI to be ready. K8S-02 shipped because nothing deploys the chart. Cover `helm template` plus `kubeconform` in the same job. | M |
+| P0 | Chart storage options | `pvc.yaml` hard-codes `ReadWriteMany`, so the chart cannot run on RWO-only storage (kind, many default classes). Add `persistence.accessMode` and `persistence.storageClass`, with a documented single-replica RWO mode. | S |
+| P1 | systemd hardening (LIN-01) | The unit written by `v2-install-service` runs as root with no sandboxing. Add a dedicated user and `NoNewPrivileges`, `ProtectSystem`, `PrivateTmp`, `ProtectKernel*`, `RestrictSUIDSGID`, `LockPersonality`; check `chcon`, `systemctl restart` and restore still work. Add `--no-same-owner` to the cloud-init `tar`. | M |
+| P1 | Windows file ACLs in the product (WIN-02) | Apply a restrictive ACL from `v2-start` to the token file, user database, backups and config, so manual installs are covered as well as the installer. | M |
+| P1 | Safer installers (WIN-03) | Do not delete the install directory when it holds a user database or backups; verify the SLSA attestation (`gh attestation verify`) or a cosign signature, not only a checksum fetched from the same release URL. | M |
+| P1 | Container hardening defaults (HARD-01) | `readOnlyRootFilesystem: true` with `emptyDir` for `/tmp` (the API image already runs read-only with only `/data` writable), default CPU and memory requests, pod anti-affinity for the two-replica deployments, `unhealthyPodEvictionPolicy` on the PDBs. Test runs, backup and restore under it. | M |
+| P1 | Secure cookie by default | Plain-HTTP host installs send a session cookie without `Secure`. Prefer auto-TLS (`--auto-tls-dir`) or a first-run warning in the UI. | M |
+| P1 | Browser accessibility in CI | Run axe (including contrast) against the demo build in Playwright for every route and theme, with populated data; add keyboard-only and 400% zoom checks. Today only jsdom tests run in CI, which cannot see contrast. | M |
+| P2 | Public diagnostic endpoints (SEC-10) | `meta/routes`, `openapi.json` and `metrics/rate-limit` are readable without sign-in so Swagger works. Require a session for the rate-limit counters. | S |
+| P2 | Freshness scoping (FRESH-01) | `/api/v1/freshness` returns every schedule and the global overdue flag to cluster-scoped users; filter schedules to the environments they can see. | S |
+| P2 | Trust ledger (SEC-07 note) | The ledger trusts each file against any recorded set, so a restore can mix files from different versions that each ran here. Prefer whole recorded sets. | S |
+| P2 | Unreleased-image build | `Dockerfile.runner` needs a prebuilt `dist/` binary and cannot be built from a plain checkout; add a documented target or a multi-stage variant. | S |
+| P2 | Flaky test | `SessionIdleGuard.test.tsx` ("offers Sign in again when the session cannot be extended") failed once in a loaded full run. Use fake timers. | S |
+| P2 | Password hashing cost | bcrypt uses the library default (10); raise it and rehash on next sign-in. | S |
+
+Checks that still need an environment this audit did not have (multi-node
+Kubernetes with RWX storage and an enforcing CNI, a Rocky Linux systemd
+host, a full Windows install, a screen reader, a large fleet) are collected
+in [`docs/audit/environment-test-prompt.md`](audit/environment-test-prompt.md).
+
 See [`docs/FEATURES_AND_CONFIG_FLAGS.md`](FEATURES_AND_CONFIG_FLAGS.md),
 [`docs/SECURITY_AND_TRUST.md`](SECURITY_AND_TRUST.md),
 [`docs/SCALING.md`](SCALING.md), and
 [`docs/THIRD_PARTY_DEPENDENCIES.md`](THIRD_PARTY_DEPENDENCIES.md) for the
 canonical operational and security details.
 
-_Last reviewed: 2026-11-17._
+_Last reviewed: 2026-11-19._
