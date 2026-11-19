@@ -277,6 +277,15 @@ What to look for:
 - **Fix:** upgrade to the 2.4.0 chart, which passes every path flag and runs the
   runner from `/data`. The `k8s/` manifests already did.
 
+### Settings, Run now fails with `NCC_PREFLIGHT_VALIDATE_SECRETS` (older charts)
+
+- **Cause:** the starter `config.yaml` in charts before 2.4.0 did not set
+  `skip-preflight-check` or `secrets.provider: env`, so the API's preflight could not
+  find the Prism password that the credentials Secret injects, although the CronJob
+  (which passes `--skip-preflight-check`) worked.
+- **Fix:** upgrade the chart, or add `skip-preflight-check: true` under
+  `runner.execution` and `secrets.provider: env` to the ConfigMap.
+
 ### The PVC stays `Pending`
 
 - **Cause:** the chart asks for `ReadWriteMany` (two API replicas share `/data`),

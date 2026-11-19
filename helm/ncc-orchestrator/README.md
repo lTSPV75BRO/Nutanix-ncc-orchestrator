@@ -10,8 +10,9 @@ API `get`/`patch` on that CronJob). `helm upgrade` puts `cronjob.schedule`
 back, so set a schedule you want to keep in your values file. Default replica
 counts are **2** for both API and UI.
 
-Prerequisites are a ConfigMap named by `configMapName`, a PVC named by
-`pvcName`, and credentials provisioned out-of-band under `secretName`. That
+The chart creates the ConfigMap named by `configMapName` (a starter `config.yaml`
+with no clusters; edit it in Settings or replace the ConfigMap) and the PVC named
+by `pvcName`. Credentials are provisioned out-of-band under `secretName`. That
 Secret **must** include `jwt-secret` (`openssl rand -base64 32`) so API
 replicas share session JWTs; the API container will not start without it.
 UI pods mint a self-signed certificate on the PVC (`/data/tls`) and serve

@@ -73,6 +73,7 @@ recorded in `scripts/govulncheck-accepted.txt` with a review-by date of
 | REL-01 to REL-04 | Long operations cut off by timeouts; SMTP without timeouts; no graceful shutdown; readiness did not check dependencies. | Timeouts, graceful shutdown and `/api/v1/health/ready`. |
 | OBS-01, OBS-02 | No request ids or per-route metrics. | `X-Request-ID` and `ncc_http_request*` metrics. |
 | LOG-01 | Thin logs for LDAP, sign-in failures, backup and restore errors, run summaries and version skew. | Structured warnings with user, client address and request id; never passwords. |
+| ENV-12 | Settings, Run now failed the secrets preflight (`NCC_PREFLIGHT_VALIDATE_SECRETS`) on Helm installs while the CronJob succeeded. | The chart creates the ConfigMap with `skip-preflight-check: true` and `secrets.provider: env`. |
 | ENV-04, ENV-05, ENV-06 | Helm PVC had no storage settings; backup key requirement was undocumented; cloud-init `tar` kept foreign owner ids. | `persistence.*` values, chart README, `--no-same-owner`. |
 | ENV-08 | `v2-install-service` hosts had no log maintenance timer. | The timer is installed with the service. |
 | ENV-10 | `helm upgrade` (Helm 4 server-side apply) conflicts with the API-edited CronJob schedule. | Documented in the chart README (`--force-conflicts`). |
