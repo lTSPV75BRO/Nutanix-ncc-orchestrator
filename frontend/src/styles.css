@@ -4831,22 +4831,23 @@ html[data-theme="light"] .site-intro-skip {
   color: var(--ui-text-secondary);
 }
 
+/* Minimal: no filled track, a hairline baseline, slim muted bars. */
 .run-activity-track {
   position: relative;
   display: flex;
   align-items: flex-end;
-  height: 112px;
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-surface-hover);
+  justify-content: center;
+  height: 104px;
+  border-bottom: 1px solid var(--ui-border);
 }
 
 .run-activity-bar {
   display: flex;
   flex-direction: column;
-  width: 100%;
+  width: min(100%, 28px);
   min-height: 0;
   overflow: hidden;
-  border-radius: var(--ui-radius-sm);
+  border-radius: 3px 3px 0 0;
 }
 
 .run-activity-bar > span {
@@ -4854,16 +4855,23 @@ html[data-theme="light"] .site-intro-skip {
   min-height: 3px;
 }
 
-.run-activity .is-ok {
-  background: var(--ui-ok);
+/* Scoped to the bars and the legend. These rules used to match every .is-ok in
+   the chart, including the "Succeeded" figure above it, which got a solid green
+   background and hid its number. Fills are softened (70%) but stay above 3:1
+   against the page in every theme. */
+.run-activity-bar > .is-ok,
+.run-activity-legend .is-ok {
+  background: color-mix(in srgb, var(--ui-ok) 70%, transparent);
 }
 
-.run-activity .is-problem {
-  background: var(--ui-fail);
+.run-activity-bar > .is-problem,
+.run-activity-legend .is-problem {
+  background: color-mix(in srgb, var(--ui-fail) 75%, transparent);
 }
 
-.run-activity .is-unknown {
-  background: var(--ui-neutral);
+.run-activity-bar > .is-unknown,
+.run-activity-legend .is-unknown {
+  background: color-mix(in srgb, var(--ui-neutral) 70%, transparent);
 }
 
 .run-activity-label {
@@ -4886,7 +4894,7 @@ html[data-theme="light"] .site-intro-skip {
 }
 
 .run-activity-day.is-today .run-activity-track {
-  box-shadow: inset 0 0 0 1px var(--ui-border-strong);
+  border-bottom-color: var(--ui-border-strong);
 }
 
 .run-activity-foot {
