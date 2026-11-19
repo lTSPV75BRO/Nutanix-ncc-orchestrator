@@ -454,6 +454,25 @@ func (p *ldapProvider) authenticate(username, password string) (Role, string, []
 	return r.role, r.name, r.groups, true, nil
 }
 
+// ldapUserBindIsOperational reports whether a failed bind as the user is a
+// failure to ask the directory (connection lost, server busy or unavailable,
+// malformed reply) rather than the directory refusing the credentials.
+func ldapUserBindIsOperational(err error) bool {
+	if err == nil {
+		return false
+	}
+	var le *ldap.Error
+	if !errors.As(err, &le) {
+		return true // not an LDAP result: an I/O or protocol failure
+	}
+	switch le.ResultCode {
+	case ldap.ErrorNetwork, ldap.ErrorUnexpectedResponse,
+		ldap.LDAPResultBusy, ldap.LDAPResultUnavailable, ldap.LDAPResultTimeLimitExceeded:
+		return true
+	}
+	return false
+}
+
 // ldapLookupResult is a verified directory user: name is the username
 // attribute's value (the canonical name of a default-profile user), upn the
 // userPrincipalName (the canonical name of a named-profile user).
@@ -480,8 +499,10 @@ func (p *ldapProvider) lookup(username, password string) (ldapLookupResult, bool
 	if p.lookupOverride != nil {
 		return p.lookupOverride(username, password)
 	}
+	started := time.Now()
 	conn, err := p.dial()
 	if err != nil {
+		serverLog.Warn("ldap: could not connect", "subsystem", "ldap", "urls", strings.Join(p.urls, ","), "error", err.Error())
 		return ldapLookupResult{}, false, err
 	}
 	defer conn.Close()
@@ -489,6 +510,7 @@ func (p *ldapProvider) lookup(username, password string) (ldapLookupResult, bool
 	// Bind the read-only service account (or anonymously when no bind DN set).
 	if p.bindDN != "" {
 		if err := conn.Bind(p.bindDN, p.bindPassword); err != nil {
+			serverLog.Warn("ldap: service-account bind failed", "subsystem", "ldap", "bind_dn", p.bindDN, "error", err.Error())
 			return ldapLookupResult{}, false, fmt.Errorf("ldap bind (service account): %w", err)
 		}
 	}
@@ -503,20 +525,35 @@ func (p *ldapProvider) lookup(username, password string) (ldapLookupResult, bool
 	)
 	res, err := conn.Search(req)
 	if err != nil {
+		serverLog.Warn("ldap: user search failed", "subsystem", "ldap", "base_dn", p.baseDN, "error", err.Error())
 		return ldapLookupResult{}, false, fmt.Errorf("ldap search: %w", err)
 	}
 	if len(res.Entries) == 0 {
+		serverLog.Debug("ldap: user not found", "subsystem", "ldap", "username", username, "base_dn", p.baseDN, "filter", p.userFilter)
 		return ldapLookupResult{}, false, nil // unknown user
 	}
 	if len(res.Entries) > 1 {
+		serverLog.Warn("ldap: user filter matched several entries", "subsystem", "ldap", "username", username, "matches", len(res.Entries))
 		return ldapLookupResult{}, false, fmt.Errorf("ldap search for %q matched %d entries (tighten user_filter)", username, len(res.Entries))
 	}
 	entry := res.Entries[0]
 
 	// Verify the password by re-binding as the located user DN.
 	if err := conn.Bind(entry.DN, password); err != nil {
-		return ldapLookupResult{found: true}, false, nil // wrong password, or a locked/disabled account
+		if ldapUserBindIsOperational(err) {
+			// The directory did not judge the password (network drop,
+			// busy or unavailable server): not a wrong password, so it
+			// must not count toward the account lockout.
+			serverLog.Warn("ldap: user bind failed for a non-credential reason", "subsystem", "ldap", "username", username, "user_dn", entry.DN, "error", err.Error())
+			return ldapLookupResult{}, false, fmt.Errorf("ldap bind (user): %w", err)
+		}
+		// Wrong password, or a locked/disabled/expired account; the result
+		// code and the server's diagnostic say which (AD: "data 52e" = bad
+		// password, "775" = locked, "533" = disabled, "532" = expired).
+		serverLog.Info("ldap: user bind rejected", "subsystem", "ldap", "username", username, "user_dn", entry.DN, "error", err.Error())
+		return ldapLookupResult{found: true}, false, nil
 	}
+	serverLog.Debug("ldap: user authenticated", "subsystem", "ldap", "username", username, "groups", len(entry.GetAttributeValues(p.groupAttr)), "elapsed_ms", time.Since(started).Milliseconds())
 
 	canonical := strings.TrimSpace(entry.GetAttributeValue(p.usernameAttr))
 	if canonical == "" {

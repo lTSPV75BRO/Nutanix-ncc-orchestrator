@@ -384,7 +384,7 @@ func (s *apiServer) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
 		args = append(args, "--encrypt")
 	}
 	if out, err := s.runOrchestratorEnv(args, 2*time.Minute, extraEnv); err != nil {
-		s.audit(r, "settings.backup.create", false, map[string]interface{}{"encrypted": false, "key_source": keySource})
+		s.audit(r, "settings.backup.create", false, map[string]interface{}{"encrypted": false, "key_source": keySource, "error": tailString(redactPaths(firstNonEmptyLine(out, err.Error())), 300)})
 		s.notifyOperationalFailure("backup_failure", "NCC backup snapshot failed", map[string]interface{}{
 			"encrypted": encrypt,
 			"error":     redactPaths(firstNonEmptyLine(out, "snapshot failed")),
@@ -460,7 +460,7 @@ func (s *apiServer) handleBackupRestoreNamed(w http.ResponseWriter, r *http.Requ
 	}
 	out, err := s.runOrchestratorEnv([]string{"v2-restore", "--install-dir", installDir, "--input-file", archivePath, "--force", "--no-restart"}, 3*time.Minute, extraEnv)
 	if err != nil {
-		s.audit(r, "settings.backup.restore", false, map[string]interface{}{"install_dir": installDir, "name": body.Name})
+		s.audit(r, "settings.backup.restore", false, map[string]interface{}{"install_dir": installDir, "name": body.Name, "error": tailString(redactPaths(firstNonEmptyLine(out, err.Error())), 300)})
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "restore failed: " + strings.TrimSpace(out)})
 		return
 	}

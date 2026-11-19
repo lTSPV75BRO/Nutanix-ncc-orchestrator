@@ -682,6 +682,7 @@ func (s *apiServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 			// Operational failure (dial/bind/search): log it but keep the
 			// response generic so we don't leak directory topology.
 			log.Printf("LDAP authentication error for %q: %v", username, err)
+			serverLog.WarnContext(r.Context(), "sign-in could not reach the directory", "subsystem", "auth", "username", username, "method", "ldap", "client_ip", clientIP, "error", err.Error())
 			s.loginFailureTotal.Add(1)
 			s.audit(r, "auth.login", false, map[string]interface{}{"username": username, "method": "ldap", "error": "ldap_unavailable"})
 			writeJSON(w, http.StatusUnauthorized, envelope{Success: false, Error: "invalid username or password"})
@@ -714,6 +715,8 @@ func (s *apiServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 			s.lockoutTotal.Add(1)
 		}
 		s.audit(r, "auth.login", false, map[string]interface{}{"username": username, "locked": locked})
+		serverLog.WarnContext(r.Context(), "sign-in failed", "subsystem", "auth", "username", username, "client_ip", clientIP,
+			"local_account", hasLocal, "directory_tried", ldapProv != nil, "locked", locked)
 		writeJSON(w, http.StatusUnauthorized, envelope{Success: false, Error: "invalid username or password"})
 		return
 	}

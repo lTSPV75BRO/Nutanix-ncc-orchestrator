@@ -162,6 +162,7 @@ func (s *apiServer) runnerVersionSkewError() error {
 	if ok, known := versionsCompatible(Version, runner); !known || ok {
 		return nil
 	}
+	serverLog.Warn("run refused: runner and API server versions differ", "subsystem", "runs", "runner_version", runner, "runner_version_source", source, "api_version", Version)
 	return fmt.Errorf("the runner image is version %s (from %s) but the API server is version %s; runs need the same major.minor version. Roll out matching image tags with Helm or Kustomize, then start the run again", runner, source, Version)
 }
 

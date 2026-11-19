@@ -13,6 +13,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -106,17 +107,22 @@ type freshnessRunCluster struct {
 func readFreshnessRun(summaryPath, environment string) (freshnessRun, bool) {
 	b, err := os.ReadFile(summaryPath)
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			serverLog.Warn("freshness: cannot read run summary", "subsystem", "freshness", "file", summaryPath, "error", err.Error())
+		}
 		return freshnessRun{}, false
 	}
 	var raw struct {
 		Timestamp string                `json:"timestamp"`
 		Clusters  []freshnessRunCluster `json:"clusters"`
 	}
-	if json.Unmarshal(b, &raw) != nil {
+	if err := json.Unmarshal(b, &raw); err != nil {
+		serverLog.Warn("freshness: run summary is not valid JSON; this run is ignored for data age", "subsystem", "freshness", "file", summaryPath, "error", err.Error())
 		return freshnessRun{}, false
 	}
 	at, err := time.Parse(time.RFC3339, strings.TrimSpace(raw.Timestamp))
 	if err != nil {
+		serverLog.Warn("freshness: run summary has no valid timestamp; this run is ignored for data age", "subsystem", "freshness", "file", summaryPath, "timestamp", raw.Timestamp)
 		return freshnessRun{}, false
 	}
 	return freshnessRun{at: at.UTC(), environment: environment, clusters: raw.Clusters}, true
