@@ -35,7 +35,17 @@ try {
         throw "Release checksum verification failed for $archive"
     }
 
-    if (Test-Path $InstallDir) { Remove-Item $InstallDir -Recurse -Force }
+    # Never wipe an existing install: it holds the user database, API token and
+    # backups. A re-run used to delete the directory item by item, failed on the
+    # first locked executable and left a half-deleted install with its
+    # backups already gone. Upgrade by stopping the stack and replacing bin and
+    # frontend-dist, or set NCC_FORCE_CLEAN=1 to delete everything on purpose.
+    if ((Test-Path $InstallDir) -and (Get-ChildItem $InstallDir -Force -ErrorAction SilentlyContinue)) {
+        if ($env:NCC_FORCE_CLEAN -ne "1") {
+            throw "$InstallDir already contains files. Refusing to delete user data and backups. Stop the stack and replace bin and frontend-dist to upgrade, or set NCC_FORCE_CLEAN=1 to remove the directory."
+        }
+        Remove-Item $InstallDir -Recurse -Force
+    }
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     Expand-Archive -Path $archivePath -DestinationPath $InstallDir -Force
 
@@ -71,9 +81,11 @@ runner:
     max-delay: "8s"
     circuit-breaker: 3
 storage:
-  output-dir: "$InstallDir\outputfiles"
-  logs-dir: "$InstallDir\logs"
-  run-history-dir: "$InstallDir\outputfiles\runs"
+  # Single quotes: inside double quotes YAML reads \P, \N, \o as escapes and the
+  # whole config fails to parse. Paths containing a quote are not supported.
+  output-dir: '$InstallDir\outputfiles'
+  logs-dir: '$InstallDir\logs'
+  run-history-dir: '$InstallDir\outputfiles\runs'
 api:
   cache:
     pc-alerts-cache-ttl: "5m"
