@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.configMapName }}
+  namespace: {{ .Values.namespace }}
+data:
+  config.yaml: |
+    schema-version: 1
+    runner:
+      targets:
+        mode: clusters
+        clusters: []
+      credentials:
+        username: admin
+        password: secret://NCC_PASSWORD
+      execution:
+        timeout: 15m
+        request-timeout: 20s
+        max-parallel: 4
+        # Same as the CronJob --skip-preflight-check: NCC_PASSWORD is injected
+        # from the credentials Secret; validate-secrets otherwise fails because
+        # this file does not set secrets-provider.
+        skip-preflight-check: true
+    storage:
+      output-dir: /data/outputfiles
+      logs-dir: /data/nccfiles
+      run-history-dir: /data/outputfiles/runs
+    secrets:
+      provider: env
+    notifications:
+      smtp-port: 587

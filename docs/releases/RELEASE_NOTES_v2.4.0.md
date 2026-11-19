@@ -82,7 +82,9 @@ sign-in lockout. Also fixed:
   leaving it "running" with its clusters locked.
 - Certificate pins (`pin-sha256`) are checked on resumed TLS sessions too.
 - The Helm chart gets the same NetworkPolicies and PodDisruptionBudgets as
-  `k8s/` (ingress rules and PDBs on by default, egress opt-in).
+  `k8s/` (ingress rules and PDBs on by default, egress opt-in). The runner
+  CronJob writes under `/data`; the seeded config skips secret preflight so
+  Run now works with `NCC_PASSWORD` from the credentials Secret.
 - CI adds gosec and gitleaks, drops the job token from checkouts and pins
   every action by commit SHA.
 - The Findings page says "finding" throughout, and its toolbar fits at
