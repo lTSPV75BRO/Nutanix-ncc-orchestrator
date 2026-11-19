@@ -47,7 +47,24 @@ spec:
                 allowPrivilegeEscalation: false
                 capabilities:
                   drop: ["ALL"]
-              args: ["--config", "/data/config/config.yaml"]
+              # The image's WORKDIR (/workspace) is not writable by uid 1000, and
+              # a relative logging.file or storage path in the config resolves
+              # against it ("mkdir logs: permission denied"). Run from the PVC and
+              # pass the same explicit paths as k8s/runner-cronjob.yaml.
+              workingDir: /data
+              args:
+                - "--config"
+                - "/data/config/config.yaml"
+                - "--log-file"
+                - "/data/logs/ncc-runner.log"
+                - "--output-dir-filtered"
+                - "/data/outputfiles"
+                - "--output-dir-logs"
+                - "/data/nccfiles"
+                - "--run-history=true"
+                - "--run-history-dir"
+                - "/data/outputfiles/runs"
+                - "--skip-preflight-check"
               env:
                 - name: NCC_RUNTIME_MODE
                   value: kubernetes

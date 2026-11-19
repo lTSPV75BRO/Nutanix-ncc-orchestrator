@@ -57,7 +57,7 @@ write_files:
 
       rm -rf "$NCC_INSTALL_DIR"
       mkdir -p "$NCC_INSTALL_DIR"
-      tar -xzf "$tmp/$archive" -C "$NCC_INSTALL_DIR"
+      tar --no-same-owner -xzf "$tmp/$archive" -C "$NCC_INSTALL_DIR"
       bin="$NCC_INSTALL_DIR/bin/ncc-orchestrator"
       chmod 0755 "$NCC_INSTALL_DIR"/bin/*
 

@@ -105,6 +105,17 @@ prometheusRule:
 
 configMapName: ncc-orchestrator-config
 pvcName: ncc-orchestrator-output
+
+# Storage for /data (config, reports, run history, logs). Two or more API
+# replicas share it, so the default is ReadWriteMany and needs a storage class
+# that supports it (NFS, CephFS, ...). Leave storageClass empty to use the
+# cluster default, which is often ReadWriteOnce-only: then the PVC never binds
+# on a multi-node cluster. For a single replica (api.replicas=1, ui.replicas=1)
+# on RWO-only storage set accessMode to ReadWriteOnce.
+persistence:
+  accessMode: ReadWriteMany
+  storageClass: ""
+  size: 10Gi
 secretName: ncc-orchestrator-credentials
 
 initImage: busybox:1.37

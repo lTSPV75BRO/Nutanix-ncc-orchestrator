@@ -34,3 +34,33 @@ func TestKubernetesAPIArgsPinWritablePaths(t *testing.T) {
 		}
 	}
 }
+
+// The runner image's WORKDIR (/workspace) is not writable by uid 1000, so a
+// relative logging.file in the config failed with "mkdir logs: permission
+// denied" and the Helm CronJob never completed a run. Both CronJob manifests
+// must pass explicit writable paths (and skip the secret preflight like the
+// k8s/ one), and the chart must run from the PVC.
+func TestRunnerCronJobPinsWritablePaths(t *testing.T) {
+	required := []string{`"--log-file"`, `"--output-dir-filtered"`, `"--output-dir-logs"`, `"--run-history-dir"`, `"--skip-preflight-check"`}
+	for _, file := range []string{
+		filepath.Join("..", "..", "helm", "ncc-orchestrator", "templates", "cronjob.yaml"),
+		filepath.Join("..", "..", "k8s", "runner-cronjob.yaml"),
+	} {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, flag := range required {
+			if !strings.Contains(string(b), flag) {
+				t.Errorf("%s does not pass %s", file, flag)
+			}
+		}
+	}
+	b, err := os.ReadFile(filepath.Join("..", "..", "helm", "ncc-orchestrator", "templates", "cronjob.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "workingDir: /data") {
+		t.Error("the Helm CronJob must run from /data, not the image WORKDIR")
+	}
+}

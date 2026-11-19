@@ -4,7 +4,10 @@ metadata:
   name: {{ .Values.pvcName }}
   namespace: {{ .Values.namespace }}
 spec:
-  accessModes: [ReadWriteMany]
+  accessModes: [{{ .Values.persistence.accessMode }}]
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
   resources:
     requests:
-      storage: 10Gi
+      storage: {{ .Values.persistence.size }}

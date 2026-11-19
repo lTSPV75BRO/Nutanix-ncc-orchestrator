@@ -15,6 +15,10 @@ metadata:
   namespace: {{ $.Values.namespace }}
 spec:
   minAvailable: {{ $.Values.podDisruptionBudget.minAvailable }}
+  {{- if semverCompare ">=1.27.0-0" $.Capabilities.KubeVersion.Version }}
+  # Pods that are running but not Ready must not block a node drain.
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  {{- end }}
   selector:
     matchLabels: { app: ncc-orchestrator-v2, component: {{ $c }} }
 {{- end }}

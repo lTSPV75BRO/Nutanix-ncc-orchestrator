@@ -28,6 +28,28 @@ helm install ncc-orchestrator ./helm/ncc-orchestrator \
 Set `ui.origin`, `ingress.host`, `ingress.tlsSecret` and storage names in
 an environment values file.
 
+Storage: `/data` is one PersistentVolumeClaim shared by the API replicas, so
+`persistence.accessMode` defaults to `ReadWriteMany` and needs a storage class
+that supports it (NFS, CephFS, ...). Set `persistence.storageClass` to such a
+class; left empty, the cluster default is used, which is often ReadWriteOnce
+only, and the claim then never binds on a multi-node cluster. On RWO-only
+storage run one replica of each component (`--set api.replicas=1 --set
+ui.replicas=1 --set persistence.accessMode=ReadWriteOnce`).
+
+Backups: every backup the API creates is encrypted by default
+(`NCC_BACKUP_ENCRYPTION=required`). Add a `backup-key` entry to the
+credentials Secret (it is optional and absent by default) or each request
+must carry a passphrase; without either, `POST /api/v1/settings/backups`
+answers HTTP 412. Set `NCC_BACKUP_ENCRYPTION=optional` only if plaintext
+archives are acceptable.
+
+Upgrades: Helm 4 applies objects with server-side apply. The API changes the
+runner CronJob schedule (Settings, Schedule), and an operator may edit the
+ConfigMap with `kubectl apply`, so `helm upgrade` can stop with a field
+conflict on `.spec.schedule` or the ConfigMap. Either set `cronjob.schedule`
+to the live value, or pass `--force-conflicts` to let the chart take
+ownership again.
+
 NetworkPolicies match `k8s/`: by default all ingress is denied except the
 UI port (from `networkPolicy.uiIngressFrom` and in-cluster namespaces) and
 the API from UI pods; add other API clients such as Prometheus with
