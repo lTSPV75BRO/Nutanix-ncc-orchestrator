@@ -39,6 +39,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
+          cache: false
 
       - name: Set up Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
@@ -46,6 +47,7 @@ jobs:
           node-version: "26.12.1" # >= 26.12.1: Oct 21 2026 Node security release; runner toolcache may lag
           # No dependency cache in a publishing workflow: a cache written by a
           # less-privileged run could poison the pushed images.
+          package-manager-cache: false
 
       - name: Check Docker Hub credentials
         id: creds

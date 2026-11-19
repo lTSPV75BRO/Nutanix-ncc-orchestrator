@@ -69,6 +69,7 @@ jobs:
           # No dependency cache here: this job holds contents:write and an OIDC
           # token, so restoring a cache another run wrote is a poisoning path
           # into signed release artifacts.
+          package-manager-cache: false
 
       - name: Install cyclonedx-gomod (SBOM generator)
         # Pinned version: bumping requires updating binaryGO.txt's
