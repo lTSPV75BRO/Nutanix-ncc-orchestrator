@@ -210,6 +210,8 @@ type apiServer struct {
 	sessionIssuer      string
 	runTimeout         time.Duration
 	debugExpose        bool
+	// healthPathCache holds the resolved display paths for /api/v1/health.
+	healthPathCache healthPathCache
 	tlsCertFile        string
 	tlsKeyFile         string
 	tlsClientCAFile    string
@@ -1264,8 +1266,9 @@ func (s *apiServer) healthPayload(p *principal) map[string]interface{} {
 	data["os"] = runtime.GOOS
 	data["arch"] = runtime.GOARCH
 	data["runtime"] = s.capabilities
-	data["config_path"] = s.displayRelPath(s.configPath)
-	data["output_dir"] = s.displayRelPath(s.outputDir)
+	paths := s.healthPaths(time.Now())
+	data["config_path"] = paths.configRel
+	data["output_dir"] = paths.outputRel
 	if p.role < RoleAdmin {
 		return data
 	}
@@ -1276,11 +1279,11 @@ func (s *apiServer) healthPayload(p *principal) map[string]interface{} {
 	data["users_store_protection"] = s.userStoreProtection()
 	data["backup_encryption_required"] = backupEncryptionRequired()
 	data["backup_server_key_configured"] = backupKeyConfigured()
-	data["config_path"] = s.absPath(s.configPath)
-	data["output_dir"] = s.absPath(s.outputDir)
-	data["log_dir"] = s.absPath(s.logDir)
-	data["token_file"] = s.absPath(s.tokenFilePath)
-	data["orchestrator_bin"] = s.absPath(s.orchestratorBin)
+	data["config_path"] = paths.configAbs
+	data["output_dir"] = paths.outputAbs
+	data["log_dir"] = paths.logAbs
+	data["token_file"] = paths.tokenAbs
+	data["orchestrator_bin"] = paths.orchBinAbs
 	if s.debugExpose {
 		data["repo_root"] = s.absPath(s.repoRoot)
 		data["schedule_state"] = s.absPath(s.scheduleStatePath)
@@ -6255,8 +6258,12 @@ func applyStackAwareDefaults(s *apiServer, argv []string) {
 		{"orchestrator-bin", &s.orchestratorBin, "./ncc-orchestrator", orchBin},
 	}
 	rewrote := []string{}
+	skipUsersDB := stackAwareKeepsUsersDBUnset(s)
 	for _, f := range flags {
 		if explicit[f.flagName] {
+			continue
+		}
+		if f.flagName == "users-db" && skipUsersDB {
 			continue
 		}
 		if *f.current != f.zeroValue {
@@ -6275,6 +6282,20 @@ func applyStackAwareDefaults(s *apiServer, argv []string) {
 		fmt.Fprintln(os.Stderr,
 			"             pass any of those flags explicitly to override.")
 	}
+}
+
+// stackAwareKeepsUsersDBUnset reports whether the stack-aware default must
+// leave --users-db alone because the operator already chose a user-database
+// backend: a Kubernetes Secret (--users-db-secret / NCC_USERS_DB_SECRET) or a
+// file path from NCC_USERS_DB. Both are read after the defaults are applied,
+// so filling --users-db first made the Secret backend fail with "mutually
+// exclusive" and made NCC_USERS_DB silently lose. This is what crash-looped
+// the API pod in the Helm and k8s/ manifests: the container image keeps both
+// binaries in /usr/local/bin, which looks like a v2 stack.
+func stackAwareKeepsUsersDBUnset(s *apiServer) bool {
+	return strings.TrimSpace(s.usersDBSecret) != "" ||
+		strings.TrimSpace(os.Getenv("NCC_USERS_DB_SECRET")) != "" ||
+		strings.TrimSpace(os.Getenv("NCC_USERS_DB")) != ""
 }
 
 // explicitFlagSet returns the set of flag names the user passed on

@@ -1,0 +1,36 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// In a container the API binary sits in /usr/local/bin next to the
+// orchestrator, which the stack-aware defaults mistake for an extracted v2
+// stack and then point log-dir, token-file-path and users-db at /usr/local
+// (not writable by uid 1000). Kubernetes `args` replace the image's CMD, so
+// every deployment must pass these flags itself. The Helm chart once passed
+// only a subset and the API pod crash-looped on first start.
+func TestKubernetesAPIArgsPinWritablePaths(t *testing.T) {
+	required := []string{
+		`"--repo-root"`, `"--log-dir"`, `"--token-file-path"`, `"--audit-log-path"`,
+		`"--runner-log-path"`, `"--users-db"`, `"--users-db-secret"`,
+	}
+	for _, file := range []string{
+		filepath.Join("..", "..", "helm", "ncc-orchestrator", "templates", "api.yaml"),
+		filepath.Join("..", "..", "k8s", "api-deployment.yaml"),
+	} {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(b)
+		for _, flag := range required {
+			if !strings.Contains(text, flag) {
+				t.Errorf("%s does not pass %s explicitly", file, flag)
+			}
+		}
+	}
+}
