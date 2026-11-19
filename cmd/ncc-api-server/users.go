@@ -272,13 +272,20 @@ func (db *userDB) applyDocument(f usersDBFile) error {
 
 const userDBReloadMinInterval = 2 * time.Second
 
-func (db *userDB) refreshIfStale() {
+func (db *userDB) refreshIfStale() { db.refresh(false) }
+
+// refreshNow re-reads the store immediately, ignoring the minimum interval.
+// Account-management endpoints call it so a user another replica just wrote is
+// visible to the admin who asks for it, instead of up to a reload tick later.
+func (db *userDB) refreshNow() { db.refresh(true) }
+
+func (db *userDB) refresh(force bool) {
 	if db == nil || db.backend == nil {
 		return
 	}
 	db.refreshMu.Lock()
 	defer db.refreshMu.Unlock()
-	if time.Since(db.lastRefresh) < userDBReloadMinInterval {
+	if !force && time.Since(db.lastRefresh) < userDBReloadMinInterval {
 		return
 	}
 	raw, version, err := backendLoad(db.backend)
