@@ -269,8 +269,10 @@ func installSupervisorSystemd(o installServiceOptions) error {
 		fmt.Printf("Would write %s:\n\n%s\n", unitPath, unit)
 		fmt.Printf("Would write %s:\n\n%s\n", applyUpdateWatcherPathPath(o), systemdApplyUpdatePathUnit(o))
 		fmt.Printf("Would write %s:\n\n%s\n", applyUpdateWatcherServicePath(o), systemdApplyUpdateOneshotUnit(o))
-		fmt.Printf("Then run:\n  systemctl daemon-reload\n  systemctl enable%s %s.service\n  systemctl enable --now %s.path\n",
-			ifThen(o.Now, " --now", ""), o.ServiceName, applyUpdateWatcherName(o.ServiceName))
+		fmt.Printf("Would write %s:\n\n%s\n", logMaintenanceServicePath(), systemdLogMaintenanceServiceUnit(o))
+		fmt.Printf("Would write %s:\n\n%s\n", logMaintenanceTimerPath(), systemdLogMaintenanceTimerUnit())
+		fmt.Printf("Then run:\n  systemctl daemon-reload\n  systemctl enable%s %s.service\n  systemctl enable --now %s.path\n  systemctl enable --now %s.timer\n",
+			ifThen(o.Now, " --now", ""), o.ServiceName, applyUpdateWatcherName(o.ServiceName), logMaintenanceUnitName)
 		return nil
 	}
 	if !systemctlAvailable() {
@@ -320,6 +322,11 @@ func installSupervisorSystemd(o installServiceOptions) error {
 	if err := installApplyUpdateWatcher(o); err != nil {
 		return err
 	}
+	// Log rotation is housekeeping: a failure to install the timer must not
+	// undo a working service install.
+	if err := installLogMaintenanceTimer(o); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: log maintenance timer not installed: %v\n", err)
+	}
 	fmt.Printf("Installed systemd service %s.service (ExecStart=%s v2-supervise --install-dir %s)\n", o.ServiceName, o.OrchestratorBin, o.InstallDir)
 	fmt.Printf("Enabled at boot%s. Manage with: systemctl status|restart|stop %s\n", ifThen(o.Now, " and started now", ""), o.ServiceName)
 	return nil
@@ -333,6 +340,7 @@ func uninstallSupervisorSystemd(o installServiceOptions) error {
 		return nil
 	}
 	_ = uninstallApplyUpdateWatcher(o)
+	uninstallLogMaintenanceTimer()
 	if systemctlAvailable() {
 		_, _ = exec.Command("systemctl", "disable", "--now", o.ServiceName+".service").CombinedOutput()
 	}
