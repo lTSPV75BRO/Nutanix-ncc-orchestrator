@@ -1,4 +1,4 @@
-// Shared building blocks for the signed-in pages (docs/ui/redesign-plan.md).
+// Shared building blocks for the signed-in pages (docs/ui/DESIGN_SYSTEM.md).
 // Styles live in styles.css under "Shared components (src/ui)" and use only
 // the --ui-* design tokens.
 export { PageHeader } from "./PageHeader";

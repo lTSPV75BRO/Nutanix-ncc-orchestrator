@@ -64,6 +64,7 @@ NCC Orchestrator
 | `golang.org/x/sys` | 0.49.0 | OS-specific process and system APIs | Runtime |
 | `golang.org/x/term` | 0.47.0 | Terminal detection and password input | Runtime |
 | `gopkg.in/natefinch/lumberjack.v2` | 2.2.1 | Rotating log files | Runtime |
+| `github.com/jimlambrt/gldap` | 0.1.14 | In-process LDAP server for the sign-in tests (with `hashicorp/go-hclog` and `fatih/color`, which it needs) | Tests only |
 
 The Go module also records indirect dependencies for XML signatures, LDAP
 encoding, OTel transport, gRPC/protobuf, configuration backends, terminal
@@ -88,6 +89,7 @@ the resolved module graph rather than upgraded independently.
 
 | Package | Declared version | Used for | Shipped to production? |
 | --- | --- | --- | --- |
+| `axe-core` | ^4.14.1 | Accessibility checks in the Vitest tests (MPL-2.0) | No |
 | `@testing-library/jest-dom` | ^7.0.1 | DOM assertions | No |
 | `@testing-library/react` | ^16.3.3 | Component tests | No |
 | `@types/node` | ^26.6.6 | TypeScript Node types | No |

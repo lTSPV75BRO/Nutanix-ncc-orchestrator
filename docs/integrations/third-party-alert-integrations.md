@@ -427,8 +427,7 @@ Troubleshooting checklist
   store; Prometheus: `tls_config.ca_file`).
 * Restrict network access to the API port to the integration hosts.
 * After the October 2026 eMudhra intermediate-CA compromise, refresh client
-  trust stores/images so revoked certificates are no longer trusted (see
-  `docs/security/security-assessment-2026-10.md`).
+  trust stores/images so revoked certificates are no longer trusted.
 
 ## 10. ServiceNow
 

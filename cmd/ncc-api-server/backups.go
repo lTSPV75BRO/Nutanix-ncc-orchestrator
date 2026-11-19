@@ -126,7 +126,8 @@ func backupKeyConfigured() bool {
 //
 // Encryption is AES-256-GCM (backupcrypt.go) with the key kept outside the
 // archive. Existing plaintext archives are NOT re-encrypted by this change;
-// see docs/security/security-assessment-2026-10.md for the migration procedure.
+// see docs/SECURITY_AND_TRUST.md (Backup archive encryption) for how to
+// re-encrypt or retire them.
 const backupEncryptionEnv = "NCC_BACKUP_ENCRYPTION"
 
 func backupEncryptionRequired() bool {

@@ -1,6 +1,6 @@
-# v2 Backend + Frontend MVP
+# API and UI architecture
 
-This document describes the `v2` split architecture:
+This document describes how the stack is split into a backend API and a web UI:
 
 - Backend API service: `cmd/ncc-api-server`
 - Frontend app: `frontend/` (React + Vite + TypeScript)
@@ -19,7 +19,7 @@ For complete machine setup/build/run instructions, use:
   - run trigger action
 - No direct cluster-management API endpoints
 
-## Backend API (MVP)
+## Backend API
 
 Base path: `/api/v1`
 
@@ -221,61 +221,7 @@ Preflight JSON contract (abridged):
 }
 ```
 
-## Upgrade path: v1 to v2
-
-By design, updater behavior is major-track aware:
-
-- `v1.x` binaries update to latest `v1.x` by default.
-- To move from `v1` to `v2`, user must explicitly enable major upgrade.
-
-### Important: what `ncc-orchestrator update` does (and does not do)
-
-- `ncc-orchestrator update` updates only the `ncc-orchestrator` CLI binary.
-- It does **not** auto-install or auto-start:
-  - `cmd/ncc-api-server`
-  - `cmd/ncc-ui-server`
-  - `frontend` dependencies/build output
-- For `v2` UI/API usage, you must install/run backend and UI components separately.
-
-### Easy install paths for users
-
-#### Path A: CLI-only user (keep using v1-style flow)
-
-If you only need CLI runs and reports:
-
-1. Check updates:
-   `ncc-orchestrator update --check`
-2. Stay on same major track by default (`v1.x` -> latest `v1.x`).
-3. Apply update:
-   `ncc-orchestrator update`
-
-No backend/frontend installation is required for this path.
-
-#### Path B: Move to full v2 stack (API + UI + frontend)
-
-Use this when you want web UI, API endpoints, API explorer, and settings management.
-
-1. Upgrade CLI with explicit major opt-in:
-   `ncc-orchestrator update --check --allow-major-upgrade`
-   `ncc-orchestrator update --allow-major-upgrade`
-2. Bootstrap v2 binaries/artifacts (no `go run`, no `npm build`):
-   `ncc-orchestrator v2-bootstrap --check`
-   `ncc-orchestrator v2-bootstrap`
-   - Preferred release asset style is a single `ncc-v2-stack-<os>-<arch>` bundle.
-3. Start both services together:
-   `ncc-orchestrator v2-start`
-4. Open:
-   `http://localhost:8080`
-
-Beginner-friendly bootstrap alternative:
-
-```bash
-ncc-orchestrator quickstart --auto-fix --setup-v2 ask
-```
-
-This mode can initialize config, run preflight, apply safe fixes, and ask permission before downloading missing v2 components.
-
-### API-only mode (bring your own frontend)
+## API-only mode
 
 Use this mode when you want to integrate with your own UI or automation client while keeping NCC backend APIs running.
 
@@ -369,19 +315,6 @@ Fallback (manual source workflow):
 
 If release assets for your OS/arch are missing, use the source workflow documented in `Run backend` and `Run frontend` sections above.
 
-### One-line answer for migration question
-
-If you are migrating from `v1` to `v2`: the updater can upgrade the CLI binary, but you still need to install/run backend + frontend services manually.
-
-Migration checklist:
-
-1. Stand up `cmd/ncc-api-server` and `cmd/ncc-ui-server`.
-2. Validate token/session auth mode, CORS allowlist, and reverse proxy wiring.
-3. Confirm config compatibility with `validate-config` and `preflight-check`.
-4. Verify report/artifact/log endpoints on `/api/v1/*`.
-5. Update automation from CLI-only workflows to API/UI-assisted workflows as needed.
-6. Keep rollback-ready `v1` binary and config snapshots until cutover is complete.
-
 ## Operational hardening checklist (recommended)
 
 - Use explicit `--cors-origin` values; do not rely on permissive defaults.
@@ -429,7 +362,3 @@ Important:
 - API pod must include `ncc-api-server`.
 - Runner binary is staged for API execution via init container from runner image (`/tools/ncc-orchestrator`).
 - UI pod must include `ncc-ui-server` + built frontend files at `/app/frontend/dist`.
-
-## Migration runbook
-
-For operational migration steps, see [MIGRATION_v1_TO_v2.md](./MIGRATION_v1_TO_v2.md).

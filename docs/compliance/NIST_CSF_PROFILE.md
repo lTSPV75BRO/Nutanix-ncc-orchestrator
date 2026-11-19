@@ -40,7 +40,7 @@ identity provider, physical security, staff training) are out of scope.
 | GV.PO-01 | Security policy published | Implemented | [`SECURITY.md`](../../.github/SECURITY.md), `CONTRIBUTING.md` |
 | GV.OV-01 | Profile reviewed each release; evidence enforced by test | Implemented | this file, manifest test |
 | GV.SC-04 | Suppliers and dependencies inventoried | Implemented | `go.mod`, `package-lock.json`, Dependabot, Dockerfiles |
-| GV.SC-07 | Supplier risk monitored | Partial | CI scanners, Dependabot; EX-03 in the risk register |
+| GV.SC-07 | Supplier risk monitored | Partial | CI scanners, Dependabot, every action pinned by SHA; exceptions in the risk register |
 | ID.AM-02 | Software inventory (CycloneDX SBOM per binary) | Implemented | `scripts/binaryGO.txt`, release workflow |
 | ID.AM-07 | Data inventory and protection | Implemented | [`SECURITY_AND_TRUST.md`](../SECURITY_AND_TRUST.md) |
 | ID.RA-01 | Vulnerabilities identified (govulncheck, npm audit, Trivy, CodeQL, Dependabot) | Implemented | `.github/workflows/ci.yml`, `codeql.yml` |
@@ -74,6 +74,20 @@ identity provider, physical security, staff training) are out of scope.
 | RC.RP-05 | Restored assets verified | Implemented | post-restore self-heal tests |
 | RC.CO-03 | Recovery progress communicated | Partial | operator-owned; playbooks provided |
 
+## Changes in v2.4.0
+
+- A full quality and security review ([`docs/audit/`](../audit/README.md)):
+  scanners, live authorization probes, an accessibility pass in a browser, and
+  deployment tests on Kubernetes and Windows. Findings and fixes are in
+  [`docs/audit/findings.md`](../audit/findings.md).
+- Backups are encrypted by default and a restore installs only program files
+  the host has run before (PR.DS, RC.RP).
+- Helm chart: narrow Kubernetes Roles, NetworkPolicies, PodDisruptionBudgets,
+  a pod security context and PrometheusRule alerts (PR.PS, DE.CM).
+- Structured logs with request ids for sign-in, directory, backup and restore
+  failures (DE.AE, RS.AN).
+- Every GitHub Action is pinned by commit SHA (GV.SC-07).
+
 ## Changes in v2.3.0
 
 - IDs moved from CSF 1.1-style codes (PR.PT, RS.RP) to CSF 2.0 subcategories.
@@ -91,7 +105,6 @@ identity provider, physical security, staff training) are out of scope.
 
 | Gap | Target |
 | --- | --- |
-| Pin GitHub-owned actions by commit SHA (GV.SC-07, EX-03) | Before 2027-01-31 |
 | Optional TOTP/WebAuthn second factor for local accounts (multi-factor today through an OIDC or SAML provider) | Roadmap |
 | Tamper-evident (hash-chained) audit log | Roadmap |
 | Independent third-party assessment of this profile | When a customer requires it |

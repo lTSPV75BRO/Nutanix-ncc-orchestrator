@@ -29,6 +29,40 @@ Use this when runs fail before or during NCC checks.
 
 See **`outputfiles/run-summary.json`** for `exit_code` and per-cluster `clusters[]`.
 
+## Reading the server logs
+
+Start here for most problems. The API server writes every message twice: to
+standard error (readable text, for `journalctl` and `kubectl logs`) and to
+`logs/ncc-api.log` as JSON lines (rotated at 50 MB, ten files kept). Secret-like
+values are masked. The same files are on **System → Logs** in the UI.
+
+- **Raise the level** without a restart on **System → Logs**, or start with
+  `--log-level debug` (`NCC_LOG_LEVEL`). Debug adds per-step detail such as
+  directory lookups. Set it back to `info` afterwards.
+- **Follow one request.** Every response carries an `X-Request-ID`; the same id
+  is on the request's log line, its audit entry and the error toast in the UI.
+  Search the log for it: `grep <id> logs/ncc-api.log`.
+- **Useful fields** on each JSON line: `level`, `msg`, `subsystem` (`auth`,
+  `ldap`, `freshness`, `runs`, ...), `username`, `client_ip`, `request_id` and
+  `error`.
+- **Audit trail.** Changes and sign-ins are in `logs/ncc-audit.log` and also
+  appear in the server log as `msg="audit"`; failed actions are warnings and
+  include the error where it is safe to show.
+- **Runner output** is in `logs/ncc-runner.log` and, per cluster, in
+  `nccfiles/`. **System → Health & repair → Support bundle** collects the
+  doctor report, process logs and redacted config in one download.
+
+What to look for:
+
+| Symptom | Log line to find |
+| --- | --- |
+| Directory (AD/LDAP) users cannot sign in | `ldap: could not connect` (network or TLS), `ldap: service-account bind failed` (bind DN or password), `ldap: user search failed`, `ldap: user filter matched several entries` (tighten the user filter), `ldap: user bind rejected` (wrong password, locked or disabled account; the server's message says which, for example AD data code 775 is locked and 52e a bad password; at `info`), `ldap: user not found` (at `debug`) |
+| Sign-in fails for everyone | `sign-in failed` warnings give the user, client address, whether a local account and a directory were tried, and whether the account locked; `sign-in could not reach the directory` means the directory, not the password |
+| A user is locked out | `sign-in failed ... locked=true`; the lockout counts only refused credentials, not directory outages |
+| "Last checked" or data age is missing for a cluster | `freshness: run summary is not valid JSON` or `has no valid timestamp` names the file that is being skipped |
+| Run now answers 409 `NCC_API_VERSION_SKEW` | `run refused: runner and API server versions differ` shows both versions; roll out matching image tags |
+| A backup or restore failed | The `settings.backup.create` or `settings.backup.restore` audit entry now carries a trimmed, path-redacted error; the orchestrator's own output is in the `orchestrator command failed` warning |
+
 ## GitHub `--update` rate limits
 
 - Set **`GITHUB_TOKEN`** in the environment for higher API rate limits when calling `GET /repos/.../releases/latest`.
@@ -201,7 +235,71 @@ See **`outputfiles/run-summary.json`** for `exit_code` and per-cluster `clusters
 - **Cause:** Exit code **3** is *partial success* — some clusters failed (e.g. an unreachable Prism Central) while others succeeded and a report was written. systemd treats any non-zero exit as a unit failure.
 - **Fix:** Expected when some targets are unreachable. Fix routing/credentials for the failing clusters, or remove them from `config.yaml`, so the run exits 0. The failing clusters are listed in `logs/ncc-scheduler.log` and `outputfiles/run-summary.json`.
 
+## Windows
+
+### `config.yaml` does not parse (`found unknown escape character`)
+
+- **Cause:** a config written by a version 2.3.x `setup-ncc.ps1` held paths such
+  as `"C:\ProgramData\NCC\v2\outputfiles"` in double quotes. In YAML a backslash
+  starts an escape, and `\P` and `\o` are not valid ones.
+- **Fix:** change the double quotes around those values to single quotes (or use
+  forward slashes), then run `ncc-orchestrator validate-config --config <file>`.
+  The 2.4.0 installer writes single-quoted paths.
+
+### `setup-ncc.ps1` refuses to run
+
+- **Cause:** the install directory already has files. The installer no longer
+  deletes an existing install, because it holds the user database, token and
+  backups.
+- **Fix:** to upgrade, use **System → Updates & backups** or
+  `ncc-orchestrator update`. To start over on purpose, back up first, then set
+  `NCC_FORCE_CLEAN=1` and run the installer again.
+
+### Other users cannot open the install directory
+
+- **Cause:** by design. The installer limits the directory to SYSTEM and
+  Administrators because the stack runs as SYSTEM and the directory holds the API
+  token and user database.
+- **Fix:** open the dashboard in a browser instead, or use an elevated prompt for
+  files in the install directory.
+
 ## Kubernetes
+
+### Chart installs, but the API pod crash-loops or the runner Job fails (older charts)
+
+- **Symptoms:** the API log says `--users-db and --users-db-secret are mutually
+  exclusive` or `write token file: ... permission denied`; the runner Job log
+  says `cannot create directory logs: mkdir logs: permission denied`.
+- **Cause:** Kubernetes `args` replace the image's default command, and charts
+  before 2.4.0 passed only some of the path flags. The container layout then made
+  the stack-aware defaults point at `/usr/local`, which uid 1000 cannot write, and
+  the runner started in the image's read-only `/workspace`.
+- **Fix:** upgrade to the 2.4.0 chart, which passes every path flag and runs the
+  runner from `/data`. The `k8s/` manifests already did.
+
+### The PVC stays `Pending`
+
+- **Cause:** the chart asks for `ReadWriteMany` (two API replicas share `/data`),
+  and the cluster's default storage class is often `ReadWriteOnce` only.
+- **Fix:** set `persistence.storageClass` to an RWX class (NFS, CephFS, ...). On
+  RWO-only storage run one replica of each component and set
+  `persistence.accessMode=ReadWriteOnce`. See
+  [`helm/ncc-orchestrator/README.md`](../helm/ncc-orchestrator/README.md).
+
+### `helm upgrade` fails with a field conflict
+
+- **Cause:** Helm 4 uses server-side apply. The API changes the runner CronJob
+  schedule (Settings → Schedule), and someone may have edited the ConfigMap with
+  `kubectl apply`, so Helm sees fields owned by another manager.
+- **Fix:** set `cronjob.schedule` to the live value, or pass `--force-conflicts`
+  to take ownership again.
+
+### Backups answer 412 `NCC_BACKUP_ENCRYPTION_REQUIRED`
+
+- **Cause:** backups are encrypted by default and the credentials Secret has no
+  `backup-key`.
+- **Fix:** add a `backup-key` entry, send a passphrase with the request, or set
+  `NCC_BACKUP_ENCRYPTION=optional` if plaintext archives are acceptable.
 
 ### API pods CrashLoop with `NCC_JWT_SECRET is required`
 

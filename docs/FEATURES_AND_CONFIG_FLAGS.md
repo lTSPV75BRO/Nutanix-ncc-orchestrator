@@ -1572,7 +1572,7 @@ Run config catalog (operator+):
 
 For complete v2 deployment examples, see:
 - `README.md` (Run backend / Run frontend)
-- `docs/V2_BACKEND_FRONTEND_MVP.md`
+- `docs/API_AND_UI_ARCHITECTURE.md`
 - `k8s/README.md`
 - `docs/PROMETHEUS.md` (generalized monitoring patterns for CLI, v2, and Kubernetes)
 

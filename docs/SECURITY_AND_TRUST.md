@@ -774,8 +774,30 @@ the api-server's environment (`NCC_BACKUP_KEY_FILE`, `NCC_BACKUP_KEY`, or
 `NCC_BACKUP_PASSPHRASE`), the in-app updater's pre-update snapshot is written
 encrypted (`pre-update-<stamp>.tar.gz.enc`). The auto-rollback restore reads the
 same environment key, so recovery stays transparent — but the rollback secrets
-bundle is no longer left plaintext on disk. With no key configured, behavior is
-unchanged (plaintext `.tar.gz`).
+bundle is no longer left plaintext on disk.
+
+**Policy (`NCC_BACKUP_ENCRYPTION`, default `required`).** The server refuses to
+write a plaintext backup: a manual snapshot needs a per-request passphrase or a
+server key, a download needs a passphrase (a server key would be useless to the
+recipient), and scheduled and pre-update backups need the server key. Without
+one the request fails with `412 NCC_BACKUP_ENCRYPTION_REQUIRED` and nothing is
+written. After creating an archive the server checks the AES-GCM envelope and
+deletes the file if it is not sealed, and the audit entry records the real
+result and the key source (`request_passphrase` or `server_key`), never key
+material. Set `NCC_BACKUP_ENCRYPTION=optional` only if plaintext archives are
+acceptable; each one is then audited as `encrypted: false`. On Kubernetes add the
+optional `backup-key` entry to the credentials Secret.
+
+**Retiring old plaintext backups.** Archives made before this policy are not
+protected by it. List `<install>/backups/*.tar.gz` (the ones without `.enc`) and
+any copies taken off the host. For each one you still need: verify it
+(`POST /api/v1/settings/backups/verify`), take a fresh encrypted snapshot, copy
+that off the host, then delete the plaintext archives and their copies. Treat
+secrets in a plaintext archive that left the host as exposed and rotate them
+(API token, LDAP bind password, SAML SP key, Prism password). Keep a copy of the
+backup key outside the host: an encrypted backup cannot be restored without it.
+To rotate the key, set the new one, take a new snapshot, and keep the old key
+until the old archives age out.
 
 Server-side snapshots also honor an optional **retention cap**: set
 `NCC_BACKUPS_RETAIN=<N>` to keep at most the N newest **manual** snapshots

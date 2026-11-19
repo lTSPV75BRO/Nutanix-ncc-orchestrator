@@ -124,12 +124,12 @@ Update and version policy:
 - By default, updates stay on your current major track (v1.x stays on v1.x).
 - Major upgrades (for example v1 -> v2) require explicit opt-in via "--allow-major-upgrade".
 - Review v1 to v2 migration guidance before major upgrades:
-  https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/blob/main/docs/V2_BACKEND_FRONTEND_MVP.md
+  https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator#upgrading
 
 Support and documentation:
 - Start with: ncc-orchestrator --help
 - Full usage and flags: README.md and docs/FEATURES_AND_CONFIG_FLAGS.md
-- MVP backend/frontend design: docs/V2_BACKEND_FRONTEND_MVP.md
+- API and UI architecture: docs/API_AND_UI_ARCHITECTURE.md
 
 Disclaimer:
 - This software is provided "as is", without warranties of any kind.
@@ -7548,7 +7548,7 @@ func promptPasswordIfEmpty(p string, Username string) (string, error) {
 // defaultGitHubRepo is used by update to fetch releases (format: owner/repo).
 const defaultGitHubRepo = "lTSPV75BRO/Nutanix-ncc-orchestrator"
 
-const v1ToV2MigrationDocURL = "https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/blob/main/docs/V2_BACKEND_FRONTEND_MVP.md"
+const v1ToV2MigrationDocURL = "https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator#upgrading"
 
 // stripGoBuildGitSuffix removes a trailing -<hex> from ldflags/git injection (e.g. 1.0.0-deadbeef...).
 // Does not strip semver prereleases like 1.0.0-rc1 (suffix is not all hex).

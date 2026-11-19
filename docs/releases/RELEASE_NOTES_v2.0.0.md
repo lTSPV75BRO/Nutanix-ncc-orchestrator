@@ -205,7 +205,7 @@ This release line includes the orchestrator runtime plus the v2 API/UI and front
 ## Upgrade notes from v1.1.0
 
 - Update image/binary tag to `2.0.0`.
-- Use [docs/PRODUCTION_READINESS_v2.0.0.md](../PRODUCTION_READINESS_v2.0.0.md) as the release gate checklist.
+- Use docs/PRODUCTION_READINESS_v2.0.0.md as the release gate checklist.
 - Use this file as the GitHub release description body for tag `v2.0.0`.
 
 ## Artifacts and deployment versions

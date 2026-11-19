@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/security/advisories/new
+    about: Report privately. Please do not open a public issue.
+  - name: Troubleshooting guide
+    url: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/blob/main/docs/TROUBLESHOOTING.md
+    about: Reading the logs and fixes for common failures.

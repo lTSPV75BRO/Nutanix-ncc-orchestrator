@@ -1,4 +1,4 @@
-// Guards the redesign's rules (docs/ui/redesign-plan.md) for the files built on
+// Guards the redesign's rules (docs/ui/DESIGN_SYSTEM.md) for the files built on
 // the design system: colours come from theme tokens in styles.css, never hex
 // values in components, and inline styles only carry data-driven sizes (bar
 // widths, chart heights). The inline-style rule covers the redesigned files;

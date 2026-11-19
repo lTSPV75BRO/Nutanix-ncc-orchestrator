@@ -17,7 +17,7 @@ Customize these values in the cloud-init file before provisioning; cloud-init
 writes them to `/etc/ncc/ncc-install.env`:
 
 ```yaml
-NCC_VERSION="2.2.1"
+NCC_VERSION="2.4.0"
 NCC_RELEASE_BASE_URL="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download"
 NCC_CLUSTERS=""
 NCC_PCS=""

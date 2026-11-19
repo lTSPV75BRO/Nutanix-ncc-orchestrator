@@ -24,7 +24,7 @@ export const THEME_OPTIONS: Array<{ value: AppThemeSelection; label: string }> =
   { value: "it-pro", label: "IT Professional" },
 ];
 
-// One design system for every theme (docs/ui/redesign-plan.md): the same
+// One design system for every theme (docs/ui/DESIGN_SYSTEM.md): the same
 // purple accent, radii, type scale and component shapes; only the surfaces,
 // text greys and status shades differ per theme.
 const SHARED_TOKENS = {

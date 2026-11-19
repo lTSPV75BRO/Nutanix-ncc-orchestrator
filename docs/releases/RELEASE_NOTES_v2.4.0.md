@@ -60,9 +60,15 @@ command line with `v2-restore --trust-stack`.
 
 ## Hardening from the November audit
 
-A full pass over the code, deployment files and UI (details in
-[`IMPROVEMENTS.md`](../IMPROVEMENTS.md#audit-of-2026-11-16-v240)) found no
-vulnerability, and fixed these:
+A full review of the code, dependencies, deployment files, installers and web UI
+(details in [`docs/audit/`](../audit/README.md)) found no authentication bypass,
+injection or path traversal and no reachable vulnerable dependency (one
+advisory is a reviewed false positive). It did find, and this release fixes,
+problems in installation and deployment: the Helm chart's API pod could not
+start, the runner CronJob could not write its logs, the Windows installer
+wrote an invalid `config.yaml`, left its directory writable by every local
+user and could delete backups on a re-run, and LDAP outages counted toward the
+sign-in lockout. Also fixed:
 
 - A crash in a background job (scheduled backup, environment schedule,
   digest and others) no longer stops the API server; it is logged and
@@ -81,6 +87,14 @@ vulnerability, and fixed these:
   every action by commit SHA.
 - The Findings page says "finding" throughout, and its toolbar fits at
   800 px.
+- Account management on a second API replica no longer shows a stale user
+  list or answers 500 on a store conflict (now 409).
+- Restoring a backup keeps nested config keys where they were.
+- `v2-install-service` installs the log maintenance timer.
+- Accessibility failures found with axe-core in a browser: colour contrast,
+  labels, ARIA, heading order, target size and keyboard focus.
+- More troubleshooting logs: LDAP steps, sign-in failures, backup and
+  restore errors, unreadable run summaries and version-skew refusals.
 
 ## Update-check reliability
 

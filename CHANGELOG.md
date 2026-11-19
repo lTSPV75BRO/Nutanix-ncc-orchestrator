@@ -241,6 +241,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Documentation reorganised.** A new [`docs/README.md`](docs/README.md) indexes the docs by
+  audience; the roadmap is now [`docs/ROADMAP.md`](docs/ROADMAP.md); the 2026 review is
+  [`docs/audit/`](docs/audit/README.md) (overview, findings register, security
+  assessment); the former MVP page is [`docs/API_AND_UI_ARCHITECTURE.md`](docs/API_AND_UI_ARCHITECTURE.md)
+  and the redesign plan is [`docs/ui/DESIGN_SYSTEM.md`](docs/ui/DESIGN_SYSTEM.md). Removed the
+  v1 and v2.0.2 migration guides, the v1.x and v2.0 milestone and production-readiness
+  checklists and the October 2026 assessment (its backup-encryption procedure moved into
+  `docs/SECURITY_AND_TRUST.md`). The README has an Upgrading section, TROUBLESHOOTING
+  covers reading the logs, Kubernetes and Windows installs, and the repository has issue
+  and pull request templates.
+
 - Overview's Clusters list and the Findings "By check" view keep their
   columns lined up from row to row: the counts, last-checked time, status,
   severity and Details columns have fixed or shared widths instead of each
@@ -276,7 +287,7 @@ Release notes: [`RELEASE_NOTES_v2.4.0.md`](docs/releases/RELEASE_NOTES_v2.4.0.md
 Setup checklist, redesigned sign-in, HA-safe user store, transactional restore,
 Windows fixes, and security hardening from a full application audit. Release
 notes: [`RELEASE_NOTES_v2.3.0.md`](docs/releases/RELEASE_NOTES_v2.3.0.md). Findings and
-evidence: [`docs/audit/`](docs/audit/executive-summary.md).
+evidence: [`docs/audit/`](docs/audit/README.md).
 
 ### Security
 
@@ -603,7 +614,7 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   (`/runs`, `/settings/config`, `/system/audit`, …); old `/settings?tab=…`
   links redirect. Roles see the same sections as before. Shared design tokens
   and building blocks (`src/ui`) for the page redesigns that follow
-  ([`docs/ui/redesign-plan.md`](docs/ui/redesign-plan.md)). System Health's
+  (`docs/ui/redesign-plan.md`). System Health's
   fix link for backup problems now opens Maintenance instead of Access.
 - **New Overview and Findings pages.** The Dashboard is split in two:
   **Overview** (`/`) answers "is everything healthy?" — health score, checks
@@ -819,7 +830,7 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   are in `build/docker/` (`docker-compose.yml` already points there); the
   reference config is `examples/example_config.yaml`; release notes are in
   `docs/releases/`; `Prometheus.md` and `IMPROVEMENTS.md` are now
-  `docs/PROMETHEUS.md` and `docs/IMPROVEMENTS.md`. Release assets, installed
+  `docs/PROMETHEUS.md` and `docs/ROADMAP.md`. Release assets, installed
   file names and the install layout are unchanged.
 - **Run config selection (breaking for API clients).** `config_path` on
   `/api/v1/runs/trigger` and `/runs/preflight` must now be the main config or
@@ -1032,7 +1043,7 @@ Quick security release for the eMudhra certificate compromise (CA bundle
 kept current in images) and Node.js CVE-2026-111497 (build toolchain pinned to
 26.12.1), plus bug fixes, alert history, security hardening, and integration
 docs. Release notes: [`RELEASE_NOTES_v2.2.1.md`](docs/releases/RELEASE_NOTES_v2.2.1.md). See
-[`docs/security/security-assessment-2026-10.md`](docs/security/security-assessment-2026-10.md)
+`docs/security/security-assessment-2026-10.md`
 and [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/third-party-alert-integrations.md).
 
 ### Fixed
@@ -1478,9 +1489,9 @@ Major **authentication + autonomic-operations** release on top of a maintenance/
 - **Dependency refresh.** Go modules updated (`github.com/modelcontextprotocol/go-sdk` 1.6.0→1.6.1, `golang.org/x/sys` 0.44→0.45, `mattn/go-colorable`, `mattn/go-runewidth`); OpenTelemetry SDK + OTLP/HTTP trace exporter added for the opt-in tracing. The Go directive was bumped `1.26.3 → 1.26.4` to pick up the stdlib `net/textproto` and `crypto/x509` fixes (`GO-2026-5039`, `GO-2026-5037`); `go vet`, `go test -race`, and `govulncheck` are clean. Frontend `npm audit` reports 0 vulnerabilities.
 - Version bumped to `2.1.0` across `VERSION`, the orchestrator/api/ui `main.Version` defaults, the OpenAPI spec version, `binaryGO.txt`, `frontend/package.json`, the Helm chart, and the `k8s/` image tags.
 
-### Remaining (tracked in IMPROVEMENTS.md)
+### Remaining (tracked in the roadmap)
 
-- **`goNCC.go` slimming (continued).** The extraction (`internal/model`, `internal/promtext`, `internal/retryutil`, `internal/notify`, `internal/nccparse`, `internal/httpclient`) is complete for v2.1.0. `goNCC.go` is still large; the remaining obvious candidate is the report renderers (`generateHTML` / `generateCSV` / `generateMarkdown` / `generateJSON` / `generateSARIF`), which are coupled to the combined-HTML and drilldown code and need a coordinated move. It can follow the same alias-backed, behavior-preserving pattern. See [`IMPROVEMENTS.md`](docs/IMPROVEMENTS.md).
+- **`goNCC.go` slimming (continued).** The extraction (`internal/model`, `internal/promtext`, `internal/retryutil`, `internal/notify`, `internal/nccparse`, `internal/httpclient`) is complete for v2.1.0. `goNCC.go` is still large; the remaining obvious candidate is the report renderers (`generateHTML` / `generateCSV` / `generateMarkdown` / `generateJSON` / `generateSARIF`), which are coupled to the combined-HTML and drilldown code and need a coordinated move. It can follow the same alias-backed, behavior-preserving pattern. See [`ROADMAP.md`](docs/ROADMAP.md).
 
 ### Known issues (fixed in v2.1.1)
 

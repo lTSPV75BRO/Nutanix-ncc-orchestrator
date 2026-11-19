@@ -16,7 +16,7 @@ a known gap, tracked in [`RISK_REGISTER.md`](RISK_REGISTER.md)).
 | PO.2 Roles and responsibilities | Met | Owner, reviewer and cadence per control area | [`CONTROL_OWNERSHIP.md`](CONTROL_OWNERSHIP.md) |
 | PO.3 Supporting toolchains | Met | Pinned Go toolchain (`go.mod`) and Node version; reproducible release script; CI on every PR | [`ci.yml`](../../.github/workflows/ci.yml), [`binaryGO.txt`](../../scripts/binaryGO.txt) |
 | PO.4 Security checks defined | Met | Build fails on lint, vet, race tests, govulncheck, npm audit (runtime + high dev), Trivy, CodeQL | [`ci.yml`](../../.github/workflows/ci.yml), [`codeql.yml`](../../.github/workflows/codeql.yml) |
-| PO.5 Secure development environments | Partial | Least-privilege workflow permissions; third-party actions pinned by SHA; GitHub-owned actions on major tags (EX-03) | [`RISK_REGISTER.md`](RISK_REGISTER.md) |
+| PO.5 Secure development environments | Partial | Least-privilege workflow permissions; every action pinned by SHA; GitHub-owned actions on major tags (EX-03) | [`RISK_REGISTER.md`](RISK_REGISTER.md) |
 
 ## PS — Protect the software
 
@@ -31,7 +31,7 @@ a known gap, tracked in [`RISK_REGISTER.md`](RISK_REGISTER.md)).
 | Practice | Status | How | Evidence |
 | --- | --- | --- | --- |
 | PW.1 Design meets security requirements | Met | Threat-driven design: separate UI/API processes, token or session auth on every API route, path confinement | [`ARCHITECTURE_AND_HANDOVER.md`](../ARCHITECTURE_AND_HANDOVER.md) |
-| PW.2 Design reviewed | Met | Security assessment of the whole stack (October 2026) with fixes tracked | [`security-assessment-2026-10.md`](../security/security-assessment-2026-10.md) |
+| PW.2 Design reviewed | Met | Security and quality review of the whole stack (November 2026) with findings tracked and verified | [`docs/audit/`](../audit/README.md) |
 | PW.4 Reuse well-secured components | Met | Standard library crypto, bcrypt, maintained SAML/LDAP libraries; dependencies inventoried in SBOMs | `go.mod`, [`package-lock.json`](../../frontend/package-lock.json) |
 | PW.5 Secure coding practices | Met | golangci-lint, `go vet`, TypeScript strict mode, request size limits, CSRF, CSP headers | [`.golangci.yml`](../../.golangci.yml), [`hardening.go`](../../cmd/ncc-api-server/hardening.go) |
 | PW.6 Secure build configuration | Met | `CGO_ENABLED=0`, `-trimpath`, stamped version info; non-root container images | [`binaryGO.txt`](../../scripts/binaryGO.txt), [`Dockerfile.api`](../../build/docker/Dockerfile.api) |

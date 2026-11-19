@@ -68,3 +68,7 @@ ncc-v2-stack-*.zip
 frontend/dist-demo/
 site/demo/
 _site/
+
+# Local assistant and editor state
+.claude/
+Claude outputs/
