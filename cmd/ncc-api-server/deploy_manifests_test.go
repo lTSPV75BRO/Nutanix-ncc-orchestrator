@@ -64,3 +64,20 @@ func TestRunnerCronJobPinsWritablePaths(t *testing.T) {
 		t.Error("the Helm CronJob must run from /data, not the image WORKDIR")
 	}
 }
+
+// The chart-seeded config is what the API uses for Settings → Run now. Without
+// skip-preflight-check and secrets.provider=env, that path failed
+// NCC_PREFLIGHT_VALIDATE_SECRETS even though the CronJob CLI skipped it.
+func TestHelmSeedConfigSkipsSecretPreflight(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "helm", "ncc-orchestrator", "templates", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(b)
+	if !strings.Contains(text, "skip-preflight-check: true") {
+		t.Error("helm seed config must skip preflight so Run now matches the CronJob")
+	}
+	if !strings.Contains(text, "provider: env") {
+		t.Error("helm seed config must use secrets.provider env (NCC_PASSWORD from the Secret)")
+	}
+}

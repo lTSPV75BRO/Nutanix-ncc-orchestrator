@@ -9,6 +9,9 @@ temp/
 Changelog*
 !CHANGELOG.md
 config.yaml
+# The Helm chart seeds a ConfigMap from this template; the pattern above
+# would otherwise keep it out of git.
+!helm/ncc-orchestrator/templates/config.yaml
 
 # Logs and outputs from your tool
 nccfiles/

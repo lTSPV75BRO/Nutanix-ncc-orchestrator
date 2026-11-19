@@ -57,7 +57,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `k8s/runner-cronjob.yaml`. The PVC takes `persistence.accessMode`,
   `persistence.storageClass` and `persistence.size`; PodDisruptionBudgets set
   `unhealthyPodEvictionPolicy: AlwaysAllow` on Kubernetes 1.27 and later; the
-  API pod has a non-root, `fsGroup` and seccomp security context.
+  API pod has a non-root, `fsGroup` and seccomp security context. The
+  chart-seeded `config.yaml` now sets `skip-preflight-check: true` and
+  `secrets.provider: env`, so Settings → Run now matches the CronJob instead
+  of failing `NCC_PREFLIGHT_VALIDATE_SECRETS`. That template is tracked in git
+  (`!helm/.../templates/config.yaml`); the repo-wide `config.yaml` ignore had
+  dropped it.
 - **Account management on a stale API replica.** The user list, `PUT` and
   `POST` now reload the shared store first, so a user another replica just
   created is visible instead of returning 404, and a store conflict on create
