@@ -99,6 +99,65 @@ func TestAutoAuditMutatingWhenHandlerSilent(t *testing.T) {
 	}
 }
 
+func TestBlockedUIWritesUiBlockedAuditThroughAuth(t *testing.T) {
+	s := newTokenTestServer(t)
+	addLocalAccount(t, s.users, "alice", RoleAdmin)
+	s.auditLogPath = filepath.Join(t.TempDir(), "audit.jsonl")
+	h := s.withRequestMeta(withErrorCapture(s.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, envelope{Success: true})
+	}))))
+
+	blocked := httptest.NewRequest(http.MethodGet, "/api/v1/runs/summary", nil)
+	blocked.Header.Set("X-Requested-With", "ncc-ui")
+	blocked.Header.Set(uiversion.VersionHeader, "2.2.1")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, blocked)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("2.2.1: want 403, got %d %s", rr.Code, rr.Body.String())
+	}
+	var env envelope
+	_ = json.Unmarshal(rr.Body.Bytes(), &env)
+	if env.ErrorCode != uiversion.ErrorCode || env.Remediation == "" {
+		t.Fatalf("block envelope %+v", env)
+	}
+	entries, err := s.auditEntries(10, auditFilter{actionPrefix: "ui.blocked"})
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("want 1 ui.blocked, got %d err=%v", len(entries), err)
+	}
+	e := entries[0]
+	if e["success"] != false || e["ui_version"] != "2.2.1" || e["ui_compromised"] != true || e["client_kind"] != "ui" {
+		t.Fatalf("ui.blocked entry %+v", e)
+	}
+	if _, ok := e["error"].(string); !ok {
+		t.Fatalf("missing error on %+v", e)
+	}
+	if _, ok := e["remediation"].(string); !ok {
+		t.Fatalf("missing remediation on %+v", e)
+	}
+
+	okReq := httptest.NewRequest(http.MethodGet, "/api/v1/runs/summary", nil)
+	okReq.Header.Set("X-Requested-With", "ncc-ui")
+	okReq.Header.Set(uiversion.VersionHeader, "2.4.0")
+	okRR := httptest.NewRecorder()
+	h.ServeHTTP(okRR, okReq)
+	if okRR.Code == http.StatusForbidden {
+		var blockedEnv envelope
+		_ = json.Unmarshal(okRR.Body.Bytes(), &blockedEnv)
+		if blockedEnv.ErrorCode == uiversion.ErrorCode {
+			t.Fatalf("2.4.0 UI must not be version-blocked: %s", okRR.Body.String())
+		}
+	}
+
+	health := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	health.Header.Set("X-Requested-With", "ncc-ui")
+	health.Header.Set(uiversion.VersionHeader, "2.2.1")
+	healthRR := httptest.NewRecorder()
+	h.ServeHTTP(healthRR, health)
+	if healthRR.Code == http.StatusForbidden {
+		t.Fatalf("health must skip UI version gate, got %s", healthRR.Body.String())
+	}
+}
+
 func TestHandleUIVersionPolicyRoundTrip(t *testing.T) {
 	s := newTokenTestServer(t)
 	body := strings.NewReader(`{"block_unversioned":false,"extra":[{"version":"1.9.0","component":"ui","reason":"lab"}]}`)
