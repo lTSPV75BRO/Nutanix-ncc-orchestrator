@@ -2,6 +2,14 @@
 
 **Status:** Unreleased.
 
+## Deployment agents resolve releases from GitHub
+
+The copy-paste deployment prompt and runbook now require GitHub's authoritative
+`releases/latest` API to determine the published version. They explicitly reject
+web-search snippets, README badges, branch versions, and Git tags as release evidence.
+When GitHub cannot be queried, the agent stops for a verified archive or internal mirror
+instead of guessing a GA version.
+
 ## See how old the data is
 
 The dashboard keeps showing a cluster's findings from its last good run when

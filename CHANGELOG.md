@@ -88,6 +88,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Deployment agents now resolve the published release authoritatively.** The
+  copy-paste deployment prompt and runbook require GitHub's
+  `releases/latest` API rather than a web-search result, README badge, branch
+  version, or newest tag. An agent that cannot resolve it must stop for a
+  verified archive or mirror instead of guessing a GA version.
 - **MCP server returned secrets to the model.** The configuration tools handed back
   the raw config file, including inline credentials; results are now scrubbed in
   one place (the redacted copy replaces the raw one, and values under

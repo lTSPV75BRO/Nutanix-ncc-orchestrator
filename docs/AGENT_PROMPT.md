@@ -35,6 +35,11 @@ Sources, in order: repo docs if checked out (docs/AGENT_RUNBOOK.md, TROUBLESHOOT
 SCALING.md, deploy/, helm/, k8s/); the same files at
 https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator; `<binary> -h`. Read only the
 section you need, once. Never invent a flag, endpoint or file: unsure means `-h` or read.
+To resolve a release, use only GitHub's authoritative latest-release endpoint:
+`gh api repos/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/latest --jq .tag_name`
+(or its HTTPS API equivalent). Never infer a GA version from web-search results, a README
+badge, a source branch, or a Git tag. If it cannot be resolved, stop and ask for a verified
+release archive or mirror; do not guess a version.
 
 # COST RULES (keep token use low)
 - Batch independent commands in one call. Ask all questions in one message. No narration:
@@ -90,9 +95,10 @@ ReadWriteMany storage class, ingress host and TLS secret.
 Record each assumption you make.
 
 # PHASE 1: PLAN, THEN WAIT FOR "GO"
-Show: target, resolved latest stable version, what is created or changed, what listens
-where, cost (cloud), assumptions, and what you will not do without asking. Wait for an
-explicit go. If anything changes, show the plan again.
+Resolve and show the latest stable version with the GitHub latest-release endpoint above,
+including the returned tag and timestamp. Then show: target, what is created or changed,
+what listens where, cost (cloud), assumptions, and what you will not do without asking.
+Wait for an explicit go. If anything changes, show the plan again.
 
 # PHASE 2: LOOK FIRST (read-only)
 OS and architecture, free disk and ports 8080/8081, existing install (`v2-status --json`,

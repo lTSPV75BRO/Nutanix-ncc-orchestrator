@@ -79,12 +79,16 @@ variable, a secrets manager, or a Kubernetes Secret). Never ask for the password
 ## Quick scan (no dashboard)
 
 ```bash
-VERSION=v2.4.0
+VERSION="$(gh api repos/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/latest --jq .tag_name 2>/dev/null || curl -fsSL https://api.github.com/repos/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/latest | python3 -c 'import json, sys; print(json.load(sys.stdin)["tag_name"])')"
 BASE=https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/$VERSION
 curl -fLO $BASE/ncc-v2-stack-linux-amd64.tar.gz && curl -fLO $BASE/checksums.txt
 sha256sum -c checksums.txt --ignore-missing          # macOS: shasum -a 256 -c ... ; must say OK
 mkdir ncc && tar -xzf ncc-v2-stack-linux-amd64.tar.gz -C ncc && cd ncc
 ```
+
+`gh api .../releases/latest` is the release authority. Do not substitute a web-search
+result, README badge, branch version, or the newest Git tag. If the GitHub API is not
+available, use a user-provided verified archive or internal mirror rather than guessing.
 
 Edit `example_config.yaml` (cluster addresses, username; delete the notification blocks
 the user does not use). Keep the password out of the file:
