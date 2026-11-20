@@ -249,9 +249,12 @@ What to look for:
   shows the shipped entries with their advisories and lets you add or remove your
   own, and switch off refusing undeclared versions if you must run an old dashboard
   against this API for a while.
-- **API clients are not affected:** only requests that identify as the dashboard
-  (`X-Requested-With: ncc-ui`, `X-NCC-UI-Version`) are checked. MCP and script
-  clients use their token and are limited by its role.
+- **Other clients are not affected:** only requests that identify as the dashboard
+  (`X-Requested-With: ncc-ui`, `X-NCC-UI-Version`) are checked. If you built your
+  own dashboard that sends `X-Requested-With: ncc-ui`, add the header
+  `X-NCC-Client: <your app name>` so it is treated as a custom client. Scripts and
+  integrations use their token and are limited by its role; their repeated refusals
+  show as `access.suspicious` in the audit log.
 
 ## Windows
 

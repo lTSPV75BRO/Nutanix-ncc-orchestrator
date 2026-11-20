@@ -170,6 +170,7 @@ type apiServer struct {
 	disableLocalAccounts bool
 	readyCache           readinessCache
 	httpMetrics          httpMetrics
+	watch                clientWatch
 	// adminSelfResetEnabled enables the anonymous forgot-password recovery for
 	// the built-in admin. Off by default: that path lets any network client
 	// rotate the admin password (and end every admin session) once a minute

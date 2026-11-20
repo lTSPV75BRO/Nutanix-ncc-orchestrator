@@ -13,6 +13,10 @@ const (
 	// ServerVersionHeader is stamped by ncc-ui-server on proxied /api/ calls.
 	// The proxy overwrites any inbound value so the browser cannot spoof it.
 	ServerVersionHeader = "X-NCC-UI-Server-Version"
+	// ClientHeader is how a custom dashboard or third-party integration names
+	// itself. Such clients are never version-gated; they are only audited and
+	// watched for suspicious access.
+	ClientHeader = "X-NCC-Client"
 	// RequestedWithValue is the X-Requested-With token the SPA sends.
 	RequestedWithValue = "ncc-ui"
 	// UnknownVersion is recorded when a request claims to be the UI but

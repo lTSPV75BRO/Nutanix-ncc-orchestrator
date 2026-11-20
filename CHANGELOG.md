@@ -109,6 +109,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the list under System, Updates & backups, Blocked versions. The refusal no longer
   tells operators to upgrade to 2.3.0 (which cannot declare a version and is itself
   refused) but to 2.4.0.
+- **Custom and third-party clients are watched, not blocked.** Version checks apply
+  only to the NCC dashboard and `ncc-mcp-server`. A custom UI can name itself with
+  `X-NCC-Client` and is then never version-gated; the audit log records its kind and
+  name. Repeated refusals from one address, or one token used from several
+  addresses, raise an `access.suspicious` audit record and a log warning.
 
 - **Helm chart: the API pod crash-looped on first start.** Kubernetes `args`
   replace the image's `CMD`, the chart passed only some path flags, and the

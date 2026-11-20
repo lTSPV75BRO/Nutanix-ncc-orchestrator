@@ -13,16 +13,39 @@ func isNCCUIRequest(r *http.Request) bool {
 	if r == nil {
 		return false
 	}
-	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Requested-With")), uiversion.RequestedWithValue) {
-		return true
-	}
-	if uiversion.Sanitize(r.Header.Get(uiversion.VersionHeader)) != "" {
-		return true
-	}
+	// The official UI server stamps this header on proxied calls and replaces
+	// any inbound value, so it is the one reliable mark of our dashboard.
 	if uiversion.Sanitize(r.Header.Get(uiversion.ServerVersionHeader)) != "" {
 		return true
 	}
-	return false
+	// A client that names itself is a custom UI or an integration: it is not
+	// ours to gate (it is audited and watched instead).
+	if customClientName(r) != "" {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Requested-With")), uiversion.RequestedWithValue) {
+		return true
+	}
+	return uiversion.Sanitize(r.Header.Get(uiversion.VersionHeader)) != ""
+}
+
+// customClientName returns the self-declared name of a custom dashboard or
+// third-party integration (header X-NCC-Client), cleaned and capped.
+func customClientName(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	raw := strings.TrimSpace(r.Header.Get(uiversion.ClientHeader))
+	var b strings.Builder
+	for _, c := range raw {
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune(" ._/-", c) {
+			b.WriteRune(c)
+		}
+		if b.Len() >= 64 {
+			break
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func presentedUIVersion(r *http.Request) string {
@@ -144,6 +167,9 @@ func (s *apiServer) decorateAuditClient(r *http.Request, payload map[string]inte
 		if _, ok := payload["channel"]; !ok {
 			payload["channel"] = "ui"
 		}
+	case customClientName(r) != "":
+		payload["client_kind"] = "custom"
+		payload["client_name"] = customClientName(r)
 	default:
 		payload["client_kind"] = "api"
 	}

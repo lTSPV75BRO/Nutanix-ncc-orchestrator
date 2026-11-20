@@ -1227,6 +1227,16 @@ and decide whether dashboards that declare no version (every build before 2.4.0)
 are refused, under System, Updates & backups, Blocked versions or
 `PUT /api/v1/settings/ui-versions`. Every refusal is audited as `ui.blocked`.
 
+Only our own tools are version-checked: the dashboard (`ncc-ui`) and
+`ncc-mcp-server`. A custom dashboard or a third-party integration is never refused
+for its version. A custom client should send `X-NCC-Client: <name>`; the API then
+records it as `client_kind: custom` with that name instead of treating it as our
+dashboard. Every non-dashboard client is watched: ten refusals (401, 403 or 429)
+from one address within five minutes, or one token used from four addresses within
+ten, raises an `access.suspicious` audit record (with the reasons) and a warning in
+the server log, once per burst. Nothing is blocked by this; it is for review and
+for alerting on the audit stream.
+
 This is a guard against an outdated dashboard that is honest about what it is. It
 checks headers the client sends, so it does not stop a hostile client; that is what
 authentication, roles and the other controls on this page do.

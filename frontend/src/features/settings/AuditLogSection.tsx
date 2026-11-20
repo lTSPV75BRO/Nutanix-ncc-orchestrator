@@ -170,7 +170,18 @@ export function AuditLogSection({ onError }: Props) {
         title: "Client",
         key: "client",
         width: 140,
-        render: (_, row) => <span className="mono audit-muted">{row.client || "—"}</span>,
+        render: (_, row) => {
+          const kind = String((row as Record<string, unknown>).client_kind ?? "");
+          const name = String((row as Record<string, unknown>).client_name ?? "");
+          // Our own dashboard is the norm; only name the other kinds.
+          const label = kind === "custom" ? name || "custom" : kind === "api" || kind === "mcp" ? kind : "";
+          return (
+            <span className="mono audit-muted">
+              {row.client || "—"}
+              {label ? <span> · {label}</span> : null}
+            </span>
+          );
+        },
       },
       {
         title: <span className="visually-hidden">Details</span>,

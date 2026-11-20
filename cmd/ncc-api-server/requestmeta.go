@@ -108,6 +108,7 @@ func (s *apiServer) withRequestMeta(next http.Handler) http.Handler {
 		if status == 0 {
 			status = http.StatusOK
 		}
+		defer s.watchClient(r, status)
 		if info.wasAudited() {
 			return
 		}
