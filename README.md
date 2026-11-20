@@ -116,6 +116,7 @@ Each binary runs on its own. Use the CLI alone for batch or cron jobs, or the fu
 | Run the dashboard on a VM or laptop | [Full stack with `v2-start`](#2-start-the-full-stack) |
 | Run the dashboard in containers | [Docker Compose](#docker-compose) |
 | Deploy to a cluster | [Kubernetes](#kubernetes) |
+| Let an AI agent deploy and tune it for me | [Deploy with an AI agent](#deploy-with-an-ai-agent) |
 | Connect Cursor / Claude to the API | [MCP import](docs/MCP_SERVER.md#import-in-five-minutes) |
 | Hack on the code | [Build from source](#build-from-source) |
 
@@ -192,6 +193,24 @@ kubectl apply -k k8s/          # runner CronJob + API + UI + NetworkPolicies
 Create `ncc-v2-secrets` first with the Prism password, API token, and a `jwt-secret` (`openssl rand -base64 32`); add `backup-key` and `master-key` if you want encrypted backups and an encrypted user store. The kustomize manifests run 1 API and 2 UI replicas; the [Helm chart](helm/ncc-orchestrator/README.md) runs 2 of each. See [`k8s/README.md`](k8s/README.md) for TLS, backups, and rollback.
 
 Published images (Docker Hub): `prajwalnutant/nutanix-ncc-orchestrator`, `prajwalnutant/ncc-api-server`, and `prajwalnutant/ncc-ui-server`, tagged with the version (for example `:2.4.0`).
+
+### Deploy with an AI agent
+
+Give an AI agent that can run shell commands (Claude Code, Cursor agent mode) this prompt and
+tell it where to deploy: a local machine, a VM, Kubernetes or a public cloud. It asks a few
+questions (or takes the defaults), shows a plan and waits for your go, then installs,
+verifies, hardens and tunes the stack, and troubleshoots it if something fails. It deploys the
+MCP server and connects itself only if you agree.
+
+> Fetch and follow the prompt in `docs/AGENT_PROMPT.md` of
+> <https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator> (the block under "The prompt").
+> Deploy NCC Orchestrator for me on: *<this machine / a VM at … / Kubernetes / AWS, Azure or GCP>*.
+> Ask me your questions first; I accept the defaults unless I say otherwise.
+
+If the agent cannot reach the repository, paste the full prompt from
+[`deploy/README.md`](deploy/README.md#deploy-with-an-ai-agent) or
+[`docs/AGENT_PROMPT.md`](docs/AGENT_PROMPT.md). Passwords stay in environment variables, never in
+the chat. Details and limits: [`docs/AGENT_PROMPT.md`](docs/AGENT_PROMPT.md).
 
 ### Build from source
 
