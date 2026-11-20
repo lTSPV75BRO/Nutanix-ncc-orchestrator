@@ -10,6 +10,7 @@ confirmed, and recorded what is left.
 | This page | Scope, method, results by area, measurements, and what was not verified |
 | [`findings.md`](findings.md) | Every finding with severity, priority and status (open and resolved) |
 | [`security-assessment.md`](security-assessment.md) | The technical record of the security findings, controls and scans |
+| [`release-scan.md`](release-scan.md) | Known vulnerabilities in every tagged release, and which are blocked |
 
 ## Result in one paragraph
 

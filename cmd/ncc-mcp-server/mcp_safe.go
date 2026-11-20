@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"unicode"
 )
@@ -48,6 +49,18 @@ func safeArtifactName(file string) (string, error) {
 		}
 	}
 	return file, nil
+}
+
+var backupNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.tar\.gz(\.enc)?$`)
+
+// safeBackupName accepts only the name of a snapshot kept on the server
+// (for example manual-20261120T101500Z.tar.gz.enc), never a path.
+func safeBackupName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if !backupNameRe.MatchString(name) || strings.Contains(name, "..") {
+		return "", fmt.Errorf("input_file must be the name of a server-side backup (for example manual-<time>.tar.gz.enc), not a path")
+	}
+	return name, nil
 }
 
 func safeRunID(id string) (string, error) {

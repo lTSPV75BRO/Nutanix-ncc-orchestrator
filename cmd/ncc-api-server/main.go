@@ -1334,8 +1334,20 @@ func (s *apiServer) displayRelPath(p string) string {
 	return filepath.Base(abs)
 }
 
+// splitAuditPrefixes parses ?exclude=http.request,mcp.call into prefixes.
+func splitAuditPrefixes(raw string) []string {
+	var out []string
+	for _, p := range strings.Split(raw, ",") {
+		if p = strings.TrimSpace(p); p != "" && len(p) <= 64 {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // handleAudit returns recent audit log entries (newest first) read from the
-// JSONL file. Filters: ?limit=200, ?action=settings, ?channel=mcp, ?failures=1.
+// JSONL file. Filters: ?limit=200, ?action=settings, ?exclude=http.request,
+// ?channel=mcp, ?failures=1.
 func (s *apiServer) handleAudit(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
@@ -1358,6 +1370,7 @@ func (s *apiServer) handleAudit(w http.ResponseWriter, r *http.Request) {
 		actionPrefix: strings.TrimSpace(q.Get("action")),
 		user:         strings.TrimSpace(q.Get("user")),
 		channel:      strings.TrimSpace(q.Get("channel")),
+		exclude:      splitAuditPrefixes(q.Get("exclude")),
 		onlyFailures: q.Get("failures") == "1" || strings.EqualFold(q.Get("failures"), "true"),
 	}
 	// since/until accept either an RFC3339 timestamp or a YYYY-MM-DD date.
@@ -2393,30 +2406,6 @@ func parseScalarConfigValue(v interface{}) string {
 	default:
 		return strings.TrimSpace(fmt.Sprintf("%v", v))
 	}
-}
-
-func redactSensitiveText(raw string) string {
-	if strings.TrimSpace(raw) == "" {
-		return raw
-	}
-	lines := strings.Split(raw, "\n")
-	out := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			out = append(out, line)
-			continue
-		}
-		lower := strings.ToLower(trimmed)
-		if strings.Contains(lower, "password:") || strings.Contains(lower, "token:") || strings.Contains(lower, "secret:") {
-			if idx := strings.Index(line, ":"); idx >= 0 {
-				out = append(out, line[:idx+1]+" \"***\"")
-				continue
-			}
-		}
-		out = append(out, line)
-	}
-	return strings.Join(out, "\n")
 }
 
 func isUnsetConfigPathLiteral(val string) bool {

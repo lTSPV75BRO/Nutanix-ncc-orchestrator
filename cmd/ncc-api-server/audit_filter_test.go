@@ -87,3 +87,29 @@ func TestHandleAuditCSVExport(t *testing.T) {
 		t.Fatalf("details column should include extra keys: %s", body)
 	}
 }
+
+// The audit page hides the automatic request and MCP call records by default
+// (?exclude=http.request,mcp.call) so the log shows what people changed, and
+// asks for them only when the operator selects them.
+func TestAuditExcludeDropsAutomaticRecords(t *testing.T) {
+	s := writeAuditFixture(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit?limit=50&exclude=mcp.call,http.request", nil)
+	rec := httptest.NewRecorder()
+	s.handleAudit(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, `"mcp.call"`) {
+		t.Fatalf("mcp.call must be excluded:\n%s", body)
+	}
+	if !strings.Contains(body, `"settings.config"`) || !strings.Contains(body, `"auth.login"`) {
+		t.Fatalf("human actions must remain:\n%s", body)
+	}
+	// Selecting the action explicitly still works.
+	rec = httptest.NewRecorder()
+	s.handleAudit(rec, httptest.NewRequest(http.MethodGet, "/api/v1/audit?action=mcp.call", nil))
+	if !strings.Contains(rec.Body.String(), `"mcp.call"`) {
+		t.Fatalf("explicit action filter must show mcp.call:\n%s", rec.Body.String())
+	}
+}

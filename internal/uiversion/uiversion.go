@@ -1,5 +1,5 @@
 // Package uiversion identifies NCC UI clients on API requests and matches
-// compromised (blacklisted) UI / UI-server versions.
+// blocked (known-vulnerable) UI / UI-server versions.
 package uiversion
 
 import (
@@ -16,29 +16,73 @@ const (
 	// RequestedWithValue is the X-Requested-With token the SPA sends.
 	RequestedWithValue = "ncc-ui"
 	// UnknownVersion is recorded when a request claims to be the UI but
-	// sent no parseable version (legacy 2.2.x / 2.3.x bundles).
+	// sent no parseable version (builds before 2.4.0 cannot declare one).
 	UnknownVersion = "unknown"
-	// ErrorCode is returned when a blacklisted UI is refused.
+	// ErrorCode is returned when a blocked UI is refused.
 	ErrorCode = "NCC_API_UI_VERSION_BLOCKED"
+	// SupportedFrom is the first release that declares its version.
+	SupportedFrom = "2.4.0"
 )
 
-// Entry is one blacklisted product version.
+// Entry is one blocked product version.
 type Entry struct {
-	Version   string `json:"version"`
-	Component string `json:"component,omitempty"` // ui, ui-server, or any
-	Reason    string `json:"reason"`
-	Builtin   bool   `json:"builtin,omitempty"`
+	Version    string   `json:"version"`
+	Component  string   `json:"component,omitempty"` // ui, ui-server, or any
+	Reason     string   `json:"reason"`
+	Advisories []string `json:"advisories,omitempty"` // GO-..., GHSA-..., or an incident name
+	Severity   string   `json:"severity,omitempty"`   // high, medium or low (highest known)
+	FixedIn    string   `json:"fixed_in,omitempty"`
+	Builtin    bool     `json:"builtin,omitempty"`
 }
 
-// Builtin is the shipped compromised-version list. 2.2.1 UI is listed for
-// the node2shell issue; that build also cannot send VersionHeader, so
-// unversioned ncc-ui clients are treated as unknown and blocked by default.
+// release is the shipped list's compact form.
+type release struct {
+	version    string
+	severity   string
+	summary    string
+	advisories []string
+}
+
+// shipped lists the releases whose dashboard or UI server carries a known
+// vulnerability. It comes from scanning every tagged release (govulncheck on
+// the Go call graph, osv-scanner on the frontend lockfile) and from the
+// 2.2.1 incident; the scan and its limits are in docs/audit/release-scan.md.
+// Releases before 2.0.0 have no dashboard, and 2.3.0 had no scanner finding,
+// so neither is listed. Extend it by shipping a new release, or at run time
+// from Settings (the admin-managed list).
+var shipped = []release{
+	{"2.0.0", "high", "react-router 7.15.1 and DOMPurify 3.4.7", []string{"GHSA-chx6-hx7r-mcp5", "GHSA-qwww-vcr4-c8h2", "GHSA-337j-9hxr-rhxg", "GHSA-h8fp-f39c-q6mh", "GHSA-wrjc-x8rr-h8h6", "DOMPurify 3.4.7 (9 advisories)"}},
+	{"2.0.1", "high", "react-router 7.15.1 and DOMPurify 3.4.7", []string{"GHSA-chx6-hx7r-mcp5", "GHSA-qwww-vcr4-c8h2", "GHSA-337j-9hxr-rhxg", "GHSA-h8fp-f39c-q6mh", "GHSA-wrjc-x8rr-h8h6", "DOMPurify 3.4.7 (9 advisories)"}},
+	{"2.0.2", "high", "react-router 7.15.1 and DOMPurify 3.4.7", []string{"GHSA-chx6-hx7r-mcp5", "GHSA-qwww-vcr4-c8h2", "GHSA-337j-9hxr-rhxg", "GHSA-h8fp-f39c-q6mh", "GHSA-wrjc-x8rr-h8h6", "DOMPurify 3.4.7 (9 advisories)"}},
+	{"2.1.0", "medium", "HTTP/2 denial of service in golang.org/x/net, the SAML library and DOMPurify", []string{"GO-2026-6617", "GO-2026-6612", "GO-2026-6611", "GO-2026-6610", "GO-2026-6603", "GO-2026-6348", "GO-2026-6909", "GHSA-6688-9rhm-gjv2", "GHSA-c6gr-qvv4-5v3f", "GHSA-cg2g-xh64-v4q7", "GHSA-mrv2-3pqr-j5jr", "GHSA-p98j-92pf-mc4p"}},
+	{"2.1.1", "medium", "HTTP/2 denial of service in golang.org/x/net, the SAML library and DOMPurify", []string{"GO-2026-6617", "GO-2026-6612", "GO-2026-6611", "GO-2026-6610", "GO-2026-6603", "GO-2026-6348", "GO-2026-6909", "GHSA-6688-9rhm-gjv2", "GHSA-c6gr-qvv4-5v3f", "GHSA-cg2g-xh64-v4q7", "GHSA-mrv2-3pqr-j5jr", "GHSA-p98j-92pf-mc4p"}},
+	{"2.2.0", "medium", "HTTP/2 denial of service in golang.org/x/net, the SAML library and DOMPurify", []string{"GO-2026-6617", "GO-2026-6612", "GO-2026-6611", "GO-2026-6610", "GO-2026-6603", "GO-2026-6909", "GHSA-c6gr-qvv4-5v3f", "GHSA-cg2g-xh64-v4q7", "GHSA-mrv2-3pqr-j5jr"}},
+	{"2.2.1", "high", "the node2shell issue and a nil-pointer panic in the SAML library", []string{"node2shell", "GO-2026-6909"}},
+}
+
+// Builtin is the shipped blocked-version list. Builds before 2.4.0 send no
+// version, so a request from one cannot be matched against these entries; the
+// "block unversioned" policy (on by default) is what refuses them.
 func Builtin() []Entry {
-	reason := "NCC UI 2.2.1 is affected by node2shell; upgrade ncc-ui-server and frontend-dist to 2.3.0 or later (2.4.0 recommended)"
-	return []Entry{
-		{Version: "2.2.1", Component: "ui", Reason: reason, Builtin: true},
-		{Version: "2.2.1", Component: "ui-server", Reason: reason, Builtin: true},
+	out := make([]Entry, 0, len(shipped))
+	for _, r := range shipped {
+		out = append(out, Entry{
+			Version:    r.version,
+			Component:  "any",
+			Reason:     "NCC " + r.version + " ships a known vulnerability (" + r.summary + "); upgrade ncc-ui-server and frontend-dist to " + SupportedFrom + " or later",
+			Advisories: append([]string(nil), r.advisories...),
+			Severity:   r.severity,
+			FixedIn:    SupportedFrom,
+			Builtin:    true,
+		})
 	}
+	return out
+}
+
+// UnversionedReason is the refusal text for a dashboard that declares no version.
+func UnversionedReason() string {
+	return "this dashboard build does not declare its version, which means it is older than " + SupportedFrom +
+		" and may be a release with a known vulnerability (including 2.2.1, node2shell); upgrade ncc-ui-server and frontend-dist to " + SupportedFrom + " or later"
 }
 
 // Sanitize trims, strips a leading v, and keeps a short semver-ish token.
@@ -94,5 +138,5 @@ func Match(version, component string, list []Entry) (Entry, bool) {
 
 // Remediation is the operator-facing recovery text.
 func Remediation() string {
-	return "Upgrade ncc-ui-server and frontend-dist to a supported release (2.4.0 or later). If you must keep a mixed stack, an admin can adjust Settings → Audit log → Compromised UI versions."
+	return "Upgrade ncc-ui-server and frontend-dist to " + SupportedFrom + " or later (reload the page afterwards). An administrator can review the list under System, Updates & backups, Blocked versions."
 }

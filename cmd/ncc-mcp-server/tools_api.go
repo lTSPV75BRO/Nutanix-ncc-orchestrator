@@ -420,10 +420,11 @@ func restoreV2Backup(ctx context.Context, req *mcp.CallToolRequest, input Restor
 	if result, _, _ := requireMCPConfirmation(input.Confirm); result != nil {
 		return result, nil, nil
 	}
-	if strings.TrimSpace(input.InputFile) == "" {
-		return mcpInvalidArgument("input_file", "input_file is required")
+	name, nameErr := safeBackupName(input.InputFile)
+	if nameErr != nil {
+		return mcpInvalidArgument("input_file", nameErr.Error())
 	}
-	env, _, err := callAPI(ctx, "restore_v2_backup", http.MethodPost, "/api/v1/settings/restore", nil, map[string]any{"name": strings.TrimSpace(input.InputFile)}, 120*time.Second)
+	env, _, err := callAPI(ctx, "restore_v2_backup", http.MethodPost, "/api/v1/settings/restore", nil, map[string]any{"name": name}, 120*time.Second)
 	return mcpAPIToolResult(env, nil, err)
 }
 
@@ -442,7 +443,12 @@ func backupV2Stack(ctx context.Context, req *mcp.CallToolRequest, input BackupV2
 	if result, _, _ := requireMCPConfirmation(input.Confirm); result != nil {
 		return result, nil, nil
 	}
-	env, _, err := callAPI(ctx, "backup_v2_stack", http.MethodGet, "/api/v1/settings/backup", nil, nil, 120*time.Second)
+	// POST /settings/backups writes an encrypted snapshot on the server and
+	// returns its name. The old call (GET /settings/backup) streamed the whole
+	// archive to the MCP process, discarded it, and reported success without
+	// creating anything. No passphrase is accepted over MCP; the server's own
+	// backup key applies (NCC_BACKUP_ENCRYPTION=required answers 412 without one).
+	env, _, err := callAPI(ctx, "backup_v2_stack", http.MethodPost, "/api/v1/settings/backups", nil, map[string]any{}, 120*time.Second)
 	return mcpAPIToolResult(env, nil, err)
 }
 

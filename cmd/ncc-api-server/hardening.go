@@ -1063,6 +1063,7 @@ func rotateAuditGenerations(abs string, keep int) {
 // fields are ignored (no filtering on that dimension).
 type auditFilter struct {
 	actionPrefix string    // match entries whose "action" has this prefix
+	exclude      []string  // drop entries whose "action" has any of these prefixes
 	user         string    // case-insensitive exact match on "user"
 	channel      string    // exact channel match (e.g. mcp)
 	onlyFailures bool      // keep only failed actions
@@ -1076,6 +1077,14 @@ func (f auditFilter) matches(entry map[string]interface{}) bool {
 		act, _ := entry["action"].(string)
 		if !strings.HasPrefix(act, f.actionPrefix) {
 			return false
+		}
+	}
+	if len(f.exclude) > 0 {
+		act, _ := entry["action"].(string)
+		for _, p := range f.exclude {
+			if p != "" && strings.HasPrefix(act, p) {
+				return false
+			}
 		}
 	}
 	if f.onlyFailures {

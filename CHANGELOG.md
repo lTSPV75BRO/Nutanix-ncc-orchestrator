@@ -88,6 +88,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **MCP server returned secrets to the model.** The configuration tools handed back
+  the raw config file, including inline credentials; results are now scrubbed in
+  one place (the redacted copy replaces the raw one, and values under
+  credential-like keys, URL credentials and chat-webhook URLs are masked). The
+  server's redactor, which only caught `password:`, `token:` and `secret:` lines,
+  now matches by key name. `backup_v2_stack` used to download and discard an archive
+  and report success; it now creates a server-side snapshot and returns its name,
+  and `restore_v2_backup` accepts only a backup name. The docs say plainly that the
+  HMAC proof and `confirm` are not security boundaries.
+- **Audit log page is back to the essentials.** Columns are When, Action, Result,
+  User and Client; everything else is in the full JSON entry, opened from the row or
+  its code button (copy the JSON or the request id). The automatic per-request and
+  MCP-call records are hidden unless you turn them on (`?exclude=` on
+  `GET /api/v1/audit`).
+- **Known-vulnerable releases are blocked.** Every tagged release was scanned
+  (`docs/audit/release-scan.md`) and the affected ones (2.0.0 to 2.2.1) are on the
+  shipped blocked-versions list with their advisory ids. A refused dashboard now
+  shows an error screen with the code `NCC_API_UI_VERSION_BLOCKED`; admins manage
+  the list under System, Updates & backups, Blocked versions. The refusal no longer
+  tells operators to upgrade to 2.3.0 (which cannot declare a version and is itself
+  refused) but to 2.4.0.
+
 - **Helm chart: the API pod crash-looped on first start.** Kubernetes `args`
   replace the image's `CMD`, the chart passed only some path flags, and the
   container layout made the stack-aware defaults point log, token and user

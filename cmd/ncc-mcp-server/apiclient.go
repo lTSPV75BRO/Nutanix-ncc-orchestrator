@@ -151,6 +151,8 @@ func mcpAPIToolResult(env apiEnvelope, data any, err error) (*mcp.CallToolResult
 			data = json.RawMessage(env.Data)
 		}
 	}
+	// Whatever the endpoint returned, the model only gets redacted values.
+	data = scrubForModel(data)
 	text, _ := json.MarshalIndent(data, "", "  ")
 	if len(text) == 0 || string(text) == "null" {
 		text = []byte(env.Message)

@@ -71,7 +71,8 @@ func (s *apiServer) matchBlockedUI(r *http.Request) (uiversion.Entry, bool) {
 			return uiversion.Entry{
 				Version:   uiversion.UnknownVersion,
 				Component: "ui",
-				Reason:    "unversioned NCC UI (includes 2.2.1 node2shell builds that cannot declare a version)",
+				Reason:    uiversion.UnversionedReason(),
+				FixedIn:   uiversion.SupportedFrom,
 				Builtin:   true,
 			}, true
 		}
@@ -115,6 +116,9 @@ func (s *apiServer) rejectCompromisedUIClient(w http.ResponseWriter, r *http.Req
 			"ui_server_version": presentedUIServerVersion(r),
 			"blocked_version":   e.Version,
 			"component":         e.Component,
+			"advisory":          strings.Join(e.Advisories, ", "),
+			"severity":          e.Severity,
+			"fixed_in":          e.FixedIn,
 		},
 	})
 	s.audit(r, "ui.blocked", false, map[string]interface{}{

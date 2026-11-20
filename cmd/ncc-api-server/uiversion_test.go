@@ -118,3 +118,63 @@ func TestHandleUIVersionPolicyRoundTrip(t *testing.T) {
 		t.Fatalf("get %s", get.Body.String())
 	}
 }
+
+// Every release the scan found a vulnerability in is on the shipped list, with
+// the advisory ids the API returns so the dashboard can show them.
+func TestShippedBlockedVersionsCarryAdvisories(t *testing.T) {
+	list := uiversion.Builtin()
+	want := []string{"2.0.0", "2.0.1", "2.0.2", "2.1.0", "2.1.1", "2.2.0", "2.2.1"}
+	for _, v := range want {
+		e, ok := uiversion.Match(v, "ui", list)
+		if !ok {
+			t.Errorf("%s should be blocked", v)
+			continue
+		}
+		if len(e.Advisories) == 0 || e.FixedIn != uiversion.SupportedFrom || e.Severity == "" {
+			t.Errorf("%s entry incomplete: %+v", v, e)
+		}
+	}
+	for _, v := range []string{"2.3.0", "2.4.0", "2.5.0"} {
+		if _, ok := uiversion.Match(v, "ui", list); ok {
+			t.Errorf("%s must not be on the shipped list", v)
+		}
+	}
+}
+
+func TestBlockedResponseNamesTheAdvisories(t *testing.T) {
+	s := newTokenTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/runs/summary", nil)
+	req.Header.Set("X-Requested-With", "ncc-ui")
+	req.Header.Set(uiversion.VersionHeader, "2.1.0")
+	rr := httptest.NewRecorder()
+	if !s.rejectCompromisedUIClient(rr, req) {
+		t.Fatal("2.1.0 must be refused")
+	}
+	var env struct {
+		ErrorCode string                 `json:"error_code"`
+		Data      map[string]interface{} `json:"data"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	adv, _ := env.Data["advisory"].(string)
+	if env.ErrorCode != uiversion.ErrorCode || !strings.Contains(adv, "GO-2026-6603") || env.Data["fixed_in"] != uiversion.SupportedFrom {
+		t.Fatalf("response data: %+v", env)
+	}
+}
+
+// A dashboard that cannot declare a version is older than 2.4.0; the answer
+// must say that, and must not tell the operator that 2.3.0 is a fix.
+func TestUnversionedRefusalPointsAt240(t *testing.T) {
+	s := newTokenTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/runs/summary", nil)
+	req.Header.Set("X-Requested-With", "ncc-ui")
+	rr := httptest.NewRecorder()
+	if !s.rejectCompromisedUIClient(rr, req) {
+		t.Fatal("unversioned dashboard must be refused by default")
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "2.4.0") || strings.Contains(body, "2.3.0 or later") {
+		t.Fatalf("remediation text: %s", body)
+	}
+}

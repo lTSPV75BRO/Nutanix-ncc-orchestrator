@@ -130,6 +130,18 @@ sign-in lockout. Also fixed:
 - More troubleshooting logs: LDAP steps, sign-in failures, backup and
   restore errors, unreadable run summaries and version-skew refusals.
 
+## Blocked versions, MCP and the audit log
+
+- Every tagged release was scanned for known vulnerabilities
+  ([`docs/audit/release-scan.md`](../audit/release-scan.md)). 2.0.0 to 2.2.1 are on the
+  blocked-versions list; a blocked dashboard shows an error screen with the code
+  `NCC_API_UI_VERSION_BLOCKED`, and admins manage the list under System, Updates &
+  backups, Blocked versions.
+- The MCP server no longer returns raw configuration to the model, its backup tool
+  creates a real server-side snapshot, and restore accepts only a backup name.
+- The audit log page shows When, Action, Result, User and Client, with the full JSON
+  entry one click away; automatic request records are hidden unless enabled.
+
 ## Update-check reliability
 
 When the GitHub REST API is rate limited, update checks now resolve the latest

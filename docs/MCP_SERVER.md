@@ -10,7 +10,7 @@ How it works: `ncc-mcp-server` is an MCP **stdio** process that is a **strict HT
 - `X-NCC-MCP-Version` and a time-bound HMAC proof (`X-NCC-MCP-Proof`, protocol `ncc-mcp-proof-v1` keyed by the PAT)
 - `X-NCC-MCP-Tool` naming the MCP tool (for audit)
 
-Setting the version string to 2.4.0 on a 2.3.x binary is not enough. The 2.4.0 API refuses a missing or forged proof (`NCC_API_MCP_UPGRADE_REQUIRED` / `NCC_API_MCP_PROOF_INVALID`). Third-party HTTP clients that do not identify as `ncc-mcp-server` keep using normal API auth. MCP-originated API requests are audited as `mcp.call` with `channel=mcp`, `mcp_tool`, PAT id/name when a PAT was used, and error/remediation on failures.
+The proof is a **compatibility check, not a security boundary**: it is an HMAC keyed by the same PAT the client already sends, so anyone holding the PAT can compute it, and a client that does not identify as `ncc-mcp-server` is not subject to it at all. What actually limits a client is the PAT: its role (viewer, operator or admin) is enforced by the API on every call, and every call is audited. The 2.4.0 API refuses a caller that claims to be MCP with a missing or invalid proof (`NCC_API_MCP_UPGRADE_REQUIRED` / `NCC_API_MCP_PROOF_INVALID`). Third-party HTTP clients that do not identify as `ncc-mcp-server` keep using normal API auth. MCP-originated API requests are audited as `mcp.call` with `channel=mcp`, `mcp_tool`, PAT id/name when a PAT was used, and error/remediation on failures.
 
 This matches MCP practice: stdio transport, JSON-RPC, tool annotations, JSON Schema arguments, no secrets in tool arguments, confirmation for mutations, and host-side RBAC on the API.
 
@@ -98,11 +98,11 @@ Hints below: **RO** = read-only, **OW** = open-world (contacts the API / cluster
 | **start_v2_stack** / **stop_v2_stack** | D | Refused over MCP (the API is already the running stack). |
 | **restart_v2_stack** | D | `POST /api/v1/health/supervisor/restart`. Requires `confirm: "APPLY"`. |
 | **repair_v2_stack** | D | `POST /api/v1/health/autoheal`. Requires `confirm: "APPLY"`. |
-| **restore_v2_backup** | D | `POST /api/v1/settings/restore`. Requires `confirm: "APPLY"` and `input_file`. |
+| **restore_v2_backup** | D | `POST /api/v1/settings/restore`. Requires `confirm: "APPLY"` and `input_file`, which must be the name of a server-side backup (`manual-<time>.tar.gz.enc`), never a path. |
 | **create_schedule** | — | `PUT /api/v1/schedule`. Custom `command` is never accepted. Mutating calls need `confirm: "APPLY"`. |
 | **list_schedules** | RO | `GET /api/v1/schedule`. |
 | **delete_schedule** | D | `PUT /api/v1/schedule` with `action=remove`. Requires `confirm: "APPLY"` unless `print_only`. |
-| **backup_v2_stack** | — | `GET /api/v1/settings/backup`. Requires `confirm: "APPLY"`. |
+| **backup_v2_stack** | — | `POST /api/v1/settings/backups` (a snapshot kept on the server; returns its name). Requires `confirm: "APPLY"`. No passphrase is accepted over MCP: the server's backup key applies, and without one the API answers 412. |
 | **orchestrator_action** | D/RO | Allowlisted read-only API maps: `version`, `v2-status`, `v2-check`, `verify`, `config-schema`, `validate-config`, `validate-secrets`, `preflight-check`. Host-only actions (uninstall, password recovery, custom argv) are refused. |
 
 API RBAC still applies: a viewer PAT cannot trigger runs even if the MCP tool is advertised.
@@ -176,7 +176,9 @@ Do not use it interactively; Cursor or another MCP host will start it and talk o
 Mutating tools are disabled by default. To enable them, explicitly set
 `NCC_MCP_ALLOW_MUTATIONS=true` in the MCP server environment and include
 `confirm: "APPLY"` in each mutating request. Preview and read-only tools do not
-need this setting. Custom schedule commands and passwords in tool arguments are
+need this setting. `confirm` is an argument the model fills in, so it stops accidents, not a
+model that has been told to apply a change; the real controls are that mutations are off by
+default, the PAT's role, and your MCP host's own approval prompt for tools marked destructive. Custom schedule commands and passwords in tool arguments are
 never accepted. API responses returned to MCP clients are capped at 1 MiB. The
 HTTP client does not honour `HTTP(S)_PROXY`.
 
@@ -209,6 +211,7 @@ Never put passwords in tool arguments. Store Prism credentials with `secret://` 
 - The API tags MCP traffic in the JSONL audit log (`action=mcp.call`, `channel=mcp`, `mcp_tool`, `mcp_client_version`). When auth used a PAT, entries also carry `pat_id`, `pat_name`, and the owning `user`. Failures include `error`, `error_code`, and `remediation`. Filter with `GET /api/v1/audit?channel=mcp`.
 - Use a dedicated config file and a least-privilege PAT (viewer vs operator vs admin).
 - Prefer `secret://` on the API server over any credential in the MCP host environment.
+- Everything a tool returns is read by the model. Tool results are scrubbed before they are returned: the configuration tool returns only the server's redacted copy, and values under credential-like names (`password`, `token`, `secret`, `api_key`, `webhook`, `hmac`, ...) are masked whatever the endpoint sent. Treat finding text and report content as untrusted input, since it comes from the clusters.
 
 ## Troubleshooting
 

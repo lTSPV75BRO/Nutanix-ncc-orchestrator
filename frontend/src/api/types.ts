@@ -649,6 +649,9 @@ export type BlockedUIVersion = {
   version: string;
   component?: string;
   reason: string;
+  advisories?: string[];
+  severity?: string;
+  fixed_in?: string;
   builtin?: boolean;
 };
 

@@ -19,6 +19,7 @@ P3 optional. No finding was rated Critical.
 | HARD-01 | Deploy | No container sets `readOnlyRootFilesystem`, default CPU and memory requests are empty, and the two-replica deployments have no pod anti-affinity. The API image runs correctly read-only with only `/data` writable; restore, retention preview and runs were not exercised under it. | Low-Medium | P2 |
 | A11Y-02 | UI | Accessibility is checked in a browser by hand. Populated pages (tables, charts, drawers), 400% zoom and a screen reader are not covered, and the browser pass is not in CI. | Medium | P2 |
 | CI-02 | CI | Nothing installs the Helm chart in CI, so a chart that cannot start (see K8S-02) is not caught. | Medium | P1 |
+| MCP-1 | MCP | `confirm: "APPLY"` is supplied by the model, and the HMAC proof is keyed by the PAT, so neither is a security boundary (documented). With `NCC_MCP_ALLOW_MUTATIONS=true`, the PAT's role is the only limit; use a least-privilege PAT and keep the host's tool approval on. | Low | P3 |
 | SEC-10 | API | `meta/routes`, `openapi.json` and `metrics/rate-limit` are readable without sign-in so the Swagger page works. | Low | P3 |
 | SEC-11 | API | A plain-HTTP host install sends the session cookie without `Secure` unless TLS or `--cookie-secure` is set (the chart sets it). bcrypt uses the library default cost (10). | Low | P3 |
 | FRESH-01 | API | `/api/v1/freshness` returns all schedules and the global overdue flag to cluster-scoped users. Metadata only. | Low | P3 |
@@ -46,6 +47,9 @@ recorded in `scripts/govulncheck-accepted.txt` with a review-by date of
 | SEC-05 | The MCP server passed the Prism password on the command line. | MCP tools refuse password arguments; credentials stay on the API server (`secret://`). |
 | SEC-06 | Email header injection through a templated subject in the runner. | Headers are flattened and RFC 2047 encoded; CR/LF addresses rejected. |
 | SEC-07 | A restore could replace the stack binaries with unverified files. | Restore installs only program files this host has run (`.ncc-trusted-stack.json`). |
+| SEC-13 | The MCP configuration tools returned the raw config file, including inline credentials, to the model. | Tool results are scrubbed in one place; only the redacted copy is returned. |
+| SEC-14 | The "redacted" config view masked only password, token and secret lines. | Key-name based redaction (webhooks, API keys, HMAC, passphrases, URL credentials); references and switches kept. |
+| SEC-15 | `backup_v2_stack` downloaded an archive, discarded it and reported success; restore accepted any path-like name. | It creates a server-side snapshot and returns its name; restore accepts only a backup name. |
 | SEC-12 | The MCP server ran tools and read resources with no credential. | Tools call the REST API only (no orchestrator subprocess). Requires `NCC_MCP_TOKEN`, HMAC proof (`ncc-mcp-proof-v1`), and API RBAC. Stamping version 2.4.0 on a 2.3.x binary is refused. |
 | SEC-08 | The UI-to-API transport honoured `HTTP(S)_PROXY`, sending the admin token through a proxy. | The transport ignores proxy variables. |
 | SEC-09 | An unknown role in a signed session mapped to admin. | Unknown or empty roles are rejected. |

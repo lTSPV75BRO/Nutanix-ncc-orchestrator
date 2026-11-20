@@ -84,6 +84,7 @@ import type {
   ExtraArgOption,
   UIVersionPolicy,
 } from "./types";
+import { inspectForBlock } from "./blocked";
 
 // ApiError preserves both the human-readable message and the structured `data`
 // payload from a failed API response. Callers that want to react to specific
@@ -194,12 +195,15 @@ async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
     },
   });
   maybeRedirectToLogin(path, response.status);
+  void inspectForBlock(response);
   return response;
 }
 
 export type AuditQuery = {
   limit?: number;
   action?: string;
+  /** Comma-separated action prefixes to leave out (the automatic request records). */
+  exclude?: string;
   failures?: boolean;
   user?: string;
   since?: string;
@@ -211,6 +215,7 @@ function buildAuditPath(opts?: AuditQuery): string {
   const params = new URLSearchParams();
   if (typeof opts?.limit === "number" && opts.limit > 0) params.set("limit", String(opts.limit));
   if (opts?.action) params.set("action", opts.action);
+  if (opts?.exclude) params.set("exclude", opts.exclude);
   if (opts?.failures) params.set("failures", "1");
   if (opts?.user) params.set("user", opts.user);
   if (opts?.since) params.set("since", opts.since);

@@ -145,6 +145,52 @@ clients are unchanged. Each MCP-originated request is audited as `mcp.call`
 with `channel=mcp`, PAT id/name when a PAT was used, and error/remediation on
 failures.
 
+Review of that rewrite (2026-11-20) found what it left behind, all fixed:
+
+- **SEC-13 (Medium): the MCP server handed the model the raw configuration.**
+  `get_sample_config` (and the `config-schema` action) returned the whole
+  `GET /api/v1/settings/config` payload, which carries the file as written in
+  `content` next to a masked `content_redacted`. Any credential written inline
+  reached the model, and from there anything it talks to. Tool results are now
+  scrubbed in one place before they are returned: the redacted copy replaces the
+  raw one, and values under credential-like key names (`password`, `token`,
+  `secret`, `api_key`, `webhook`, `hmac`, ...) and URLs with embedded credentials
+  or webhook tokens are masked, whatever endpoint they came from.
+- **SEC-14 (Medium): the redactor behind that copy missed most credentials.**
+  `redactSensitiveText` masked only lines containing `password:`, `token:` or
+  `secret:`, so a Slack webhook URL, an API key, an HMAC key, a passphrase or a
+  bind password was shown in clear in the "redacted" view, in diagnostics and in
+  the MCP tool. It now matches by key name, keeps `secret://` references,
+  switches, numbers and durations, and masks URL userinfo and chat-webhook URLs.
+- **SEC-15 (Low): `backup_v2_stack` did not back anything up.** It called the
+  download endpoint (`GET /settings/backup`), streamed the archive to the MCP
+  process, discarded it and answered `{"ok":true}`; under the default encryption
+  policy it simply failed with 412. It now creates a server-side snapshot
+  (`POST /settings/backups`, the server's backup key, no passphrase over MCP) and
+  returns its name. `restore_v2_backup` accepts only a backup name
+  (`manual-<time>.tar.gz.enc`), never a path.
+- **What the controls are, and are not.** The HMAC proof is keyed by the PAT the
+  client already sends, so anyone holding the PAT can compute it and a client that
+  does not call itself `ncc-mcp-server` is not checked at all: it is a
+  compatibility check, not authentication. `confirm: "APPLY"` is a value the
+  model supplies, so it stops accidents, not a model that was told to apply a
+  change. What bounds an MCP client is the PAT's role, the default-off
+  `NCC_MCP_ALLOW_MUTATIONS`, the host's own approval prompt for destructive
+  tools, and the audit log. Use a least-privilege PAT.
+
+### Blocked dashboard versions
+
+The API refuses dashboards on a blocked-versions list (`NCC_API_UI_VERSION_BLOCKED`)
+and the dashboard shows an error screen with the code. The shipped list now comes
+from scanning every tagged release ([`release-scan.md`](release-scan.md)); an
+administrator can add entries under System, Updates & backups, Blocked versions.
+Two things to know: builds before 2.4.0 cannot declare a version, so they are
+refused by the "block unversioned" policy (on by default) and not by their
+list entry; and the check is made on headers the client sends, so it stops an
+honest outdated dashboard, not a hostile client. The refusal text used to tell
+operators to upgrade to 2.3.0, which is itself unversioned and refused; it now
+points at 2.4.0.
+
 ### Smaller items
 
 - **DEP-03.** `GO-2026-6909` in `crewjam/saml` v0.6.3: reviewed false positive

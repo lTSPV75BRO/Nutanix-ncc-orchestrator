@@ -6985,3 +6985,194 @@ a.findings-group-chip:hover {
     display: none;
   }
 }
+
+/* Settings -> Audit log */
+.audit-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ui-space-2) var(--ui-space-3);
+  margin-top: var(--ui-space-3);
+}
+
+.audit-toolbar-end {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+  margin-left: auto;
+}
+
+.audit-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--ui-text-sm);
+  color: var(--ui-text-secondary);
+}
+
+.audit-summary {
+  margin: var(--ui-space-3) 0 var(--ui-space-2);
+  font-size: var(--ui-text-sm);
+  color: var(--ui-text-secondary);
+}
+
+.audit-failed {
+  color: var(--ui-fail-text);
+}
+
+.audit-muted {
+  color: var(--ui-text-secondary);
+}
+
+.audit-when,
+.audit-user {
+  font-size: var(--ui-text-sm);
+}
+
+.audit-action {
+  font-size: var(--ui-text-sm);
+  color: var(--ui-text);
+}
+
+.audit-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ui-space-3);
+  margin: 0 0 var(--ui-space-4);
+}
+
+.audit-facts dt {
+  font-size: var(--ui-text-xs);
+  color: var(--ui-text-secondary);
+}
+
+.audit-facts dd {
+  margin: 2px 0 0;
+  font-size: var(--ui-text-sm);
+  color: var(--ui-text);
+  overflow-wrap: anywhere;
+}
+
+.audit-json-label {
+  display: block;
+  margin-bottom: var(--ui-space-1);
+  font-size: var(--ui-text-xs);
+}
+
+.audit-json {
+  margin: 0;
+  padding: var(--ui-space-3);
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-hover);
+  color: var(--ui-text);
+  font-family: var(--ui-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: var(--ui-text-xs);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Blocked dashboard version (the API refused this build) */
+.blocked-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: var(--ui-space-5, 24px);
+  background: var(--app-bg);
+  color: var(--ui-text);
+}
+
+.blocked-card {
+  width: min(520px, 100%);
+  padding: var(--ui-space-6, 32px);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-surface);
+}
+
+.blocked-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--ui-radius-md);
+  background: color-mix(in srgb, var(--ui-fail) 14%, transparent);
+  color: var(--ui-fail-text);
+  font-size: 20px;
+}
+
+.blocked-title {
+  margin: var(--ui-space-4) 0 var(--ui-space-2);
+  font-size: var(--ui-text-xl, 20px);
+  font-weight: 600;
+}
+
+.blocked-reason {
+  margin: 0 0 var(--ui-space-2);
+  color: var(--ui-text);
+}
+
+.blocked-fix {
+  margin: 0 0 var(--ui-space-4);
+  color: var(--ui-text-secondary);
+  font-size: var(--ui-text-sm);
+}
+
+.blocked-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ui-space-3);
+  margin: 0 0 var(--ui-space-5, 24px);
+  padding: var(--ui-space-3);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-hover);
+}
+
+.blocked-facts dt {
+  font-size: var(--ui-text-xs);
+  color: var(--ui-text-secondary);
+}
+
+.blocked-facts dd {
+  margin: 2px 0 0;
+  font-size: var(--ui-text-sm);
+  overflow-wrap: anywhere;
+}
+
+.blocked-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ui-space-2);
+}
+
+/* System -> Updates & backups -> Blocked versions */
+.blocked-policy {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ui-space-2);
+  margin-bottom: var(--ui-space-3);
+  font-size: var(--ui-text-sm);
+  color: var(--ui-text-secondary);
+}
+
+.blocked-policy .ant-switch {
+  flex: none;
+  margin-top: 2px;
+}
+
+.blocked-adv {
+  font-size: var(--ui-text-xs);
+  color: var(--ui-text-secondary);
+}
+
+.blocked-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ui-space-2);
+  margin-top: var(--ui-space-3);
+}

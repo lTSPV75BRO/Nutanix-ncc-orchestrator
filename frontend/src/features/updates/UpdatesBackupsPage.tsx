@@ -1,7 +1,9 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { Card, Skeleton, Space, Tabs } from "antd";
-import { CloudDownloadOutlined, DatabaseOutlined, SwapOutlined } from "@ant-design/icons";
+import { CloudDownloadOutlined, DatabaseOutlined, StopOutlined, SwapOutlined } from "@ant-design/icons";
 import { useSearchParams } from "react-router";
+import { notifyError } from "../../notify";
+import { BlockedVersionsPanel } from "./BlockedVersionsPanel";
 import { MigrationsPanel } from "./MigrationsPanel";
 
 const Cards = lazy(() =>
@@ -19,7 +21,7 @@ const Cards = lazy(() =>
 );
 
 /** Tabs of Updates & backups, in order. */
-export const UPDATES_TABS = ["updates", "backups", "migrations"] as const;
+export const UPDATES_TABS = ["updates", "backups", "migrations", "blocked"] as const;
 export type UpdatesTab = (typeof UPDATES_TABS)[number];
 
 /** The tab from `?tab=`; old `?focus=backup` links open Backups. */
@@ -57,6 +59,7 @@ export function UpdatesBackupsPage({ isKubernetes = false }: { isKubernetes?: bo
         { key: "updates", icon: <CloudDownloadOutlined aria-hidden />, label: "Updates", children: <Lazy><Cards part="updates" isKubernetes={isKubernetes} /></Lazy> },
         { key: "backups", icon: <DatabaseOutlined aria-hidden />, label: "Backups", children: <Lazy><Cards part="backups" isKubernetes={isKubernetes} /></Lazy> },
         { key: "migrations", icon: <SwapOutlined aria-hidden />, label: "Migrations", children: <MigrationsPanel /> },
+        { key: "blocked", icon: <StopOutlined aria-hidden />, label: "Blocked versions", children: <BlockedVersionsPanel onError={notifyError} /> },
       ]}
     />
   );

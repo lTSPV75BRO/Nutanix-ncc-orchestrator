@@ -235,6 +235,24 @@ What to look for:
 - **Cause:** Exit code **3** is *partial success* — some clusters failed (e.g. an unreachable Prism Central) while others succeeded and a report was written. systemd treats any non-zero exit as a unit failure.
 - **Fix:** Expected when some targets are unreachable. Fix routing/credentials for the failing clusters, or remove them from `config.yaml`, so the run exits 0. The failing clusters are listed in `logs/ncc-scheduler.log` and `outputfiles/run-summary.json`.
 
+## Dashboard shows "This dashboard version is blocked" (`NCC_API_UI_VERSION_BLOCKED`)
+
+- **What it means:** the API refused this dashboard because its version is on the
+  blocked-versions list (a release with a known vulnerability, or an entry an
+  administrator added). The screen shows the error code, the advisory ids, the
+  version that matched and a request id to quote.
+- **Fix:** upgrade `ncc-ui-server` and `frontend-dist` to 2.4.0 or later (a stack
+  archive replaces both), then reload the page. Dashboards before 2.4.0 cannot
+  declare a version, so they are refused as a group; the plain error text reaches
+  them as a failed sign-in or a toast.
+- **Look at the list:** System, Updates & backups, Blocked versions (admins). It
+  shows the shipped entries with their advisories and lets you add or remove your
+  own, and switch off refusing undeclared versions if you must run an old dashboard
+  against this API for a while.
+- **API clients are not affected:** only requests that identify as the dashboard
+  (`X-Requested-With: ncc-ui`, `X-NCC-UI-Version`) are checked. MCP and script
+  clients use their token and are limited by its role.
+
 ## Windows
 
 ### `config.yaml` does not parse (`found unknown escape character`)

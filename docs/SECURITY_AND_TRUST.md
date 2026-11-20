@@ -1214,6 +1214,23 @@ certificate.
 
 ---
 
+## Blocked dashboard versions
+
+A release found to carry a known vulnerability can be refused by the API. A
+dashboard that declares a blocked version (header `X-NCC-UI-Version`, and the UI
+server's `X-NCC-UI-Server-Version`) gets HTTP 403 with error code
+`NCC_API_UI_VERSION_BLOCKED`, the advisory ids, the severity and the version that
+fixes it, and the dashboard shows an error screen with the same details. The
+shipped list comes from scanning every tagged release (see
+[`audit/release-scan.md`](audit/release-scan.md)); administrators can add entries
+and decide whether dashboards that declare no version (every build before 2.4.0)
+are refused, under System, Updates & backups, Blocked versions or
+`PUT /api/v1/settings/ui-versions`. Every refusal is audited as `ui.blocked`.
+
+This is a guard against an outdated dashboard that is honest about what it is. It
+checks headers the client sends, so it does not stop a hostile client; that is what
+authentication, roles and the other controls on this page do.
+
 ## Reporting suspected tampering
 
 If a binary you downloaded does not match `checksums.txt`, or

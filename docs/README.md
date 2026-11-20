@@ -48,5 +48,5 @@ Orchestrator. If you are new, start with the
 | Document | What it covers |
 | --- | --- |
 | [Roadmap](ROADMAP.md) | Planned and proposed work by priority |
-| [Quality and security review](audit/README.md) | Method, results and measurements of the 2026 review; [findings register](audit/findings.md); [security assessment](audit/security-assessment.md) |
+| [Quality and security review](audit/README.md) | Method, results and measurements of the 2026 review; [findings register](audit/findings.md); [security assessment](audit/security-assessment.md); [release vulnerability scan](audit/release-scan.md) |
 | [Release notes](releases/README.md), [changelog](../CHANGELOG.md) | What changed in each version |

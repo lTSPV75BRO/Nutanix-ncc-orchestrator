@@ -2,6 +2,11 @@
 // and the API. Self-reported versions (ldflags, User-Agent, env) are not
 // trusted. A 2.4.0+ client must present a time-bound HMAC proof keyed by
 // NCC_MCP_TOKEN using protocol ncc-mcp-proof-v1, which 2.3.x cannot produce.
+//
+// This is a compatibility check, not authentication: the key is the PAT that
+// the client also sends, so any holder of the PAT can compute a valid proof, and
+// a caller that does not identify as an MCP client is not checked at all. The
+// PAT's role and the audit log are what limit and record an MCP client.
 package mcpclient
 
 import (
