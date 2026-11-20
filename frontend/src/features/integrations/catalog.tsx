@@ -731,13 +731,13 @@ index = ncc`,
         snippets: [
           {
             label: "macOS or Linux",
-            code: `git clone <your copy of the NCC Orchestrator repository> ncc-orchestrator
+            code: `git clone https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator.git ncc-orchestrator
 cd ncc-orchestrator
 go build -trimpath -o ncc-mcp-server ./cmd/ncc-mcp-server`,
           },
           {
             label: "Windows (PowerShell)",
-            code: `git clone <your copy of the NCC Orchestrator repository> ncc-orchestrator
+            code: `git clone https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator.git ncc-orchestrator
 cd ncc-orchestrator
 go build -trimpath -o ncc-mcp-server.exe ./cmd/ncc-mcp-server`,
           },
