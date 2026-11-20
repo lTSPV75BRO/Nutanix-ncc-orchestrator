@@ -75,7 +75,8 @@ describe("IntegrationsPage", () => {
     renderAt("/integrations/mcp");
     const boxes = screen.getAllByRole("checkbox", { name: "Done" });
     fireEvent.click(boxes[0]);
-    expect(screen.getByText("1 of 4 steps done")).toBeInTheDocument();
+    const total = INTEGRATIONS.find((i) => i.id === "mcp")!.steps.length;
+    expect(screen.getByText(`1 of ${total} steps done`)).toBeInTheDocument();
     cleanup();
     renderAt("/integrations/mcp");
     expect(screen.getAllByRole("checkbox", { name: "Done" })[0]).toBeChecked();

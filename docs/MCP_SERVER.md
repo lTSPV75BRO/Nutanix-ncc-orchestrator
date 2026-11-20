@@ -18,6 +18,19 @@ Current server implementation version: **`3.0.0`** (overridable at build time vi
 
 Every tool advertises MCP **annotations** (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) and a human-readable title, so MCP hosts can present read-only tools differently from mutating/destructive ones (e.g. ask for confirmation before `delete_schedule`).
 
+## Is it part of the stack?
+
+No, on purpose. `ncc-mcp-server` is optional: few installations need it, and every
+extra binary is more to ship, verify and keep patched. The stack archives
+(`ncc-orchestrator`, `ncc-api-server`, `ncc-ui-server`, the dashboard) do not
+contain it, nothing in the stack starts it, and the API does not need it. It runs
+on the computer that runs the AI assistant, is started by the assistant, and
+calls the API like any other client. Build it where you need it (below), or
+produce release-style binaries with `scripts/binaryGO.txt --with-mcp`.
+
+Older builds (0.1.13 to 2.3.0) had no sign-in at all. Do not keep them; use a build
+from 2.4.0 or later. The in-app guide is **Integrations, AI assistants (MCP)**.
+
 ## Import in five minutes
 
 You need a running **ncc-api-server**, the **2.4.0+** `ncc-mcp-server` binary, and a dashboard PAT.
@@ -58,11 +71,22 @@ Agent skill (how the model should use the tools): [`skills/ncc-mcp/SKILL.md`](..
 
 ## Build
 
-From the repo root:
+You need Go 1.27.4 or newer and a copy of the repository. From its root:
 
 ```bash
-go build -o ncc-mcp-server ./cmd/ncc-mcp-server/
+# macOS or Linux
+go build -trimpath -o ncc-mcp-server ./cmd/ncc-mcp-server
 ```
+
+```powershell
+# Windows (PowerShell)
+go build -trimpath -o ncc-mcp-server.exe ./cmd/ncc-mcp-server
+```
+
+To stamp the build with a version (shown in the audit log), add
+`-ldflags "-X main.serverVersion=<version>"`. Build on the machine that runs the
+assistant or copy the single file there; it has no other files to install. Keep it
+where only you can change it, and give the host its absolute path.
 
 Or install into `$GOPATH/bin` (or `$HOME/go/bin`):
 

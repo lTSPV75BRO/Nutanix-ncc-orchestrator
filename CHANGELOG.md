@@ -109,6 +109,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the list under System, Updates & backups, Blocked versions. The refusal no longer
   tells operators to upgrade to 2.3.0 (which cannot declare a version and is itself
   refused) but to 2.4.0.
+- **The in-app AI assistant guide matches the 2.4.0 MCP server.** It still told
+  operators to put `ncc-mcp-server` next to the orchestrator and said it ships in
+  every release; it now walks through the account, token, build (it is optional and
+  not in the stack download) and assistant configuration, with Windows and Linux
+  commands.
 - **Signed builds refuse an unsigned release.** The updater accepted a release with
   its `checksums.txt.sig` removed even when the build embeds a release key.
 - **The engine's check for an old MCP server now works on Windows.** It found the

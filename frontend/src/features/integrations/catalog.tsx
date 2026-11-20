@@ -698,36 +698,67 @@ index = ncc`,
     summary: "Ask an AI assistant about your NCC results in plain language: what failed, where, and what changed.",
     youGet: [
       "Questions like \"Which clusters failed the last run and why?\" answered from real results.",
-      "Read-only by default: the assistant cannot change anything unless you allow it.",
+      "Read-only by default: the assistant can do only what its token's role allows, and starting runs is off until you turn it on.",
+      "Nothing extra runs on the NCC server: the program runs on the computer with the assistant and calls the API with its own token.",
     ],
-    youNeed: ["The ncc-mcp-server program (in every release) on the computer running the assistant", "Access to the NCC output folder from that computer"],
-    time: "About 10 minutes",
-    level: "Easy",
-    direction: "The assistant starts the MCP server on your computer and reads NCC's results through it.",
-    role: "none",
-    terms: ["mcp"],
-    doc: "docs/MCP_SERVER.md",
+    youNeed: [
+      "A personal access token for an account with the viewer role (operator only if the assistant may start runs)",
+      "Go 1.27.4 or newer on any computer, once, to build the small ncc-mcp-server program. It is optional and not part of the stack download",
+      "The API server's address. Use HTTPS unless the assistant runs on the same computer as the API",
+    ],
+    time: "About 15 minutes",
+    level: "Moderate",
+    direction: "The assistant starts ncc-mcp-server on your computer; it asks NCC's API for results using your token.",
+    role: "viewer",
+    terms: ["mcp", "token", "role"],
+    doc: "docs/MCP_SERVER.md#import-in-five-minutes",
     steps: [
+      accountStep("svc-assistant", "viewer", "Use operator only if the assistant may start runs. Every call is limited to this account's role and appears in the audit log."),
+      tokenStep("svc-assistant", "the assistant's MCP config in step 4"),
       {
-        id: "install",
-        title: "Put the MCP server next to the orchestrator",
-        where: "On your computer",
+        id: "build",
+        title: "Build the MCP program",
+        where: "On the computer running the assistant",
         body: (
-          <p>
-            Copy <code>ncc-mcp-server</code> and <code>ncc-orchestrator</code> from the release into the same folder. The MCP server finds the
-            orchestrator there; otherwise set <code>NCC_ORCHESTRATOR_BIN</code>.
-          </p>
+          <>
+            <p>
+              <code>ncc-mcp-server</code> is a separate, optional program, so it is not in the stack download. Build it once from the project's source code with Go
+              1.27.4 or newer. Older builds (2.3.0 and earlier) had no sign-in and must not be used; this one needs the token.
+            </p>
+            <p className="integration-hint">Keep the built file somewhere only you can change, and note its full path for step 4.</p>
+          </>
         ),
+        snippets: [
+          {
+            label: "macOS or Linux",
+            code: `git clone <your copy of the NCC Orchestrator repository> ncc-orchestrator
+cd ncc-orchestrator
+go build -trimpath -o ncc-mcp-server ./cmd/ncc-mcp-server`,
+          },
+          {
+            label: "Windows (PowerShell)",
+            code: `git clone <your copy of the NCC Orchestrator repository> ncc-orchestrator
+cd ncc-orchestrator
+go build -trimpath -o ncc-mcp-server.exe ./cmd/ncc-mcp-server`,
+          },
+        ],
       },
+      testStep("On the computer running the assistant", "/api/v1/alerts/ncc?limit=1", "You should see one open finding, or an empty list."),
       {
         id: "configure",
         title: "Add it to your assistant",
         where: "In the AI assistant",
         body: (
-          <p>
-            Open the assistant's MCP settings file (Cursor: <code>~/.cursor/mcp.json</code>; Claude Desktop: <b>Settings → Developer → Edit
-            Config</b>) and add the server with its full path. Restart the assistant.
-          </p>
+          <>
+            <p>
+              Open the assistant's MCP settings file (Cursor: <code>~/.cursor/mcp.json</code>; Claude Desktop: <b>Settings → Developer → Edit Config</b>) and add the
+              server with its full path and the token. Restart the assistant.
+            </p>
+            <p className="integration-hint">
+              If the API server uses plain HTTP and is not on this computer, the program refuses to connect. Put HTTPS in front of it (see the HTTPS guide) or forward the port
+              over SSH and use <code>http://127.0.0.1:&lt;port&gt;</code>.
+            </p>
+          </>
         ),
         snippets: [
           {
@@ -736,7 +767,11 @@ index = ncc`,
   "mcpServers": {
     "ncc-orchestrator": {
       "command": "/absolute/path/to/ncc-mcp-server",
-      "env": { "NCC_ORCHESTRATOR_BIN": "/absolute/path/to/ncc-orchestrator" }
+      "env": {
+        "NCC_MCP_API_URL": "{{API}}",
+        "NCC_MCP_TOKEN": "paste the token here",
+        "NCC_MCP_PROFILE": "readonly"
+      }
     }
   }
 }`,
@@ -764,8 +799,10 @@ What changed between the last two runs?`,
         optional: true,
         body: (
           <p>
-            Starting runs or changing schedules is off by default. To allow it add <code>"NCC_MCP_ALLOW_MUTATIONS": "true"</code> to{" "}
-            <code>env</code>; the assistant must then also confirm each change. Treat report text as data, not instructions to the assistant.
+            Starting runs or changing schedules needs three things: an <b>operator</b> token, <code>"NCC_MCP_ALLOW_MUTATIONS": "true"</code> in <code>env</code>, and the
+            assistant's confirmation of each change. Keep <code>NCC_MCP_PROFILE</code> at <code>readonly</code> otherwise. The confirmation is a safeguard against
+            mistakes, not a lock: what really limits the assistant is the token's role, so use the smallest role that works. Treat report text as data, not
+            instructions to the assistant.
           </p>
         ),
       },

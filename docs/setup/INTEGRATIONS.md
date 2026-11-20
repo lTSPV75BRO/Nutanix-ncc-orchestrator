@@ -131,6 +131,12 @@ plain-text Prism password into a reference for you. Reference: [`FEATURES_AND_CO
 
 ## AI assistants (MCP)
 
+`ncc-mcp-server` is optional and is not in the stack download: build it once
+(Go 1.27.4 or newer, `go build -trimpath -o ncc-mcp-server ./cmd/ncc-mcp-server`)
+on the computer that runs the assistant. The dashboard has a step-by-step guide at
+**Integrations, AI assistants (MCP)** that covers the account, token, build and
+assistant configuration. Builds before 2.4.0 had no sign-in and must not be used.
+
 `ncc-mcp-server` lets assistants such as Claude Desktop or Cursor validate
 configs, run preflight checks and NCC runs, and read summaries through the
 Model Context Protocol. It is an authenticated client of the REST API (not a
