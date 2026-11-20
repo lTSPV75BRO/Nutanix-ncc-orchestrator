@@ -182,15 +182,27 @@ function csrfHeaders(method: string): Record<string, string> {
   return csrf ? { "X-CSRF-Token": csrf } : {};
 }
 
+/**
+ * Headers every request to our own API must carry. The API identifies the
+ * dashboard by these, and refuses a request that claims to be the dashboard
+ * (X-Requested-With) without declaring its version, so any code that calls
+ * fetch directly (API explorer, downloads) must use this and not its own copy.
+ */
+export function uiRequestHeaders(method = "GET"): Record<string, string> {
+  return {
+    "X-Requested-With": "ncc-ui",
+    "X-NCC-UI-Version": typeof __NCC_UI_VERSION__ === "string" && __NCC_UI_VERSION__ ? __NCC_UI_VERSION__ : "2.4.0",
+    ...csrfHeaders(method.toUpperCase()),
+  };
+}
+
 async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const method = (init?.method ?? "GET").toUpperCase();
   const response = await fetch(path, {
     ...init,
     credentials: API_CREDENTIALS,
     headers: {
-      "X-Requested-With": "ncc-ui",
-      "X-NCC-UI-Version": typeof __NCC_UI_VERSION__ === "string" && __NCC_UI_VERSION__ ? __NCC_UI_VERSION__ : "2.4.0",
-      ...csrfHeaders(method),
+      ...uiRequestHeaders(method),
       ...(init?.headers ?? {}),
     },
   });
@@ -536,9 +548,7 @@ export const api = {
   // Blob download; uses a raw fetch because the response is not JSON.
   auditExportCSV: async (opts?: AuditQuery): Promise<string> => {
     const path = buildAuditPath({ ...opts, format: "csv" });
-    const response = await apiFetch(path, {
-      headers: { "X-Requested-With": "ncc-ui" },
-    });
+    const response = await apiFetch(path);
     if (!response.ok) {
       throw new ApiError(`audit export failed (${response.status})`, response.status, undefined);
     }

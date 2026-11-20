@@ -134,6 +134,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   parent process with `ps`, so a pre-2.4.0 `ncc-mcp-server` (which had no
   authentication at all) was never recognised there. MCP servers 0.1.13 to 2.3.0
   should be replaced with 2.4.0.
+- **API explorer and CSV export no longer refused as an "old dashboard".** Developer, API explorer,
+  and the audit CSV export sent the dashboard marker header (`X-Requested-With: ncc-ui`) without the
+  version header, so the API treated them as an unversioned dashboard and refused them. All dashboard
+  requests now take their headers from one helper, a test fails if any other file writes that marker,
+  and the refusal text no longer blames 2.2.1 for an unversioned request. The explorer also stops
+  attaching the dashboard headers and CSRF token to requests it sends to external URLs.
 - **Custom and third-party clients are watched, not blocked.** Version checks apply
   only to the NCC dashboard and `ncc-mcp-server`. A custom UI can name itself with
   `X-NCC-Client` and is then never version-gated; the audit log records its kind and

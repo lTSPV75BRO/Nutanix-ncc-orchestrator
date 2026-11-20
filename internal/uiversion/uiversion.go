@@ -85,8 +85,9 @@ func Builtin() []Entry {
 
 // UnversionedReason is the refusal text for a dashboard that declares no version.
 func UnversionedReason() string {
-	return "this dashboard build does not declare its version, which means it is older than " + SupportedFrom +
-		" and may be a release with a known vulnerability (including 2.2.1, node2shell); upgrade ncc-ui-server and frontend-dist to " + SupportedFrom + " or later"
+	return "this request identifies itself as the NCC dashboard (X-Requested-With: ncc-ui) but does not declare a version. " +
+		"Dashboards before " + SupportedFrom + " cannot declare one, and some of those releases have known vulnerabilities, so they are refused; " +
+		"upgrade ncc-ui-server and frontend-dist to " + SupportedFrom + " or later. A custom client or script should not send that header: send X-NCC-Client with its name instead"
 }
 
 // Sanitize trims, strips a leading v, and keeps a short semver-ish token.
