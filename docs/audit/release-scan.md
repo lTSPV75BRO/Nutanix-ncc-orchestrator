@@ -37,6 +37,10 @@ is in 0.5.2) and a false positive from 2.3.0 on (0.6.3).
   the current toolchain, so it cannot say which standard-library advisories the
   published binaries carried. Scan a published binary with
   `govulncheck -mode=binary <file>` for that.
+- **Design flaws in older releases.** `ncc-mcp-server` 0.1.13 to 2.3.0 had no
+  authentication (SEC-12 in [`security-assessment.md`](security-assessment.md)). A
+  scanner cannot see that, and the API cannot block those builds because they never
+  call it. Replace them with 2.4.0.
 - **Findings from the code review.** Application-level defects (for example the
   deleted-account session bug fixed in 2.3.0, the Helm chart crash fixed in
   2.4.0, or an installer that wiped backups) are not in a scanner's database; they

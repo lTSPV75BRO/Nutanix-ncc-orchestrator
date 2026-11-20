@@ -83,3 +83,14 @@ func TestDenyLegacyMCPClientFailsClosedWhenAPIRejects(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestParentProcessBaseNameResolvesOnThisPlatform(t *testing.T) {
+	// The test binary's parent is `go test` (or a shell); the point is that
+	// the lookup works at all, including on Windows where `ps` does not exist.
+	if got := parentProcessBaseName(os.Getppid()); got == "" {
+		t.Skip("parent process name not readable here")
+	}
+	if got := parentProcessBaseName(os.Getpid()); got == "" {
+		t.Fatalf("own process name should be resolvable")
+	}
+}

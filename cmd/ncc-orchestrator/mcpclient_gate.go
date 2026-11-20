@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"goncc/internal/mcpclient"
+	"goncc/internal/procutil"
 )
 
 // mcpVerifyAPI is replaced in tests. Production verifies the PAT with the API
@@ -56,6 +57,15 @@ func parentIsMCPServer() bool {
 func parentProcessBaseName(pid int) string {
 	if pid <= 0 {
 		return ""
+	}
+	if runtime.GOOS == "windows" {
+		// There is no ps on Windows, so without this the parent check never
+		// matched and a legacy MCP server was not recognised there.
+		image, err := procutil.ImagePath(pid)
+		if err != nil {
+			return ""
+		}
+		return filepath.Base(image)
 	}
 	if runtime.GOOS == "linux" {
 		data, err := os.ReadFile(filepath.Join("/proc", fmt.Sprintf("%d", pid), "comm"))

@@ -134,7 +134,34 @@ shared store first, retry a conflicting create once and answer 409.
 `docker-publish.yml` and `release.yml` said "no cache" in comments but relied on
 action defaults that enable one. Caches are now disabled explicitly.
 
-### SEC-12: MCP tools ran without a credential (Medium, fixed)
+### SEC-12: MCP tools ran without a credential (High, fixed in 2.4.0)
+
+**Affected: `ncc-mcp-server` in every release from 0.1.13 to 2.3.0.** Those
+builds ran the orchestrator engine as a subprocess and did no authentication of
+their own: whoever (or whatever) could start the process, or prompt the model
+driving it, could call the engine with the OS account's privileges. The tool list
+included `orchestrator_action` (`uninstall`, `reset-password`,
+`install-update-watcher`, `quickstart`), upgrade apply, backup restore, schedules
+and reads of any config path. The only gate was `confirm: "APPLY"`, which the
+model supplies. The exposure is local (stdio, no listening port), which is why it
+is High and not Critical, but a prompt-injected model is enough to reach it.
+
+**Why the earlier reviews missed it.** The October and November rounds reviewed
+the MCP tools one by one and fixed what each did (SEC-04: arbitrary schedule
+command, SEC-05: password on the command line). They never asked the question
+above the tools: what authenticates the caller? The live probes covered the API,
+not the MCP process, and the dependency and release scans cannot see a design
+flaw. It was found and fixed by the 2.4.0 rewrite, not by the review. The review
+method now includes an explicit trust-boundary check for every entry point
+(listener, CLI, subprocess, token), recorded in this page.
+
+**Older builds cannot be fixed from the server.** A 2.3.0 or earlier MCP server
+never contacts the API, so the API cannot refuse it and the blocked-versions list
+cannot see it. What stops it: the 2.4.0 engine refuses to run when its parent
+process is named `ncc-mcp-server` and has no valid proof and token (SEC-16
+fixed that check on Windows). That is a name check, so a renamed old binary
+bypasses it. Remove old `ncc-mcp-server` binaries and replace them with 2.4.0,
+or stop launching them from your MCP host configuration.
 
 `ncc-mcp-server` executed orchestrator tools and served resources as soon as
 the host started the process. It now talks only to `ncc-api-server` over HTTPS
@@ -190,6 +217,24 @@ list entry; and the check is made on headers the client sends, so it stops an
 honest outdated dashboard, not a hostile client. The refusal text used to tell
 operators to upgrade to 2.3.0, which is itself unversioned and refused; it now
 points at 2.4.0.
+
+### SEC-16: the engine's old-MCP check did nothing on Windows (Medium, fixed)
+
+The 2.4.0 engine refuses to run for an `ncc-mcp-server` parent that has no valid
+proof, but it found the parent with `ps`, which does not exist on Windows, so on
+Windows an old MCP server was never recognised. It now reads the parent's image
+name through the Windows API. Verified by running the engine from a parent named
+`ncc-mcp-server.exe`: refused with `mcp client upgrade required`.
+
+### Authentication sweep of the API (2026-11-20)
+
+All 129 routes in `/api/v1/meta/routes` were requested with no credentials, a
+garbage token, a forged session cookie, a dashboard-claiming header set and an
+MCP-claiming header set. Every route answered 401, 403, 404 or 405 except the
+documented public ones: `health`, `health/ready`, `tls/public`, `openapi.json`,
+`meta/routes`, `metrics/rate-limit`, `auth/me`, `auth/logout` and
+`auth/forgot-password`. The three metadata routes describe the API's shape and
+leave nothing else readable.
 
 ### Smaller items
 

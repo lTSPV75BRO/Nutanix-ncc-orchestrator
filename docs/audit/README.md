@@ -47,6 +47,8 @@ Severity is Critical, High, Medium or Low; priority is P0 (fix now) to P3
   browser (including colour contrast) on 16 routes in three themes; the Windows
   installer run end to end; the Helm chart installed on a `kind` cluster; a
   multi-node cluster and a Rocky Linux host tested separately.
+- **Trust-boundary check of every entry point** (added after SEC-12 was missed): for each listener, CLI,
+  subprocess and token, who can reach it and what authenticates them. Done for the API (all 129 routes swept without credentials), the UI server (proxy and static files only), the MCP server and the engine's MCP guard.
 - **Reading the code** of the newer features (directory profiles, freshness,
   restore trust, version-skew check, retention, backup verification) and the
   deployment files.
