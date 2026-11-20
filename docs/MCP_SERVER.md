@@ -33,6 +33,10 @@ from 2.4.0 or later. The in-app guide is **Integrations, AI assistants (MCP)**.
 
 ## Import in five minutes
 
+**Automated:** `scripts/ncc-mcp-setup.sh --api https://<api-host>:8081` (with `NCC_ADMIN_TOKEN` set) creates a
+viewer account, mints its token, builds the binary and writes the host config for you; the token is never
+printed. The manual steps follow.
+
 You need a running **ncc-api-server**, the **2.4.0+** `ncc-mcp-server` binary, and a dashboard PAT.
 
 1. **Mint a token** in the dashboard: user menu (top right) → **Personal access tokens → Create token**. Use **viewer** for read-only assistants, **operator** to trigger runs. Copy `ncc_pat_…` once.

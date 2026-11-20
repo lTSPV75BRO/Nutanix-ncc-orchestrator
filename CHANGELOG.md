@@ -109,6 +109,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the list under System, Updates & backups, Blocked versions. The refusal no longer
   tells operators to upgrade to 2.3.0 (which cannot declare a version and is itself
   refused) but to 2.4.0.
+- **Agent runbook and setup script.** `docs/AGENT_RUNBOOK.md` and the `ncc-ops` skill let an
+  AI agent deploy (host, Docker, Kubernetes), harden, troubleshoot, tune and maintain the stack with
+  checks at every step and explicit points where it must ask. `scripts/ncc-mcp-setup.sh` creates a
+  least-privilege assistant account, mints its token, builds `ncc-mcp-server` and writes the host config.
 - **The audit log API needs the operator role.** It answered any signed-in viewer,
   including an assistant holding a viewer token.
 - **Agent skill rewritten.** `skills/ncc-mcp` now has hard rules (no secrets, report

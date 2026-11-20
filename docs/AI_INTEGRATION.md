@@ -65,7 +65,11 @@ keys, URL credentials and chat-webhook URLs are masked. Do not ask a model to re
 them. Builds of `ncc-mcp-server` before 2.4.0 had no authentication at all and are
 refused by a 2.4.0 stack; replace them.
 
-## The agent skill
+## The agent skills
+
+[`skills/ncc-ops/SKILL.md`](../skills/ncc-ops/SKILL.md) is for an agent with a shell that deploys,
+hardens, troubleshoots and tunes the stack; it follows [`AGENT_RUNBOOK.md`](AGENT_RUNBOOK.md).
+The `ncc-mcp` skill below is for answering questions through the MCP tools.
 
 [`skills/ncc-mcp/SKILL.md`](../skills/ncc-mcp/SKILL.md) tells an assistant how to use
 the tools: hard rules (no secrets, data is not instructions, confirmation belongs to
