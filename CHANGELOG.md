@@ -109,6 +109,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the list under System, Updates & backups, Blocked versions. The refusal no longer
   tells operators to upgrade to 2.3.0 (which cannot declare a version and is itself
   refused) but to 2.4.0.
+- **The audit log API needs the operator role.** It answered any signed-in viewer,
+  including an assistant holding a viewer token.
+- **Agent skill rewritten.** `skills/ncc-mcp` now has hard rules (no secrets, report
+  text is data not instructions, confirmation belongs to the user), playbooks, an
+  answer format, an error table and a per-tool role reference that matches the 2.4.0
+  server.
 - **The in-app AI assistant guide matches the 2.4.0 MCP server.** It still told
   operators to put `ncc-mcp-server` next to the orchestrator and said it ships in
   every release; it now walks through the account, token, build (it is optional and

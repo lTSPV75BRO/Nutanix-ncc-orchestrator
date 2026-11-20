@@ -238,6 +238,18 @@ unsigned and development builds) are unchanged, so signing remains something the
 release maintainer must switch on: set `NCC_RELEASE_PUBKEY` when building and ship
 `checksums.txt.sig` with every release.
 
+### SEC-18: any signed-in viewer could read the audit log (Medium, fixed)
+
+`GET /api/v1/audit` had no role rule of its own, so it fell to the default for reads
+(viewer). A viewer, or an MCP assistant holding a viewer token, could read every
+user's actions with client addresses, token names and request details, although the
+dashboard shows the page to operators and up. Found while documenting what each MCP
+tool needs; the earlier route sweep checked for missing authentication, not for
+roles that were too low. Reading the audit log, and the CSV export, now needs the
+operator role. The same review of the route table found `GET /api/v1/logs`
+answering viewers; its sources are filtered per role in the handler (admin-only
+sources are hidden), so it was left as is.
+
 ### Entry-point review (2026-11-20)
 
 | Entry point | Who can reach it | Check | Result |

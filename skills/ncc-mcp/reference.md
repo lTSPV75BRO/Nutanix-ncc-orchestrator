@@ -1,47 +1,55 @@
 # NCC MCP tool reference
 
-All tools call `ncc-api-server`. RBAC of the PAT still applies.
+Every tool is one REST call to `ncc-api-server` with the user's PAT. The PAT's role
+decides whether it works; the "Role" column is the minimum the API enforces. Results
+are scrubbed before you see them (credential-like values appear masked).
 
 ## Read
 
-| Tool | API | Notes |
-| --- | --- | --- |
-| `get_run_summary` | `GET /api/v1/runs/summary` | Latest run |
-| `list_run_history` | `GET /api/v1/runs` | `limit` max 100 |
-| `list_run_artifacts` | `GET /api/v1/artifacts` | Basenames only |
-| `get_report` | `GET /api/v1/artifacts/{file}` | `file` is a basename (`index.html` or `10.0.0.1.log`) |
-| `get_findings` | `GET /api/v1/alerts/ncc` | Optional `cluster`, `severity` |
-| `compare_runs` | two `GET /api/v1/runs/{id}` | Needs `current_run_id` and `baseline_run_id` |
-| `get_sample_config` | `GET /api/v1/settings/config` | Live config, not only the example |
-| `get_metrics` | `GET /api/v1/health` | Stack health |
-| `troubleshoot_v2_stack` | `GET /api/v1/health/diagnostics` | Self-heal scan |
-| `check_upgrade` | `GET /api/v1/settings/update` | Does not install |
-| `preview_install_service` | `GET /api/v1/health/supervisor` | Status, not an install preview file |
-| `list_schedules` | `GET /api/v1/schedule` | |
-| `validate_config` / `preflight_check` | `POST /api/v1/runs/preflight` | Needs `config_path` on the **API host** |
-| `discover_clusters` | `GET /api/v1/settings/pc-clusters` | Needs `prism_central_url`; no username/password |
+| Tool | API | Role | Notes |
+| --- | --- | --- | --- |
+| `get_run_summary` | `GET /api/v1/runs/summary` | viewer | Latest run |
+| `list_run_history` | `GET /api/v1/runs` | viewer | `limit` max 100 |
+| `list_run_artifacts` | `GET /api/v1/artifacts` | viewer | Basenames only |
+| `get_report` | `GET /api/v1/artifacts/{file}` | viewer | `file` is a basename (`index.html`, `10.0.0.1.log`) |
+| `get_findings` | `GET /api/v1/alerts/ncc` | viewer | Optional `cluster`, `severity` |
+| `compare_runs` | two `GET /api/v1/runs/{id}` | viewer | Needs `current_run_id` and `baseline_run_id` |
+| `get_metrics` | `GET /api/v1/health` | viewer | Health summary only, not Prometheus metrics |
+| `list_schedules` | `GET /api/v1/schedule` | viewer | |
+| `validate_config` / `preflight_check` | `POST /api/v1/runs/preflight` | operator | `config_path` is on the **API host** |
+| `get_sample_config` | `GET /api/v1/settings/config` | admin | Current config with credentials masked |
+| `discover_clusters` | `GET /api/v1/settings/pc-clusters` | admin | Needs `prism_central_url`; no username or password |
+| `troubleshoot_v2_stack` | `GET /api/v1/health/diagnostics` | admin | Self-heal scan |
+| `preview_install_service` | `GET /api/v1/health/supervisor` | admin | Status, not an install file |
+| `check_upgrade` | `GET /api/v1/settings/update` | admin | Does not install |
 
 ## Write (gated)
 
-Need `NCC_MCP_ALLOW_MUTATIONS=true` and `confirm: "APPLY"` unless noted.
+Need an adequate role, `NCC_MCP_ALLOW_MUTATIONS=true` in the MCP process, and
+`confirm: "APPLY"` (unless noted). `confirm` is a safeguard against accidents: only
+send it after the user asked for that exact change this turn.
 
-| Tool | API | Notes |
-| --- | --- | --- |
-| `run_ncc` | `POST /api/v1/runs/trigger` | Requires APPLY; no password/username/`insecure_skip_verify` |
-| `replay_reports` | trigger with `--replay` | Needs `config_path` |
-| `create_schedule` | `PUT /api/v1/schedule` | `command` always refused; `print_only` skips APPLY |
-| `delete_schedule` | `PUT /api/v1/schedule` remove | |
-| `apply_upgrade` | `POST /api/v1/settings/update/apply` | No checksum skip |
-| `restart_v2_stack` | `POST /api/v1/health/supervisor/restart` | |
-| `repair_v2_stack` | `POST /api/v1/health/autoheal` | |
-| `restore_v2_backup` | `POST /api/v1/settings/restore` | Needs `input_file` |
-| `backup_v2_stack` | `GET /api/v1/settings/backup` | |
+| Tool | API | Role | Notes |
+| --- | --- | --- | --- |
+| `run_ncc` | `POST /api/v1/runs/trigger` | operator | No password, username or `insecure_skip_verify` |
+| `replay_reports` | trigger with `--replay` | operator | Needs `config_path` |
+| `create_schedule` | `PUT /api/v1/schedule` | operator | `command` always refused; `print_only` skips APPLY |
+| `delete_schedule` | `PUT /api/v1/schedule` (remove) | operator | |
+| `apply_upgrade` | `POST /api/v1/settings/update/apply` | admin | No checksum skip |
+| `restart_v2_stack` | `POST /api/v1/health/supervisor/restart` | admin | |
+| `repair_v2_stack` | `POST /api/v1/health/autoheal` | admin | |
+| `backup_v2_stack` | `POST /api/v1/settings/backups` | admin | Creates a server-side snapshot and returns its name. No passphrase over MCP; answers 412 if the server requires a backup key and has none |
+| `restore_v2_backup` | `POST /api/v1/settings/restore` | admin | `input_file` must be a backup **name** (`manual-<time>.tar.gz.enc`), never a path |
 
 ## Always refused over MCP
 
-`bootstrap_v2_stack`, `install_service`, `uninstall_service`, `start_v2_stack`, `stop_v2_stack`, password reset, custom orchestrator argv.
+`bootstrap_v2_stack`, `install_service`, `uninstall_service`, `start_v2_stack`,
+`stop_v2_stack`, password reset, and custom orchestrator arguments.
 
-`orchestrator_action` allowlist: `version`, `env-info`, `terms`, `v2-status`, `v2-check`, `verify`, `config-schema`, `validate-config`, `validate-secrets`, `preflight-check`.
+`orchestrator_action` maps an allowlist onto API reads: `version`, `env-info`, `terms`
+(components), `v2-status` (supervisor), `v2-check` and `verify` (diagnostics),
+`config-schema` (masked config), and `validate-config`, `validate-secrets`,
+`preflight-check` (preflight, needs `config_path`). Anything else is refused.
 
 ## Resources
 
@@ -51,17 +59,19 @@ Need `NCC_MCP_ALLOW_MUTATIONS=true` and `confirm: "APPLY"` unless noted.
 - `ncc://runs/{run_id}/summary`
 - `ncc://runs/{run_id}/report/{file}`
 
-## Env
+## Environment
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `NCC_MCP_TOKEN` | yes | Dashboard PAT (`ncc_pat_…`), ≥16 chars |
+| `NCC_MCP_TOKEN` | yes | Dashboard PAT (`ncc_pat_…`), at least 16 characters |
 | `NCC_MCP_API_URL` | no | Default `http://127.0.0.1:8081`. `http://` only on loopback |
-| `NCC_MCP_PROFILE` | no | `readonly` / `operator` / `admin` |
+| `NCC_MCP_PROFILE` | no | `readonly`, `operator` (default) or `admin`: which tools are registered |
 | `NCC_MCP_ALLOW_MUTATIONS` | no | Must be `true` for APPLY tools |
 
-Audit on the API: `GET /api/v1/audit?channel=mcp` (`action=mcp.call`). PAT
-calls include `pat_id`, `pat_name`, and owner `user`. Failures include
-`error` and `remediation`. PAT
-calls include `pat_id`, `pat_name`, and owner `user`. Failures include
-`error` and `remediation`.
+## Audit
+
+Every MCP-originated request is recorded by the API as `mcp.call` with `channel=mcp`,
+the tool name, the client version, and the PAT's id, name and owner. Failures include
+`error` and `remediation`. Read it with `GET /api/v1/audit?channel=mcp` (operator or
+higher; the dashboard shows it under System, Audit log). Repeated refusals or one
+token used from several addresses show up as `access.suspicious`.

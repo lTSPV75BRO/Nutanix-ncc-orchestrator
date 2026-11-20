@@ -470,6 +470,10 @@ func routeMinRoleFor(p string, isRead bool) Role {
 	case p == "/api/v1/runs/config-preference":
 		// Any authenticated caller may store their own default run config.
 		return RoleViewer
+	case p == "/api/v1/audit":
+		// Who did what, from where, with which token. The dashboard shows it to
+		// operators and up; the API used to answer any signed-in viewer.
+		return RoleOperator
 	case p == "/api/v1/schedule":
 		// Reading the schedule is a plain viewer read; creating/updating or
 		// applying a recurring run is an operator action (it automates the same

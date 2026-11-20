@@ -289,3 +289,9 @@ func TestRunExtraArgsEndpointMatchesAllowlist(t *testing.T) {
 		}
 	}
 }
+
+func TestAuditLogIsNotReadableByViewers(t *testing.T) {
+	if got := routeMinRoleFor("/api/v1/audit", true); got < RoleOperator {
+		t.Fatalf("audit log read needs operator or higher, got %s", got)
+	}
+}
