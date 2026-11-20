@@ -1020,6 +1020,9 @@ func (s *apiServer) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
 		return
 	}
+	if rejectInvalidMCPClient(w, r) {
+		return
+	}
 	data := map[string]interface{}{
 		"authenticated": false,
 		"login_enabled": s.loginEnabled(),

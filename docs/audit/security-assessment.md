@@ -134,6 +134,16 @@ shared store first, retry a conflicting create once and answer 409.
 `docker-publish.yml` and `release.yml` said "no cache" in comments but relied on
 action defaults that enable one. Caches are now disabled explicitly.
 
+### SEC-12: MCP tools ran without a credential (Medium, fixed)
+
+`ncc-mcp-server` executed orchestrator tools and served resources as soon as
+the host started the process. It now talks only to `ncc-api-server` over HTTPS
+(or loopback HTTP): PAT (`NCC_MCP_TOKEN`), HMAC proof (`ncc-mcp-proof-v1`),
+and API RBAC. A 2.3.x binary cannot mint the proof by changing its version
+string. The API fails closed on a missing or forged proof; ordinary API
+clients are unchanged. Each MCP-originated request is audited as `mcp.call`
+with `channel=mcp`.
+
 ### Smaller items
 
 - **DEP-03.** `GO-2026-6909` in `crewjam/saml` v0.6.3: reviewed false positive
@@ -170,9 +180,8 @@ action defaults that enable one. Caches are now disabled explicitly.
   off by default; opt in with `--allow-admin-self-reset`. Recover with
   `v2-reset-password --user admin` on the host.
 - **SEC-04, SEC-05.** The MCP `create_schedule` tool installed an arbitrary
-  command (now refused unless `NCC_MCP_ALLOW_SCHEDULE_COMMAND=true`), and the
-  MCP server put the Prism password on the command line (now only in the
-  environment).
+  command (now never accepted; schedules use the API). MCP tools refuse
+  password arguments; credentials stay on the API server.
 - **SEC-06.** A CR/LF in a templated email subject could inject headers in the
   runner's mail. Headers are flattened and RFC 2047 encoded.
 - **SEC-07.** A backup holding `bin/` could make a restore install new

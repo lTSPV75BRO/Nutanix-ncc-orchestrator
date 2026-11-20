@@ -729,7 +729,7 @@ build_one() {
   name=$(basename "$pkg")
   flags="$LDFLAGS"
   if [ "$name" = "ncc-mcp-server" ]; then
-    flags="$flags -X main.serverVersion=${VERSION}${GIT_DIRTY}"
+    flags="$flags -X main.serverVersion=${VERSION}${GIT_DIRTY} -X main.productVersion=${VERSION}${GIT_DIRTY}"
   fi
   echo "build ${name}-${goos}-${goarch}${ext}"
   CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath -buildvcs=true -ldflags "$flags" -o "dist/${name}-${goos}-${goarch}${ext}" "$pkg"

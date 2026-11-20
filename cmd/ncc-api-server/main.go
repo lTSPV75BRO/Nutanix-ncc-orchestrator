@@ -211,7 +211,7 @@ type apiServer struct {
 	runTimeout         time.Duration
 	debugExpose        bool
 	// healthPathCache holds the resolved display paths for /api/v1/health.
-	healthPathCache healthPathCache
+	healthPathCache    healthPathCache
 	tlsCertFile        string
 	tlsKeyFile         string
 	tlsClientCAFile    string
@@ -1026,6 +1026,9 @@ func (s *apiServer) withAuth(next http.Handler) http.Handler {
 	stateless := auth.AuthMiddleware(s.jwtSecret, s, s.staticTokenForMode())(afterStateless)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if rejectInvalidMCPClient(w, r) {
+			return
+		}
 		if s.isPublicAuthPath(r) {
 			next.ServeHTTP(w, r)
 			return
@@ -1329,7 +1332,7 @@ func (s *apiServer) displayRelPath(p string) string {
 }
 
 // handleAudit returns recent audit log entries (newest first) read from the
-// JSONL file. Filters: ?limit=200, ?action=settings, ?failures=1.
+// JSONL file. Filters: ?limit=200, ?action=settings, ?channel=mcp, ?failures=1.
 func (s *apiServer) handleAudit(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
@@ -1351,6 +1354,7 @@ func (s *apiServer) handleAudit(w http.ResponseWriter, r *http.Request) {
 	filter := auditFilter{
 		actionPrefix: strings.TrimSpace(q.Get("action")),
 		user:         strings.TrimSpace(q.Get("user")),
+		channel:      strings.TrimSpace(q.Get("channel")),
 		onlyFailures: q.Get("failures") == "1" || strings.EqualFold(q.Get("failures"), "true"),
 	}
 	// since/until accept either an RFC3339 timestamp or a YYYY-MM-DD date.
@@ -1402,6 +1406,7 @@ func (s *apiServer) handleAudit(w http.ResponseWriter, r *http.Request) {
 		"filters": map[string]interface{}{
 			"action":   filter.actionPrefix,
 			"user":     filter.user,
+			"channel":  filter.channel,
 			"failures": filter.onlyFailures,
 			"since":    q.Get("since"),
 			"until":    q.Get("until"),

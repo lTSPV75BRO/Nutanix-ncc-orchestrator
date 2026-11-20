@@ -133,9 +133,14 @@ plain-text Prism password into a reference for you. Reference: [`FEATURES_AND_CO
 
 `ncc-mcp-server` lets assistants such as Claude Desktop or Cursor validate
 configs, run preflight checks and NCC runs, and read summaries through the
-Model Context Protocol. Destructive tools are marked so the assistant asks
-first. Setup and the tool list: [`MCP_SERVER.md`](../MCP_SERVER.md) and
-[`AI_INTEGRATION.md`](../AI_INTEGRATION.md).
+Model Context Protocol. It is an authenticated client of the REST API (not a
+local orchestrator wrapper). It requires a personal access token in
+`NCC_MCP_TOKEN` (see [API tokens](#api-tokens)); tool calls and resource reads
+are refused without it. Destructive tools are marked so the assistant asks
+first, and host-only actions are refused. API audit logs tag MCP traffic as
+`channel=mcp`. Import in five minutes, example host configs, and the agent
+skill: [`MCP_SERVER.md`](../MCP_SERVER.md#import-in-five-minutes),
+[`examples/mcp/`](../../examples/mcp/), [`skills/ncc-mcp/`](../../skills/ncc-mcp/).
 
 ## Chat tools
 

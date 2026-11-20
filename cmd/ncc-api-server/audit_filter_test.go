@@ -17,6 +17,7 @@ func writeAuditFixture(t *testing.T) *apiServer {
 		`{"ts":"2026-06-01T10:00:00Z","action":"auth.login","success":true,"user":"alice","role":"admin","client":"10.0.0.1","method":"POST","path":"/api/v1/auth/login"}`,
 		`{"ts":"2026-06-02T11:00:00Z","action":"auth.login","success":false,"user":"bob","role":"viewer","client":"10.0.0.2","method":"POST","path":"/api/v1/auth/login"}`,
 		`{"ts":"2026-06-03T12:00:00Z","action":"settings.config","success":true,"user":"alice","role":"admin","client":"10.0.0.1","method":"PUT","path":"/api/v1/settings/config","config_path":"x.yaml"}`,
+		`{"ts":"2026-06-04T13:00:00Z","action":"mcp.call","success":true,"channel":"mcp","mcp_tool":"run_ncc","user":"svc-mcp","method":"POST","path":"/api/v1/runs/trigger"}`,
 	}
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -28,8 +29,8 @@ func TestAuditEntriesFiltering(t *testing.T) {
 	s := writeAuditFixture(t)
 
 	all, err := s.auditEntries(100, auditFilter{})
-	if err != nil || len(all) != 3 {
-		t.Fatalf("expected 3 entries, got %d (err=%v)", len(all), err)
+	if err != nil || len(all) != 4 {
+		t.Fatalf("expected 4 entries, got %d (err=%v)", len(all), err)
 	}
 	// User filter (case-insensitive).
 	byUser, _ := s.auditEntries(100, auditFilter{user: "ALICE"})
@@ -52,6 +53,10 @@ func TestAuditEntriesFiltering(t *testing.T) {
 	day2, _ := s.auditEntries(100, auditFilter{since: since, until: until})
 	if len(day2) != 1 {
 		t.Fatalf("expected 1 entry on 2026-06-02, got %d", len(day2))
+	}
+	mcpOnly, _ := s.auditEntries(100, auditFilter{channel: "mcp"})
+	if len(mcpOnly) != 1 {
+		t.Fatalf("expected 1 mcp channel entry, got %d", len(mcpOnly))
 	}
 }
 

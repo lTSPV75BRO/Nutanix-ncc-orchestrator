@@ -42,10 +42,11 @@ recorded in `scripts/govulncheck-accepted.txt` with a review-by date of
 | SEC-01 | A deleted local account kept its session and role until expiry, and a re-created name revived old tokens. | Deletion records a tombstone; sessions issued before it are rejected. |
 | SEC-02 | An operator could direct `--prom-dir` outside the install root. | Path-valued extra arguments are confined like config paths. |
 | SEC-03 | Anyone who could reach the UI could force a reset of the admin password. | Off by default; opt in with `--allow-admin-self-reset`. |
-| SEC-04 | The MCP `create_schedule` tool installed an arbitrary command. | Refused unless `NCC_MCP_ALLOW_SCHEDULE_COMMAND=true`. |
-| SEC-05 | The MCP server passed the Prism password on the command line. | Passed only through `NCC_PASSWORD`. |
+| SEC-04 | The MCP `create_schedule` tool installed an arbitrary command. | Custom commands are never accepted; schedules go through `PUT /api/v1/schedule`. |
+| SEC-05 | The MCP server passed the Prism password on the command line. | MCP tools refuse password arguments; credentials stay on the API server (`secret://`). |
 | SEC-06 | Email header injection through a templated subject in the runner. | Headers are flattened and RFC 2047 encoded; CR/LF addresses rejected. |
 | SEC-07 | A restore could replace the stack binaries with unverified files. | Restore installs only program files this host has run (`.ncc-trusted-stack.json`). |
+| SEC-12 | The MCP server ran tools and read resources with no credential. | Tools call the REST API only (no orchestrator subprocess). Requires `NCC_MCP_TOKEN`, HMAC proof (`ncc-mcp-proof-v1`), and API RBAC. Stamping version 2.4.0 on a 2.3.x binary is refused. |
 | SEC-08 | The UI-to-API transport honoured `HTTP(S)_PROXY`, sending the admin token through a proxy. | The transport ignores proxy variables. |
 | SEC-09 | An unknown role in a signed session mapped to admin. | Unknown or empty roles are rejected. |
 | K8S-01 | The Helm API pod had no security context; its init container ran as root. | Non-root, `fsGroup` and seccomp at pod level; restricted init container. |

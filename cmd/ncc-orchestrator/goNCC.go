@@ -16261,6 +16261,12 @@ func newRootCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ncc-orchestrator",
 		Short: "Nutanix NCC Orchestrator",
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Name() == "help" {
+				return nil
+			}
+			return denyLegacyMCPClient()
+		},
 		Long: `A tool to run NCC checks on multiple clusters, aggregate results, and generate reports.
 Use --config for setup.
 

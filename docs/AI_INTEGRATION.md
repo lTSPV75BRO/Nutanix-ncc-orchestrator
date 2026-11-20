@@ -3,10 +3,17 @@
 NCC exposes two complementary machine-facing interfaces:
 
 - `ncc-mcp-server` for assistants that support the Model Context Protocol.
+  Tools call `ncc-api-server` only (no orchestrator subprocess). The process
+  requires `NCC_MCP_TOKEN` (a personal access token); HTTP clients must send
+  the same value as `Authorization: Bearer` or `X-API-Token`. Use the 2.4.0
+  MCP binary; 2.3.x is refused by the stack. API audit lines use
+  `action=mcp.call` and `channel=mcp`.
 - The authenticated REST API and OpenAPI document for services, agents, and
   CI pipelines.
 
 Both interfaces use the versioned AI contract `schema_version: "3.0"`.
+
+**Ship the agent skill with the MCP binary:** [`skills/ncc-mcp/SKILL.md`](../skills/ncc-mcp/SKILL.md). Import steps and host JSON: [`MCP_SERVER.md`](MCP_SERVER.md#import-in-five-minutes) and [`examples/mcp/`](../examples/mcp/).
 
 ## Recommended workflow
 

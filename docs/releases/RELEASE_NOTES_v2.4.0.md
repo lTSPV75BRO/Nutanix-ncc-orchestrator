@@ -58,6 +58,32 @@ Moving to a new server: data restores as before; install the version you
 want there. If you trust a backup from another server, restore it on the
 command line with `v2-restore --trust-stack`.
 
+## MCP talks only to the API
+
+`ncc-mcp-server` used to exec `ncc-orchestrator` as soon as the host started it.
+It now is an MCP stdio client of **`ncc-api-server`**: every tool and resource
+uses the same REST APIs as the dashboard, with a personal access token
+(`NCC_MCP_TOKEN`), a time-bound HMAC proof, and API RBAC. HTTP MCP hosts must
+send that token on each request. Set `NCC_MCP_API_URL` when the API is not on
+loopback port 8081. Put the token in the MCP host environment, not in tool
+arguments. Passwords and custom schedule commands are refused.
+
+The API records a dedicated audit action `mcp.call` (`channel=mcp`, `mcp_tool`)
+for those requests. Filter with `GET /api/v1/audit?channel=mcp`.
+
+A leftover 2.3.0 MCP binary is refused even if someone rebuilds it with version
+`2.4.0`: the stack requires a proof that only the 2.4.0 source produces, and a
+PAT the API accepts.
+
+To attach Cursor or Claude: copy [`examples/mcp/cursor.mcp.json`](../../examples/mcp/cursor.mcp.json)
+or [`examples/mcp/claude_desktop.json`](../../examples/mcp/claude_desktop.json), set the PAT and API
+URL, and reload MCP. Assistants should use the skill in
+[`skills/ncc-mcp/`](../../skills/ncc-mcp/). Step-by-step:
+[`MCP_SERVER.md`](../MCP_SERVER.md#import-in-five-minutes).
+Triggering a run (`run_ncc`, `replay_reports`) now needs the same mutation
+opt-in and `confirm: "APPLY"` as upgrades. MCP will not skip TLS verification
+or follow a crafted API path off the configured host.
+
 ## Hardening from the November audit
 
 A full review of the code, dependencies, deployment files, installers and web UI

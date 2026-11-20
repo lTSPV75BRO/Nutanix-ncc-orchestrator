@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"goncc/internal/mcpclient"
 )
 
 // Request IDs and per-route HTTP metrics.
@@ -102,6 +104,16 @@ func (s *apiServer) withRequestMeta(next http.Handler) http.Handler {
 		}()
 		defer recoverPanic(rec, r, rec)
 		next.ServeHTTP(rec, r)
+		if isMCPHTTPRequest(r) && r.URL.Path != mcpclient.AuthMePath {
+			status := rec.status
+			if status == 0 {
+				status = http.StatusOK
+			}
+			s.audit(r, "mcp.call", status < 400, map[string]interface{}{
+				"http_status": status,
+				"route":       routeLabel(r.URL.Path),
+			})
+		}
 	})
 }
 

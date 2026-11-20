@@ -102,7 +102,7 @@ flowchart LR
 | `ncc-orchestrator` | [`cmd/ncc-orchestrator`](cmd/ncc-orchestrator) | Runs NCC on many clusters, writes reports, schedules runs, and manages the API + UI stack (`v2-start`, `v2-status`, …) |
 | `ncc-api-server` | [`cmd/ncc-api-server`](cmd/ncc-api-server) | REST API: runs, reports, alert lifecycle, settings, users, audit log, metrics |
 | `ncc-ui-server` | [`cmd/ncc-ui-server`](cmd/ncc-ui-server), [`frontend/`](frontend) | Serves the React dashboard and proxies `/api` to the API server |
-| `ncc-mcp-server` | [`cmd/ncc-mcp-server`](cmd/ncc-mcp-server) | Optional [Model Context Protocol](docs/MCP_SERVER.md) bridge for AI assistants |
+| `ncc-mcp-server` | [`cmd/ncc-mcp-server`](cmd/ncc-mcp-server) | Optional [Model Context Protocol](docs/MCP_SERVER.md) client: AI tools call the REST API with a PAT (no orchestrator subprocess) |
 
 Each binary runs on its own. Use the CLI alone for batch or cron jobs, or the full stack for the dashboard.
 
@@ -116,6 +116,7 @@ Each binary runs on its own. Use the CLI alone for batch or cron jobs, or the fu
 | Run the dashboard on a VM or laptop | [Full stack with `v2-start`](#2-start-the-full-stack) |
 | Run the dashboard in containers | [Docker Compose](#docker-compose) |
 | Deploy to a cluster | [Kubernetes](#kubernetes) |
+| Connect Cursor / Claude to the API | [MCP import](docs/MCP_SERVER.md#import-in-five-minutes) |
 | Hack on the code | [Build from source](#build-from-source) |
 
 ### 1. Download a release

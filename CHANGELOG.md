@@ -12,6 +12,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
+- **MCP is API-only with strict auth (SEC-12).** `ncc-mcp-server` no longer
+  execs `ncc-orchestrator`. Every tool and resource calls `ncc-api-server`
+  with a personal access token (`NCC_MCP_TOKEN`), HMAC proof
+  (`ncc-mcp-proof-v1`), and `X-NCC-MCP-Tool`. The process will not start
+  without a PAT. HTTP MCP hosts must send the same token as
+  `Authorization: Bearer` or `X-API-Token`. `NCC_MCP_API_URL` (default
+  `http://127.0.0.1:8081`) is verified on every tool call. Passwords and
+  custom schedule commands are refused. Host-only lifecycle (bootstrap,
+  install/uninstall service, start/stop stack, password reset) is refused
+  over MCP. Each MCP-originated API request is audited as `mcp.call` with
+  `channel=mcp` (filter `GET /api/v1/audit?channel=mcp`).
+- **The 2.4.0 stack refuses ncc-mcp-server 2.3.x, including a version
+  stamp.** A 2.3.x binary that sets its version to 2.4.0 (ldflags, env, or
+  User-Agent) is still refused: access requires a time-bound HMAC proof
+  (`ncc-mcp-proof-v1`) keyed by `NCC_MCP_TOKEN`, which only 2.4.0+ source
+  mints, plus a PAT the API accepts. Forged proofs return
+  `NCC_API_MCP_PROOF_INVALID`. Ordinary API clients and the CLI are unchanged.
 - **Restore no longer installs program files this server has never run
   (SEC-07).** A backup's `bin/ncc-*` and `frontend-dist/` files are restored
   only when every one matches a version this server installed or ran before
@@ -41,6 +58,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   marked `#nosec` with a reason) and gitleaks over the full history
   (reviewed false positives in `.gitleaksignore`). Workflow checkouts no
   longer keep the job token, and every action is pinned by commit SHA.
+
+### Added
+
+- **MCP import and agent skill.** Copy-paste host configs in `examples/mcp/`
+  (Cursor, Claude Desktop), `examples/mcp/forward-api.sh` for HTTP APIs behind
+  a loopback tunnel, and `skills/ncc-mcp/` (linked from `.cursor/skills/ncc-mcp`)
+  so assistants summarize findings and refuse secrets/`APPLY` by default.
+  See [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md#import-in-five-minutes).
+- **MCP red-team gates.** `run_ncc` and `replay_reports` require
+  `NCC_MCP_ALLOW_MUTATIONS` and `confirm=APPLY`. MCP refuses
+  `insecure_skip_verify`, HTTP/userinfo Prism URLs, path traversal in
+  report/run ids, API-URL credentials/query/fragment, and open-redirect
+  `callAPI` paths. Header versions are sanitized before HMAC.
 
 ### Fixed
 

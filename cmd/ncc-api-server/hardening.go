@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"goncc/internal/mcpclient"
 	"goncc/internal/v2layout"
 )
 
@@ -906,6 +907,15 @@ func (s *apiServer) audit(r *http.Request, action string, success bool, fields m
 		}
 		payload["user_agent"] = ua
 	}
+	if tool := mcpclient.SanitizeToolName(r.Header.Get(mcpclient.ToolHeader)); tool != "" || isMCPHTTPRequest(r) {
+		payload["channel"] = "mcp"
+		if tool != "" {
+			payload["mcp_tool"] = tool
+		}
+		if ver := strings.TrimSpace(r.Header.Get(mcpclient.VersionHeader)); ver != "" {
+			payload["mcp_client_version"] = ver
+		}
+	}
 	// Attribute the action to the authenticated principal (user + role) when it
 	// was resolved by withAuth. Static-token automation surfaces as the
 	// synthetic subject (e.g. "static-admin-token"); local/SSO sessions carry
@@ -987,6 +997,7 @@ func rotateAuditGenerations(abs string, keep int) {
 type auditFilter struct {
 	actionPrefix string    // match entries whose "action" has this prefix
 	user         string    // case-insensitive exact match on "user"
+	channel      string    // exact channel match (e.g. mcp)
 	onlyFailures bool      // keep only failed actions
 	since        time.Time // keep entries at or after this time
 	until        time.Time // keep entries at or before this time
@@ -1008,6 +1019,12 @@ func (f auditFilter) matches(entry map[string]interface{}) bool {
 	if f.user != "" {
 		u, _ := entry["user"].(string)
 		if !strings.EqualFold(strings.TrimSpace(u), f.user) {
+			return false
+		}
+	}
+	if f.channel != "" {
+		ch, _ := entry["channel"].(string)
+		if !strings.EqualFold(strings.TrimSpace(ch), f.channel) {
 			return false
 		}
 	}
