@@ -648,6 +648,7 @@ func main() {
 		TokenFile:        tokenFile,
 		AbsTokenFile:     absTokenFile,
 		TokenOverrideSet: apiToken != "",
+		UIServerVersion:  Version,
 	})
 
 	originSet := map[string]struct{}{}

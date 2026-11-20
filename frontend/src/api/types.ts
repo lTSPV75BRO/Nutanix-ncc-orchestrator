@@ -624,10 +624,39 @@ export type AuditLogEntry = {
   /** Acting principal (set by withAuth-attributed entries). */
   user?: string;
   role?: string;
+  /** How the request authenticated (personal-access-token, session-cookie, …). */
+  auth?: string;
+  /** Personal access token id when auth used a PAT. */
+  pat_id?: string;
+  /** Operator-supplied PAT label. */
+  pat_name?: string;
+  error?: string;
+  error_code?: string;
+  remediation?: string;
+  channel?: string;
+  mcp_tool?: string;
+  client_kind?: string;
+  ui_version?: string;
+  ui_server_version?: string;
+  ui_compromised?: boolean;
   /** Some auth-flow entries (login/password change) carry an explicit username. */
   username?: string;
   /** All other audit fields land here. */
   [key: string]: unknown;
+};
+
+export type BlockedUIVersion = {
+  version: string;
+  component?: string;
+  reason: string;
+  builtin?: boolean;
+};
+
+export type UIVersionPolicy = {
+  block_unversioned: boolean;
+  builtin: BlockedUIVersion[];
+  extra: BlockedUIVersion[];
+  blocked: BlockedUIVersion[];
 };
 
 export type AuditLogData = {

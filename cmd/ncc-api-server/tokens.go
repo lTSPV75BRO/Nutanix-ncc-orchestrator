@@ -45,7 +45,7 @@ func (s *apiServer) LookupPAT(tokenHash string) (auth.PATOwner, bool) {
 	if !ok {
 		return auth.PATOwner{}, false
 	}
-	return auth.PATOwner{UserID: p.subject, Role: p.role.String(), Groups: append([]string(nil), p.groups...)}, true
+	return auth.PATOwner{UserID: p.subject, Role: p.role.String(), Groups: append([]string(nil), p.groups...), TokenID: p.patID, TokenName: p.patName}, true
 }
 
 // principalFromPAT resolves a request authenticated by a personal access token.
@@ -98,7 +98,7 @@ func (s *apiServer) principalFromPATHash(hash, clientIP string) (principal, bool
 		return principal{}, false
 	}
 	s.users.touchTokenLastUsed(pt.ID, clientIP)
-	return principal{role: role, subject: subject, method: authPAT, groups: groups}, true
+	return principal{role: role, subject: subject, method: authPAT, groups: groups, patID: pt.ID, patName: strings.TrimSpace(pt.Name)}, true
 }
 
 // handleAuthTokens is the self-service personal-access-token endpoint:

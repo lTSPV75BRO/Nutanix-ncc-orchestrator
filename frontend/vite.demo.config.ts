@@ -50,6 +50,9 @@ function demoMode(): Plugin {
 }
 
 export default defineConfig({
+  define: {
+    __NCC_UI_VERSION__: JSON.stringify("2.4.0-demo"),
+  },
   base: "./",
   plugins: [demoMode(), react()],
   build: {

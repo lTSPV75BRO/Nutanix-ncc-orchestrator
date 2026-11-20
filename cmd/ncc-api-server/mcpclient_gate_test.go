@@ -150,6 +150,67 @@ func TestMCPCallAuditLine(t *testing.T) {
 	}
 }
 
+func TestMCPCallAuditPATIdentityAndFailure(t *testing.T) {
+	s := newTokenTestServer(t)
+	addLocalAccount(t, s.users, "alice", RoleAdmin)
+	secret := patPrefix + "secret-alice-admin-mcp12"
+	id := "pat-alice-mcp"
+	if err := s.users.addToken(personalToken{
+		ID: id, Name: "cursor-mcp", Owner: "alice", OwnerLocal: true,
+		Role: "admin", Hash: patHash(secret),
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.auditLogPath = filepath.Join(t.TempDir(), "audit.jsonl")
+	h := s.withRequestMeta(withErrorCapture(s.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, envelope{Success: true})
+	}))))
+
+	proof, err := mcpclient.SignProof(secret, "2.4.0", time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	okReq := httptest.NewRequest(http.MethodGet, "/api/v1/runs/summary", nil)
+	okReq.Header.Set(mcpclient.ToolHeader, "get_run_summary")
+	okReq.Header.Set(mcpclient.VersionHeader, "2.4.0")
+	okReq.Header.Set(mcpclient.ProofHeader, proof)
+	okReq.Header.Set("Authorization", "Bearer "+secret)
+	okReq.Header.Set("User-Agent", "ncc-mcp-server/2.4.0")
+	h.ServeHTTP(httptest.NewRecorder(), okReq)
+	entries, err := s.auditEntries(10, auditFilter{actionPrefix: "mcp.call"})
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("want 1 success mcp.call, got %d err=%v", len(entries), err)
+	}
+	e := entries[0]
+	if e["success"] != true || e["user"] != "alice" || e["pat_id"] != id || e["pat_name"] != "cursor-mcp" || e["auth"] != "personal-access-token" {
+		t.Fatalf("success entry %+v", e)
+	}
+
+	bad := httptest.NewRequest(http.MethodGet, "/api/v1/runs/summary", nil)
+	bad.Header.Set(mcpclient.ToolHeader, "get_run_summary")
+	bad.Header.Set(mcpclient.VersionHeader, "2.4.0")
+	bad.Header.Set("Authorization", "Bearer "+secret)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, bad)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("want 403, got %d %s", rr.Code, rr.Body.String())
+	}
+	entries, err = s.auditEntries(10, auditFilter{actionPrefix: "mcp.call", onlyFailures: true})
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("want 1 failed mcp.call, got %d err=%v", len(entries), err)
+	}
+	f := entries[0]
+	if f["pat_id"] != id || f["pat_name"] != "cursor-mcp" || f["user"] != "alice" {
+		t.Fatalf("failed PAT identity %+v", f)
+	}
+	errText, _ := f["error"].(string)
+	rem, _ := f["remediation"].(string)
+	if errText == "" || rem == "" {
+		t.Fatalf("failed entry missing error/remediation %+v", f)
+	}
+}
+
 func TestHandleMeRejectsStampedVersion(t *testing.T) {
 	s := newLoginServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)

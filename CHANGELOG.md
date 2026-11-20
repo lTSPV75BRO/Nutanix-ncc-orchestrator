@@ -22,7 +22,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   custom schedule commands are refused. Host-only lifecycle (bootstrap,
   install/uninstall service, start/stop stack, password reset) is refused
   over MCP. Each MCP-originated API request is audited as `mcp.call` with
-  `channel=mcp` (filter `GET /api/v1/audit?channel=mcp`).
+  `channel=mcp` (filter `GET /api/v1/audit?channel=mcp`). When the caller
+  used a personal access token the entry includes `pat_id`, `pat_name`,
+  and the owning `user`. Failed calls also record `error`, `error_code`,
+  and `remediation`.
 - **The 2.4.0 stack refuses ncc-mcp-server 2.3.x, including a version
   stamp.** A 2.3.x binary that sets its version to 2.4.0 (ldflags, env, or
   User-Agent) is still refused: access requires a time-bound HMAC proof
@@ -71,6 +74,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `insecure_skip_verify`, HTTP/userinfo Prism URLs, path traversal in
   report/run ids, API-URL credentials/query/fragment, and open-redirect
   `callAPI` paths. Header versions are sanitized before HMAC.
+- **Audit log PAT identity and failure text.** JSONL, CSV, and the Audit log
+  page record `pat_id`, `pat_name`, and the owning `user` when a request
+  authenticated with a personal access token. Failed entries include `error`,
+  `error_code`, and `remediation` (the operator-facing solution).
+- **Audit log covers UI version and auto-records mutations.** Every audit line
+  tags `client_kind` (`ui` / `mcp` / `api`), `ui_version`, and
+  `ui_server_version`. Mutating or failed API calls that a handler did not
+  already audit are recorded as `http.request`. Compromised UI builds are
+  refused (`NCC_API_UI_VERSION_BLOCKED`): builtin **2.2.1** (node2shell) plus
+  an admin extra list, and unversioned `ncc-ui` clients by default. Manage
+  extras at Settings → Audit log or `GET/PUT /api/v1/settings/ui-versions`.
 
 ### Fixed
 

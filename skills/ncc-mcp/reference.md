@@ -60,4 +60,8 @@ Need `NCC_MCP_ALLOW_MUTATIONS=true` and `confirm: "APPLY"` unless noted.
 | `NCC_MCP_PROFILE` | no | `readonly` / `operator` / `admin` |
 | `NCC_MCP_ALLOW_MUTATIONS` | no | Must be `true` for APPLY tools |
 
-Audit on the API: `GET /api/v1/audit?channel=mcp` (`action=mcp.call`).
+Audit on the API: `GET /api/v1/audit?channel=mcp` (`action=mcp.call`). PAT
+calls include `pat_id`, `pat_name`, and owner `user`. Failures include
+`error` and `remediation`. PAT
+calls include `pat_id`, `pat_name`, and owner `user`. Failures include
+`error` and `remediation`.

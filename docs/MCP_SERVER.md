@@ -10,7 +10,7 @@ How it works: `ncc-mcp-server` is an MCP **stdio** process that is a **strict HT
 - `X-NCC-MCP-Version` and a time-bound HMAC proof (`X-NCC-MCP-Proof`, protocol `ncc-mcp-proof-v1` keyed by the PAT)
 - `X-NCC-MCP-Tool` naming the MCP tool (for audit)
 
-Setting the version string to 2.4.0 on a 2.3.x binary is not enough. The 2.4.0 API refuses a missing or forged proof (`NCC_API_MCP_UPGRADE_REQUIRED` / `NCC_API_MCP_PROOF_INVALID`). Third-party HTTP clients that do not identify as `ncc-mcp-server` keep using normal API auth. MCP-originated API requests are audited as `mcp.call` with `channel=mcp` and `mcp_tool`.
+Setting the version string to 2.4.0 on a 2.3.x binary is not enough. The 2.4.0 API refuses a missing or forged proof (`NCC_API_MCP_UPGRADE_REQUIRED` / `NCC_API_MCP_PROOF_INVALID`). Third-party HTTP clients that do not identify as `ncc-mcp-server` keep using normal API auth. MCP-originated API requests are audited as `mcp.call` with `channel=mcp`, `mcp_tool`, PAT id/name when a PAT was used, and error/remediation on failures.
 
 This matches MCP practice: stdio transport, JSON-RPC, tool annotations, JSON Schema arguments, no secrets in tool arguments, confirmation for mutations, and host-side RBAC on the API.
 
@@ -206,7 +206,7 @@ Never put passwords in tool arguments. Store Prism credentials with `secret://` 
 
 - Configure `NCC_MCP_TOKEN` (a dashboard PAT, not the API process's `NCC_API_TOKEN`) in the MCP host. Without it the server exits on start and tools/resources are refused.
 - The MCP process never execs the orchestrator and never puts passwords on a command line.
-- The API tags MCP traffic in the JSONL audit log (`action=mcp.call`, `channel=mcp`, `mcp_tool`, `mcp_client_version`). Filter with `GET /api/v1/audit?channel=mcp`.
+- The API tags MCP traffic in the JSONL audit log (`action=mcp.call`, `channel=mcp`, `mcp_tool`, `mcp_client_version`). When auth used a PAT, entries also carry `pat_id`, `pat_name`, and the owning `user`. Failures include `error`, `error_code`, and `remediation`. Filter with `GET /api/v1/audit?channel=mcp`.
 - Use a dedicated config file and a least-privilege PAT (viewer vs operator vs admin).
 - Prefer `secret://` on the API server over any credential in the MCP host environment.
 

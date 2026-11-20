@@ -83,6 +83,8 @@ type principal struct {
 	mustChange bool      // local account flagged for forced password change
 	expiresAt  time.Time // session expiry (zero for static-token auth)
 	groups     []string  // directory (AD/SAML) groups from the session, for cluster-group membership
+	patID      string    // personal access token id when method is authPAT
+	patName    string    // operator-supplied PAT label when method is authPAT
 }
 
 // principalCtxKey scopes the resolved principal stored on a request's context
@@ -338,7 +340,7 @@ func (s *apiServer) principalFromIdentity(ident *auth.Identity) (principal, bool
 		if !ok || role == RoleNone {
 			return principal{}, false
 		}
-		return principal{role: role, subject: ident.UserID, method: authPAT, groups: ident.Groups}, true
+		return principal{role: role, subject: ident.UserID, method: authPAT, groups: ident.Groups, patID: ident.TokenID, patName: ident.TokenName}, true
 	case auth.AuthTypeJWT:
 		role, ok := parseRole(ident.Role)
 		if !ok {

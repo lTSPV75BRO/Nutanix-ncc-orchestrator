@@ -33,6 +33,9 @@ type apiProxyConfig struct {
 	TokenFile        string
 	AbsTokenFile     string
 	TokenOverrideSet bool
+	// UIServerVersion is stamped on every proxied API request so the API can
+	// audit and refuse compromised ncc-ui-server builds. Inbound copies are dropped.
+	UIServerVersion string
 }
 
 // newAPIProxy builds the reverse proxy for /api/ traffic.
@@ -61,6 +64,10 @@ func newAPIProxy(cfg apiProxyConfig) *httputil.ReverseProxy {
 
 		pr.Out.Header.Del("Authorization")
 		pr.Out.Header.Del("X-API-Token")
+		pr.Out.Header.Del("X-NCC-UI-Server-Version")
+		if v := strings.TrimSpace(cfg.UIServerVersion); v != "" {
+			pr.Out.Header.Set("X-NCC-UI-Server-Version", v)
+		}
 		if cfg.ForwardSessions() {
 			// The browser's session cookie (forwarded automatically) plus its
 			// X-CSRF-Token header authenticate the request at its own role.

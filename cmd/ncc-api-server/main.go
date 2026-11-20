@@ -1029,6 +1029,9 @@ func (s *apiServer) withAuth(next http.Handler) http.Handler {
 		if rejectInvalidMCPClient(w, r) {
 			return
 		}
+		if s.rejectCompromisedUIClient(w, r) {
+			return
+		}
 		if s.isPublicAuthPath(r) {
 			next.ServeHTTP(w, r)
 			return
@@ -1152,7 +1155,7 @@ func (s *apiServer) withCORS(next http.Handler) http.Handler {
 		if r.TLS != nil {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-API-Token, Authorization, X-CSRF-Token")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-API-Token, Authorization, X-CSRF-Token, X-Requested-With, X-NCC-UI-Version, X-NCC-MCP-Version, X-NCC-MCP-Proof, X-NCC-MCP-Tool")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -1437,7 +1440,7 @@ func (s *apiServer) writeAuditCSV(w http.ResponseWriter, entries []map[string]in
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"ncc-audit-%s.csv\"", time.Now().UTC().Format("20060102-150405")))
 	cw := csv.NewWriter(w)
-	cols := []string{"ts", "user", "role", "action", "success", "client", "method", "path", "user_agent"}
+	cols := []string{"ts", "user", "role", "auth", "pat_id", "pat_name", "client_kind", "ui_version", "ui_server_version", "ui_compromised", "channel", "action", "success", "error", "error_code", "remediation", "client", "method", "path", "user_agent"}
 	_ = cw.Write(append(append([]string{}, cols...), "details"))
 	known := map[string]bool{}
 	for _, c := range cols {
@@ -4521,6 +4524,7 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/settings/ldap/test", Methods: []string{http.MethodPost}, Description: "Admin-only: validate an LDAP/AD configuration by authenticating sample credentials, without saving it", SampleBody: "{\n  \"url\": \"ldaps://dc1.corp.example.com:636\",\n  \"base_dn\": \"DC=corp,DC=example,DC=com\",\n  \"bind_dn\": \"CN=ncc-svc,DC=corp,DC=example,DC=com\",\n  \"bind_password\": \"service-account-secret\",\n  \"role_map\": \"CN=NCC-Admins,OU=Groups,DC=corp,DC=example,DC=com=admin\",\n  \"test_username\": \"jdoe\",\n  \"test_password\": \"users-password\"\n}"},
 		{Path: "/api/v1/settings/ldap/search", Methods: []string{http.MethodGet}, Description: "Admin-only: live AD/LDAP type-ahead search for groups and users (?q=<term>&type=group|user|all&limit=<n>) to assign to cluster groups"},
 		{Path: "/api/v1/settings/session", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: read/set the session lifetime (ttl_sec or ttl_min; 0 restores the --session-ttl default)", SampleBody: "{\n  \"ttl_min\": 360\n}"},
+		{Path: "/api/v1/settings/ui-versions", Methods: []string{http.MethodGet, http.MethodPut}, Description: "Admin-only: UI version blacklist. GET returns builtin compromised versions (2.2.1 node2shell) plus extra operator entries. PUT replaces extra entries and whether unversioned ncc-ui clients are refused.", SampleBody: "{\n  \"block_unversioned\": true,\n  \"extra\": [{\"version\":\"2.1.0\",\"component\":\"ui\",\"reason\":\"example\"}]\n}"},
 		{Path: "/api/v1/settings/tls", Methods: []string{http.MethodGet, http.MethodPut, http.MethodDelete}, Description: "Admin-only: manage HTTPS for the UI server. GET returns the installed certificate metadata; PUT installs a PEM cert+key; DELETE on a host/VM disables HTTPS, and on Kubernetes reverts to the stack-managed self-signed cert (HTTPS stays on). Kubernetes UI pods hot-reload /data/tls; host/VM restarts the stack", SampleBody: "{\n  \"cert\": \"-----BEGIN CERTIFICATE-----\\n...\\n-----END CERTIFICATE-----\\n\",\n  \"key\": \"-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n\"\n}"},
 		{Path: "/api/v1/settings/tls/generate", Methods: []string{http.MethodPost}, Description: "Admin-only: generate (or renew) a self-signed certificate for the UI server, enable HTTPS, and restart the stack. Body is optional: {hosts:[...], valid_days:N}; hosts default to the request host and always include localhost/loopback", SampleBody: "{\n  \"hosts\": [\"10.21.88.27\"],\n  \"valid_days\": 825\n}"},
 		{Path: "/api/v1/settings/cluster-groups", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET operator+: read the cluster groups; PUT admin-only: replace the groups that confine non-admins to their clusters (members = local accounts + AD groups/users)", SampleBody: "{\n  \"groups\": [\n    {\n      \"name\": \"Platform\",\n      \"clusters\": [\"10.0.0.1\", \"pc-east\"],\n      \"local_users\": [\"alice\"],\n      \"ad_groups\": [\"CN=NCC-Platform,OU=Groups,DC=corp,DC=example,DC=com\"]\n    }\n  ]\n}"},
@@ -6099,6 +6103,7 @@ func (s *apiServer) buildHandler() http.Handler {
 		mux.HandleFunc("/api/v1/settings/ldap/test", s.handleLDAPTest)
 		mux.HandleFunc("/api/v1/settings/ldap/search", s.handleLDAPSearch)
 		mux.HandleFunc("/api/v1/settings/session", s.handleSessionPolicy)
+		mux.HandleFunc("/api/v1/settings/ui-versions", s.handleUIVersionPolicy)
 		mux.HandleFunc("/api/v1/settings/tls", s.handleTLSSettings)
 		mux.HandleFunc("/api/v1/settings/tls/generate", s.handleTLSGenerate)
 		mux.HandleFunc("/api/v1/settings/password-resets", s.handlePasswordResets)
@@ -6167,7 +6172,7 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/docs/assets/", s.handleSwaggerAsset)
 	mux.HandleFunc("/", s.handleAPIDocsHome)
 
-	return s.withRequestMeta(s.withCompression(s.withCORS(s.withRateLimit(s.withAuth(withErrorCapture(mux))))))
+	return s.withRequestMeta(s.withCompression(s.withCORS(s.withRateLimit(withErrorCapture(s.withAuth(mux))))))
 }
 
 // initJWTSecret loads NCC_JWT_SECRET (or reuses --session-secret) for HS256

@@ -916,6 +916,7 @@ func (s *apiServer) audit(r *http.Request, action string, success bool, fields m
 			payload["mcp_client_version"] = ver
 		}
 	}
+	s.decorateAuditClient(r, payload)
 	// Attribute the action to the authenticated principal (user + role) when it
 	// was resolved by withAuth. Static-token automation surfaces as the
 	// synthetic subject (e.g. "static-admin-token"); local/SSO sessions carry
@@ -927,13 +928,79 @@ func (s *apiServer) audit(r *http.Request, action string, success bool, fields m
 		if rs := p.role.String(); rs != "" {
 			payload["role"] = rs
 		}
+		if am := p.method.String(); am != "" && am != "none" {
+			payload["auth"] = am
+		}
+		if p.method == authPAT {
+			if p.patID != "" {
+				payload["pat_id"] = p.patID
+			}
+			if p.patName != "" {
+				payload["pat_name"] = p.patName
+			}
+		}
+	} else {
+		s.annotatePresentedPAT(r, payload)
 	}
+	s.attachAuditFailure(r, success, payload)
 	for k, v := range fields {
 		payload[k] = v
+	}
+	if info := requestLogInfoFrom(r.Context()); info != nil {
+		info.markAudited()
 	}
 	b, _ := json.Marshal(payload)
 	logAuditEntry(payload)
 	s.appendAuditLine(b)
+}
+
+// annotatePresentedPAT records PAT id and label when a ncc_pat_ credential is
+// present even if withAuth never stored a principal (MCP proof rejected, etc).
+// It does not touch last-used and never writes the secret.
+func (s *apiServer) annotatePresentedPAT(r *http.Request, payload map[string]interface{}) {
+	if s == nil || s.users == nil || r == nil || payload == nil {
+		return
+	}
+	tok := extractAPIToken(r)
+	if !strings.HasPrefix(tok, patPrefix) {
+		return
+	}
+	pt, found := s.users.findTokenByHash(patHash(tok))
+	if !found {
+		return
+	}
+	payload["auth"] = authPAT.String()
+	if pt.ID != "" {
+		payload["pat_id"] = pt.ID
+	}
+	if name := strings.TrimSpace(pt.Name); name != "" {
+		payload["pat_name"] = name
+	}
+	if _, has := payload["user"]; !has && strings.TrimSpace(pt.Owner) != "" {
+		payload["user"] = pt.Owner
+	}
+}
+
+// attachAuditFailure copies the response error, code, and remediation onto a
+// failed audit line so operators see why it failed and what to do.
+func (s *apiServer) attachAuditFailure(r *http.Request, success bool, payload map[string]interface{}) {
+	if success || r == nil || payload == nil {
+		return
+	}
+	info := requestLogInfoFrom(r.Context())
+	if info == nil {
+		return
+	}
+	msg, code, rem := info.failure()
+	if _, ok := payload["error"]; !ok && msg != "" {
+		payload["error"] = msg
+	}
+	if _, ok := payload["error_code"]; !ok && code != "" {
+		payload["error_code"] = code
+	}
+	if _, ok := payload["remediation"]; !ok && rem != "" {
+		payload["remediation"] = rem
+	}
 }
 
 // appendAuditLine writes a JSONL audit entry with a serialized lock so concurrent

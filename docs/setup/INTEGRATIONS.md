@@ -138,7 +138,7 @@ local orchestrator wrapper). It requires a personal access token in
 `NCC_MCP_TOKEN` (see [API tokens](#api-tokens)); tool calls and resource reads
 are refused without it. Destructive tools are marked so the assistant asks
 first, and host-only actions are refused. API audit logs tag MCP traffic as
-`channel=mcp`. Import in five minutes, example host configs, and the agent
+`channel=mcp` (PAT id/name and failure remediation when applicable). Import in five minutes, example host configs, and the agent
 skill: [`MCP_SERVER.md`](../MCP_SERVER.md#import-in-five-minutes),
 [`examples/mcp/`](../../examples/mcp/), [`skills/ncc-mcp/`](../../skills/ncc-mcp/).
 

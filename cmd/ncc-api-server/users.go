@@ -20,6 +20,8 @@ import (
 	"golang.org/x/term"
 
 	yaml "go.yaml.in/yaml/v3"
+
+	"goncc/internal/uiversion"
 )
 
 // account is a single local user record persisted in the user database.
@@ -132,6 +134,14 @@ type usersDBFile struct {
 	ClusterGroups []clusterGroup         `json:"cluster_groups,omitempty"`
 	Tokens        []personalToken        `json:"personal_tokens,omitempty"`
 	Deleted       []deletedAccount       `json:"deleted_accounts,omitempty"`
+	UIVersions    *uiVersionPolicy       `json:"ui_versions,omitempty"`
+}
+
+// uiVersionPolicy is the admin-managed extra blacklist for NCC UI / UI-server
+// versions, on top of the shipped builtin list (2.2.1 node2shell).
+type uiVersionPolicy struct {
+	BlockUnversioned bool              `json:"block_unversioned"`
+	Extra            []uiversion.Entry `json:"extra,omitempty"`
 }
 
 // deletedAccount is the tombstone a deleted local account leaves behind.
@@ -195,6 +205,7 @@ type userDB struct {
 	resets        []passwordResetRequest
 	clusterGroups []clusterGroup
 	tokens        []personalToken
+	uiVersions    *uiVersionPolicy
 	deleted       map[string]deletedAccount // lower-cased username -> tombstone
 	refreshMu     sync.Mutex
 	lastRefresh   time.Time
@@ -261,6 +272,7 @@ func (db *userDB) applyDocument(f usersDBFile) error {
 	db.resets = f.Resets
 	db.clusterGroups = f.ClusterGroups
 	db.tokens = f.Tokens
+	db.uiVersions = f.UIVersions
 	db.deleted = map[string]deletedAccount{}
 	for _, d := range f.Deleted {
 		if key := strings.ToLower(strings.TrimSpace(d.Username)); key != "" {
@@ -440,7 +452,7 @@ func (db *userDB) saveLocked() error {
 	if db.backend == nil {
 		return nil // in-memory store
 	}
-	out := usersDBFile{SAML: db.saml, OIDC: db.oidc, LDAP: db.ldapCfg, Session: db.session, TLS: db.tls, Resets: db.resets, ClusterGroups: db.clusterGroups, Tokens: db.tokens}
+	out := usersDBFile{SAML: db.saml, OIDC: db.oidc, LDAP: db.ldapCfg, Session: db.session, TLS: db.tls, Resets: db.resets, ClusterGroups: db.clusterGroups, Tokens: db.tokens, UIVersions: db.uiVersions}
 	keys := make([]string, 0, len(db.accounts))
 	for k := range db.accounts {
 		keys = append(keys, k)
@@ -1283,6 +1295,45 @@ func (db *userDB) setSessionTTLSeconds(seconds int) error {
 	} else {
 		db.session = &sessionPolicy{TTLSeconds: seconds}
 	}
+	return db.saveLocked()
+}
+
+func (db *userDB) extraBlockedUIVersions() []uiversion.Entry {
+	if db == nil {
+		return nil
+	}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	if db.uiVersions == nil {
+		return nil
+	}
+	out := make([]uiversion.Entry, 0, len(db.uiVersions.Extra))
+	for _, e := range db.uiVersions.Extra {
+		e.Builtin = false
+		out = append(out, e)
+	}
+	return out
+}
+
+func (db *userDB) blockUnversionedUI() bool {
+	if db == nil {
+		return true
+	}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	if db.uiVersions == nil {
+		return true
+	}
+	return db.uiVersions.BlockUnversioned
+}
+
+func (db *userDB) setUIVersionPolicy(p uiVersionPolicy) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
+	c := p
+	c.Extra = append([]uiversion.Entry(nil), p.Extra...)
+	db.uiVersions = &c
 	return db.saveLocked()
 }
 

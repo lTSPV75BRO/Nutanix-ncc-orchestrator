@@ -69,7 +69,13 @@ loopback port 8081. Put the token in the MCP host environment, not in tool
 arguments. Passwords and custom schedule commands are refused.
 
 The API records a dedicated audit action `mcp.call` (`channel=mcp`, `mcp_tool`)
-for those requests. Filter with `GET /api/v1/audit?channel=mcp`.
+for those requests. Filter with `GET /api/v1/audit?channel=mcp`. PAT-authenticated
+calls include `pat_id`, `pat_name`, and the owning user. Failed calls include
+the error description and remediation. UI traffic is tagged with `ui_version`
+(from `X-NCC-UI-Version`) and `ui_server_version` (stamped by ncc-ui-server).
+The API refuses blacklisted UI builds: **2.2.1** is builtin (node2shell),
+unversioned dashboards are refused by default, and admins can add more
+versions under Settings → Audit log.
 
 A leftover 2.3.0 MCP binary is refused even if someone rebuilds it with version
 `2.4.0`: the stack requires a proof that only the 2.4.0 source produces, and a

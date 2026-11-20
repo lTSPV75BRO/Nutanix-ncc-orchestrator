@@ -142,7 +142,8 @@ the host started the process. It now talks only to `ncc-api-server` over HTTPS
 and API RBAC. A 2.3.x binary cannot mint the proof by changing its version
 string. The API fails closed on a missing or forged proof; ordinary API
 clients are unchanged. Each MCP-originated request is audited as `mcp.call`
-with `channel=mcp`.
+with `channel=mcp`, PAT id/name when a PAT was used, and error/remediation on
+failures.
 
 ### Smaller items
 

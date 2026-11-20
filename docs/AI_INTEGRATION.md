@@ -7,7 +7,8 @@ NCC exposes two complementary machine-facing interfaces:
   requires `NCC_MCP_TOKEN` (a personal access token); HTTP clients must send
   the same value as `Authorization: Bearer` or `X-API-Token`. Use the 2.4.0
   MCP binary; 2.3.x is refused by the stack. API audit lines use
-  `action=mcp.call` and `channel=mcp`.
+  `action=mcp.call` and `channel=mcp`, with `pat_id` / `pat_name` when a PAT
+  was used and `error` / `remediation` on failures.
 - The authenticated REST API and OpenAPI document for services, agents, and
   CI pipelines.
 

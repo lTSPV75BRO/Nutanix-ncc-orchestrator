@@ -82,6 +82,7 @@ import type {
   OnboardingStatus,
   OnboardingUpdate,
   ExtraArgOption,
+  UIVersionPolicy,
 } from "./types";
 
 // ApiError preserves both the human-readable message and the structured `data`
@@ -187,6 +188,7 @@ async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
     credentials: API_CREDENTIALS,
     headers: {
       "X-Requested-With": "ncc-ui",
+      "X-NCC-UI-Version": typeof __NCC_UI_VERSION__ === "string" && __NCC_UI_VERSION__ ? __NCC_UI_VERSION__ : "2.4.0",
       ...csrfHeaders(method),
       ...(init?.headers ?? {}),
     },
@@ -521,6 +523,9 @@ export const api = {
     const path = buildAuditPath(opts);
     return callApi<AuditLogData>(path);
   },
+  uiVersionPolicy: () => callApi<UIVersionPolicy>("/api/v1/settings/ui-versions"),
+  updateUIVersionPolicy: (payload: { block_unversioned: boolean; extra: { version: string; component?: string; reason: string }[] }) =>
+    callApi<UIVersionPolicy>("/api/v1/settings/ui-versions", { method: "PUT", body: JSON.stringify(payload) }),
   // auditExportCSV fetches the filtered audit log as CSV text (the backend
   // streams a downloadable file). Returns the raw CSV so the caller can build a
   // Blob download; uses a raw fetch because the response is not JSON.

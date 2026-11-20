@@ -331,13 +331,15 @@ func (stdlogBridge) Write(p []byte) (int, error) {
 // requestLogInfo is filled in while a request is handled (by withAuth and the
 // error capture below) and read by the request log when it completes.
 type requestLogInfo struct {
-	mu      sync.Mutex
-	user    string
-	role    string
-	method  string
-	errMsg  string
-	errCode string
-	attrs   []any
+	mu             sync.Mutex
+	user           string
+	role           string
+	method         string
+	errMsg         string
+	errCode        string
+	errRemediation string
+	audited        bool
+	attrs          []any
 }
 
 type requestLogInfoKey struct{}
@@ -354,6 +356,33 @@ func (i *requestLogInfo) principal() (string, string) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	return i.user, i.role
+}
+
+func (i *requestLogInfo) failure() (msg, code, remediation string) {
+	if i == nil {
+		return "", "", ""
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.errMsg, i.errCode, i.errRemediation
+}
+
+func (i *requestLogInfo) markAudited() {
+	if i == nil {
+		return
+	}
+	i.mu.Lock()
+	i.audited = true
+	i.mu.Unlock()
+}
+
+func (i *requestLogInfo) wasAudited() bool {
+	if i == nil {
+		return false
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.audited
 }
 
 func (i *requestLogInfo) setPrincipal(p principal) {
@@ -452,6 +481,9 @@ func logRequest(r *http.Request, info *requestLogInfo, status int, bytes int64, 
 		if info.errCode != "" {
 			attrs = append(attrs, "error_code", info.errCode)
 		}
+		if info.errRemediation != "" {
+			attrs = append(attrs, "remediation", info.errRemediation)
+		}
 		attrs = append(attrs, info.attrs...)
 		info.mu.Unlock()
 	}
@@ -503,13 +535,14 @@ func (w *errorCaptureWriter) record() {
 		return
 	}
 	var env struct {
-		Error     string `json:"error"`
-		ErrorCode string `json:"error_code"`
-		Message   string `json:"message"`
+		Error       string `json:"error"`
+		ErrorCode   string `json:"error_code"`
+		Message     string `json:"message"`
+		Remediation string `json:"remediation"`
 	}
-	msg, code := "", ""
+	msg, code, rem := "", "", ""
 	if json.Unmarshal(w.buf, &env) == nil {
-		msg, code = env.Error, env.ErrorCode
+		msg, code, rem = env.Error, env.ErrorCode, env.Remediation
 		if msg == "" {
 			msg = env.Message
 		}
@@ -519,6 +552,9 @@ func (w *errorCaptureWriter) record() {
 	if len(msg) > 500 {
 		msg = msg[:500] + "…"
 	}
+	if len(rem) > 500 {
+		rem = rem[:500] + "…"
+	}
 	w.info.mu.Lock()
 	if w.info.errMsg == "" {
 		w.info.errMsg = redactString(msg)
@@ -526,11 +562,14 @@ func (w *errorCaptureWriter) record() {
 	if w.info.errCode == "" {
 		w.info.errCode = code
 	}
+	if w.info.errRemediation == "" {
+		w.info.errRemediation = redactString(rem)
+	}
 	w.info.mu.Unlock()
 }
 
-// withErrorCapture sits just outside the router (inside auth and compression)
-// so it sees handler responses uncompressed.
+// withErrorCapture sits outside auth and inside compression so failed auth,
+// MCP proof, and handler JSON errors are captured uncompressed.
 func withErrorCapture(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		info := requestLogInfoFrom(r.Context())

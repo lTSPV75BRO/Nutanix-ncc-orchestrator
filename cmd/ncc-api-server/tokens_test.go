@@ -70,6 +70,9 @@ func TestPATResolvesLocalOwnerLiveRole(t *testing.T) {
 	if !ok || p.method != authPAT || p.subject != "alice" || p.role != RoleViewer {
 		t.Fatalf("expected viewer alice via PAT, got ok=%v subject=%q role=%v", ok, p.subject, p.role)
 	}
+	if p.patID == "" || p.patName != "test" {
+		t.Fatalf("expected PAT id and name on principal, got id=%q name=%q", p.patID, p.patName)
+	}
 
 	// Promote alice; the live role must be re-resolved on the next request even
 	// though the token snapshot still says viewer.

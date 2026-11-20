@@ -74,7 +74,7 @@ func TestHandleAuditCSVExport(t *testing.T) {
 		t.Fatalf("missing attachment disposition: %q", cd)
 	}
 	body := rr.Body.String()
-	if !strings.Contains(body, "ts,user,role,action") {
+	if !strings.Contains(body, "ts,user,role,auth,pat_id,pat_name,client_kind") {
 		t.Fatalf("CSV header missing: %s", body)
 	}
 	// Only alice rows (2) + header.

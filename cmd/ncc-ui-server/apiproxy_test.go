@@ -97,6 +97,17 @@ func TestAPIProxyPreservesHostAndForwardingHeaders(t *testing.T) {
 	}
 }
 
+func TestAPIProxyStampsUIServerVersionAndDropsSpoof(t *testing.T) {
+	front, seen := newProxyFixture(t, http.StatusOK, apiProxyConfig{UIServerVersion: "2.4.0"})
+	proxyGet(t, front, "/api/v1/runs", map[string]string{
+		"X-NCC-UI-Server-Version": "2.2.1",
+	})
+	got := <-seen
+	if v := got.Header.Get("X-NCC-UI-Server-Version"); v != "2.4.0" {
+		t.Fatalf("UI-server version = %q, want stamped 2.4.0 not spoofed 2.2.1", v)
+	}
+}
+
 func TestAPIProxySetsClientIPWithoutInboundChain(t *testing.T) {
 	front, seen := newProxyFixture(t, http.StatusOK, apiProxyConfig{})
 	proxyGet(t, front, "/api/v1/runs", nil)

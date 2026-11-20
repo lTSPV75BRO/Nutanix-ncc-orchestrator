@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   Alert,
   Button,
@@ -27,7 +27,8 @@ import type { ColumnsType } from "antd/es/table";
 import dayjs, { type Dayjs } from "dayjs";
 import { useSearchParams } from "react-router";
 import { api, type AuditQuery } from "../../api/client";
-import type { AuditLogEntry } from "../../api/types";
+import type { AuditLogEntry, BlockedUIVersion } from "../../api/types";
+import { useAuth } from "../../auth/AuthContext";
 import { notify } from "../../notify";
 import { formatDateTime, relativeTime } from "../../utils/datetime";
 import { StatusBadge } from "../../ui";
@@ -65,11 +66,15 @@ const ACTION_PRESETS: { label: string; value: string }[] = [
   { label: "Scheduled backup config", value: "schedule.backup." },
   { label: "Runs (preflight + trigger + cancel)", value: "runs." },
   { label: "Health checks and repairs", value: "health.diagnostics." },
+  { label: "MCP assistant calls", value: "mcp.call" },
+  { label: "HTTP requests (auto)", value: "http.request" },
+  { label: "Blocked UI versions", value: "ui.blocked" },
 ];
 
 type AuditRow = AuditLogEntry & { __idx: number };
 
 export function AuditLogSection({ onError }: Props) {
+  const { isAdmin } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [actionFilter, setActionFilter] = useState<string>("");
   const [onlyFailures, setOnlyFailures] = useState(false);
@@ -180,14 +185,38 @@ export function AuditLogSection({ onError }: Props) {
         render: (_, row) => {
           const user = (row.user ?? row.username) as string | undefined;
           const role = row.role as string | undefined;
-          if (!user) return <span>—</span>;
+          const patName = row.pat_name;
+          const patID = row.pat_id;
+          if (!user && !patName) return <span>—</span>;
           return (
             <Space size={4} wrap>
-              <Typography.Text style={{ fontSize: 12 }}>{user}</Typography.Text>
+              <Typography.Text style={{ fontSize: 12 }}>{user || "—"}</Typography.Text>
               {role ? (
                 <Tag color={roleColor(role)}>{role}</Tag>
               ) : null}
+              {patName || patID ? (
+                <Tooltip title={patID ? `PAT id ${patID}` : "Personal access token"}>
+                  <Tag>{patName || patID}</Tag>
+                </Tooltip>
+              ) : null}
             </Space>
+          );
+        },
+      },
+      {
+        title: "Failure",
+        key: "error",
+        ellipsis: true,
+        render: (_, row) => {
+          if (row.success) return <span>—</span>;
+          const detail = row.error || row.error_code;
+          if (!detail) return <span>—</span>;
+          return (
+            <Tooltip title={row.remediation || detail}>
+              <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                {detail}
+              </Typography.Text>
+            </Tooltip>
           );
         },
       },
@@ -196,9 +225,17 @@ export function AuditLogSection({ onError }: Props) {
         key: "client",
         width: 150,
         render: (_, row) => (
-          <Typography.Text type="secondary" className="mono" style={{ fontSize: 12 }}>
-            {row.client || "—"}
-          </Typography.Text>
+          <Space size={4} wrap>
+            <Typography.Text type="secondary" className="mono" style={{ fontSize: 12 }}>
+              {row.client || "—"}
+            </Typography.Text>
+            {row.client_kind ? <Tag>{row.client_kind}</Tag> : null}
+            {row.ui_version ? (
+              <Tooltip title={row.ui_server_version ? `UI-server ${row.ui_server_version}` : "SPA version"}>
+                <Tag color={row.ui_compromised ? "error" : undefined}>UI {row.ui_version}</Tag>
+              </Tooltip>
+            ) : null}
+          </Space>
         ),
       },
       {
@@ -270,8 +307,10 @@ export function AuditLogSection({ onError }: Props) {
     <Card className="page-card">
       <div className="config-section-head">
         <h2 className="ui-panel-title">Recorded changes</h2>
-        <p className="ui-panel-desc">Config saves, schedule changes, sign-ins and run triggers, newest first.</p>
+        <p className="ui-panel-desc">Config saves, schedule changes, sign-ins, MCP calls, UI version, and run triggers, newest first.</p>
       </div>
+
+      {isAdmin ? <UIVersionBlacklistCard onError={onError} /> : null}
 
       <Space size={[8, 8]} wrap style={{ marginTop: 12, width: "100%" }}>
         <Select
@@ -435,6 +474,103 @@ export function AuditLogSection({ onError }: Props) {
           </pre>
         ) : null}
       </Modal>
+    </Card>
+  );
+}
+
+function UIVersionBlacklistCard({ onError }: { onError: (e: unknown) => void }) {
+  const [version, setVersion] = useState("");
+  const [reason, setReason] = useState("");
+  const [component, setComponent] = useState("ui");
+  const q = useQuery({
+    queryKey: ["ui-version-policy"],
+    queryFn: () => api.uiVersionPolicy(),
+  });
+  const save = useMutation({
+    mutationFn: (payload: { block_unversioned: boolean; extra: { version: string; component?: string; reason: string }[] }) =>
+      api.updateUIVersionPolicy(payload),
+    onSuccess: () => {
+      void q.refetch();
+      setVersion("");
+      setReason("");
+    },
+    onError,
+  });
+  const policy = q.data;
+  const extra = policy?.extra ?? [];
+  const persist = (nextExtra: BlockedUIVersion[], block = policy?.block_unversioned ?? true) => {
+    save.mutate({
+      block_unversioned: block,
+      extra: nextExtra.map((e) => ({ version: e.version, component: e.component, reason: e.reason })),
+    });
+  };
+  return (
+    <Card size="small" style={{ marginTop: 12 }} title="Compromised UI versions">
+      <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
+        The API refuses NCC UI clients on this list. 2.2.1 is built-in (node2shell). Unversioned dashboards
+        (legacy 2.2.x/2.3.x bundles) are refused unless you turn that off.
+      </Typography.Paragraph>
+      <Space size={6} align="center" style={{ marginBottom: 8 }}>
+        <Switch
+          checked={policy?.block_unversioned !== false}
+          onChange={(v) => persist(extra, v)}
+          disabled={!policy || save.isPending}
+        />
+        <Typography.Text>Refuse unversioned ncc-ui clients</Typography.Text>
+      </Space>
+      <Space size={[8, 8]} wrap style={{ marginBottom: 8 }}>
+        {(policy?.builtin ?? []).map((e) => (
+          <Tag key={`${e.component}-${e.version}`} color="red">
+            {e.component || "ui"} {e.version} (builtin)
+          </Tag>
+        ))}
+        {extra.map((e) => (
+          <Tag
+            key={`${e.component}-${e.version}-${e.reason}`}
+            closable
+            onClose={(ev) => {
+              ev.preventDefault();
+              persist(extra.filter((x) => x !== e));
+            }}
+          >
+            {e.component || "any"} {e.version}
+          </Tag>
+        ))}
+      </Space>
+      <Space wrap>
+        <Input
+          placeholder="Version (e.g. 2.1.0)"
+          value={version}
+          onChange={(e) => setVersion(e.target.value)}
+          style={{ width: 160 }}
+        />
+        <Select
+          value={component}
+          onChange={setComponent}
+          options={[
+            { value: "ui", label: "UI (SPA)" },
+            { value: "ui-server", label: "UI server" },
+            { value: "any", label: "Any" },
+          ]}
+          style={{ width: 140 }}
+        />
+        <Input
+          placeholder="Reason"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          style={{ width: 240 }}
+        />
+        <Button
+          type="primary"
+          loading={save.isPending}
+          disabled={!version.trim() || !reason.trim()}
+          onClick={() =>
+            persist([...extra, { version: version.trim(), component, reason: reason.trim() }])
+          }
+        >
+          Block version
+        </Button>
+      </Space>
     </Card>
   );
 }

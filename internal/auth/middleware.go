@@ -43,9 +43,11 @@ const (
 
 // PATOwner is the identity resolved from a hashed personal access token.
 type PATOwner struct {
-	UserID string
-	Role   string
-	Groups []string
+	UserID    string
+	Role      string
+	Groups    []string
+	TokenID   string // opaque id from minting (safe to log)
+	TokenName string // operator-supplied label (safe to log)
 }
 
 // UserStore looks up a PAT by the SHA-256 hex digest of the presented secret.
@@ -56,13 +58,15 @@ type UserStore interface {
 
 // Identity is the resolved caller after Authenticate succeeds.
 type Identity struct {
-	UserID   string
-	Role     string
-	AuthType string
-	Source   string // header or cookie (drives CSRF in the api-server)
-	Gen      int
-	Groups   []string
-	IssuedAt time.Time // JWT iat; zero for PAT and static-token callers
+	UserID    string
+	Role      string
+	AuthType  string
+	Source    string // header or cookie (drives CSRF in the api-server)
+	Gen       int
+	Groups    []string
+	IssuedAt  time.Time // JWT iat; zero for PAT and static-token callers
+	TokenID   string    // PAT id when AuthType is pat
+	TokenName string    // PAT label when AuthType is pat
 }
 
 // UserIDFromContext returns the authenticated user id, or "".
@@ -172,11 +176,13 @@ func Authenticate(r *http.Request, jwtSecret []byte, userStore UserStore, static
 			return nil, ErrInvalid
 		}
 		return &Identity{
-			UserID:   strings.TrimSpace(owner.UserID),
-			Role:     role,
-			AuthType: AuthTypePAT,
-			Source:   source,
-			Groups:   append([]string(nil), owner.Groups...),
+			UserID:    strings.TrimSpace(owner.UserID),
+			Role:      role,
+			AuthType:  AuthTypePAT,
+			Source:    source,
+			Groups:    append([]string(nil), owner.Groups...),
+			TokenID:   strings.TrimSpace(owner.TokenID),
+			TokenName: strings.TrimSpace(owner.TokenName),
 		}, nil
 	}
 
