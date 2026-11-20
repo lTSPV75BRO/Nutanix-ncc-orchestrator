@@ -4,3 +4,6 @@ scripts/binaryGO.cmd text eol=crlf
 # Golden report fixtures are compared byte-for-byte; a CRLF checkout
 # (core.autocrlf=true, the Windows default) made the golden tests fail.
 cmd/ncc-orchestrator/testdata/golden/* text eol=lf
+
+# Shell scripts must keep LF line endings or bash fails with ": command not found".
+*.sh text eol=lf
