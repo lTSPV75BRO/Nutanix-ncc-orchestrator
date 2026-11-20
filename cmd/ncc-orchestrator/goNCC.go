@@ -8266,7 +8266,10 @@ func verifyAssetAgainstReleaseChecksum(rel *githubRelease, assetName string, bod
 		// carry a valid Ed25519 signature before we trust any hash in it —
 		// otherwise an attacker who can swap the asset could swap its checksum
 		// too. Unsigned/dev builds (no embedded key) keep the prior behavior.
-		if sigStatus, sigErr := verifyChecksumSignature(rel, csBody, client, false); sigErr != nil {
+		// A signed build also refuses a release that carries no signature at
+		// all: otherwise removing the .sig asset turned the check off.
+		_, signedBuild := embeddedReleasePublicKey()
+		if sigStatus, sigErr := verifyChecksumSignature(rel, csBody, client, signedBuild); sigErr != nil {
 			return fmt.Errorf("refusing to install %s: checksums.txt signature %s: %w", assetName, sigStatus, sigErr)
 		} else if sigStatus == sigValid {
 			fmt.Fprintln(os.Stderr, "Checksum signature verified (Ed25519).")

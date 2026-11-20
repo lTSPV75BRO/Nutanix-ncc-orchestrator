@@ -81,3 +81,19 @@ func TestSignReleaseFileRoundTrip(t *testing.T) {
 		t.Fatalf("round-trip verify failed: status=%s err=%v", status, err)
 	}
 }
+
+func TestSignedBuildRefusesReleaseWithoutSignatureAsset(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withEmbeddedKey(t, base64.StdEncoding.EncodeToString(pub))
+	rel := &githubRelease{TagName: "v9.9.9"} // no checksums.txt.sig asset
+	if _, err := verifyChecksumSignature(rel, []byte("sums"), nil, true); err == nil {
+		t.Fatal("a signed build must refuse a release that has no signature")
+	}
+	// The advisory mode (verify --online without --require-signature) only reports it.
+	if status, err := verifyChecksumSignature(rel, []byte("sums"), nil, false); err != nil || status != sigMissing {
+		t.Fatalf("advisory mode: status=%s err=%v", status, err)
+	}
+}

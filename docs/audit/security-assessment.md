@@ -226,6 +226,29 @@ Windows an old MCP server was never recognised. It now reads the parent's image
 name through the Windows API. Verified by running the engine from a parent named
 `ncc-mcp-server.exe`: refused with `mcp client upgrade required`.
 
+### SEC-17: a signed build installed an unsigned release (Medium, fixed)
+
+The updater checked the Ed25519 signature on `checksums.txt` only when the
+release carried one. A build with an embedded release key therefore accepted a
+release whose `checksums.txt.sig` had been removed, and trusted a checksum list
+that came from the same place as the archive. A signed build now refuses a
+release with no signature (`verify --online` stays advisory unless
+`--require-signature` is given). Builds with no embedded key (the default for
+unsigned and development builds) are unchanged, so signing remains something the
+release maintainer must switch on: set `NCC_RELEASE_PUBKEY` when building and ship
+`checksums.txt.sig` with every release.
+
+### Entry-point review (2026-11-20)
+
+| Entry point | Who can reach it | Check | Result |
+| --- | --- | --- | --- |
+| API, 129 catalogued routes plus the 18 prefix routes not in the catalogue | Network | Requested with no credential, garbage token, forged cookie, dashboard and MCP header claims | Only the documented public routes answer; SAML answers 503 when disabled |
+| UI server | Network | Route list | Proxy for `/api/` and `/saml/`, static files; no debug endpoints |
+| MCP server 2.4.0 | Local, through a host | Source | No subprocess or file access; API only, with a PAT |
+| Engine CLI (`uninstall`, `v2-reset-password`, `v2-restore`, ...) | Local OS account | Source | Trusts the OS account by design, like any admin CLI; reachable by an MCP parent only with a valid proof and token (SEC-16) |
+| Archive extraction (update, bootstrap, restore) | Release asset or backup file | Source | Every entry is checked to stay inside the destination; links are not created; per-file size limit. No limit on the total or on the entry count for updates. |
+| Release updates | Release asset | Source | Checksum always; signature when the build is signed (SEC-17) |
+
 ### Authentication sweep of the API (2026-11-20)
 
 All 129 routes in `/api/v1/meta/routes` were requested with no credentials, a
