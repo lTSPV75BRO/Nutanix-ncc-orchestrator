@@ -12,6 +12,8 @@ description: >-
 
 # NCC ops
 
+For a greenfield deployment, follow the questions, plan, retry policy and report in
+[`docs/AGENT_PROMPT.md`](../../docs/AGENT_PROMPT.md); it uses the runbook for the commands.
 The full procedure, with exact commands and what "done" looks like, is in
 [`docs/AGENT_RUNBOOK.md`](../../docs/AGENT_RUNBOOK.md). Read the section for the job
 before you start; do not work from memory.

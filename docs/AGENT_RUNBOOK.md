@@ -5,6 +5,9 @@ on the machine that will run NCC Orchestrator, and for the person who asked it t
 the work. Everything below is a command you can run and a result you can check. People
 can follow it too; each section says what "done" looks like.
 
+A ready-to-paste prompt that drives this runbook end to end (questions, plan, deploy, retries,
+report) is in [`AGENT_PROMPT.md`](AGENT_PROMPT.md).
+
 The matching agent skill is [`skills/ncc-ops/SKILL.md`](../skills/ncc-ops/SKILL.md).
 For answering questions about findings through MCP, use
 [`skills/ncc-mcp/SKILL.md`](../skills/ncc-mcp/SKILL.md) instead.

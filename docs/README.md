@@ -23,6 +23,7 @@ Orchestrator. If you are new, start with the
 | [Alert integrations](integrations/third-party-alert-integrations.md) | ServiceNow, SIEMs, scripts; the findings API and event feed |
 | [API and UI architecture](API_AND_UI_ARCHITECTURE.md) | How the API and UI fit together; the OpenAPI spec is served at `/api/v1/openapi.json` |
 | [AI assistants](AI_INTEGRATION.md), [MCP server](MCP_SERVER.md) | Schemas, jobs, tools, safety defaults |
+| [Agent prompt](AGENT_PROMPT.md) | A copy-paste prompt that makes an AI agent deploy, harden, tune and fix the stack on a machine, VM, Kubernetes or cloud, asking you first |
 | [Agent runbook](AGENT_RUNBOOK.md) | For AI agents and automation: deploy, connect MCP, harden, troubleshoot, tune and maintain, step by step with checks |
 
 ## Secure it
