@@ -146,8 +146,10 @@ func TestRedTeamConfirmHomoglyphAndPadding(t *testing.T) {
 		if res == nil || !res.IsError {
 			t.Fatalf("confirm %q must not pass", c)
 		}
-		if !strings.Contains(strings.ToLower(res.Content[0].(*mcp.TextContent).Text), "apply") && !strings.Contains(strings.ToLower(res.Content[0].(*mcp.TextContent).Text), "confirm") {
-			// " Apply " trims to "Apply" which is not APPLY
+		// The refusal must say what is needed, so the model is told to ask the user.
+		text := strings.ToLower(res.Content[0].(*mcp.TextContent).Text)
+		if !strings.Contains(text, "apply") && !strings.Contains(text, "confirm") {
+			t.Fatalf("refusal for %q does not mention confirm/APPLY: %s", c, text)
 		}
 	}
 }

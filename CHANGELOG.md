@@ -88,6 +88,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Scripts, custom clients and download links through the UI port are no longer refused.**
+  `ncc-ui-server` stamps its version on everything it proxies, and the API took that header
+  alone as proof the caller was the dashboard, so a script using the UI port, a custom client
+  sending `X-NCC-Client`, and plain links such as the raw-output download were refused as an
+  "unversioned dashboard". Only a request that claims to be the dashboard (`X-Requested-With:
+  ncc-ui`) is held to the dashboard rules now; a blocked UI-server version still refuses
+  everything behind it. This is the root cause of the SSO case below.
 - **SAML and OIDC sign-in no longer trips the UI version gate.** Identity
   redirects and assertion callbacks proxied through `ncc-ui-server` have its
   server-version header but cannot carry the dashboard's SPA-version header.

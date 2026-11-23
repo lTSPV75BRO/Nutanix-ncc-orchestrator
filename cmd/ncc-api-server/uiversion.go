@@ -13,11 +13,12 @@ func isNCCUIRequest(r *http.Request) bool {
 	if r == nil {
 		return false
 	}
-	// The official UI server stamps this header on proxied calls and replaces
-	// any inbound value, so it is the one reliable mark of our dashboard.
-	if uiversion.Sanitize(r.Header.Get(uiversion.ServerVersionHeader)) != "" {
-		return true
-	}
+	// Only a request that claims to be the dashboard is held to the dashboard
+	// rules. The UI server stamps X-NCC-UI-Server-Version on everything it
+	// proxies (scripts, downloads, link clicks), so that header alone does not
+	// make a request "the dashboard"; it is checked separately against the
+	// blocked UI-server versions.
+	//
 	// A client that names itself is a custom UI or an integration: it is not
 	// ours to gate (it is audited and watched instead).
 	if customClientName(r) != "" {
@@ -50,6 +51,9 @@ func customClientName(r *http.Request) string {
 
 func presentedUIVersion(r *http.Request) string {
 	if r == nil {
+		return ""
+	}
+	if customClientName(r) != "" {
 		return ""
 	}
 	if v := uiversion.Sanitize(r.Header.Get(uiversion.VersionHeader)); v != "" {
@@ -167,7 +171,7 @@ func (s *apiServer) decorateAuditClient(r *http.Request, payload map[string]inte
 	switch {
 	case payload["channel"] == "mcp" || isMCPHTTPRequest(r):
 		payload["client_kind"] = "mcp"
-	case isNCCUIRequest(r) || presentedUIServerVersion(r) != "":
+	case isNCCUIRequest(r):
 		payload["client_kind"] = "ui"
 		if _, ok := payload["channel"]; !ok {
 			payload["channel"] = "ui"

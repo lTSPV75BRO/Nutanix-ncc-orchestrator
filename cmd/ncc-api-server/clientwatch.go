@@ -97,7 +97,7 @@ func requestClientKind(r *http.Request) string {
 	switch {
 	case isMCPHTTPRequest(r):
 		return "mcp"
-	case isNCCUIRequest(r) || presentedUIServerVersion(r) != "":
+	case isNCCUIRequest(r):
 		return "ui"
 	case customClientName(r) != "":
 		return "custom"

@@ -252,3 +252,43 @@ func TestUnversionedRefusalPointsAt240(t *testing.T) {
 		t.Fatalf("remediation text: %s", body)
 	}
 }
+
+// ncc-ui-server stamps its version on everything it proxies. A script, a custom
+// client or a plain link click through that port is not "the dashboard" and must
+// not be refused as an unversioned one.
+func TestProxiedNonDashboardRequestsAreNotRefusedAsUnversioned(t *testing.T) {
+	s := newTokenTestServer(t)
+	cases := map[string]func(*http.Request){
+		"script with a token":          func(r *http.Request) { r.Header.Set("Authorization", "Bearer x") },
+		"custom client":                func(r *http.Request) { r.Header.Set(uiversion.ClientHeader, "acme-console") },
+		"custom client, blocked label": func(r *http.Request) { r.Header.Set(uiversion.ClientHeader, "acme"); r.Header.Set(uiversion.VersionHeader, "2.2.1") },
+		"download link (cookie only)":  func(r *http.Request) { r.Header.Set("Cookie", "ncc_session=x") },
+	}
+	for name, mod := range cases {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/artifacts/index.html?download=1", nil)
+		req.Header.Set(uiversion.ServerVersionHeader, "2.4.0")
+		mod(req)
+		if s.rejectCompromisedUIClient(httptest.NewRecorder(), req) {
+			t.Errorf("%s: refused as a dashboard, but it is not one", name)
+		}
+	}
+}
+
+func TestProxiedDashboardWithoutVersionIsStillRefused(t *testing.T) {
+	s := newTokenTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/runs/summary", nil)
+	req.Header.Set(uiversion.ServerVersionHeader, "2.4.0")
+	req.Header.Set("X-Requested-With", "ncc-ui") // claims to be the dashboard, declares no version
+	if !s.rejectCompromisedUIClient(httptest.NewRecorder(), req) {
+		t.Fatal("a pre-2.4.0 dashboard (marker, no version) must still be refused")
+	}
+}
+
+func TestBlockedUIServerVersionStillRefusesEverythingThroughIt(t *testing.T) {
+	s := newTokenTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/runs/summary", nil)
+	req.Header.Set(uiversion.ServerVersionHeader, "2.2.1")
+	if !s.rejectCompromisedUIClient(httptest.NewRecorder(), req) {
+		t.Fatal("a blocked ui-server version must be refused whoever is behind it")
+	}
+}
