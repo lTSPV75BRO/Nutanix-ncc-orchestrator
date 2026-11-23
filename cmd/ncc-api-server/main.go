@@ -171,6 +171,7 @@ type apiServer struct {
 	readyCache           readinessCache
 	httpMetrics          httpMetrics
 	watch                clientWatch
+	absCache             absPathCache
 	// adminSelfResetEnabled enables the anonymous forgot-password recovery for
 	// the built-in admin. Off by default: that path lets any network client
 	// rotate the admin password (and end every admin session) once a minute
@@ -5292,6 +5293,16 @@ func (s *apiServer) saveSchedule(st scheduleState) error {
 }
 
 func (s *apiServer) absPath(p string) string {
+	key := s.repoRoot + "\x00" + p // the answer depends on the root too
+	if v, ok := s.absCache.get(key); ok {
+		return v
+	}
+	v := s.resolveAbsPath(p)
+	s.absCache.put(key, v)
+	return v
+}
+
+func (s *apiServer) resolveAbsPath(p string) string {
 	if abs, err := s.normalizeAndConfinePath(p); err == nil {
 		return abs
 	}

@@ -88,6 +88,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Performance (measured with the benchmarks added in the same change).**
+  - *Dashboard data endpoint:* the API resolved its configured directories (a walk that follows symlinks) several
+    times per request, about three quarters of the CPU in a profile of `/report/data`. The result is now reused
+    for two seconds: 15.6 ms to 2.7 ms per request at 500 clusters on Windows (the saving is smaller on Linux,
+    which has no per-component name normalisation). Caller-supplied paths still go through the uncached
+    confinement check.
+  - *Audit log page:* it read and split the whole live file (up to 5 MiB) under the lock every audit write needs;
+    it now reads backwards from the end and stops at the newest entries, allocating 0.4 MB instead of 6 MB per
+    request.
+  - *Static assets:* the UI server compressed every JavaScript and CSS file again for every visitor at the default
+    level. Each file is now compressed once at the best level and served from memory with `ETag`, `Content-Length`,
+    304 revalidation and Range support (190 KB to 60 KB for the main bundle; 2.1 ms to 0.8 ms and 1.1 MB to 0.13 MB
+    allocated per 1 MB asset request). `Accept-Encoding: gzip;q=0` is now honoured.
 - **MCP `get_findings` filters now work, answers are smaller, and a too-large answer is an error.** The
   tool accepted `check` and `limit` but never sent them, and the API had no `severity` filter, so an
   assistant that asked for "FAIL only" got everything. `GET /api/v1/alerts/ncc` now takes
