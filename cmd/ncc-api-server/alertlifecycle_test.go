@@ -619,3 +619,24 @@ func TestAlertLifecycleMetrics(t *testing.T) {
 		}
 	}
 }
+
+func TestFilterAlertsBySeverity(t *testing.T) {
+	alerts := []nccAlert{
+		{ID: "1", Severity: "FAIL", UpdatedAt: "2026-01-01T00:00:00Z"},
+		{ID: "2", Severity: "WARN", UpdatedAt: "2026-01-01T00:00:01Z"},
+		{ID: "3", Severity: "ERR", UpdatedAt: "2026-01-01T00:00:02Z"},
+	}
+	got, _ := filterAlerts(alerts, alertQuery{Severity: []string{"FAIL", "ERR"}}, nil)
+	if len(got) != 2 || got[0].ID != "1" || got[1].ID != "3" {
+		t.Fatalf("got %+v", got)
+	}
+	if all, _ := filterAlerts(alerts, alertQuery{}, nil); len(all) != 3 {
+		t.Fatalf("no filter must return everything, got %d", len(all))
+	}
+	if _, err := parseSeverityFilter("FAIL,bogus"); err == nil {
+		t.Fatal("unknown severity must be rejected")
+	}
+	if sev, err := parseSeverityFilter(" fail , err "); err != nil || len(sev) != 2 || sev[0] != "FAIL" || sev[1] != "ERR" {
+		t.Fatalf("got %v %v", sev, err)
+	}
+}

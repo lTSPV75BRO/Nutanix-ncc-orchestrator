@@ -104,7 +104,12 @@ func callAPI(ctx context.Context, tool, method, path string, query url.Values, b
 		raw = raw[:maxAPIResponseBytes]
 	}
 	var env apiEnvelope
-	_ = json.Unmarshal(raw, &env)
+	parseErr := json.Unmarshal(raw, &env)
+	if truncated && parseErr != nil && resp.StatusCode < 400 {
+		// A cut-off JSON document cannot be read; answering {"ok":true} (as
+		// happened before) would tell the model nothing was wrong.
+		return env, raw, fmt.Errorf("the answer is larger than %d bytes and was cut off; narrow the request (cluster, check, severity, limit)", maxAPIResponseBytes)
+	}
 	if resp.StatusCode >= 400 {
 		msg := strings.TrimSpace(env.Error)
 		if msg == "" {
@@ -153,7 +158,8 @@ func mcpAPIToolResult(env apiEnvelope, data any, err error) (*mcp.CallToolResult
 	}
 	// Whatever the endpoint returned, the model only gets redacted values.
 	data = scrubForModel(data)
-	text, _ := json.MarshalIndent(data, "", "  ")
+	// Compact JSON: the indentation is whitespace the model would be billed for.
+	text, _ := json.Marshal(data)
 	if len(text) == 0 || string(text) == "null" {
 		text = []byte(env.Message)
 		if len(text) == 0 {

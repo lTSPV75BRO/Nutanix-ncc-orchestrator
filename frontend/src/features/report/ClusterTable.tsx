@@ -21,6 +21,7 @@ import { AimOutlined, AppstoreOutlined, BarsOutlined, CheckOutlined, ClockCircle
 import { Link } from "react-router";
 import { KeyValueList, Panel, StatusBadge, type KeyValueItem } from "../../ui";
 import { clusterPath } from "../../navigation";
+import { isClusterAddress, prismURLFor } from "../../utils/prism";
 import type { NCCDisposition } from "../../api/types";
 import { asArray, asRecord, displayClusterName, nccDispositionKey, resolveClusterName } from "../../utils/report";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
@@ -223,19 +224,6 @@ function normalizeCheckTitle(check: string): string {
   return check.replace(/^detailed information for\s*/i, "").replace(/:$/, "").trim();
 }
 
-function isIPv4Like(value: string): boolean {
-  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(value);
-}
-
-function normalizeClusterHost(cluster: string): string {
-  let clean = cluster.trim();
-  if (!clean) return "";
-  clean = clean.replace(/^https?:\/\//i, "");
-  clean = clean.replace(/\/+$/, "");
-  clean = clean.replace(/:\d+$/, "");
-  return clean;
-}
-
 function clusterPrismURL(
   cluster: string,
   clusterNameMap: Record<string, string>,
@@ -243,15 +231,15 @@ function clusterPrismURL(
 ): string {
   const candidates = [cluster, displayName].map((value) => value.trim()).filter(Boolean);
   for (const candidate of candidates) {
-    const clean = normalizeClusterHost(candidate);
-    if (isIPv4Like(clean)) return `https://${clean}:9440`;
+    const url = prismURLFor(candidate);
+    if (url) return url;
   }
-  const mappedIP = Object.entries(clusterNameMap).find(
+  const mapped = Object.entries(clusterNameMap).find(
     ([key, name]) =>
-      isIPv4Like(normalizeClusterHost(key)) &&
+      isClusterAddress(key) &&
       candidates.some((candidate) => name.trim().toLowerCase() === candidate.toLowerCase()),
   )?.[0];
-  return mappedIP ? `https://${normalizeClusterHost(mappedIP)}:9440` : "";
+  return mapped ? prismURLFor(mapped) : "";
 }
 
 /**

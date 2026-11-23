@@ -118,7 +118,7 @@ Hints below: **RO** = read-only, **OW** = open-world (contacts the API / cluster
 | **check_upgrade** | RO, OW | `GET /api/v1/settings/update`. |
 | **preview_install_service** | RO | `GET /api/v1/health/supervisor` (status only; does not install a host service). |
 | **get_report** | RO | `GET /api/v1/artifacts/{file}` (`index.html` or a basename; no path traversal). |
-| **get_findings** | RO | `GET /api/v1/alerts/ncc`, optional cluster/severity filters. |
+| **get_findings** | RO | `GET /api/v1/alerts/ncc` with optional `cluster`, `check`, `severity` (comma list), `limit` (default 50, max 200) and `cursor` (the previous `next_cursor`). |
 | **compare_runs** | RO | Fetches two archived runs from `GET /api/v1/runs/{id}` and returns both payloads. |
 | **apply_upgrade** | D | `POST /api/v1/settings/update/apply`. Requires `confirm: "APPLY"` and `NCC_MCP_ALLOW_MUTATIONS=true`. Checksum skip is refused. |
 | **bootstrap_v2_stack** | D | Refused over MCP (host installer only). Still requires `confirm: "APPLY"` so clients fail closed. |

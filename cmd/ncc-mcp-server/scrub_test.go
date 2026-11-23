@@ -132,3 +132,57 @@ func TestRestoreToolAcceptsOnlyBackupNames(t *testing.T) {
 		}
 	}
 }
+
+// Regression: get_findings accepted check and limit but never sent them, and the
+// API had no severity filter, so the model thought it had filtered. Each input
+// must reach the API, and a missing limit must not mean "everything".
+func TestGetFindingsSendsItsFiltersAndABoundedLimit(t *testing.T) {
+	var got string
+	stubAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL.RawQuery
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": map[string]any{"items": []any{}}})
+	})
+	if _, _, err := getFindings(context.Background(), &mcp.CallToolRequest{}, GetFindingsInput{Cluster: "dev-lab-01", Check: "vg_space_usage_check", Severity: "FAIL,ERR", Cursor: "abc"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"cluster=dev-lab-01", "check=vg_space_usage_check", "severity=FAIL%2CERR", "limit=50", "cursor=abc"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("query %q is missing %q", got, want)
+		}
+	}
+	if _, _, err := getFindings(context.Background(), &mcp.CallToolRequest{}, GetFindingsInput{Limit: 9999}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "limit=200") {
+		t.Fatalf("limit must be capped at 200: %q", got)
+	}
+}
+
+// Regression: an answer over the size cap was cut mid-JSON, failed to parse, and
+// came back as {"ok":true}.
+func TestOversizedAnswerIsAnErrorNotOK(t *testing.T) {
+	stubAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"data":{"items":["` + strings.Repeat("x", maxAPIResponseBytes+10) + `"]}}`))
+	})
+	res, _, err := getFindings(context.Background(), &mcp.CallToolRequest{}, GetFindingsInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res == nil || !res.IsError || !strings.Contains(toolText(t, res), "cut off") {
+		t.Fatalf("want an error saying the answer was cut off, got %+v", res)
+	}
+}
+
+func TestToolTextIsCompactJSON(t *testing.T) {
+	stubAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": map[string]any{"a": 1, "b": []any{1, 2}}})
+	})
+	res, _, err := getRunSummary(context.Background(), &mcp.CallToolRequest{}, GetRunSummaryInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := toolText(t, res); strings.Contains(out, "\n") {
+		t.Fatalf("expected compact JSON, got %q", out)
+	}
+}

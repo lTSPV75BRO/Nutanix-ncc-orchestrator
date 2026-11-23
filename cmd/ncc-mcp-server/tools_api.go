@@ -207,8 +207,9 @@ type GetFindingsInput struct {
 	RunID     string `json:"run_id,omitempty"`
 	Cluster   string `json:"cluster,omitempty"`
 	Check     string `json:"check,omitempty"`
-	Severity  string `json:"severity,omitempty"`
-	Limit     int    `json:"limit,omitempty"`
+	Severity  string `json:"severity,omitempty" jsonschema:"FAIL, WARN, ERR or INFO; a comma list is allowed."`
+	Limit     int    `json:"limit,omitempty" jsonschema:"Findings to return (default 50, max 200). Use next_cursor to continue."`
+	Cursor    string `json:"cursor,omitempty" jsonschema:"next_cursor from the previous call."`
 }
 
 func getFindings(ctx context.Context, req *mcp.CallToolRequest, input GetFindingsInput) (*mcp.CallToolResult, any, error) {
@@ -218,6 +219,22 @@ func getFindings(ctx context.Context, req *mcp.CallToolRequest, input GetFinding
 	}
 	if input.Severity != "" {
 		q.Set("severity", input.Severity)
+	}
+	if input.Check != "" {
+		q.Set("check", input.Check)
+	}
+	// Keep answers small: the model pays for every finding it reads. The API
+	// default is 100 and ignores nothing we send, so say what we want.
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	q.Set("limit", strconv.Itoa(limit))
+	if input.Cursor != "" {
+		q.Set("cursor", input.Cursor)
 	}
 	env, _, err := callAPI(ctx, "get_findings", http.MethodGet, "/api/v1/alerts/ncc", q, nil, 30*time.Second)
 	return mcpAPIToolResult(env, nil, err)

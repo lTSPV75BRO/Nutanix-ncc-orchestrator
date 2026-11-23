@@ -88,6 +88,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **MCP `get_findings` filters now work, answers are smaller, and a too-large answer is an error.** The
+  tool accepted `check` and `limit` but never sent them, and the API had no `severity` filter, so an
+  assistant that asked for "FAIL only" got everything. `GET /api/v1/alerts/ncc` now takes
+  `severity` (FAIL, WARN, ERR, INFO; comma list); the tool sends `cluster`, `check`, `severity`,
+  `limit` (default 50, max 200) and `cursor`. Tool results are compact JSON instead of indented, which
+  is fewer tokens per call. An answer over the 1 MB cap used to be cut mid-JSON and returned as
+  `{"ok":true}`; it is now an error that says to narrow the request.
+- **Prism links for clusters with a DNS name.** Only IPv4 addresses got a Prism link; fully qualified
+  names (`prism.dc1.example.com`) now do too.
 - **The API status pill is gone from the header; an unreachable API raises a notice.** The Status page
   already shows the API's state. When the dashboard cannot reach the API, a sticky "API unreachable"
   notice appears once, with a Retry button, the tab title gets a warning mark, the dashboard checks

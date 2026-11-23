@@ -1123,6 +1123,8 @@ type alertQuery struct {
 	Cluster       string
 	Check         string
 	FindingID     string
+	// Severity limits results to these severities (upper case: FAIL, WARN, ERR, INFO).
+	Severity      []string
 	IncludeClosed bool
 	UpdatedSince  time.Time
 	Cursor        alertCursor
@@ -1199,6 +1201,9 @@ func filterAlerts(alerts []nccAlert, q alertQuery, permits func(cluster, cluster
 			continue
 		}
 		if q.FindingID != "" && a.FindingID != q.FindingID {
+			continue
+		}
+		if len(q.Severity) > 0 && !severityInList(a.Severity, q.Severity) {
 			continue
 		}
 		if !q.UpdatedSince.IsZero() {

@@ -547,12 +547,18 @@ func (s *apiServer) handleListNCCAlerts(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})
 		return
 	}
+	severities, sevErr := parseSeverityFilter(q.Get("severity"))
+	if sevErr != nil {
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: sevErr.Error()})
+		return
+	}
 	query := alertQuery{
 		State:         strings.ToLower(strings.TrimSpace(q.Get("state"))),
 		Detection:     strings.ToLower(strings.TrimSpace(q.Get("detection"))),
 		Cluster:       strings.TrimSpace(q.Get("cluster")),
 		Check:         strings.TrimSpace(q.Get("check")),
 		FindingID:     strings.TrimSpace(q.Get("finding_id")),
+		Severity:      severities,
 		IncludeClosed: q.Get("include_closed") == "1" || strings.EqualFold(q.Get("include_closed"), "true"),
 		Limit:         limit,
 	}
@@ -737,4 +743,32 @@ func (s *apiServer) handleNCCAlertAction(w http.ResponseWriter, r *http.Request,
 	}
 	s.audit(r, "alerts.ncc."+action, true, map[string]interface{}{"alert_id": id, "by": actor, "run_at": runAt, "cluster": saved[0].Cluster, "check": saved[0].Check})
 	writeJSON(w, http.StatusOK, envelope{Success: true, Message: "NCC finding updated", Data: saved[0]})
+}
+
+// parseSeverityFilter reads ?severity=FAIL,ERR (case-insensitive).
+func parseSeverityFilter(raw string) ([]string, error) {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		p := strings.ToUpper(strings.TrimSpace(part))
+		if p == "" {
+			continue
+		}
+		switch p {
+		case "FAIL", "WARN", "ERR", "INFO":
+			out = append(out, p)
+		default:
+			return nil, fmt.Errorf("invalid severity %q: use FAIL, WARN, ERR or INFO", strings.TrimSpace(part))
+		}
+	}
+	return out, nil
+}
+
+func severityInList(sev string, list []string) bool {
+	sev = strings.ToUpper(strings.TrimSpace(sev))
+	for _, s := range list {
+		if s == sev {
+			return true
+		}
+	}
+	return false
 }

@@ -23,13 +23,10 @@ import { freshness as dataAge } from "../utils/freshness";
 import { NCC_ALERTS_QUERY_KEY } from "../utils/alertLifecycle";
 import { asRecord } from "../utils/report";
 import { plural } from "../utils/text";
+import { prismURLFor } from "../utils/prism";
 
 const SEV_ORDER: Record<string, number> = { FAIL: 0, ERR: 1, WARN: 2, INFO: 3 };
 type StateFilter = "all" | "open" | "acknowledged";
-
-function isIPv4(value: string): boolean {
-  return /^\d{1,3}(\.\d{1,3}){3}$/.test(value.trim());
-}
 
 /** "Resolved, not reported since" / "Came back" for a closed finding. */
 function closeLabel(a: NCCAlert): string {
@@ -141,7 +138,7 @@ export function ClusterPage() {
   const reachable = entry ? entry.ok : true;
   const age = dataAge(lastDataAt);
   const failing = (entry?.fail ?? 0) + (entry?.err ?? 0);
-  const prismUrl = isIPv4(address) ? `https://${address}:9440` : "";
+  const prismUrl = prismURLFor(address);
   const findingsHref = `/findings?clusters=${encodeURIComponent(name)}`;
 
   const about: KeyValueItem[] = [

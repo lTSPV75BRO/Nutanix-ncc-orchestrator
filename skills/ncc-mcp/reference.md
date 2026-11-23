@@ -12,7 +12,7 @@ are scrubbed before you see them (credential-like values appear masked).
 | `list_run_history` | `GET /api/v1/runs` | viewer | `limit` max 100 |
 | `list_run_artifacts` | `GET /api/v1/artifacts` | viewer | Basenames only |
 | `get_report` | `GET /api/v1/artifacts/{file}` | viewer | `file` is a basename (`index.html`, `10.0.0.1.log`) |
-| `get_findings` | `GET /api/v1/alerts/ncc` | viewer | Optional `cluster`, `severity` |
+| `get_findings` | `GET /api/v1/alerts/ncc` | viewer | Optional `cluster`, `check`, `severity` (comma list), `limit` (default 50, max 200), `cursor`; page with `next_cursor`. Oldest change first |
 | `compare_runs` | two `GET /api/v1/runs/{id}` | viewer | Needs `current_run_id` and `baseline_run_id` |
 | `get_metrics` | `GET /api/v1/health` | viewer | Health summary only, not Prometheus metrics |
 | `list_schedules` | `GET /api/v1/schedule` | viewer | |
