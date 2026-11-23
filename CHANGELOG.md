@@ -93,6 +93,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   server-version header but cannot carry the dashboard's SPA-version header.
   The API now exempts only the public OIDC login/callback and `/saml/` paths,
   so they are not refused as an unversioned dashboard.
+- **Production dashboard bundles now carry their actual UI version.** Vite
+  defines `__NCC_UI_VERSION__` from `frontend/package.json`, so the request
+  header used by the version gate is stamped at build time rather than using a
+  fallback value.
 - **Deployment agents now resolve the published release authoritatively.** The
   copy-paste deployment prompt and runbook require GitHub's
   `releases/latest` API rather than a web-search result, README badge, branch

@@ -20,12 +20,16 @@ function resolveApiToken() {
     return "";
 }
 const apiToken = resolveApiToken();
+const uiVersion = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "package.json"), "utf8")).version || "2.4.0";
 if (!apiToken) {
     // Helpful during local dev if proxy requests still return 401.
     // eslint-disable-next-line no-console
     console.warn("[vite] NCC API token not found; /api proxy requests may get 401.");
 }
 export default defineConfig({
+    define: {
+        __NCC_UI_VERSION__: JSON.stringify(uiVersion),
+    },
     plugins: [react()],
     server: {
         port: 8080,

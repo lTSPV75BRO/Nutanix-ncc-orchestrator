@@ -10,6 +10,9 @@ requests do not originate from the SPA, so they cannot supply its version
 header; only the public OIDC login/callback and `/saml/` routes bypass the
 version gate.
 
+Production dashboard bundles also embed their `frontend/package.json` version
+in `X-NCC-UI-Version`, rather than relying on a fallback value.
+
 ## Deployment agents resolve releases from GitHub
 
 The copy-paste deployment prompt and runbook now require GitHub's authoritative
