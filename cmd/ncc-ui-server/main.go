@@ -602,7 +602,11 @@ func main() {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
 	}
-	applyUIHeaders := func(w http.ResponseWriter, isTLS bool) { applyHeaders(w, isTLS, uiCSP) }
+	applyUIHeaders := func(w http.ResponseWriter, isTLS bool) {
+		applyHeaders(w, isTLS, uiCSP)
+		// Isolate the dashboard from windows it did not open.
+		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+	}
 	applyAPIHeaders := func(w http.ResponseWriter, isTLS bool) { applyHeaders(w, isTLS, apiCSP) }
 	proxy := newAPIProxy(apiProxyConfig{
 		Backend:          backend,
@@ -680,6 +684,21 @@ func main() {
 	assets := newGzipAssets(staticFS)
 	indexPath := filepath.Join(dir, "index.html")
 	serveIndex := func(w http.ResponseWriter, r *http.Request) {
+		// The shell is the first request of every page load, so send it
+		// compressed from the same cache as the assets.
+		if r.Method == http.MethodGet && acceptsGzip(r) {
+			if e := assets.entry("/index.html"); e != nil {
+				h := w.Header()
+				h.Set("Content-Type", "text/html; charset=utf-8")
+				h.Set("Content-Encoding", "gzip")
+				h.Set("Cache-Control", "no-store")
+				h.Add("Vary", "Accept-Encoding")
+				h.Set("Content-Length", strconv.Itoa(len(e.body)))
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(e.body)
+				return
+			}
+		}
 		b, err := os.ReadFile(indexPath)
 		if err != nil {
 			http.Error(w, "index.html not found", http.StatusInternalServerError)

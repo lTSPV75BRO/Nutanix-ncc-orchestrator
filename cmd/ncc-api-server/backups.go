@@ -265,6 +265,24 @@ func (s *apiServer) safeBackupPath(name string) (string, bool) {
 	return full, true
 }
 
+// countBackupArchives counts the backup archives on disk without opening any of
+// them. listBackupEntries inspects every unencrypted archive to see whether it
+// includes the stack, which is far too slow for callers that only need a count
+// (the setup checklist is polled on every page load).
+func (s *apiServer) countBackupArchives() int {
+	ents, err := os.ReadDir(s.backupsDir())
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, e := range ents {
+		if !e.IsDir() && isBackupArchiveName(e.Name()) {
+			n++
+		}
+	}
+	return n
+}
+
 func (s *apiServer) listBackupEntries() ([]backupEntry, error) {
 	dir := s.backupsDir()
 	ents, err := os.ReadDir(dir)

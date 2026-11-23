@@ -256,13 +256,13 @@ func (s *apiServer) onboardingBackupStep() onboardingStep {
 		AdminOnly:   true,
 	}
 	sched, err := s.loadBackupSchedule()
-	entries, _ := s.listBackupEntries()
+	backups := s.countBackupArchives()
 	switch {
 	case err == nil && sched.Enabled:
 		step.Done = true
-		step.Detail = fmt.Sprintf("Scheduled every %s; %s on disk.", strings.TrimSpace(sched.Every), plural.Count(len(entries), "backup"))
-	case len(entries) > 0:
-		step.Detail = plural.Count(len(entries), "backup") + " on disk, but no schedule. Turn on scheduled backups."
+		step.Detail = fmt.Sprintf("Scheduled every %s; %s on disk.", strings.TrimSpace(sched.Every), plural.Count(backups, "backup"))
+	case backups > 0:
+		step.Detail = plural.Count(backups, "backup") + " on disk, but no schedule. Turn on scheduled backups."
 	default:
 		step.Detail = "No backups yet."
 	}

@@ -215,7 +215,7 @@ describe("ClusterTable alert sources", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Expand findings" }));
+    fireEvent.click(screen.getByRole("button", { name: /Full page/ }));
     expect(document.documentElement.classList.contains("alerts-expanded")).toBe(true);
     expect(screen.getByText("Findings")).toBeInTheDocument();
     expect(screen.getByText("Needs attention")).toBeInTheDocument();
@@ -239,7 +239,7 @@ describe("ClusterTable alert sources", () => {
     );
 
     expect(screen.queryByText("NCC finding 100")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Expand findings" }));
+    fireEvent.click(screen.getByRole("button", { name: /Full page/ }));
     expect(document.querySelector(".alerts-pagination")).not.toBeNull();
     expect(screen.getByText("1–100 of 120")).toBeInTheDocument();
   });

@@ -1517,7 +1517,7 @@ export function ClusterTable({
     <Card className={`alerts-card page-card${expanded ? " alerts-card-expanded" : ""}`}>
       <div className="alerts-header">
         <div>
-          <Typography.Title level={4} className="tile-title">
+          <Typography.Title level={2} className="tile-title">
             Findings
           </Typography.Title>
           <Typography.Text type="secondary" className="tile-subtitle">
@@ -1565,7 +1565,7 @@ export function ClusterTable({
           <Tooltip title={expanded ? "Leave full page (Esc)" : "Show the findings across the page. Filters and details stay available."}>
             <Button
               size="small"
-              aria-label={expanded ? "Exit full page" : "Expand findings"}
+              aria-label={expanded ? "Exit full page" : "Full page, expand findings"}
               icon={expanded ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
               onClick={() => setExpanded(!expanded)}
             >
@@ -1586,7 +1586,7 @@ export function ClusterTable({
                     type="button"
                     role="radio"
                     aria-checked={selected}
-                    aria-label={`${item.label}, ${count} ${count === 1 ? "finding" : "findings"}`}
+                    aria-label={`${item.label} ${count} ${count === 1 ? "finding" : "findings"}`}
                     className={`alerts-handling-chip alerts-handling-chip-${item.tone}${selected ? " is-selected" : ""}${count === 0 && item.value !== "all" ? " is-empty" : ""}`}
                     onClick={() => setHandling(item.value)}
                   >

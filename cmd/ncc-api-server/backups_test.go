@@ -183,3 +183,29 @@ Error: backup verification failed: Version: Different major versions are not com
 		t.Fatal("plain text must not parse as a report")
 	}
 }
+
+// TestCountBackupArchivesMatchesListing pins that the cheap count used by the
+// setup checklist agrees with the full listing and ignores other files.
+func TestCountBackupArchivesMatchesListing(t *testing.T) {
+	install := t.TempDir()
+	s := &apiServer{repoRoot: install, configPath: filepath.Join(install, "config.yaml")}
+	if n := s.countBackupArchives(); n != 0 {
+		t.Fatalf("no directory: got %d, want 0", n)
+	}
+	dir := s.backupsDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"manual-1.tar.gz", "manual-2.tar.gz.enc", "notes.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := s.listBackupEntries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.countBackupArchives(); got != len(entries) || got != 2 {
+		t.Fatalf("count = %d, listing = %d, want 2", got, len(entries))
+	}
+}
