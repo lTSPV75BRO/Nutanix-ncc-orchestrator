@@ -22,7 +22,7 @@ To report a vulnerability, see [`.github/SECURITY.md`](../../.github/SECURITY.md
   Windows installer that wrote an invalid config and could destroy backups.
   All are fixed.
 - Open recommendations: systemd sandboxing, Windows file ACLs in the product,
-  container hardening defaults, and attestation checks in the installers.
+  and publishing releases from CI only (REL-05).
 
 ## Threat model in brief
 
@@ -47,11 +47,11 @@ To report a vulnerability, see [`.github/SECURITY.md`](../../.github/SECURITY.md
 | CSRF | Double-submit token on every cookie-authenticated mutation. A live request without the token, or with a wrong one, returned 403. |
 | CORS | Explicit allowlist. A foreign origin gets no allow-origin header and a 403 on preflight; the configured origin is allowed with credentials. |
 | SSRF | Webhook, Slack, SMTP, LDAP and SAML targets are admin-configured; operators can only test configured channels; errors are URL-redacted. |
-| Authentication | bcrypt, constant-time comparison, generic login errors, lockout per account, source and account+source shared across replicas, hashed and expiring tokens. A live run of five wrong passwords returned 401 and then 429. |
+| Authentication | bcrypt (cost 12), constant-time comparison, generic login errors, lockout per account, source and account+source shared across replicas, hashed and expiring tokens. A live run of five wrong passwords returned 401 and then 429. |
 | Authorization | Route-to-minimum-role table plus cluster-group scoping. A live matrix of every route and method as viewer and as operator found no escalation. Intended exceptions: a viewer's own preference and tokens, an operator's notification test and read access to clusters. |
-| Unauthenticated surface | Of 105 routes probed with four methods each, 378 of 420 requests returned 401. Reachable without a session: health, readiness, `auth/*` (login, logout, me, forgot-password), the OpenAPI document, `meta/routes`, `metrics/rate-limit`, `tls/public` and `/saml/*` (503 when unconfigured). |
+| Unauthenticated surface | Of 105 routes probed with four methods each, 378 of 420 requests returned 401. Reachable without a session: health, readiness, `auth/*` (login, logout, me, forgot-password), the OpenAPI document, `meta/routes`, `tls/public` and `/saml/*` (503 when unconfigured). `metrics/rate-limit` was reachable then and needs a session since 2026-11-23 (SEC-10). |
 | Deserialization | JSON with size limits and `DisallowUnknownFields`; YAML into typed structs. |
-| Containers | Non-root uid, `allowPrivilegeEscalation: false`, capabilities dropped, NetworkPolicies (default-deny ingress). Images built from this branch scan clean. |
+| Containers | Non-root uid, read-only root filesystem, `allowPrivilegeEscalation: false`, capabilities dropped, NetworkPolicies (default-deny ingress). Images built from this branch scan clean. |
 | CI | `contents: read` by default; release workflow scoped to tags with `id-token` and `attestations`; no `pull_request_target`; third-party actions pinned by SHA; publishing workflows disable dependency caches. One `zizmor` finding remains (`workflow_run` in `pages.yml`), reviewed: read-only token, only after a successful Release run, default-branch checkout. |
 
 ## Findings, November 2026 (v2.4.0)
@@ -268,15 +268,16 @@ garbage token, a forged session cookie, a dashboard-claiming header set and an
 MCP-claiming header set. Every route answered 401, 403, 404 or 405 except the
 documented public ones: `health`, `health/ready`, `tls/public`, `openapi.json`,
 `meta/routes`, `metrics/rate-limit`, `auth/me`, `auth/logout` and
-`auth/forgot-password`. The three metadata routes describe the API's shape and
-leave nothing else readable.
+`auth/forgot-password`. The metadata routes describe the API's shape and leave
+nothing else readable. `metrics/rate-limit` has needed a session since (SEC-10).
 
 ### Smaller items
 
 - **DEP-03.** `GO-2026-6909` in `crewjam/saml` v0.6.3: reviewed false positive
   (fix in v0.5.2, present in v0.6.3). Handler panics are also recovered into a
   logged 500.
-- **FRESH-01, SEC-10, SEC-11, SEC-07b.** Low-severity items listed in
+- **SEC-07b.** Low severity, listed in [`findings.md`](findings.md).
+- **FRESH-01, SEC-10, SEC-11, WIN-03, HARD-01.** Fixed on 2026-11-23; see
   [`findings.md`](findings.md).
 
 ### Recommendations, not yet implemented
@@ -287,12 +288,8 @@ leave nothing else readable.
   a dedicated user, on a systemd host, then check restart, restore, apply
   update and `chcon`.
 - **WIN-02.** Apply restrictive ACLs from `v2-start` on Windows.
-- **WIN-03.** Guard the cloud-init script's `rm -rf`; verify the SLSA
-  attestation (`gh attestation verify`) or a cosign signature in both
-  installers.
-- **HARD-01.** `readOnlyRootFilesystem` with an `emptyDir` for `/tmp`, default
-  requests and limits, pod anti-affinity. The API image already runs read-only
-  with only `/data` writable.
+- **REL-05.** Publish release files from the workflow only, so every published
+  file has the attestation the installers check.
 
 ## Findings, October 2026 (v2.2.1)
 
@@ -355,7 +352,7 @@ Secrets; consider restricting `/api/v1/audit` to operators and admins.
 | `gitleaks` | Full git history | No leaks. |
 | `gosec` | All Go code, high severity and confidence, G703 excluded as CI does | Clean. |
 | `golangci-lint` v2.15 | All Go code | 0 issues. |
-| `trivy` | Filesystem and the built API and UI images | 0 vulnerabilities, 0 secrets. Misconfigurations: no read-only root filesystem and no default resource limits (HARD-01). |
+| `trivy` | Filesystem and the built API and UI images | 0 vulnerabilities, 0 secrets. Misconfigurations at the time: no read-only root filesystem (fixed since) and no default resource limits (left unset on purpose). |
 | `kubeconform`, `kube-linter`, `helm lint` | Rendered Helm chart | 17 resources valid; remaining kube-linter findings are HARD-01 items and a CronJob TTL note. |
 | `zizmor` | GitHub workflows | One reviewed finding (`workflow_run`). |
 

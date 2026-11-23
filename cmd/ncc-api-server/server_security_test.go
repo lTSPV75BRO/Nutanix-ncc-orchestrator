@@ -97,8 +97,8 @@ func TestWithAuthTokenMode(t *testing.T) {
 	req6 := httptest.NewRequest(http.MethodGet, "/api/v1/metrics/rate-limit", nil)
 	rr6 := httptest.NewRecorder()
 	next.ServeHTTP(rr6, req6)
-	if rr6.Code != http.StatusOK {
-		t.Fatalf("expected rate-limit metrics endpoint to bypass auth, got %d", rr6.Code)
+	if rr6.Code != http.StatusUnauthorized {
+		t.Fatalf("expected rate-limit metrics endpoint to need a session, got %d", rr6.Code)
 	}
 
 	req7 := httptest.NewRequest(http.MethodGet, "/docs/ui", nil)

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -570,17 +571,61 @@ func (db *userDB) verify(username, password string) (Role, bool, bool) {
 	}
 	key := strings.ToLower(strings.TrimSpace(username))
 	db.mu.RLock()
-	a, found := db.accounts[key]
+	var a account
+	stored, found := db.accounts[key]
+	if found {
+		// Copied under the lock: writers change accounts in place.
+		a = *stored
+	}
 	db.mu.RUnlock()
 	if !found {
-		_ = bcrypt.CompareHashAndPassword([]byte(dummyBcryptHash), []byte(password))
+		_ = bcrypt.CompareHashAndPassword(dummyHash(passwordHashCost), []byte(password))
 		return RoleNone, false, false
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(a.PasswordHash), []byte(password)); err != nil {
+		// A hash from before the cost was raised answers sooner than the dummy
+		// comparison above, which would tell existing accounts from unknown
+		// names. Each comparison at cost k takes 2^k steps, so the costs from
+		// the stored one up to the target add up to exactly the difference.
+		if cost, cerr := bcrypt.Cost([]byte(a.PasswordHash)); cerr == nil {
+			for ; cost < passwordHashCost; cost++ {
+				_ = bcrypt.CompareHashAndPassword(dummyHash(cost), []byte(password))
+			}
+		}
 		return RoleNone, false, false
 	}
+	db.upgradePasswordHash(key, a.PasswordHash, password)
 	role, _ := parseRole(a.Role)
 	return role, true, a.MustChange
+}
+
+// upgradePasswordHash replaces a hash made at a lower bcrypt cost, using the
+// password the user just proved. It is not a password change: sessions stay
+// valid and the must-change flag is kept. The stored hash is compared again
+// under the write lock so a password change made meanwhile wins. Failure is
+// logged only; the sign-in already succeeded.
+func (db *userDB) upgradePasswordHash(key, stored, password string) {
+	if !db.writable() {
+		return
+	}
+	if cost, err := bcrypt.Cost([]byte(stored)); err != nil || cost >= passwordHashCost {
+		return
+	}
+	hash, err := hashPassword(password)
+	if err != nil {
+		return
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
+	a, ok := db.accounts[key]
+	if !ok || a.PasswordHash != stored {
+		return
+	}
+	a.PasswordHash = hash
+	if err := db.saveLocked(); err != nil {
+		log.Printf("user store: could not upgrade the password hash of %q: %v", a.Username, err)
+	}
 }
 
 // lookup returns a copy of an account by username.
@@ -1344,9 +1389,16 @@ var (
 	errReservedAdminDelete = errors.New("the built-in admin account cannot be deleted")
 )
 
-// dummyBcryptHash is a valid bcrypt hash used only to equalize timing for
-// unknown usernames. It never matches a real password.
-const dummyBcryptHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+// passwordHashCost is the bcrypt cost of new password hashes. Hashes made at a
+// lower cost are replaced at the account's next sign-in. A variable so tests can
+// lower it.
+var passwordHashCost = 12
+
+// dummyHash is a valid bcrypt hash of the given cost, used only to equalize
+// sign-in timing. It never matches a real password.
+func dummyHash(cost int) []byte {
+	return []byte(fmt.Sprintf("$2a$%02d$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy", cost))
+}
 
 // randPassword returns a URL-safe random password string (~24 chars).
 func randPassword() (string, error) {
@@ -1359,7 +1411,7 @@ func randPassword() (string, error) {
 
 // hashPassword returns a bcrypt hash suitable for the user database.
 func hashPassword(password string) (string, error) {
-	b, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	b, err := bcrypt.GenerateFromPassword([]byte(password), passwordHashCost)
 	if err != nil {
 		return "", err
 	}

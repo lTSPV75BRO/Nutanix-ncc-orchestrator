@@ -23,6 +23,9 @@ spec:
             matchLabels:
               app: ncc-orchestrator-v2
               component: ui
+          matchLabelKeys: ["pod-template-hash"]
+      # The UI server never calls the Kubernetes API.
+      automountServiceAccountToken: false
       securityContext:
         fsGroup: 1000
         fsGroupChangePolicy: "OnRootMismatch"
@@ -92,11 +95,14 @@ spec:
             timeoutSeconds: 2
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               cpu: "50m"
@@ -105,6 +111,8 @@ spec:
               cpu: "500m"
               memory: "512Mi"
       volumes:
+        - name: tmp
+          emptyDir: {}
         - name: data
           persistentVolumeClaim:
             claimName: ncc-v2-data

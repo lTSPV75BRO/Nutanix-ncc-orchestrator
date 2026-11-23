@@ -1058,7 +1058,7 @@ func (s *apiServer) isPublicAuthPath(r *http.Request) bool {
 	if r.Method == http.MethodGet && r.URL.Path == "/api/v1/tls/public" {
 		return true
 	}
-	if r.Method == http.MethodGet && (r.URL.Path == "/api/v1/openapi.json" || r.URL.Path == "/api/v1/meta/routes" || r.URL.Path == "/api/v1/metrics/rate-limit") {
+	if r.Method == http.MethodGet && (r.URL.Path == "/api/v1/openapi.json" || r.URL.Path == "/api/v1/meta/routes") {
 		return true
 	}
 	if r.Method == http.MethodGet && r.URL.Path == "/metrics" && s.metricsPublic {
@@ -1869,7 +1869,7 @@ func (s *apiServer) handleAPIDocsHome(w http.ResponseWriter, r *http.Request) {
   </table>
 
   <script>
-    const state = { routes: [], health: null, metrics: null };
+    const state = { routes: [], health: null, metrics: null, deniedToken: null };
     function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[c])); }
     function tokenHeader(token) {
       const t = String(token || "").trim();
@@ -1916,12 +1916,20 @@ func (s *apiServer) handleAPIDocsHome(w http.ResponseWriter, r *http.Request) {
       } catch (_) {
         state.health = null;
       }
-      try {
-        const metricsRes = await fetch("/api/v1/metrics/rate-limit");
-        const metricsJson = await metricsRes.json();
-        state.metrics = metricsJson.data || {};
-      } catch (_) {
-        state.metrics = null;
+      // The counters need a session or a token; without one ask once, not on
+      // every poll.
+      const token = document.getElementById("api-token").value.trim();
+      if (token !== state.deniedToken) {
+        try {
+          const metricsRes = await fetch("/api/v1/metrics/rate-limit", token ? { headers: { "X-API-Token": token } } : {});
+          if (metricsRes.status === 401 || metricsRes.status === 403) {
+            state.deniedToken = token;
+          }
+          const metricsJson = await metricsRes.json();
+          state.metrics = metricsJson.data || null;
+        } catch (_) {
+          state.metrics = null;
+        }
       }
       document.getElementById("st-health").textContent = (state.health && state.health.status) || "unavailable";
       document.getElementById("st-auth").textContent = (state.health && state.health.auth_mode) || "-";
@@ -1939,7 +1947,7 @@ func (s *apiServer) handleAPIDocsHome(w http.ResponseWriter, r *http.Request) {
     }
     document.getElementById("route-filter").addEventListener("input", renderRoutes);
     document.getElementById("api-token").addEventListener("input", renderRoutes);
-    document.getElementById("refresh-btn").addEventListener("click", refreshAll);
+    document.getElementById("refresh-btn").addEventListener("click", () => { state.deniedToken = null; refreshAll(); });
     refreshAll();
     setInterval(refreshStatus, 5000);
   </script>
@@ -4544,7 +4552,7 @@ func apiRouteCatalog() []routeMeta {
 		{Path: "/api/v1/settings/notifications/status", Methods: []string{http.MethodGet}, Description: "Operator+: per-channel delivery status shared by the runner and this server: state (ok, failing, never), last attempt and last success times, the last URL-redacted error, attempts on the last delivery, and how many undelivered messages wait in notification-deadletter-dir."},
 		{Path: "/api/v1/schedule", Methods: []string{http.MethodGet, http.MethodPut}, Description: "GET viewer+: read scheduler state; PUT operator+: create/update/apply a recurring run. GET returns resource_version; send it back on PUT and a save over a newer schedule answers 409 NCC_API_SCHEDULE_CONFLICT (omit it for an unconditional save)", SampleBody: "{\n  \"type\": \"cron\",\n  \"action\": \"create\",\n  \"cron\": \"15 */4 * * *\",\n  \"config\": \"config.yaml\",\n  \"print_only\": true,\n  \"apply\": false\n}"},
 		{Path: "/api/v1/schedule/health", Methods: []string{http.MethodGet}, Description: "Scheduler health snapshot (last run/success/error hints)"},
-		{Path: "/api/v1/freshness", Methods: []string{http.MethodGet}, Description: "Data freshness from the run history: per cluster, when it was last checked, when it last returned data and how many runs in a row failed; per active schedule (main and environment), whether two intervals passed without a run (schedule_overdue). Clusters are limited to the caller's cluster groups."},
+		{Path: "/api/v1/freshness", Methods: []string{http.MethodGet}, Description: "Data freshness from the run history: per cluster, when it was last checked, when it last returned data and how many runs in a row failed; per active schedule (main and environment), whether two intervals passed without a run (schedule_overdue). Clusters and environment schedules are limited to the caller's cluster groups."},
 		{Path: "/api/v1/artifacts", Methods: []string{http.MethodGet}, Description: "List available artifacts"},
 		{Path: "/api/v1/artifacts/{name}", Methods: []string{http.MethodGet}, Description: "Read artifact by name"},
 		{Path: "/api/v1/runs", Methods: []string{http.MethodGet}, Description: "List historical runs with metrics (limit, source, since filters; merges archived runs, latest summary, and audit triggers)"},

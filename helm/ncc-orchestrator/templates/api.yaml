@@ -33,14 +33,18 @@ spec:
             matchLabels:
               app: ncc-orchestrator-v2
               component: api
+          # Spread each revision on its own: the old pods of a rollout otherwise
+          # count, and both new replicas could end up on one node.
+          matchLabelKeys: ["pod-template-hash"]
       initContainers:
         - name: seed-config
-          image: busybox:1.37
+          image: {{ .Values.initImage }}
           command: ["sh", "-c", "mkdir -p /data/config && test -f /data/config/config.yaml || cp /config-cm/config.yaml /data/config/config.yaml"]
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: {{ .Values.readOnlyRootFilesystem }}
             capabilities: { drop: ["ALL"] }
           volumeMounts:
             - { name: config-cm, mountPath: /config-cm, readOnly: true }
@@ -96,10 +100,14 @@ spec:
             runAsNonRoot: true
             runAsUser: 1000
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: {{ .Values.readOnlyRootFilesystem }}
             capabilities: { drop: ["ALL"] }
           volumeMounts:
             - { name: data, mountPath: /data }
+            - { name: tmp, mountPath: /tmp }
       volumes:
+        - name: tmp
+          emptyDir: {}
         - name: config-cm
           configMap: { name: {{ .Values.configMapName }} }
         - name: data

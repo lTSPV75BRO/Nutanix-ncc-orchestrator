@@ -27,6 +27,9 @@ spec:
             matchLabels:
               app: ncc-orchestrator-v2
               component: api
+          # Spread each revision on its own: the old pods of a rollout otherwise
+          # count, and both new replicas could end up on one node.
+          matchLabelKeys: ["pod-template-hash"]
       securityContext:
         fsGroup: 1000
         fsGroupChangePolicy: "OnRootMismatch"
@@ -42,6 +45,7 @@ spec:
           command: ["sh", "-c", "cp /usr/local/bin/ncc-orchestrator /tools/ncc-orchestrator && chmod 0755 /tools/ncc-orchestrator"]
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           volumeMounts:
@@ -52,6 +56,11 @@ spec:
         - name: stage-config
           image: busybox:1.37
           command: ["sh", "-c", "mkdir -p /data/config && test -f /data/config/config.yaml || cp /config-cm/config.yaml /data/config/config.yaml"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           volumeMounts:
             - name: config-cm-vol
               mountPath: /config-cm
@@ -182,6 +191,7 @@ spec:
             timeoutSeconds: 2
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           volumeMounts:
@@ -190,6 +200,8 @@ spec:
             - name: tools
               mountPath: /tools
               readOnly: true
+            - name: tmp
+              mountPath: /tmp
           # Sizing: the api-server keeps the latest report and alert history
           # parsed in memory. Measured at 7,000 clusters / 200k findings it
           # used ~1 GiB; small fleets use well under 256Mi. GOMEMLIMIT (env
@@ -209,4 +221,6 @@ spec:
           persistentVolumeClaim:
             claimName: ncc-v2-data
         - name: tools
+          emptyDir: {}
+        - name: tmp
           emptyDir: {}

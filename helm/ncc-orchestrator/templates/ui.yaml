@@ -12,12 +12,25 @@ spec:
     metadata:
       labels: { app: ncc-orchestrator-v2, component: ui }
     spec:
+      # The UI server never calls the Kubernetes API.
+      automountServiceAccountToken: false
       securityContext:
         fsGroup: 1000
         fsGroupChangePolicy: "OnRootMismatch"
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: ncc-orchestrator-v2
+              component: ui
+          matchLabelKeys: ["pod-template-hash"]
       containers:
         - name: ui
           image: "{{ .Values.images.ui.repository }}:{{ .Values.images.ui.tag }}"
@@ -48,10 +61,14 @@ spec:
             runAsNonRoot: true
             runAsUser: 1000
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: {{ .Values.readOnlyRootFilesystem }}
             capabilities: { drop: ["ALL"] }
           volumeMounts:
             - { name: data, mountPath: /data }
+            - { name: tmp, mountPath: /tmp }
       volumes:
+        - name: tmp
+          emptyDir: {}
         - name: data
           persistentVolumeClaim: { claimName: {{ .Values.pvcName }} }
 ---

@@ -11,5 +11,8 @@ export default defineConfig({
       },
     },
     setupFiles: "./src/test/setup.ts",
+    // Above the waitFor timeout in setup.ts, so a wait that does fail reports
+    // its own error instead of the test's.
+    testTimeout: 20_000,
   },
 });

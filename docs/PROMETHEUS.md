@@ -227,12 +227,16 @@ Use Topology A for runner textfile metrics, and optionally scrape API runtime me
 scrape_configs:
   - job_name: ncc-api-rate-limit
     metrics_path: /api/v1/metrics/rate-limit
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/ncc-viewer-token
     static_configs:
       - targets: ["ncc-api-host:8081"]
 ```
 
 Notes:
 
+- Since 2.4.0 the endpoint needs a viewer token (a personal access token or the static viewer token), sent as `Authorization: Bearer` or `X-API-Token`.
 - Endpoint returns JSON (not Prometheus exposition). Scrape with JSON-capable pipeline/exporter, or keep it for ops automation and dashboards via API polling.
 - Keep standard Prometheus scraping for node_exporter textfile metrics.
 

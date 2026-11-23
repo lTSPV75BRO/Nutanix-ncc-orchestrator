@@ -35,6 +35,7 @@ spec:
                 runAsUser: 1000
                 runAsGroup: 1000
                 allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
                 capabilities:
                   drop: ["ALL"]
               volumeMounts:
@@ -52,6 +53,7 @@ spec:
                 runAsUser: 1000
                 runAsGroup: 1000
                 allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
                 capabilities:
                   drop: ["ALL"]
               args:
@@ -78,7 +80,15 @@ spec:
               volumeMounts:
                 - name: data
                   mountPath: /data
+                - name: tmp
+                  mountPath: /tmp
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "256Mi"
           volumes:
+            - name: tmp
+              emptyDir: {}
             - name: config-cm
               configMap:
                 name: ncc-v2-config

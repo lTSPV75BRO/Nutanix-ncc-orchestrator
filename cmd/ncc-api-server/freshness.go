@@ -327,8 +327,45 @@ func (s *apiServer) freshnessSchedules(runs []freshnessRun, now time.Time) []fre
 	return out
 }
 
-// handleFreshness serves GET /api/v1/freshness (viewer+). Clusters are
-// filtered to the caller's cluster groups.
+// visibleSchedules keeps the schedules a caller limited to cluster groups has a
+// cluster in: the main schedule always, and an environment when its cluster
+// list or its latest runs (clusters, already filtered) include one of theirs.
+func (s *apiServer) visibleSchedules(all []freshnessSchedule, access clusterAccess, clusters []freshnessCluster) []freshnessSchedule {
+	mine := map[string]bool{}
+	for _, c := range clusters {
+		mine[strings.ToLower(c.Environment)] = true
+	}
+	out := []freshnessSchedule{}
+	for _, sch := range all {
+		keep := sch.Kind == "main" || mine[strings.ToLower(sch.Environment)]
+		if !keep {
+			if src, err := s.environmentFile(sch.Environment); err == nil {
+				for _, c := range s.environmentInfoFor(sch.Environment, src).Clusters {
+					if access.permits(c) {
+						keep = true
+						break
+					}
+				}
+			}
+		}
+		if keep {
+			out = append(out, sch)
+		}
+	}
+	return out
+}
+
+func anyScheduleOverdue(list []freshnessSchedule) bool {
+	for _, sch := range list {
+		if sch.Overdue {
+			return true
+		}
+	}
+	return false
+}
+
+// handleFreshness serves GET /api/v1/freshness (viewer+). Clusters and
+// schedules are filtered to the caller's cluster groups.
 func (s *apiServer) handleFreshness(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
@@ -345,6 +382,8 @@ func (s *apiServer) handleFreshness(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			clusters = kept
+			data.Schedules = s.visibleSchedules(data.Schedules, access, clusters)
+			data.ScheduleOverdue = anyScheduleOverdue(data.Schedules)
 		}
 	}
 	data.Clusters = clusters
@@ -367,14 +406,10 @@ func (s *apiServer) freshnessRuns() []freshnessRun {
 func (s *apiServer) freshnessSnapshot(now time.Time) freshnessData {
 	runs := s.freshnessRuns()
 	schedules := s.freshnessSchedules(runs, now)
-	overdue := false
-	for _, sch := range schedules {
-		overdue = overdue || sch.Overdue
-	}
 	return freshnessData{
 		GeneratedAt:     now.Format(time.RFC3339),
 		Clusters:        clusterFreshness(runs, now),
 		Schedules:       schedules,
-		ScheduleOverdue: overdue,
+		ScheduleOverdue: anyScheduleOverdue(schedules),
 	}
 }

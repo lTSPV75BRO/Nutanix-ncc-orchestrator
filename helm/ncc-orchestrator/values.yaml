@@ -59,9 +59,19 @@ ingress:
 # memory — ~1 GiB measured at 7,000 clusters / 200k findings, well under
 # 256Mi for small fleets. When setting a memory limit for the api, also set
 # apiGoMemLimit to ~90% of it so the Go heap stays under the limit.
+# The defaults are requests only (no limits), for the scheduler.
 resources:
-  api: {}
-  ui: {}
+  api:
+    requests: { cpu: 100m, memory: 256Mi }
+  ui:
+    requests: { cpu: 50m, memory: 64Mi }
+  runner:
+    requests: { cpu: 100m, memory: 256Mi }
+
+# Containers run with a read-only root filesystem; only /data (the PVC) and
+# /tmp (an emptyDir) are writable. Set to false only to work around a custom
+# image that writes elsewhere.
+readOnlyRootFilesystem: true
 
 # GOMEMLIMIT for the api-server, e.g. "1800MiB" with a 2Gi limit. Empty = unset.
 apiGoMemLimit: ""

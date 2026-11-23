@@ -69,8 +69,8 @@ warnings with the user, client address and request id, and never passwords.
 ### Security
 
 See [`security-assessment.md`](security-assessment.md). No Critical findings;
-one accepted false positive in the dependency scan; deployment and installer
-hardening fixed; systemd sandboxing, Windows ACLs and container defaults open.
+one accepted false positive in the dependency scan; deployment, installer and
+container hardening fixed; systemd sandboxing and Windows ACLs open.
 
 ### Dependencies
 
@@ -127,10 +127,8 @@ not re-run on those systems.
 
 These need an environment that was not available or time that was not spent:
 
-- Node drain on a live cluster, a 7,000-cluster data set with pod memory, and a
-  read-only root filesystem exercised with restore, retention preview and runs.
-- Egress NetworkPolicy, and a multi-replica install where the replicas land on
-  different nodes through a rollout.
+- Node drain on a live cluster, and a 7,000-cluster data set with pod memory.
+- Egress NetworkPolicy.
 - A reboot and `kill -9` of supervisor children on Linux; a systemd drop-in with
   sandboxing; LDAP against a real directory on Linux.
 - A Windows reboot, a service account other than SYSTEM, an upgrade from an older

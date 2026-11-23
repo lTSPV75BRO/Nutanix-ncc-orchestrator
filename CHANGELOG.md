@@ -12,6 +12,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
+- **Stronger password hashing (SEC-11).** New password hashes use bcrypt cost
+  12 (was 10). Existing accounts are upgraded the next time they sign in; nobody
+  is signed out and no password changes. System Health warns when sessions run
+  over plain HTTP.
+- **`GET /api/v1/metrics/rate-limit` needs a viewer session or token (SEC-10).**
+  It was public. Give monitoring that reads it a viewer token.
+- **Containers run with a read-only root filesystem (HARD-01)** in the Helm
+  chart and `k8s/`: only `/data` and a `/tmp` `emptyDir` are writable. The chart
+  sets default CPU and memory requests and the UI pod no longer mounts a service
+  account token. For a custom image that writes elsewhere, set
+  `readOnlyRootFilesystem: false`.
+- **Safer installers (WIN-03).** The cloud-init script no longer deletes an
+  existing install (`NCC_FORCE_CLEAN=1` does, on purpose), and both installers
+  check the release's build attestation with the GitHub CLI when it is installed
+  and signed in (`NCC_VERIFY_ATTESTATION=auto|require|off`).
+- **Schedules in `/api/v1/freshness` follow cluster groups (FRESH-01).** A user
+  limited to cluster groups sees only environment schedules that cover one of
+  their clusters, and the overdue flag counts only those.
 - **MCP is API-only with strict auth (SEC-12).** `ncc-mcp-server` no longer
   execs `ncc-orchestrator`. Every tool and resource calls `ncc-api-server`
   with a personal access token (`NCC_MCP_TOKEN`), HMAC proof
@@ -88,6 +106,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The cloud-init and Windows installers can download a release (REL-06).**
+  Their default URL used the bare version, but release tags start with `v`, so
+  GitHub answered 404. They try `v<version>` first and the bare version next, so
+  mirrors keep working.
+- **API and UI replicas stay on different nodes through a rollout (ENV-11):** the
+  spread constraint now counts each revision on its own (`matchLabelKeys`).
+- **The Helm chart is installed in CI (CI-02):** `scripts/helm-smoke-test.sh`
+  installs it on `kind` and checks sign-in, a run, the report, backup, verify,
+  retention preview and restore. The chart's `initImage` value now takes effect.
 - **Performance (measured with the benchmarks added in the same change).**
   - *Dashboard data endpoint:* the API resolved its configured directories (a walk that follows symlinks) several
     times per request, about three quarters of the CPU in a profile of `/report/data`. The result is now reused

@@ -225,7 +225,11 @@ func (s *apiServer) writeDiagnostics(w http.ResponseWriter, r *http.Request, req
 		})
 		tally(string(d.Status))
 	}
-	for _, d := range append(s.k8sRuntimeDiagnostics(), s.apiRuntimeDiagnostic()) {
+	runtimeDiags := append(s.k8sRuntimeDiagnostics(), s.apiRuntimeDiagnostic())
+	if !s.capabilities.Kubernetes && s.sessionsHonored() {
+		runtimeDiags = append(runtimeDiags, s.cookieDiagnostic())
+	}
+	for _, d := range runtimeDiags {
 		checks = append(checks, unifiedCheck{
 			ID: d.ID, Title: d.Title, Category: d.Category,
 			Status: string(d.Status), Message: d.Message, Hint: d.Hint,
@@ -419,6 +423,21 @@ func (s *apiServer) doctorCheckIDs(requested []string) []string {
 		}
 	}
 	return out
+}
+
+// cookieDiagnostic warns when a host install serves sessions over plain HTTP.
+// Kubernetes has its own check in k8sRuntimeDiagnostics.
+func (s *apiServer) cookieDiagnostic() diagResult {
+	d := diagResult{ID: "session-cookie-secure", Title: "Secure session cookies", Category: "tls"}
+	if s.cookieSecure() {
+		d.Status = diagOK
+		d.Message = "Session cookies are marked Secure for HTTPS."
+		return d
+	}
+	d.Status = diagWarn
+	d.Message = "Sign-in runs over plain HTTP, so session cookies are not marked Secure and can be read on the network."
+	d.Hint = "Turn on HTTPS in Settings → Access → HTTPS / TLS, or pass --cookie-secure when a proxy in front of the stack serves HTTPS."
+	return d
 }
 
 func (s *apiServer) k8sRuntimeDiagnostics() []diagResult {

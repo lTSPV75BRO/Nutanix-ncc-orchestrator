@@ -14,7 +14,7 @@ days, M under a week, L longer.
 
 | Item | Scope | Size |
 | --- | --- | --- |
-| Helm install smoke test in CI | Install the chart on a `kind` cluster from images built in the job and wait for the API and UI to be ready; run `helm template` with `kubeconform` in the same job. The chart's API pod could not start and nothing in CI noticed (CI-02). | M |
+| Publish from CI only (REL-05) | Find why "Publish GitHub Release" was refused, publish 2.4.0 from the workflow, verify one attestation, and add that check as the workflow's last step. | S |
 | Server-side report pagination | Build only the requested `checks_snapshot` or `agg_rows` page instead of loading and filtering the whole report before slicing. | M |
 | Kubernetes HA integration test | Two API replicas, shared storage, CronJob execution, schedule updates and pod rescheduling on separate nodes; add a 7,000-cluster data set with memory figures. | L |
 
@@ -24,9 +24,6 @@ days, M under a week, L longer.
 | --- | --- | --- |
 | systemd hardening (LIN-01) | The unit written by `v2-install-service` runs as root with no sandboxing. Add a dedicated user and `NoNewPrivileges`, `ProtectSystem`, `PrivateTmp`, `ProtectKernel*`, `RestrictSUIDSGID` and `LockPersonality`; check `chcon`, `systemctl restart`, restore and in-app update still work. | M |
 | Windows file ACLs in the product (WIN-02) | Apply a restrictive ACL from `v2-start` to the token file, user database, backups and config, so manual installs are covered as well as the installer. | M |
-| Safer installers (WIN-03) | Apply the Windows installer's "never delete an existing install" rule to the cloud-init script, and verify the SLSA attestation (`gh attestation verify`) or a cosign signature in both, not only a checksum fetched from the same release URL. | M |
-| Container hardening defaults (HARD-01) | `readOnlyRootFilesystem: true` with an `emptyDir` for `/tmp` (the API image already runs read-only with only `/data` writable), default CPU and memory requests, pod anti-affinity for the two-replica deployments. Test runs, backup and restore under it. | M |
-| Secure cookie by default (SEC-11) | A plain-HTTP host install sends the session cookie without `Secure`. Prefer auto-TLS or a first-run warning in the UI. | M |
 | Secret rotation workflow | Document and optionally guide rotation of API tokens, JWT secrets, backup keys and Prism credentials across replicas. | M |
 | Outbound URL policy | An administrator-visible allowlist for Prism Central, LDAP, OIDC, SMTP, webhook and update-server destinations. | M |
 | Signed image and SBOM verification | Publish Cosign signatures and SBOMs and optionally verify image provenance during deployment. | M |
@@ -50,11 +47,7 @@ days, M under a week, L longer.
 | Split the largest files | `goNCC.go` (18.9k lines), the API `main.go` (6.3k) and `AccessSection.tsx` (3.4k). Extract by area when touching it. | L |
 | Path handling review (gosec G703) | CI excludes G703 because of 80+ path-taint hits on server-config paths. Review by area, move request-derived paths to `os.Root`, mark the rest with a reason, then drop the exclusion. | M |
 | Support bundle: Kubernetes state | Add Kubernetes events, CronJob and PVC state, and component versions per pod to the bundle. | S-M |
-| Public diagnostic endpoints (SEC-10) | `meta/routes`, `openapi.json` and `metrics/rate-limit` are readable without sign-in for the Swagger page. Require a session for the rate-limit counters. | S |
-| Freshness scoping (FRESH-01) | Filter `/api/v1/freshness` schedules to the environments a cluster-scoped user can see. | S |
 | Runner image from a checkout | `Dockerfile.runner` expects a prebuilt `dist/` binary and cannot be built from a plain clone; add a documented target or a multi-stage variant. | S |
-| Flaky test (TEST-02) | `SessionIdleGuard.test.tsx` failed once in a loaded run; use fake timers. | S |
-| Password hashing cost | bcrypt uses the library default (10); raise it and rehash on the next sign-in. | S |
 
 ## Performance sequence
 

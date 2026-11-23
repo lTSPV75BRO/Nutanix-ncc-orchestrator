@@ -19,11 +19,25 @@ writes them to `/etc/ncc/ncc-install.env`:
 ```yaml
 NCC_VERSION="2.4.0"
 NCC_RELEASE_BASE_URL="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download"
+NCC_VERIFY_ATTESTATION="auto"
 NCC_CLUSTERS=""
 NCC_PCS=""
 NCC_USERNAME="admin"
 NCC_PASSWORD="<inject securely at first boot>"
 ```
+
+Both installers behave the same way:
+
+- **Version:** `NCC_VERSION` works with or without the leading `v`. A mirror may
+  name its directory either way.
+- **Existing install:** an install directory that already has files is never
+  deleted. The installer stops with an error; set `NCC_FORCE_CLEAN=1` to remove
+  it on purpose.
+- **Build attestation:** `NCC_VERIFY_ATTESTATION` is `auto` (check when the GitHub
+  CLI is installed and signed in, or `GH_TOKEN` is set), `require` or `off`.
+  Use `require` where you can: the checksum comes from the same place as the
+  archive. The published 2.2.1 and 2.3.0 files have no matching attestation, so
+  install those with `off`.
 
 The install root and configuration are under `/opt/ncc-v2`; all runner,
 API, UI, scheduler, and supervisor logs are kept under `/opt/ncc-v2/logs`.

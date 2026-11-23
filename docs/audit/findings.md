@@ -15,17 +15,10 @@ P3 optional. No finding was rated Critical.
 | --- | --- | --- | --- | --- |
 | LIN-01 | Install | The systemd unit written by `v2-install-service` runs as root with no sandboxing (`NoNewPrivileges`, `ProtectSystem`, `PrivateTmp` unset). Needs testing on a systemd host because the service restarts itself with `systemctl` and runs `chcon`. | Medium | P2 |
 | WIN-02 | Install | The product sets no Windows ACLs on the token, user database, backups or config. Only the installer restricts its directory, so manual installs under `ProgramData` inherit permissive rights. | Medium | P2 |
-| WIN-03 | Install | Remaining part: the cloud-init script still deletes an existing install directory, and neither installer verifies the SLSA attestation (they check a SHA-256 fetched from the same release URL). The Windows installer no longer deletes an existing install. | Medium | P2 |
-| HARD-01 | Deploy | No container sets `readOnlyRootFilesystem`, default CPU and memory requests are empty, and the two-replica deployments have no pod anti-affinity. The API image runs correctly read-only with only `/data` writable; restore, retention preview and runs were not exercised under it. | Low-Medium | P2 |
 | A11Y-02 | UI | Accessibility is checked in a browser by hand. Populated pages (tables, charts, drawers), 400% zoom and a screen reader are not covered, and the browser pass is not in CI. | Medium | P2 |
-| CI-02 | CI | Nothing installs the Helm chart in CI, so a chart that cannot start (see K8S-02) is not caught. | Medium | P1 |
+| REL-05 | Release | The published v2.3.0 files were uploaded by hand on 2026-11-08 and are not the CI build, so none has a build attestation and `gh attestation verify` fails for them. The CI rebuild of 2026-11-19 was attested but not published: "Publish GitHub Release" failed with `Resource not accessible by integration`. v2.2.1 `checksums.txt` has no attestation either. Publish 2.4.0 from the workflow only, and check one file with `gh attestation verify` before announcing it. | Medium | P1 |
 | MCP-1 | MCP | `confirm: "APPLY"` is supplied by the model, and the HMAC proof is keyed by the PAT, so neither is a security boundary (documented). With `NCC_MCP_ALLOW_MUTATIONS=true`, the PAT's role is the only limit; use a least-privilege PAT and keep the host's tool approval on. | Low | P3 |
-| SEC-10 | API | `meta/routes`, `openapi.json` and `metrics/rate-limit` are readable without sign-in so the Swagger page works. | Low | P3 |
-| SEC-11 | API | A plain-HTTP host install sends the session cookie without `Secure` unless TLS or `--cookie-secure` is set (the chart sets it). bcrypt uses the library default cost (10). | Low | P3 |
-| FRESH-01 | API | `/api/v1/freshness` returns all schedules and the global overdue flag to cluster-scoped users. Metadata only. | Low | P3 |
 | SEC-07b | Restore | The trusted-stack ledger judges each file against any recorded set, so a restore can mix files from different versions that each ran on the host. No new code is admitted. | Low | P3 |
-| ENV-11 | Deploy | Once, both API replicas landed on the same node during a rollout surge despite the topology spread constraint. | Low | P3 |
-| TEST-02 | Tests | `SessionIdleGuard.test.tsx` failed once in a loaded full run and passed on rerun. Use fake timers. | Low | P3 |
 | MAINT-01 | Code | `goNCC.go` (18.9k lines), the API `main.go` (6.3k) and `AccessSection.tsx` are very large single files. Split by area when touching them. | Medium | P3 |
 
 Accepted risk: **DEP-03**, `GO-2026-6909` in `crewjam/saml` v0.6.3, is a
@@ -59,6 +52,11 @@ recorded in `scripts/govulncheck-accepted.txt` with a review-by date of
 | K8S-01 | The Helm API pod had no security context; its init container ran as root. | Non-root, `fsGroup` and seccomp at pod level; restricted init container. |
 | WIN-01 | The Windows install directory under `ProgramData` was writable by every local user while the stack ran as SYSTEM. | The installer restricts it to SYSTEM and Administrators. |
 | CI-01 | The publishing workflows relied on a comment for "no cache" and could restore a poisoned cache. | Caches are disabled explicitly. |
+| WIN-03 | The installers could delete an existing install, and checked only a SHA-256 from the same release URL. | Neither deletes a non-empty directory without `NCC_FORCE_CLEAN=1`; both check the build attestation (`NCC_VERIFY_ATTESTATION` = `auto`, `require`, `off`). The Linux script was run in a container for 11 cases; the Windows change was checked by parsing it and running its `gh` step. |
+| HARD-01 | Containers had a writable root filesystem and no default requests. | Read-only root filesystem with a `/tmp` `emptyDir` on every container (Helm and `k8s/`), default requests, `seccompProfile` and no service account token on the UI. A run, backup, verify, retention preview and restore pass under it on `kind`. Limits stay unset on purpose (sizing depends on fleet size). |
+| SEC-10 | The rate-limit counters were readable without sign-in. | They need a viewer session or token. `openapi.json` and `meta/routes` stay public for the Swagger page. |
+| SEC-11 | bcrypt used the library default cost (10); a plain-HTTP host install gave no hint that its cookie is not `Secure`. | Cost 12, with older hashes upgraded at the next sign-in (not a password change; sign-in timing stays equal for unknown names). System Health warns when sessions run over plain HTTP. |
+| FRESH-01 | `/api/v1/freshness` returned every schedule and the global overdue flag to cluster-scoped users. | Environment schedules and the flag follow the caller's cluster groups; the main schedule stays visible. |
 | OPS-03 | No secret scanning in CI. | gitleaks runs in CI; a full-history scan is clean. |
 
 ### Correctness and reliability
@@ -68,6 +66,9 @@ recorded in `scripts/govulncheck-accepted.txt` with a review-by date of
 | K8S-02 | The Helm API pod crash-looped on first start (also in the published 2.3.0 image). | The chart passes the full flag set; a configured Secret or `NCC_USERS_DB` suppresses the `--users-db` default. |
 | ENV-03 | The Helm runner CronJob failed with `mkdir logs: permission denied`. | It runs from `/data` with explicit paths and `--skip-preflight-check`. |
 | WIN-04 | The Windows installer wrote an invalid `config.yaml` (backslash paths in double quotes). | Paths are single-quoted. |
+| CI-02 | Nothing installed the Helm chart in CI. | `helm-smoke` job: `kubeconform` on the chart and `k8s/`, then `scripts/helm-smoke-test.sh` installs the chart on `kind` and runs it against a simulated cluster. |
+| REL-06 | Both installers failed with their default settings: they downloaded from `.../download/2.4.0/`, but release tags start with `v`, so GitHub answered 404. | They try `v<version>`, then the bare version for mirrors. |
+| ENV-11 | Once, both API replicas landed on one node during a rollout. | `matchLabelKeys: [pod-template-hash]` spreads each revision on its own. Six rollouts on two workers stayed spread; the original fault did not reproduce without it either. |
 | COR-09 | `upsertYAMLScalar` dropped indentation, so a restore moved nested config keys to the top level. | Indentation is kept; a `$` in a value is literal. |
 | COR-08 | A dropped or busy LDAP directory during sign-in counted as a wrong password and fed the lockout. | Only a refused credential counts; tested against a real LDAP conversation. |
 | ENV-01 | Creating a user on a second replica returned HTTP 500 on a store conflict. | Retried once, then 409. |
@@ -98,3 +99,4 @@ recorded in `scripts/govulncheck-accepted.txt` with a review-by date of
 | DEP-01, DEP-02 | Go module bumps; npm dev-tool advisories. | Updated; `npm audit` reports 0. |
 | OPS-02 | Dependabot and a full `npm audit`. | Added. |
 | TEST-01 | Monaco test timeout flake. | Fixed. |
+| TEST-02 | `SessionIdleGuard.test.tsx` failed once in a loaded run. | It already used fake timers; the likely cause is the one-second default of `waitFor`. Raised to five seconds for all tests. |

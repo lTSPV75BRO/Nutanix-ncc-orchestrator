@@ -34,8 +34,13 @@ spec:
               type: RuntimeDefault
           initContainers:
             - name: seed-config
-              image: busybox:1.37
+              image: {{ .Values.initImage }}
               command: ["sh", "-c", "mkdir -p /data/config && test -f /data/config/config.yaml || cp /config-cm/config.yaml /data/config/config.yaml"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: {{ .Values.readOnlyRootFilesystem }}
+                capabilities:
+                  drop: ["ALL"]
               volumeMounts:
                 - { name: config-cm, mountPath: /config-cm, readOnly: true }
                 - { name: output, mountPath: /data }
@@ -43,8 +48,10 @@ spec:
             - name: ncc-orchestrator
               image: "{{ .Values.images.runner.repository }}:{{ .Values.images.runner.tag }}"
               imagePullPolicy: {{ .Values.images.runner.pullPolicy }}
+              resources: {{ .Values.resources.runner | toYaml | nindent 16 }}
               securityContext:
                 allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: {{ .Values.readOnlyRootFilesystem }}
                 capabilities:
                   drop: ["ALL"]
               # The image's WORKDIR (/workspace) is not writable by uid 1000, and
@@ -76,7 +83,11 @@ spec:
               volumeMounts:
                 - name: output
                   mountPath: /data
+                - name: tmp
+                  mountPath: /tmp
           volumes:
+            - name: tmp
+              emptyDir: {}
             - name: config-cm
               configMap:
                 name: {{ .Values.configMapName }}

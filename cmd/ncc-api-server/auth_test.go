@@ -122,7 +122,7 @@ func TestUserStoreVerify(t *testing.T) {
 func TestLoadUserStoreRejectsBadRole(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "users.yaml")
-	content := "users:\n  - username: bob\n    password_hash: \"" + dummyBcryptHash + "\"\n    role: wizard\n"
+	content := "users:\n  - username: bob\n    password_hash: \"" + string(dummyHash(10)) + "\"\n    role: wizard\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}

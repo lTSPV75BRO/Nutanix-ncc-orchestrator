@@ -17,22 +17,66 @@ $Username = if ($env:NCC_USERNAME) { $env:NCC_USERNAME } else { "admin" }
 
 $arch = if ([Environment]::Is64BitOperatingSystem) { "amd64" } else { throw "64-bit Windows is required" }
 $archive = "ncc-v2-stack-windows-$arch.zip"
-$baseUrl = "$ReleaseBaseUrl/$NccVersion"
+$NccVersion = $NccVersion -replace '^v', ''
+# The checksum comes from the same place as the archive, so it only proves the
+# download is complete. The build attestation proves the archive came from this
+# project's release workflow. "auto" checks it when the GitHub CLI is installed
+# and signed in (or GH_TOKEN is set); "require" fails without it; "off" skips it.
+$Attest = if ($env:NCC_VERIFY_ATTESTATION) { $env:NCC_VERIFY_ATTESTATION } else { "auto" }
+if ($Attest -notin @("auto", "require", "off")) { throw "NCC_VERIFY_ATTESTATION must be auto, require or off" }
+$ReleaseRepo = if ($env:NCC_RELEASE_REPO) { $env:NCC_RELEASE_REPO } else { "lTSPV75BRO/Nutanix-ncc-orchestrator" }
+
+# Runs gh without its stderr turning into a terminating error, and returns the
+# exit code.
+function Invoke-Gh {
+    param([string[]]$Arguments)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try { & gh @Arguments 2>&1 | ForEach-Object { Write-Host $_ } } finally { $ErrorActionPreference = $previous }
+    return $LASTEXITCODE
+}
+
 $tempDir = Join-Path $env:TEMP ("ncc-" + [Guid]::NewGuid().ToString("N"))
 $archivePath = Join-Path $tempDir $archive
 $checksumPath = Join-Path $tempDir "checksums.txt"
 
 New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 try {
-    Invoke-WebRequest -Uri "$baseUrl/$archive" -OutFile $archivePath
-    Invoke-WebRequest -Uri "$baseUrl/checksums.txt" -OutFile $checksumPath
+    # GitHub release tags start with "v" (v2.4.0). A mirror may use either form,
+    # so try the tag first and the bare version next.
+    $baseUrl = $null
+    foreach ($tag in @("v$NccVersion", $NccVersion)) {
+        try {
+            Invoke-WebRequest -Uri "$ReleaseBaseUrl/$tag/checksums.txt" -OutFile $checksumPath -UseBasicParsing
+            $baseUrl = "$ReleaseBaseUrl/$tag"
+            break
+        } catch {
+            Write-Host "No release at $ReleaseBaseUrl/$tag ($($_.Exception.Message))"
+        }
+    }
+    if (!$baseUrl) { throw "No release $NccVersion found under $ReleaseBaseUrl" }
+    Invoke-WebRequest -Uri "$baseUrl/$archive" -OutFile $archivePath -UseBasicParsing
 
-    $expected = (Get-Content $checksumPath |
+    $line = Get-Content $checksumPath |
         Where-Object { $_ -match "\s$([regex]::Escape($archive))$" } |
-        Select-Object -First 1).Split(" ")[0]
+        Select-Object -First 1
+    $expected = if ($line) { $line.Split(" ")[0] } else { "" }
     $actual = (Get-FileHash $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
     if (!$expected -or $expected.ToLowerInvariant() -ne $actual) {
         throw "Release checksum verification failed for $archive"
+    }
+
+    if ($Attest -ne "off") {
+        $haveGh = [bool](Get-Command gh -ErrorAction SilentlyContinue)
+        if ($haveGh -and (Invoke-Gh @("auth", "status")) -eq 0) {
+            if ((Invoke-Gh @("attestation", "verify", $archivePath, "--repo", $ReleaseRepo)) -ne 0) {
+                throw "Build attestation verification failed for $archive. Set NCC_VERIFY_ATTESTATION=off only if you trust the source."
+            }
+        } elseif ($Attest -eq "require") {
+            throw "NCC_VERIFY_ATTESTATION=require needs the GitHub CLI (gh), signed in or with GH_TOKEN set"
+        } else {
+            Write-Host "Build attestation not checked: the GitHub CLI is missing or not signed in."
+        }
     }
 
     # Never wipe an existing install: it holds the user database, API token and

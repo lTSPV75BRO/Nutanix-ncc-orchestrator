@@ -81,3 +81,59 @@ func TestHelmSeedConfigSkipsSecretPreflight(t *testing.T) {
 		t.Error("helm seed config must use secrets.provider env (NCC_PASSWORD from the Secret)")
 	}
 }
+
+// Every container of the API, UI and runner runs with a read-only root
+// filesystem (HARD-01), so each needs a writable /tmp next to /data. One
+// securityContext per container: init containers count too.
+func TestManifestsUseReadOnlyRootFilesystem(t *testing.T) {
+	helm := filepath.Join("..", "..", "helm", "ncc-orchestrator", "templates")
+	k8s := filepath.Join("..", "..", "k8s")
+	for file, containers := range map[string]int{
+		filepath.Join(helm, "api.yaml"):           2,
+		filepath.Join(helm, "ui.yaml"):            1,
+		filepath.Join(helm, "cronjob.yaml"):       2,
+		filepath.Join(k8s, "api-deployment.yaml"): 3,
+		filepath.Join(k8s, "ui-deployment.yaml"):  1,
+		filepath.Join(k8s, "runner-cronjob.yaml"): 2,
+	} {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(b)
+		for _, want := range []string{"readOnlyRootFilesystem: ", "allowPrivilegeEscalation: false"} {
+			if got := strings.Count(text, want); got != containers {
+				t.Errorf("%s: %q on %d of %d containers", file, want, got, containers)
+			}
+		}
+		if !strings.Contains(text, "mountPath: /tmp") {
+			t.Errorf("%s: no writable /tmp", file)
+		}
+	}
+	values, err := os.ReadFile(filepath.Join("..", "..", "helm", "ncc-orchestrator", "values.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(values), "\nreadOnlyRootFilesystem: true") {
+		t.Error("values.yaml: readOnlyRootFilesystem is not true by default")
+	}
+}
+
+// Neither installer may delete an existing install (user database, token,
+// backups), and both look for the release under its tag name (WIN-03).
+func TestInstallersKeepExistingData(t *testing.T) {
+	for file, wants := range map[string][]string{
+		filepath.Join("..", "..", "deploy", "cloud-init", "ncc-v2.yaml"): {"NCC_FORCE_CLEAN", "gh attestation verify", `for tag in "v$version" "$version"`},
+		filepath.Join("..", "..", "deploy", "windows", "setup-ncc.ps1"):  {"NCC_FORCE_CLEAN", `"attestation", "verify"`, `@("v$NccVersion", $NccVersion)`},
+	} {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range wants {
+			if !strings.Contains(string(b), want) {
+				t.Errorf("%s: %q is missing", file, want)
+			}
+		}
+	}
+}

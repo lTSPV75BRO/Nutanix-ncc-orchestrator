@@ -1,7 +1,7 @@
 # Continuous-integration quality gates. Runs on every push to main and on all
 # pull requests. Keeps the default branch releasable: Go build/vet/race tests,
 # golangci-lint, govulncheck, gosec, gitleaks, frontend tests + npm audit,
-# and a Trivy filesystem scan. Checkouts never keep the job token
+# a Helm install on kind, and a Trivy filesystem scan. Checkouts never keep the job token
 # (persist-credentials: false) and every action is pinned by commit SHA.
 name: CI
 
@@ -146,6 +146,35 @@ jobs:
         run: |
           set -o pipefail
           govulncheck -format json ./cmd/... ./internal/... ./tools/... | go run ./tools/vulngate scripts/govulncheck-accepted.txt
+
+  helm-smoke:
+    # The chart once shipped with an API pod that could not start and a CronJob
+    # that could not complete a run; nothing installed it before a release.
+    name: helm install smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - name: install kind and kubeconform
+        run: |
+          go install sigs.k8s.io/kind@v0.33.0
+          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.8.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: validate the chart and the k8s/ manifests
+        run: |
+          set -o pipefail
+          helm lint helm/ncc-orchestrator
+          helm template ncc helm/ncc-orchestrator | kubeconform -strict -summary -ignore-missing-schemas
+          helm template ncc helm/ncc-orchestrator --set ingress.enabled=true --set networkPolicy.egress.enabled=true --set prometheusRule.enabled=true | kubeconform -strict -summary -ignore-missing-schemas
+          kubectl kustomize k8s | kubeconform -strict -summary -ignore-missing-schemas
+      - name: install on a kind cluster and run it
+        run: scripts/helm-smoke-test.sh
 
   trivy:
     name: trivy filesystem scan

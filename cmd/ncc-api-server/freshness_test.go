@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -212,5 +213,62 @@ func TestHandleFreshnessInactiveSchedule(t *testing.T) {
 		if env.Data.Clusters == nil || env.Data.Schedules == nil {
 			t.Fatal("empty lists must encode as [] not null")
 		}
+	}
+}
+
+// A caller limited to cluster groups sees only the environment schedules that
+// cover one of their clusters, and the overdue flag follows (FRESH-01).
+func TestHandleFreshnessSchedulesFollowClusterGroups(t *testing.T) {
+	root := t.TempDir()
+	out := filepath.Join(root, "outputfiles")
+	now := time.Now().UTC().Truncate(time.Second)
+	writeFreshnessRun(t, filepath.Join(out, "runs", "r1"), now.Add(-30*time.Minute), "dev", []map[string]interface{}{{"address": "pe-dev", "ok": true}})
+	writeFreshnessRun(t, filepath.Join(out, "runs", "r2"), now.Add(-9*time.Hour), "prod", []map[string]interface{}{{"address": "pe-prod", "ok": true}})
+	envDir := filepath.Join(root, filepath.FromSlash(environmentsRelDir))
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lab := "runner:\n  targets:\n    mode: clusters\n    clusters: [pe-dev]\n"
+	if err := os.WriteFile(filepath.Join(envDir, "lab.yaml"), []byte(lab), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newClusterGroupTestServer(t, []clusterGroup{{Name: "Dev", Clusters: []string{"pe-dev"}, LocalUsers: []string{"alice"}}})
+	s.repoRoot, s.outputDir, s.configPath, s.scheduleStatePath = root, "outputfiles", "config.yaml", ".ncc-api-schedule.json"
+	saved := now.Add(-48 * time.Hour).Format(time.RFC3339)
+	if err := s.saveEnvironmentSchedules([]environmentSchedule{
+		{ID: "e1", Environment: "dev", Enabled: true, Every: "1h", CreatedAt: saved},
+		{ID: "e2", Environment: "prod", Enabled: true, Every: "1h", CreatedAt: saved},
+		// Never ran, but its cluster list contains alice's cluster.
+		{ID: "e3", Environment: "lab", Enabled: true, Every: "96h", CreatedAt: saved},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	get := func(p principal) freshnessData {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/freshness", nil)
+		rr := httptest.NewRecorder()
+		s.handleFreshness(rr, withPrincipal(req, p))
+		var env struct {
+			Data freshnessData `json:"data"`
+		}
+		if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
+			t.Fatal(err)
+		}
+		return env.Data
+	}
+
+	admin := get(principal{role: RoleAdmin, subject: "root"})
+	if len(admin.Schedules) != 3 || !admin.ScheduleOverdue {
+		t.Fatalf("admin: %+v", admin)
+	}
+	alice := get(principal{role: RoleViewer, subject: "alice"})
+	names := []string{}
+	for _, sch := range alice.Schedules {
+		names = append(names, sch.Environment)
+	}
+	if strings.Join(names, ",") != "dev,lab" || alice.ScheduleOverdue {
+		t.Fatalf("alice sees %v (overdue %v), want dev,lab and not overdue", names, alice.ScheduleOverdue)
 	}
 }
