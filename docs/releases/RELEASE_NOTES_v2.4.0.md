@@ -2,6 +2,14 @@
 
 **Status:** Unreleased.
 
+## SSO works through the UI proxy
+
+SAML and OpenID Connect redirects and callbacks are no longer refused as an
+unversioned dashboard when they pass through `ncc-ui-server`. These identity
+requests do not originate from the SPA, so they cannot supply its version
+header; only the public OIDC login/callback and `/saml/` routes bypass the
+version gate.
+
 ## Deployment agents resolve releases from GitHub
 
 The copy-paste deployment prompt and runbook now require GitHub's authoritative

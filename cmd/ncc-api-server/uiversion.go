@@ -117,7 +117,12 @@ func skipUIVersionGate(r *http.Request) bool {
 	}
 	p := r.URL.Path
 	return p == "/api/v1/health" || p == "/api/v1/health/ready" || p == "/metrics" ||
-		p == "/" || p == "/docs" || p == "/docs/ui" || strings.HasPrefix(p, "/docs/assets/")
+		p == "/" || p == "/docs" || p == "/docs/ui" || strings.HasPrefix(p, "/docs/assets/") ||
+		// SAML and OIDC redirects/callbacks can pass through ncc-ui-server. The
+		// proxy stamps its server version, while the IdP request cannot carry
+		// the SPA's X-NCC-UI-Version header. These public identity endpoints
+		// must therefore not be treated as an unversioned dashboard.
+		p == oidcLoginPath || p == oidcCallbackPath || strings.HasPrefix(p, "/saml/")
 }
 
 // rejectCompromisedUIClient writes 403 when the caller is a blacklisted NCC UI.

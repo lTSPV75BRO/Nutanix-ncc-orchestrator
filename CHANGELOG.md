@@ -88,6 +88,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **SAML and OIDC sign-in no longer trips the UI version gate.** Identity
+  redirects and assertion callbacks proxied through `ncc-ui-server` have its
+  server-version header but cannot carry the dashboard's SPA-version header.
+  The API now exempts only the public OIDC login/callback and `/saml/` paths,
+  so they are not refused as an unversioned dashboard.
 - **Deployment agents now resolve the published release authoritatively.** The
   copy-paste deployment prompt and runbook require GitHub's
   `releases/latest` API rather than a web-search result, README badge, branch

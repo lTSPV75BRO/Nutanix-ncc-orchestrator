@@ -41,6 +41,21 @@ func TestRejectUnversionedUIByDefault(t *testing.T) {
 	}
 }
 
+func TestSSOAuthPathsSkipUIVersionGate(t *testing.T) {
+	s := newTokenTestServer(t)
+	for _, path := range []string{oidcLoginPath, oidcCallbackPath, "/saml/login", "/saml/acs"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		// These are the headers on an identity redirect routed through
+		// ncc-ui-server: it stamps its own version, but an IdP callback has
+		// no SPA request header from which to obtain the frontend version.
+		req.Header.Set("X-Requested-With", "ncc-ui")
+		req.Header.Set(uiversion.ServerVersionHeader, "2.4.0")
+		if s.rejectCompromisedUIClient(httptest.NewRecorder(), req) {
+			t.Errorf("%s must skip the UI version gate", path)
+		}
+	}
+}
+
 func TestAllowCurrentUIVersion(t *testing.T) {
 	s := newTokenTestServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/runs/summary", nil)
