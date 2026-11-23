@@ -88,6 +88,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **The API status pill is gone from the header; an unreachable API raises a notice.** The Status page
+  already shows the API's state. When the dashboard cannot reach the API, a sticky "API unreachable"
+  notice appears once, with a Retry button, the tab title gets a warning mark, the dashboard checks
+  every 10 seconds instead of 30, and "API reachable again" replaces the notice when it returns.
 - **Findings: cluster names open Prism, and the list and By check views are formatted.** A cluster
   name in the table, list, By check chips and the detail drawer now opens the cluster in Prism in a
   new tab (a small icon beside it opens the cluster page in the dashboard). The KB badge and cluster

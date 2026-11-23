@@ -11,7 +11,6 @@ import {
   RocketOutlined,
   ThunderboltOutlined,
   UserOutlined,
-  WifiOutlined,
 } from "@ant-design/icons";
 import { Alert, Button, Dropdown, Tag, Tooltip } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -128,39 +127,41 @@ function useDocumentTitleSync(health: HealthStatePayload, runActive: boolean) {
   }, [health.state, runActive, page]);
 }
 
-function HeaderHealthPill({
-  health,
-  onRetry,
-}: {
-  health: HealthStatePayload;
-  onRetry?: () => void;
-}) {
-  const title =
-    health.state === "err"
-      ? "API did not answer through this UI. Click to retry."
-      : health.authMode
-        ? `API through this UI · auth: ${health.authMode}`
-        : "API through this UI. Click to refresh.";
-  return (
-    <>
-      <Tooltip title={title}>
-        <button
-          type="button"
-          className={`header-health-pill ${health.state}`}
-          aria-label={`${health.label}. Retry API health.`}
-          onClick={() => onRetry?.()}
-        >
-          <span className="header-health-dot" />
-          <WifiOutlined className="header-health-icon" />
-          <span className="header-health-label">{health.label}</span>
-        </button>
-      </Tooltip>
-      {/* A button may not carry role="status"; announce changes from a separate live region. */}
-      <span className="visually-hidden" role="status" aria-live="polite">
-        {health.label}
-      </span>
-    </>
-  );
+const API_DOWN_TOAST_KEY = "ncc-api-unreachable";
+
+/**
+ * Tell the user when the dashboard cannot reach the API. The state itself
+ * lives on the Status page; here a sticky notice appears once when the API stops
+ * answering (with a Retry button) and is replaced by a short confirmation when it
+ * is back, instead of a permanent indicator in the header.
+ */
+export function useApiReachabilityNotice(unreachable: boolean, retry: () => void) {
+  const announced = useRef(false);
+  const retryRef = useRef(retry);
+  retryRef.current = retry;
+  useEffect(() => {
+    if (unreachable) {
+      if (announced.current) return;
+      announced.current = true;
+      notify.error({
+        key: API_DOWN_TOAST_KEY,
+        message: "API unreachable",
+        description: "This dashboard cannot reach the API server, so what you see may be out of date. It keeps trying every 10 seconds; the Status page has details.",
+        duration: 0,
+        btn: (
+          <Button size="small" onClick={() => retryRef.current()}>
+            Retry now
+          </Button>
+        ),
+      });
+      return;
+    }
+    if (announced.current) {
+      announced.current = false;
+      notify.close(API_DOWN_TOAST_KEY);
+      notify.success({ message: "API reachable again", duration: 4 });
+    }
+  }, [unreachable]);
 }
 
 function BootstrapSplash({
@@ -601,7 +602,8 @@ export default function App() {
   const healthQuery = useQuery({
     queryKey: ["health"],
     queryFn: api.health,
-    refetchInterval: 30_000,
+    // Poll faster while the API is not answering so the notice clears soon after it returns.
+    refetchInterval: (query) => (query.state.status === "error" ? 10_000 : 30_000),
     staleTime: 15_000,
     retry: 1,
   });
@@ -646,6 +648,7 @@ export default function App() {
     | undefined;
 
   useDocumentTitleSync(healthState, runActive);
+  useApiReachabilityNotice(healthQuery.isError, () => void healthQuery.refetch());
 
   // Wait for /auth/me before routing. While it is in flight, login_enabled is
   // unknown (falsy), so rendering the app would mount Dashboard queries that
@@ -730,7 +733,6 @@ export default function App() {
         <>
           <CommandJump viewer={viewer} />
           {appReady && canSeeSettings ? <SetupHeaderButton /> : null}
-          <HeaderHealthPill health={healthState} onRetry={() => void healthQuery.refetch()} />
           <HeaderTriggerRunButton />
           {signedIn ? (
             <HeaderUserMenu

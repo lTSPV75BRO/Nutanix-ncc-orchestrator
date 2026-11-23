@@ -534,87 +534,6 @@ a {
   flex-shrink: 0;
 }
 
-.header-health-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--control-bg) 80%, transparent);
-  border: 1px solid color-mix(in srgb, var(--control-border) 70%, transparent);
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.2px;
-  white-space: nowrap;
-  color: inherit;
-  font-family: inherit;
-  cursor: pointer;
-  transition:
-    background var(--anim-fast) var(--anim-ease),
-    border-color var(--anim-fast) var(--anim-ease);
-}
-
-.header-health-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  position: relative;
-}
-
-.header-health-dot::after {
-  content: "";
-  position: absolute;
-  inset: -3px;
-  border-radius: 50%;
-  opacity: 0.5;
-  filter: blur(3px);
-  animation: pulse-soft 2.4s ease-in-out infinite;
-}
-
-.header-health-pill.ok .header-health-dot,
-.header-health-pill.ok .header-health-dot::after {
-  background: var(--health-ok-dot, #22c55e);
-}
-
-.header-health-pill.ok {
-  background: var(--health-ok-bg, color-mix(in srgb, var(--control-bg) 80%, transparent));
-  border-color: var(--health-ok-border, rgba(34, 197, 94, 0.35));
-  color: var(--health-ok-color, #bbf7d0);
-}
-
-.header-health-pill.warn .header-health-dot,
-.header-health-pill.warn .header-health-dot::after {
-  background: var(--health-warn-dot, #f59e0b);
-}
-
-.header-health-pill.warn {
-  background: var(--health-warn-bg, color-mix(in srgb, var(--control-bg) 80%, transparent));
-  border-color: var(--health-warn-border, rgba(245, 158, 11, 0.35));
-  color: var(--health-warn-color, #fde68a);
-}
-
-.header-health-pill.err .header-health-dot,
-.header-health-pill.err .header-health-dot::after {
-  background: var(--health-err-dot, #ef4444);
-}
-
-.header-health-pill.err {
-  background: var(--health-err-bg, color-mix(in srgb, var(--control-bg) 80%, transparent));
-  border-color: var(--health-err-border, rgba(239, 68, 68, 0.45));
-  color: var(--health-err-color, #fecaca);
-}
-
-.header-health-icon {
-  font-size: 12px;
-  opacity: 0.7;
-}
-
-@keyframes pulse-soft {
-  0%, 100% { opacity: 0.4; transform: scale(0.95); }
-  50%      { opacity: 0.75; transform: scale(1.15); }
-}
-
 .header-icon-btn.ant-btn {
   width: 36px;
   height: 36px;
@@ -2882,7 +2801,6 @@ html[data-theme="it-pro"] {
   .ui-content {
     padding: var(--ui-space-4) var(--ui-space-3);
   }
-  .ui-topbar .header-health-label,
   .ui-topbar .header-user-name,
   .ui-topbar .header-setup-label,
   .ui-topbar .command-jump-btn {
