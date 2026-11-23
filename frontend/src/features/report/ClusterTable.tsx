@@ -254,7 +254,21 @@ function clusterPrismURL(
   return mappedIP ? `https://${normalizeClusterHost(mappedIP)}:9440` : "";
 }
 
-function previewDetail(detail: string): string {
+/**
+ * One-line summary of a finding for the list and By check views. The KB article
+ * has its own badge, so the "Refer to KB 1234 (http://…) for details on <check>"
+ * boilerplate that NCC appends (raw URL included) is dropped here.
+ */
+export function previewDetail(detail: string): string {
+  if (!detail) return "—";
+  const text = detail
+    .replace(/\s+/g, " ")
+    .replace(/\s*Refer to KB\s*\d+(?:\s*\(\s*https?:\/\/[^)\s]*\s*\))?(?:\s*for details on\s*[\w.-]+)?[.\s]*/gi, " ")
+    .trim();
+  return cleanPreview(text);
+}
+
+function cleanPreview(detail: string): string {
   if (!detail) return "—";
   return detail
     .replace(/\s+/g, " ")
@@ -367,10 +381,10 @@ function PCAlertInspector({
   facts.push({
     label: "Cluster",
     value: (
-      <Link to={clusterPath(row.cluster)} className="drawer-cluster-link">
+      <DrawerClusterLink row={row}>
         {row.clusterName}
         {clusterSubtitle ? <span className="mono drawer-cluster-address">{clusterSubtitle}</span> : null}
-      </Link>
+      </DrawerClusterLink>
     ),
     title: row.clusterName,
   });
@@ -431,29 +445,57 @@ function ClusterCell({ row, url, subtitle }: { row: RowRecord; url?: string; sub
   );
 }
 
+/** The cluster in a detail drawer: opens Prism when the address is known, else the cluster page. */
+function DrawerClusterLink({ row, children }: { row: RowRecord; children: ReactNode }) {
+  const prism = clusterPrismURL(row.cluster, {}, row.clusterName);
+  return prism ? (
+    <a href={prism} target="_blank" rel="noopener noreferrer" className="drawer-cluster-link" title={`Open ${row.clusterName} in Prism`}>
+      {children}
+    </a>
+  ) : (
+    <Link to={clusterPath(row.cluster)} className="drawer-cluster-link" title={`Open the ${row.clusterName} cluster page`}>
+      {children}
+    </Link>
+  );
+}
+
 function ClusterNameLine({ row, url }: { row: RowRecord; url?: string }) {
+  // The name opens the cluster in Prism (the place to act on a finding); the
+  // small icon opens its page in this dashboard. Without a known address the
+  // name falls back to the dashboard page.
   return (
     <span className="alerts-cluster-name-line">
-      <Link
-        to={clusterPath(row.cluster)}
-        className="alerts-cluster-link"
-        title={`Open the ${row.clusterName} cluster page`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {row.clusterName}
-      </Link>
       {url ? (
         <a
           href={url}
           target="_blank"
-          rel="noreferrer"
-          className="alerts-cluster-prism"
-          aria-label={`Open ${row.clusterName} in Prism`}
-          title="Open in Prism"
+          rel="noopener noreferrer"
+          className="alerts-cluster-link"
+          title={`Open ${row.clusterName} in Prism`}
           onClick={(e) => e.stopPropagation()}
         >
-          <ExportOutlined />
+          {row.clusterName}
         </a>
+      ) : (
+        <Link
+          to={clusterPath(row.cluster)}
+          className="alerts-cluster-link"
+          title={`Open the ${row.clusterName} cluster page`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {row.clusterName}
+        </Link>
+      )}
+      {url ? (
+        <Link
+          to={clusterPath(row.cluster)}
+          className="alerts-cluster-prism"
+          aria-label={`Open the ${row.clusterName} cluster page`}
+          title="Open the cluster page in this dashboard"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <ClusterOutlined />
+        </Link>
       ) : null}
     </span>
   );
@@ -572,6 +614,14 @@ function ResizableHeaderCell({ onResize, onResetWidth, resizeLabel, children, cl
         role="separator"
         aria-orientation="vertical"
         aria-label={resizeLabel}
+        aria-valuemin={COLUMN_MIN_WIDTH}
+        aria-valuemax={COLUMN_MAX_WIDTH}
+        // A focusable separator is a slider: it must report its value (the column
+        // width in px). Read it from the header cell after each render.
+        ref={(el) => {
+          const th = el?.parentElement;
+          if (el && th) el.setAttribute("aria-valuenow", String(Math.round(th.getBoundingClientRect().width)));
+        }}
         tabIndex={0}
         title="Drag to resize · double-click to reset"
         className="alerts-col-resizer"
@@ -677,10 +727,10 @@ function NCCAlertInspector({
     {
       label: "Cluster",
       value: (
-        <Link to={clusterPath(row.cluster)} className="drawer-cluster-link">
+        <DrawerClusterLink row={row}>
           {row.clusterName}
           {address && address !== row.clusterName ? <span className="mono drawer-cluster-address">{address}</span> : null}
-        </Link>
+        </DrawerClusterLink>
       ),
       title: row.clusterName,
     },
@@ -1722,11 +1772,18 @@ export function ClusterTable({
                           {detail !== "—" ? <span className="findings-group-detail" title={detail}>{detail}</span> : null}
                         </div>
                         <div className="findings-group-clusters" aria-label="Clusters">
-                          {shownClusters.map((r) => (
-                            <Link key={r.key} to={clusterPath(r.cluster)} className="findings-group-chip" title={`Open the ${r.clusterName} cluster page`}>
-                              {r.clusterName}
-                            </Link>
-                          ))}
+                          {shownClusters.map((r) => {
+                            const prism = clusterPrismURL(r.cluster, clusterNameMap, r.clusterName);
+                            return prism ? (
+                              <a key={r.key} href={prism} target="_blank" rel="noopener noreferrer" className="findings-group-chip" title={`Open ${r.clusterName} in Prism`}>
+                                {r.clusterName}
+                              </a>
+                            ) : (
+                              <Link key={r.key} to={clusterPath(r.cluster)} className="findings-group-chip" title={`Open the ${r.clusterName} cluster page`}>
+                                {r.clusterName}
+                              </Link>
+                            );
+                          })}
                           {g.rows.length > shownClusters.length ? (
                             <span className="findings-group-chip is-more">+{g.rows.length - shownClusters.length}</span>
                           ) : null}

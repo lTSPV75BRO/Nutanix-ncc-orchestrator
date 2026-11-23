@@ -285,7 +285,7 @@ function IntegrationGuide({
           </p>
         </div>
 
-        <aside className="integration-side" aria-label="About this integration">
+        <aside className="integration-side" aria-label="About this integration" tabIndex={0}>
           <Panel title="What you get">
             <ul className="integration-list is-check">
               {i.youGet.map((t) => (

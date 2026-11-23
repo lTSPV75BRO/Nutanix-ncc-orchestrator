@@ -411,10 +411,10 @@ func listSystemdSchedules(taskName string) error {
 	// Emit a line carrying the marker so detectInstalledSchedule matches.
 	fmt.Printf("# %s systemd timer %s.timer (OnCalendar=%s)\n", marker, base, onCalendar)
 	if systemctlAvailable() {
-		if out, err := exec.Command("systemctl", "is-enabled", base+".timer").CombinedOutput(); err == nil {
+		if out, err := exec.Command("systemctl", "is-enabled", base+".timer").CombinedOutput(); err == nil { // #nosec G702 -- no shell; base is "ncc-sched-" plus a sanitized name
 			fmt.Printf("timer enabled: %s", string(out))
 		}
-		if out, err := exec.Command("systemctl", "list-timers", "--all", base+".timer").CombinedOutput(); err == nil {
+		if out, err := exec.Command("systemctl", "list-timers", "--all", base+".timer").CombinedOutput(); err == nil { // #nosec G702 -- no shell; base is "ncc-sched-" plus a sanitized name
 			fmt.Print(string(out))
 		}
 	}

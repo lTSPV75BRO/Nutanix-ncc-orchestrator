@@ -10805,7 +10805,7 @@ func restartV2Stack(installDir string) error {
 	}
 	fmt.Println("\nRestarting stack (binary-managed)...")
 	// Stop first; ignore the error since the stack may already be down.
-	stop := exec.Command(self, "v2-stop", "--install-dir", installDir)
+	stop := exec.Command(self, "v2-stop", "--install-dir", installDir) // #nosec G702 -- runs this same binary (os.Executable), no shell
 	stop.Stdout, stop.Stderr = os.Stdout, os.Stderr
 	_ = stop.Run()
 	// Start detached so the relaunched API/UI survive this process exiting,
@@ -14062,7 +14062,7 @@ func listWindowsSchedule(taskName string) error {
 	if runtime.GOOS != "windows" {
 		return errors.New("windows schedule can only be listed on Windows")
 	}
-	out, err := exec.Command("schtasks", "/Query", "/TN", taskName, "/FO", "LIST", "/V").CombinedOutput()
+	out, err := exec.Command("schtasks", "/Query", "/TN", taskName, "/FO", "LIST", "/V").CombinedOutput() // #nosec G702 -- no shell; the task name is the value of /TN
 	if err != nil {
 		return fmt.Errorf("query scheduled task: %v (%s)", err, strings.TrimSpace(string(out)))
 	}
@@ -14074,7 +14074,7 @@ func removeWindowsSchedule(taskName string) error {
 	if runtime.GOOS != "windows" {
 		return errors.New("windows schedule can only be removed on Windows")
 	}
-	out, err := exec.Command("schtasks", "/Delete", "/TN", taskName, "/F").CombinedOutput()
+	out, err := exec.Command("schtasks", "/Delete", "/TN", taskName, "/F").CombinedOutput() // #nosec G702 -- no shell; the task name is the value of /TN
 	if err != nil {
 		return fmt.Errorf("delete scheduled task: %v (%s)", err, strings.TrimSpace(string(out)))
 	}
@@ -14087,7 +14087,7 @@ func runScheduleCommandNow(runCmd string) error {
 	if err != nil {
 		return err
 	}
-	c := exec.Command(name, args...)
+	c := exec.Command(name, args...) // #nosec G702 -- runs the schedule command the operator just asked for, parsed without a shell
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
 	c.Stdin = os.Stdin

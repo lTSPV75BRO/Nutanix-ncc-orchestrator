@@ -1765,7 +1765,7 @@ a.finding-link:hover {
 /* One style for every link that opens a cluster (tables, drawer, Insights,
    run details): accent text, underline on hover. */
 .ui-link,
-.alerts-table a.alerts-cluster-link,
+a.alerts-cluster-link,
 a.drawer-cluster-link,
 a.cluster-page-link,
 .run-cluster-link .cluster-page-link {
@@ -1780,8 +1780,8 @@ a.cluster-page-link,
 
 .ui-link:hover,
 .ui-link:focus-visible,
-.alerts-table a.alerts-cluster-link:hover,
-.alerts-table a.alerts-cluster-link:focus-visible,
+a.alerts-cluster-link:hover,
+a.alerts-cluster-link:focus-visible,
 a.drawer-cluster-link:hover,
 a.cluster-page-link:hover,
 a.cluster-page-link:focus-visible,
@@ -1927,12 +1927,14 @@ a.drawer-cluster-link:hover .drawer-cluster-address,
   transition: opacity var(--anim-fast, 150ms) var(--anim-ease, ease), background var(--anim-fast, 150ms) var(--anim-ease, ease);
 }
 
-.alerts-table a.alerts-cluster-prism:hover {
+a.alerts-cluster-prism:hover {
   color: var(--link-color);
   background: color-mix(in srgb, var(--link-color) 14%, transparent);
 }
 
 tr:hover .alerts-cluster-prism,
+.findings-list-item:hover .alerts-cluster-prism,
+.findings-group-rows li:hover .alerts-cluster-prism,
 .alerts-cluster-prism:focus-visible {
   opacity: 1;
 }
@@ -2063,6 +2065,46 @@ html[data-theme="light"] .alerts-toolbar {
   font-size: var(--pill-font-size);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+/* Danger text on the dark themes is antd's derived red (#d23953), which is
+   4.0:1 on the surface and 3.6:1 on the error tag tint, under WCAG AA. Use the
+   same per-theme status text colour as the badges. */
+.ant-btn-dangerous.ant-btn-default,
+.ant-btn-dangerous.ant-btn-text,
+.ant-btn-dangerous.ant-btn-link {
+  color: var(--ui-fail-text);
+}
+
+.severity-pill.ant-tag-error {
+  color: var(--ui-fail-text) !important;
+}
+
+/* Status tints and typography use the per-theme "text" status colours too:
+   antd's own green (#16a34a) is 2.5:1 on its tint and its amber 3.2:1 on white
+   in the light theme. */
+.ant-tag-success:not(.ant-tag-solid),
+.ant-typography.ant-typography-success {
+  color: var(--ui-ok-text) !important;
+}
+
+.ant-tag-warning:not(.ant-tag-solid),
+.ant-typography.ant-typography-warning {
+  color: var(--ui-warn-text) !important;
+}
+
+.ant-tag-error:not(.ant-tag-solid),
+.ant-typography.ant-typography-danger {
+  color: var(--ui-fail-text) !important;
+}
+
+/* ERR is the orange-red pill ("volcano"), INFO the blue one ("processing"). */
+.severity-pill.ant-tag-volcano {
+  color: color-mix(in srgb, var(--ui-fail-text) 55%, var(--ui-warn-text)) !important;
+}
+
+.severity-pill.ant-tag-processing {
+  color: var(--ui-info-text) !important;
 }
 
 .severity-pill-unknown {
@@ -5271,7 +5313,7 @@ html[data-theme="light"] .site-intro-skip {
   line-clamp: 2;
 }
 
-.alerts-table a.alerts-kb-link {
+a.alerts-kb-link {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -5288,8 +5330,8 @@ html[data-theme="light"] .site-intro-skip {
   transition: background var(--anim-fast, 150ms) var(--anim-ease, ease), border-color var(--anim-fast, 150ms) var(--anim-ease, ease);
 }
 
-.alerts-table a.alerts-kb-link:hover,
-.alerts-table a.alerts-kb-link:focus-visible {
+a.alerts-kb-link:hover,
+a.alerts-kb-link:focus-visible {
   background: color-mix(in srgb, var(--link-color) 20%, transparent);
   border-color: color-mix(in srgb, var(--link-color) 55%, transparent);
 }
@@ -6898,7 +6940,8 @@ a.findings-group-chip,
   white-space: nowrap;
 }
 
-a.findings-group-chip:hover {
+a.findings-group-chip:hover,
+a.findings-group-chip:focus-visible {
   border-color: color-mix(in srgb, var(--link-color) 50%, var(--ui-border));
 }
 

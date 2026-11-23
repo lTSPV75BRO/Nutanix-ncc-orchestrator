@@ -17,3 +17,8 @@ a90b15c0c7a3673fdb897908d9a9c9a5dcc8bc24:cmd/ncc-api-server/recovery_test.go:gen
 a90b15c0c7a3673fdb897908d9a9c9a5dcc8bc24:cmd/ncc-api-server/userdb_test.go:generic-api-key:221
 a90b15c0c7a3673fdb897908d9a9c9a5dcc8bc24:cmd/ncc-api-server/userdb_test.go:generic-api-key:224
 af296aa60fd4178fcd0703ac13d38ba404d8dcea:cmd/ncc-api-server/backupschedule_test.go:generic-api-key:77
+# 2026-11-23 review: prose about MCP mutations, fixed test strings for the redactor, and an example wget command.
+0d2d60c9eddb2580d9e6534967c2093fd44aeecc:docs/AI_INTEGRATION.md:generic-api-key:52
+1a130012e457536208c0d90f6b537536f7a7dfe4:cmd/ncc-api-server/redact_text_test.go:generic-api-key:17
+1a130012e457536208c0d90f6b537536f7a7dfe4:cmd/ncc-api-server/redact_text_test.go:generic-api-key:30
+f4bc43e2a72721404e03a730356b2be7591666be:docs/audit/environment-test-results.md:generic-api-key:96
