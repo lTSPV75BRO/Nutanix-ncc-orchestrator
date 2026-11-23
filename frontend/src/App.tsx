@@ -37,7 +37,6 @@ import { notify, notifyError } from "./notify";
 import { AuthContext, useAuth, type AuthValue } from "./auth/AuthContext";
 import { LoginPage, setLoginNotice } from "./pages/LoginPage";
 import { ChangePasswordPage, ChangePasswordModal } from "./pages/ChangePasswordPage";
-import { PersonalTokensModal } from "./features/tokens/PersonalTokensModal";
 import { SessionIdleGuard, SessionTimeLeft } from "./components/SessionIdleGuard";
 import { sessionDeadline } from "./utils/sessionTime";
 import { openSetupChecklist, SetupHeaderButton } from "./features/onboarding/SetupChecklist";
@@ -45,6 +44,11 @@ import { CommandJump } from "./components/CommandJump";
 import { formatDateTime, formatTime, localDateKey, parseInstant } from "./utils/datetime";
 import { roleColor } from "./auth/roleColor";
 
+// The tokens dialog is the only thing on the first screens that needs antd's
+// Table, Select and Popconfirm (about 280 kB), so it loads when first opened.
+const PersonalTokensModal = lazy(() =>
+  import("./features/tokens/PersonalTokensModal").then((m) => ({ default: m.PersonalTokensModal })),
+);
 const OverviewPage = lazy(() => import("./pages/OverviewPage").then((m) => ({ default: m.OverviewPage })));
 const FindingsPage = lazy(() => import("./pages/FindingsPage").then((m) => ({ default: m.FindingsPage })));
 const RunsPage = lazy(() => import("./pages/RunsPage").then((m) => ({ default: m.RunsPage })));
@@ -547,6 +551,9 @@ export default function App() {
   const authValue: AuthValue = { me: me ?? null, role, isAdmin, canOperate, loginEnabled, authenticated };
   const [changePwOpen, setChangePwOpen] = useState(false);
   const [tokensOpen, setTokensOpen] = useState(false);
+  // Mount the (lazy) tokens dialog on first open and keep it, so closing animates.
+  const [tokensMounted, setTokensMounted] = useState(false);
+  if (tokensOpen && !tokensMounted) setTokensMounted(true);
 
   const handleLogout = async () => {
     try {
@@ -806,7 +813,11 @@ export default function App() {
           void meQuery.refetch();
         }}
       />
-      <PersonalTokensModal open={tokensOpen} onClose={() => setTokensOpen(false)} role={role} />
+      {tokensMounted ? (
+        <Suspense fallback={null}>
+          <PersonalTokensModal open={tokensOpen} onClose={() => setTokensOpen(false)} role={role} />
+        </Suspense>
+      ) : null}
       {loginEnabled && authenticated && !me?.must_change_password ? (
         <SessionIdleGuard
           onLogout={handleLogout}
