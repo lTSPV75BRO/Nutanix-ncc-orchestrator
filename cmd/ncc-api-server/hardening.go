@@ -1136,28 +1136,80 @@ func (s *apiServer) auditEntries(limit int, f auditFilter) ([]map[string]interfa
 	// API shape stable for the UI even when the file doesn't exist yet.
 	out := make([]map[string]interface{}, 0, limit)
 	abs := s.absPath(s.auditLogPath)
-	data, err := os.ReadFile(abs)
+	err := readLinesNewestFirst(abs, auditTailChunk, func(ln []byte) bool {
+		ln = bytes.TrimSpace(ln)
+		if len(ln) == 0 {
+			return true
+		}
+		var entry map[string]interface{}
+		if err := json.Unmarshal(ln, &entry); err != nil {
+			return true
+		}
+		if !f.matches(entry) {
+			return true
+		}
+		out = append(out, entry)
+		return len(out) < limit
+	})
 	if err != nil {
 		if os.IsNotExist(err) {
 			return out, nil
 		}
 		return out, err
 	}
-	lines := bytes.Split(data, []byte{'\n'})
-	// Walk newest-first.
-	for i := len(lines) - 1; i >= 0 && len(out) < limit; i-- {
-		ln := bytes.TrimSpace(lines[i])
-		if len(ln) == 0 {
-			continue
-		}
-		var entry map[string]interface{}
-		if err := json.Unmarshal(ln, &entry); err != nil {
-			continue
-		}
-		if !f.matches(entry) {
-			continue
-		}
-		out = append(out, entry)
-	}
 	return out, nil
+}
+
+// auditTailChunk is how much of the audit log is read at a time from the end.
+// The page asks for the newest ~100 entries, which is a few tens of kilobytes,
+// so the whole file (up to the 5 MiB rotation size, with the lock held that every
+// request's audit write also needs) no longer has to be read and split.
+const auditTailChunk = 256 << 10
+
+// readLinesNewestFirst calls fn with each line of the file, last line first,
+// until fn returns false. It reads chunk bytes at a time backwards from the end.
+func readLinesNewestFirst(path string, chunk int, fn func(line []byte) bool) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if chunk <= 0 {
+		chunk = auditTailChunk
+	}
+	pos := st.Size()
+	var carry []byte // the start of a line whose beginning is still earlier in the file
+	for pos > 0 {
+		n := int64(chunk)
+		if n > pos {
+			n = pos
+		}
+		pos -= n
+		buf := make([]byte, int(n)+len(carry))
+		if _, err := f.ReadAt(buf[:n], pos); err != nil && err != io.EOF {
+			return err
+		}
+		copy(buf[n:], carry)
+		// buf now holds [pos, pos+n) followed by the carried line start.
+		end := len(buf)
+		for end > 0 {
+			i := bytes.LastIndexByte(buf[:end], '\n')
+			if i < 0 {
+				break
+			}
+			if !fn(buf[i+1 : end]) {
+				return nil
+			}
+			end = i
+		}
+		carry = append(carry[:0], buf[:end]...)
+	}
+	if len(carry) > 0 {
+		fn(carry)
+	}
+	return nil
 }
