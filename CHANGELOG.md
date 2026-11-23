@@ -12,6 +12,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
+- **Free release signing.** The tag release workflow now builds one coherent
+  artifact set, embeds an Ed25519 release public key, signs
+  `checksums.txt`, and publishes its detached signature. Linux binaries and
+  stack archives also carry GPG signatures and the matching public key.
+  Windows and macOS remain checksum- and provenance-verified but unsigned
+  until CA-issued publisher identities are available.
 - **Stronger password hashing (SEC-11).** New password hashes use bcrypt cost
   12 (was 10). Existing accounts are upgraded the next time they sign in; nobody
   is signed out and no password changes. System Health warns when sessions run

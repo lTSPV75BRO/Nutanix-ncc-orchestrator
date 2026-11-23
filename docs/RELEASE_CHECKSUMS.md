@@ -4,6 +4,61 @@ For **`ncc-orchestrator -u`** to verify downloads, the GitHub release must inclu
 
 ---
 
+## Release signatures in the free pipeline
+
+The tag-triggered release workflow signs `checksums.txt` with an Ed25519
+release key and publishes `checksums.txt.sig`. It embeds the matching public
+key in release binaries, so an operator can run:
+
+```bash
+ncc-orchestrator verify --online --require-signature
+```
+
+Linux artifacts also have GPG detached signatures (`.asc`) and the release
+publishes `ncc-release-signing.gpg` for importing the corresponding public
+key. macOS and Windows binaries are checksum- and provenance-verified but
+remain unsigned until Apple Developer ID and CA-issued Authenticode
+credentials are available.
+
+The workflow requires these GitHub Actions secrets:
+
+- `NCC_RELEASE_SIGN_KEY_BASE64`
+- `NCC_LINUX_GPG_PRIVATE_KEY_BASE64`
+- `NCC_LINUX_GPG_KEY_ID`
+- `NCC_LINUX_GPG_PASSPHRASE`
+
+`NCC_RELEASE_PUBKEY` is public and belongs in a GitHub Actions repository
+variable. Never commit or print any private key or passphrase.
+
+### One-time maintainer setup
+
+Generate the Ed25519 update-signing key on a trusted machine, then keep its
+private file offline except when loading the encrypted GitHub Actions secret:
+
+```bash
+go run ./cmd/ncc-orchestrator release-keygen --out ncc-release-signing.key
+base64 -w 0 ncc-release-signing.key
+```
+
+Use the resulting base64 text for `NCC_RELEASE_SIGN_KEY_BASE64`; copy the
+public key printed by `release-keygen` into `NCC_RELEASE_PUBKEY`. On macOS,
+use `base64 < ncc-release-signing.key | tr -d '\n'` instead of `base64 -w 0`.
+
+Create a dedicated, passphrase-protected GPG signing key for Linux artifacts,
+record its full fingerprint, and export it only for the Actions secret:
+
+```bash
+gpg --quick-generate-key 'NCC release signing <releases@example.invalid>' ed25519 sign 2y
+gpg --list-secret-keys --keyid-format LONG
+gpg --armor --export-secret-keys YOUR_FULL_FINGERPRINT | base64 -w 0
+```
+
+Set the fingerprint as `NCC_LINUX_GPG_KEY_ID` and its passphrase as
+`NCC_LINUX_GPG_PASSPHRASE`. Preserve an encrypted offline backup of both
+private keys before enabling the release workflow.
+
+---
+
 ## 0. Choose release track first (`v1` vs `v2`)
 
 Maintainers should decide release track before building artifacts:
@@ -82,7 +137,8 @@ The tool downloads the **first** such asset and uses it to verify the binary it 
 When you create the release (e.g. v2.4.0):
 
 1. Upload each **binary** (e.g. `ncc-orchestrator-linux-amd64`, …).
-2. Upload the **checksum file** (e.g. `checksums.txt`).
+2. Upload `checksums.txt`, `checksums.txt.sig`, and, for Linux, the `.asc`
+   detached signatures plus `ncc-release-signing.gpg`.
 
 Then **`ncc-orchestrator -u`** will:
 

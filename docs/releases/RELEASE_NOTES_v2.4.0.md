@@ -2,6 +2,14 @@
 
 **Status:** Unreleased.
 
+## Free release signing
+
+Every release now carries an Ed25519 signature over `checksums.txt`, verified
+by `ncc-orchestrator verify --online --require-signature`. Linux binaries and
+stack archives also have GPG detached signatures, with their public key in
+the release. Windows and macOS downloads remain checksum- and
+provenance-verified but unsigned until publisher identities are available.
+
 ## SSO works through the UI proxy
 
 SAML and OpenID Connect redirects and callbacks are no longer refused as an

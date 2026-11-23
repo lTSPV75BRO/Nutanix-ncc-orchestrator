@@ -21,8 +21,9 @@ Linux when the OS warns that the binary is "untrusted".
 > 3. Run `ncc-orchestrator verify` to print the embedded build metadata
 >    (version, git revision, vendor, self-hash) for the file you have
 >    on disk.
-> 4. (Optional) Verify the GPG-signed git tag (`git tag -v v2.4.0`) and
->    release-attestation.json provenance once published.
+> 4. Run `verify --online --require-signature` to verify the Ed25519
+>    signature over `checksums.txt`; Linux users can additionally verify
+>    the detached GPG signature with the published public key.
 
 ---
 
@@ -37,14 +38,19 @@ Every GitHub release publishes the following on its release page:
 | `example_config.yaml` | Reference configuration (works as `config.yaml` if you copy it). |
 | `RELEASE_NOTES_v<X.Y.Z>.md` | Per-release notes, including known issues and upgrade guidance. |
 | `checksums.txt` | One line per artifact: `<sha256>  <filename>`. |
+| `checksums.txt.sig` | Ed25519 signature over the complete checksum manifest. |
+| `ncc-release-signing.gpg` | Public OpenPGP key for Linux detached-signature verification. |
 | `release-attestation.json` | Single-file machine-readable provenance (vendor, git rev, build host, full artifact set with sizes/hashes). |
 
-Optionally, when the maintainer's personal signing keys are configured
-at build time:
+The free release pipeline always signs `checksums.txt` with an Ed25519
+release key embedded into the binaries and signs Linux binaries and stack
+archives with GPG. macOS and Windows artifacts remain unsigned unless the
+maintainer later configures paid Apple Developer ID/notarization or
+Authenticode credentials:
 
-- macOS binaries are signed with the maintainer's Apple Developer ID and notarized.
-- Windows `.exe` files are signed with the maintainer's Authenticode certificate.
-- Linux binaries / stack archives ship a `<file>.asc` GPG detached signature against the maintainer's published public key.
+- macOS binaries can be signed with the maintainer's Apple Developer ID and notarized.
+- Windows `.exe` files can be signed with the maintainer's Authenticode certificate.
+- Linux binaries / stack archives ship a `<file>.asc` GPG detached signature.
 
 These signing chains attest to the project maintainer's identity (the
 github.com/lTSPV75BRO account / `Prajwal Vernekar` per LICENSE), **not**
@@ -76,6 +82,30 @@ Get-FileHash .\ncc-orchestrator-windows-amd64.exe -Algorithm SHA256
 
 If the hashes do not match, **do not run the binary**. Re-download or
 report the discrepancy on the [issue tracker](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/issues).
+
+---
+
+## Step 1b — Verify the signed release manifest
+
+The release binary embeds the Ed25519 public key for its release stream.
+After downloading the matching binary and release assets, verify the
+checksum manifest online:
+
+```bash
+./ncc-orchestrator-linux-amd64 verify --online --require-signature
+```
+
+It fails when `checksums.txt.sig` is absent, invalid, or was signed by a
+different key. This verifies release integrity without requiring an Apple,
+Windows, or commercial code-signing identity.
+
+Linux users can independently verify a detached signature after importing
+the public key shipped with the release:
+
+```bash
+gpg --import ncc-release-signing.gpg
+gpg --verify ncc-orchestrator-linux-amd64.asc ncc-orchestrator-linux-amd64
+```
 
 ---
 

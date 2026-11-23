@@ -845,10 +845,22 @@ sign_binaries() {
     local f
     shopt -s nullglob
     for f in dist/ncc-orchestrator-linux-*; do
-      gpg --batch --yes --local-user "$NCC_LINUX_GPG_KEY_ID" --detach-sign --armor --output "$f.asc" "$f"
+      gpg_detach_sign "$f"
     done
     shopt -u nullglob
   fi
+}
+
+# gpg_detach_sign accepts an optional passphrase through stdin-free loopback
+# pinentry so a CI runner can use an encrypted signing subkey. The value stays
+# in the process environment and is never printed by this script.
+gpg_detach_sign() {
+  local in="$1"
+  local -a args=(--batch --yes --local-user "$NCC_LINUX_GPG_KEY_ID")
+  if [ -n "${NCC_LINUX_GPG_PASSPHRASE:-}" ]; then
+    args+=(--pinentry-mode loopback --passphrase "$NCC_LINUX_GPG_PASSPHRASE")
+  fi
+  gpg "${args[@]}" --detach-sign --armor --output "$in.asc" "$in"
 }
 sign_binaries
 
@@ -925,9 +937,12 @@ if [ "$NO_STACKS" != 1 ]; then
   if [ -n "${NCC_LINUX_GPG_KEY_ID:-}" ] && command -v gpg >/dev/null 2>&1; then
     shopt -s nullglob
     for f in dist/ncc-v2-stack-linux-*; do
-      gpg --batch --yes --local-user "$NCC_LINUX_GPG_KEY_ID" --detach-sign --armor --output "$f.asc" "$f"
+      gpg_detach_sign "$f"
     done
     shopt -u nullglob
+    # Consumers need the matching public key to verify the detached
+    # signatures. It is safe to publish and is included in checksums.txt.
+    gpg --batch --armor --export "$NCC_LINUX_GPG_KEY_ID" > dist/ncc-release-signing.gpg
   fi
 
   GIT_REV_FULL=$(git rev-parse HEAD 2>/dev/null || echo unknown)
@@ -953,7 +968,7 @@ if [ "$NO_STACKS" != 1 ]; then
     echo "  \"artifacts\": ["
     first=1
     shopt -s nullglob
-    for f in dist/ncc-orchestrator-* dist/ncc-v2-stack-* dist/example_config.yaml "dist/RELEASE_NOTES_v${VERSION}.md"; do
+    for f in dist/ncc-orchestrator-* dist/ncc-v2-stack-* dist/ncc-release-signing.gpg dist/example_config.yaml "dist/RELEASE_NOTES_v${VERSION}.md"; do
       case "$f" in
         *.asc|*.sig) continue ;;
       esac
@@ -989,7 +1004,7 @@ if [ "$NO_STACKS" != 1 ]; then
     cd dist
     : > checksums.txt
     shopt -s nullglob
-    for f in ncc-orchestrator-* ncc-v2-stack-* example_config.yaml "RELEASE_NOTES_v${VERSION}.md" release-attestation.json bom-*.cdx.json; do
+    for f in ncc-orchestrator-* ncc-v2-stack-* ncc-release-signing.gpg example_config.yaml "RELEASE_NOTES_v${VERSION}.md" release-attestation.json bom-*.cdx.json; do
       case "$f" in
         *.asc|*.sig) continue ;;
       esac

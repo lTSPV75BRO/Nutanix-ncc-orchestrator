@@ -2,9 +2,9 @@ name: Release
 
 # Tag-driven release pipeline. Pushing a `v*` tag (e.g. v2.2.0) builds
 # every binary + every stack archive via scripts/binaryGO.txt, generates SBOMs
-# and a release-attestation.json, signs each artifact with a GitHub
-# Actions SLSA build-provenance attestation, and publishes the result
-# as a GitHub Release.
+# and a release-attestation.json, signs checksums.txt with an Ed25519 release
+# key, signs Linux artifacts with GPG, attests the artifacts with GitHub
+# Actions SLSA provenance, and publishes the result as a GitHub Release.
 #
 # What this gives release consumers:
 #
@@ -45,6 +45,7 @@ jobs:
     name: Build, SBOM, attest, release
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    environment: release
     steps:
       - name: Checkout (tag or input ref)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -79,35 +80,56 @@ jobs:
           go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.7.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
+      - name: Prepare free-tier signing material
+        env:
+          NCC_RELEASE_SIGN_KEY_BASE64: ${{ secrets.NCC_RELEASE_SIGN_KEY_BASE64 }}
+          NCC_RELEASE_PUBKEY: ${{ vars.NCC_RELEASE_PUBKEY }}
+          NCC_LINUX_GPG_PRIVATE_KEY_BASE64: ${{ secrets.NCC_LINUX_GPG_PRIVATE_KEY_BASE64 }}
+          NCC_LINUX_GPG_KEY_ID: ${{ secrets.NCC_LINUX_GPG_KEY_ID }}
+          NCC_LINUX_GPG_PASSPHRASE: ${{ secrets.NCC_LINUX_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          for name in NCC_RELEASE_SIGN_KEY_BASE64 NCC_RELEASE_PUBKEY NCC_LINUX_GPG_PRIVATE_KEY_BASE64 NCC_LINUX_GPG_KEY_ID NCC_LINUX_GPG_PASSPHRASE; do
+            [ -n "${!name}" ] || { echo "::error::$name is required for a release"; exit 1; }
+          done
+          release_key="$RUNNER_TEMP/ncc-release-signing.key"
+          printf '%s' "$NCC_RELEASE_SIGN_KEY_BASE64" | base64 --decode > "$release_key"
+          chmod 600 "$release_key"
+          gpg_home="$RUNNER_TEMP/ncc-release-gpg"
+          install -d -m 700 "$gpg_home"
+          printf '%s' "$NCC_LINUX_GPG_PRIVATE_KEY_BASE64" | base64 --decode | gpg --batch --homedir "$gpg_home" --import
+          gpg --batch --homedir "$gpg_home" --list-secret-keys "$NCC_LINUX_GPG_KEY_ID" >/dev/null
+          {
+            echo "NCC_RELEASE_SIGN_KEY=$release_key"
+            echo "NCC_RELEASE_PUBKEY=$NCC_RELEASE_PUBKEY"
+            echo "GNUPGHOME=$gpg_home"
+            echo "NCC_LINUX_GPG_KEY_ID=$NCC_LINUX_GPG_KEY_ID"
+            echo "NCC_LINUX_GPG_PASSPHRASE=$NCC_LINUX_GPG_PASSPHRASE"
+          } >> "$GITHUB_ENV"
+
       - name: Run scripts/binaryGO.txt (build + sign + SBOM + attestation)
         env:
-          # binaryGO.txt's optional code-signing blocks are no-ops
-          # unless the matching env vars are set. We don't ship signing
-          # secrets to GHA by default; operators forking this workflow
-          # can wire repo Secrets to NCC_MACOS_*, NCC_WINDOWS_*,
-          # NCC_LINUX_GPG_KEY_ID and the blocks will activate.
-          NCC_MACOS_SIGN_IDENTITY: ${{ secrets.NCC_MACOS_SIGN_IDENTITY }}
-          NCC_MACOS_NOTARY_PROFILE: ${{ secrets.NCC_MACOS_NOTARY_PROFILE }}
-          NCC_WINDOWS_PFX_PATH: ${{ secrets.NCC_WINDOWS_PFX_PATH }}
-          NCC_WINDOWS_PFX_PASSWORD: ${{ secrets.NCC_WINDOWS_PFX_PASSWORD }}
-          NCC_LINUX_GPG_KEY_ID: ${{ secrets.NCC_LINUX_GPG_KEY_ID }}
           NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
         run: |
-          set -euxo pipefail
-          # binaryGO.txt is a shell script; source it line-by-line so
-          # any failure short-circuits the workflow rather than
-          # silently producing partial dist/ contents.
-          bash -euxo pipefail scripts/binaryGO.txt
+          set -euo pipefail
+          bash scripts/binaryGO.txt
 
       - name: Verify dist/ inventory
         # Belt-and-suspenders: binaryGO.txt prints RELEASE_OK on
         # success, but we re-check the count here so the workflow
         # cannot accept a partial build that somehow snuck past.
         run: |
+          set -euo pipefail
           test -f dist/checksums.txt
+          test -s dist/checksums.txt.sig
+          test -s dist/ncc-release-signing.gpg
           test -f dist/release-attestation.json
           ls dist/ncc-v2-stack-* | wc -l | grep -q 6
           ls dist/ncc-orchestrator-* dist/ncc-api-server-* dist/ncc-ui-server-* | wc -l | grep -q 18
+          ls dist/ncc-orchestrator-linux-*.asc | wc -l | grep -q 2
+          ls dist/ncc-v2-stack-linux-*.asc | wc -l | grep -q 2
+          gpg --batch --verify dist/ncc-orchestrator-linux-amd64.asc dist/ncc-orchestrator-linux-amd64
+          gpg --batch --verify dist/ncc-v2-stack-linux-amd64.tar.gz.asc dist/ncc-v2-stack-linux-amd64.tar.gz
           echo "release inventory verified"
 
       - name: Generate SLSA build-provenance attestation
@@ -128,8 +150,11 @@ jobs:
             dist/ncc-ui-server-*
             dist/ncc-v2-stack-*
             dist/checksums.txt
+            dist/checksums.txt.sig
+            dist/ncc-release-signing.gpg
             dist/release-attestation.json
             dist/bom-*.cdx.json
+            dist/*.asc
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -149,5 +174,21 @@ jobs:
             dist/example_config.yaml
             dist/RELEASE_NOTES_*.md
             dist/checksums.txt
+            dist/checksums.txt.sig
+            dist/ncc-release-signing.gpg
             dist/release-attestation.json
             dist/bom-*.cdx.json
+            dist/*.asc
+
+      - name: Verify the published signed update
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          dist/ncc-orchestrator-linux-amd64 verify --online \
+            --release "$GITHUB_REF_NAME" --require-signature
+
+      - name: Remove signing material
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/ncc-release-signing.key"
+          rm -rf "$RUNNER_TEMP/ncc-release-gpg"
