@@ -1,6 +1,64 @@
 # NCC Orchestrator — v2.4.0
 
-**Status:** Unreleased.
+**Status:** release candidate. These notes also describe `2.4.0-rc.1`.
+
+## Trying a release candidate
+
+A candidate is a GitHub pre-release. It is never marked Latest, and stable installs are
+not offered it. On a test host that runs 2.3.0 or later:
+
+```bash
+ncc-orchestrator update --target-version 2.4.0-rc.1
+ncc-orchestrator v2-restart
+```
+
+From a candidate, updates offer newer candidates and then 2.4.0. Images have the tag
+`2.4.0-rc.1`. The VM templates install the version in `NCC_VERSION`. Please report
+problems with the output of `ncc-orchestrator upgrade --status` and a support bundle
+(`ncc-orchestrator doctor`).
+
+Not tested yet: an upgrade on a real Windows Server, Rocky or macOS host (CI rehearses
+it on hosted Windows, macOS and Ubuntu machines and in systemd containers), and a
+download of this release by an install in the field.
+
+## Upgrades that cover everything
+
+From 2.4.0 on an upgrade is carried out by the **update helper**, which the service
+manager starts only while there is an upgrade to do:
+
+- The new version's helper is installed and tested first. If that fails, nothing was
+  changed.
+- It then replaces the whole stack, including the supervisor, and brings the service,
+  schedule and log timer definitions and the configuration up to the new version.
+- When the result is not healthy it puts everything back, also after a crash or reboot
+  in between. **Roll back** stays available for 24 hours.
+- It works with systemd, the Windows Task Scheduler, launchd and stacks started with
+  `v2-start --detach`. Lines added to a systemd unit by hand are kept.
+- `ncc-orchestrator upgrade` has `--plan`, `--status`, `--rollback`, `--to` and
+  `--bundle` (hosts without internet access). The dashboard shows the plan and progress.
+- Helm: `helm upgrade` checks the new images first and the running version afterwards.
+
+**From 2.3.x and earlier:** the step to 2.4.0 is still carried out by the old version.
+Two minutes after 2.4.0 starts, and when no run is going on, it installs the helper and
+brings the service up to its definitions (one short restart, with rollback). Turn this
+off with `NCC_UPGRADE_ADOPT=0`. See "Upgrades" in
+[`FEATURES_AND_CONFIG_FLAGS.md`](../FEATURES_AND_CONFIG_FLAGS.md).
+
+## Windows service
+
+- A supervisor that died is started again within a minute by a second scheduled task,
+  `ncc-orchestrator-watchdog`. Task Scheduler's own restart setting does not do that. A
+  stop with `v2-stop` or `schtasks /End` is respected.
+- A schedule no longer replaces the service's task (both were named
+  `ncc-orchestrator`). On an affected host run `v2-install-service` as Administrator and
+  save the schedule again.
+
+## VM templates
+
+The cloud-init template and `setup-ncc.ps1` failed at the first boot. Both now install
+the service with `v2-install-service` and keep the Prism password in `secrets.json`,
+which only the administrator can read. `NCC_CONFIG` is gone; the configuration is
+`config.yaml` in the install folder. CI runs both templates.
 
 ## Local signing tests
 
@@ -17,6 +75,8 @@ by `ncc-orchestrator verify --online --require-signature`. Linux binaries and
 stack archives also have GPG detached signatures, with their public key in
 the release. Windows and macOS downloads remain checksum- and
 provenance-verified but unsigned until publisher identities are available.
+The release job tests both keys before it builds, and an Ed25519 key made with openssl
+(PEM) is accepted. A release is published from a draft only after every file verified.
 
 ## SSO works through the UI proxy
 
@@ -98,8 +158,8 @@ command line with `v2-restore --trust-stack`.
 
 ## Tighter permissions on the host
 
-On Linux the service now runs in a systemd sandbox. Re-run `v2-install-service` and
-restart the service to get it on an existing install. On Windows the stack limits its
+On Linux the service now runs in a systemd sandbox. Existing installs get it from the
+update helper after the upgrade. On Windows the stack limits its
 secrets, backups and logs to SYSTEM, Administrators and the account that runs it, and
 warns when the install folder itself is open to other users.
 
@@ -211,6 +271,7 @@ is excluded from production security scanning.
 
 The Go toolchain requirement is now `1.27.4`, which fixes
 `GO-2026-6859` affecting HTTP/1 servers through a `net/http` header race.
+The Go and frontend dependencies are current as of 2026-11-24.
 
 ## SAML test provider
 
@@ -237,4 +298,7 @@ outages counting toward the lockout, and the missing log maintenance timer on
 - Go vet, tests, and builds pass.
 - Frontend tests and production build pass.
 - `npm audit` reports zero vulnerabilities.
-- Helm lint and template rendering pass.
+- Helm lint and template rendering pass; CI installs the chart on kind.
+- CI rehearses upgrades, rollbacks and failures on Ubuntu, macOS and Windows
+  (`scripts/upgrade-e2e.sh`) and runs the VM templates
+  (`scripts/vm-template-test.sh`).

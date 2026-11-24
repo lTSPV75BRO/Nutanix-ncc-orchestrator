@@ -510,9 +510,11 @@ systemd schedules run as root in a sandbox that the API, UI and NCC runs inherit
 
 The update watcher's restart helper gets the process part only. This limits
 damage; it does not contain a compromised service, which can still write files
-as root and manage units. Existing installs keep their unit until you re-run
-`sudo ncc-orchestrator v2-install-service` and
-`systemctl restart ncc-orchestrator`; re-save a systemd schedule to update its unit.
+as root and manage units. Existing installs get the sandbox, schedules included, from
+the update helper after the upgrade to 2.4.0. With `NCC_UPGRADE_ADOPT=0` run
+`sudo ncc-orchestrator upgrade-adopt`, or re-run `v2-install-service`, restart the
+service and save a systemd schedule again. A unit whose command or user was changed by
+hand is kept as it is and reported.
 
 If a setting breaks something on your host, override it with a drop-in, which
 survives a reinstall. `226/NAMESPACE` in `systemctl status` means the host

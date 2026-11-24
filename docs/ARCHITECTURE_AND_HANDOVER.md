@@ -37,7 +37,7 @@ Top-level ownership map:
   - `goNCC.go`: `main`, version info and core types; the cobra root command is in `rootcmd.go`, the rest of the runner logic is split by area (`config_*.go`, `report_*.go`, `run_*.go`, `v2_*.go`, `update_*.go`, ...)
   - Subcommands (`discover-clusters`, `v2-start`, `quickstart`, `validate-*`, `preflight-check`)
   - Output generation and policy/notification/metrics logic
-  - Supporting files: `pipeline.go`, `supervise.go`, `selfheal.go`, `update_install.go`, `backupcrypt.go`, `releasesign.go`, …
+  - Supporting files: `pipeline.go`, `supervise.go`, `supervise_watchdog.go`, `selfheal.go`, `upgrade_*.go` (update helper), `update_install.go`, `backupcrypt.go`, `releasesign.go`, …
   - `*_test.go` and `testdata/`: runner behavior and contract tests
 - `cmd/ncc-api-server/`
   - API routes, auth, path confinement, run trigger, config/schedule/notification persistence
@@ -84,6 +84,10 @@ Primary responsibilities:
   - Prometheus textfile metrics
 - Handles retries/adaptive parallelism/policy gates/notifications
 - Exposes bootstrap flows (`quickstart`, `v2-bootstrap`, `v2-start`, `v2-stop`)
+- Supervises the API and UI (`v2-supervise`), registered with systemd, Task Scheduler or
+  launchd by `v2-install-service`; on Windows a watchdog task starts it again if it died
+- Upgrades the stack through the update helper, a copy of itself in `helper/` that the
+  service manager starts only for an upgrade ([design](UPGRADE_HELPER_PLAN.md))
 
 ### 3.2 `ncc-api-server`
 
@@ -180,7 +184,8 @@ Build layers:
 Important release contracts:
 
 - `VERSION` must match release tag intent.
-- Checksums are required for updater integrity verification.
+- Checksums are required for updater integrity verification; `checksums.txt` is signed
+  (Ed25519) and lists `upgrade-manifest.json`, which the update helper reads.
 - Docs and manifests must align with image tags and binary expectations.
 
 ---

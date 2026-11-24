@@ -256,7 +256,38 @@ What to look for:
   integrations use their token and are limited by its role; their repeated refusals
   show as `access.suspicious` in the audit log.
 
+## Upgrades
+
+### An upgrade ended as "Rolled back" or "Nothing was changed"
+
+- **Cause:** the new version did not become healthy on this host, or a check failed
+  before anything was changed. The stack runs the old version.
+- **Fix:** `ncc-orchestrator upgrade --status` names the step and reason;
+  `logs/upgrade-helper.log` has the details. Correct it and upgrade again.
+
+### The update helper is not ready
+
+- **Cause:** `ncc-orchestrator upgrade --plan` says why: adoption has not run yet (two
+  minutes after 2.4.0 starts, when no run is going on), it is off
+  (`NCC_UPGRADE_ADOPT=0`, `NCC_UPGRADE_HELPER=0`), or the service is not managed by
+  systemd, Task Scheduler, launchd or `v2-start --detach`.
+- **Fix:** `ncc-orchestrator upgrade-adopt` as root or Administrator. Without the helper
+  the supervisor upgrades the API, UI and programs as in 2.3.x.
+
+### A changed line in the systemd unit moved
+
+- **Cause:** by design. Lines added by hand move to `<unit>.d/50-local.conf`. A unit with
+  a changed command or user is kept and reported.
+
 ## Windows
+
+### The stack is not started again after a crash or a stop
+
+- **After a crash:** the task `ncc-orchestrator-watchdog` starts the supervisor again
+  within a minute (2.4.0 and later). If that task is missing, run
+  `ncc-orchestrator doctor --fix` or `v2-install-service` as Administrator.
+- **After `v2-stop` or `schtasks /End`:** it stays stopped on purpose. Start it with
+  `schtasks /Run /TN ncc-orchestrator`, or reboot.
 
 ### `config.yaml` does not parse (`found unknown escape character`)
 
@@ -273,7 +304,7 @@ What to look for:
   deletes an existing install, because it holds the user database, token and
   backups.
 - **Fix:** to upgrade, use **System → Updates & backups** or
-  `ncc-orchestrator update`. To start over on purpose, back up first, then set
+  `ncc-orchestrator upgrade` (2.3.x: `update`). To start over on purpose, back up first, then set
   `NCC_FORCE_CLEAN=1` and run the installer again.
 
 ### Other users cannot open the install directory

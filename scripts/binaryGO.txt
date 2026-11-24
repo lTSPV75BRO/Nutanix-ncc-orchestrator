@@ -126,7 +126,8 @@ Images (packages the linux binaries this script built)
                          The tag is name:VERSION, not name:VERSION-ARCH.
   --registry HOST        default: $NCC_DOCKER_REGISTRY or docker.io
   --image-prefix NAME    default: $NCC_IMAGE_PREFIX or prajwalnutant
-  --no-latest            Do not tag :latest (latest is on for Stream=Release)
+  --no-latest            Do not tag :latest (on for Stream=Release; never for a
+                         pre-release version such as 2.4.0-rc.1)
 
 Env: VERSION, STREAM, BUILD_DATE, GIT_REVISION, NCC_RELEASE_PUBKEY,
      NCC_RELEASE_SIGN_KEY, NCC_MACOS_*, NCC_WINDOWS_*, NCC_LINUX_GPG_KEY_ID,
@@ -1073,6 +1074,10 @@ fi
 
 build_images() {
   local arch stage name file tag_version tag_latest
+  # A candidate must not become what `docker pull` gives everyone.
+  case "$VERSION" in
+    *-*) DO_LATEST=0 ;;
+  esac
   if [ -z "$ENGINE" ]; then
     resolve_container_engine
   fi

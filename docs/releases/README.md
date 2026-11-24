@@ -6,7 +6,7 @@ description.
 
 | Version | Notes |
 | --- | --- |
-| 2.4.0 (unreleased) | [RELEASE_NOTES_v2.4.0.md](RELEASE_NOTES_v2.4.0.md) |
+| 2.4.0 (release candidate) | [RELEASE_NOTES_v2.4.0.md](RELEASE_NOTES_v2.4.0.md) |
 | 2.3.0 | [RELEASE_NOTES_v2.3.0.md](RELEASE_NOTES_v2.3.0.md) |
 | 2.2.1 | [RELEASE_NOTES_v2.2.1.md](RELEASE_NOTES_v2.2.1.md) |
 | 2.2.0 | [RELEASE_NOTES_v2.2.0.md](RELEASE_NOTES_v2.2.0.md) |

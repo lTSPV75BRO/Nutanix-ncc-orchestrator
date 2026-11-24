@@ -134,6 +134,10 @@ Done when: `v2-status` shows API and UI healthy, `curl -k https://localhost:8080
 and the user can sign in. The UI uses HTTPS with a generated self-signed certificate;
 replace it under Settings, Access, HTTPS (see [`setup/HTTPS.md`](setup/HTTPS.md)).
 
+Other ports: pass the same `--api-listen` and `--ui-listen` to `v2-install-service`. On
+Windows it registers two scheduled tasks, `ncc-orchestrator` (the service) and
+`ncc-orchestrator-watchdog` (starts it again if it died).
+
 Windows: `deploy/windows/setup-ncc.ps1` automates the same steps and refuses to run over
 an existing install (`NCC_FORCE_CLEAN=1` deletes it: ask first).
 
@@ -192,7 +196,8 @@ the user keeps secrets: without it, backups cannot be restored.
 
 [`deploy/README.md`](../deploy/README.md) covers both. Set `NCC_VERSION`, `NCC_CLUSTERS` or
 `NCC_PCS`, and inject `NCC_PASSWORD` through the platform's secret mechanism, not the
-template. Both verify the archive against `checksums.txt` before installing.
+template; it ends up in `secrets.json` in the install folder, readable by the
+administrator only. Both verify the archive against `checksums.txt` before installing.
 
 ## Verify the deployment
 
@@ -251,7 +256,7 @@ marked **ask**.
 | 15 | Old versions blocked: System, Updates & backups, Blocked versions shows the shipped list, "refuse unversioned" on | Leave it on |
 | 16 | Running 2.4.0 or later: `update --check` | Upgrade ([Maintain](#maintain-backup-update-roll-back)) |
 | 17 | Kubernetes: NetworkPolicies applied, `readOnlyRootFilesystem` where possible, resource requests set | `k8s/` already ships the policies; see HARD-01 in [`audit/findings.md`](audit/findings.md) |
-| 18 | Linux service sandboxed: `systemctl show -p NoNewPrivileges ncc-orchestrator` says `yes` | Re-run `v2-install-service`, then `systemctl restart ncc-orchestrator` (**ask**); see [`SECURITY_AND_TRUST.md`](SECURITY_AND_TRUST.md#systemd-sandbox-linux-service) |
+| 18 | Linux service sandboxed: `systemctl show -p NoNewPrivileges ncc-orchestrator` says `yes` | `sudo ncc-orchestrator upgrade-adopt` (**ask**: it restarts the service); see [`SECURITY_AND_TRUST.md`](SECURITY_AND_TRUST.md#systemd-sandbox-linux-service) |
 
 Known open hardening work (the service runs as root on Linux, in a systemd sandbox that
 limits but does not contain it, and an open install folder on Windows is only reported) is listed in
@@ -283,6 +288,8 @@ Always in this order; stop when you find the cause.
 | Run answers 409 `NCC_API_VERSION_SKEW` | Runner and API versions differ | Use matching image tags |
 | Data "Stale" though scheduled runs look healthy | Scheduler writes elsewhere | [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md#scheduled-runs-cron--systemd-timer) |
 | `status=203/EXEC` on Linux | SELinux label | [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) |
+| Windows: `v2-status` empty although the tasks exist | Stopped on purpose (`v2-stop`, `schtasks /End`), or the task is disabled | `schtasks /Run /TN ncc-orchestrator` (**ask**) |
+| An upgrade ended with `rolled_back` or "nothing was changed" | The new version was not healthy here, or a check failed first | `upgrade --status`, `logs/upgrade-helper.log` |
 | Scan exit code 2 | Config invalid | `validate-config`, `preflight-check` |
 | Scan exit code 3 | Some clusters failed | `outputfiles/run-summary.json`, per-cluster `clusters[]` |
 | `access.suspicious` in the audit log | Repeated refusals or one token from many addresses | Identify the client (`client_kind`, `client_name`, address); rotate the token if it is not theirs |
@@ -318,11 +325,20 @@ before and after numbers.
 ./bin/ncc-orchestrator v2-backup --encrypt --key-file /path/to/backup.key --output-dir ./backups --retain 10
 ./bin/ncc-orchestrator v2-restore --verify-only --key-file /path/to/backup.key ./backups/<file>   # proves it is readable
 
-# Update (checksum-verified; the in-app updater also backs up and rolls back on failure)
+# Upgrade from 2.4.0 on: whole stack, with backup, health check and rollback on failure
+./bin/ncc-orchestrator upgrade --plan       # what changes on this host
+./bin/ncc-orchestrator upgrade              # offline: --bundle <stack archive>
+./bin/ncc-orchestrator upgrade --status
+# From 2.3.x: back up first, then
 ./bin/ncc-orchestrator update --check
 ./bin/ncc-orchestrator update
+./bin/ncc-orchestrator v2-restart
 ./bin/ncc-orchestrator v2-status --json
 ```
+
+After the step from 2.3.x, 2.4.0 installs the update helper about two minutes after it
+starts; wait for it before you report (`upgrade --plan` says `Update helper: ready`).
+`upgrade --rollback` goes back to the previous version for 24 hours (**ask**).
 
 Read the release notes of the target version first
 ([`releases/README.md`](releases/README.md)). To restore: stop the stack, `v2-restore`,

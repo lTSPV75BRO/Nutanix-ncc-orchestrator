@@ -23,7 +23,8 @@ To report a vulnerability, see [`.github/SECURITY.md`](../../.github/SECURITY.md
   All are fixed.
 - A crafted backup could make the server run its own program (SEC-19, High,
   found and fixed on 2026-11-24).
-- Open: the first release from the new publishing workflow (REL-05); the Linux
+- Open: the first release from the new publishing workflow (REL-05); pushes to
+  `main` replace published image tags (REL-10); the Linux
   service is sandboxed but still root (LIN-02).
 
 ## Threat model in brief

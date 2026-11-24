@@ -14,7 +14,8 @@ days, M under a week, L longer.
 
 | Item | Scope | Size |
 | --- | --- | --- |
-| First release from the new workflow (REL-05) | Create the `release` environment, signing secrets and `NCC_RELEASE_PUBKEY`, tag 2.4.0, and check that the workflow's own verification passes. | S |
+| First release from the new workflow (REL-05) | The `release` environment and keys exist. Publish a candidate, then 2.4.0, and check that the workflow's own verification passes and that installs update to it. | S |
+| Published images stay as they are (REL-10) | Push images only from the release workflow, or under another tag from `main`. | S |
 | Server-side report pagination | Build only the requested `checks_snapshot` or `agg_rows` page instead of loading and filtering the whole report before slicing. | M |
 | Kubernetes HA integration test | Two API replicas, shared storage, CronJob execution, schedule updates and pod rescheduling on separate nodes; add a 7,000-cluster data set with memory figures. | L |
 
@@ -77,6 +78,7 @@ graceful shutdown and supervised updates; per-cluster data freshness and the
 stopped-schedule banner; raw-log retention with a dry-run preview;
 `v2-restore --verify-only`; restore that installs only program files the host
 has run; narrow Kubernetes Roles and PrometheusRule alerts in the Helm chart;
+the update helper (whole-stack upgrades with rollback on every platform);
 report-cache state and a runner version-skew check; structured logs from every
 process with a Logs page and a run-time level; an Integrations page; and the
 fixes from the quality and security review.

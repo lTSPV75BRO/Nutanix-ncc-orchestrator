@@ -50,6 +50,6 @@ Orchestrator. If you are new, start with the
 | Document | What it covers |
 | --- | --- |
 | [Roadmap](ROADMAP.md) | Planned and proposed work by priority |
-| [Upgrade helper](UPGRADE_HELPER_PLAN.md) | Design and plan for upgrades that include the supervisor and service definitions, on every platform (proposed) |
+| [Upgrade helper](UPGRADE_HELPER_PLAN.md) | How upgrades include the supervisor and service definitions on every platform: design, what was built, known limits |
 | [Quality and security review](audit/README.md) | Method, results and measurements of the 2026 review; [findings register](audit/findings.md); [security assessment](audit/security-assessment.md); [release vulnerability scan](audit/release-scan.md) |
 | [Release notes](releases/README.md), [changelog](../CHANGELOG.md) | What changed in each version |

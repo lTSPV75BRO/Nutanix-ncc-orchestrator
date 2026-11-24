@@ -196,7 +196,7 @@ failing halfway.
 
 | Phase | Content | Target | Size | Done when |
 | --- | --- | --- | --- | --- |
-| U0 | Pre-release support in the updater and release workflow | RC 1 | S | built; proven when RC 1 is published |
+| U0 | Pre-release support in the updater and release workflow | RC 1 | S | built; proven when RC 1 is published and an install updates to it |
 | U1 | Helper core (journal, stage 1 and 2, rollback), Linux systemd, adoption from 2.3.x | RC 2 | L | 2.3.0 → RC 2 in a systemd container ends on the sandboxed unit with no manual step; every fault below rolls back |
 | U2 | Windows tasks and macOS launchd | RC 2 or 3 | M | same on Windows Server 2022 and macOS; supervisor, folder permissions and schedule migrated |
 | U3 | CLI, hand-started stacks, UI plan and progress, `--bundle` | RC 3 | M | one flow in the UI on every host type; offline upgrade works |
@@ -244,6 +244,9 @@ Code: `cmd/ncc-orchestrator/upgrade_*.go` (engine, stage 1, platforms, CLI) and
 | Helm pre-upgrade hook checks backup, space and skew | It pulls and starts the new images once. The post-upgrade hook waits for five answers in a row with the new version. |
 | `ncc-orchestrator update` hands over to the helper | Unchanged: it replaces programs only. `upgrade` is the new command. |
 
+Since then: on Windows the service has a second task, `ncc-orchestrator-watchdog`
+(WIN-07); upgrades, rollback and adoption include it.
+
 Known limits: a Windows task with a name of its own is found only when it is
 `ncc-orchestrator`; the 2.3.x to 2.4.0 step itself is still carried out by the
 2.3.x supervisor, and adoption finishes it two minutes after 2.4.0 starts; a
@@ -252,5 +255,6 @@ manual rollback exists for upgrades the helper carried out.
 Rehearsed with `scripts/upgrade-e2e.sh` (also in CI on Ubuntu, macOS and
 Windows): upgrade with a locally added unit line, rollback by hand, a release
 that does not start, a changed package, the helper killed while installing and
-while checking; each from a service manager and from `v2-start`. Adoption was
+while checking; each from a service manager and from `v2-start`. With a service
+manager it also kills the supervisor. Adoption was
 rehearsed from 2.2.1 and 2.3.0 under systemd 257, and the Helm hooks on kind.

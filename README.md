@@ -386,7 +386,8 @@ Details: [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md) and the [sec
 | Restart the stack | `ncc-orchestrator v2-restart` |
 | Start at boot (systemd, Windows Task Scheduler, or launchd) | `ncc-orchestrator v2-install-service` (`--print-only` to preview) |
 | Back up / restore config, users, tokens, and state | `ncc-orchestrator v2-backup` / `v2-restore` |
-| Update to the latest release | `ncc-orchestrator update --check`, then `update` (or **System → Updates & backups**) |
+| Update to the latest release | **System → Updates & backups**, or `ncc-orchestrator upgrade --plan`, then `upgrade` (from 2.3.x: `update --check`, then `update`) |
+| Follow or undo an upgrade | `ncc-orchestrator upgrade --status`, `upgrade --rollback` (24 hours) |
 | Recover a lost password | `ncc-orchestrator v2-reset-password --user admin` |
 | Shell completion | `ncc-orchestrator completion bash\|zsh\|fish\|powershell` |
 
@@ -400,7 +401,7 @@ Details: [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md) and the [sec
 
 ## Verifying release binaries
 
-Release binaries are not yet code-signed, so macOS and Windows may warn on first launch.
+From 2.4.0 on, `checksums.txt` is signed (Ed25519) and Linux binaries and stack archives have GPG signatures. Windows and macOS programs are not code-signed yet, so those systems may warn on first launch.
 
 1. **Check the hash** against `checksums.txt` from the same release; stop if it does not match.
    ```bash
@@ -412,7 +413,7 @@ Release binaries are not yet code-signed, so macOS and Windows may warn on first
    ```
 2. **Clear the OS warning** for that file only:
    macOS `xattr -dr com.apple.quarantine <folder>` · Windows `Get-ChildItem -Recurse <folder> | Unblock-File` · Linux `chmod +x bin/*`
-3. **Confirm provenance:** `ncc-orchestrator verify` prints the version, git revision, and the SHA-256 of the running executable. With the GitHub CLI, `gh attestation verify <file> --owner lTSPV75BRO` checks the SLSA build-provenance attestation.
+3. **Confirm provenance:** `ncc-orchestrator verify` prints the version, git revision, and the SHA-256 of the running executable; `verify --online --require-signature` also checks the signed checksums. With the GitHub CLI, `gh attestation verify <file> --owner lTSPV75BRO` checks the SLSA build-provenance attestation.
 
 More (GPG, Windows file properties, antivirus quarantine): [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md).
 
@@ -447,12 +448,12 @@ Raw NCC output goes to `nccfiles/`, runner logs to `logs/ncc-runner.log`, and th
 **To v2.4.0.** Configure a backup key first: backups are **encrypted by default**, and the in-app updater refuses to run without a server-side key because it takes an encrypted backup before it changes anything. Set `NCC_BACKUP_KEY_FILE` (recommended), `NCC_BACKUP_KEY` or `NCC_BACKUP_PASSPHRASE` on the API server (on Kubernetes add `backup-key` to the credentials Secret), or set `NCC_BACKUP_ENCRYPTION=optional` to keep plaintext backups. Existing acknowledge and resolve marks are imported automatically.
 
 - **Helm:** the chart now passes the full set of path flags (the API pod could not start without them), the runner CronJob runs from `/data`, and the PVC takes `persistence.accessMode`, `persistence.storageClass` and `persistence.size`. With Helm 4, `helm upgrade` can report a server-side-apply conflict after someone edited the CronJob schedule in the UI; pass `--force-conflicts`. See [`helm/ncc-orchestrator/README.md`](helm/ncc-orchestrator/README.md).
-- **Windows:** `setup-ncc.ps1` now refuses to run over an existing install (set `NCC_FORCE_CLEAN=1` to delete it on purpose). To upgrade, use **System → Updates & backups** or `ncc-orchestrator update`.
-- **Linux:** `v2-install-service` also installs the log maintenance timer.
+- **Windows:** `setup-ncc.ps1` now refuses to run over an existing install (set `NCC_FORCE_CLEAN=1` to delete it on purpose) and keeps the Prism password in `secrets.json`. To upgrade, use **System → Updates & backups** or `ncc-orchestrator update`.
+- **Linux, macOS, Windows:** about two minutes after 2.4.0 starts it installs the [update helper](docs/FEATURES_AND_CONFIG_FLAGS.md) and brings the service up to its current definition (Linux: systemd sandbox and log maintenance timer; Windows: the watchdog task), with one short restart. Turn this off with `NCC_UPGRADE_ADOPT=0`.
 
 Other changes and rollback notes: [`RELEASE_NOTES_v2.4.0.md`](docs/releases/RELEASE_NOTES_v2.4.0.md).
 
-**Between v2 releases.** Use **System → Updates & backups** or `ncc-orchestrator update --check` then `update`. It takes a backup, installs the checksum-verified release, restarts the services and rolls back automatically if they do not come up. Read the release notes for the version you are moving to.
+**Between v2 releases.** Use **System → Updates & backups** or `ncc-orchestrator upgrade`. It takes a backup, installs the verified release (programs, web UI, service definitions), restarts the services and puts everything back if they do not come up. `ncc-orchestrator upgrade --bundle <archive>` works without internet access. `ncc-orchestrator update` replaces the programs only, and is the command to use up to 2.3.x. Read the release notes for the version you are moving to.
 
 **From v1.** `ncc-orchestrator update` stays on the v1.x track unless you pass `--allow-major-upgrade`, and it replaces only the command-line binary. The API and UI are separate programs: install them from a stack archive (see [Quick start](#quick-start)) or run `ncc-orchestrator v2-bootstrap`. Your configuration file keeps working; run `validate-config` and `preflight-check` before the first run, and keep the old binary and a copy of the config until the new setup has produced a good run.
 

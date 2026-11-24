@@ -72,7 +72,7 @@ changed `.github/workflows/*`, which `GITHUB_TOKEN` cannot do.
 2. Tag that commit `v2.4.0-rc.1` and push the tag. The workflow refuses a tag that
    is not `v` plus `VERSION`.
 3. The release is marked pre-release and never Latest, and images
-   `:2.4.0-rc.1` are pushed. Stable installs are not offered it.
+   `:2.4.0-rc.1` are pushed (`:latest` stays). Stable installs are not offered it.
 4. Try it with `ncc-orchestrator update --target-version 2.4.0-rc.1` (2.3.0 and
    later). From a candidate, updates find the next candidate and then the release.
 5. Before the final tag, stamp `2.4.0` the same way.

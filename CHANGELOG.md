@@ -10,21 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [2.4.0] - Unreleased
 
-### Fixed
-
-- **Unsigned local builds work again.** The build no longer expects the Linux
-  GPG public-key artifact when Linux GPG signing was not configured. Windows
-  test signing can set `NCC_WINDOWS_TIMESTAMP_URL=none` to skip external
-  timestamping for a self-signed certificate.
-- **Windows: a supervisor that died is started again (WIN-07).** Task Scheduler's restart
-  setting does not cover that. The service now has a second task,
-  `ncc-orchestrator-watchdog`, which looks every minute. `v2-stop` and
-  `schtasks /End` are respected. Existing hosts get it with the upgrade.
-- **VM templates (INS-02).** The cloud-init template and `setup-ncc.ps1` failed at the first
-  boot. Both now install the service with `v2-install-service` and keep the Prism password
-  in `secrets.json`. `NCC_CONFIG` is gone: the configuration is
-  `<install folder>/config.yaml`, the one the service reads.
-- `v2-install-service` takes `--api-listen` and `--ui-listen`.
+Release candidate `2.4.0-rc.1`: 2026-11-24.
 
 ### Security
 
@@ -46,7 +32,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Release candidates (REL-08).** A tag such as `v2.4.0-rc.1` is published as a
   pre-release and never offered to stable installs. An install that runs a candidate is
   offered newer candidates and then the release; others opt in with
-  `ncc-orchestrator update --include-prerelease`. A tag must match `VERSION`.
+  `ncc-orchestrator update --include-prerelease`. A tag must match `VERSION`. Images of a
+  candidate do not become `:latest`.
 - **Supervisor and doctor (INS-01).** A stopping supervisor leaves the pid file of a
   server started by hand, so restarts from the UI stop it. The scheduler check
   understands `auto`, removed and preview-only schedules.
@@ -186,6 +173,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Unsigned local builds work again.** The build no longer expects the Linux
+  GPG public-key artifact when Linux GPG signing was not configured. Windows
+  test signing can set `NCC_WINDOWS_TIMESTAMP_URL=none` to skip external
+  timestamping for a self-signed certificate.
+- **Windows: a supervisor that died is started again (WIN-07).** Task Scheduler's restart
+  setting does not cover that. The service now has a second task,
+  `ncc-orchestrator-watchdog`, which looks every minute. `v2-stop` and
+  `schtasks /End` are respected. Existing hosts get it with the upgrade.
+- **VM templates (INS-02).** The cloud-init template and `setup-ncc.ps1` failed at the first
+  boot. Both now install the service with `v2-install-service` and keep the Prism password
+  in `secrets.json`. `NCC_CONFIG` is gone: the configuration is
+  `<install folder>/config.yaml`, the one the service reads.
+- `v2-install-service` takes `--api-listen` and `--ui-listen`.
 - **systemd: the stack comes back after a restore, TLS change or unsupervised update
   from the UI (REL-07).** The restart was started inside the service and died with it,
   leaving the stack stopped.
@@ -247,8 +247,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   column-resize handles lacked a value; the Integrations side panel scrolled without keyboard focus.
   An axe-core sweep of 18 pages and the four Findings views is clean in dark, light and IT Professional.
 - **Dependencies:** `golang.org/x/crypto` 0.59.0, `x/sys` 0.50.0, `x/term` 0.48.0, `x/oauth2` 0.38.0, and
-  the frontend patch updates (antd 6.7.2, react-router 8.5.2, vite 8.3.8, vitest 5.1.1, react-query
-  5.108.4). `npm audit` reports 0; `govulncheck` reports only the reviewed GO-2026-6909.
+  the frontend patch updates (antd 6.7.2, react-router 8.5.2, vite 8.3.8, plugin-react 6.3.0,
+  jsdom 31.0.1, vitest 5.1.1, react-query 5.108.4). `npm audit` reports 0; `govulncheck` reports only the reviewed GO-2026-6909.
 - **CI gates:** the reviewed `exec.Command` calls (no shell) carry `#nosec G702` with their reason, the
   MCP red-team test no longer has an empty branch (staticcheck), and four reviewed gitleaks false
   positives are listed in `.gitleaksignore`.

@@ -131,9 +131,10 @@ These need an environment that was not available or time that was not spent:
 - Egress NetworkPolicy.
 - A reboot and `kill -9` of supervisor children on Linux; the systemd sandbox with
   SELinux enforcing; LDAP against a real directory on Linux.
-- The Windows permissions as SYSTEM or elevated; the release workflow end to end.
-- A Windows reboot, a service account other than SYSTEM, an upgrade from an older
-  release, and a Sysprep first boot.
+- The Windows permissions as SYSTEM or elevated.
+- A Windows reboot, a service account other than SYSTEM, an upgrade of a Windows host
+  from an older release, and a Sysprep first boot. CI runs the VM templates and
+  rehearses upgrades with a service on Windows, macOS and Ubuntu.
 - OWASP ZAP (DAST) and a screen reader.
 
 Each is listed as a follow-up in [`docs/ROADMAP.md`](../ROADMAP.md) or
