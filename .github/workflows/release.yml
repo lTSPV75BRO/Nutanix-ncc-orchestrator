@@ -156,29 +156,9 @@ jobs:
           NCC_LINUX_GPG_PASSPHRASE: ${{ secrets.NCC_LINUX_GPG_PASSPHRASE }}
         run: |
           set -euo pipefail
-          umask 077
-          for name in NCC_RELEASE_SIGN_KEY_BASE64 NCC_RELEASE_PUBKEY NCC_LINUX_GPG_PRIVATE_KEY_BASE64 NCC_LINUX_GPG_KEY_ID NCC_LINUX_GPG_PASSPHRASE; do
-            [ -n "${!name}" ] || { echo "::error::$name is required for a release (environment 'release' secret/variable)"; exit 1; }
-          done
-          release_key="$RUNNER_TEMP/ncc-release-signing.key"
-          printf '%s' "$NCC_RELEASE_SIGN_KEY_BASE64" | base64 --decode > "$release_key"
-          chmod 600 "$release_key"
-          gpg_home="$RUNNER_TEMP/ncc-release-gpg"
-          install -d -m 700 "$gpg_home"
-          printf '%s' "$NCC_LINUX_GPG_PRIVATE_KEY_BASE64" | base64 --decode | gpg --batch --homedir "$gpg_home" --import
-          gpg --batch --homedir "$gpg_home" --list-secret-keys "$NCC_LINUX_GPG_KEY_ID" >/dev/null
-          # The passphrase goes to a 0600 file (gpg --passphrase-file), never to
-          # GITHUB_ENV or a command line.
-          pass_file="$RUNNER_TEMP/ncc-release-gpg.pass"
-          printf '%s\n' "$NCC_LINUX_GPG_PASSPHRASE" > "$pass_file"
-          chmod 600 "$pass_file"
-          {
-            echo "NCC_RELEASE_SIGN_KEY=$release_key"
-            echo "NCC_RELEASE_PUBKEY=$NCC_RELEASE_PUBKEY"
-            echo "GNUPGHOME=$gpg_home"
-            echo "NCC_LINUX_GPG_KEY_ID=$NCC_LINUX_GPG_KEY_ID"
-            echo "NCC_LINUX_GPG_PASSPHRASE_FILE=$pass_file"
-          } >> "$GITHUB_ENV"
+          # Writes the key files, signs a test file with each key, and puts only
+          # file names, the GPG key ID and the public key into GITHUB_ENV.
+          bash scripts/release-signing-keys.sh "$RUNNER_TEMP" "$GITHUB_ENV"
 
       - name: Run scripts/binaryGO.txt (build + sign + SBOM + attestation)
         env:

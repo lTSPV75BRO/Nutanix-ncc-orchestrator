@@ -18,6 +18,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   stack archives also carry GPG signatures and the matching public key.
   Windows and macOS remain checksum- and provenance-verified but unsigned
   until CA-issued publisher identities are available.
+- **Release keys are checked before the build (REL-09).** The release job signs a test
+  file with both keys and stops if a key, key ID or passphrase is wrong. Ed25519 keys
+  made with openssl (PEM) are accepted, and a build with an invalid public key fails
+  instead of producing programs that skip signature checks.
 - **Windows: a schedule no longer replaces the supervisor task (WIN-06).** Both used
   the task name `ncc-orchestrator`. The default schedule's task is now
   `ncc-orchestrator-schedule`; on an affected host run `v2-install-service` as

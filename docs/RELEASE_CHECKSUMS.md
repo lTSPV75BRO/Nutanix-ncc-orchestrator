@@ -28,8 +28,8 @@ secrets (environment or repository secrets):
 - `NCC_LINUX_GPG_KEY_ID`
 - `NCC_LINUX_GPG_PASSPHRASE`
 
-`NCC_RELEASE_PUBKEY` is public and belongs in a GitHub Actions repository
-variable. Never commit or print any private key or passphrase.
+`NCC_RELEASE_PUBKEY` is public and belongs in a GitHub Actions **variable**
+(environment or repository), not a secret. Never commit or print any private key or passphrase.
 
 ### How a release is published (maintainer view)
 
@@ -98,6 +98,19 @@ base64 -w 0 ncc-release-signing.key
 Use the resulting base64 text for `NCC_RELEASE_SIGN_KEY_BASE64`; copy the
 public key printed by `release-keygen` into `NCC_RELEASE_PUBKEY`. On macOS,
 use `base64 < ncc-release-signing.key | tr -d '\n'` instead of `base64 -w 0`.
+
+A key made with openssl works too: store base64 of the unencrypted PKCS#8 PEM file
+(`openssl genpkey -algorithm ed25519`) as the secret, and the PEM public key
+(`openssl pkey -in key.pem -pubout`) or its one-line form as the variable. To see
+the one-line form, or to check that both belong together:
+
+```bash
+go run ./cmd/ncc-orchestrator release-pubkey --key key.pem --public "$(cat key.pub.pem)"
+```
+
+Before building, the release job runs `scripts/release-signing-keys.sh`: it signs a
+test file with both keys and stops if the Ed25519 pair does not match, or if the GPG
+key, its ID or its passphrase is wrong.
 
 Create a dedicated, passphrase-protected GPG signing key for Linux artifacts,
 record its full fingerprint, and export it only for the Actions secret:

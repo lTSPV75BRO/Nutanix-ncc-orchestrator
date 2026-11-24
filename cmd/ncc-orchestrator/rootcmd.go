@@ -2434,11 +2434,31 @@ when a valid signature is absent (e.g. an unsigned build or release).`,
 			return nil
 		},
 	}
-	releaseSignCmd.Flags().String("key", "", "Path to the base64 Ed25519 private key (from release-keygen)")
+	releaseSignCmd.Flags().String("key", "", "Path to the Ed25519 private key (from release-keygen, or PKCS#8 PEM)")
 	releaseSignCmd.Flags().String("in", "checksums.txt", "File to sign")
 	releaseSignCmd.Flags().String("out", "", "Signature output path (default <in>.sig)")
 	_ = releaseSignCmd.MarkFlagRequired("key")
 	cmd.AddCommand(releaseSignCmd)
+
+	releasePubkeyCmd := &cobra.Command{
+		Use:    "release-pubkey",
+		Short:  "Print the release public key in the form a build embeds, and check that it belongs to the signing key (maintainers)",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			key, _ := cmd.Flags().GetString("key")
+			public, _ := cmd.Flags().GetString("public")
+			pub, err := releasePublicKey(key, public)
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), pub)
+			return err
+		},
+	}
+	releasePubkeyCmd.Flags().String("key", "", "Path to the Ed25519 private key")
+	releasePubkeyCmd.Flags().String("public", "", "Public key: one line of base64, or PEM")
+	cmd.AddCommand(releasePubkeyCmd)
 
 	// completion subcommand: emit shell-completion scripts for bash,
 	// zsh, fish, and powershell. Uses cobra's built-in generators so

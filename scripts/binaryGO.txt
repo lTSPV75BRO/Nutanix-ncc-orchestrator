@@ -575,6 +575,14 @@ GIT_DIRTY=""
 if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
   GIT_DIRTY="-dirty"
 fi
+# The release public key goes into -ldflags: one line of base64. A PEM key is
+# converted, and a value that is not an Ed25519 public key stops the build (it
+# would produce programs that skip signature checks).
+if [ -n "${NCC_RELEASE_PUBKEY:-}" ] && ! [[ "$NCC_RELEASE_PUBKEY" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
+  NCC_RELEASE_PUBKEY="$(go run ./cmd/ncc-orchestrator release-pubkey --public "$NCC_RELEASE_PUBKEY")" \
+    || die "NCC_RELEASE_PUBKEY is not an Ed25519 public key"
+  export NCC_RELEASE_PUBKEY
+fi
 if [ "$REQUIRE_CLEAN" = 1 ] && [ -n "$GIT_DIRTY" ]; then
   die "worktree is dirty; commit or stash, or omit --require-clean"
 fi
