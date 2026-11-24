@@ -133,8 +133,11 @@ func runUninstallCommand(cmd *cobra.Command, args []string) error {
 
 	if opts.RemoveV2Runtime {
 		if opts.DryRun {
-			fmt.Fprintf(os.Stderr, "[dry-run] would stop detached v2 services from install-dir %s\n", opts.InstallDir)
+			fmt.Fprintf(os.Stderr, "[dry-run] would stop detached v2 services from install-dir %s and remove its update helper\n", opts.InstallDir)
 		} else {
+			if svc := findStackService(opts.InstallDir); svc != nil && svc.privileged() == nil {
+				svc.removeHelper()
+			}
 			stopErr := runV2Stop(v2StopOptions{
 				InstallDir:  opts.InstallDir,
 				Force:       opts.Force,

@@ -16,6 +16,11 @@ spec:
             matchLabels:
               app: ncc-orchestrator-v2
               component: ui
+        # k8s/upgrade-check-job.yaml
+        - podSelector:
+            matchLabels:
+              app: ncc-orchestrator-v2
+              component: upgrade-check
       ports:
         - protocol: TCP
           port: 8081

@@ -40,9 +40,9 @@ type aclInstall struct {
 var (
 	aclPrivateDirs = []string{"backups", "tls", "auth", "config", "configs", "secrets", "logs"}
 	// run/ holds the files that ask the supervisor to restart or upgrade.
-	aclProgramDirs = []string{"bin", "frontend-dist", "run"}
+	aclProgramDirs = []string{"bin", "frontend-dist", "run", "helper"}
 	// aclPrepareDirs are created before anyone else can create them.
-	aclPrepareDirs = []string{"backups", "tls", "configs", "logs", "run"}
+	aclPrepareDirs = []string{"backups", "tls", "configs", "logs", "run", "helper"}
 	// aclPrivateFiles are secret or security-relevant files in the install dir
 	// itself (token, users, initial password, start settings, state, config and
 	// its copies).

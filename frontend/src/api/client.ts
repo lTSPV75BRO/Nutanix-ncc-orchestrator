@@ -62,6 +62,7 @@ import type {
   PublicTLSInfo,
   TLSApplyResult,
   UpdateStatus,
+  UpgradePlan,
   UpdateJob,
   BackupEntry,
   BackupScheduleResponse,
@@ -693,6 +694,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload ?? {}),
     }),
+  updatePlan: () => callApi<UpgradePlan>("/api/v1/settings/update/plan"),
+  rollbackUpdate: () => callApiEnvelope<unknown>("/api/v1/settings/update/rollback", { method: "POST", body: "{}" }),
   listBackups: () =>
     callApi<{ backups: BackupEntry[]; encryption_policy?: { required: boolean; server_key_configured: boolean } }>(
       "/api/v1/settings/backups",

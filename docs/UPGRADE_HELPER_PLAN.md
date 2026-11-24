@@ -1,6 +1,8 @@
 # Upgrade helper: design and plan
 
-**Status:** proposed, not built. Written 2026-11-24 against the 2.4.0 code.
+**Status:** built for 2.4.0 (phases U0 to U4); U5 is LIN-02, planned for 2.5.0.
+Written 2026-11-24. [How it was built](#how-it-was-built) lists where the code
+differs from this plan. Operating it: `FEATURES_AND_CONFIG_FLAGS.md`, "Upgrades".
 
 Goal: one click (or one command) moves an install from any supported version to
 the next one, including the parts an upgrade cannot change today (the
@@ -219,12 +221,36 @@ candidate, on Rocky 9, Ubuntu 24.04, Debian 12 (systemd containers, and one
 real Rocky host), Windows Server 2022, macOS, kind; service and hand-started.
 The Linux part runs in CI.
 
-## Decisions needed
+## Decisions
 
-1. **Ship the helper in 2.4.0 (recommended) or 2.5.0?** In 2.4.0 it needs two
-   more candidates, but every later upgrade benefits and 2.3.x hosts get the
-   sandbox without manual steps. In 2.5.0, 2.4.0 ships sooner and hosts need
-   `v2-install-service` run once by hand after the upgrade.
-2. **Adoption on by default?** Recommended yes: it changes only definitions we
-   generated, restarts the stack once and rolls back on its own.
-3. **Locally edited units:** keep and report (recommended), or replace.
+1. The helper ships in **2.4.0**.
+2. Adoption is **on** by default (`NCC_UPGRADE_ADOPT=0` turns it off).
+3. Locally edited units are **kept**: added lines move to a drop-in, and a unit
+   with a changed command or user is left alone and reported.
+
+## How it was built
+
+Code: `cmd/ncc-orchestrator/upgrade_*.go` (engine, stage 1, platforms, CLI) and
+`cmd/ncc-api-server/upgradehelper.go`.
+
+| Plan | Built |
+| --- | --- |
+| Path unit on `request.json`; boot trigger on Windows added for stage 2 | One file, `run/upgrade/wake`, exists while there is work. systemd and launchd watch it. On Windows the helper is started on request and at boot, and every minute while there is work: Task Scheduler does not restart a program that was killed. |
+| Probe for 15 s with a heartbeat | 5 s after the checks; the job's heartbeat is every 15 s. |
+| The helper downloads the stack | Stage 1 downloads, the helper verifies the signature and checksum again before it unpacks. The helper has no network code path. |
+| The helper's program comes from the release's orchestrator asset | It comes from the same verified stack archive. |
+| `helper_protocol`, `min_from`, `migrations`, `config_schema`, `downtime_hint` in the manifest | `schema`, `version`, `helper_protocol` and optional `min_from`; the rest had no reader. |
+| Replace a locally edited unit on request | Not built: edit or remove the unit and run `v2-install-service`. |
+| Helm pre-upgrade hook checks backup, space and skew | It pulls and starts the new images once. The post-upgrade hook waits for five answers in a row with the new version. |
+| `ncc-orchestrator update` hands over to the helper | Unchanged: it replaces programs only. `upgrade` is the new command. |
+
+Known limits: a Windows task with a name of its own is found only when it is
+`ncc-orchestrator`; the 2.3.x to 2.4.0 step itself is still carried out by the
+2.3.x supervisor, and adoption finishes it two minutes after 2.4.0 starts; a
+manual rollback exists for upgrades the helper carried out.
+
+Rehearsed with `scripts/upgrade-e2e.sh` (also in CI on Ubuntu, macOS and
+Windows): upgrade with a locally added unit line, rollback by hand, a release
+that does not start, a changed package, the helper killed while installing and
+while checking; each from a service manager and from `v2-start`. Adoption was
+rehearsed from 2.2.1 and 2.3.0 under systemd 257, and the Helm hooks on kind.

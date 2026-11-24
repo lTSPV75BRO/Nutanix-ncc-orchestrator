@@ -1020,6 +1020,12 @@ if [ "$NO_STACKS" != 1 ]; then
   } > dist/release-attestation.json
   echo "wrote dist/release-attestation.json"
 
+  # What an upgrade to this release needs (cmd/ncc-orchestrator/upgrade_stage.go).
+  HELPER_PROTOCOL=$(sed -n 's/^const helperProtocol = \([0-9][0-9]*\).*$/\1/p' cmd/ncc-orchestrator/upgrade_stage.go)
+  [ -n "$HELPER_PROTOCOL" ] || die "helperProtocol not found in cmd/ncc-orchestrator/upgrade_stage.go"
+  printf '{"schema":1,"version":"%s","helper_protocol":%s}\n' "$VERSION" "$HELPER_PROTOCOL" > dist/upgrade-manifest.json
+  echo "wrote dist/upgrade-manifest.json"
+
   if [ "$SKIP_SBOM" != 1 ] && command -v cyclonedx-gomod >/dev/null 2>&1; then
     for spec in "ncc-orchestrator:./cmd/ncc-orchestrator" "ncc-api-server:./cmd/ncc-api-server" "ncc-ui-server:./cmd/ncc-ui-server"; do
       name="${spec%%:*}"
@@ -1035,7 +1041,7 @@ if [ "$NO_STACKS" != 1 ]; then
     cd dist
     : > checksums.txt
     shopt -s nullglob
-    for f in ncc-orchestrator-* ncc-v2-stack-* ncc-release-signing.gpg example_config.yaml "RELEASE_NOTES_v${VERSION}.md" release-attestation.json bom-*.cdx.json; do
+    for f in ncc-orchestrator-* ncc-v2-stack-* ncc-release-signing.gpg example_config.yaml "RELEASE_NOTES_v${VERSION}.md" release-attestation.json upgrade-manifest.json bom-*.cdx.json; do
       case "$f" in
         *.asc|*.sig) continue ;;
       esac

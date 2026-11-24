@@ -287,6 +287,10 @@ func runV2Start(opts v2StartOptions) error {
 	if opts.Detach && !opts.Supervise && systemdStackIsActive() {
 		return fmt.Errorf("ncc-orchestrator.service is already active; use `systemctl restart ncc-orchestrator.service` or `ncc-orchestrator v2-restart` instead of starting a detached duplicate")
 	}
+	if !opts.Supervise && resumeInterruptedUpgrade(installDir) {
+		fmt.Println("An interrupted upgrade is being finished by the update helper, which also starts the stack. Follow it with: ncc-orchestrator upgrade --status")
+		return nil
+	}
 	// Record the portable start settings so backups carry them and an
 	// orchestrator-managed restart (after a restore, or via v2-restart) reuses
 	// the same CORS/listen/session configuration. Best-effort; never block the

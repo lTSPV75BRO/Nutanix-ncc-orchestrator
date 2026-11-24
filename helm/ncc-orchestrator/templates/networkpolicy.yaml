@@ -48,6 +48,10 @@ spec:
     - from:
         - podSelector:
             matchLabels: { app: ncc-orchestrator-v2, component: ui }
+        {{- if .Values.upgradeCheck.enabled }}
+        - podSelector:
+            matchLabels: { app: ncc-orchestrator-v2, component: upgrade-check }
+        {{- end }}
         {{- with $np.apiIngressFrom }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -76,6 +80,13 @@ spec:
             matchLabels: { app: ncc-orchestrator-v2, component: api }
       ports:
         - { protocol: TCP, port: 8081 }
+    {{- if .Values.upgradeCheck.enabled }}
+    - to:
+        - podSelector:
+            matchLabels: { app: ncc-orchestrator-v2, component: ui }
+      ports:
+        - { protocol: TCP, port: 8080 }
+    {{- end }}
     - to:
         {{- range $np.egress.cidrs }}
         - ipBlock: { cidr: {{ . | quote }} }

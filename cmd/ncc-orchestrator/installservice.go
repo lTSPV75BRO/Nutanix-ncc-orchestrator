@@ -334,6 +334,7 @@ func installSupervisorSystemd(o installServiceOptions) error {
 	if err := installLogMaintenanceTimer(o); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: log maintenance timer not installed: %v\n", err)
 	}
+	installHelperOrWarn(o)
 	fmt.Printf("Installed systemd service %s.service (ExecStart=%s v2-supervise --install-dir %s)\n", o.ServiceName, o.OrchestratorBin, o.InstallDir)
 	fmt.Printf("Enabled at boot%s. Manage with: systemctl status|restart|stop %s\n", ifThen(o.Now, " and started now", ""), o.ServiceName)
 	return nil
@@ -346,6 +347,7 @@ func uninstallSupervisorSystemd(o installServiceOptions) error {
 		fmt.Printf("  systemctl disable --now %s.path\n  rm -f %s %s\n", applyUpdateWatcherName(o.ServiceName), applyUpdateWatcherPathPath(o), applyUpdateWatcherServicePath(o))
 		return nil
 	}
+	removeHelperForService(o.InstallDir)
 	_ = uninstallApplyUpdateWatcher(o)
 	uninstallLogMaintenanceTimer()
 	if systemctlAvailable() {
@@ -367,19 +369,35 @@ func windowsSupervisorTaskCmd(o installServiceOptions) string {
 	return fmt.Sprintf("\"%s\" v2-supervise --install-dir \"%s\"", o.OrchestratorBin, o.InstallDir)
 }
 
-// windowsSupervisorTaskXML is the Task Scheduler definition for the
-// supervisor. Plain `schtasks /SC ONSTART` leaves the defaults, which stop the
-// task after 72 hours, never restart it when it dies, and stop it on battery.
-func windowsSupervisorTaskXML(o installServiceOptions) string {
+// windowsTaskSpec is a task that runs as SYSTEM at startup or on demand.
+type windowsTaskSpec struct {
+	Description, Command, Arguments, WorkingDir string
+	Retries                                     int
+	// EveryMinute also starts it every minute, unless it runs already.
+	EveryMinute bool
+}
+
+const windowsMinuteTrigger = `<TimeTrigger><Repetition><Interval>PT1M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>` +
+	`<StartBoundary>2020-01-01T00:00:00</StartBoundary><Enabled>true</Enabled></TimeTrigger>`
+
+// windowsTaskXML is its Task Scheduler definition. Plain `schtasks /SC ONSTART`
+// leaves the defaults, which stop the task after 72 hours, never restart it
+// when it dies, and stop it on battery.
+func windowsTaskXML(t windowsTaskSpec) string {
 	esc := func(s string) string {
 		r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;")
 		return r.Replace(s)
 	}
+	escArgs := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace
+	triggers := `<BootTrigger><Enabled>true</Enabled></BootTrigger>`
+	if t.EveryMinute {
+		triggers += windowsMinuteTrigger
+	}
 	return strings.Join([]string{
 		`<?xml version="1.0" encoding="UTF-16"?>`,
 		`<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">`,
-		`  <RegistrationInfo><Description>NCC Orchestrator v2 stack supervisor (API + UI)</Description></RegistrationInfo>`,
-		`  <Triggers><BootTrigger><Enabled>true</Enabled></BootTrigger></Triggers>`,
+		`  <RegistrationInfo><Description>` + esc(t.Description) + `</Description></RegistrationInfo>`,
+		`  <Triggers>` + triggers + `</Triggers>`,
 		`  <Principals><Principal id="Author"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>`,
 		`  <Settings>`,
 		`    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>`,
@@ -396,16 +414,27 @@ func windowsSupervisorTaskXML(o installServiceOptions) string {
 		`    <WakeToRun>false</WakeToRun>`,
 		`    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>`,
 		`    <Priority>5</Priority>`,
-		`    <RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure>`,
+		fmt.Sprintf(`    <RestartOnFailure><Interval>PT1M</Interval><Count>%d</Count></RestartOnFailure>`, t.Retries),
 		`  </Settings>`,
 		`  <Actions Context="Author"><Exec>`,
-		`    <Command>` + esc(o.OrchestratorBin) + `</Command>`,
-		`    <Arguments>v2-supervise --install-dir "` + esc(o.InstallDir) + `"</Arguments>`,
-		`    <WorkingDirectory>` + esc(o.InstallDir) + `</WorkingDirectory>`,
+		`    <Command>` + esc(t.Command) + `</Command>`,
+		`    <Arguments>` + escArgs(t.Arguments) + `</Arguments>`,
+		`    <WorkingDirectory>` + esc(t.WorkingDir) + `</WorkingDirectory>`,
 		`  </Exec></Actions>`,
 		`</Task>`,
 		``,
 	}, "\r\n")
+}
+
+// windowsSupervisorTaskXML is the supervisor's task.
+func windowsSupervisorTaskXML(o installServiceOptions) string {
+	return windowsTaskXML(windowsTaskSpec{
+		Description: "NCC Orchestrator v2 stack supervisor (API + UI)",
+		Command:     o.OrchestratorBin,
+		Arguments:   `v2-supervise --install-dir "` + o.InstallDir + `"`,
+		WorkingDir:  o.InstallDir,
+		Retries:     999,
+	})
 }
 
 // utf16LEWithBOM encodes s the way schtasks /XML expects.
@@ -449,6 +478,7 @@ func registerWindowsTaskXML(taskName, taskXML string) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
+	// #nosec G702 -- fixed program, argv only; the administrator's task name
 	if out, err := exec.Command("schtasks", "/Create", "/TN", taskName, "/XML", name, "/F").CombinedOutput(); err != nil {
 		return fmt.Errorf("create scheduled task: %v (%s)", err, strings.TrimSpace(string(out)))
 	}
@@ -464,6 +494,7 @@ func installSupervisorWindows(o installServiceOptions) error {
 	if err := registerWindowsSupervisorTask(o); err != nil {
 		return err
 	}
+	installHelperOrWarn(o)
 	fmt.Printf("Created Windows Scheduled Task %q (trigger: at system startup, run as SYSTEM, no time limit, restarts on failure)\n", o.ServiceName)
 	fmt.Printf("Command: %s\n", tr)
 	if o.Now {
@@ -480,6 +511,7 @@ func uninstallSupervisorWindows(o installServiceOptions) error {
 		fmt.Printf("Would run:\n  schtasks /End /TN %q\n  schtasks /Delete /TN %q /F\n", o.ServiceName, o.ServiceName)
 		return nil
 	}
+	removeHelperForService(o.InstallDir)
 	_, _ = exec.Command("schtasks", "/End", "/TN", o.ServiceName).CombinedOutput()
 	if out, err := exec.Command("schtasks", "/Delete", "/TN", o.ServiceName, "/F").CombinedOutput(); err != nil {
 		return fmt.Errorf("delete scheduled task: %v (%s)", err, strings.TrimSpace(string(out)))
@@ -490,8 +522,10 @@ func uninstallSupervisorWindows(o installServiceOptions) error {
 
 // ---- macOS / launchd ----
 
+const launchdLabelPrefix = "io.github.ncc-orchestrator."
+
 func launchdLabel(serviceName string) string {
-	return "io.github.ncc-orchestrator." + sanitizeSystemdName(serviceName)
+	return launchdLabelPrefix + sanitizeSystemdName(serviceName)
 }
 
 func launchdPlistPath(serviceName string) string {
@@ -553,6 +587,7 @@ func installSupervisorLaunchd(o installServiceOptions) error {
 	if out, err := exec.Command("launchctl", "load", "-w", plistPath).CombinedOutput(); err != nil {
 		return fmt.Errorf("launchctl load: %v (%s)", err, strings.TrimSpace(string(out)))
 	}
+	installHelperOrWarn(o)
 	fmt.Printf("Installed launchd daemon %s (%s)\n", launchdLabel(o.ServiceName), plistPath)
 	return nil
 }
@@ -563,12 +598,21 @@ func uninstallSupervisorLaunchd(o installServiceOptions) error {
 		fmt.Printf("Would run:\n  launchctl unload -w %s\n  rm -f %s\n", plistPath, plistPath)
 		return nil
 	}
+	removeHelperForService(o.InstallDir)
 	_, _ = exec.Command("launchctl", "unload", "-w", plistPath).CombinedOutput()
 	if err := os.Remove(plistPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove %s: %w", plistPath, err)
 	}
 	fmt.Printf("Removed launchd daemon %s\n", launchdLabel(o.ServiceName))
 	return nil
+}
+
+// installHelperOrWarn installs the update helper beside the service. Without it
+// the first upgrade installs it, so a failure is only reported.
+func installHelperOrWarn(o installServiceOptions) {
+	if err := installHelperForService(o); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: update helper not installed (the first upgrade tries again): %v\n", err)
+	}
 }
 
 func ifThen(cond bool, yes, no string) string {

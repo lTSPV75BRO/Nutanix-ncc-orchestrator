@@ -46,8 +46,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   sets restore data only and say why; `--verify-only` reports **Program files**.
 - **The systemd service is sandboxed (LIN-01)**, with the log-maintenance and schedule
   units: no new privileges, kernel settings read-only, fewer capabilities and socket
-  types. Existing installs: re-run `v2-install-service`, restart the service and
-  re-save systemd schedules. Relax a setting with `systemctl edit`.
+  types. Existing installs get it from the update helper after the upgrade. Relax a
+  setting with `systemctl edit`.
 - **Windows file permissions (WIN-02).** `v2-start` and the supervisor limit the token,
   user database, config, secrets, backups, TLS keys and logs to SYSTEM, Administrators
   and the account running the stack, and stop ordinary users writing to `bin`,
@@ -130,6 +130,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Update helper.** Upgrades are carried out from outside the service: the new version's
+  helper is installed and tested first, then replaces the whole stack, including the
+  supervisor, and brings service, schedule and log timer definitions up to date. It puts
+  everything back when the result is not healthy, also after a crash or reboot. Works with
+  systemd, the Windows Task Scheduler, launchd and `v2-start --detach`.
+  - **Roll back** to the previous version for 24 hours (UI, `upgrade --rollback`, API).
+  - `ncc-orchestrator upgrade` with `--plan`, `--status`, `--to`, and `--bundle` for hosts
+    without internet access. The update dialog shows what changes on the host.
+  - Hosts from 2.3.x and earlier are brought up by 2.4.0 itself after it starts (once, when
+    idle, with rollback): they get the sandboxed service, the new supervisor and the log
+    timer. Turn off with `NCC_UPGRADE_ADOPT=0`. Lines added to a unit by hand are kept.
+  - Runs cannot start during an upgrade; the result is in the audit log.
+  - Helm: `helm upgrade` pulls and starts the new images before anything changes and then
+    waits until the API and UI run the new version (`upgradeCheck`). With `--atomic` a
+    failed check brings the previous revision back. Kustomize: `k8s/upgrade-check-job.yaml`.
+  - Releases publish `upgrade-manifest.json`, listed in the signed checksums.
 - **MCP import and agent skill.** Copy-paste host configs in `examples/mcp/`
   (Cursor, Claude Desktop), `examples/mcp/forward-api.sh` for HTTP APIs behind
   a loopback tunnel, and `skills/ncc-mcp/` (linked from `.cursor/skills/ncc-mcp`)

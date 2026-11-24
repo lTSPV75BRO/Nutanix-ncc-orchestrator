@@ -235,7 +235,20 @@ export type UpgradePhase =
   | "done"
   | "rolling_back"
   | "rolled_back"
-  | "failed";
+  | "failed"
+  // Phases of the update helper (and of the preparation for it).
+  | "downloading"
+  | "helper_install"
+  | "helper_check"
+  | "handover"
+  | "staging"
+  | "saving"
+  | "stopping"
+  | "swapping"
+  | "migrating"
+  | "starting"
+  | "checking"
+  | "restoring";
 
 export type UpgradeJob = {
   id: string;
@@ -256,6 +269,31 @@ export type UpgradeJob = {
   steps: { at: string; phase: UpgradePhase; message: string }[] | null;
   doctor?: { summary?: Record<string, number>; fixed?: string[]; failing?: string[]; error?: string };
   supervisor_restart_pending?: boolean;
+  /** "adopt": same version, new service definitions. */
+  action?: "upgrade" | "adopt" | "rollback";
+  /** "helper": the update helper; "stage": preparation for it; none: the supervisor of an older release. */
+  runner?: "stage" | "helper";
+  /** What changed besides the programs (service definitions, configuration). */
+  migrations?: string[];
+  /** Until when the previous version can be put back. */
+  rollback_until?: string;
+};
+
+/** GET /api/v1/settings/update/plan: what an upgrade would do. */
+export type UpgradePlan = {
+  current_version: string;
+  target_version?: string;
+  up_to_date?: boolean;
+  service?: string;
+  kind?: string;
+  helper: "ready" | "missing" | "off" | "unavailable";
+  problems?: string[];
+  definitions?: string[];
+  disk_needed_bytes?: number;
+  disk_free_bytes?: number;
+  rollback_to?: string;
+  rollback_until?: string;
+  release_problem?: string;
 };
 
 /** One archive in the server-side backups directory. */

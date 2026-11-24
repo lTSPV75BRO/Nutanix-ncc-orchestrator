@@ -25,6 +25,7 @@ import (
 var restoreProtectedDirs = map[string]string{
 	"run":      "the supervisor's working files",
 	"bin":      "the programs folder",
+	"helper":   "the update helper's program",
 	"tls":      "this server's certificates and keys",
 	"backups":  "this server's backups",
 	"frontend": "a fallback UI folder",

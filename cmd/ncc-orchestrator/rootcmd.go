@@ -1516,6 +1516,7 @@ When using --binary-url for install, --binary-sha256 is required.`,
 	updateCmd.Flags().String("target-version", "", "Target version hint (recommended with --binary-url)")
 	updateCmd.Flags().Bool("skip-checksum-verify", false, "Skip SHA-256 verification of the downloaded asset against the release checksums.txt (not recommended; for air-gapped/mirrored installs)")
 	cmd.AddCommand(updateCmd)
+	cmd.AddCommand(newUpgradeCommands()...)
 
 	v2BootstrapCmd := &cobra.Command{
 		Use:   "v2-bootstrap",

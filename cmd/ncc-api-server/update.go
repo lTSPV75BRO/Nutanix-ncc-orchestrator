@@ -150,7 +150,7 @@ func (s *apiServer) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		"current_version":     Version,
 		"supported":           supported,
 		"job":                 updateJob.snapshot(),
-		"supervised_upgrades": s.supervisorSupports("upgrade"),
+		"supervised_upgrades": s.supervisorSupports("upgrade") || s.handStartedStack(),
 	}
 	if up := s.readUpgradeJob(); up != nil {
 		data["upgrade"] = up
@@ -346,7 +346,7 @@ func (s *apiServer) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if up := s.readUpgradeJob(); up != nil && upgradeJobActive(up) {
-		writeJSON(w, http.StatusConflict, envelope{Success: false, Error: "the supervisor is still carrying out an upgrade (" + up.Phase + ")"})
+		writeJSON(w, http.StatusConflict, envelope{Success: false, Error: "an upgrade is still in progress (" + up.Phase + ")"})
 		return
 	}
 
@@ -355,7 +355,7 @@ func (s *apiServer) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	supervised := s.supervisorSupports("upgrade")
+	supervised := s.supervisorSupports("upgrade") || s.handStartedStack()
 	requestedBy := ""
 	if p, ok := principalFromContext(r.Context()); ok {
 		requestedBy = p.subject
@@ -369,7 +369,7 @@ func (s *apiServer) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 
 	msg := "Update started: taking a backup, applying the update, then restarting the stack. This page will reconnect when the new version is live."
 	if supervised {
-		msg = "Update started: taking a backup, then the supervisor installs the update, restarts each server and checks it is healthy. If a server does not come back, the previous version is put back automatically."
+		msg = "Update started: a backup is taken, the new version is installed and the services are checked. If they do not come back healthy, the previous version is put back automatically."
 	}
 	writeJSON(w, http.StatusAccepted, envelope{Success: true, Message: msg, Data: updateJob.snapshot()})
 }
@@ -422,8 +422,13 @@ func (s *apiServer) runUpdateJob(req updateApplyRequest, supervised bool, reques
 	updateJob.mu.Unlock()
 
 	if supervised {
-		// 2'. Hand over to the supervisor, which outlives the restarts.
-		if err := s.requestSupervisedUpgrade(upgradeRequest{
+		// 2'. Hand over to the supervisor, or (no supervisor) to a process of its
+		// own. Either outlives this server and brings in the update helper.
+		handOver := s.requestSupervisedUpgrade
+		if !s.supervisorSupports("upgrade") {
+			handOver = s.startHandStartedUpgrade
+		}
+		if err := handOver(upgradeRequest{
 			ID:            stamp,
 			TargetVersion: req.TargetVersion,
 			BackupPath:    backupPath,
@@ -431,13 +436,13 @@ func (s *apiServer) runUpdateJob(req updateApplyRequest, supervised bool, reques
 			RequestedAt:   time.Now().UTC().Format(time.RFC3339),
 		}); err != nil {
 			s.updateFailedTotal.Add(1)
-			updateJob.fail("could not hand the update to the supervisor (a pre-update backup was saved as " + filepath.Base(backupPath) + "): " + err.Error())
+			updateJob.fail("could not hand the update over (a pre-update backup was saved as " + filepath.Base(backupPath) + "): " + err.Error())
 			return
 		}
 		updateJob.mu.Lock()
 		updateJob.inProgress = false
 		updateJob.phase = updPhaseSupervised
-		updateJob.message = "Backup saved. The supervisor is installing the update."
+		updateJob.message = "Backup saved. The update is being installed."
 		updateJob.finishedAt = time.Now()
 		updateJob.mu.Unlock()
 		return

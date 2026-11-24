@@ -113,6 +113,20 @@ prometheusRule:
   # Warn when the data volume has less than this fraction free.
   pvcFreeRatio: 0.1
 
+# Hook Jobs of `helm upgrade`. Before anything changes, the new images are
+# pulled and started once; afterwards the API and UI must answer with the new
+# version. When a check fails the release is marked failed and, with --atomic
+# (--rollback-on-failure in Helm 4), the previous revision comes back.
+upgradeCheck:
+  enabled: true
+  # How long pulling the new images may take.
+  pullTimeoutSeconds: 240
+  # How long the API and UI may take to run the new version.
+  timeout: 5m
+  # The version to expect: "auto" takes it from the API image tag when that is
+  # a plain version; "" accepts any version.
+  expectVersion: auto
+
 configMapName: ncc-orchestrator-config
 pvcName: ncc-orchestrator-output
 

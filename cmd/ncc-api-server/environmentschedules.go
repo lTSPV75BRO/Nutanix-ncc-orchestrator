@@ -293,6 +293,9 @@ func (s *apiServer) runDueEnvironmentSchedules(now time.Time) {
 	if len(list) == 0 {
 		return
 	}
+	if s.upgradeInProgress() != "" {
+		return // due again at the next tick, after the restart
+	}
 	changed := false
 	for i := range list {
 		next := nextEnvironmentRun(list[i], time.Local)

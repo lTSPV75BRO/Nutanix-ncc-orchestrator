@@ -14,6 +14,7 @@ import { api } from "../../../api/client";
 import type {
   ComponentsData,
   UpdateStatus,
+  UpgradePlan,
 } from "../../../api/types";
 import { notify, notifyError } from "../../../notify";
 import { IconTitle, KeyValueList, StatusBadge } from "../../../ui";
@@ -23,10 +24,61 @@ const UPDATE_PHASE_LABEL: Record<string, string> = {
   backing_up: "Backing up",
   updating: "Downloading & installing",
   restarting: "Restarting",
-  supervised: "Handed to the supervisor",
+  supervised: "Handed over",
   done: "Done",
   error: "Failed",
 };
+
+/** What the upgrade does to this host, in the confirm dialog. Modal.confirm is outside the query provider. */
+export function UpgradePlanSummary() {
+  const [plan, setPlan] = useState<UpgradePlan | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .updatePlan()
+      .then((p) => !cancelled && setPlan(p))
+      .catch(() => !cancelled && setFailed(true));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  if (failed) return null;
+  if (!plan) {
+    return (
+      <Typography.Paragraph type="secondary" aria-live="polite">
+        Checking what changes on this host…
+      </Typography.Paragraph>
+    );
+  }
+  const definitions = (plan.definitions ?? []).filter((d) => !d.endsWith(": unchanged"));
+  const problems = plan.problems ?? [];
+  return (
+    <>
+      {problems.length ? (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 12 }}
+          title="This would stop the update"
+          description={problems.map((p) => (
+            <div key={p}>{p}</div>
+          ))}
+        />
+      ) : null}
+      {definitions.length ? (
+        <Typography.Paragraph>
+          Changes to the service ({plan.service}):
+          <ul style={{ margin: 0, paddingLeft: 20 }}>
+            {definitions.map((d) => (
+              <li key={d}>{d}</li>
+            ))}
+          </ul>
+        </Typography.Paragraph>
+      ) : null}
+    </>
+  );
+}
 
 // UpdatesCard lets an admin check for a newer release and apply it in place. The
 // backend takes a pre-update backup, installs the new stack (orchestrator + api
@@ -82,7 +134,7 @@ export function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }
         setStatus((prev) => ({ ...(prev ?? {}), ...s }) as UpdateStatus);
         const p = s.job?.phase;
         if (p === "supervised") {
-          // The supervisor carries on; UpgradeProgress follows it.
+          // It goes on outside this server; UpgradeProgress follows it.
           stopPolling();
           setApplying(false);
           void qc.invalidateQueries({ queryKey: UPGRADE_QUERY_KEY });
@@ -182,7 +234,7 @@ export function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }
             </li>
             {supervisedUpgrades ? (
               <li>
-                <b>restart the API and then the web UI</b>, checking that each comes back healthy. If one does
+                <b>restart the services</b> and check that they come back healthy on the new version. If they do
                 not, the previous version is <b>put back automatically</b>.
               </li>
             ) : (
@@ -191,6 +243,7 @@ export function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }
               </li>
             )}
           </ol>
+          {supervisedUpgrades ? <UpgradePlanSummary /> : null}
           <Typography.Paragraph style={{ marginBottom: 0 }}>
             This page will reconnect automatically once the restarted stack is healthy. You may be
             prompted to sign in again.

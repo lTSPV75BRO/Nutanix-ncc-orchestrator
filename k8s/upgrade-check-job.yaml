@@ -1,0 +1,42 @@
+# Optional, after an upgrade with `kubectl apply -k k8s/`: waits until the API
+# and UI answer with the expected version. Not part of the kustomization.
+#
+#   kubectl -n ncc-orchestrator-v2 delete job ncc-v2-upgrade-check --ignore-not-found
+#   kubectl apply -f k8s/upgrade-check-job.yaml
+#   kubectl -n ncc-orchestrator-v2 wait --for=condition=Complete job/ncc-v2-upgrade-check --timeout=330s
+#
+# When it does not complete: kubectl -n ncc-orchestrator-v2 logs job/ncc-v2-upgrade-check,
+# and go back with `kubectl -n ncc-orchestrator-v2 rollout undo deployment/ncc-v2-api`
+# (and deployment/ncc-v2-ui).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ncc-v2-upgrade-check
+  namespace: ncc-orchestrator-v2
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: { app: ncc-orchestrator-v2, component: upgrade-check }
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: check
+          image: docker.io/prajwalnutant/nutanix-ncc-orchestrator:2.4.0-rc.1
+          command: ["/usr/local/bin/ncc-orchestrator"]
+          args: ["upgrade-check", "--api", "http://ncc-v2-api:8081", "--ui", "https://ncc-v2-ui", "--expect", "$(NCC_IMAGE_TAG)", "--timeout", "5m"]
+          env:
+            - name: NCC_IMAGE_TAG
+              value: "2.4.0-rc.1"
+          resources: { requests: { cpu: 10m, memory: 32Mi } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }

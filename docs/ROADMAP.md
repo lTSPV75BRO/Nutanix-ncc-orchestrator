@@ -15,7 +15,6 @@ days, M under a week, L longer.
 | Item | Scope | Size |
 | --- | --- | --- |
 | First release from the new workflow (REL-05) | Create the `release` environment, signing secrets and `NCC_RELEASE_PUBKEY`, tag 2.4.0, and check that the workflow's own verification passes. | S |
-| Upgrade helper | A dormant helper, updated first, that upgrades the whole stack including the supervisor, service definitions and schedules, and rolls back, on every platform. [Design and phases](UPGRADE_HELPER_PLAN.md); proposed. | L |
 | Server-side report pagination | Build only the requested `checks_snapshot` or `agg_rows` page instead of loading and filtering the whole report before slicing. | M |
 | Kubernetes HA integration test | Two API replicas, shared storage, CronJob execution, schedule updates and pod rescheduling on separate nodes; add a 7,000-cluster data set with memory figures. | L |
 

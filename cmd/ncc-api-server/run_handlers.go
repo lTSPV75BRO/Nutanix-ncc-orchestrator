@@ -643,6 +643,10 @@ func (s *apiServer) handleRunTrigger(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, envelope{Success: false, Error: err.Error(), ErrorCode: errorCodeVersionSkew})
 		return
 	}
+	if msg := s.upgradeInProgress(); msg != "" {
+		writeJSON(w, http.StatusConflict, envelope{Success: false, Error: msg})
+		return
+	}
 	var req runTriggerRequest
 	if err := decodeJSON(r.Body, &req); err != nil && !errors.Is(err, io.EOF) {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: err.Error()})

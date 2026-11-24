@@ -1,0 +1,78 @@
+{{- /*
+Hook Jobs of `helm upgrade`: try the new images before, check the stack after.
+*/}}
+{{- if .Values.upgradeCheck.enabled }}
+{{- $podSecurity := dict "runAsNonRoot" true "runAsUser" 1000 "runAsGroup" 1000 "seccompProfile" (dict "type" "RuntimeDefault") }}
+{{- $security := dict "allowPrivilegeEscalation" false "readOnlyRootFilesystem" true "capabilities" (dict "drop" (list "ALL")) }}
+{{- $expect := .Values.upgradeCheck.expectVersion }}
+{{- if eq $expect "auto" }}
+{{- $tag := toString .Values.images.api.tag }}
+{{- $expect = ternary $tag "" (regexMatch "^v?[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$" $tag) }}
+{{- end }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ncc-v2-upgrade-precheck
+  namespace: {{ .Values.namespace }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  # An image that cannot be pulled keeps the pod waiting; this ends it.
+  activeDeadlineSeconds: {{ .Values.upgradeCheck.pullTimeoutSeconds }}
+  template:
+    metadata:
+      labels: { app: ncc-orchestrator-v2, component: upgrade-check }
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: {{- toYaml $podSecurity | nindent 8 }}
+      containers:
+        {{- range $name, $program := dict "runner" "ncc-orchestrator" "api" "ncc-api-server" "ui" "ncc-ui-server" }}
+        {{- $image := index $.Values.images $name }}
+        - name: {{ $name }}
+          image: "{{ $image.repository }}:{{ $image.tag }}"
+          imagePullPolicy: {{ $image.pullPolicy }}
+          command: ["/usr/local/bin/{{ $program }}", "version"]
+          resources: { requests: { cpu: 10m, memory: 32Mi } }
+          securityContext: {{- toYaml $security | nindent 12 }}
+        {{- end }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ncc-v2-upgrade-check
+  namespace: {{ .Values.namespace }}
+  annotations:
+    helm.sh/hook: post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels: { app: ncc-orchestrator-v2, component: upgrade-check }
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext: {{- toYaml $podSecurity | nindent 8 }}
+      containers:
+        - name: check
+          image: "{{ .Values.images.runner.repository }}:{{ .Values.images.runner.tag }}"
+          imagePullPolicy: {{ .Values.images.runner.pullPolicy }}
+          command: ["/usr/local/bin/ncc-orchestrator"]
+          args:
+            - upgrade-check
+            - --api
+            - http://ncc-v2-api:{{ .Values.api.service.port }}
+            {{- if .Values.ui.enabled }}
+            - --ui
+            - https://ncc-v2-ui
+            {{- end }}
+            - --expect
+            - {{ $expect | quote }}
+            - --timeout
+            - {{ .Values.upgradeCheck.timeout | quote }}
+          resources: { requests: { cpu: 10m, memory: 32Mi } }
+          securityContext: {{- toYaml $security | nindent 12 }}
+{{- end }}

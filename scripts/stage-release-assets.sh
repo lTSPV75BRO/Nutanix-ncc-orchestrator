@@ -32,7 +32,7 @@ copy_glob() { # copy_glob PATTERN MIN_COUNT
 }
 
 copy_required checksums.txt checksums.txt.sig ncc-release-signing.gpg \
-  release-attestation.json example_config.yaml
+  release-attestation.json upgrade-manifest.json example_config.yaml
 copy_glob 'ncc-orchestrator-*' 6
 copy_glob 'ncc-v2-stack-*' 6
 copy_glob 'bom-*.cdx.json' 1

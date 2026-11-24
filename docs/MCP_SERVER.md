@@ -115,7 +115,7 @@ Hints below: **RO** = read-only, **OW** = open-world (contacts the API / cluster
 | **get_sample_config** | RO | `GET /api/v1/settings/config`. |
 | **get_metrics** | RO | `GET /api/v1/health`. |
 | **troubleshoot_v2_stack** | RO | `GET /api/v1/health/diagnostics`. |
-| **check_upgrade** | RO, OW | `GET /api/v1/settings/update`. |
+| **check_upgrade** | RO, OW | `GET /api/v1/settings/update`. Its `upgrade` field follows a running upgrade, including the update helper's steps. |
 | **preview_install_service** | RO | `GET /api/v1/health/supervisor` (status only; does not install a host service). |
 | **get_report** | RO | `GET /api/v1/artifacts/{file}` (`index.html` or a basename; no path traversal). |
 | **get_findings** | RO | `GET /api/v1/alerts/ncc` with optional `cluster`, `check`, `severity` (comma list), `limit` (default 50, max 200) and `cursor` (the previous `next_cursor`). |

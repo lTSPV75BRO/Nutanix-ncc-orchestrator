@@ -51,6 +51,13 @@ conflict on `.spec.schedule` or the ConfigMap. Either set `cronjob.schedule`
 to the live value, or pass `--force-conflicts` to let the chart take
 ownership again.
 
+`helm upgrade` runs two checks (`upgradeCheck` in `values.yaml`). Before anything
+changes, the new images are pulled and started once. Afterwards the API and UI
+must answer with the new version, five times in a row, within
+`upgradeCheck.timeout`. Add `--atomic` (Helm 4: `--rollback-on-failure`) so that
+a failed check brings the previous revision back. Set `upgradeCheck.enabled:
+false` when rolling back to images from before 2.4.0.
+
 NetworkPolicies match `k8s/`: by default all ingress is denied except the
 UI port (from `networkPolicy.uiIngressFrom` and in-cluster namespaces) and
 the API from UI pods; add other API clients such as Prometheus with

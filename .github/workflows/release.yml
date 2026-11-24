@@ -177,6 +177,7 @@ jobs:
           test -s dist/checksums.txt.sig
           test -s dist/ncc-release-signing.gpg
           test -f dist/release-attestation.json
+          test -s dist/upgrade-manifest.json
           # The detached signatures (*.asc) share the artifacts' names: count
           # them apart, or a signed build never has the expected totals.
           expect() { # expect COUNT DESCRIPTION FILE...

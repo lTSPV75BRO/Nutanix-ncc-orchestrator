@@ -268,7 +268,41 @@ outside the restart budget, and also ends a backoff or cooldown wait. In the
 UI: **Status → Supervisor** (state, last crash with log, events,
 Restart / Start now).
 
-**Supervised upgrades.** The supervisor's state file lists the features it
+**Upgrades.** From 2.4.0 on, an upgrade is carried out by the *update helper*, a
+copy of the orchestrator in `helper/` that the service manager starts only
+while there is an upgrade to do. No process runs otherwise.
+
+1. A pre-update backup is taken and the release is downloaded and verified.
+2. The new version's helper is installed with its own service definition and
+   tested on this host. Until here nothing else has changed, and any failure
+   ends with "nothing was changed".
+3. The helper saves the current version, stops the service, replaces the
+   programs and the web UI, brings the service, schedule and log timer
+   definitions up to the new version, migrates the configuration and starts it.
+4. The supervisor, API and UI must come back healthy on the new version and
+   stay up. Otherwise the helper puts programs, definitions and configuration
+   back, also after a crash or reboot in between.
+
+Where it applies: systemd, Windows Task Scheduler, launchd, and stacks started
+with `v2-start --detach`. Lines that were added to a systemd unit by hand move
+to `<unit>.d/50-local.conf`; a definition with a changed command or user is
+kept and reported. Runs cannot start during an upgrade.
+
+| What | How |
+|------|-----|
+| In the UI | **System → Updates & backups → Updates**; the dialog shows what changes on this host. **Roll back** stays for 24 hours. |
+| On the host | `ncc-orchestrator upgrade`, `--plan`, `--status`, `--rollback`, `--to VERSION` |
+| Without internet | `ncc-orchestrator upgrade --bundle ncc-v2-stack-<os>-<arch>.tar.gz`, with `checksums.txt` and `checksums.txt.sig` in the same folder |
+| API | `GET /api/v1/settings/update/plan`, `POST /api/v1/settings/update/apply`, `POST /api/v1/settings/update/rollback`; progress in `upgrade` of `GET /api/v1/settings/update` |
+| After the step from 2.3.x | 2.4.0 installs the helper and brings the service up to its definitions by itself, two minutes after it starts and when no run is going on. `NCC_UPGRADE_ADOPT=0` turns this off; `ncc-orchestrator upgrade-adopt` does it by hand. |
+| Turn the helper off | `NCC_UPGRADE_HELPER=0` for the service: the supervisor upgrades as described below |
+| Logs and state | `logs/upgrade-helper.log`, `run/v2-upgrade-state.json`, and `run/upgrade/` (root or SYSTEM only) |
+| Kubernetes | `helm upgrade` runs two checks (`upgradeCheck` in `values.yaml`); for kustomize see `k8s/upgrade-check-job.yaml` |
+
+The API audits the result as `settings.update.result`.
+
+**Supervised upgrades** (hosts without the helper, or with
+`NCC_UPGRADE_HELPER=0`). The supervisor's state file lists the features it
 supports (`features: ["restart", "upgrade"]`) and its version. When it
 supports `upgrade`, `POST /api/v1/settings/update/apply` takes the pre-update
 backup and then writes `run/v2-supervisor-upgrade.request` instead of
@@ -709,9 +743,10 @@ A caller's role can come from a static token or an interactive login:
   `?check=1`; plain GET is a cheap status poll). `POST /api/v1/settings/update/apply`
   runs a background job that takes a **pre-update backup** with
   `v2-backup --include-stack` (config plus orchestrator/API/UI binaries and
-  `frontend-dist`, aborting if it fails), applies the checksum-verified
-  package update (orchestrator + api + ui + frontend), then **restarts the stack
-  automatically** (`v2-restart`); the UI polls the phase and reconnects when the
+  `frontend-dist`, aborting if it fails), then hands over to the update helper
+  (see **Upgrades**), or applies the checksum-verified package update and
+  **restarts the stack automatically** (`v2-restart`) where neither a supervisor
+  nor `v2-start --detach` runs it; the UI polls the phase and reconnects when the
   new version is live. **Rollback last update** restores the newest
   `pre-update-*` snapshot, including the previous software version when that
   snapshot has a stack. Optional `target_version` / `skip_checksum_verify`. Requires

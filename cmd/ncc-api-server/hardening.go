@@ -810,6 +810,8 @@ func (s *apiServer) withRateLimit(next http.Handler) http.Handler {
 		"/api/v1/settings/backups/download":         true,
 		"/api/v1/settings/restore":                  true,
 		"/api/v1/settings/update/apply":             true,
+		"/api/v1/settings/update/plan":              true,
+		"/api/v1/settings/update/rollback":          true,
 		"/api/v1/health/diagnostics/support-bundle": true,
 		"/api/v1/health/migrations/config":          true,
 		"/api/v1/health/supervisor/restart":         true,

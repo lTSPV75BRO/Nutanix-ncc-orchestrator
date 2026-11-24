@@ -218,8 +218,40 @@ jobs:
           helm template ncc helm/ncc-orchestrator | kubeconform -strict -summary -ignore-missing-schemas
           helm template ncc helm/ncc-orchestrator --set ingress.enabled=true --set networkPolicy.egress.enabled=true --set prometheusRule.enabled=true | kubeconform -strict -summary -ignore-missing-schemas
           kubectl kustomize k8s | kubeconform -strict -summary -ignore-missing-schemas
+          kubeconform -strict -summary k8s/upgrade-check-job.yaml
       - name: install on a kind cluster and run it
         run: scripts/helm-smoke-test.sh
+
+  upgrade-e2e:
+    # Real upgrades, rollbacks and an interrupted helper under systemd, launchd
+    # and the Windows Task Scheduler, with test releases built here.
+    name: upgrade rehearsal (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, dir: /opt/ncc-e2e, sudo: sudo }
+          - { os: macos-latest, dir: /usr/local/ncc-e2e, sudo: sudo }
+          - { os: windows-latest, dir: "C:/ncc-e2e", sudo: "" }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - name: build the test releases
+        run: bash scripts/upgrade-e2e.sh build e2e
+      - name: rehearse with the service manager
+        run: ${{ matrix.sudo }} bash scripts/upgrade-e2e.sh run e2e "${{ matrix.dir }}"
+      - name: rehearse without one (v2-start)
+        run: bash scripts/upgrade-e2e.sh run e2e "$PWD/manual-e2e" manual 18081 18080
 
   trivy:
     name: trivy filesystem scan

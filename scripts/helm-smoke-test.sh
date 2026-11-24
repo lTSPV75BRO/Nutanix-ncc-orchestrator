@@ -73,6 +73,15 @@ k create namespace fakeprism
 k -n fakeprism run fakeprism --image "$REG/fakeprism:$TAG" --image-pull-policy=Never --port 9440 --expose
 k -n fakeprism wait --for=condition=Ready pod/fakeprism --timeout=120s
 
+# kind's storage class only supports ReadWriteOnce; one node, so that is enough.
+chart=(helm/ncc-orchestrator
+  --set "namespace=$NS"
+  --set "images.runner.repository=$REG/nutanix-ncc-orchestrator" --set "images.runner.tag=$TAG" --set images.runner.pullPolicy=Never
+  --set "images.api.repository=$REG/ncc-api-server" --set "images.api.tag=$TAG" --set images.api.pullPolicy=Never
+  --set "images.ui.repository=$REG/ncc-ui-server" --set "images.ui.tag=$TAG" --set images.ui.pullPolicy=Never
+  --set persistence.accessMode=ReadWriteOnce
+  --set ui.service.type=ClusterIP)
+
 step "install the chart"
 k create namespace "$NS"
 k -n "$NS" create secret generic ncc-orchestrator-credentials \
@@ -80,14 +89,7 @@ k -n "$NS" create secret generic ncc-orchestrator-credentials \
   --from-literal=jwt-secret="$TOKEN$TOKEN" \
   --from-literal=password=smoke \
   --from-literal=backup-key="$(head -c 32 /dev/urandom | base64)"
-# kind's storage class only supports ReadWriteOnce; one node, so that is enough.
-helm --kube-context "$CTX" install ncc helm/ncc-orchestrator \
-  --set namespace="$NS" \
-  --set images.runner.repository="$REG/nutanix-ncc-orchestrator" --set images.runner.tag="$TAG" --set images.runner.pullPolicy=Never \
-  --set images.api.repository="$REG/ncc-api-server" --set images.api.tag="$TAG" --set images.api.pullPolicy=Never \
-  --set images.ui.repository="$REG/ncc-ui-server" --set images.ui.tag="$TAG" --set images.ui.pullPolicy=Never \
-  --set persistence.accessMode=ReadWriteOnce \
-  --set ui.service.type=ClusterIP
+helm --kube-context "$CTX" install ncc "${chart[@]}"
 k -n "$NS" rollout status deployment/ncc-v2-api --timeout=240s
 k -n "$NS" rollout status deployment/ncc-v2-ui --timeout=240s
 
@@ -154,5 +156,20 @@ api GET /api/v1/settings/retention/preview | must '"success":true' "retention pr
 api POST /api/v1/settings/backups/restore "{\"name\":\"$name\"}" | must '"success":true' "restored"
 k -n "$NS" rollout status deployment/ncc-v2-api --timeout=240s
 api GET /api/v1/health/ready | must '"success":true' "ready after the restore"
+
+step "helm upgrade: image and version checks, rollback"
+h() { helm --kube-context "$CTX" upgrade ncc "${chart[@]}" --timeout 300s "$@"; }
+version="$(k -n "$NS" exec deploy/ncc-v2-api -c api -- wget -q -O- http://127.0.0.1:8081/api/v1/health | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')"
+[ -n "$version" ] || fail "the API does not say its version"
+h --set "upgradeCheck.expectVersion=$version" --set api.replicas=1 || fail "an upgrade to the same version"
+echo "ok: upgraded, v$version expected and found"
+if h --set images.ui.tag=missing --set upgradeCheck.pullTimeoutSeconds=20 2>&1; then fail "a missing image was not noticed"; fi
+[ "$(k -n "$NS" get deploy ncc-v2-ui -o 'jsonpath={.spec.template.spec.containers[0].image}')" = "$REG/ncc-ui-server:$TAG" ] \
+  || fail "the UI was changed before its image was checked"
+echo "ok: a missing image stops the upgrade before anything changes"
+if h --set upgradeCheck.expectVersion=9.9.9 --set upgradeCheck.timeout=10s --set api.replicas=2 --atomic 2>&1; then fail "the wrong version was accepted"; fi
+[ "$(k -n "$NS" get deploy ncc-v2-api -o 'jsonpath={.spec.replicas}')" = 1 ] || fail "the failed upgrade was not rolled back"
+k -n "$NS" rollout status deployment/ncc-v2-api --timeout=240s
+echo "ok: the wrong version rolls the upgrade back"
 
 printf '\nHELM_SMOKE_OK\n'
