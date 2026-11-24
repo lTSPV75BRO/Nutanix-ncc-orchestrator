@@ -19,7 +19,7 @@ import (
 )
 
 // v2StartStateFileName mirrors the orchestrator's persisted start-state file
-// (cmd/ncc-orchestrator/goNCC.go: v2StartStateFile). The api-server patches it in place so a
+// (cmd/ncc-orchestrator/v2_start_state.go: v2StartStateFile). The api-server patches it in place so a
 // self-triggered v2-restart rebinds the UI server to (or off) TLS. Kept as a
 // literal because the two binaries do not share a package.
 const v2StartStateFileName = ".ncc-v2-start.json"
@@ -349,17 +349,17 @@ func (s *apiServer) applyTLSMaterial(w http.ResponseWriter, r *http.Request, cer
 
 	installDir := s.maintenanceInstallDir()
 	tlsDir := filepath.Join(installDir, tlsDirName)
-	if err := os.MkdirAll(tlsDir, 0o700); err != nil {
+	if err := mkdirPrivate(tlsDir); err != nil {
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not create TLS directory: " + err.Error()})
 		return
 	}
 	certPath := filepath.Join(tlsDir, "ui.crt")
 	keyPath := filepath.Join(tlsDir, "ui.key")
-	if err := os.WriteFile(certPath, []byte(ensureTrailingNewline(certPEM)), 0o600); err != nil {
+	if err := writeSecretFile(certPath, []byte(ensureTrailingNewline(certPEM))); err != nil {
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not write certificate: " + err.Error()})
 		return
 	}
-	if err := os.WriteFile(keyPath, []byte(ensureTrailingNewline(keyPEM)), 0o600); err != nil {
+	if err := writeSecretFile(keyPath, []byte(ensureTrailingNewline(keyPEM))); err != nil {
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "could not write private key: " + err.Error()})
 		return
 	}
@@ -533,7 +533,7 @@ func patchV2StartStateUITLS(installDir, certPath, keyPath string) (ok bool, err 
 	if merr != nil {
 		return false, merr
 	}
-	if werr := os.WriteFile(path, append(out, '\n'), 0o600); werr != nil {
+	if werr := writeSecretFile(path, append(out, '\n')); werr != nil {
 		return false, werr
 	}
 	return true, nil

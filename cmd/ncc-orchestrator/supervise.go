@@ -44,6 +44,21 @@ type superviseChild struct {
 	logPath    string   // child stdout/stderr is appended here
 	healthArgs []string // argv for a `--health-check` self-probe (nil = liveness-only)
 	waitToken  string   // optional: gate the first start until this file exists
+
+	lastPID int // last process this supervisor started; read after its loop ended
+}
+
+// removeOwnPIDFile removes the pid file only while it names the process this
+// supervisor started last. A server started by hand beside the service writes
+// its own pid there, and v2-stop still needs it to find that server (INS-01).
+func (c *superviseChild) removeOwnPIDFile() {
+	pid, err := readPIDFromFile(c.pidPath)
+	if err == nil && pid != c.lastPID {
+		if known, matches := processIdentityMatches(pid, filepath.Base(c.bin)); processIsAlive(pid) && (!known || matches) {
+			return
+		}
+	}
+	_ = os.Remove(c.pidPath)
 }
 
 // superviseConfig is the policy + child set for runV2Supervise.
@@ -216,7 +231,7 @@ func superviseRun(ctx context.Context, cfg *superviseConfig, logf func(string, .
 	// Best-effort: drop the children's pid files now that they are stopped so a
 	// later `v2-status` does not report stale PIDs.
 	for _, child := range cfg.children {
-		_ = os.Remove(child.pidPath)
+		child.removeOwnPIDFile()
 	}
 }
 
@@ -341,6 +356,7 @@ func runChildOnce(ctx context.Context, cfg *superviseConfig, c *superviseChild, 
 		return childExited
 	}
 	pid := cmd.Process.Pid
+	c.lastPID = pid
 	startedAt := time.Now()
 	_ = os.WriteFile(c.pidPath, []byte(fmt.Sprintf("%d\n", pid)), 0o644)
 	logf("%s started pid=%d", c.name, pid)

@@ -67,6 +67,12 @@ const (
 
 // inspectBackupArchive runs every verification check on the archive at in.
 func inspectBackupArchive(in, keyFile, passphrase, runningVersion string) backupInspectReport {
+	return inspectBackupArchiveFor(in, keyFile, passphrase, runningVersion, stackTarget{})
+}
+
+// inspectBackupArchiveFor also checks, when target names an install, whether
+// a restore there would put the program files back.
+func inspectBackupArchiveFor(in, keyFile, passphrase, runningVersion string, target stackTarget) backupInspectReport {
 	rep := backupInspectReport{Archive: filepath.Base(in), RunningVersion: runningVersion, Secrets: []string{}}
 
 	// 1. Decryption.
@@ -142,6 +148,10 @@ func inspectBackupArchive(in, keyFile, passphrase, runningVersion string) backup
 
 	// 8. Version compatibility.
 	rep.addVersionCheck(m.Version, runningVersion)
+
+	// 9. Program files, judged as a restore would (SEC-07).
+	rep.addProgramFilesCheck(sc, target, m.Version)
+	rep.addProtectedPathsCheck(sc)
 	return rep.finish()
 }
 
@@ -610,9 +620,10 @@ func printBackupInspectReport(w io.Writer, rep backupInspectReport) {
 }
 
 // runBackupVerify is `v2-restore --verify-only`: report every check, exit
-// non-zero when one fails. It never touches an install dir.
-func runBackupVerify(w io.Writer, in, keyFile, passphrase string, asJSON bool) error {
-	rep := inspectBackupArchive(in, keyFile, passphrase, Version)
+// non-zero when one fails. It never writes to an install dir; target is only
+// read, to judge the program files.
+func runBackupVerify(w io.Writer, in, keyFile, passphrase string, asJSON bool, target stackTarget) error {
+	rep := inspectBackupArchiveFor(in, keyFile, passphrase, Version, target)
 	if asJSON {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")

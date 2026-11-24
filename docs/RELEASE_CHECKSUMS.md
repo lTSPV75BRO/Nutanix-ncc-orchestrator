@@ -20,7 +20,8 @@ key. macOS and Windows binaries are checksum- and provenance-verified but
 remain unsigned until Apple Developer ID and CA-issued Authenticode
 credentials are available.
 
-The workflow requires these GitHub Actions secrets:
+The workflow runs in the GitHub environment `release` and requires these
+secrets (environment or repository secrets):
 
 - `NCC_RELEASE_SIGN_KEY_BASE64`
 - `NCC_LINUX_GPG_PRIVATE_KEY_BASE64`
@@ -30,7 +31,61 @@ The workflow requires these GitHub Actions secrets:
 `NCC_RELEASE_PUBKEY` is public and belongs in a GitHub Actions repository
 variable. Never commit or print any private key or passphrase.
 
+### How a release is published (maintainer view)
+
+Push a `v*` tag. `.github/workflows/release.yml` then runs three jobs:
+
+1. `preflight` fails at once if a **published** release for the tag already
+   exists. The workflow never edits a published release: delete it in the
+   GitHub UI (the tag stays) or use a new tag. A leftover **draft** from a
+   failed run is replaced.
+2. `build` (holds the signing secrets, cannot write releases) builds, signs and
+   attests exactly the files to publish (`scripts/stage-release-assets.sh`).
+3. `publish` (holds `contents: write`, no secrets) creates a **draft** release
+   with `gh release create --verify-tag` (no target commit is sent), uploads the
+   files, runs `scripts/verify-published-release.sh` on the draft, and only then
+   publishes. If a check fails after publishing, the release is turned back
+   into a draft.
+
+Never upload assets by hand: a file that is not attested by the release
+workflow fails verification, and `gh attestation verify` fails for it.
+
+Audit any release (draft or published) from a workstation:
+
+```bash
+scripts/verify-published-release.sh -R lTSPV75BRO/Nutanix-ncc-orchestrator v2.4.0
+```
+
+It downloads every asset and checks `checksums.txt`, a build attestation from
+`release.yml` for the tag on every asset (`gh attestation verify
+--signer-workflow`), and the GPG signatures. Releases published before this
+pipeline (v2.3.0 and earlier) are expected to fail the attestation check.
+
+Why the old flow failed (v2.3.0, most likely): the action updated the existing release and
+re-sent its stale `target_commitish`; the commits between that and the tag
+changed `.github/workflows/*`, which `GITHUB_TOKEN` cannot do.
+
+### Release candidates
+
+1. `bash scripts/binaryGO.txt --set-version 2.4.0-rc.1` stamps `VERSION`, the
+   chart, the manifests and the frontend, then builds; commit the stamps.
+2. Tag that commit `v2.4.0-rc.1` and push the tag. The workflow refuses a tag that
+   is not `v` plus `VERSION`.
+3. The release is marked pre-release and never Latest, and images
+   `:2.4.0-rc.1` are pushed. Stable installs are not offered it.
+4. Try it with `ncc-orchestrator update --target-version 2.4.0-rc.1` (2.3.0 and
+   later). From a candidate, updates find the next candidate and then the release.
+5. Before the final tag, stamp `2.4.0` the same way.
+
 ### One-time maintainer setup
+
+Create the environment first (Settings, Environments, New environment,
+`release`; optionally add yourself as a required reviewer and limit it to
+`v*` tags), then add the secrets above to it and `NCC_RELEASE_PUBKEY` as a
+repository or environment variable.
+
+Details of the keys:
+
 
 Generate the Ed25519 update-signing key on a trusted machine, then keep its
 private file offline except when loading the encrypted GitHub Actions secret:

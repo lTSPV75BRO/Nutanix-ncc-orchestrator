@@ -1,13 +1,14 @@
-# Continuous-integration quality gates. Runs on every push to main and on all
-# pull requests. Keeps the default branch releasable: Go build/vet/race tests,
+# Continuous-integration quality gates. Runs on every push to main and to a
+# release branch (v2.4.0), and on all pull requests. Keeps the default branch releasable: Go build/vet/race tests,
 # golangci-lint, govulncheck, gosec, gitleaks, frontend tests + npm audit,
-# a Helm install on kind, and a Trivy filesystem scan. Checkouts never keep the job token
+# browser accessibility checks (axe-core on the demo build), a Helm install on
+# kind, and a Trivy filesystem scan. Checkouts never keep the job token
 # (persist-credentials: false) and every action is pinned by commit SHA.
 name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "v[0-9]+.[0-9]+.[0-9]+"]
   pull_request:
 
 permissions:
@@ -126,6 +127,50 @@ jobs:
         env:
           NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
         run: npm run build
+
+  a11y:
+    # Accessibility in a real browser (A11Y-02): axe-core with colour contrast
+    # on every route in all three themes with populated demo data, overlays,
+    # 400% zoom reflow, keyboard and screen-reader proxies. jsdom cannot see
+    # contrast or layout, so the frontend job cannot do this. A real screen
+    # reader pass stays manual (docs/ui/DESIGN_SYSTEM.md).
+    name: browser accessibility (demo build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "26.12.1" # >= 26.12.1: Oct 21 2026 Node security release; runner toolcache may lag
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: npm ci
+        env:
+          NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
+        run: npm ci
+      - name: type-check the browser tests
+        run: npm run typecheck:e2e
+      - name: install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: build the demo and run the accessibility suite
+        env:
+          NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
+        run: npm run test:a11y
+      - name: upload the report
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: a11y-report
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+          retention-days: 7
+          if-no-files-found: ignore
 
   govulncheck:
     name: govulncheck

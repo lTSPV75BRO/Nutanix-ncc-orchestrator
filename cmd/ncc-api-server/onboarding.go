@@ -91,7 +91,7 @@ func (s *apiServer) saveOnboardingState(st onboardingState) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(path, append(b, '\n'), 0o644)
+	return writeFileAtomic(path, append(b, '\n'), 0o600)
 }
 
 // isPlaceholderTarget reports sample values shipped in example/dummy configs

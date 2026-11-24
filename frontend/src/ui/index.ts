@@ -13,3 +13,4 @@ export { VirtualList } from "./VirtualList";
 export { ListToolbar, matchesSearch, type ListFilterOption } from "./ListToolbar";
 export { TagList } from "./TagList";
 export { IconTitle, TitleIcon } from "./IconTitle";
+export { ChartViewToggle, type ChartView } from "./ChartViewToggle";

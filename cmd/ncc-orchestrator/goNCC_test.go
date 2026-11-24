@@ -3560,11 +3560,18 @@ func TestPickLatestSemverRelease(t *testing.T) {
 		{TagName: "v1.2.9"},
 		{TagName: "v2.1.0-rc1", Prerelease: true},
 	}
-	gotV1 := pickLatestSemverRelease(releases, 1)
+	gotV1 := pickLatestSemverRelease(releases, 1, false)
 	if gotV1 == nil || gotV1.TagName != "v1.3.0" {
 		t.Fatalf("pickLatestSemverRelease(v1) got %+v", gotV1)
 	}
-	gotAny := pickLatestSemverRelease(releases, 0)
+	rc := append(append([]githubRelease{}, releases...), githubRelease{TagName: "v99.0.0-rc.1"}, githubRelease{TagName: "v98.0.0", Prerelease: true}, githubRelease{TagName: "v97.0.0-rc.9", Draft: true})
+	if got := pickLatestSemverRelease(rc, 0, false); got == nil || strings.HasPrefix(got.TagName, "v9") {
+		t.Fatalf("a release candidate was offered to a stable install: %+v", got)
+	}
+	if got := pickLatestSemverRelease(rc, 0, true); got == nil || got.TagName != "v99.0.0-rc.1" {
+		t.Fatalf("release candidate not found: %+v", got)
+	}
+	gotAny := pickLatestSemverRelease(releases, 0, false)
 	if gotAny == nil || gotAny.TagName != "v2.0.0" {
 		t.Fatalf("pickLatestSemverRelease(any) got %+v", gotAny)
 	}

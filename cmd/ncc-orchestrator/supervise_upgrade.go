@@ -149,6 +149,8 @@ type upgrader struct {
 
 	mu  sync.Mutex
 	job *upgradeJob
+	// snapFiles: what snapshot saved (nil after a supervisor restart).
+	snapFiles map[string]string
 }
 
 func newUpgrader(cfg *superviseConfig, logf func(string, ...any)) *upgrader {
@@ -228,7 +230,9 @@ func (u *upgrader) save() {
 	path := upgradeStatePath(u.installDir)
 	tmp := path + ".tmp"
 	if os.WriteFile(tmp, b, 0o644) == nil {
-		_ = os.Rename(tmp, path)
+		// Windows refuses the rename while the dashboard is reading the old file.
+		// Losing the last save would show a finished upgrade as running.
+		_ = renameWithRetry(tmp, path)
 	}
 }
 
@@ -476,10 +480,22 @@ func (u *upgrader) snapshot() error {
 			return err
 		}
 	}
+	files, err := snapshotHashes(snap)
+	if err != nil {
+		return err
+	}
+	u.snapFiles = files
+	if err := recordUpgradeSnapshot(u.installDir, files); err != nil {
+		u.logf("upgrade: could not record the saved version: %v", err)
+	}
 	return nil
 }
 
-func (u *upgrader) removeSnapshot() { _ = os.RemoveAll(u.snapshotDir()) }
+func (u *upgrader) removeSnapshot() {
+	_ = os.RemoveAll(u.snapshotDir())
+	u.snapFiles = nil
+	_ = recordUpgradeSnapshot(u.installDir, nil)
+}
 
 // rollback puts the snapshot back and restarts the servers on it.
 func (u *upgrader) rollback(ctx context.Context, reason string) {
@@ -487,6 +503,12 @@ func (u *upgrader) rollback(ctx context.Context, reason string) {
 	snap := u.snapshotDir()
 	if !existingDir(filepath.Join(snap, "bin")) {
 		u.step(upgFailed, "%s. No saved copy of the previous version was found; restore the pre-update backup %s from Updates & backups → Backups.", reason, filepath.Base(u.job.BackupPath))
+		return
+	}
+	// Only what this supervisor saved may run again (SEC-19): the folder
+	// could have been planted.
+	if err := checkUpgradeSnapshot(u.installDir, snap, u.snapFiles); err != nil {
+		u.step(upgFailed, "%s. The saved copy of the previous version was not put back because it is not trusted (%v); the installed files were left as they are. Restore the pre-update backup %s, or install that version from its release.", reason, err, filepath.Base(u.job.BackupPath))
 		return
 	}
 	u.step(upgRollingBack, "%s. Putting the previous version back", reason)

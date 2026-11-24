@@ -14,6 +14,9 @@ func TestVersionAllowed(t *testing.T) {
 	if !VersionAllowed("2.4.0") || !VersionAllowed("v2.4.1") || !VersionAllowed("2.5.0") {
 		t.Fatal("2.4.0 and later must be allowed")
 	}
+	if !VersionAllowed("2.4.0-rc.1") || HeaderSafeVersion("v2.4.0-rc.1") != "2.4.0-rc.1" || VersionAllowed("2.3.9-rc.1") {
+		t.Fatal("a 2.4.0 release candidate must be allowed and report itself, a 2.3 one refused")
+	}
 }
 
 func TestParseRequestVersion(t *testing.T) {

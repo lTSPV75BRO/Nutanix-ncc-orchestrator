@@ -13,8 +13,15 @@ on:
       - "scripts/binaryGO.txt"
       - "VERSION"
       - ".github/workflows/docker-publish.yml"
-  release:
-    types: [published]
+  # Called by release.yml for a tag (a release that workflow publishes cannot
+  # trigger this one).
+  workflow_call:
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: false
+      DOCKERHUB_TOKEN:
+        required: false
+  workflow_dispatch:
 
 env:
   NCC_DOCKER_REGISTRY: docker.io

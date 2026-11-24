@@ -469,6 +469,54 @@ a {
   color: var(--link-color);
 }
 
+/* A link inside running text must differ from the text by more than colour
+   (WCAG 1.4.1; the accent is under 3:1 against the body grey). */
+p a:not(.ant-btn),
+.ant-alert-title a,
+.ant-alert-description a,
+.ant-typography a:not(.ant-btn),
+.ant-form-item-extra a,
+.ant-descriptions-item-content a:not(.ant-btn) {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* The destructive menu item ("Sign out everywhere") is antd's error red,
+   3:1 on the dark menu surfaces. */
+.ant-dropdown-menu .ant-dropdown-menu-item-danger:not(.ant-dropdown-menu-item-disabled),
+.ant-dropdown-menu .ant-dropdown-menu-item-danger:not(.ant-dropdown-menu-item-disabled) .ant-dropdown-menu-title-content {
+  color: var(--ui-fail-text) !important;
+}
+
+/* Reflow (WCAG 1.4.10): a table wider than the screen scrolls inside its own
+   box instead of widening the page. A panel in a grid may shrink below its
+   widest table. */
+.ui-panel {
+  min-width: 0;
+}
+.ant-table-wrapper .ant-table-content {
+  overflow-x: auto;
+}
+
+/* Findings view switch: on a 320 px screen only the icons stay visible (the
+   names stay available to screen readers and in the tooltip). */
+@media (max-width: 480px) {
+  .alerts-view-option > span:not(.anticon) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+/* antd draws the empty-table text in its disabled grey (1.8:1 on white). */
+.ant-table-placeholder,
+.ant-table-placeholder > .ant-table-cell {
+  color: var(--ui-text-secondary);
+}
+
 /* Every antd Card takes the Panel look (src/ui/Panel.tsx): flat surface,
    1px border, 12px radius, no shadow or hover lift. */
 .ant-card {
@@ -817,6 +865,13 @@ a {
   padding: 8px 10px;
   border-bottom: 1px solid var(--table-cell-border);
   background: color-mix(in srgb, var(--control-bg) 86%, transparent);
+}
+
+/* Sub-headings keep their small size whatever level keeps the outline in
+   order (h2 panel title, then h3). */
+.section-subheading.ant-typography {
+  font-size: 14px !important;
+  font-weight: 600 !important;
 }
 
 .section-title.ant-typography {
@@ -2048,6 +2103,9 @@ pre {
     border-color var(--anim-normal) var(--anim-ease);
 }
 
+/* Reduced motion. antd's popups are switched off through its `motion` token
+   (src/theme.tsx): with `animation: none` they never receive the animationend
+   event they wait for and stayed invisible (opacity 0, zero size). */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -2329,7 +2387,7 @@ html[data-theme="it-pro"] {
 }
 
 .ui-sidebar-brand:hover .ui-sidebar-brand-name {
-  color: var(--ui-accent);
+  color: var(--link-color);
 }
 
 .ui-sidebar-brand:focus-visible {
@@ -5547,7 +5605,12 @@ h5.ant-typography {
 html .ant-tag.ant-tag-gold:not(.ant-tag-disabled):not(.ant-tag-solid),
 html .ant-tag.ant-tag-orange:not(.ant-tag-disabled):not(.ant-tag-solid),
 html .ant-tag.ant-tag-warning:not(.ant-tag-disabled):not(.ant-tag-solid),
-html .ant-tag.ant-tag-yellow:not(.ant-tag-disabled):not(.ant-tag-solid) {
+html .ant-tag.ant-tag-yellow:not(.ant-tag-disabled):not(.ant-tag-solid),
+html .ant-tag.ant-tag-green:not(.ant-tag-disabled):not(.ant-tag-solid),
+html .ant-tag.ant-tag-lime:not(.ant-tag-disabled):not(.ant-tag-solid),
+html .ant-tag.ant-tag-blue:not(.ant-tag-disabled):not(.ant-tag-solid),
+html .ant-tag.ant-tag-geekblue:not(.ant-tag-disabled):not(.ant-tag-solid),
+html .ant-tag.ant-tag-cyan:not(.ant-tag-disabled):not(.ant-tag-solid) {
   color: var(--ui-tag-text);
 }
 .ant-tag.ant-tag-red,

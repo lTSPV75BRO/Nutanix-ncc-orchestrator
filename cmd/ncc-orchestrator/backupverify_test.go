@@ -159,7 +159,7 @@ func TestBackupVerifyGoodArchivePasses(t *testing.T) {
 		t.Fatal("report leaks a secret value")
 	}
 	var buf bytes.Buffer
-	if err := runBackupVerify(&buf, arch, "", "", false); err != nil {
+	if err := runBackupVerify(&buf, arch, "", "", false, stackTarget{}); err != nil {
 		t.Fatalf("runBackupVerify: %v\n%s", err, buf.String())
 	}
 	if !strings.Contains(buf.String(), "Result: OK") || strings.Contains(buf.String(), verifySecretValue) {

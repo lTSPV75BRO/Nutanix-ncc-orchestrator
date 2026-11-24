@@ -1593,7 +1593,7 @@ func writeInitialPasswordFile(dbPath, username, password string) (string, error)
 	dir := filepath.Dir(dbPath)
 	p := filepath.Join(dir, ".ncc-initial-admin-password")
 	body := fmt.Sprintf("username: %s\npassword: %s\nnote: you must change this password on first login; this file is deleted afterward.\n", username, password)
-	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+	if err := writeSecretFile(p, []byte(body)); err != nil {
 		return "", err
 	}
 	return p, nil

@@ -16,7 +16,7 @@ For first-time setup and full local build instructions, start with:
 
 Main components you may touch:
 
-- `cmd/ncc-orchestrator` - orchestrator runner CLI (`goNCC.go` is the root command)
+- `cmd/ncc-orchestrator` - orchestrator runner CLI (`goNCC.go` holds `main`; the root command is in `rootcmd.go`, the rest is split by area)
 - `cmd/ncc-api-server` - backend API service
 - `cmd/ncc-ui-server` - UI proxy/static server
 - `cmd/ncc-mcp-server` - optional MCP bridge

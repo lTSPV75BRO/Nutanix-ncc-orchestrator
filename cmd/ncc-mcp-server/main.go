@@ -23,11 +23,19 @@ var productVersion = "2.4.0"
 
 func boolPtr(b bool) *bool { return &b }
 
-func main() {
+// newMCPServer registers every tool and resource. main adds the auth and log
+// middleware; tests build the server without them.
+func newMCPServer() *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    serverName,
 		Version: serverVersion,
-	}, nil)
+	}, &mcp.ServerOptions{
+		// Elicitation (the human confirmation for mutating tools) is a
+		// server-to-client request, which the SDK refuses to send on protocol
+		// 2026-07-28 and later (multi round-trip replaces it). Negotiate older
+		// revisions so clients that support elicitation keep working.
+		SupportedProtocolVersions: elicitationProtocolVersions(),
+	})
 
 	// Tool: run_ncc — run NCC checks on clusters and generate reports
 	addAITool(server, &mcp.Tool{
@@ -265,7 +273,7 @@ func main() {
 		Name:        "orchestrator_action",
 		Title:       "Run supported orchestrator action",
 		Description: "Run an allowlisted read-only operator action through the API (status, diagnostics, config, preflight). Host-only actions such as uninstall and password recovery are refused.",
-		Annotations: &mcp.ToolAnnotations{Title: "Run supported orchestrator action", DestructiveHint: boolPtr(true)},
+		Annotations: &mcp.ToolAnnotations{Title: "Run supported orchestrator action", ReadOnlyHint: true, IdempotentHint: true},
 	}, orchestratorAction)
 
 	// Tool: get_report — read aggregated or per-cluster report content (HTML/text)
@@ -352,15 +360,24 @@ func main() {
 		MIMEType:    "text/html",
 	}, handleReportResource)
 	addAIResources(server)
+	return server
+}
+
+func main() {
+	server := newMCPServer()
 
 	// Log to stderr only (stdout is used for MCP JSON-RPC)
 	log.SetOutput(os.Stderr)
 	if err := mcpAuthReady(); err != nil {
 		log.Fatalf("MCP server authentication: %v", err)
 	}
+	confirmMode, err := mcpConfirmModeFromEnv()
+	if err != nil {
+		log.Fatalf("MCP server configuration: %v", err)
+	}
 	server.AddReceivingMiddleware(requireMCPAuth)
 	server.AddReceivingMiddleware(logMCPCalls)
-	log.Printf("level=INFO msg=\"ncc-mcp-server starting\" transport=stdio auth=required")
+	log.Printf("level=INFO msg=\"ncc-mcp-server starting\" transport=stdio auth=required confirm=%s mutations=%t", confirmMode, mcpMutationsAllowed())
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Fatalf("MCP server error: %v", err)
 	}

@@ -34,7 +34,7 @@ func runNCC(ctx context.Context, req *mcp.CallToolRequest, input RunNCCInput) (*
 	if input.InsecureSkipVerify {
 		return mcpContractError(ai.CodePermissionDenied, "authorization", "insecure_skip_verify is not allowed over MCP", false)
 	}
-	if result, _, _ := requireMCPConfirmation(input.Confirm); result != nil {
+	if result, _, _ := requireMCPConfirmation(ctx, req, "run_ncc", input.Confirm, input); result != nil {
 		return result, nil, nil
 	}
 	body := map[string]any{}
@@ -135,7 +135,7 @@ type ReplayReportsInput struct {
 }
 
 func replayReports(ctx context.Context, req *mcp.CallToolRequest, input ReplayReportsInput) (*mcp.CallToolResult, any, error) {
-	if result, _, _ := requireMCPConfirmation(input.Confirm); result != nil {
+	if result, _, _ := requireMCPConfirmation(ctx, req, "replay_reports", input.Confirm, input); result != nil {
 		return result, nil, nil
 	}
 	if strings.TrimSpace(input.ConfigPath) == "" {
@@ -326,7 +326,7 @@ type ApplyUpgradeInput struct {
 }
 
 func applyUpgrade(ctx context.Context, req *mcp.CallToolRequest, input ApplyUpgradeInput) (*mcp.CallToolResult, any, error) {
-	if result, _, _ := requireMCPConfirmation(input.Confirm); result != nil {
+	if result, _, _ := requireMCPConfirmation(ctx, req, "apply_upgrade", input.Confirm, input); result != nil {
 		return result, nil, nil
 	}
 	if input.SkipChecksumVerify {
@@ -352,7 +352,7 @@ type BootstrapV2StackInput struct {
 }
 
 func bootstrapV2Stack(ctx context.Context, req *mcp.CallToolRequest, input BootstrapV2StackInput) (*mcp.CallToolResult, any, error) {
-	if result, _, _ := requireMCPConfirmation(input.Confirm); result != nil {
+	if result, _, _ := requireMCPConfirmation(ctx, req, "bootstrap_v2_stack", input.Confirm, input); result != nil {
 		return result, nil, nil
 	}
 	return mcpContractError(ai.CodePermissionDenied, "authorization", "bootstrap_v2_stack is not available over MCP; use the dashboard or an admin host shell", false)
@@ -367,14 +367,14 @@ type ServiceChangeInput struct {
 }
 
 func installService(ctx context.Context, req *mcp.CallToolRequest, input ServiceChangeInput) (*mcp.CallToolResult, any, error) {
-	if result, _, _ := requireMCPConfirmation(input.Confirm); result != nil {
+	if result, _, _ := requireMCPConfirmation(ctx, req, "install_service", input.Confirm, input); result != nil {
 		return result, nil, nil
 	}
 	return mcpContractError(ai.CodePermissionDenied, "authorization", "install_service is not available over MCP; use the host installer", false)
 }
 
 func uninstallService(ctx context.Context, req *mcp.CallToolRequest, input ServiceChangeInput) (*mcp.CallToolResult, any, error) {
-	if result, _, _ := requireMCPConfirmation(input.Confirm); result != nil {
+	if result, _, _ := requireMCPConfirmation(ctx, req, "uninstall_service", input.Confirm, input); result != nil {
 		return result, nil, nil
 	}
 	return mcpContractError(ai.CodePermissionDenied, "authorization", "uninstall_service is not available over MCP; use the host installer", false)
@@ -387,21 +387,21 @@ type StackChangeInput struct {
 }
 
 func startV2Stack(ctx context.Context, req *mcp.CallToolRequest, input StackChangeInput) (*mcp.CallToolResult, any, error) {
-	if result, _, _ := requireMCPConfirmation(input.Confirm); result != nil {
+	if result, _, _ := requireMCPConfirmation(ctx, req, "start_v2_stack", input.Confirm, input); result != nil {
 		return result, nil, nil
 	}
 	return mcpContractError(ai.CodePermissionDenied, "authorization", "start_v2_stack is not available over MCP; the API server is already the running stack", false)
 }
 
 func stopV2Stack(ctx context.Context, req *mcp.CallToolRequest, input StackChangeInput) (*mcp.CallToolResult, any, error) {
-	if result, _, _ := requireMCPConfirmation(input.Confirm); result != nil {
+	if result, _, _ := requireMCPConfirmation(ctx, req, "stop_v2_stack", input.Confirm, input); result != nil {
 		return result, nil, nil
 	}
 	return mcpContractError(ai.CodePermissionDenied, "authorization", "stop_v2_stack is not available over MCP", false)
 }
 
 func restartV2Stack(ctx context.Context, req *mcp.CallToolRequest, input StackChangeInput) (*mcp.CallToolResult, any, error) {
-	if result, _, _ := requireMCPConfirmation(input.Confirm); result != nil {
+	if result, _, _ := requireMCPConfirmation(ctx, req, "restart_v2_stack", input.Confirm, input); result != nil {
 		return result, nil, nil
 	}
 	env, _, err := callAPI(ctx, "restart_v2_stack", http.MethodPost, "/api/v1/health/supervisor/restart", nil, map[string]any{"child": "api"}, 30*time.Second)
@@ -416,7 +416,7 @@ type RepairV2StackInput struct {
 }
 
 func repairV2Stack(ctx context.Context, req *mcp.CallToolRequest, input RepairV2StackInput) (*mcp.CallToolResult, any, error) {
-	if result, _, _ := requireMCPConfirmation(input.Confirm); result != nil {
+	if result, _, _ := requireMCPConfirmation(ctx, req, "repair_v2_stack", input.Confirm, input); result != nil {
 		return result, nil, nil
 	}
 	env, _, err := callAPI(ctx, "repair_v2_stack", http.MethodPost, "/api/v1/health/autoheal", nil, map[string]any{}, 60*time.Second)
@@ -434,7 +434,7 @@ type RestoreV2BackupInput struct {
 }
 
 func restoreV2Backup(ctx context.Context, req *mcp.CallToolRequest, input RestoreV2BackupInput) (*mcp.CallToolResult, any, error) {
-	if result, _, _ := requireMCPConfirmation(input.Confirm); result != nil {
+	if result, _, _ := requireMCPConfirmation(ctx, req, "restore_v2_backup", input.Confirm, input); result != nil {
 		return result, nil, nil
 	}
 	name, nameErr := safeBackupName(input.InputFile)
@@ -457,7 +457,7 @@ type BackupV2StackInput struct {
 }
 
 func backupV2Stack(ctx context.Context, req *mcp.CallToolRequest, input BackupV2StackInput) (*mcp.CallToolResult, any, error) {
-	if result, _, _ := requireMCPConfirmation(input.Confirm); result != nil {
+	if result, _, _ := requireMCPConfirmation(ctx, req, "backup_v2_stack", input.Confirm, input); result != nil {
 		return result, nil, nil
 	}
 	// POST /settings/backups writes an encrypted snapshot on the server and
@@ -537,7 +537,7 @@ func createSchedule(ctx context.Context, req *mcp.CallToolRequest, input CreateS
 		return mcpContractError(ai.CodePermissionDenied, "authorization", "create_schedule does not accept a custom command over MCP", false)
 	}
 	if !input.PrintOnly {
-		if result, _, _ := requireMCPConfirmation(input.Confirm); result != nil {
+		if result, _, _ := requireMCPConfirmation(ctx, req, "create_schedule", input.Confirm, input); result != nil {
 			return result, nil, nil
 		}
 	}
@@ -576,7 +576,7 @@ type DeleteScheduleInput struct {
 
 func deleteSchedule(ctx context.Context, req *mcp.CallToolRequest, input DeleteScheduleInput) (*mcp.CallToolResult, any, error) {
 	if !input.PrintOnly {
-		if result, _, _ := requireMCPConfirmation(input.Confirm); result != nil {
+		if result, _, _ := requireMCPConfirmation(ctx, req, "delete_schedule", input.Confirm, input); result != nil {
 			return result, nil, nil
 		}
 	}

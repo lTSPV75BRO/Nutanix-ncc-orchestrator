@@ -34,7 +34,7 @@ High-level flow:
 Top-level ownership map:
 
 - `cmd/ncc-orchestrator/`
-  - `goNCC.go`: main CLI entry and runtime orchestration logic
+  - `goNCC.go`: `main`, version info and core types; the cobra root command is in `rootcmd.go`, the rest of the runner logic is split by area (`config_*.go`, `report_*.go`, `run_*.go`, `v2_*.go`, `update_*.go`, ...)
   - Subcommands (`discover-clusters`, `v2-start`, `quickstart`, `validate-*`, `preflight-check`)
   - Output generation and policy/notification/metrics logic
   - Supporting files: `pipeline.go`, `supervise.go`, `selfheal.go`, `update_install.go`, `backupcrypt.go`, `releasesign.go`, …

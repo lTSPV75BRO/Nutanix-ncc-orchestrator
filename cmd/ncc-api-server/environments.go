@@ -385,6 +385,7 @@ func (s *apiServer) materializeEnvironment(name string) (string, error) {
 		return "", err
 	}
 	tmpName := tmp.Name()
+	restrictNewSecret(tmpName)
 	if _, err := tmp.Write(merged); err != nil {
 		tmp.Close()
 		os.Remove(tmpName)
@@ -392,7 +393,7 @@ func (s *apiServer) materializeEnvironment(name string) (string, error) {
 	}
 	tmp.Close()
 	_ = os.Chmod(tmpName, 0o600)
-	if err := os.Rename(tmpName, target); err != nil {
+	if err := renameSecretFile(tmpName, target); err != nil {
 		os.Remove(tmpName)
 		return "", err
 	}
@@ -631,10 +632,10 @@ func (s *apiServer) saveEnvironment(name string, content []byte) (string, error)
 		return redactSensitiveText(string(out)), fmt.Errorf("these settings don't validate with the main config: %v", err)
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, content, 0o600); err != nil {
+	if err := writeSecretFile(tmp, content); err != nil {
 		return "", err
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := renameSecretFile(tmp, path); err != nil {
 		os.Remove(tmp)
 		return "", err
 	}

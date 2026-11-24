@@ -95,7 +95,7 @@ func (s *apiServer) saveBackupSchedule(st backupScheduleState) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o600)
+	return writeSecretFile(path, b)
 }
 
 // backupScheduleMu serializes state writes and prevents overlapping runs.
@@ -135,7 +135,7 @@ func (s *apiServer) runScheduledBackupOnce(ctx context.Context, st backupSchedul
 		return
 	}
 	defer release()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := mkdirPrivate(dir); err != nil {
 		s.finishScheduledBackup(st, "", fmt.Errorf("create backups dir: %w", err))
 		return
 	}

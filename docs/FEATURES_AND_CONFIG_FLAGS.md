@@ -297,11 +297,13 @@ the supervisor, updates work as before. In the UI: **Updates & backups →
 Updates**.
 
 `v2-install-service` now installs: on Linux `StartLimitIntervalSec=0`,
-`LimitNOFILE=65536`, `OOMScoreAdjust=-500`; on Windows a Task Scheduler
+`LimitNOFILE=65536`, `OOMScoreAdjust=-500` and a sandbox
+([systemd sandbox](SECURITY_AND_TRUST.md#systemd-sandbox-linux-service)); on Windows a Task Scheduler
 definition with no time limit (the default stopped the supervisor after 72
 hours), restart on failure every minute, and no battery stop; on macOS
 `ThrottleInterval` and a 65536 open-file limit. Existing installs get these
-from `service-config` (`doctor --fix`) or by re-running `v2-install-service`.
+from `service-config` (`doctor --fix`) or by re-running `v2-install-service`;
+the sandbox comes only from re-running it.
 
 **Runtime tuning.** In a container with a memory limit, the API, UI and
 runner set the Go soft memory limit to 90% of it at start (unless
@@ -1125,6 +1127,7 @@ By default, updates remain in the current major track (for example `v1.x` -> lat
 |---|---|---|---|---|
 | `--check` | bool | `true`, `false` | `false` | Check-only mode. Reports selected release/binary availability without downloading or replacing. |
 | `--allow-major-upgrade` | bool | `true`, `false` | `false` | Explicitly permits major-version upgrades. Required for `v1.x` -> `v2.x` transitions. |
+| `--include-prerelease` | bool | `true`, `false` | `false` | Also consider release candidates. An install that runs a candidate always does, until the release is out. |
 | `--repo` | string | `owner/repo` or GitHub repo URL | `lTSPV75BRO/Nutanix-ncc-orchestrator` | GitHub source repo used for release discovery/check/update. |
 | `--binary-url` | string | Direct binary URL | empty | Use a non-GitHub/custom artifact URL for check/update operations. |
 | `--binary-sha256` | string | 64-char SHA256 hex | empty | Required when installing via `--binary-url` (ignored for `--check`). Used to enforce artifact integrity. |
@@ -1416,9 +1419,9 @@ single run's worth of report data.
 | `v2-restore` | `--force` | `false` | Overwrite existing files / proceed even if the stack is running. |
 | `v2-restore` | `--restart` | `false` | Force a stack restart/start after restore even if it looks stopped (restart is automatic when the stack is running). |
 | `v2-restore` | `--no-restart` | `false` | Suppress the automatic post-restore restart (e.g. staging a host for later). |
-| `v2-restore` | `--verify-only` | `false` | Check the archive without restoring or writing to the install dir: decryption, every entry readable, safe paths, manifest list and SHA-256 checksums (`sha256` in `manifest.json`), YAML/JSON config parses, secrets present (names only), config-referenced files and reports present, version compatibility (same major passes, newer minor warns, other major fails). Prints Pass/Warn/Fail per check and exits non-zero on a fail. See [Check a backup](setup/SCHEDULE_AND_BACKUPS.md#back-up-and-restore). |
+| `v2-restore` | `--verify-only` | `false` | Check the archive without restoring or writing to the install dir: decryption, every entry readable, safe paths, manifest list and SHA-256 checksums (`sha256` in `manifest.json`), YAML/JSON config parses, secrets present (names only), config-referenced files and reports present, version compatibility (same major passes, newer minor warns, other major fails), and whether a restore would put the program files back. Prints Pass/Warn/Fail per check and exits non-zero on a fail. See [Check a backup](setup/SCHEDULE_AND_BACKUPS.md#back-up-and-restore). |
 | `v2-restore` | `--json` | `false` | With `--verify-only`, print the checks as JSON. |
-| `v2-restore` | `--trust-stack` | `false` | Also restore the backup's program files (`bin/ncc-*`, `frontend-dist/`) when this server has never installed them. Without it they are restored only when every file matches a version this server installed before (`.ncc-trusted-stack.json`) or the file installed now; otherwise only data is restored. Command line only; the API never sets it. |
+| `v2-restore` | `--trust-stack` | `false` | Also restore the backup's program files (`bin/ncc-*`, `frontend-dist/`) when this server has never installed them. Without it they are restored only when the program files on disk afterwards would be exactly one set this server recorded (`.ncc-trusted-stack.json`) or the installed set, so versions never mix; otherwise only data is restored. Command line only; the API never sets it. |
 | `v2-restart` | `--install-dir` | auto-detect (`.ncc-v2`) | Stop and re-start the stack (`v2-stop` then `v2-start --detach`), performed by the binary. |
 | `v2-reset-password` | `--user` | `admin` | Local account to reset. |
 | `v2-reset-password` | `--users-db` / `--users-db-secret[-namespace]` | `<install-dir>/.ncc-api-users.json` | User store to reset against (file or Kubernetes Secret). |

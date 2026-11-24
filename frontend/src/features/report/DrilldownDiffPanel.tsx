@@ -44,7 +44,7 @@ export function DrilldownDiffPanel({ drilldownDiff, clusterNameMap }: Props) {
 
   return (
     <Card className="page-card">
-      <Typography.Title level={4} className="section-title">
+      <Typography.Title level={2} className="section-title">
         Changes since the previous run
 </Typography.Title>
       <Typography.Text type="secondary" className="section-subtitle">

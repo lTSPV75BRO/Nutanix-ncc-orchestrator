@@ -102,7 +102,16 @@ export function AppShell({
   return (
     <div className="ui-shell">
       {/* First stop for keyboard users: skip the sidebar and top bar. */}
-      <a href="#main-content" className="ui-skip-link">
+      <a
+        href="#main-content"
+        className="ui-skip-link"
+        onClick={(e) => {
+          // A bare #main-content link would change the address (and, with the
+          // hash router of the demo, open a page that does not exist).
+          e.preventDefault();
+          document.getElementById("main-content")?.focus();
+        }}
+      >
         Skip to content
       </a>
       <aside className={`ui-sidebar${collapsed ? " is-collapsed" : ""}`} aria-label="Primary">

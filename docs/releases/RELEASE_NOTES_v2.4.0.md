@@ -74,16 +74,26 @@ Other detail views were tidied to match:
 
 Backups taken before an update include the program files, so a rollback can
 bring the previous version back. A restore now puts program files back only
-when this server has run that exact version before. Otherwise it restores the
+when this server has run that exact version, as a whole, before. Otherwise it restores the
 data, keeps the installed version running, and says so; install the version
 you want from its release. This stops a tampered backup from running its own
 code on the server after the restart. **Rollback last update** keeps working,
 because the backup taken before the update records the old version as
 trusted.
 
+Scripts, programs, keys and the supervisor's working files are never taken from a
+backup, and a restore keeps this server's own network and HTTPS settings.
+
 Moving to a new server: data restores as before; install the version you
 want there. If you trust a backup from another server, restore it on the
 command line with `v2-restore --trust-stack`.
+
+## Tighter permissions on the host
+
+On Linux the service now runs in a systemd sandbox. Re-run `v2-install-service` and
+restart the service to get it on an existing install. On Windows the stack limits its
+secrets, backups and logs to SYSTEM, Administrators and the account that runs it, and
+warns when the install folder itself is open to other users.
 
 ## MCP talks only to the API
 

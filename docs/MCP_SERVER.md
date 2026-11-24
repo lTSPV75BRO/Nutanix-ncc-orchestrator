@@ -204,9 +204,15 @@ Do not use it interactively; Cursor or another MCP host will start it and talk o
 Mutating tools are disabled by default. To enable them, explicitly set
 `NCC_MCP_ALLOW_MUTATIONS=true` in the MCP server environment and include
 `confirm: "APPLY"` in each mutating request. Preview and read-only tools do not
-need this setting. `confirm` is an argument the model fills in, so it stops accidents, not a
-model that has been told to apply a change; the real controls are that mutations are off by
-default, the PAT's role, and your MCP host's own approval prompt for tools marked destructive. Custom schedule commands and passwords in tool arguments are
+need this setting. `confirm` is an argument the model fills in, so on its own it stops accidents, not a model that has been told to apply a change.
+
+**Human confirmation (`NCC_MCP_CONFIRM`).** When the connected client supports MCP elicitation, every mutating call (any tool that takes `confirm`, except print-only previews) first shows the person a yes/no dialog with the tool name and its arguments (secrets masked, long values cut, control characters removed), and runs only if they accept. Decline, cancel, an error or no answer within 2 minutes refuses the call. The existing checks run first, so a call that would be refused anyway never prompts.
+
+- `auto` (default): ask when the client supports elicitation; otherwise behave as before (`confirm: "APPLY"` plus `NCC_MCP_ALLOW_MUTATIONS`).
+- `require`: refuse mutating calls from clients that cannot ask.
+- `off`: never ask.
+
+Any other value stops the server at startup. This server speaks stdio only (there is no stateless HTTP mode, which could not ask). It negotiates MCP protocol revisions before 2026-07-28, because later revisions replace server-initiated elicitation. Honest limits: elicitation proves that the *host* showed a dialog, not that a person read it; a malicious or auto-approving host can still answer yes. It raises the bar against a prompt-injected model, and the PAT's role stays the hard limit, so keep the role as low as the job allows. The role is checked by the API after the dialog, so a call the role will refuse can still prompt once. Other controls: mutations are off by default, and your MCP host's own approval prompt for tools marked destructive. Custom schedule commands and passwords in tool arguments are
 never accepted. API responses returned to MCP clients are capped at 1 MiB. The
 HTTP client does not honour `HTTP(S)_PROXY`.
 
@@ -228,6 +234,7 @@ To let Cursor agents follow the NCC workflow automatically, the repo already lin
 | `NCC_MCP_TOKEN` | Required. Personal access token (`ncc_pat_…`) or other bearer secret. The server will not start without it. |
 | `NCC_MCP_API_URL` | API base URL (default `http://127.0.0.1:8081`). Each tool/resource call checks `GET /api/v1/auth/me` and then the mapped REST route. Non-loopback `http://` is rejected. |
 | `NCC_MCP_ALLOW_MUTATIONS` | Set `true` to allow mutating tools that also send `confirm: "APPLY"`. |
+| `NCC_MCP_CONFIRM` | `auto` (default), `require` or `off`: ask the human through MCP elicitation before a mutating call. See Mutation safety. |
 | `NCC_MCP_PROFILE` | Advertised capability profile: `readonly`, `operator` (default), or `admin`. Admin-only tools are not registered outside the `admin` profile. |
 
 Never put passwords in tool arguments. Store Prism credentials with `secret://` on the API server.

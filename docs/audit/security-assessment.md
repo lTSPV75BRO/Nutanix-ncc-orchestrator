@@ -21,8 +21,10 @@ To report a vulnerability, see [`.github/SECURITY.md`](../../.github/SECURITY.md
   start, a Windows install directory writable by every local user, and a
   Windows installer that wrote an invalid config and could destroy backups.
   All are fixed.
-- Open recommendations: systemd sandboxing, Windows file ACLs in the product,
-  and publishing releases from CI only (REL-05).
+- A crafted backup could make the server run its own program (SEC-19, High,
+  found and fixed on 2026-11-24).
+- Open: the first release from the new publishing workflow (REL-05); the Linux
+  service is sandboxed but still root (LIN-02).
 
 ## Threat model in brief
 
@@ -250,6 +252,25 @@ operator role. The same review of the route table found `GET /api/v1/logs`
 answering viewers; its sources are filtered per role in the handler (admin-only
 sources are hidden), so it was left as is.
 
+### SEC-19: a crafted backup could run code (High, fixed)
+
+SEC-07 checks the program files in a backup, but a restore also wrote other paths
+that the server runs or trusts later. A backup holding `run/upgrade-rollback/` and a
+`run/v2-upgrade-state.json` that says a rollback was interrupted made the supervisor
+copy foreign binaries over `bin/` and start them. This was proven on Windows with a
+harmless marker program. Scheduler scripts in `logs/`, a schedule `log_path` with a
+line break, and start settings that were empty on the host were further ways in
+(shown by tests and reading, not run on a Linux host). Restoring needs the admin
+role or a shell on the server, so the risk was an admin tricked into restoring a
+tampered file.
+
+A restore now refuses those paths whoever made the archive, refuses links and special
+members, never marks data executable and keeps the host's own network settings. The
+supervisor checks its saved copy against its own record before using it. A restore
+stays an admin-level action: it replaces accounts and the audit log. An update begun by a
+2.3.x supervisor that is itself restarted midway and then has to roll back is refused;
+reinstall the old version instead.
+
 ### Entry-point review (2026-11-20)
 
 | Entry point | Who can reach it | Check | Result |
@@ -274,22 +295,17 @@ nothing else readable. `metrics/rate-limit` has needed a session since (SEC-10).
 ### Smaller items
 
 - **DEP-03.** `GO-2026-6909` in `crewjam/saml` v0.6.3: reviewed false positive
-  (fix in v0.5.2, present in v0.6.3). Handler panics are also recovered into a
+  (fix in v0.5.2, present in v0.6.3), no longer reported since 2026-11-24. Handler panics are also recovered into a
   logged 500.
-- **SEC-07b.** Low severity, listed in [`findings.md`](findings.md).
+- **SEC-07b, MCP-1, LIN-01, WIN-02.** Fixed on 2026-11-24; see
+  [`findings.md`](findings.md).
 - **FRESH-01, SEC-10, SEC-11, WIN-03, HARD-01.** Fixed on 2026-11-23; see
   [`findings.md`](findings.md).
 
 ### Recommendations, not yet implemented
 
-- **LIN-01.** The systemd unit runs as root with no sandboxing. Try
-  `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=full`, `ProtectHome`,
-  `ProtectKernel*`, `RestrictSUIDSGID` and `LockPersonality` as a drop-in, and
-  a dedicated user, on a systemd host, then check restart, restore, apply
-  update and `chcon`.
-- **WIN-02.** Apply restrictive ACLs from `v2-start` on Windows.
-- **REL-05.** Publish release files from the workflow only, so every published
-  file has the attestation the installers check.
+- **LIN-02.** Run the API and UI as a dedicated user instead of root.
+- **REL-05.** Publish 2.4.0 from the workflow and let its verification pass.
 
 ## Findings, October 2026 (v2.2.1)
 

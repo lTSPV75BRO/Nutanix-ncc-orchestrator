@@ -1,5 +1,5 @@
 // Every runner setting the config file accepts (see validateConfigFileRawTypes
-// and normalizeCanonicalConfig in cmd/ncc-orchestrator/goNCC.go). Each field
+// and normalizeCanonicalConfig in cmd/ncc-orchestrator/config_load.go). Each field
 // knows its flat key and its path in the nested `schema-version: 1` layout, so
 // the form reads and writes whichever shape the open file uses.
 

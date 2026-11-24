@@ -51,7 +51,7 @@ export function SloPanel({ sloDashboard, nccClusterSummary, regressionSummary, c
       title: "Health score",
       key: "health",
       width: 220,
-      render: (_, row) => <Progress percent={Number(row.health.toFixed(1))} size="small" status={row.health < 75 ? "exception" : row.health < 90 ? "active" : "success"} />,
+      render: (_, row) => <Progress percent={Number(row.health.toFixed(1))} size="small" aria-label={`${row.cluster} health score`} status={row.health < 75 ? "exception" : row.health < 90 ? "active" : "success"} />,
     },
     {
       title: "Fail rate",
@@ -73,7 +73,7 @@ export function SloPanel({ sloDashboard, nccClusterSummary, regressionSummary, c
 
   return (
     <Card className="page-card">
-      <Typography.Title level={4} className="section-title">
+      <Typography.Title level={2} className="section-title">
         SLO + Regression
       </Typography.Title>
       <Typography.Text type="secondary" className="section-subtitle">
@@ -110,14 +110,14 @@ export function SloPanel({ sloDashboard, nccClusterSummary, regressionSummary, c
         </Col>
       </Row>
 
-      <Typography.Title level={5}>SLO by cluster</Typography.Title>
+      <Typography.Title level={3} className="section-subheading">SLO by cluster</Typography.Title>
       {clusters.length === 0 ? (
         <Empty description="No SLO cluster data found." />
       ) : (
         <Table size="small" columns={columns} dataSource={clusters} pagination={{ pageSize: 8, showSizeChanger: false }} />
       )}
 
-      <Typography.Title level={5}>Regression summary</Typography.Title>
+      <Typography.Title level={3} className="section-subheading">Regression summary</Typography.Title>
       <Row gutter={[12, 12]}>
         <Col xs={24} md={8}>
           <Card size="small" title={<IconTitle icon={<RiseOutlined />}>More failures</IconTitle>}>

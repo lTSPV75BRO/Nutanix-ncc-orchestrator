@@ -54,13 +54,20 @@ func isBackupArchiveName(name string) bool {
 }
 
 // restoreStackNote explains, after a successful restore, that the backup's
-// program files were left out because this server never installed them
-// (v2-restore prints "program files not trusted"; SEC-07).
+// program files were left out and why (v2-restore prints "program files not
+// trusted" and a "reason:" line; SEC-07).
 func restoreStackNote(out string) string {
 	if !strings.Contains(out, "stack restored: no (program files not trusted)") {
 		return ""
 	}
-	return " The backup's program files were not installed because this server has never run that version; your data was restored and the current version keeps running. To go back to that version, install it from its release."
+	why := "this server has never run that version"
+	switch {
+	case strings.Contains(out, "\nreason: mixed versions"):
+		why = "they would mix files from different versions"
+	case strings.Contains(out, "\nreason: incomplete version"):
+		why = "they are only part of a version"
+	}
+	return " The backup's program files were not installed because " + why + "; your data was restored and the current version keeps running. To go back to that version, install it from its release."
 }
 
 // backupArchiveIncludesStack reports whether a plaintext backup also holds
@@ -388,7 +395,7 @@ func (s *apiServer) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := mkdirPrivate(dir); err != nil {
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "create backups dir: " + sanitizeErr(err)})
 		return
 	}
@@ -553,7 +560,7 @@ func (s *apiServer) handleBackupVerifyNamed(w http.ResponseWriter, r *http.Reque
 	if passphrase != "" {
 		extraEnv = []string{"NCC_BACKUP_PASSPHRASE=" + passphrase}
 	}
-	out, err := s.runOrchestratorEnv([]string{"v2-restore", "--input-file", archivePath, "--verify-only", "--json"}, 2*time.Minute, extraEnv)
+	out, err := s.runOrchestratorEnv([]string{"v2-restore", "--install-dir", s.maintenanceInstallDir(), "--input-file", archivePath, "--verify-only", "--json"}, 2*time.Minute, extraEnv)
 	report, parsed := parseBackupVerifyReport(out)
 	data := map[string]interface{}{"output": strings.TrimSpace(out)}
 	if parsed {

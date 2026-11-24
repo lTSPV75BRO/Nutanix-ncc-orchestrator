@@ -556,6 +556,15 @@ func checkRuntimeModeDrift(hc *healContext) healResult {
 	}
 }
 
+// scheduleStateString reads a value of the saved schedule; a missing or null
+// one is "" ("%v" would turn it into "<nil>").
+func scheduleStateString(st map[string]interface{}, key string) string {
+	if st[key] == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprintf("%v", st[key]))
+}
+
 func checkSchedulerIntegrity(hc *healContext) healResult {
 	res := healResult{ID: "scheduler-integrity", Title: "Scheduler integrity", Category: "process"}
 	statePath := filepath.Join(hc.InstallDir, ".ncc-api-schedule.json")
@@ -572,85 +581,127 @@ func checkSchedulerIntegrity(hc *healContext) healResult {
 		res.Hint = "Re-save scheduler settings from Settings -> Schedule."
 		return res
 	}
-	task := strings.TrimSpace(fmt.Sprintf("%v", st["task_name"]))
+	task := scheduleStateString(st, "task_name")
 	if task == "" {
-		task = "ncc-orchestrator"
+		task = "ncc-orchestrator" // create-schedule's --task-name default
 	}
-	typ := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", st["type"])))
-	logPath := strings.TrimSpace(fmt.Sprintf("%v", st["log_path"]))
+	if action := strings.ToLower(scheduleStateString(st, "action")); action == "remove" {
+		res.Status = healOK
+		res.Message = "the schedule was removed; nothing to check"
+		return res
+	}
+	if scheduleStateString(st, "print_only") == "true" {
+		res.Status = healOK
+		res.Message = "the schedule was saved as a preview and never installed; nothing to check"
+		return res
+	}
+	logPath := scheduleStateString(st, "log_path")
 	if logPath == "" {
 		logPath = filepath.Join(hc.InstallDir, "logs", "ncc-scheduler.log")
 	}
-	if typ == "systemd" {
-		runner := filepath.Join(filepath.Dir(logPath), "ncc-sched-"+task+".sh")
-		timer := filepath.Join("/etc/systemd/system", "ncc-sched-"+task+".timer")
-		service := filepath.Join("/etc/systemd/system", "ncc-sched-"+task+".service")
-		missing := []string{}
-		for _, p := range []string{runner, timer, service} {
+	// "auto" (and an empty type) is what create-schedule resolves it to here.
+	typ, err := normalizeScheduleType(scheduleStateString(st, "type"))
+	if err != nil {
+		res.Status = healWarn
+		res.Message = "unknown scheduler type in persisted state: " + scheduleStateString(st, "type")
+		res.Hint = "Re-save scheduler settings to normalize scheduler state."
+		return res
+	}
+	missing, err := missingScheduleParts(typ, task, logPath)
+	if err != nil {
+		res.Status = healWarn
+		res.Message = "could not check the " + typ + " schedule: " + err.Error()
+		res.Hint = "Run the check as the user that owns the schedule (root for the service)."
+		return res
+	}
+	if len(missing) == 0 {
+		res.Status = healOK
+		res.Message = typ + " schedule is installed"
+		return res
+	}
+	if hc.Fix {
+		if fixed, msg := repairSchedulerArtifactsFromState(hc.InstallDir, st, typ, task, logPath); fixed {
+			res.Status = healOK
+			res.Fixed = true
+			res.FixMsg = msg
+			res.Message = "repaired missing scheduler artifacts from persisted state"
+			return res
+		}
+	}
+	res.Status = healWarn
+	res.Message = "scheduler artifacts missing: " + strings.Join(missing, ", ")
+	res.Hint = "Re-apply schedule (Settings -> Schedule -> Save + Apply) or run restore self-heal."
+	return res
+}
+
+// missingScheduleParts lists what an installed schedule of this type lacks.
+// A variable so tests never look at the host's real schedule.
+var missingScheduleParts = func(typ, task, logPath string) ([]string, error) {
+	missing := []string{}
+	switch typ {
+	case "systemd":
+		base := systemdUnitBase(task)
+		for _, p := range []string{
+			scheduleRunnerScriptPath(task, logPath),
+			filepath.Join(systemdUnitDir, base+".timer"),
+			filepath.Join(systemdUnitDir, base+".service"),
+		} {
 			if !fileExists(p) {
 				missing = append(missing, filepath.Base(p))
 			}
 		}
-		if len(missing) > 0 {
-			if hc.Fix {
-				if fixed, msg := repairSchedulerArtifactsFromState(hc.InstallDir, st, typ, task, logPath); fixed {
-					res.Status = healOK
-					res.Fixed = true
-					res.FixMsg = msg
-					res.Message = "repaired missing scheduler artifacts from persisted state"
-					return res
-				}
-			}
-			res.Status = healWarn
-			res.Message = "scheduler artifacts missing: " + strings.Join(missing, ", ")
-			res.Hint = "Re-apply schedule (Settings -> Schedule -> Save + Apply) or run restore self-heal."
-			return res
+	case "cron":
+		out, err := exec.Command("crontab", "-l").CombinedOutput()
+		text := string(out)
+		if err != nil && !strings.Contains(strings.ToLower(text), "no crontab") {
+			return nil, fmt.Errorf("crontab -l: %v (%s)", err, strings.TrimSpace(text))
 		}
-		res.Status = healOK
-		res.Message = "systemd scheduler state, units, and runner script are aligned"
-		return res
-	}
-	if typ == "cron" {
-		runner := filepath.Join(filepath.Dir(logPath), "ncc-scheduler.sh")
-		if !fileExists(runner) {
-			if hc.Fix {
-				if fixed, msg := repairSchedulerArtifactsFromState(hc.InstallDir, st, typ, task, logPath); fixed {
-					res.Status = healOK
-					res.Fixed = true
-					res.FixMsg = msg
-					res.Message = "repaired missing scheduler artifacts from persisted state"
-					return res
-				}
-			}
-			res.Status = healWarn
-			res.Message = "cron scheduler runner script is missing"
-			res.Hint = "Re-apply schedule to regenerate the runner script."
-			return res
+		if !strings.Contains(text, scheduleMarker(task)) {
+			missing = append(missing, "crontab entry "+scheduleMarker(task))
 		}
-		res.Status = healOK
-		res.Message = "cron scheduler state and runner script are aligned"
-		return res
+	case "windows":
+		name, found := findWindowsSchedule(task)
+		if !found {
+			missing = append(missing, "scheduled task "+name)
+		}
 	}
-	res.Status = healWarn
-	res.Message = "unknown scheduler type in persisted state: " + typ
-	res.Hint = "Re-save scheduler settings to normalize scheduler state."
-	return res
+	return missing, nil
 }
 
 func repairSchedulerArtifactsFromState(installDir string, st map[string]interface{}, typ, task, logPath string) (bool, string) {
-	action := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", st["action"])))
+	action := strings.ToLower(scheduleStateString(st, "action"))
 	if action != "" && action != "create" {
 		return false, ""
 	}
-	every := strings.TrimSpace(fmt.Sprintf("%v", st["every"]))
+	// Saved but never applied: there is nothing to repair.
+	if scheduleStateString(st, "print_only") == "true" {
+		return false, ""
+	}
+
+	orch := filepath.Join(installDir, "bin", "ncc-orchestrator")
+	if !fileExists(orch) {
+		orch = "ncc-orchestrator"
+	}
+	out, err := exec.Command(orch, scheduleRepairArgs(installDir, st, typ, task, logPath)...).CombinedOutput()
+	if err != nil {
+		_ = out
+		return false, ""
+	}
+	return true, "re-applied scheduler via create-schedule using persisted state"
+}
+
+// scheduleRepairArgs is the create-schedule command for a saved schedule.
+func scheduleRepairArgs(installDir string, st map[string]interface{}, typ, task, logPath string) []string {
+	every := scheduleStateString(st, "every")
 	if every == "" {
 		every = "4h"
 	}
-	withLock := strings.TrimSpace(fmt.Sprintf("%v", st["with_lock"]))
+	// The API omits with_lock when it is off.
+	withLock := scheduleStateString(st, "with_lock")
 	if withLock == "" {
-		withLock = "true"
+		withLock = "false"
 	}
-	configPath := strings.TrimSpace(fmt.Sprintf("%v", st["config"]))
+	configPath := scheduleStateString(st, "config")
 	if configPath == "" {
 		configPath = filepath.Join(installDir, "config.yaml")
 	}
@@ -664,10 +715,6 @@ func repairSchedulerArtifactsFromState(installDir string, st map[string]interfac
 		logPath = filepath.Join(installDir, logPath)
 	}
 
-	orch := filepath.Join(installDir, "bin", "ncc-orchestrator")
-	if !fileExists(orch) {
-		orch = "ncc-orchestrator"
-	}
 	args := []string{
 		"--config", configPath,
 		"create-schedule",
@@ -675,15 +722,13 @@ func repairSchedulerArtifactsFromState(installDir string, st map[string]interfac
 		"--every", every,
 		"--log-path", logPath,
 		"--task-name", task,
-		"--with-lock", withLock,
+		"--with-lock=" + withLock,
 		"--print-only=false",
 	}
-	out, err := exec.Command(orch, args...).CombinedOutput()
-	if err != nil {
-		_ = out
-		return false, ""
+	if cron := scheduleStateString(st, "cron"); cron != "" {
+		args = append(args, "--cron", cron) // wins over --every
 	}
-	return true, "re-applied scheduler via create-schedule using persisted state"
+	return args
 }
 
 func checkSELinuxExecContext(hc *healContext) healResult {
@@ -1144,14 +1189,12 @@ func checkDiskSpace(hc *healContext) healResult {
 }
 
 // checkSecretsPerms flags secret files that are group/world-readable and (with
-// --fix) tightens them to 0600. No-op on Windows where POSIX mode bits do not
-// carry the same meaning.
+// --fix) tightens them to 0600. On Windows it does the same for the NTFS
+// permissions of the install (installacl.go).
 func checkSecretsPerms(hc *healContext) healResult {
 	res := healResult{ID: "secrets-perms", Title: "Secret file permissions", Category: "encryption"}
 	if runtime.GOOS == "windows" {
-		res.Status = healOK
-		res.Message = "skipped on windows (NTFS ACLs, not POSIX mode bits)"
-		return res
+		return checkSecretsPermsWindows(hc)
 	}
 	candidates := []string{
 		filepath.Join(hc.InstallDir, ".ncc-api-users.json"),

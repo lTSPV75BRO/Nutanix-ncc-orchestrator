@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -383,7 +382,7 @@ func (s *apiServer) runUpdateJob(req updateApplyRequest, supervised bool, reques
 	// 1. Pre-update backup. We refuse to apply the update if the backup fails,
 	//    since the whole point is to have a rollback point first.
 	backupDir := filepath.Join(installDir, "backups")
-	if err := os.MkdirAll(backupDir, 0o700); err != nil {
+	if err := mkdirPrivate(backupDir); err != nil {
 		s.updateFailedTotal.Add(1)
 		updateJob.fail("could not create backup directory: " + err.Error())
 		return

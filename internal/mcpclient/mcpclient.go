@@ -74,7 +74,8 @@ func InvalidProofMessage() string {
 	return "MCP client proof is invalid; a 2.3.x binary cannot impersonate " + MinVersion + " by setting the version string. Use the " + MinVersion + " ncc-mcp-server binary and a personal access token"
 }
 
-// VersionAllowed reports whether v is a 2.4.0+ MCP client version.
+// VersionAllowed reports whether v is a 2.4.0+ MCP client version. Release
+// candidates of 2.4.0 count: they are the same product before its release.
 func VersionAllowed(v string) bool {
 	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
 	if v == "" {
@@ -84,7 +85,7 @@ func VersionAllowed(v string) bool {
 	if err != nil {
 		return false
 	}
-	min, err := semver.NewVersion(MinVersion)
+	min, err := semver.NewVersion(MinVersion + "-0")
 	if err != nil {
 		return false
 	}

@@ -115,7 +115,7 @@ describe("config document", () => {
 });
 
 describe("config schema stays in step with the runner", () => {
-  const go = readFileSync(join(REPO, "cmd", "ncc-orchestrator", "goNCC.go"), "utf8");
+  const go = readFileSync(join(REPO, "cmd", "ncc-orchestrator", "config_load.go"), "utf8");
 
   it("has a field for every key config.yaml accepts", () => {
     const block = go.slice(go.indexOf("allowedTopKeys := map[string]bool{"), go.indexOf("for key := range viper.AllSettings()"));

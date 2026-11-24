@@ -457,6 +457,11 @@ pkg = root / "frontend" / "package.json"
 text = pkg.read_text()
 pkg.write_text(re.sub(r'("version": ")[^"]+"', r"\g<1>" + ver + '"', text, count=1))
 
+# The lockfile names the version twice, both before the first dependency.
+lock = root / "frontend" / "package-lock.json"
+lt = lock.read_text(encoding="utf-8")
+lock.write_text(re.sub(r'("version": ")[^"]+"', r"\g<1>" + ver + '"', lt, count=2), encoding="utf-8")
+
 chart = root / "helm" / "ncc-orchestrator" / "Chart.yaml"
 ct = chart.read_text()
 ct = re.sub(r'(?m)^version:\s*\S+', "version: " + ver, ct, count=1)
@@ -477,6 +482,7 @@ img = re.compile(r'(docker\.io/prajwalnutant/(?:nutanix-ncc-orchestrator|ncc-api
 for path in (root / "k8s").glob("*.yaml"):
     raw = path.read_text()
     updated = img.sub(r"\g<1>" + ver, raw)
+    updated = re.sub(r'(name: NCC_(?:ORCHESTRATOR_|UI_)?IMAGE_TAG\s+value: ")[^"]+"', r"\g<1>" + ver + '"', updated)
     if updated != raw:
         path.write_text(updated)
 print("stamped version", ver)
@@ -519,6 +525,13 @@ check_versions() {
     tag="${line##*:}"
     if [ "$tag" != "$VERSION" ]; then
       echo "version mismatch: k8s image $line, VERSION is $VERSION" >&2
+      failed=1
+    fi
+  done
+  # The API compares these with what runs: a stale one reports version skew.
+  for tag in $(awk '/name: NCC_.*IMAGE_TAG/{getline; gsub(/[" ]/, ""); sub(/^value:/, ""); print}' k8s/*.yaml); do
+    if [ "$tag" != "$VERSION" ]; then
+      echo "version mismatch: k8s IMAGE_TAG $tag, VERSION is $VERSION" >&2
       failed=1
     fi
   done
@@ -851,14 +864,21 @@ sign_binaries() {
   fi
 }
 
-# gpg_detach_sign accepts an optional passphrase through stdin-free loopback
-# pinentry so a CI runner can use an encrypted signing subkey. The value stays
-# in the process environment and is never printed by this script.
+# gpg_detach_sign signs "$1" with a loopback pinentry so a CI runner can use an
+# encrypted signing key. The passphrase never appears on a command line (where
+# `ps` could show it): NCC_LINUX_GPG_PASSPHRASE_FILE (a mode-0600 file whose
+# first line is the passphrase) is preferred; NCC_LINUX_GPG_PASSPHRASE is still
+# honoured for local runs and is handed to gpg on file descriptor 3.
 gpg_detach_sign() {
   local in="$1"
   local -a args=(--batch --yes --local-user "$NCC_LINUX_GPG_KEY_ID")
-  if [ -n "${NCC_LINUX_GPG_PASSPHRASE:-}" ]; then
-    args+=(--pinentry-mode loopback --passphrase "$NCC_LINUX_GPG_PASSPHRASE")
+  if [ -n "${NCC_LINUX_GPG_PASSPHRASE_FILE:-}" ]; then
+    [ -r "$NCC_LINUX_GPG_PASSPHRASE_FILE" ] || die "NCC_LINUX_GPG_PASSPHRASE_FILE is not readable"
+    args+=(--pinentry-mode loopback --passphrase-file "$NCC_LINUX_GPG_PASSPHRASE_FILE")
+  elif [ -n "${NCC_LINUX_GPG_PASSPHRASE:-}" ]; then
+    args+=(--pinentry-mode loopback --passphrase-fd 3)
+    gpg "${args[@]}" --detach-sign --armor --output "$in.asc" "$in" 3<<<"$NCC_LINUX_GPG_PASSPHRASE"
+    return
   fi
   gpg "${args[@]}" --detach-sign --armor --output "$in.asc" "$in"
 }
@@ -897,6 +917,9 @@ if [ "$NO_STACKS" != 1 ]; then
   cp examples/example_config.yaml dist/ 2>/dev/null || true
   if [ -f "docs/releases/RELEASE_NOTES_v${VERSION}.md" ]; then
     cp "docs/releases/RELEASE_NOTES_v${VERSION}.md" dist/
+  elif [ -f "docs/releases/RELEASE_NOTES_v${VERSION%%-*}.md" ]; then
+    # A release candidate ships the notes of the version it leads to.
+    cp "docs/releases/RELEASE_NOTES_v${VERSION%%-*}.md" "dist/RELEASE_NOTES_v${VERSION}.md"
   fi
   rm -rf dist/.stack
   mkdir -p dist/.stack

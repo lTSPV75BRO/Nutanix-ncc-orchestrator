@@ -21,9 +21,8 @@ The serious problems were around the code, in deployment and installation: the
 Helm chart's API pod could not start, the Windows installer produced an invalid
 config, left its install directory writable by every local user and could wipe
 backups, and a few multi-replica and restore paths misbehaved. All of those are
-fixed and covered by tests. What remains is hardening work (systemd sandboxing,
-container defaults, Windows file ACLs, installer attestation checks) and
-checks that need larger environments. See [`findings.md`](findings.md).
+fixed and covered by tests. What remains is the first release from the new
+publishing workflow and checks that need larger environments. See [`findings.md`](findings.md).
 
 ## Scope and versions
 
@@ -70,7 +69,7 @@ warnings with the user, client address and request id, and never passwords.
 
 See [`security-assessment.md`](security-assessment.md). No Critical findings;
 one accepted false positive in the dependency scan; deployment, installer and
-container hardening fixed; systemd sandboxing and Windows ACLs open.
+container hardening, systemd sandboxing and Windows permissions fixed.
 
 ### Dependencies
 
@@ -108,8 +107,9 @@ visible text, an invalid ARIA role on a button, heading levels, 14 px password
 toggles and unfocusable scrollable code blocks. All are fixed; the re-scan
 shows 0 violations on 16 routes in the dark, light and IT Professional themes.
 Keyboard order was walked on the first screen (skip link first, visible focus
-everywhere). Not covered: pages with populated data, 400% zoom, and screen
-readers. The rules are in [`docs/ui/DESIGN_SYSTEM.md`](../ui/DESIGN_SYSTEM.md).
+everywhere). Since 2026-11-24 a browser suite (CI job `a11y`) covers populated
+pages, every tab, overlays, 400% zoom and keyboard use. Not covered: a real screen
+reader. The rules are in [`docs/ui/DESIGN_SYSTEM.md`](../ui/DESIGN_SYSTEM.md).
 
 ### Deployment and installers
 
@@ -129,11 +129,12 @@ These need an environment that was not available or time that was not spent:
 
 - Node drain on a live cluster, and a 7,000-cluster data set with pod memory.
 - Egress NetworkPolicy.
-- A reboot and `kill -9` of supervisor children on Linux; a systemd drop-in with
-  sandboxing; LDAP against a real directory on Linux.
+- A reboot and `kill -9` of supervisor children on Linux; the systemd sandbox with
+  SELinux enforcing; LDAP against a real directory on Linux.
+- The Windows permissions as SYSTEM or elevated; the release workflow end to end.
 - A Windows reboot, a service account other than SYSTEM, an upgrade from an older
   release, and a Sysprep first boot.
-- OWASP ZAP (DAST), a screen reader, and accessibility of pages with data.
+- OWASP ZAP (DAST) and a screen reader.
 
 Each is listed as a follow-up in [`docs/ROADMAP.md`](../ROADMAP.md) or
 [`findings.md`](findings.md).

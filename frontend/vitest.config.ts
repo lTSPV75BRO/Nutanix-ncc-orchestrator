@@ -1,9 +1,11 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
   test: {
+    // e2e/ holds the Playwright browser specs (npm run test:a11y), which Vitest must not load.
+    exclude: [...configDefaults.exclude, "e2e/**"],
     environment: "jsdom",
     environmentOptions: {
       jsdom: {

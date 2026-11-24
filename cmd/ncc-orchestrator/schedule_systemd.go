@@ -254,7 +254,7 @@ func onCalendarFromSchedule(cronSpec string, every time.Duration) (string, error
 
 // buildSystemdScheduleUnits returns the .service and .timer unit file contents.
 func buildSystemdScheduleUnits(taskName, onCalendar, scriptPath, workDir, marker string) (service, timer string) {
-	service = strings.Join([]string{
+	serviceLines := []string{
 		"[Unit]",
 		"Description=NCC Orchestrator scheduled run (" + taskName + ")",
 		"Documentation=https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator",
@@ -264,8 +264,9 @@ func buildSystemdScheduleUnits(taskName, onCalendar, scriptPath, workDir, marker
 		"Type=oneshot",
 		"WorkingDirectory=" + workDir,
 		"ExecStart=/bin/sh " + scriptPath,
-		"",
-	}, "\n")
+	}
+	serviceLines = append(serviceLines, systemdHardening()...)
+	service = strings.Join(append(serviceLines, ""), "\n")
 	timer = strings.Join([]string{
 		"[Unit]",
 		"Description=NCC Orchestrator scheduled run timer (" + taskName + ")",

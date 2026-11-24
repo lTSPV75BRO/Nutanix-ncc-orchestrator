@@ -18,6 +18,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   stack archives also carry GPG signatures and the matching public key.
   Windows and macOS remain checksum- and provenance-verified but unsigned
   until CA-issued publisher identities are available.
+- **Windows: a schedule no longer replaces the supervisor task (WIN-06).** Both used
+  the task name `ncc-orchestrator`. The default schedule's task is now
+  `ncc-orchestrator-schedule`; on an affected host run `v2-install-service` as
+  Administrator and save the schedule again. The UI now shows Windows schedules as
+  installed.
+- **Release candidates (REL-08).** A tag such as `v2.4.0-rc.1` is published as a
+  pre-release and never offered to stable installs. An install that runs a candidate is
+  offered newer candidates and then the release; others opt in with
+  `ncc-orchestrator update --include-prerelease`. A tag must match `VERSION`.
+- **Supervisor and doctor (INS-01).** A stopping supervisor leaves the pid file of a
+  server started by hand, so restarts from the UI stop it. The scheduler check
+  understands `auto`, removed and preview-only schedules.
+- **A restore can no longer plant files the server runs (SEC-19).** Files that run,
+  or decide what runs (`run/`, other files in `bin/`, scheduler and start scripts,
+  `tls/`, certificates and keys, `backups/`), are never taken from a backup. Links are
+  refused and a file cannot replace a folder; `--verify-only` lists such files as
+  **Protected files**. The supervisor rolls back only to a copy it saved, or to a
+  version this server ran. A restore keeps this server's listener, origin, backend and
+  HTTPS settings, even empty ones. Scheduler log paths and `log-file` may not name a
+  script or program.
+- **Program files are restored only as one whole version (SEC-07b).** Mixed or partial
+  sets restore data only and say why; `--verify-only` reports **Program files**.
+- **The systemd service is sandboxed (LIN-01)**, with the log-maintenance and schedule
+  units: no new privileges, kernel settings read-only, fewer capabilities and socket
+  types. Existing installs: re-run `v2-install-service`, restart the service and
+  re-save systemd schedules. Relax a setting with `systemctl edit`.
+- **Windows file permissions (WIN-02).** `v2-start` and the supervisor limit the token,
+  user database, config, secrets, backups, TLS keys and logs to SYSTEM, Administrators
+  and the account running the stack, and stop ordinary users writing to `bin`,
+  `frontend-dist` and `run`. Access given to specific accounts is kept. The
+  `secrets-perms` doctor check reports and repairs it.
+- **MCP: the person confirms changes (MCP-1).** Mutating tools ask through MCP
+  elicitation when the client supports it (`NCC_MCP_CONFIRM=auto|require|off`, default
+  `auto`). Declined or unanswered prompts (2 minutes) refuse the call. The server
+  negotiates MCP revisions before 2026-07-28 so that it can ask.
+- **Releases are published only after they verify (REL-05).** The workflow attests
+  every file, uploads to a draft, verifies, publishes and verifies again; a published
+  release is never changed. `scripts/verify-published-release.sh` audits any release.
 - **Stronger password hashing (SEC-11).** New password hashes use bcrypt cost
   12 (was 10). Existing accounts are upgraded the next time they sign in; nobody
   is signed out and no password changes. System Health warns when sessions run
@@ -112,6 +150,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **systemd: the stack comes back after a restore, TLS change or unsupervised update
+  from the UI (REL-07).** The restart was started inside the service and died with it,
+  leaving the stack stopped.
+- **Schedules survive a restore and Heal.** A cron schedule could become "every 4 hours"
+  with its lock switched on; both are kept. Heal repairs schedules saved without a task
+  name. `create-schedule --cron` accepts only five fields or an @-macro. A restore no
+  longer writes a stray file named `<nil>` in the install folder (safe to delete).
+- **Accessibility (A11Y-02):** menus and selects no longer stay invisible when the system
+  asks for reduced motion; focus returns after a dialog; links in text are underlined;
+  contrast, heading order, control labels and 320 px layouts fixed. The trend chart has a
+  Chart/Table switch. A browser suite checks all of it in CI (`npm run test:a11y`).
+- **Internal:** `goNCC.go` (18.9k lines), the API `main.go` (6.4k) and
+  `AccessSection.tsx` (3.4k) are split by area with no behaviour change (MAINT-01).
+- **Windows:** the final state of an update could be lost while the dashboard read it.
+- **`v2-start --wait-ready`** works with the default self-signed certificate.
 - **The cloud-init and Windows installers can download a release (REL-06).**
   Their default URL used the bare version, but release tags start with `v`, so
   GitHub answered 404. They try `v<version>` first and the bare version next, so

@@ -66,7 +66,12 @@ function sharedComponents(surface: string, raised: string, border: string, accen
   };
 }
 
-function toAntThemeConfig(theme: AppThemeKey): ThemeConfig {
+function toAntThemeConfig(theme: AppThemeKey, motion: boolean): ThemeConfig {
+  const config = toBaseThemeConfig(theme);
+  return { ...config, token: { ...config.token, motion } };
+}
+
+function toBaseThemeConfig(theme: AppThemeKey): ThemeConfig {
   if (theme === "light") {
     return {
       algorithm: antdTheme.defaultAlgorithm,
@@ -86,6 +91,8 @@ function toAntThemeConfig(theme: AppThemeKey): ThemeConfig {
         // antd's default muted greys fall short of WCAG AA (4.5:1) on white.
         colorTextDescription: "#52525b",
         colorTextPlaceholder: "#6b7280",
+        // Labels in Descriptions use the tertiary grey (#8c8c8c, 3.4:1 on white).
+        colorTextTertiary: "#6b7280",
         colorBorder: "#e4e4e7",
         colorBorderSecondary: "#f4f4f5",
       },
@@ -110,6 +117,8 @@ function toAntThemeConfig(theme: AppThemeKey): ThemeConfig {
         colorTextSecondary: "#b6c9e6",
         colorTextDescription: "#a8bcd9",
         colorTextPlaceholder: "#90a6c6",
+        // Descriptions labels: antd's derived tertiary is 4.4:1 on this surface.
+        colorTextTertiary: "#90a6c6",
         colorBorder: "#24324a",
         colorBorderSecondary: "#1b2840",
       },
@@ -157,6 +166,21 @@ function getSystemTheme(): AppThemeKey {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
+/** True when the user asks the system for less motion. */
+function usePrefersReducedMotion(): boolean {
+  const query = "(prefers-reduced-motion: reduce)";
+  const [reduced, setReduced] = useState(() => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(query).matches);
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia(query);
+    const apply = () => setReduced(media.matches);
+    apply();
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, []);
+  return reduced;
+}
+
 export function AppThemeProvider({ children }: { children: ReactNode }) {
   const [storedTheme, setStoredTheme] = useLocalStorageState<string>("app.theme", "dark");
   const selectedTheme = normalizeThemeSelection(storedTheme);
@@ -178,6 +202,7 @@ export function AppThemeProvider({ children }: { children: ReactNode }) {
   }, [setSystemTheme]);
 
   const theme: AppThemeKey = selectedTheme === "auto" ? systemTheme : selectedTheme;
+  const reducedMotion = usePrefersReducedMotion();
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -188,7 +213,7 @@ export function AppThemeProvider({ children }: { children: ReactNode }) {
   return (
     <ThemeContext.Provider value={{ selectedTheme, theme, setTheme }}>
       <ConfigProvider
-        theme={toAntThemeConfig(theme)}
+        theme={toAntThemeConfig(theme, !reducedMotion)}
         spin={{ indicator: <BarsLoader /> }}
         button={{ loadingIcon: <ArcSpinner /> }}
         empty={{ image: <span className="ui-empty-icon"><InboxOutlined /></span> }}

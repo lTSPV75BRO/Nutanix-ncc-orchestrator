@@ -989,7 +989,7 @@ export function ConfigSection({ onError }: Props) {
 
                 {others.length > 0 && show === "all" && !query ? (
                   <Card className="page-card" id="config-section-other">
-                    <Typography.Title level={4} style={{ margin: 0 }}>
+                    <Typography.Title level={2} className="section-subheading" style={{ margin: 0 }}>
                       Other keys in this file
                     </Typography.Title>
                     <Typography.Text type="secondary" className="section-subtitle">
@@ -1032,7 +1032,7 @@ export function ConfigSection({ onError }: Props) {
               <LinkOutlined />
             </TitleIcon>
             <div>
-            <Typography.Title level={3} className="section-title">
+            <Typography.Title level={2} className="section-title">
               Linked files
             </Typography.Title>
             <Typography.Text type="secondary" className="section-subtitle">

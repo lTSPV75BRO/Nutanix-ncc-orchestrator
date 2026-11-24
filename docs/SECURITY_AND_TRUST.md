@@ -496,6 +496,49 @@ fails to deliver after retries (channel, cluster, error, payload) as a
 `0600` JSON file, so a transient outage does not silently lose an alert. Treat
 that directory as sensitive — payloads can contain check details.
 
+### systemd sandbox (Linux service)
+
+The units written by `v2-install-service` (supervisor, log maintenance) and by
+systemd schedules run as root in a sandbox that the API, UI and NCC runs inherit:
+
+- Processes: `NoNewPrivileges`, `RestrictSUIDSGID`, `LockPersonality`,
+  `RestrictRealtime`, `RestrictNamespaces`, `SystemCallArchitectures=native`,
+  sockets limited to Unix, IPv4, IPv6 and netlink, and capabilities such as
+  `CAP_SYS_MODULE`, `CAP_SYS_BOOT`, `CAP_SYS_TIME` and `CAP_NET_RAW` removed.
+- Kernel: `ProtectKernelTunables`, `ProtectKernelModules`, `ProtectKernelLogs`,
+  `ProtectControlGroups`, `ProtectClock`.
+
+The update watcher's restart helper gets the process part only. This limits
+damage; it does not contain a compromised service, which can still write files
+as root and manage units. Existing installs keep their unit until you re-run
+`sudo ncc-orchestrator v2-install-service` and
+`systemctl restart ncc-orchestrator`; re-save a systemd schedule to update its unit.
+
+If a setting breaks something on your host, override it with a drop-in, which
+survives a reinstall. `226/NAMESPACE` in `systemctl status` means the host
+cannot create the mount namespace the kernel settings need:
+
+```ini
+# sudo systemctl edit ncc-orchestrator     (same for ncc-log-maintenance, ncc-sched-<task>)
+[Service]
+ProtectKernelTunables=no
+ProtectKernelModules=no
+ProtectKernelLogs=no
+ProtectControlGroups=no
+ProtectClock=no
+```
+
+To allow everything again, also set `NoNewPrivileges=no`, `RestrictSUIDSGID=no`,
+`LockPersonality=no`, `RestrictRealtime=no`, `RestrictNamespaces=no`, and
+`RestrictAddressFamilies=`, `SystemCallArchitectures=`, `CapabilityBoundingSet=~`
+(these three as shown), then `systemctl restart ncc-orchestrator`.
+
+`PrivateTmp`, `ProtectHome` and `ProtectSystem` are off because the install,
+output or backup folder may be under `/tmp`, `/root`, `/home` or `/usr`. If yours
+are not, add them in the same drop-in: `PrivateTmp=yes`, `ProtectHome=yes`,
+`ProtectSystem=yes` (not `full` or `strict`: schedules write to
+`/etc/systemd/system`). Check with `systemd-analyze security ncc-orchestrator`.
+
 ### api-server access control (RBAC + login)
 
 The api-server supports three authorization levels, ordered
@@ -743,6 +786,40 @@ kubectl -n ncc-orchestrator-v2 get secret ncc-v2-users \
 kubectl -n ncc-orchestrator-v2 logs deploy/ncc-v2-api | grep -A4 "FIRST-RUN ADMIN"
 ```
 
+#### Windows file permissions
+
+File modes such as `0600` do nothing on Windows, and folders under
+`C:\ProgramData` let every local user read files and add new ones. `v2-start`
+and `v2-supervise` therefore set NTFS permissions before the stack runs:
+
+| Path | Ordinary users |
+| ---- | -------------- |
+| `.ncc-*` state files (API token, user database, initial admin password, start settings), `config*.yaml` and its copies, `*.env`, `secrets*`, the files named by `--config-path`, `--token-file`, `--users-db`, `secrets-file`, `--api-session-secret-file`, `NCC_MASTER_KEY_FILE` and `NCC_BACKUP_KEY_FILE` | no access |
+| `backups\`, `tls\`, `configs\`, `config\`, `auth\`, `secrets\`, `logs\` | no access, new files included |
+| `bin\`, `frontend-dist\`, `run\` and product binaries in the install folder | read and run only |
+
+- Full control goes to SYSTEM, Administrators and the account that runs the
+  stack. Access you gave to a specific user, service account or group stays;
+  only broad groups (Everyone, Authenticated Users, Users, Guests, INTERACTIVE,
+  NETWORK, Domain Users and the like) and CREATOR OWNER entries are removed. To
+  run the stack later under another account that is not an administrator, grant
+  that account access first.
+- Nothing is changed when no broad group has access. Rewritten files keep their
+  permissions. A failure, or a volume without permissions (FAT32, exFAT), is one
+  warning and never stops the start.
+- The install folder itself, `outputfiles\`, the NCC log folder and TLS keys
+  outside the install folder are not changed. A start and the `secrets-perms`
+  doctor check warn when the folder or such a key is open. To close the folder:
+
+```powershell
+icacls "C:\NCC" /inheritance:d
+icacls "C:\NCC" /remove:g *S-1-1-0 *S-1-5-11 *S-1-5-32-545
+```
+
+Check with `ncc-orchestrator doctor --only-checks secrets-perms`; add `--fix` to
+repair. Someone who could write to the folder before the first start may have
+left files of their own, so install into a new folder.
+
 #### Restored program files (SEC-07)
 
 Pre-update rollback points also hold the program files (`bin/ncc-*` and
@@ -756,13 +833,38 @@ the stack or supervisor starts, after a supervised upgrade, and on every
 sets, is written `0600`, is never included in a backup and is never taken
 from one.
 
-On restore the stack is put back only when **every** file matches the ledger
-or the file installed now. Otherwise no program file is restored (so the UI
-and the servers never mix versions): the data is restored, the installed
-version keeps running, and the output says so (`stack restored: no (program
-files not trusted)`; the UI adds a note). Trusting files the host already ran
-adds no code it was not running. An operator with a shell on the server can
+On restore the stack is put back only when the program files on disk
+afterwards would be exactly **one recorded set**, or exactly the files
+installed now. A backup that mixes files of versions that each ran here (an
+old API server with a newer UI) is refused, and so is part of a version unless
+the installed binaries complete that same set. A restore replaces
+`frontend-dist/` as a whole, so no installed asset stays; installed binaries
+the backup does not hold do stay, so they count. Other spellings of a program
+file's path (case, trailing dot, 8.3 name) count as program files. Otherwise
+no program file is restored: the data is restored, the installed version keeps
+running, and the output says so (`stack restored: no (program files not
+trusted)`, then `reason: unknown version`, `mixed versions` or `incomplete
+version`; the UI adds a note). `--verify-only` applies the same rule and
+reports it as **Program files**. Trusting sets the host already ran adds no
+code it was not running. An operator with a shell on the server can
 override with `v2-restore --trust-stack`; the API never passes that flag.
+
+#### Files a restore never takes (SEC-19)
+
+A backup holds data and, for rollback points, the program files above. These
+are never taken from an archive, whatever it holds (they are skipped with a
+reason, and `--verify-only` lists them as **Protected files**): anything under
+`run/`, `tls/` or `backups/`, anything else in `bin/`, scripts, executables and
+libraries, and certificates and private keys (except `.ncc-api-*`). Links and special files are
+refused, and a file cannot replace a folder. Restored data is never executable.
+`--trust-stack` does not change this.
+
+Before putting back a failed in-app update, the supervisor checks that its
+saved copy (`run/upgrade-rollback/`) is what it saved, or exactly one recorded
+set; otherwise the update ends as failed and the installed files stay. A restore
+over an existing install keeps this server's listener, origin, backend and HTTPS
+settings, even empty ones. Scheduler log paths and `log-file` may not name a
+script or program, and scheduler log paths may not hold control characters.
 
 #### Backup archive encryption
 

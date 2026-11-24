@@ -167,6 +167,19 @@ write_files:
       [Service]
       Type=oneshot
       ExecStart=/bin/sh -c '${bin} doctor --install-dir ${NCC_INSTALL_DIR} --fix --only-checks log-sizes --json >> ${NCC_INSTALL_DIR}/logs/doctor.log 2>&1 || true'
+      NoNewPrivileges=yes
+      RestrictSUIDSGID=yes
+      LockPersonality=yes
+      RestrictRealtime=yes
+      RestrictNamespaces=yes
+      RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+      SystemCallArchitectures=native
+      CapabilityBoundingSet=~CAP_SYS_MODULE CAP_SYS_BOOT CAP_SYS_TIME CAP_SYS_RAWIO CAP_SYS_PACCT CAP_SYS_TTY_CONFIG CAP_SYSLOG CAP_WAKE_ALARM CAP_BLOCK_SUSPEND CAP_MAC_ADMIN CAP_NET_ADMIN CAP_NET_RAW
+      ProtectKernelTunables=yes
+      ProtectKernelModules=yes
+      ProtectKernelLogs=yes
+      ProtectControlGroups=yes
+      ProtectClock=yes
       EOF
       cat > /etc/systemd/system/ncc-log-maintenance.timer <<EOF
       [Unit]

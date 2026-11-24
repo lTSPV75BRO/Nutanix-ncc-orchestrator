@@ -30,15 +30,16 @@ func logMaintenanceTimerPath() string {
 func systemdLogMaintenanceServiceUnit(o installServiceOptions) string {
 	script := fmt.Sprintf("%s doctor --install-dir %s --fix --only-checks log-sizes --json >> %s 2>&1 || true",
 		systemdQuote(o.OrchestratorBin), systemdQuote(o.InstallDir), systemdQuote(path.Join(filepath.ToSlash(o.InstallDir), "logs", "doctor.log")))
-	return strings.Join([]string{
+	lines := []string{
 		"[Unit]",
 		"Description=NCC log size check and rotation",
 		"",
 		"[Service]",
 		"Type=oneshot",
 		"ExecStart=/bin/sh -c " + systemdQuote(script),
-		"",
-	}, "\n")
+	}
+	lines = append(lines, systemdHardening()...)
+	return strings.Join(append(lines, ""), "\n")
 }
 
 func systemdLogMaintenanceTimerUnit() string {

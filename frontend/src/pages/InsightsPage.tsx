@@ -23,7 +23,7 @@ import { LifecycleInsightsCard } from "../features/report/LifecycleInsightsCard"
 import { SloPanel } from "../features/report/SloPanel";
 import { clusterPath, sectionHref } from "../navigation";
 import { notifyError } from "../notify";
-import { EmptyState, KeyValueList, ListToolbar, matchesSearch, Panel, StatTile, StatusBadge, toneFor, VirtualList, type Tone } from "../ui";
+import { ChartViewToggle, EmptyState, KeyValueList, ListToolbar, matchesSearch, Panel, StatTile, StatusBadge, toneFor, VirtualList, type ChartView, type Tone } from "../ui";
 import { formatDateTime, relativeTime } from "../utils/datetime";
 import { clusterDataAges, formatDuration, freshness, lookupDataAge, type ClusterDataAge } from "../utils/freshness";
 import { useFreshness } from "../hooks/useClusterDirectory";
@@ -222,6 +222,7 @@ export function InsightsPage() {
   const trends = useQuery({ queryKey: ["report-trends"], queryFn: () => api.reportTrends(24), enabled: features.isFetched && !insightsOff });
   const nccMarks = useQuery({ queryKey: ["ncc-dispositions"], queryFn: api.nccDispositions, staleTime: 15_000, enabled: features.isFetched && !insightsOff });
   const [drillCheck, setDrillCheck] = useState<DrillRow | null>(null);
+  const [trendView, setTrendView] = useState<ChartView>("chart");
   const [searchParams, setSearchParams] = useSearchParams();
   const requested = searchParams.get("tab") as TabKey | null;
   const tab: TabKey = requested && TABS.includes(requested) ? requested : "summary";
@@ -829,6 +830,7 @@ export function InsightsPage() {
     <div className="insights-tab">
       <Panel
         title="Failures over recent runs" icon={<LineChartOutlined />}
+        extra={recentTrends.length ? <ChartViewToggle value={trendView} onChange={setTrendView} what="Failures over recent runs" /> : undefined}
         description={
           recentTrends.length
             ? `Failing and error checks in the last ${recentTrends.length} runs.${
@@ -839,8 +841,28 @@ export function InsightsPage() {
       >
         {recentTrends.length === 0 ? (
           <EmptyState title="Not enough runs for a trend" description="A trend appears after a few runs have finished." />
+        ) : trendView === "table" ? (
+          <Table
+            size="small"
+            pagination={false}
+            rowKey="key"
+            aria-label="Failures over recent runs"
+            columns={[
+              { title: "Run", dataIndex: "when", key: "when" },
+              { title: "FAIL", dataIndex: "fail", key: "fail", align: "right" as const },
+              { title: "ERR", dataIndex: "err", key: "err", align: "right" as const },
+              { title: "FAIL + ERR", dataIndex: "total", key: "total", align: "right" as const },
+            ]}
+            dataSource={recentTrends.map((p, idx) => ({
+              key: `${String(p.timestamp || "")}-${idx}`,
+              when: formatDateTime(String(p.timestamp || "")),
+              fail: toNumber(p.fail_total),
+              err: toNumber(p.err_total),
+              total: toNumber(p.fail_total) + toNumber(p.err_total),
+            }))}
+          />
         ) : (
-          <div className="insights-trend" role="img" aria-label={`Failures across ${recentTrends.length} runs`}>
+          <div className="insights-trend" role="img" aria-label={`Failures across ${recentTrends.length} runs, oldest first: ${recentTrends.map((p) => toNumber(p.fail_total) + toNumber(p.err_total)).join(", ")}. Switch to Table for the details.`}>
             {recentTrends.map((p, idx) => {
               const value = toNumber(p.fail_total) + toNumber(p.err_total);
               const ts = String(p.timestamp || "");

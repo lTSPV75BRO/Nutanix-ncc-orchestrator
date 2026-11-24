@@ -14,7 +14,8 @@ days, M under a week, L longer.
 
 | Item | Scope | Size |
 | --- | --- | --- |
-| Publish from CI only (REL-05) | Find why "Publish GitHub Release" was refused, publish 2.4.0 from the workflow, verify one attestation, and add that check as the workflow's last step. | S |
+| First release from the new workflow (REL-05) | Create the `release` environment, signing secrets and `NCC_RELEASE_PUBKEY`, tag 2.4.0, and check that the workflow's own verification passes. | S |
+| Upgrade helper | A dormant helper, updated first, that upgrades the whole stack including the supervisor, service definitions and schedules, and rolls back, on every platform. [Design and phases](UPGRADE_HELPER_PLAN.md); proposed. | L |
 | Server-side report pagination | Build only the requested `checks_snapshot` or `agg_rows` page instead of loading and filtering the whole report before slicing. | M |
 | Kubernetes HA integration test | Two API replicas, shared storage, CronJob execution, schedule updates and pod rescheduling on separate nodes; add a 7,000-cluster data set with memory figures. | L |
 
@@ -22,18 +23,16 @@ days, M under a week, L longer.
 
 | Item | Scope | Size |
 | --- | --- | --- |
-| systemd hardening (LIN-01) | The unit written by `v2-install-service` runs as root with no sandboxing. Add a dedicated user and `NoNewPrivileges`, `ProtectSystem`, `PrivateTmp`, `ProtectKernel*`, `RestrictSUIDSGID` and `LockPersonality`; check `chcon`, `systemctl restart`, restore and in-app update still work. | M |
-| Windows file ACLs in the product (WIN-02) | Apply a restrictive ACL from `v2-start` to the token file, user database, backups and config, so manual installs are covered as well as the installer. | M |
+| Unprivileged Linux service (LIN-02) | Run the API and UI as a dedicated user, with a small root helper for units and `systemctl`; then turn on `ProtectSystem`. Phase U5 of the [upgrade helper](UPGRADE_HELPER_PLAN.md). | L |
 | Secret rotation workflow | Document and optionally guide rotation of API tokens, JWT secrets, backup keys and Prism credentials across replicas. | M |
 | Outbound URL policy | An administrator-visible allowlist for Prism Central, LDAP, OIDC, SMTP, webhook and update-server destinations. | M |
 | Signed image and SBOM verification | Publish Cosign signatures and SBOMs and optionally verify image provenance during deployment. | M |
-| Signed trust for restored program files | Restore accepts program files only when this host ran them before. Publish per-file SHA-256 in the signed release checksums so a backup from another server can be verified without `--trust-stack`; prefer whole recorded sets over per-file trust (SEC-07b). | M |
+| Signed trust for restored program files | Restore accepts program files only when this host ran them before. Publish per-file SHA-256 in the signed release checksums so a backup from another server can be verified without `--trust-stack`. | M |
 
 ## P1: operator experience
 
 | Item | Scope | Size |
 | --- | --- | --- |
-| Browser accessibility in CI (A11Y-02) | Run axe-core, including contrast, against the demo build for every route and theme with populated data, plus keyboard-only and 400% zoom checks. Today only jsdom tests run in CI, which cannot see contrast. Add a table view for the trend and SLO charts. | M |
 | Notification delivery history | Settings shows each channel's last attempt, success, error and dead-letter count. Add a browsable history of past deliveries and replay of dead-lettered messages from the UI. | S-M |
 | Overdue schedules in the digest | Data age is shown across the UI and in notifications; add an overdue-schedule line to the runner digest email. | S |
 
@@ -43,9 +42,9 @@ days, M under a week, L longer.
 | --- | --- | --- |
 | DAST in CI | An OWASP ZAP baseline scan against a docker-compose stack on `main`, and an authenticated role-matrix replay. | M |
 | Kubernetes API contract tests | Fake Kubernetes API errors, missing RBAC, suspended schedules, invalid cron and concurrent updates. | M |
-| Report package extraction | Move the remaining renderers from `goNCC.go` into focused `internal/report` packages with benchmarks. | L |
-| Split the largest files | `goNCC.go` (18.9k lines), the API `main.go` (6.3k) and `AccessSection.tsx` (3.4k). Extract by area when touching it. | L |
+| Report package extraction | Move the remaining renderers from the `report_*.go` files into focused `internal/report` packages with benchmarks. | L |
 | Path handling review (gosec G703) | CI excludes G703 because of 80+ path-taint hits on server-config paths. Review by area, move request-derived paths to `os.Root`, mark the rest with a reason, then drop the exclusion. | M |
+| Two very large functions | Break up `newRootCmd` (2.6k lines) and `writeAggregatedHTMLSingle` (2k), left whole by the file split. | M |
 | Support bundle: Kubernetes state | Add Kubernetes events, CronJob and PVC state, and component versions per pod to the bundle. | S-M |
 | Runner image from a checkout | `Dockerfile.runner` expects a prebuilt `dist/` binary and cannot be built from a plain clone; add a documented target or a multi-stage variant. | S |
 

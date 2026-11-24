@@ -1,16 +1,34 @@
 name: Release
 
-# Tag-driven release pipeline. Pushing a `v*` tag (e.g. v2.2.0) builds
+# Tag-driven release pipeline. Pushing a `v*` tag (e.g. v2.4.0) builds
 # every binary + every stack archive via scripts/binaryGO.txt, generates SBOMs
 # and a release-attestation.json, signs checksums.txt with an Ed25519 release
-# key, signs Linux artifacts with GPG, attests the artifacts with GitHub
+# key, signs Linux artifacts with GPG, attests every published file with GitHub
 # Actions SLSA provenance, and publishes the result as a GitHub Release.
+#
+# Three jobs, so that each holds only the privileges it needs:
+#
+#   preflight  contents:read   refuses a tag whose release is already public
+#   build      contents:read   signing secrets + OIDC; builds, signs, attests,
+#                              hands the files to `publish` as one artifact
+#   publish    contents:write  no secrets, no build; creates a DRAFT release,
+#                              uploads, verifies the uploaded files, then
+#                              publishes. A failed run never leaves a visible
+#                              half release (a published one is turned back
+#                              into a draft).
+#
+# Why the release is created with `gh release create --verify-tag` and never
+# updated with a target commit: the release v2.3.0 failed with "Resource not
+# accessible by integration" because the update sent the release's old
+# target_commitish, and the commits between that and the tag changed
+# .github/workflows/*, which GITHUB_TOKEN may not do. Here the release always
+# points at the existing tag and no request carries a target commit.
 #
 # What this gives release consumers:
 #
-#   1. SHA-256 manifest (checksums.txt) signed by the same provenance
-#      attestation, so a single `gh attestation verify` covers every
-#      artifact in the release.
+#   1. SHA-256 manifest (checksums.txt), signed (checksums.txt.sig), and
+#      attested like every other file, so `gh attestation verify` covers every
+#      published file (scripts/verify-published-release.sh runs it for all).
 #
 #   2. CycloneDX 1.5 SBOMs (bom-*.cdx.json) for each binary; pluggable
 #      into Trivy / Grype / Dependency-Track for CVE alerts.
@@ -23,6 +41,12 @@ name: Release
 # is involved at any point in the pipeline; that's a deliberate
 # constraint so the SLSA attestation chain remains auditable end-to-end
 # from a public, reproducible build environment.
+#
+# workflow_dispatch builds and attests but never creates a release.
+#
+# Release candidates: a tag with a suffix (v2.4.0-rc.1) is published as a
+# pre-release and is never marked "Latest", so stable installs are not offered
+# it. The tag must equal "v" plus the VERSION file (scripts/release-tag-check.sh).
 
 on:
   push:
@@ -36,16 +60,59 @@ on:
         default: ""
 
 permissions:
-  contents: write          # create/update GitHub Release
-  id-token: write          # OIDC token for actions/attest-build-provenance
-  attestations: write      # write the attestation back to the repo
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  preflight:
+    name: Refuse an already-published tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout (scripts only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
+      - name: Check that the tag matches the VERSION file
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: bash scripts/release-tag-check.sh "$TAG"
+
+      - name: Check that the release for this tag is not public yet
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          state="$(bash scripts/release-state.sh "$TAG")"
+          case "$state" in
+            published)
+              echo "::error title=Release $TAG already exists::A published release for $TAG already exists. This workflow will not modify it (its files would not be attested). Delete the release in the GitHub UI, or release a new tag."
+              exit 1 ;;
+            draft) echo "::notice::A draft release for $TAG exists (leftover of a failed run); it will be replaced." ;;
+          esac
+
   build:
-    name: Build, SBOM, attest, release
+    name: Build, SBOM, sign, attest
+    needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: release
+    permissions:
+      contents: read          # checkout only; nothing here can write the release
+      id-token: write         # OIDC token for actions/attest-build-provenance
+      attestations: write     # write the attestation back to the repo
     steps:
       - name: Checkout (tag or input ref)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -67,8 +134,8 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "26.12.1" # >= 26.12.1: Oct 21 2026 Node security release; runner toolcache may lag
-          # No dependency cache here: this job holds contents:write and an OIDC
-          # token, so restoring a cache another run wrote is a poisoning path
+          # No dependency cache here: this job holds an OIDC token and signing
+          # keys, so restoring a cache another run wrote is a poisoning path
           # into signed release artifacts.
           package-manager-cache: false
 
@@ -89,8 +156,9 @@ jobs:
           NCC_LINUX_GPG_PASSPHRASE: ${{ secrets.NCC_LINUX_GPG_PASSPHRASE }}
         run: |
           set -euo pipefail
+          umask 077
           for name in NCC_RELEASE_SIGN_KEY_BASE64 NCC_RELEASE_PUBKEY NCC_LINUX_GPG_PRIVATE_KEY_BASE64 NCC_LINUX_GPG_KEY_ID NCC_LINUX_GPG_PASSPHRASE; do
-            [ -n "${!name}" ] || { echo "::error::$name is required for a release"; exit 1; }
+            [ -n "${!name}" ] || { echo "::error::$name is required for a release (environment 'release' secret/variable)"; exit 1; }
           done
           release_key="$RUNNER_TEMP/ncc-release-signing.key"
           printf '%s' "$NCC_RELEASE_SIGN_KEY_BASE64" | base64 --decode > "$release_key"
@@ -99,12 +167,17 @@ jobs:
           install -d -m 700 "$gpg_home"
           printf '%s' "$NCC_LINUX_GPG_PRIVATE_KEY_BASE64" | base64 --decode | gpg --batch --homedir "$gpg_home" --import
           gpg --batch --homedir "$gpg_home" --list-secret-keys "$NCC_LINUX_GPG_KEY_ID" >/dev/null
+          # The passphrase goes to a 0600 file (gpg --passphrase-file), never to
+          # GITHUB_ENV or a command line.
+          pass_file="$RUNNER_TEMP/ncc-release-gpg.pass"
+          printf '%s\n' "$NCC_LINUX_GPG_PASSPHRASE" > "$pass_file"
+          chmod 600 "$pass_file"
           {
             echo "NCC_RELEASE_SIGN_KEY=$release_key"
             echo "NCC_RELEASE_PUBKEY=$NCC_RELEASE_PUBKEY"
             echo "GNUPGHOME=$gpg_home"
             echo "NCC_LINUX_GPG_KEY_ID=$NCC_LINUX_GPG_KEY_ID"
-            echo "NCC_LINUX_GPG_PASSPHRASE=$NCC_LINUX_GPG_PASSPHRASE"
+            echo "NCC_LINUX_GPG_PASSPHRASE_FILE=$pass_file"
           } >> "$GITHUB_ENV"
 
       - name: Run scripts/binaryGO.txt (build + sign + SBOM + attestation)
@@ -124,13 +197,24 @@ jobs:
           test -s dist/checksums.txt.sig
           test -s dist/ncc-release-signing.gpg
           test -f dist/release-attestation.json
-          ls dist/ncc-v2-stack-* | wc -l | grep -q 6
-          ls dist/ncc-orchestrator-* dist/ncc-api-server-* dist/ncc-ui-server-* | wc -l | grep -q 18
-          ls dist/ncc-orchestrator-linux-*.asc | wc -l | grep -q 2
-          ls dist/ncc-v2-stack-linux-*.asc | wc -l | grep -q 2
+          # The detached signatures (*.asc) share the artifacts' names: count
+          # them apart, or a signed build never has the expected totals.
+          expect() { # expect COUNT DESCRIPTION FILE...
+            local want="$1" what="$2"; shift 2
+            [ "$#" -eq "$want" ] || { echo "::error::expected $want $what, found $#: $*"; exit 1; }
+          }
+          shopt -s nullglob extglob
+          expect 6 stacks dist/ncc-v2-stack-!(*.asc)
+          expect 18 binaries dist/ncc-@(orchestrator|api-server|ui-server)-!(*.asc)
+          expect 2 "orchestrator signatures" dist/ncc-orchestrator-linux-*.asc
+          expect 2 "stack signatures" dist/ncc-v2-stack-linux-*.asc
           gpg --batch --verify dist/ncc-orchestrator-linux-amd64.asc dist/ncc-orchestrator-linux-amd64
           gpg --batch --verify dist/ncc-v2-stack-linux-amd64.tar.gz.asc dist/ncc-v2-stack-linux-amd64.tar.gz
           echo "release inventory verified"
+
+      - name: Stage the files to publish
+        # release-assets/ is the one definition of what a release contains.
+        run: bash scripts/stage-release-assets.sh dist release-assets
 
       - name: Generate SLSA build-provenance attestation
         # actions/attest-build-provenance@v4 (a wrapper over actions/attest) generates an in-toto
@@ -144,51 +228,120 @@ jobs:
         # survives mirror sites and CDN caches.
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
-          subject-path: |
-            dist/ncc-orchestrator-*
-            dist/ncc-api-server-*
-            dist/ncc-ui-server-*
-            dist/ncc-v2-stack-*
-            dist/checksums.txt
-            dist/checksums.txt.sig
-            dist/ncc-release-signing.gpg
-            dist/release-attestation.json
-            dist/bom-*.cdx.json
-            dist/*.asc
+          # Every file that is published, and nothing else.
+          subject-path: release-assets/*
 
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        # Only fire on tag pushes, not on workflow_dispatch (manual
-        # rebuilds don't need a new Release; they regenerate
-        # attestations against the existing tag).
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Hand the files to the publish job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          # body-path is the dist-bundled release notes that
-          # binaryGO.txt copies in step 5. Falls back to the auto-
-          # generated release body if the file isn't present.
-          body_path: dist/RELEASE_NOTES_${{ github.ref_name }}.md
-          generate_release_notes: true
-          files: |
-            dist/ncc-orchestrator-*
-            dist/ncc-v2-stack-*
-            dist/example_config.yaml
-            dist/RELEASE_NOTES_*.md
-            dist/checksums.txt
-            dist/checksums.txt.sig
-            dist/ncc-release-signing.gpg
-            dist/release-attestation.json
-            dist/bom-*.cdx.json
-            dist/*.asc
-
-      - name: Verify the published signed update
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          set -euo pipefail
-          dist/ncc-orchestrator-linux-amd64 verify --online \
-            --release "$GITHUB_REF_NAME" --require-signature
+          name: release-assets
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Remove signing material
         if: always()
         run: |
-          rm -f "$RUNNER_TEMP/ncc-release-signing.key"
+          rm -f "$RUNNER_TEMP/ncc-release-signing.key" "$RUNNER_TEMP/ncc-release-gpg.pass"
           rm -rf "$RUNNER_TEMP/ncc-release-gpg"
+
+  publish:
+    name: Draft, verify, publish
+    needs: build
+    # Manual (workflow_dispatch) rebuilds do not create a release.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write         # create/upload/publish the GitHub Release
+      attestations: read      # gh attestation verify
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+      VERIFY_ATTEMPTS: "4"
+    steps:
+      - name: Checkout (scripts only)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
+      - name: Download the built files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+          path: release-assets
+
+      - name: Create the draft release and upload the files
+        run: |
+          set -euo pipefail
+          case "$(bash scripts/release-state.sh "$TAG")" in
+            published)
+              echo "::error::release $TAG is already published; refusing to modify it. Delete it or use a new tag."
+              exit 1 ;;
+            draft)
+              echo "replacing leftover draft release $TAG"
+              gh release delete "$TAG" --yes ;;
+          esac
+          notes=()
+          if [ -f "release-assets/RELEASE_NOTES_${TAG}.md" ]; then
+            notes=(--notes-file "release-assets/RELEASE_NOTES_${TAG}.md")
+          fi
+          kind="$(bash scripts/release-tag-check.sh "$TAG")"
+          flags=()
+          if [ "$kind" = prerelease=true ]; then
+            flags=(--prerelease --latest=false)
+          fi
+          # --verify-tag: the tag must already exist; no target commit is sent.
+          gh release create "$TAG" --draft --verify-tag --title "$TAG" --generate-notes "${notes[@]}" "${flags[@]}"
+          gh release upload "$TAG" release-assets/*
+
+      - name: Verify the uploaded draft (checksums, attestations, exact file set)
+        run: |
+          bash scripts/verify-published-release.sh --repo "$GH_REPO" \
+            --workflow .github/workflows/release.yml \
+            --expect-dir release-assets "$TAG"
+
+      - name: Publish the release
+        id: publish
+        run: |
+          set -euo pipefail
+          if [ "$(bash scripts/release-tag-check.sh "$TAG")" = prerelease=true ]; then
+            gh release edit "$TAG" --draft=false --prerelease --latest=false
+          else
+            gh release edit "$TAG" --draft=false
+          fi
+          echo "published=true" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the published signed update
+        run: |
+          set -euo pipefail
+          chmod +x release-assets/ncc-orchestrator-linux-amd64
+          release-assets/ncc-orchestrator-linux-amd64 verify --online \
+            --release "$TAG" --require-signature
+
+      - name: Verify the public release again
+        run: |
+          bash scripts/verify-published-release.sh --repo "$GH_REPO" \
+            --workflow .github/workflows/release.yml \
+            --expect-dir release-assets "$TAG"
+
+      - name: Withdraw the release if verification failed
+        if: failure() && steps.publish.outputs.published == 'true'
+        run: |
+          gh release edit "$TAG" --draft=true
+          echo "::error::release $TAG failed post-publish verification and was turned back into a draft"
+
+  images:
+    name: Container images
+    # A release published with GITHUB_TOKEN starts no other workflow, so the
+    # image build is called from here. It runs after the release is verified;
+    # a failed push does not withdraw it.
+    needs: publish
+    permissions:
+      contents: read
+    uses: ./.github/workflows/docker-publish.yml
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}

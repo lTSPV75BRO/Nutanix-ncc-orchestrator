@@ -81,10 +81,10 @@ func (s *apiServer) saveEnvironmentSchedules(list []environmentSchedule) error {
 		return err
 	}
 	tmp := s.environmentSchedulesPath() + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	if err := writeSecretFile(tmp, b); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.environmentSchedulesPath())
+	return renameSecretFile(tmp, s.environmentSchedulesPath())
 }
 
 func (s *apiServer) removeEnvironmentSchedules(env string) {

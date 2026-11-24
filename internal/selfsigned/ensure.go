@@ -3,6 +3,8 @@ package selfsigned
 import (
 	"os"
 	"path/filepath"
+
+	"goncc/internal/winacl"
 )
 
 const (
@@ -53,10 +55,10 @@ func Ensure(dir string, hosts []string) (certPath, keyPath string, err error) {
 		}
 		certPath = filepath.Join(dir, SelfCertFile)
 		keyPath = filepath.Join(dir, SelfKeyFile)
-		if wErr := os.WriteFile(certPath, certPEM, 0o600); wErr != nil {
+		if wErr := winacl.WriteFile(certPath, certPEM, 0o600); wErr != nil {
 			return wErr
 		}
-		if wErr := os.WriteFile(keyPath, keyPEM, 0o600); wErr != nil {
+		if wErr := winacl.WriteFile(keyPath, keyPEM, 0o600); wErr != nil {
 			return wErr
 		}
 		return nil

@@ -69,6 +69,8 @@ ncc-v2-stack-*.zip
 
 # Website build outputs (site/README.md)
 frontend/dist-demo/
+/frontend/test-results/
+/frontend/playwright-report/
 site/demo/
 _site/
 

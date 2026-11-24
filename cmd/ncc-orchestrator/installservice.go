@@ -61,7 +61,7 @@ func (o *installServiceOptions) resolve() error {
 }
 
 func systemdSupervisorUnit(o installServiceOptions) string {
-	return strings.Join([]string{
+	lines := []string{
 		"[Unit]",
 		"Description=NCC Orchestrator v2 stack supervisor (API + UI)",
 		"Documentation=https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator",
@@ -88,11 +88,15 @@ func systemdSupervisorUnit(o installServiceOptions) string {
 		"# The supervisor is what restarts everything else; under memory pressure",
 		"# the kernel should pick something else first.",
 		"OOMScoreAdjust=-500",
+	}
+	lines = append(lines, systemdHardening()...)
+	lines = append(lines,
 		"",
 		"[Install]",
 		"WantedBy=multi-user.target",
 		"",
-	}, "\n")
+	)
+	return strings.Join(lines, "\n")
 }
 
 func runV2InstallService(o installServiceOptions) error {
@@ -196,7 +200,9 @@ func systemdApplyUpdatePathUnit(o installServiceOptions) string {
 
 // systemdApplyUpdateOneshotUnit restarts the supervisor after a short delay so
 // all three binaries finish copying. The ExecStart if/then stays on one line
-// (`then chcon`, never `then;`) so /bin/sh -c accepts it.
+// (`then chcon`, never `then;`) so /bin/sh -c accepts it. It gets the process
+// hardening only: the API rewrites this unit when it starts, so it must also
+// work on existing installs whose host cannot create mount namespaces.
 func systemdApplyUpdateOneshotUnit(o installServiceOptions) string {
 	bins := applyUpdateWatcherBinaries(o)
 	quoted := make([]string, 0, len(bins))
@@ -204,7 +210,7 @@ func systemdApplyUpdateOneshotUnit(o installServiceOptions) string {
 		quoted = append(quoted, systemdQuote(bin))
 	}
 	script := "sleep 5; if command -v chcon >/dev/null 2>&1; then chcon -t bin_t " + strings.Join(quoted, " ") + " >/dev/null 2>&1 || true; fi; systemctl restart " + o.ServiceName + ".service"
-	return strings.Join([]string{
+	lines := []string{
 		"[Unit]",
 		"Description=Restart NCC stack after binaries change",
 		"Documentation=https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator",
@@ -212,8 +218,9 @@ func systemdApplyUpdateOneshotUnit(o installServiceOptions) string {
 		"[Service]",
 		"Type=oneshot",
 		"ExecStart=/bin/sh -c " + systemdQuote(script),
-		"",
-	}, "\n")
+	}
+	lines = append(lines, systemdProcessHardening()...)
+	return strings.Join(append(lines, ""), "\n")
 }
 
 func installApplyUpdateWatcher(o installServiceOptions) error {
@@ -413,20 +420,36 @@ func utf16LEWithBOM(s string) []byte {
 // registerWindowsSupervisorTask writes the task XML to a temp file and
 // (re)registers it, replacing an existing definition.
 func registerWindowsSupervisorTask(o installServiceOptions) error {
+	if x, ok := queryWindowsTaskXML(o.ServiceName); ok && windowsScanTask(x) {
+		// A schedule saved by an earlier release under the same name.
+		moved := windowsScheduleTaskName(o.ServiceName)
+		if moved == o.ServiceName {
+			return fmt.Errorf("scheduled task %q already runs a scan schedule; remove it or use another --service-name", o.ServiceName)
+		}
+		if err := registerWindowsTaskXML(moved, x); err != nil {
+			return fmt.Errorf("keep the existing scan schedule as %q: %w", moved, err)
+		}
+		fmt.Printf("Moved the existing scan schedule %q to %q\n", o.ServiceName, moved)
+	}
+	return registerWindowsTaskXML(o.ServiceName, windowsSupervisorTaskXML(o))
+}
+
+// registerWindowsTaskXML (re)registers a task from its definition.
+func registerWindowsTaskXML(taskName, taskXML string) error {
 	f, err := os.CreateTemp("", "ncc-supervisor-task-*.xml")
 	if err != nil {
 		return err
 	}
 	name := f.Name()
 	defer os.Remove(name)
-	if _, err := f.Write(utf16LEWithBOM(windowsSupervisorTaskXML(o))); err != nil {
+	if _, err := f.Write(utf16LEWithBOM(taskXML)); err != nil {
 		_ = f.Close()
 		return err
 	}
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if out, err := exec.Command("schtasks", "/Create", "/TN", o.ServiceName, "/XML", name, "/F").CombinedOutput(); err != nil {
+	if out, err := exec.Command("schtasks", "/Create", "/TN", taskName, "/XML", name, "/F").CombinedOutput(); err != nil {
 		return fmt.Errorf("create scheduled task: %v (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil

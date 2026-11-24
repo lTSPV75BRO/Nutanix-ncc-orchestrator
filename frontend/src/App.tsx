@@ -495,10 +495,16 @@ function HeaderUserMenu({
           if (key.startsWith("theme:")) onTheme(key.slice("theme:".length) as AppThemeSelection);
           else if (key === "logout") onLogout();
           else if (key === "logout-all") onLogoutEverywhere();
-          else if (key === "change-password") onChangePassword();
-          else if (key === "tokens") onManageTokens();
-          else if (key === "about") onAbout();
-          else if (key === "setup") openSetupChecklist();
+          else {
+            // The menu item that was clicked is about to disappear. Put focus
+            // back on the menu button first, so the dialog (or drawer) opened
+            // below remembers it and gives focus back there when it closes.
+            document.querySelector<HTMLElement>(".header-user-btn")?.focus();
+            if (key === "change-password") onChangePassword();
+            else if (key === "tokens") onManageTokens();
+            else if (key === "about") onAbout();
+            else if (key === "setup") openSetupChecklist();
+          }
         },
       }}
     >

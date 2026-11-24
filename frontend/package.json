@@ -11,6 +11,8 @@
     "build": "tsc -b && vite build",
     "build:demo": "vite build --config vite.demo.config.ts",
     "preview": "vite preview",
+    "test:a11y": "npm run build:demo && playwright test",
+    "typecheck:e2e": "tsc -p tsconfig.e2e.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "coverage": "vitest run --coverage --passWithNoTests"
   },
@@ -27,6 +29,7 @@
     "yaml": "^2.9.1"
   },
   "devDependencies": {
+    "@playwright/test": "1.65.0",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^26.6.6",

@@ -452,7 +452,7 @@ func (s *apiServer) saveNotificationStatus(st notificationState) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o600)
+	return writeSecretFile(path, b)
 }
 
 func (s *apiServer) loadLegacyNotificationState() (notificationState, error) {
@@ -544,7 +544,7 @@ func (s *apiServer) saveNotificationsToConfig(st notificationState) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(cfgPath, out, 0o600)
+	return writeSecretFile(cfgPath, out)
 }
 
 // loadConfigDocument reads config.yaml as written (nested keys stay nested).

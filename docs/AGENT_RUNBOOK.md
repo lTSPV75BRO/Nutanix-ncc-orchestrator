@@ -251,9 +251,10 @@ marked **ask**.
 | 15 | Old versions blocked: System, Updates & backups, Blocked versions shows the shipped list, "refuse unversioned" on | Leave it on |
 | 16 | Running 2.4.0 or later: `update --check` | Upgrade ([Maintain](#maintain-backup-update-roll-back)) |
 | 17 | Kubernetes: NetworkPolicies applied, `readOnlyRootFilesystem` where possible, resource requests set | `k8s/` already ships the policies; see HARD-01 in [`audit/findings.md`](audit/findings.md) |
+| 18 | Linux service sandboxed: `systemctl show -p NoNewPrivileges ncc-orchestrator` says `yes` | Re-run `v2-install-service`, then `systemctl restart ncc-orchestrator` (**ask**); see [`SECURITY_AND_TRUST.md`](SECURITY_AND_TRUST.md#systemd-sandbox-linux-service) |
 
-Known open hardening work (the service runs as root on Linux with no sandboxing, and no
-Windows ACLs on state files outside the installer) is listed in
+Known open hardening work (the service runs as root on Linux, in a systemd sandbox that
+limits but does not contain it, and an open install folder on Windows is only reported) is listed in
 [`audit/findings.md`](audit/findings.md); say so rather than claiming it is solved.
 
 ## Troubleshoot

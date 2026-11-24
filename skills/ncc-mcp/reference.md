@@ -67,6 +67,7 @@ send it after the user asked for that exact change this turn.
 | `NCC_MCP_API_URL` | no | Default `http://127.0.0.1:8081`. `http://` only on loopback |
 | `NCC_MCP_PROFILE` | no | `readonly`, `operator` (default) or `admin`: which tools are registered |
 | `NCC_MCP_ALLOW_MUTATIONS` | no | Must be `true` for APPLY tools |
+| `NCC_MCP_CONFIRM` | no | `auto` (default: the host asks the person when it supports elicitation), `require` or `off` |
 
 ## Audit
 
