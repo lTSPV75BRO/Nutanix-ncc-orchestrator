@@ -22,8 +22,8 @@ problems with the output of `ncc-orchestrator upgrade --status` and a support bu
 (`ncc-orchestrator doctor`).
 
 Not tested yet: an upgrade on a real Windows Server, Rocky or macOS host (CI rehearses
-it on hosted Windows, macOS and Ubuntu machines; 2.3.0 was updated to rc.1 from GitHub in
-a systemd container), and an upgrade from the dashboard.
+it on hosted Windows, macOS and Ubuntu machines; in a systemd container 2.3.0 was
+updated to rc.1 and rc.1 to rc.2 and back, from GitHub), and an upgrade from the dashboard.
 
 ## Upgrades that cover everything
 

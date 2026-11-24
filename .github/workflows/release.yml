@@ -305,8 +305,16 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x release-assets/ncc-orchestrator-linux-amd64
-          release-assets/ncc-orchestrator-linux-amd64 verify --online \
-            --release "$TAG" --require-signature | tee verify.log
+          # GitHub's public list shows a new release after a delay (it is cached
+          # for a minute), so only "not found" is tried again.
+          for _ in {1..12}; do
+            status=0
+            release-assets/ncc-orchestrator-linux-amd64 verify --online --release "$TAG" --require-signature > verify.log 2>&1 || status=$?
+            cat verify.log
+            grep -q '^verify_result: *NOT FOUND' verify.log || break
+            sleep 15
+          done
+          [ "$status" -eq 0 ]
           grep -q '^signature_result: *VALID' verify.log
           grep -q '^verify_result: *MATCH' verify.log
 
