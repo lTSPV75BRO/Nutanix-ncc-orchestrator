@@ -81,11 +81,12 @@ function SessionExpiryNotice({
         onClose={() => setDismissedFor(expiresAt)}
         action={
           failed ? (
-            <Button size="small" type="primary" onClick={onLogout}>
+            // Own key: a reused button still ignores clicks while its loading state ends.
+            <Button key="again" size="small" type="primary" onClick={onLogout}>
               Sign in again
             </Button>
           ) : (
-            <Button size="small" type="primary" loading={busy} onClick={() => void stay()}>
+            <Button key="stay" size="small" type="primary" loading={busy} onClick={() => void stay()}>
               Stay signed in
             </Button>
           )
