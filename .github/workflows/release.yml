@@ -189,6 +189,12 @@ jobs:
           expect 18 binaries dist/ncc-@(orchestrator|api-server|ui-server)-!(*.asc)
           expect 2 "orchestrator signatures" dist/ncc-orchestrator-linux-*.asc
           expect 2 "stack signatures" dist/ncc-v2-stack-linux-*.asc
+          # A file that the build leaves in the tree marks the programs as modified,
+          # and `verify --online` cannot check those (REL-11).
+          for f in dist/ncc-@(orchestrator|api-server|ui-server)-!(*.asc); do
+            go version -m "$f" | grep -q 'vcs.modified=false' \
+              || { echo "::error::$f was built from a modified tree"; git status --porcelain; exit 1; }
+          done
           gpg --batch --verify dist/ncc-orchestrator-linux-amd64.asc dist/ncc-orchestrator-linux-amd64
           gpg --batch --verify dist/ncc-v2-stack-linux-amd64.tar.gz.asc dist/ncc-v2-stack-linux-amd64.tar.gz
           echo "release inventory verified"
@@ -300,7 +306,9 @@ jobs:
           set -euo pipefail
           chmod +x release-assets/ncc-orchestrator-linux-amd64
           release-assets/ncc-orchestrator-linux-amd64 verify --online \
-            --release "$TAG" --require-signature
+            --release "$TAG" --require-signature | tee verify.log
+          grep -q '^signature_result: *VALID' verify.log
+          grep -q '^verify_result: *MATCH' verify.log
 
       - name: Verify the public release again
         run: |

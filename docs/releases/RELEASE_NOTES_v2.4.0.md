@@ -1,6 +1,9 @@
 # NCC Orchestrator — v2.4.0
 
-**Status:** release candidate. These notes also describe `2.4.0-rc.1`.
+**Status:** release candidate 2 (`2.4.0-rc.2`).
+
+Since `2.4.0-rc.1`: `verify --online` works. In rc.1 it prints "SKIPPED", although the
+release is signed correctly; use rc.2.
 
 ## Trying a release candidate
 
@@ -8,18 +11,19 @@ A candidate is a GitHub pre-release. It is never marked Latest, and stable insta
 not offered it. On a test host that runs 2.3.0 or later:
 
 ```bash
-ncc-orchestrator update --target-version 2.4.0-rc.1
+ncc-orchestrator update --target-version 2.4.0-rc.2
 ncc-orchestrator v2-restart
 ```
 
-From a candidate, updates offer newer candidates and then 2.4.0. Images have the tag
-`2.4.0-rc.1`. The VM templates install the version in `NCC_VERSION`. Please report
+From rc.1 use **Updates & backups** or `ncc-orchestrator upgrade`. From a candidate,
+updates offer newer candidates and then 2.4.0. Images have the tag `2.4.0-rc.2`. The VM
+templates install the version in `NCC_VERSION`. Please report
 problems with the output of `ncc-orchestrator upgrade --status` and a support bundle
 (`ncc-orchestrator doctor`).
 
 Not tested yet: an upgrade on a real Windows Server, Rocky or macOS host (CI rehearses
-it on hosted Windows, macOS and Ubuntu machines and in systemd containers), and a
-download of this release by an install in the field.
+it on hosted Windows, macOS and Ubuntu machines; 2.3.0 was updated to rc.1 from GitHub in
+a systemd container), and an upgrade from the dashboard.
 
 ## Upgrades that cover everything
 

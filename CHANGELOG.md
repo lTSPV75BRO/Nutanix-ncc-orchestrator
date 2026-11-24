@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [2.4.0] - Unreleased
 
-Release candidate `2.4.0-rc.1`: 2026-11-24.
+Release candidates: `2.4.0-rc.1` and `2.4.0-rc.2` (fixes `verify --online`), 2026-11-24.
 
 ### Security
 
@@ -188,6 +188,11 @@ Release candidate `2.4.0-rc.1`: 2026-11-24.
 - **Windows: `v2-stop` and `v2-restart` as Administrator stop the service.** They failed
   with "Access is denied", because Windows does not let an Administrator end a process of
   SYSTEM by default. Without Administrator rights the error now says so.
+- **`verify --online` checks release builds (REL-11).** The frontend build wrote files into
+  the source tree, so releases counted as modified builds and the check was skipped, also
+  with `--require-signature` and in the release workflow. The build leaves the tree as it
+  is, `--require-signature` fails when nothing was checked, a candidate is compared with
+  its own release, and the workflow refuses programs from a modified tree.
 - `v2-install-service` takes `--api-listen` and `--ui-listen`.
 - **systemd: the stack comes back after a restore, TLS change or unsupervised update
   from the UI (REL-07).** The restart was started inside the service and died with it,

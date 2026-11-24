@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -42,6 +43,13 @@ type verifyOptions struct {
 	RequireSignature bool   // fail unless the Ed25519 signature over checksums.txt verifies
 }
 
+// releaseVersion is the release a build belongs to: 2.0.2 for "2.0.2-<sha>" and
+// "2.0.2-dirty", 2.4.0-rc.1 for "2.4.0-rc.1-<sha>".
+func releaseVersion(v string) string {
+	v, _, _ = strings.Cut(v, "+")
+	return strings.TrimSuffix(stripGoBuildGitSuffix(v), "-dirty")
+}
+
 func runVerifyCommand(out io.Writer, opts verifyOptions) error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -72,13 +80,7 @@ func runVerifyCommand(out io.Writer, opts verifyOptions) error {
 	fmt.Fprintf(out, "project_url:       https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator\n")
 	fmt.Fprintf(out, "affiliation:       independent open-source project; not affiliated with or endorsed by Nutanix, Inc.\n")
 
-	// Strip git-rev / dirty suffixes (e.g. "2.0.2-<sha>" or "2.0.2-dirty")
-	// so the URL / release lookup points at the canonical release tag.
-	tagVersion := Version
-	if i := strings.IndexAny(tagVersion, "-+"); i >= 0 {
-		tagVersion = tagVersion[:i]
-	}
-	releaseTag := tagVersion
+	releaseTag := releaseVersion(Version)
 	if t := strings.TrimSpace(opts.ReleaseTag); t != "" {
 		releaseTag = strings.TrimPrefix(t, "v")
 	}
@@ -110,6 +112,9 @@ func runVerifyOnline(out io.Writer, exePath, localHash string, hashErr error, gi
 	}
 	if gitDirty {
 		fmt.Fprintf(out, "verify_result:     SKIPPED — locally-modified build (git_dirty=true) will not match a published release\n")
+		if requireSignature {
+			return errors.New("signature required but a locally-modified build cannot be verified")
+		}
 		return nil
 	}
 	repo := strings.TrimSpace(repoOverride)
@@ -137,8 +142,11 @@ func runVerifyOnline(out io.Writer, exePath, localHash string, hashErr error, gi
 		fmt.Fprintf(out, "verify_result:     NOT FOUND — no release tagged v%s in %s (dev build or unpublished version?)\n", releaseTag, repo)
 		return fmt.Errorf("release v%s not found in %s", releaseTag, repo)
 	}
-	_, assetName := pickAssetForCurrentPlatform(*rel)
-	if assetName == "" {
+	assetName := fmt.Sprintf("ncc-orchestrator-%s-%s", runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS == "windows" {
+		assetName += ".exe"
+	}
+	if !slices.ContainsFunc(rel.Assets, func(a githubAsset) bool { return a.Name == assetName }) {
 		fmt.Fprintf(out, "verify_result:     NOT FOUND — release v%s has no asset for %s/%s\n", releaseTag, runtime.GOOS, runtime.GOARCH)
 		return fmt.Errorf("no asset for %s/%s in release v%s", runtime.GOOS, runtime.GOARCH, releaseTag)
 	}
