@@ -8,12 +8,14 @@ $ReleaseBaseUrl = if ($env:NCC_RELEASE_BASE_URL) {
     "https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download"
 }
 $InstallDir = if ($env:NCC_INSTALL_DIR) { $env:NCC_INSTALL_DIR } else { "C:\ProgramData\NCC\v2" }
-$ConfigPath = if ($env:NCC_CONFIG) { $env:NCC_CONFIG } else { "$InstallDir\config.yaml" }
+# The service looks for its configuration here.
+$ConfigPath = "$InstallDir\config.yaml"
 $ApiPort = if ($env:NCC_API_PORT) { $env:NCC_API_PORT } else { "8081" }
 $UiPort = if ($env:NCC_UI_PORT) { $env:NCC_UI_PORT } else { "8080" }
 $Clusters = if ($env:NCC_CLUSTERS) { $env:NCC_CLUSTERS } else { "" }
 $Pcs = if ($env:NCC_PCS) { $env:NCC_PCS } else { "" }
 $Username = if ($env:NCC_USERNAME) { $env:NCC_USERNAME } else { "admin" }
+$Password = if ($env:NCC_PASSWORD) { $env:NCC_PASSWORD } else { "CHANGE_ME" }
 
 $arch = if ([Environment]::Is64BitOperatingSystem) { "amd64" } else { throw "64-bit Windows is required" }
 $archive = "ncc-v2-stack-windows-$arch.zip"
@@ -93,8 +95,6 @@ try {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     Expand-Archive -Path $archivePath -DestinationPath $InstallDir -Force
 
-    $configDir = Split-Path $ConfigPath -Parent
-    New-Item -ItemType Directory -Path $configDir -Force | Out-Null
     New-Item -ItemType Directory -Path "$InstallDir\outputfiles" -Force | Out-Null
     New-Item -ItemType Directory -Path "$InstallDir\logs" -Force | Out-Null
 
@@ -136,8 +136,14 @@ api:
 deployment:
   platform: host
   self-heal: true
-secrets-provider: env
+secrets-provider: file
+secrets-file: '$InstallDir\secrets.json'
 "@ | Set-Content -Path $ConfigPath -Encoding UTF8
+
+    # The SYSTEM task, schedules and runs from a shell all read the password from
+    # this file; an environment variable of this script would reach none of them.
+    # Without a byte order mark, which is not valid JSON.
+    [IO.File]::WriteAllText("$InstallDir\secrets.json", (@{ NCC_PASSWORD = $Password } | ConvertTo-Json))
 
     New-NetFirewallRule -DisplayName "NCC Orchestrator UI ($UiPort)" `
         -Direction Inbound -Action Allow -Protocol TCP -LocalPort $UiPort `
@@ -147,17 +153,14 @@ secrets-provider: env
         -Profile Domain,Private | Out-Null
 
     $bin = "$InstallDir\bin\ncc-orchestrator.exe"
-    $args = "v2-start --install-dir `"$InstallDir`" --config-path `"$ConfigPath`" " +
-        "--output-dir `"$InstallDir\outputfiles`" --log-dir `"$InstallDir\logs`" " +
-        "--orchestrator-bin `"$bin`" --api-listen :$ApiPort --ui-listen :$UiPort " +
-        "--detach --self-heal"
-    $action = New-ScheduledTaskAction -Execute $bin -Argument $args
-    $trigger = New-ScheduledTaskTrigger -AtStartup
-    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-    Register-ScheduledTask -TaskName "NCC Orchestrator v2" -Action $action `
-        -Trigger $trigger -Principal $principal -Force | Out-Null
-    Start-ScheduledTask -TaskName "NCC Orchestrator v2"
+    # Also installs the update helper and the task that starts the supervisor
+    # again when it has died.
+    $install = @("v2-install-service", "--install-dir", $InstallDir, "--orchestrator-bin", $bin,
+        "--api-listen", ":$ApiPort", "--ui-listen", ":$UiPort", "--now")
+    & $bin @install
+    if ($LASTEXITCODE -ne 0) { throw "v2-install-service failed ($LASTEXITCODE)" }
 
+    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
     $doctorArgs = "doctor --install-dir `"$InstallDir`" --fix --only-checks log-sizes --json"
     $doctorAction = New-ScheduledTaskAction -Execute $bin -Argument $doctorArgs
     $doctorTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5) `
@@ -167,7 +170,7 @@ secrets-provider: env
         -Trigger $doctorTrigger -Principal $principal -Force | Out-Null
 
     Write-Host "NCC v$NccVersion installed at $InstallDir."
-    Write-Host "Edit $ConfigPath and replace CHANGE_ME before running checks."
+    Write-Host "Set the Prism password in $InstallDir\secrets.json and the clusters in $ConfigPath before running checks."
 } finally {
     Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
 }

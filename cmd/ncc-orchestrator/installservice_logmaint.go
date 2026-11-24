@@ -11,11 +11,10 @@ import (
 
 // Log maintenance timer for hosts set up with v2-install-service.
 //
-// deploy/cloud-init/ncc-v2.yaml has always written a timer that runs
+// deploy/cloud-init/ncc-v2.yaml used to write a timer that runs
 // `doctor --fix --only-checks log-sizes` every 15 minutes, but a host installed
 // with `v2-install-service` had no such timer, so its logs were only rotated
-// when someone ran doctor by hand. The units use the same names as cloud-init
-// (ncc-log-maintenance.*), so running both just rewrites identical files.
+// when someone ran doctor by hand. Since 2.4.0 cloud-init leaves it to this.
 
 const logMaintenanceUnitName = "ncc-log-maintenance"
 

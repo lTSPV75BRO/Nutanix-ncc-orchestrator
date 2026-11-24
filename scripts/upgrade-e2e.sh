@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Rehearses real upgrades with the update helper on this host: upgrade, adoption
-# of an older install, rollback by hand, a release that does not start, and a
-# helper that is killed half way.
+# of an older install, rollback by hand, a supervisor that dies, a release that
+# does not start, and a helper that is killed half way.
 #
 #   scripts/upgrade-e2e.sh build OUT_DIR           # builds the test releases (needs go)
 #   scripts/upgrade-e2e.sh run OUT_DIR INSTALL_DIR # service manager of this OS; root/Administrator
@@ -120,6 +120,7 @@ diagnose() {
     step "diagnostics"
     cat "$dir/run/v2-upgrade-state.json" 2>/dev/null || true
     tail -n 60 "$dir/logs/upgrade-helper.log" 2>/dev/null || true
+    tail -n 40 "$dir/logs/v2-supervisor.log" 2>/dev/null || true
     tail -n 20 "$dir/logs/v2-api.log" 2>/dev/null | grep -v "password:" || true
     if [ "$os" = linux ] && [ "$manual" = 0 ]; then
       systemctl status 'ncc-orchestrator*' --no-pager -l 2>/dev/null | tail -n 80 || true
@@ -192,6 +193,38 @@ if [ "$os" = linux ] && [ "$manual" = 0 ]; then
 fi
 ok "v$A is back"
 
+if [ "$manual" = 0 ]; then
+  step "the supervisor dies"
+  sup() { tr -cd '0-9' < "$dir/run/v2-supervisor.pid" 2>/dev/null || true; }
+  old="$(sup)"
+  [ -n "$old" ] || fail "no supervisor"
+  if [ "$os" = windows ]; then taskkill //F //PID "$old"; else kill -9 "$old"; fi
+  for ((i = 0; i < 180; i++)); do
+    new="$(sup)"
+    [ -n "$new" ] && [ "$new" != "$old" ] && break
+    sleep 1
+  done
+  [ "$new" != "$old" ] || fail "the supervisor was not started again"
+  check_version "$A"
+  status="$("$orch" v2-status --install-dir "$dir" --json)"
+  echo "ok: started again after ${i}s (process $old, now $new)"
+  [[ "$status" != *port-in-use* ]] || fail "the servers of the dead supervisor hold the ports: $status"
+  if [ "$os" = windows ]; then
+    step "a stop by the administrator is respected"
+    schtasks //End //TN ncc-orchestrator
+    sleep 150
+    [ -z "$(version)" ] || fail "the stack was started again after schtasks /End"
+    schtasks //Run //TN ncc-orchestrator
+    check_version "$A"
+    "$orch" v2-stop --install-dir "$dir"
+    sleep 150
+    [ -z "$(version)" ] || fail "the stack was started again after v2-stop"
+    schtasks //Run //TN ncc-orchestrator
+    check_version "$A"
+    ok "stays stopped after schtasks /End and v2-stop"
+  fi
+fi
+
 step "a release that does not start (v$BAD)"
 if upgrade_to "$BAD"; then fail "the upgrade claims to have worked"; fi
 expect_job rolled_back
@@ -255,6 +288,11 @@ step "remove"
 cleanup
 if [ "$os" = linux ] && [ "$manual" = 0 ]; then
   for f in "$helper_unit.service" "$helper_unit.path"; do [ ! -e "$f" ] || fail "$f was left behind"; done
+fi
+if [ "$os" = windows ] && [ "$manual" = 0 ]; then
+  for t in ncc-orchestrator ncc-orchestrator-upgrade ncc-orchestrator-watchdog; do
+    if schtasks //Query //TN "$t" >/dev/null 2>&1; then fail "the task $t was left behind"; fi
+  done
 fi
 [ -z "$(version)" ] || fail "the API still answers"
 ok "removed"

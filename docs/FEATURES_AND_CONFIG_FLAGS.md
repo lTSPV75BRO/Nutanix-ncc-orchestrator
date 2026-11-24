@@ -334,10 +334,13 @@ Updates**.
 `LimitNOFILE=65536`, `OOMScoreAdjust=-500` and a sandbox
 ([systemd sandbox](SECURITY_AND_TRUST.md#systemd-sandbox-linux-service)); on Windows a Task Scheduler
 definition with no time limit (the default stopped the supervisor after 72
-hours), restart on failure every minute, and no battery stop; on macOS
+hours), no battery stop, and a second task, `ncc-orchestrator-watchdog`, that
+looks every minute and starts the supervisor again when it has died (not after
+`v2-stop`, `schtasks /End` or disabling its task); on macOS
 `ThrottleInterval` and a 65536 open-file limit. Existing installs get these
-from `service-config` (`doctor --fix`) or by re-running `v2-install-service`;
-the sandbox comes only from re-running it.
+with the upgrade (adoption), from `service-config` (`doctor --fix`) or by
+re-running `v2-install-service`; the sandbox does not come from `doctor`.
+`--api-listen` and `--ui-listen` set the addresses the service starts with.
 
 **Runtime tuning.** In a container with a memory limit, the API, UI and
 runner set the Go soft memory limit to 90% of it at start (unless

@@ -17,13 +17,12 @@ write_files:
       NCC_RELEASE_BASE_URL="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download"
       NCC_VERIFY_ATTESTATION="auto"
       NCC_INSTALL_DIR="/opt/ncc-v2"
-      NCC_CONFIG="/opt/ncc-v2/config.yaml"
       NCC_API_PORT="8081"
       NCC_UI_PORT="8080"
       NCC_CLUSTERS=""
       NCC_PCS=""
       NCC_USERNAME="admin"
-      NCC_PASSWORD="CHANGE_ME"
+      NCC_PASSWORD='CHANGE_ME'
 
   - path: /usr/local/sbin/install-ncc-v2
     permissions: "0750"
@@ -106,8 +105,15 @@ write_files:
       bin="$NCC_INSTALL_DIR/bin/ncc-orchestrator"
       chmod 0755 "$NCC_INSTALL_DIR"/bin/*
 
-      mkdir -p "$(dirname "$NCC_CONFIG")" "$NCC_INSTALL_DIR/outputfiles" "$NCC_INSTALL_DIR/logs"
-      cat > "$NCC_CONFIG" <<EOF
+      mkdir -p "$NCC_INSTALL_DIR/outputfiles" "$NCC_INSTALL_DIR/logs"
+      # The service looks for its configuration here.
+      config="$NCC_INSTALL_DIR/config.yaml"
+      # The service, schedules and runs from a shell all read the password from
+      # this file; an environment variable would reach only some of them.
+      secrets="$NCC_INSTALL_DIR/secrets.json"
+      password="$(printf '%s' "$NCC_PASSWORD" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+      (umask 077; printf '{"NCC_PASSWORD": "%s"}\n' "$password" > "$secrets")
+      cat > "$config" <<EOF
       schema-version: 1
       runner:
         targets:
@@ -136,9 +142,10 @@ write_files:
       deployment:
         platform: host
         self-heal: true
-      secrets-provider: env
+      secrets-provider: file
+      secrets-file: "${secrets}"
       EOF
-      chmod 0600 "$NCC_CONFIG"
+      chmod 0600 "$config"
 
       if command -v ufw >/dev/null 2>&1; then
         ufw allow "$NCC_UI_PORT/tcp"
@@ -149,54 +156,14 @@ write_files:
         firewall-cmd --reload
       fi
 
-      "$bin" v2-install-service \
-        --install-dir "$NCC_INSTALL_DIR" \
-        --config-path "$NCC_CONFIG" \
-        --output-dir "$NCC_INSTALL_DIR/outputfiles" \
-        --log-dir "$NCC_INSTALL_DIR/logs" \
-        --orchestrator-bin "$bin" \
-        --token-file "$NCC_INSTALL_DIR/.ncc-api-token" \
-        --api-listen ":$NCC_API_PORT" \
-        --ui-listen ":$NCC_UI_PORT" \
-        --self-heal --now
+      # Also installs the update helper and the log maintenance timer. The ports
+      # are passed only when they are not the standard ones.
+      set --
+      [ "$NCC_API_PORT" = 8081 ] || set -- "$@" --api-listen ":$NCC_API_PORT"
+      [ "$NCC_UI_PORT" = 8080 ] || set -- "$@" --ui-listen ":$NCC_UI_PORT"
+      "$bin" v2-install-service --install-dir "$NCC_INSTALL_DIR" --orchestrator-bin "$bin" --now "$@"
 
-      cat > /etc/systemd/system/ncc-log-maintenance.service <<EOF
-      [Unit]
-      Description=NCC log size check and rotation
-
-      [Service]
-      Type=oneshot
-      ExecStart=/bin/sh -c '${bin} doctor --install-dir ${NCC_INSTALL_DIR} --fix --only-checks log-sizes --json >> ${NCC_INSTALL_DIR}/logs/doctor.log 2>&1 || true'
-      NoNewPrivileges=yes
-      RestrictSUIDSGID=yes
-      LockPersonality=yes
-      RestrictRealtime=yes
-      RestrictNamespaces=yes
-      RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
-      SystemCallArchitectures=native
-      CapabilityBoundingSet=~CAP_SYS_MODULE CAP_SYS_BOOT CAP_SYS_TIME CAP_SYS_RAWIO CAP_SYS_PACCT CAP_SYS_TTY_CONFIG CAP_SYSLOG CAP_WAKE_ALARM CAP_BLOCK_SUSPEND CAP_MAC_ADMIN CAP_NET_ADMIN CAP_NET_RAW
-      ProtectKernelTunables=yes
-      ProtectKernelModules=yes
-      ProtectKernelLogs=yes
-      ProtectControlGroups=yes
-      ProtectClock=yes
-      EOF
-      cat > /etc/systemd/system/ncc-log-maintenance.timer <<EOF
-      [Unit]
-      Description=Check NCC log sizes every 15 minutes
-
-      [Timer]
-      OnBootSec=5min
-      OnUnitActiveSec=15min
-      Persistent=true
-
-      [Install]
-      WantedBy=timers.target
-      EOF
-      systemctl daemon-reload
-      systemctl enable --now ncc-log-maintenance.timer
-
-      echo "NCC v${version} installed. Edit $NCC_CONFIG and replace CHANGE_ME before running checks."
+      echo "NCC v${version} installed. Set the Prism password in $secrets and the clusters in $config before running checks."
 
 runcmd:
   - [sh, -c, /usr/local/sbin/install-ncc-v2]

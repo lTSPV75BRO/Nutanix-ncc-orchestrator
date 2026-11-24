@@ -161,7 +161,7 @@ func runV2Supervise(cfg superviseConfig) error {
 		_, _ = os.Stderr.WriteString(line)
 	}
 
-	supPIDPath := filepath.Join(runDir, "v2-supervisor.pid")
+	supPIDPath := filepath.Join(runDir, supervisorPIDFile)
 	// Single-instance guard: refuse to start if another supervisor is already
 	// live. A second supervisor can never bind the shared ports anyway (its
 	// children crash-loop on "address already in use"), and on exit it would
@@ -180,7 +180,8 @@ func runV2Supervise(cfg superviseConfig) error {
 	if err := os.WriteFile(supPIDPath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644); err != nil {
 		return fmt.Errorf("supervisor: write pid file: %w", err)
 	}
-	defer os.Remove(supPIDPath)
+	// Removed after a clean stop only: a pid file that stays behind tells the
+	// Windows watchdog that the supervisor died.
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -205,6 +206,7 @@ func runV2Supervise(cfg superviseConfig) error {
 		cfg.installDir, cfg.maxRestarts, cfg.window, cfg.probeInterval, cfg.unhealthyThreshold, cfg.startGrace, cfg.stableAfter)
 
 	superviseRun(ctx, &cfg, logf)
+	_ = os.Remove(supPIDPath)
 	logf("stopped")
 	return nil
 }

@@ -377,9 +377,13 @@ func checkWindowsTask(hc *healContext, res healResult) healResult {
 		return res
 	}
 	gaps := windowsTaskGaps(taskXML)
+	if _, ok := queryWindowsTaskXML(watchdogTaskName(supervisorServiceName)); !ok {
+		gaps = append(gaps, "nothing starts it again when it has died (no task "+watchdogTaskName(supervisorServiceName)+")")
+	}
+	const good = "scheduled task " + supervisorServiceName + " has no time limit and is started again when it has died"
 	if len(gaps) == 0 {
 		res.Status = healOK
-		res.Message = "scheduled task " + supervisorServiceName + " has no time limit and restarts on failure"
+		res.Message = good
 		return res
 	}
 	res.Status = healWarn
@@ -398,8 +402,8 @@ func checkWindowsTask(hc *healContext, res healResult) healResult {
 	}
 	res.Status = healOK
 	res.Fixed = true
-	res.FixMsg = "re-registered scheduled task " + supervisorServiceName + " with no time limit and restart on failure"
-	res.Message = "scheduled task " + supervisorServiceName + " has no time limit and restarts on failure"
+	res.FixMsg = "re-registered scheduled task " + supervisorServiceName + " with no time limit, and the task that starts it again"
+	res.Message = good
 	return res
 }
 

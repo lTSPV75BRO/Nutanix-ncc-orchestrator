@@ -16,6 +16,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   GPG public-key artifact when Linux GPG signing was not configured. Windows
   test signing can set `NCC_WINDOWS_TIMESTAMP_URL=none` to skip external
   timestamping for a self-signed certificate.
+- **Windows: a supervisor that died is started again (WIN-07).** Task Scheduler's restart
+  setting does not cover that. The service now has a second task,
+  `ncc-orchestrator-watchdog`, which looks every minute. `v2-stop` and
+  `schtasks /End` are respected. Existing hosts get it with the upgrade.
+- **VM templates (INS-02).** The cloud-init template and `setup-ncc.ps1` failed at the first
+  boot. Both now install the service with `v2-install-service` and keep the Prism password
+  in `secrets.json`. `NCC_CONFIG` is gone: the configuration is
+  `<install folder>/config.yaml`, the one the service reads.
+- `v2-install-service` takes `--api-listen` and `--ui-listen`.
 
 ### Security
 

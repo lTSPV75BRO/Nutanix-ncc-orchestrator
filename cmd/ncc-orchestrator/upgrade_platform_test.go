@@ -267,7 +267,39 @@ func TestWindowsServicePlan(t *testing.T) {
 	stored := strings.Replace(svc.helperXML(helper, false), "<BootTrigger><Enabled>true</Enabled></BootTrigger>", "<BootTrigger />", 1)
 	realQuery := queryWindowsTaskXML
 	t.Cleanup(func() { queryWindowsTaskXML = realQuery })
-	queryWindowsTaskXML = func(string) (string, bool) { return stored, true }
+	watchdog, haveWatchdog := windowsWatchdogTaskXML(o), false
+	queryWindowsTaskXML = func(name string) (string, bool) {
+		switch name {
+		case watchdogTaskName(o.ServiceName):
+			return watchdog, haveWatchdog
+		case o.ServiceName:
+			return ours, true
+		}
+		return stored, true
+	}
+	// A host from before 2.4.0 has no watchdog; putting that back removes it.
+	if c := svc.plan(); len(c) != 2 || c[0].Action != defUnchanged || c[1].Action != defCreate {
+		t.Errorf("plan without a watchdog: %v", c)
+	}
+	saved, err := svc.save()
+	if err != nil || len(saved) != 2 || !saved[1].Missing {
+		t.Fatalf("saved %v (%v)", saved, err)
+	}
+	haveWatchdog = true
+	if c := svc.plan(); c[1].Action != defUnchanged {
+		t.Errorf("plan with a watchdog: %v", c)
+	}
+	calls := fakeSvcCommands(t, nil)
+	if err := svc.restore(saved); err != nil || len(*calls) != 1 || !strings.Contains((*calls)[0], "/Delete /TN ncc-orchestrator-watchdog") {
+		t.Errorf("restore: %v, calls %v", err, *calls)
+	}
+	if svc.restore([]savedDefinition{{ID: "task:somebody-else", Body: "x"}}) == nil || svc.restore([]savedDefinition{{ID: "task:" + o.ServiceName, Missing: true}}) == nil {
+		t.Error("restored a task that is not the service's")
+	}
+	watchdog = strings.Replace(watchdog, "v2-watchdog", "v2-other", 1)
+	if c := svc.plan(); c[1].Action != defReplace {
+		t.Errorf("plan with another watchdog: %v", c)
+	}
 	if !strings.Contains(stored, "<BootTrigger />") || !svc.helperCurrent(helper) {
 		t.Errorf("the stored helper task looks outdated:\n%s", stored)
 	}

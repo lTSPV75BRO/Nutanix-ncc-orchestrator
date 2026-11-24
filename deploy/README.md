@@ -8,8 +8,8 @@ downloaded stack archive against `checksums.txt` before installation.
 
 Use [`cloud-init/ncc-v2.yaml`](cloud-init/ncc-v2.yaml) on Ubuntu/Debian or
 RHEL/Rocky. It detects `amd64`/`arm64`, installs prerequisites, creates
-`/etc/ncc/config.yaml` using the canonical schema, and registers the stack with
-the native boot service.
+`/opt/ncc-v2/config.yaml` using the canonical schema, and registers the stack
+with the native boot service (`v2-install-service`).
 The UI uses the default HTTPS behavior. When installed, `ufw` or `firewalld`
 rules are updated for the standard UI/API ports.
 
@@ -23,7 +23,7 @@ NCC_VERIFY_ATTESTATION="auto"
 NCC_CLUSTERS=""
 NCC_PCS=""
 NCC_USERNAME="admin"
-NCC_PASSWORD="<inject securely at first boot>"
+NCC_PASSWORD='<inject securely at first boot>'
 ```
 
 Both installers behave the same way:
@@ -41,9 +41,11 @@ Both installers behave the same way:
 
 The install root and configuration are under `/opt/ncc-v2`; all runner,
 API, UI, scheduler, and supervisor logs are kept under `/opt/ncc-v2/logs`.
-The installer settings are kept in `/etc/ncc/ncc-install.env`. Inject the
-password securely, configure at least one cluster or Prism Central target, and ensure the VM can
-reach the required Nutanix endpoints.
+The installer settings are kept in `/etc/ncc/ncc-install.env`. The Prism
+password is stored in `secrets.json` next to the configuration, readable by
+root only, and is used by the service, schedules and runs from a shell; replace
+it there later. Configure at least one cluster or Prism Central target, and
+ensure the VM can reach the required Nutanix endpoints.
 
 ## Windows Sysprep
 
@@ -61,7 +63,10 @@ During the `specialize` pass, the script downloads and checksum-verifies the
 Windows `amd64` stack archive, installs it under
 `C:\ProgramData\NCC\v2`, creates the config and output directories, opens
 private/domain firewall rules for ports 8080 and 8081, and registers the
-`NCC Orchestrator v2` scheduled task to start at boot.
+service: the scheduled tasks `ncc-orchestrator` (starts at boot) and
+`ncc-orchestrator-watchdog` (starts it again if it dies). The password goes to
+`secrets.json` in the install folder, which only SYSTEM and Administrators can
+read.
 
 The templates intentionally do not embed production credentials. Use an image
 secret-injection mechanism before first run.
@@ -71,8 +76,8 @@ For production, prefer an internal artifact mirror by setting
 Runtime API/UI logs rotate at 50 MiB, retain five compressed backups, and keep
 30 days of history. The orchestrator's `doctor` log-size check monitors
 `logs/*.log`; run `ncc-orchestrator doctor --fix` to rotate an oversized log
-immediately if needed. The Linux template also installs a 15-minute systemd
-timer, and the Windows template installs an equivalent scheduled task, so
+immediately if needed. `v2-install-service` also installs a 15-minute systemd
+timer on Linux, and the Windows template installs an equivalent scheduled task, so
 oversized logs are checked and rotated automatically.
 
 ## Deploy with an AI agent

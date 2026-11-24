@@ -32,6 +32,8 @@ type installServiceOptions struct {
 	OrchestratorBin string
 	Now             bool // start/enable immediately (Linux: enable --now; macOS: load -w)
 	PrintOnly       bool
+	// APIListen, UIListen: saved for the supervisor, which starts with them.
+	APIListen, UIListen string
 }
 
 func (o *installServiceOptions) resolve() error {
@@ -105,6 +107,11 @@ func runV2InstallService(o installServiceOptions) error {
 	}
 	if err := o.resolve(); err != nil {
 		return err
+	}
+	if !o.PrintOnly {
+		if err := saveListenAddresses(o.InstallDir, o.APIListen, o.UIListen); err != nil {
+			return err
+		}
 	}
 	switch runtime.GOOS {
 	case "linux":
@@ -375,6 +382,8 @@ type windowsTaskSpec struct {
 	Retries                                     int
 	// EveryMinute also starts it every minute, unless it runs already.
 	EveryMinute bool
+	NotAtBoot   bool
+	TimeLimit   string // ISO 8601 duration; "" = none
 }
 
 const windowsMinuteTrigger = `<TimeTrigger><Repetition><Interval>PT1M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>` +
@@ -390,8 +399,14 @@ func windowsTaskXML(t windowsTaskSpec) string {
 	}
 	escArgs := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace
 	triggers := `<BootTrigger><Enabled>true</Enabled></BootTrigger>`
+	if t.NotAtBoot {
+		triggers = ""
+	}
 	if t.EveryMinute {
 		triggers += windowsMinuteTrigger
+	}
+	if t.TimeLimit == "" {
+		t.TimeLimit = "PT0S"
 	}
 	return strings.Join([]string{
 		`<?xml version="1.0" encoding="UTF-16"?>`,
@@ -412,7 +427,7 @@ func windowsTaskXML(t windowsTaskSpec) string {
 		`    <Hidden>false</Hidden>`,
 		`    <RunOnlyIfIdle>false</RunOnlyIfIdle>`,
 		`    <WakeToRun>false</WakeToRun>`,
-		`    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>`,
+		`    <ExecutionTimeLimit>` + t.TimeLimit + `</ExecutionTimeLimit>`,
 		`    <Priority>5</Priority>`,
 		fmt.Sprintf(`    <RestartOnFailure><Interval>PT1M</Interval><Count>%d</Count></RestartOnFailure>`, t.Retries),
 		`  </Settings>`,
@@ -446,8 +461,8 @@ func utf16LEWithBOM(s string) []byte {
 	return out
 }
 
-// registerWindowsSupervisorTask writes the task XML to a temp file and
-// (re)registers it, replacing an existing definition.
+// registerWindowsSupervisorTask (re)registers the supervisor's task, replacing
+// an existing definition, and the one that watches it.
 func registerWindowsSupervisorTask(o installServiceOptions) error {
 	if x, ok := queryWindowsTaskXML(o.ServiceName); ok && windowsScanTask(x) {
 		// A schedule saved by an earlier release under the same name.
@@ -460,7 +475,10 @@ func registerWindowsSupervisorTask(o installServiceOptions) error {
 		}
 		fmt.Printf("Moved the existing scan schedule %q to %q\n", o.ServiceName, moved)
 	}
-	return registerWindowsTaskXML(o.ServiceName, windowsSupervisorTaskXML(o))
+	if err := registerWindowsTaskXML(o.ServiceName, windowsSupervisorTaskXML(o)); err != nil {
+		return err
+	}
+	return installWatchdogTask(o)
 }
 
 // registerWindowsTaskXML (re)registers a task from its definition.
@@ -489,13 +507,14 @@ func installSupervisorWindows(o installServiceOptions) error {
 	tr := windowsSupervisorTaskCmd(o)
 	if o.PrintOnly {
 		fmt.Printf("Would register scheduled task %q from this definition (schtasks /Create /XML /F):\n\n%s\n", o.ServiceName, windowsSupervisorTaskXML(o))
+		fmt.Printf("Would register scheduled task %q (starts it again every minute if it has died):\n\n%s\n", watchdogTaskName(o.ServiceName), windowsWatchdogTaskXML(o))
 		return nil
 	}
 	if err := registerWindowsSupervisorTask(o); err != nil {
 		return err
 	}
 	installHelperOrWarn(o)
-	fmt.Printf("Created Windows Scheduled Task %q (trigger: at system startup, run as SYSTEM, no time limit, restarts on failure)\n", o.ServiceName)
+	fmt.Printf("Created Windows Scheduled Task %q (trigger: at system startup, run as SYSTEM, no time limit; started again by %q)\n", o.ServiceName, watchdogTaskName(o.ServiceName))
 	fmt.Printf("Command: %s\n", tr)
 	if o.Now {
 		if out, err := exec.Command("schtasks", "/Run", "/TN", o.ServiceName).CombinedOutput(); err != nil {
@@ -508,10 +527,11 @@ func installSupervisorWindows(o installServiceOptions) error {
 
 func uninstallSupervisorWindows(o installServiceOptions) error {
 	if o.PrintOnly {
-		fmt.Printf("Would run:\n  schtasks /End /TN %q\n  schtasks /Delete /TN %q /F\n", o.ServiceName, o.ServiceName)
+		fmt.Printf("Would run:\n  schtasks /Delete /TN %q /F\n  schtasks /End /TN %q\n  schtasks /Delete /TN %q /F\n", watchdogTaskName(o.ServiceName), o.ServiceName, o.ServiceName)
 		return nil
 	}
 	removeHelperForService(o.InstallDir)
+	removeWatchdogTask(o.ServiceName)
 	_, _ = exec.Command("schtasks", "/End", "/TN", o.ServiceName).CombinedOutput()
 	if out, err := exec.Command("schtasks", "/Delete", "/TN", o.ServiceName, "/F").CombinedOutput(); err != nil {
 		return fmt.Errorf("delete scheduled task: %v (%s)", err, strings.TrimSpace(string(out)))

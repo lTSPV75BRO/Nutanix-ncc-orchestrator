@@ -168,14 +168,26 @@ func (s *windowsService) plan() []defChange {
 	if !ok {
 		x = s.taskXML
 	}
-	return []defChange{planWindowsTask(s.o, x)}
+	main := planWindowsTask(s.o, x)
+	out := []defChange{main}
+	if main.Action == defKeep {
+		return out // not started as we would: nothing is added to it
+	}
+	w := defChange{ID: taskDefPrefix + watchdogTaskName(s.o.ServiceName), Title: "Watchdog task", Action: defUnchanged, body: windowsWatchdogTaskXML(s.o)}
+	switch x, ok := queryWindowsTaskXML(watchdogTaskName(s.o.ServiceName)); {
+	case !ok:
+		w.Action, w.Detail = defCreate, "starts the supervisor again when it has died"
+	case !watchdogTaskCurrent(x, s.o):
+		w.Action = defReplace
+	}
+	return append(out, w)
 }
 
 func (s *windowsService) migrate() ([]defChange, error) {
 	changes := s.plan()
 	for _, c := range changes {
 		if c.pending() {
-			if err := registerWindowsTaskXML(s.o.ServiceName, c.body); err != nil {
+			if err := registerWindowsTaskXML(strings.TrimPrefix(c.ID, taskDefPrefix), c.body); err != nil {
 				return changes, err
 			}
 		}
@@ -188,19 +200,29 @@ func (s *windowsService) save() ([]savedDefinition, error) {
 	if !ok {
 		return nil, fmt.Errorf("cannot read the scheduled task %s", s.o.ServiceName)
 	}
-	return []savedDefinition{{ID: taskDefPrefix + s.o.ServiceName, Body: x}}, nil
+	w, ok := queryWindowsTaskXML(watchdogTaskName(s.o.ServiceName))
+	return []savedDefinition{
+		{ID: taskDefPrefix + s.o.ServiceName, Body: x},
+		{ID: taskDefPrefix + watchdogTaskName(s.o.ServiceName), Body: w, Missing: !ok},
+	}, nil
 }
 
 func (s *windowsService) restore(defs []savedDefinition) error {
 	for _, d := range defs {
-		if d.ID != taskDefPrefix+s.o.ServiceName || d.Missing {
+		name := strings.TrimPrefix(d.ID, taskDefPrefix)
+		watchdog := name == watchdogTaskName(s.o.ServiceName)
+		if !strings.HasPrefix(d.ID, taskDefPrefix) || (name != s.o.ServiceName && !watchdog) || (d.Missing && !watchdog) {
 			return fmt.Errorf("not the task of this service: %s", d.ID)
 		}
-		if x, ok := queryWindowsTaskXML(s.o.ServiceName); ok && x == d.Body {
-			continue
-		}
-		if err := registerWindowsTaskXML(s.o.ServiceName, d.Body); err != nil {
-			return err
+		x, ok := queryWindowsTaskXML(name)
+		switch {
+		case d.Missing && ok:
+			removeWatchdogTask(s.o.ServiceName)
+		case d.Missing || (ok && x == d.Body):
+		default:
+			if err := registerWindowsTaskXML(name, d.Body); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

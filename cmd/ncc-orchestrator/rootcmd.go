@@ -1517,6 +1517,7 @@ When using --binary-url for install, --binary-sha256 is required.`,
 	updateCmd.Flags().Bool("skip-checksum-verify", false, "Skip SHA-256 verification of the downloaded asset against the release checksums.txt (not recommended; for air-gapped/mirrored installs)")
 	cmd.AddCommand(updateCmd)
 	cmd.AddCommand(newUpgradeCommands()...)
+	cmd.AddCommand(newWatchdogCommand())
 
 	v2BootstrapCmd := &cobra.Command{
 		Use:   "v2-bootstrap",
@@ -1782,7 +1783,7 @@ alive across reboots and the supervisor keeps the stack alive across crashes.`,
 	v2StartCmd.Flags().String("api-session-secret", "", "Session HMAC secret passed to ncc-api-server (use file flag in production)")
 	v2StartCmd.Flags().String("api-session-secret-file", "", "Read API session secret from file and pass to ncc-api-server")
 	v2StartCmd.Flags().Duration("api-run-timeout", 90*time.Minute, "Run timeout passed to ncc-api-server")
-	v2StartCmd.Flags().Int("api-rate-limit-per-minute", 60, "Per-client API rate limit passed to ncc-api-server (0 disables)")
+	v2StartCmd.Flags().Int("api-rate-limit-per-minute", defaultAPIRateLimitPerMinute, "Per-client API rate limit passed to ncc-api-server (0 disables)")
 	v2StartCmd.Flags().Duration("api-read-timeout", 15*time.Second, "HTTP read timeout passed to ncc-api-server")
 	v2StartCmd.Flags().Duration("api-write-timeout", 60*time.Second, "HTTP write timeout passed to ncc-api-server")
 	v2StartCmd.Flags().Duration("api-idle-timeout", 60*time.Second, "HTTP idle timeout passed to ncc-api-server")
@@ -1821,7 +1822,8 @@ the v2 stack starts automatically after an OS reboot and is kept alive by the
 native supervisor:
 
   Linux   -> a Type=simple systemd service (Restart=always) under /etc/systemd/system
-  Windows -> a Task Scheduler task triggered at system startup (run as SYSTEM)
+  Windows -> a Task Scheduler task triggered at system startup (run as SYSTEM),
+             and one that starts it again when it has died
   macOS   -> a launchd LaunchDaemon (RunAtLoad + KeepAlive) under /Library/LaunchDaemons
 
 Run with --print-only to preview the unit/task without applying it. Typically
@@ -1832,15 +1834,21 @@ requires root/Administrator.`,
 			orchestratorBin, _ := cmd.Flags().GetString("orchestrator-bin")
 			now, _ := cmd.Flags().GetBool("now")
 			printOnly, _ := cmd.Flags().GetBool("print-only")
+			apiListen, _ := cmd.Flags().GetString("api-listen")
+			uiListen, _ := cmd.Flags().GetString("ui-listen")
 			return runV2InstallService(installServiceOptions{
 				InstallDir:      installDir,
 				ServiceName:     serviceName,
 				OrchestratorBin: orchestratorBin,
 				Now:             now,
 				PrintOnly:       printOnly,
+				APIListen:       strings.TrimSpace(apiListen),
+				UIListen:        strings.TrimSpace(uiListen),
 			})
 		},
 	}
+	v2InstallServiceCmd.Flags().String("api-listen", "", "Listen address of the API server the service starts (default: the saved one, else :8081)")
+	v2InstallServiceCmd.Flags().String("ui-listen", "", "Listen address of the UI server the service starts (default: the saved one, else :8080)")
 	v2InstallServiceCmd.Flags().String("install-dir", "", "Installation directory the supervisor manages (default: auto-detect, fallback .ncc-v2)")
 	v2InstallServiceCmd.Flags().String("service-name", "ncc-orchestrator", "Service/task name to create")
 	v2InstallServiceCmd.Flags().String("orchestrator-bin", "", "Path to the ncc-orchestrator binary the service runs (default: this executable)")

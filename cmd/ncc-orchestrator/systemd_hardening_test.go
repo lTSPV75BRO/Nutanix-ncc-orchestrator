@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -117,16 +118,45 @@ func TestServiceConfigDoesNotAddHardening(t *testing.T) {
 	}
 }
 
-// The cloud-init template rewrites the log maintenance unit, so it has to
-// carry the same sandbox.
-func TestCloudInitLogMaintenanceHardening(t *testing.T) {
-	raw, err := os.ReadFile("../../deploy/cloud-init/ncc-v2.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, l := range systemdHardening() {
-		if !strings.HasPrefix(l, "#") && !strings.Contains(string(raw), "      "+l) {
-			t.Errorf("deploy/cloud-init/ncc-v2.yaml lacks %q", l)
+// The VM templates called v2-install-service with flags it does not have, so
+// the first boot failed (INS-02). They leave units to the service installer.
+func TestVMTemplatesUseKnownFlags(t *testing.T) {
+	flag := regexp.MustCompile(`--[a-z][a-z-]*`)
+	for _, file := range []string{"../../deploy/cloud-init/ncc-v2.yaml", "../../deploy/windows/setup-ncc.ps1"} {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n")
+		calls := 0
+		for n, l := range lines {
+			at := strings.Index(l, "v2-install-service\"")
+			if at < 0 {
+				at = strings.Index(l, "v2-install-service --")
+			}
+			if at < 0 {
+				continue
+			}
+			calls++
+			cmd, _, err := newRootCmd().Find([]string{"v2-install-service"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The optional arguments are in the lines before, or the line after.
+			text := strings.Join(lines[max(0, n-2):n], "\n") + l[at:] + lines[n+1]
+			for _, f := range flag.FindAllString(text, -1) {
+				if cmd.Flags().Lookup(strings.TrimPrefix(f, "--")) == nil {
+					t.Errorf("%s: v2-install-service has no flag %s", file, f)
+				}
+			}
+		}
+		if calls != 1 {
+			t.Errorf("%s: %d calls of v2-install-service", file, calls)
+		}
+		for _, bad := range []string{"--self-heal", "/etc/systemd/system", "secrets-provider: env"} {
+			if strings.Contains(string(raw), bad) {
+				t.Errorf("%s: %q", file, bad)
+			}
 		}
 	}
 }

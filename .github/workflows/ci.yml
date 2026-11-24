@@ -234,7 +234,7 @@ jobs:
           - { os: macos-latest, dir: /usr/local/ncc-e2e, sudo: sudo }
           - { os: windows-latest, dir: "C:/ncc-e2e", sudo: "" }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash
@@ -252,6 +252,9 @@ jobs:
         run: ${{ matrix.sudo }} bash scripts/upgrade-e2e.sh run e2e "${{ matrix.dir }}"
       - name: rehearse without one (v2-start)
         run: bash scripts/upgrade-e2e.sh run e2e "$PWD/manual-e2e" manual 18081 18080
+      - name: run the VM provisioning template
+        if: runner.os != 'macOS'
+        run: ${{ matrix.sudo }} bash scripts/vm-template-test.sh e2e
 
   trivy:
     name: trivy filesystem scan

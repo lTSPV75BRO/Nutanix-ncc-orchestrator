@@ -271,14 +271,18 @@ func runV2Stop(opts v2StopOptions) error {
 			continue
 		}
 		foundAny = true
-		if processIsAlive(pid) {
-			known, matches := processIdentityMatches(pid, t.identity...)
-			if known && !matches {
-				_ = os.Remove(t.pidPath)
-				cleanedStaleAny = true
-				fmt.Fprintf(os.Stderr, "removed stale %s pid file (pid=%d belongs to an unrelated process)\n", t.name, pid)
-				continue
-			}
+		if !processIsAlive(pid) {
+			// On Windows a process that is gone cannot even be looked up to stop it.
+			_ = os.Remove(t.pidPath)
+			cleanedStaleAny = true
+			fmt.Fprintf(os.Stderr, "removed stale %s pid file (pid=%d already exited)\n", t.name, pid)
+			continue
+		}
+		if known, matches := processIdentityMatches(pid, t.identity...); known && !matches {
+			_ = os.Remove(t.pidPath)
+			cleanedStaleAny = true
+			fmt.Fprintf(os.Stderr, "removed stale %s pid file (pid=%d belongs to an unrelated process)\n", t.name, pid)
+			continue
 		}
 		if err := signalPIDStop(pid, opts.Force); err != nil {
 			if errors.Is(err, os.ErrProcessDone) {

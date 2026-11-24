@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -100,6 +101,46 @@ func writeV2StartState(installDir string, opts v2StartOptions) error {
 	}
 	return writeSecretFile(filepath.Join(installDir, v2StartStateFile), append(data, '\n'))
 }
+
+// saveListenAddresses changes the addresses of the saved start settings; an
+// empty one stays as it is.
+func saveListenAddresses(installDir, api, ui string) error {
+	if api == "" && ui == "" {
+		return nil
+	}
+	for _, a := range []string{api, ui} {
+		if a == "" {
+			continue
+		}
+		if _, port, err := net.SplitHostPort(a); err != nil || !validPort(port) {
+			return fmt.Errorf("%q is not a listen address (use HOST:PORT or :PORT)", a)
+		}
+	}
+	st, ok := loadV2StartState(installDir)
+	if !ok {
+		st = v2StartState{APIRateLimitPerMinute: defaultAPIRateLimitPerMinute}
+	}
+	if api != "" {
+		st.APIListen = api
+	}
+	if ui != "" {
+		st.UIListen = ui
+	}
+	data, err := json.MarshalIndent(st, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeSecretFile(filepath.Join(installDir, v2StartStateFile), append(data, '\n'))
+}
+
+func validPort(s string) bool {
+	n, err := strconv.Atoi(s)
+	return err == nil && n > 0 && n < 65536
+}
+
+// defaultAPIRateLimitPerMinute is the default of --api-rate-limit-per-minute. A
+// saved 0 turns the limit off, so new settings need it.
+const defaultAPIRateLimitPerMinute = 60
 
 // preserveHostStartStateNetworking re-applies the current host's
 // environment-specific v2-start networking settings (listen addresses,
