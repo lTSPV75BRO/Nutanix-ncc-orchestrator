@@ -10,6 +10,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [2.4.0] - Unreleased
 
+### Fixed
+
+- **Unsigned local builds work again.** The build no longer expects the Linux
+  GPG public-key artifact when Linux GPG signing was not configured. Windows
+  test signing can set `NCC_WINDOWS_TIMESTAMP_URL=none` to skip external
+  timestamping for a self-signed certificate.
+
 ### Security
 
 - **Free release signing.** The tag release workflow now builds one coherent

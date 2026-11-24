@@ -529,7 +529,7 @@ check_versions() {
     fi
   done
   # The API compares these with what runs: a stale one reports version skew.
-  for tag in $(awk '/name: NCC_.*IMAGE_TAG/{getline; gsub(/[" ]/, ""); sub(/^value:/, ""); print}' k8s/*.yaml); do
+  for tag in $(awk '/name: NCC_.*IMAGE_TAG/{getline; gsub(/[" \r]/, ""); sub(/^value:/, ""); print}' k8s/*.yaml); do
     if [ "$tag" != "$VERSION" ]; then
       echo "version mismatch: k8s IMAGE_TAG $tag, VERSION is $VERSION" >&2
       failed=1
@@ -850,14 +850,24 @@ sign_binaries() {
     shopt -u nullglob
   fi
   if [ -n "${NCC_WINDOWS_PFX_PATH:-}" ] && command -v osslsigncode >/dev/null 2>&1 && in_csv "$OS_LIST" windows; then
-    local f
+    local f timestamp_url
+    timestamp_url="${NCC_WINDOWS_TIMESTAMP_URL:-http://timestamp.digicert.com}"
+    # A self-signed certificate used for a local test cannot obtain useful
+    # third-party timestamping. Set this to "none" to sign without a network
+    # request; public releases should retain the default timestamp service.
     shopt -s nullglob
     for f in dist/ncc-orchestrator-windows-*.exe dist/ncc-api-server-windows-*.exe dist/ncc-ui-server-windows-*.exe; do
-      osslsigncode sign -pkcs12 "$NCC_WINDOWS_PFX_PATH" -pass "${NCC_WINDOWS_PFX_PASSWORD:-}" \
-        -h sha256 -t "${NCC_WINDOWS_TIMESTAMP_URL:-http://timestamp.digicert.com}" \
-        -n "NCC Orchestrator (open-source project)" \
-        -i "https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator" \
-        -in "$f" -out "$f.signed"
+      if [ "$timestamp_url" = "none" ]; then
+        osslsigncode sign -pkcs12 "$NCC_WINDOWS_PFX_PATH" -pass "${NCC_WINDOWS_PFX_PASSWORD:-}" \
+          -h sha256 -n "NCC Orchestrator (open-source project)" \
+          -i "https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator" \
+          -in "$f" -out "$f.signed"
+      else
+        osslsigncode sign -pkcs12 "$NCC_WINDOWS_PFX_PATH" -pass "${NCC_WINDOWS_PFX_PASSWORD:-}" \
+          -h sha256 -t "$timestamp_url" -n "NCC Orchestrator (open-source project)" \
+          -i "https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator" \
+          -in "$f" -out "$f.signed"
+      fi
       mv "$f.signed" "$f"
     done
     shopt -u nullglob
@@ -1003,6 +1013,9 @@ if [ "$NO_STACKS" != 1 ]; then
       case "$f" in
         *.asc|*.sig) continue ;;
       esac
+      # nullglob does not discard an explicit missing filename. The public GPG
+      # key is present only for Linux-signed builds.
+      [ -f "$f" ] || continue
       base=$(basename "$f")
       sz=$(wc -c < "$f" | tr -d ' ')
       sha=$(sha256_file "$f")
@@ -1045,6 +1058,7 @@ if [ "$NO_STACKS" != 1 ]; then
       case "$f" in
         *.asc|*.sig) continue ;;
       esac
+      [ -f "$f" ] || continue
       printf '%s  %s\n' "$(sha256_file "$f")" "$f" >> checksums.txt
     done
     shopt -u nullglob

@@ -2,6 +2,14 @@
 
 **Status:** Unreleased.
 
+## Local signing tests
+
+An unsigned local build no longer fails looking for the Linux GPG public key.
+For a self-signed Windows test certificate, set
+`NCC_WINDOWS_TIMESTAMP_URL=none` to avoid contacting a timestamp service.
+This is for local testing only; public releases should use a trusted
+certificate and timestamp service.
+
 ## Free release signing
 
 Every release now carries an Ed25519 signature over `checksums.txt`, verified
