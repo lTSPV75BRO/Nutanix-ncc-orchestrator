@@ -393,7 +393,7 @@ func runChildOnce(ctx context.Context, cfg *superviseConfig, c *superviseChild, 
 			if _, err := os.Stat(requestPath); err != nil {
 				continue
 			}
-			_ = os.Remove(requestPath)
+			_ = removeWithRetry(requestPath)
 			logf("%s restart requested; stopping pid=%d gracefully", c.name, pid)
 			_ = stopChild(cmd, waitCh, cfg.stopGrace)
 			recordChildExit(cfg, c, "requested", "restart requested from Status → Supervisor", false)
@@ -485,7 +485,7 @@ func waitOrRestartRequest(ctx context.Context, cfg *superviseConfig, c *supervis
 	deadline := time.Now().Add(d)
 	for {
 		if _, err := os.Stat(requestPath); err == nil {
-			_ = os.Remove(requestPath)
+			_ = removeWithRetry(requestPath)
 			cfg.state.event(c.name, "restart-requested", "starting now instead of waiting")
 			return ctx.Err() == nil
 		}

@@ -717,6 +717,6 @@ func binariesChecked(n int) string {
 func runPlatformCommand(timeout time.Duration, name string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput() // #nosec G702 -- no shell; the program name is a constant and a task name is one argument
 	return string(out), err
 }

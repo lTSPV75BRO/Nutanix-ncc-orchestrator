@@ -7200,3 +7200,27 @@ a.findings-group-chip:focus-visible {
   gap: var(--ui-space-2);
   margin-top: var(--ui-space-3);
 }
+
+/* Reflow at 320 px (WCAG 1.4.10) must not depend on how wide the system font is:
+   rows of buttons wrap, and long names break. */
+@media (max-width: 400px) {
+  .ant-space-horizontal {
+    flex-wrap: wrap;
+  }
+
+  .ant-space-horizontal > .ant-space-item {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  #main-content strong,
+  main strong {
+    overflow-wrap: anywhere;
+  }
+
+  .ant-btn:not(.ant-btn-icon-only) {
+    max-width: 100%;
+    height: auto;
+    white-space: normal;
+  }
+}

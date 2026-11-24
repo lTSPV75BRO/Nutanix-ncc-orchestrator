@@ -71,6 +71,22 @@ func renameWithRetry(from, to string) error {
 	return err
 }
 
+// removeWithRetry removes a file that another process may still be writing.
+// Windows refuses that, and a request file left behind is acted on twice.
+func removeWithRetry(path string) error {
+	var err error
+	for attempt := 0; attempt < 20; attempt++ {
+		if err = os.Remove(path); err == nil || os.IsNotExist(err) {
+			return nil
+		}
+		if !isTransientFileError(err) {
+			return err
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return err
+}
+
 // isTransientFileError reports errors worth retrying: Windows sharing and
 // lock violations (often an antivirus scanner holding a new file for a moment)
 // and access-denied while another process has the file open.

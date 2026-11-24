@@ -27,6 +27,10 @@ func TestRetentionPreviewRouteIsAdminOnly(t *testing.T) {
 
 func TestRetentionPreviewArgsUseCanonicalFolders(t *testing.T) {
 	root := t.TempDir()
+	// Canonical: links and Windows short names (RUNNER~1) resolved.
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		root = r
+	}
 	s := &apiServer{repoRoot: root, configPath: "config.yaml", outputDir: "outputfiles", logDir: "nccfiles"}
 	got := strings.Join(s.retentionPreviewArgs(), " ")
 	for _, want := range []string{

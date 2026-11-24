@@ -91,7 +91,7 @@ func TestRestoreStackIsAllOrNothing(t *testing.T) {
 	writeInstallFile(t, install, "bin/ncc-api-server", "api v2")
 	archive := writeRestoreTestArchive(t, [][2]string{
 		{"config.yaml", "x: 2\n"},
-		{"bin/ncc-api-server", "api v1"},          // trusted
+		{"bin/ncc-api-server", "api v1"},           // trusted
 		{"bin/ncc-ui-server", "crafted ui-server"}, // not
 	})
 	if err := restoreForTest(t, install, archive, false); err != nil {

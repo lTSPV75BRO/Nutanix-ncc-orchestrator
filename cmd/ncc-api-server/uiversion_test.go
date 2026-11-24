@@ -259,10 +259,13 @@ func TestUnversionedRefusalPointsAt240(t *testing.T) {
 func TestProxiedNonDashboardRequestsAreNotRefusedAsUnversioned(t *testing.T) {
 	s := newTokenTestServer(t)
 	cases := map[string]func(*http.Request){
-		"script with a token":          func(r *http.Request) { r.Header.Set("Authorization", "Bearer x") },
-		"custom client":                func(r *http.Request) { r.Header.Set(uiversion.ClientHeader, "acme-console") },
-		"custom client, blocked label": func(r *http.Request) { r.Header.Set(uiversion.ClientHeader, "acme"); r.Header.Set(uiversion.VersionHeader, "2.2.1") },
-		"download link (cookie only)":  func(r *http.Request) { r.Header.Set("Cookie", "ncc_session=x") },
+		"script with a token": func(r *http.Request) { r.Header.Set("Authorization", "Bearer x") },
+		"custom client":       func(r *http.Request) { r.Header.Set(uiversion.ClientHeader, "acme-console") },
+		"custom client, blocked label": func(r *http.Request) {
+			r.Header.Set(uiversion.ClientHeader, "acme")
+			r.Header.Set(uiversion.VersionHeader, "2.2.1")
+		},
+		"download link (cookie only)": func(r *http.Request) { r.Header.Set("Cookie", "ncc_session=x") },
 	}
 	for name, mod := range cases {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/artifacts/index.html?download=1", nil)

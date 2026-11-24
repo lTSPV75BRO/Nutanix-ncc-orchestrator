@@ -1118,11 +1118,11 @@ func (st *alertLifecycleStore) pruneLocked(doc *alertLifecycleDoc) {
 // ---- query helpers -------------------------------------------------------
 
 type alertQuery struct {
-	State         string
-	Detection     string
-	Cluster       string
-	Check         string
-	FindingID     string
+	State     string
+	Detection string
+	Cluster   string
+	Check     string
+	FindingID string
 	// Severity limits results to these severities (upper case: FAIL, WARN, ERR, INFO).
 	Severity      []string
 	IncludeClosed bool

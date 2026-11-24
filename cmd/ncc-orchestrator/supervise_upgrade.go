@@ -274,7 +274,7 @@ func (u *upgrader) takeRequest() (upgradeRequest, bool) {
 	if err != nil {
 		return upgradeRequest{}, false
 	}
-	_ = os.Remove(path)
+	_ = removeWithRetry(path)
 	var req upgradeRequest
 	if json.Unmarshal(b, &req) != nil {
 		u.logf("upgrade: ignoring an unreadable request")

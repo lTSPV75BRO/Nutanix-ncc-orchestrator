@@ -30,7 +30,7 @@ async function overflow(page: Page) {
           break;
         }
       }
-      if (!inside) offenders.push(`${el.tagName.toLowerCase()}.${String(el.className).slice(0, 60)} right=${Math.round(r.right)}`);
+      if (!inside) offenders.push(`${el.tagName.toLowerCase()}.${String(el.className).slice(0, 60)} right=${Math.round(r.right)} "${(el.textContent ?? "").slice(0, 40)}"`);
     }
     return { scrollWidth: Math.max(doc.scrollWidth, document.body.scrollWidth), width, offenders: offenders.slice(0, 8) };
   });
@@ -38,6 +38,8 @@ async function overflow(page: Page) {
 
 /** No page-level sideways scroll, and nothing sticking out past the edge outside a scroller (clipped content is a failure too). */
 async function expectFits(page: Page, label: string) {
+  // Fonts differ between systems; leave room for one that is a little wider.
+  await page.addStyleTag({ content: "body * { letter-spacing: 0.06em; }" });
   const o = await overflow(page);
   const where = `\n  ${o.offenders.join("\n  ")}`;
   expect(o.scrollWidth, `${label} scrolls sideways (${o.scrollWidth} > ${o.width}):${where}`).toBeLessThanOrEqual(o.width);
