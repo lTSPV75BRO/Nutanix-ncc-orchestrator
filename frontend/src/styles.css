@@ -7223,4 +7223,12 @@ a.findings-group-chip:focus-visible {
     height: auto;
     white-space: normal;
   }
+
+  .ant-card .ant-card-head-title {
+    white-space: normal;
+  }
+
+  .ui-icon-title {
+    max-width: 100%;
+  }
 }

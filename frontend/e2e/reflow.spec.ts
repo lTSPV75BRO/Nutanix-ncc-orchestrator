@@ -38,8 +38,9 @@ async function overflow(page: Page) {
 
 /** No page-level sideways scroll, and nothing sticking out past the edge outside a scroller (clipped content is a failure too). */
 async function expectFits(page: Page, label: string) {
-  // Fonts differ between systems; leave room for one that is a little wider.
-  await page.addStyleTag({ content: "body * { letter-spacing: 0.06em; }" });
+  // Fonts differ between systems: test with a wide one (the GitHub runners have
+  // DejaVu Sans, which is as wide as Verdana) and a little letter spacing.
+  await page.addStyleTag({ content: 'body *:not(.anticon, .anticon *) { font-family: Verdana, "DejaVu Sans", sans-serif !important; letter-spacing: 0.06em; }' });
   const o = await overflow(page);
   const where = `\n  ${o.offenders.join("\n  ")}`;
   expect(o.scrollWidth, `${label} scrolls sideways (${o.scrollWidth} > ${o.width}):${where}`).toBeLessThanOrEqual(o.width);
