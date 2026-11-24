@@ -6,7 +6,9 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -275,10 +277,31 @@ func v2StartArgsFromState(installDir string) (args []string, ok bool) {
 	return args, true
 }
 
+// runsAsSystem: Windows only; false elsewhere.
+func runsAsSystem() bool {
+	u, err := user.Current()
+	return err == nil && u.Uid == "S-1-5-18"
+}
+
 func restartV2Stack(installDir string) error {
 	if systemdStackIsActive() {
 		fmt.Println("\nRestarting stack (systemd-managed)...")
 		return restartSystemdStack()
+	}
+	// An administrator restarts the Windows service as a service, not as a stack
+	// of their own account. A restart from inside it (SYSTEM) must not end the
+	// task, because that ends this process too.
+	if runtime.GOOS == "windows" && !runsAsSystem() {
+		if svc := findWindowsService(installDir); svc != nil && svc.running() {
+			if err := svc.privileged(); err != nil {
+				return err
+			}
+			fmt.Printf("\nRestarting stack (%s)...\n", svc.title())
+			if err := svc.stop(); err != nil {
+				return err
+			}
+			return svc.start()
+		}
 	}
 	self, err := os.Executable()
 	if err != nil || strings.TrimSpace(self) == "" {

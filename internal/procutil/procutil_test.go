@@ -1,6 +1,7 @@
 package procutil
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"runtime"
@@ -60,5 +61,28 @@ func TestExistsRunningChild(t *testing.T) {
 	}()
 	if !Exists(cmd.Process.Pid) {
 		t.Fatalf("Exists(%d) = false for a running child process", cmd.Process.Pid)
+	}
+}
+
+func TestTerminate(t *testing.T) {
+	if err := Terminate(0); err == nil {
+		t.Fatal("pid 0 was accepted")
+	}
+	cmd := exec.Command("sleep", "30")
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("ping", "-n", "30", "127.0.0.1")
+	}
+	if err := cmd.Start(); err != nil {
+		t.Skipf("cannot start helper process: %v", err)
+	}
+	pid := cmd.Process.Pid
+	if err := Terminate(pid); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err == nil {
+		t.Fatal("the process ended by itself")
+	}
+	if err := Terminate(pid); !errors.Is(err, os.ErrProcessDone) {
+		t.Fatalf("a process that is gone: %v", err)
 	}
 }

@@ -185,6 +185,9 @@ Release candidate `2.4.0-rc.1`: 2026-11-24.
   boot. Both now install the service with `v2-install-service` and keep the Prism password
   in `secrets.json`. `NCC_CONFIG` is gone: the configuration is
   `<install folder>/config.yaml`, the one the service reads.
+- **Windows: `v2-stop` and `v2-restart` as Administrator stop the service.** They failed
+  with "Access is denied", because Windows does not let an Administrator end a process of
+  SYSTEM by default. Without Administrator rights the error now says so.
 - `v2-install-service` takes `--api-listen` and `--ui-listen`.
 - **systemd: the stack comes back after a restore, TLS change or unsupervised update
   from the UI (REL-07).** The restart was started inside the service and died with it,

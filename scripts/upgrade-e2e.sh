@@ -222,6 +222,12 @@ if [ "$manual" = 0 ]; then
     schtasks //Run //TN ncc-orchestrator
     check_version "$A"
     ok "stays stopped after schtasks /End and v2-stop"
+    old="$(sup)"
+    "$orch" v2-restart --install-dir "$dir"
+    check_version "$A"
+    [ "$(sup)" != "$old" ] || fail "v2-restart did not restart the supervisor"
+    schtasks //Query //TN ncc-orchestrator | grep -q Running || fail "v2-restart left the service stopped"
+    ok "v2-restart restarts the service"
   fi
 fi
 

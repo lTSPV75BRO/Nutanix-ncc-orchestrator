@@ -112,7 +112,10 @@ write_files:
       # this file; an environment variable would reach only some of them.
       secrets="$NCC_INSTALL_DIR/secrets.json"
       password="$(printf '%s' "$NCC_PASSWORD" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
-      (umask 077; printf '{"NCC_PASSWORD": "%s"}\n' "$password" > "$secrets")
+      # chmod as well: the umask has no effect in a folder with a default ACL.
+      (umask 077; : > "$secrets")
+      chmod 0600 "$secrets"
+      printf '{"NCC_PASSWORD": "%s"}\n' "$password" > "$secrets"
       cat > "$config" <<EOF
       schema-version: 1
       runner:

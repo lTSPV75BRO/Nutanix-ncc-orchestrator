@@ -49,6 +49,8 @@ off with `NCC_UPGRADE_ADOPT=0`. See "Upgrades" in
 - A supervisor that died is started again within a minute by a second scheduled task,
   `ncc-orchestrator-watchdog`. Task Scheduler's own restart setting does not do that. A
   stop with `v2-stop` or `schtasks /End` is respected.
+- `v2-stop` and `v2-restart` work from an Administrator prompt; they failed with "Access
+  is denied" because the service runs as SYSTEM.
 - A schedule no longer replaces the service's task (both were named
   `ncc-orchestrator`). On an affected host run `v2-install-service` as Administrator and
   save the schedule again.

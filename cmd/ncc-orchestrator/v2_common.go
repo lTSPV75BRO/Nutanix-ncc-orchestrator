@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"goncc/internal/procutil"
 	"goncc/internal/selfsigned"
 	"goncc/internal/v2layout"
 )
@@ -583,12 +584,12 @@ func readPIDFromFile(path string) (int, error) {
 }
 
 func signalPIDStop(pid int, force bool) error {
+	if runtime.GOOS == "windows" || force {
+		return procutil.Terminate(pid)
+	}
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return err
-	}
-	if runtime.GOOS == "windows" || force {
-		return proc.Kill()
 	}
 	return proc.Signal(syscall.SIGTERM)
 }
