@@ -120,7 +120,7 @@ diagnose() {
     step "diagnostics"
     cat "$dir/run/v2-upgrade-state.json" 2>/dev/null || true
     tail -n 60 "$dir/logs/upgrade-helper.log" 2>/dev/null || true
-    tail -n 20 "$dir/logs/v2-api.log" 2>/dev/null || true
+    tail -n 20 "$dir/logs/v2-api.log" 2>/dev/null | grep -v "password:" || true
     if [ "$os" = linux ] && [ "$manual" = 0 ]; then
       systemctl status 'ncc-orchestrator*' --no-pager -l 2>/dev/null | tail -n 80 || true
     fi
@@ -176,8 +176,9 @@ if [ "$os" = linux ] && [ "$manual" = 0 ]; then
 fi
 helper_running && fail "the helper still runs"
 if [ "$os" = windows ] && [ "$manual" = 0 ]; then
-  schtasks //Query //TN ncc-orchestrator-upgrade //XML | grep -q "<BootTrigger>" || fail "the helper has no task"
-  schtasks //Query //TN ncc-orchestrator-upgrade //XML | grep -q "<Repetition>" && fail "the helper's task is still armed"
+  task="$(schtasks //Query //TN ncc-orchestrator-upgrade //XML)" || fail "the helper has no task"
+  [[ "$task" == *"<BootTrigger"* ]] || fail "the helper's task does not start at boot: $task"
+  [[ "$task" != *"<Repetition>"* ]] || fail "the helper's task is still armed: $task"
 fi
 ok "upgraded; supervisor, API and UI run v$B"
 
@@ -198,11 +199,12 @@ check_version "$A"
 ok "rolled back on its own"
 
 step "a package that was changed after it was signed for"
-mkdir -p "$out/tampered"
-cp "$(bundle "$B")" "$out/$B/checksums.txt" "$out/tampered/"
-printf 'x' >> "$(echo "$out/tampered/"ncc-v2-stack-*.*)"
-if "$orch" upgrade --install-dir "$dir" --bundle "$(echo "$out/tampered/"ncc-v2-stack-*.*)" --skip-backup; then fail "a changed package was accepted"; fi
+rm -rf "$dir.tampered"; mkdir -p "$dir.tampered" # not in $out, which may be another user's
+cp "$(bundle "$B")" "$out/$B/checksums.txt" "$dir.tampered/"
+printf 'x' >> "$(echo "$dir.tampered/"ncc-v2-stack-*.*)"
+if "$orch" upgrade --install-dir "$dir" --bundle "$(echo "$dir.tampered/"ncc-v2-stack-*.*)" --skip-backup; then fail "a changed package was accepted"; fi
 check_version "$A"
+rm -rf "$dir.tampered"
 ok "refused; nothing was changed"
 
 interrupt() { # interrupt PHASE_PATTERN: upgrades to $B and kills the helper in such a phase

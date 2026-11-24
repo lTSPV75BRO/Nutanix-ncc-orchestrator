@@ -69,7 +69,8 @@ func (s *windowsService) helperCurrent(bin string) bool {
 			return false
 		}
 	}
-	return strings.Contains(x, "<BootTrigger>") && strings.Contains(x, "<RestartOnFailure>")
+	// It leaves out defaults: a plain boot trigger is stored as <BootTrigger />.
+	return strings.Contains(x, "<BootTrigger") && strings.Contains(x, "<RestartOnFailure>")
 }
 
 func (s *windowsService) installHelper(bin string) error {

@@ -262,6 +262,18 @@ func TestWindowsServicePlan(t *testing.T) {
 	if svc == nil || svc.orchestratorBin() != o.OrchestratorBin {
 		t.Fatalf("found %+v", svc)
 	}
+	// As Task Scheduler writes it: without defaults.
+	helper := `C:\NCC Data\helper\ncc-upgrade-helper.exe`
+	stored := strings.Replace(svc.helperXML(helper, false), "<BootTrigger><Enabled>true</Enabled></BootTrigger>", "<BootTrigger />", 1)
+	realQuery := queryWindowsTaskXML
+	t.Cleanup(func() { queryWindowsTaskXML = realQuery })
+	queryWindowsTaskXML = func(string) (string, bool) { return stored, true }
+	if !strings.Contains(stored, "<BootTrigger />") || !svc.helperCurrent(helper) {
+		t.Errorf("the stored helper task looks outdated:\n%s", stored)
+	}
+	if svc.helperCurrent(`C:\Other\helper.exe`) {
+		t.Error("another program's task looks current")
+	}
 	if windowsServiceFromTask(`C:\Other`, ours) != nil {
 		t.Error("found the service of another folder")
 	}
