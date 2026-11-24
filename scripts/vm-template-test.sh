@@ -89,7 +89,13 @@ for ((i = 0; i < 60; i++)); do
   sleep 2
 done
 [[ "$health" == *"\"version\":\"$version\""* ]] || fail "the API does not answer on port $api: $health"
-curl -sk --max-time 10 "https://127.0.0.1:$ui/" | grep -q "<title>NCC $version<" || fail "the UI does not answer on port $ui"
+page=""
+for ((i = 0; i < 30; i++)); do # the UI starts after the API
+  page="$(curl -sk --max-time 10 "https://127.0.0.1:$ui/" || true)"
+  [[ "$page" == *"<title>NCC $version<"* ]] && break
+  sleep 2
+done
+[[ "$page" == *"<title>NCC $version<"* ]] || fail "the UI does not answer on port $ui"
 echo "ok: API and UI run on the chosen ports"
 
 "$orch" validate-config --config "$dir/config.yaml" || fail "the configuration is not valid"
