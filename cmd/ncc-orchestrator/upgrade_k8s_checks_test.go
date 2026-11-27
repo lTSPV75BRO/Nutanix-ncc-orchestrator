@@ -88,7 +88,7 @@ func TestCheckDataWritable(t *testing.T) {
 		if err := os.Chmod(filepath.Join(dir, "config"), 0o555); err != nil {
 			t.Fatal(err)
 		}
-		defer os.Chmod(filepath.Join(dir, "config"), 0o755)
+		defer func() { _ = os.Chmod(filepath.Join(dir, "config"), 0o755) }()
 		if _, err := checkDataWritable(dir); err == nil || !strings.Contains(err.Error(), "cannot write") {
 			t.Fatalf("a read-only folder passed: %v", err)
 		}

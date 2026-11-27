@@ -82,7 +82,10 @@ jobs:
       - name: install WebKit
         run: npx playwright install webkit
       - name: set up the machine for VoiceOver
-        run: npx guidepup setup --ci
+        # setup configures the OS; install fetches the preferences image VoiceOver mounts.
+        run: |
+          npx guidepup setup --ci
+          npx guidepup install
       - name: run the screen reader tests
         run: npm run test:sr
       - name: upload the report

@@ -50,7 +50,7 @@ export async function reachHeading(sr: SR, pattern: RegExp, max = 12): Promise<s
 /** Wait for the page to be ready, then put the screen reader at the top of it. */
 export async function startAt(page: Page, sr: SR) {
   await settled(page);
-  await page.locator("main h1").first().waitFor();
+  await page.getByRole("heading", { level: 1 }).first().waitFor();
   await sr.navigateToWebContent();
   await sr.clearSpokenPhraseLog();
 }
@@ -71,7 +71,7 @@ export async function signInWithKeyboard(page: Page, sr: SR) {
   await page.keyboard.press("Tab");
   await page.keyboard.type("demo");
   await page.keyboard.press("Enter");
-  await expect(page.locator("main h1")).toHaveText("Overview");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Overview");
   await settled(page);
 }
 
@@ -80,6 +80,6 @@ export async function goTo(page: Page, label: string) {
   const item = page.locator(".ui-sidebar").getByRole("menuitem", { name: label });
   await item.focus();
   await page.keyboard.press("Enter");
-  await expect(page.locator("main h1")).toHaveText(label);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(label);
   await settled(page);
 }

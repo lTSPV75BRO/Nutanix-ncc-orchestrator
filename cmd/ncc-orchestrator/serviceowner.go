@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -49,10 +48,6 @@ type ownershipRecord struct {
 	DefaultUID int `json:"default_uid"`
 	DefaultGID int `json:"default_gid"`
 }
-
-// maxOwnershipExceptions bounds the record: an install whose owners are that
-// mixed is not migrated (the migration says so).
-const maxOwnershipExceptions = 100000
 
 func (r ownershipRecord) encode() string {
 	b, _ := json.Marshal(r)
@@ -153,19 +148,6 @@ func ensureServiceUser(name string) (created bool, err error) {
 // ownershipPlanDetail describes what the migration does with the owners.
 func ownershipPlanDetail(name string) string {
 	return "programs stay root's; the service user " + name + " owns configuration, state, outputs and logs"
-}
-
-// sortedEntries orders a record's entries so parents come before children.
-func sortedEntries(es []ownEntry) []ownEntry {
-	depth := func(p string) int {
-		if p == "." {
-			return -1
-		}
-		return strings.Count(p, "/")
-	}
-	out := append([]ownEntry{}, es...)
-	sort.SliceStable(out, func(i, j int) bool { return depth(out[i].Path) < depth(out[j].Path) })
-	return out
 }
 
 // outsideFoldersNotWritable lists configured folders outside the install that

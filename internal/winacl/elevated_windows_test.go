@@ -54,7 +54,14 @@ func enablePrivilege(t *testing.T, name string) {
 	}
 	tp := windows.Tokenprivileges{PrivilegeCount: 1}
 	tp.Privileges[0] = windows.LUIDAndAttributes{Luid: luid, Attributes: windows.SE_PRIVILEGE_ENABLED}
-	if err := windows.AdjustTokenPrivileges(windows.GetCurrentProcessToken(), false, &tp, 0, nil, nil); err != nil {
+	// The pseudo handle of GetCurrentProcessToken can only query; adjusting
+	// needs a real handle with TOKEN_ADJUST_PRIVILEGES.
+	var tok windows.Token
+	if err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_ADJUST_PRIVILEGES|windows.TOKEN_QUERY, &tok); err != nil {
+		t.Fatalf("open the process token: %v", err)
+	}
+	defer tok.Close()
+	if err := windows.AdjustTokenPrivileges(tok, false, &tp, 0, nil, nil); err != nil {
 		t.Fatalf("enable %s: %v", name, err)
 	}
 	if windows.GetLastError() == windows.ERROR_NOT_ALL_ASSIGNED {

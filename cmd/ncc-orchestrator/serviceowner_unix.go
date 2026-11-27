@@ -11,10 +11,29 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
+
+// maxOwnershipExceptions bounds the record: an install whose owners are that
+// mixed is not migrated (the migration says so).
+const maxOwnershipExceptions = 100000
+
+// sortedEntries orders a record's entries so parents come before children.
+func sortedEntries(es []ownEntry) []ownEntry {
+	depth := func(p string) int {
+		if p == "." {
+			return -1
+		}
+		return strings.Count(p, "/")
+	}
+	out := append([]ownEntry{}, es...)
+	sort.SliceStable(out, func(i, j int) bool { return depth(out[i].Path) < depth(out[j].Path) })
+	return out
+}
 
 // statOwner returns the owner, group and permission bits (with sticky) of a
 // path, without following a symbolic link.
@@ -405,7 +424,7 @@ func serviceUserRunner(installDir string) func(time.Duration, string, ...string)
 	return func(timeout time.Duration, name string, args ...string) (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, name, args...) // #nosec G204 -- our own program, argv only
+		cmd := exec.CommandContext(ctx, name, args...) // #nosec G204 G702 -- our own program, argv only
 		cmd.Dir = installDir
 		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid), Groups: []uint32{}}}
 		out, err := cmd.CombinedOutput()
