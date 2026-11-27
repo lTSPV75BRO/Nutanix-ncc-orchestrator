@@ -63,6 +63,20 @@ jobs:
         run: go vet ./...
       - name: go test
         run: go test -count=1 ./...
+      # WIN-05: the Windows permission code (NTFS ACLs, owner takeover) behaves
+      # differently for a standard user, an elevated administrator and SYSTEM
+      # (the account the Task Scheduler service runs the stack as). The steps
+      # below run it as the last two and fail, not skip, when the token is not
+      # what the test needs (NCC_TEST_EXPECT_ELEVATED / NCC_TEST_EXPECT_SYSTEM).
+      - name: assert the runner session is elevated
+        shell: pwsh
+        run: ./scripts/ci/assert-elevated.ps1
+      - name: permission tests, elevated administrator
+        shell: pwsh
+        run: ./scripts/ci/windows-acl-tests.ps1 -Identity Elevated
+      - name: permission tests, as SYSTEM (scheduled task)
+        shell: pwsh
+        run: ./scripts/ci/windows-acl-tests.ps1 -Identity System -TimeoutSeconds 900
 
   lint:
     name: golangci-lint

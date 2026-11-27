@@ -828,7 +828,16 @@ icacls "C:\NCC" /remove:g *S-1-1-0 *S-1-5-11 *S-1-5-32-545
 ```
 
 Check with `ncc-orchestrator doctor --only-checks secrets-perms`; add `--fix` to
-repair. Someone who could write to the folder before the first start may have
+repair.
+
+CI (`test-windows`) runs these permission tests under three identities: the
+runner's standard `go test`, an elevated administrator (asserted with
+`scripts/ci/assert-elevated.ps1`; includes taking over files owned by another
+account), and SYSTEM through a one-shot scheduled task
+(`scripts/ci/windows-acl-tests.ps1`), where `doctor --fix` on an installer-layout
+folder must leave SYSTEM and Administrators with full control and Users with
+read-only access. `NCC_TEST_EXPECT_ELEVATED=1` / `NCC_TEST_EXPECT_SYSTEM=1` make
+a missing token fail those tests instead of skipping them. Someone who could write to the folder before the first start may have
 left files of their own, so install into a new folder.
 
 #### Restored program files (SEC-07)
