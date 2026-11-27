@@ -1,5 +1,10 @@
 {{- /*
-Hook Jobs of `helm upgrade`: try the new images before, check the stack after.
+Hook Jobs of `helm upgrade`. Before: the new images are pulled and started
+once (weight 0), then the pre-upgrade checks run (weight 1): version skew,
+write permission, free space and a verified backup. After: the API, UI and
+runner image must all report the new version.
+A failed Job stays (hook-succeeded only deletes good ones): read its log with
+`kubectl -n <namespace> logs job/ncc-v2-upgrade-preflight`.
 */}}
 {{- if .Values.upgradeCheck.enabled }}
 {{- $podSecurity := dict "runAsNonRoot" true "runAsUser" 1000 "runAsGroup" 1000 "seccompProfile" (dict "type" "RuntimeDefault") }}
@@ -16,6 +21,7 @@ metadata:
   namespace: {{ .Values.namespace }}
   annotations:
     helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "0"
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 0
@@ -38,6 +44,75 @@ spec:
           resources: { requests: { cpu: 10m, memory: 32Mi } }
           securityContext: {{- toYaml $security | nindent 12 }}
         {{- end }}
+{{- $pc := .Values.upgradeCheck.preCheck }}
+{{- if and .Values.api.enabled (or $pc.backup $pc.skew $pc.permissions (ne (toString $pc.minFreeSpace) "0")) }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ncc-v2-upgrade-preflight
+  namespace: {{ .Values.namespace }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ $pc.timeoutSeconds }}
+  template:
+    metadata:
+      labels: { app: ncc-orchestrator-v2, component: upgrade-check }
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      # The same user and group as the API, so "can write /data" means what it
+      # means for the API.
+      securityContext: {{- toYaml (merge (dict "fsGroup" 1000) $podSecurity) | nindent 8 }}
+      # The data volume may be ReadWriteOnce: run where the API pods run.
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels: { app: ncc-orchestrator-v2, component: api }
+      containers:
+        - name: check
+          image: "{{ .Values.images.runner.repository }}:{{ .Values.images.runner.tag }}"
+          imagePullPolicy: {{ .Values.images.runner.pullPolicy }}
+          command: ["/usr/local/bin/ncc-orchestrator"]
+          args:
+            - upgrade-preflight
+            - --api
+            - http://ncc-v2-api:{{ .Values.api.service.port }}
+            - --data-dir
+            - /data
+            - --expect
+            - {{ $expect | quote }}
+            - --min-from
+            - {{ $pc.minFrom | quote }}
+            - --min-free
+            - {{ toString $pc.minFreeSpace | quote }}
+            - --backup={{ $pc.backup }}
+            - --skew={{ $pc.skew }}
+            - --permissions={{ $pc.permissions }}
+            - --allow-downgrade={{ $pc.allowDowngrade }}
+            - --timeout
+            - {{ $pc.apiTimeout | quote }}
+          env:
+            - name: NCC_API_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secretName }}, key: api-token }
+          # The summary of a failed check is the last thing in the log; show it
+          # in `kubectl describe pod` too.
+          terminationMessagePolicy: FallbackToLogsOnError
+          resources: { requests: { cpu: 10m, memory: 32Mi } }
+          securityContext: {{- toYaml $security | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: {{ .Values.pvcName }} }
+{{- end }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -62,7 +137,7 @@ spec:
           imagePullPolicy: {{ .Values.images.runner.pullPolicy }}
           command: ["/usr/local/bin/ncc-orchestrator"]
           args:
-            - upgrade-check
+            - upgrade-verify
             - --api
             - http://ncc-v2-api:{{ .Values.api.service.port }}
             {{- if .Values.ui.enabled }}

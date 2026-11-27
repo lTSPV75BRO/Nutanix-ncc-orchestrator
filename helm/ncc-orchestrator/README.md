@@ -51,12 +51,28 @@ conflict on `.spec.schedule` or the ConfigMap. Either set `cronjob.schedule`
 to the live value, or pass `--force-conflicts` to let the chart take
 ownership again.
 
-`helm upgrade` runs two checks (`upgradeCheck` in `values.yaml`). Before anything
-changes, the new images are pulled and started once. Afterwards the API and UI
-must answer with the new version, five times in a row, within
-`upgradeCheck.timeout`. Add `--atomic` (Helm 4: `--rollback-on-failure`) so that
-a failed check brings the previous revision back. Set `upgradeCheck.enabled:
-false` when rolling back to images from before 2.4.0.
+`helm upgrade` runs checks around the rollout (`upgradeCheck` in `values.yaml`).
+Before anything changes, the new images are pulled and started once, then the
+pre-upgrade Job `ncc-v2-upgrade-preflight` runs (`upgradeCheck.preCheck`), as
+the API's user on the API's node with `/data` mounted:
+
+| Check | Fails when | Value |
+| --- | --- | --- |
+| Version skew | the target is older than the running version, or older than `minFrom` allows | `skew`, `minFrom`, `allowDowngrade` |
+| Permissions | a file cannot be written and removed in `/data` or its folders | `permissions` |
+| Free space | the data volume has less than `minFreeSpace` free (again after the backup) | `minFreeSpace` (`512Mi`; `"0"` = off) |
+| Backup | the API cannot take a backup, or it does not verify | `backup` (needs the `api-token` key in the credentials Secret) |
+
+The first three run before the backup. A failure stops the upgrade before
+anything changed; with `--atomic` (Helm 4: `--rollback-on-failure`) the previous
+revision stays. The reason is in the Job's log (the failed Job is kept):
+`kubectl -n ncc-orchestrator-v2 logs job/ncc-v2-upgrade-preflight`. The backup
+stays on the data volume (`/data/backups`). Afterwards the post-upgrade Job
+`ncc-v2-upgrade-check` waits, within `upgradeCheck.timeout`, until the API, the
+UI server and the runner image all report the new version, five answers in a
+row. Set `upgradeCheck.enabled: false` when rolling back to images from before
+2.4.0, and `upgradeCheck.preCheck.backup: false` when the API is down on purpose.
+Without Helm, `k8s/upgrade-check-job.yaml` has the same two Jobs.
 
 NetworkPolicies match `k8s/`: by default all ingress is denied except the
 UI port (from `networkPolicy.uiIngressFrom` and in-cluster namespaces) and
