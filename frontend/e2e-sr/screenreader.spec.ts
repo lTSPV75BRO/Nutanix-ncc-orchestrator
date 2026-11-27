@@ -78,10 +78,13 @@ test.describe("screen reader on the demo build", () => {
     const button = page.getByRole("button", { name: "Copy link" });
     await button.focus();
     await screenReader.clearSpokenPhraseLog();
-    await page.keyboard.press("Enter");
+    // Press through the screen reader, not the page: VoiceOver logs only what
+    // follows its own commands, so a page key press leaves the log empty.
+    await screenReader.press("Enter");
     await expect(page.locator(".ant-notification-notice").first()).toBeVisible();
-    // "Link to these findings copied" (clipboard allowed) or "Copy this link" (not): both say "link".
-    await waitToHear(screenReader, /link/, "toast text was never spoken");
+    // "Link to these findings copied" (clipboard allowed) or "Copy this link"
+    // (not). Not just "link": the button's own name, "Copy link", has it too.
+    await waitToHear(screenReader, /link to these findings copied|copy this link/, "toast text was never spoken");
     // The toast is a live region, not a focus move.
     await expect(button).toBeFocused();
   });

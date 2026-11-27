@@ -48,6 +48,26 @@ export async function reachHeading(sr: SR, pattern: RegExp, max = 12): Promise<s
 }
 
 /**
+ * Guidepup's navigateToWebContent clicks the middle of the page to give it
+ * focus. On Runs or Overview that click lands on a row and opens it. Cover the
+ * page with an empty, hidden layer for the click, then take it away.
+ */
+async function enterPage(page: Page, sr: SR) {
+  await page.evaluate(() => {
+    const cover = document.createElement("div");
+    cover.id = "sr-click-guard";
+    cover.setAttribute("aria-hidden", "true");
+    cover.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:transparent";
+    document.body.appendChild(cover);
+  });
+  try {
+    await sr.navigateToWebContent();
+  } finally {
+    await page.evaluate(() => document.getElementById("sr-click-guard")?.remove());
+  }
+}
+
+/**
  * Wait for the page to be ready, then put the screen reader at the top of it.
  * Focus is taken off any control first: on a sidebar menu item NVDA stays in
  * focus mode, where heading and item navigation keys go to the menu instead.
@@ -59,7 +79,7 @@ export async function startAt(page: Page, sr: SR) {
     (document.activeElement as HTMLElement | null)?.blur();
     window.scrollTo(0, 0);
   });
-  await sr.navigateToWebContent();
+  await enterPage(page, sr);
   await sr.clearSpokenPhraseLog();
 }
 
@@ -89,7 +109,7 @@ export async function signInWithKeyboard(page: Page, sr: SR) {
   await page.goto("./#/overview", { waitUntil: "load" });
   const user = page.getByRole("textbox", { name: "Username" });
   await user.waitFor();
-  await sr.navigateToWebContent();
+  await enterPage(page, sr);
   // Moving the screen reader into the page can move focus (VoiceOver does):
   // put it back on the field the page focuses on arrival.
   await user.focus();
