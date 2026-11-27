@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -91,7 +92,8 @@ func systemdSupervisorUnit(o installServiceOptions) string {
 		"# the kernel should pick something else first.",
 		"OOMScoreAdjust=-500",
 	}
-	lines = append(lines, systemdHardening()...)
+	// The supervisor writes schedule units, and replaces its own programs.
+	lines = append(lines, systemdHardening(o.InstallDir, systemdUnitDir, path.Dir(filepath.ToSlash(o.OrchestratorBin)))...)
 	lines = append(lines,
 		"",
 		"[Install]",

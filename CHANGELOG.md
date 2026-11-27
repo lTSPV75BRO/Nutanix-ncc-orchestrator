@@ -10,9 +10,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [2.4.0] - Unreleased
 
-Release candidates: `2.4.0-rc.1` and `2.4.0-rc.2` (fixes `verify --online`), 2026-11-24.
+Release candidates: `2.4.0-rc.1` and `2.4.0-rc.2` (fixes `verify --online`), 2026-11-24; `2.4.0-rc.3` (Linux and Windows hardening, quieter pages), 2026-11-27.
 
 ### Security
+
+- **Linux service sandbox, file system (LIN-02).** The units drop `CAP_SYS_ADMIN`
+  and turn on `ProtectSystem=full`, `ProtectHome=read-only` and `PrivateTmp=yes`,
+  with `ReadWritePaths` for the install folder, `/etc/systemd/system` and the
+  folders the configuration names. Exposure in `systemd-analyze security` falls
+  from 5.9 to 5.2. 2.3.x and 2.4.0-rc units are replaced by the update helper.
+- **Windows install folder (WIN-05).** `doctor --fix` removes write access for
+  ordinary users from the install folder when it holds only this product; for
+  shared or system folders it keeps reporting with the `icacls` command to run.
+- **Released images are not replaced (REL-10).** `docker-publish.yml` queues runs
+  per branch and skips a branch run that is no longer the newest commit or whose
+  version is already tagged.
 
 - **Free release signing.** The tag release workflow now builds one coherent
   artifact set, embeds an Ed25519 release public key, signs
@@ -181,6 +193,8 @@ Release candidates: `2.4.0-rc.1` and `2.4.0-rc.2` (fixes `verify --online`), 202
   Warning, Info, Pass). Stat figures are no longer coloured; a dot by the
   label carries the state. Card titles have a plain icon instead of a violet
   tile, and buttons have no coloured shadow.
+- **Text resize and spacing are tested (A11Y-03).** Every page is checked with
+  text at 200% and with the WCAG text-spacing overrides.
 - **Findings filters look like filters.** The Fail, Warning, Error and Info
   counts above the findings list are now labelled "Show" and drawn as
   bordered buttons. A selected one is filled and gets a check mark, a tooltip

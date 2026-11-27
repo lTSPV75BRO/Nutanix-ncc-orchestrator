@@ -37,7 +37,7 @@ func systemdLogMaintenanceServiceUnit(o installServiceOptions) string {
 		"Type=oneshot",
 		"ExecStart=/bin/sh -c " + systemdQuote(script),
 	}
-	lines = append(lines, systemdHardening()...)
+	lines = append(lines, systemdHardening(o.InstallDir, path.Dir(filepath.ToSlash(o.OrchestratorBin)))...)
 	return strings.Join(append(lines, ""), "\n")
 }
 

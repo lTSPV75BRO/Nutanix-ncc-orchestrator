@@ -214,7 +214,82 @@ func aclConfigRef(installDir, path string) string {
 // aclRootHint is the command that closes the install dir itself. The product
 // does not do that: the folder may be shared with other software.
 func aclRootHint(dir string) string {
-	return fmt.Sprintf(`icacls "%s" /inheritance:d, then icacls "%s" /remove:g *S-1-1-0 *S-1-5-11 *S-1-5-32-545`, dir, dir)
+	return fmt.Sprintf(`icacls "%s" /inheritance:d, then icacls "%s" /remove:g *S-1-1-0 *S-1-5-11 *S-1-5-32-545 *S-1-5-4`, dir, dir)
+}
+
+var (
+	// aclRootKnownDirs are the folders of our layout besides the private and
+	// program ones; aclRootKnownFiles are files that may sit next to them.
+	aclRootKnownDirs  = []string{"outputfiles", "frontend", "docs", "scripts", "deploy", "data", "tmp", "temp", "reports", "output"}
+	aclRootKnownFiles = []string{"readme*", "license*", "notice*", "version*", "changelog*", "*.md", "*.txt", "*.ps1", "*.cmd", "*.bat", "*.sh", "*.pid", "*.log"}
+)
+
+// aclRootUnsafe explains why the install folder must not be changed by the
+// product, or returns "" when it is ours alone: it holds our stack, is not a
+// shared system location, and has nothing in it that is not part of our layout.
+func aclRootUnsafe(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "the folder path cannot be resolved"
+	}
+	if isVolumeRoot(abs) {
+		return "it is a drive or share root"
+	}
+	low := strings.ToLower(strings.TrimRight(abs, `\/`))
+	shared := []string{"ProgramData", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "SystemRoot", "windir", "USERPROFILE", "PUBLIC", "ALLUSERSPROFILE", "LOCALAPPDATA", "APPDATA", "TEMP", "TMP", "SystemDrive"}
+	for _, name := range shared {
+		if v := strings.TrimSpace(os.Getenv(name)); v != "" {
+			if a, err := filepath.Abs(v); err == nil && strings.ToLower(strings.TrimRight(a, `\/`)) == low {
+				return "it is a shared system location (" + abs + ")"
+			}
+		}
+	}
+	if home := strings.TrimSpace(os.Getenv("USERPROFILE")); home != "" {
+		if a, err := filepath.Abs(filepath.Dir(home)); err == nil && strings.ToLower(strings.TrimRight(a, `\/`)) == low {
+			return "it is the folder that holds user profiles"
+		}
+	}
+	_, e1 := os.Stat(filepath.Join(abs, trustedStackFile))
+	_, e2 := os.Stat(filepath.Join(abs, "bin", "ncc-orchestrator.exe"))
+	if e1 != nil && e2 != nil {
+		return "it does not hold our stack (no " + trustedStackFile + " or bin\\ncc-orchestrator.exe)"
+	}
+	entries, err := os.ReadDir(abs)
+	if err != nil {
+		return "the folder cannot be listed: " + err.Error()
+	}
+	var foreign []string
+	for _, e := range entries {
+		n := strings.ToLower(e.Name())
+		known := false
+		if e.IsDir() {
+			for _, d := range append(append(append([]string(nil), aclPrivateDirs...), aclProgramDirs...), aclRootKnownDirs...) {
+				known = known || n == d
+			}
+			known = known || strings.HasPrefix(n, ".ncc-")
+		} else {
+			known = matchesAny(aclPrivateFiles, e.Name()) || matchesAny(aclSkipFiles, e.Name()) ||
+				matchesAny(aclProgramFiles, e.Name()) || matchesAny(aclRootKnownFiles, e.Name())
+		}
+		if !known {
+			foreign = append(foreign, e.Name())
+		}
+	}
+	if len(foreign) > 0 {
+		return "it contains files that are not ours: " + aclSummary(foreign)
+	}
+	return ""
+}
+
+// closeInstallRoot removes write access for broad groups on the install folder
+// itself, keeping read and execute. It reports whether anything changed, and
+// the reason when it declined because the folder may be shared.
+func closeInstallRoot(dir string) (changed bool, refused string, err error) {
+	if r := aclRootUnsafe(dir); r != "" {
+		return false, r, nil
+	}
+	changed, err = winacl.Restrict(dir, winacl.NoBroadWrite)
+	return changed, "", err
 }
 
 // secureInstallACLs restricts an install's secrets and program folders on
@@ -326,6 +401,18 @@ func checkSecretsPermsWindows(hc *healContext) healResult {
 		in.keys = append(in.keys, st.UITLSKeyFile)
 	}
 	o := in.apply(hc.Fix && !isVolumeRoot(hc.InstallDir))
+	rootRefused := ""
+	if hc.Fix && aclRootWarning(hc.InstallDir) != "" {
+		changed, refused, err := closeInstallRoot(hc.InstallDir)
+		switch {
+		case err != nil:
+			o.fail(hc.InstallDir, err)
+		case changed:
+			o.changed = append(o.changed, hc.InstallDir)
+		default:
+			rootRefused = refused
+		}
+	}
 	root := aclRootWarning(hc.InstallDir)
 
 	var problems []string
@@ -353,6 +440,9 @@ func checkSecretsPermsWindows(hc *healContext) healResult {
 			hints = append(hints, "Re-run with --fix to limit the listed paths to SYSTEM, Administrators and this account.")
 		}
 		if root != "" {
+			if rootRefused != "" {
+				root += " (--fix left it alone because " + rootRefused + ")"
+			}
 			hints = append(hints, root)
 		}
 		res.Hint = strings.Join(hints, " ")

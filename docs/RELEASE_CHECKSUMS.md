@@ -77,6 +77,13 @@ changed `.github/workflows/*`, which `GITHUB_TOKEN` cannot do.
    later). From a candidate, updates find the next candidate and then the release.
 5. Before the final tag, stamp `2.4.0` the same way.
 
+Image publishing: images of a version come from the tag run (`release.yml` calls
+`docker-publish.yml`). A push to `main` runs it too, but it skips the push when
+`v<VERSION>` already exists or a newer commit is at the head of `main`, so a
+merge never replaces the images of a released version or `:latest`. Runs for one
+ref are queued, not cancelled. `:latest` is only set for a version without a
+`-` suffix (`scripts/binaryGO.txt`).
+
 ### One-time maintainer setup
 
 Create the environment first (Settings, Environments, New environment,

@@ -226,8 +226,10 @@ func planUnit(title, path, installed, desired string) defChange {
 }
 
 // retiredUnitLines were written by an earlier release and are dropped without
-// asking. (Every line of 2.2.1 and 2.3.0 is still written today.)
-var retiredUnitLines = map[string]bool{}
+// asking. (Every other line of 2.2.1, 2.3.0 and 2.4.0-rc is still written today.)
+var retiredUnitLines = map[string]bool{
+	systemdCapabilityLine240rc: true, // kept CAP_SYS_ADMIN
+}
 
 // applyUnit writes what planUnit decided.
 func applyUnit(c defChange) error {

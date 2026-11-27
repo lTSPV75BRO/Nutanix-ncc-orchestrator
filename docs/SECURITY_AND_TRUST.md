@@ -504,9 +504,16 @@ systemd schedules run as root in a sandbox that the API, UI and NCC runs inherit
 - Processes: `NoNewPrivileges`, `RestrictSUIDSGID`, `LockPersonality`,
   `RestrictRealtime`, `RestrictNamespaces`, `SystemCallArchitectures=native`,
   sockets limited to Unix, IPv4, IPv6 and netlink, and capabilities such as
-  `CAP_SYS_MODULE`, `CAP_SYS_BOOT`, `CAP_SYS_TIME` and `CAP_NET_RAW` removed.
+  `CAP_SYS_ADMIN`, `CAP_SYS_MODULE`, `CAP_SYS_BOOT`, `CAP_SYS_TIME` and
+  `CAP_NET_RAW` removed. `systemctl` and `chcon` work without `CAP_SYS_ADMIN`.
 - Kernel: `ProtectKernelTunables`, `ProtectKernelModules`, `ProtectKernelLogs`,
   `ProtectControlGroups`, `ProtectClock`.
+- File system (since 2.4.0-rc.3): `ProtectSystem=full` (`/usr`, `/boot`, `/efi`
+  and `/etc` read-only), `ProtectHome=read-only` and `PrivateTmp=yes`, with
+  `ReadWritePaths=` for the install folder, `/etc/systemd/system` (schedule
+  units) and every folder under those trees that the configuration names when
+  the unit is written. `PrivateTmp` is left out when the install or a configured
+  folder is under `/tmp` or `/var/tmp`.
 
 The update watcher's restart helper gets the process part only. This limits
 damage; it does not contain a compromised service, which can still write files
@@ -535,11 +542,13 @@ To allow everything again, also set `NoNewPrivileges=no`, `RestrictSUIDSGID=no`,
 `RestrictAddressFamilies=`, `SystemCallArchitectures=`, `CapabilityBoundingSet=~`
 (these three as shown), then `systemctl restart ncc-orchestrator`.
 
-`PrivateTmp`, `ProtectHome` and `ProtectSystem` are off because the install,
-output or backup folder may be under `/tmp`, `/root`, `/home` or `/usr`. If yours
-are not, add them in the same drop-in: `PrivateTmp=yes`, `ProtectHome=yes`,
-`ProtectSystem=yes` (not `full` or `strict`: schedules write to
-`/etc/systemd/system`). Check with `systemd-analyze security ncc-orchestrator`.
+If you point an output, log or backup folder at a new place under `/usr`, `/etc`,
+`/home` or `/root` after the unit was written, it stays read-only for the service
+until the unit is written again (`sudo ncc-orchestrator upgrade-adopt` or
+`v2-install-service`) or you allow it in the same drop-in:
+`ReadWritePaths=-/the/folder`. To turn the file system protections off, set
+`ProtectSystem=no`, `ProtectHome=no` and `PrivateTmp=no`. Check with
+`systemd-analyze security ncc-orchestrator` (5.2 on systemd 257, was 5.9).
 
 ### api-server access control (RBAC + login)
 

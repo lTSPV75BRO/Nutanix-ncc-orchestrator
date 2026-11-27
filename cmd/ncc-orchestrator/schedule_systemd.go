@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -265,7 +266,8 @@ func buildSystemdScheduleUnits(taskName, onCalendar, scriptPath, workDir, marker
 		"WorkingDirectory=" + workDir,
 		"ExecStart=/bin/sh " + scriptPath,
 	}
-	serviceLines = append(serviceLines, systemdHardening()...)
+	// The run writes its log next to the script.
+	serviceLines = append(serviceLines, systemdHardening(workDir, path.Dir(filepath.ToSlash(scriptPath)))...)
 	service = strings.Join(append(serviceLines, ""), "\n")
 	timer = strings.Join([]string{
 		"[Unit]",

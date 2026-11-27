@@ -138,16 +138,60 @@ func TestSecretsPermsCheckOnWindows(t *testing.T) {
 	if res = checkSecretsPerms(hc); !res.Fixed || res.FixMsg == "" {
 		t.Fatalf("fix: %+v", res)
 	}
-	// Only the install folder itself is left, which the product never changes.
+	// The install folder is ours (marker, known layout), so --fix closed it too.
 	hc.Fix = false
-	if res = checkSecretsPerms(hc); res.Status != healWarn || !strings.Contains(res.Hint, "icacls") || strings.Contains(res.Hint, "--fix") {
+	if res = checkSecretsPerms(hc); res.Status != healOK {
 		t.Fatalf("after fix: %+v", res)
 	}
-	if out, err := exec.Command("icacls", dir, "/remove:g", "*S-1-5-32-545", "*S-1-5-11").CombinedOutput(); err != nil {
-		t.Fatalf("icacls: %v %s", err, out)
+	if isBroad(t, dir, winacl.NoBroadWrite) {
+		t.Fatal("install folder still writable for broad groups")
 	}
-	if res = checkSecretsPerms(hc); res.Status != healOK {
-		t.Fatalf("closed install: %+v", res)
+	if !isBroad(t, dir, winacl.Private) {
+		t.Fatal("install folder should stay readable")
+	}
+	// Children keep inheriting the folder's access.
+	if isBroad(t, filepath.Join(dir, "outputfiles"), winacl.NoBroadWrite) {
+		t.Fatal("outputfiles got write access back")
+	}
+}
+
+func TestCloseInstallRootRefusesUnsafe(t *testing.T) {
+	// A folder with someone else's files is only reported.
+	dir := broadInstall(t)
+	if err := os.WriteFile(filepath.Join(dir, "other-app.dll"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hc := &healContext{InstallDir: dir, ConfigPath: filepath.Join(dir, "config.yaml"), Fix: true}
+	res := checkSecretsPerms(hc)
+	if res.Status != healWarn || !strings.Contains(res.Hint, "icacls") || !strings.Contains(res.Hint, "other-app.dll") {
+		t.Fatalf("foreign file: %+v", res)
+	}
+	if !isBroad(t, dir, winacl.NoBroadWrite) {
+		t.Fatal("a shared folder was changed")
+	}
+
+	// No marker of ours.
+	bare := filepath.Join(t.TempDir(), "bare")
+	if err := os.Mkdir(bare, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if changed, refused, err := closeInstallRoot(bare); changed || refused == "" || err != nil {
+		t.Errorf("bare folder: %v %q %v", changed, refused, err)
+	}
+
+	// Shared system locations, even with our files in them.
+	shared := broadInstall(t)
+	t.Setenv("ProgramData", shared)
+	if changed, refused, _ := closeInstallRoot(shared); changed || !strings.Contains(refused, "shared system location") {
+		t.Errorf("ProgramData: %v %q", changed, refused)
+	}
+	if !isBroad(t, shared, winacl.NoBroadWrite) {
+		t.Fatal("ProgramData-like folder was changed")
+	}
+	for _, d := range []string{`C:\`, filepath.Dir(os.Getenv("USERPROFILE"))} {
+		if changed, refused, _ := closeInstallRoot(d); changed || refused == "" {
+			t.Errorf("%s: %v %q", d, changed, refused)
+		}
 	}
 }
 

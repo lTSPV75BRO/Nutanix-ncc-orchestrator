@@ -1,9 +1,21 @@
 # NCC Orchestrator — v2.4.0
 
-**Status:** release candidate 2 (`2.4.0-rc.2`).
+**Status:** release candidate 3 (`2.4.0-rc.3`).
+
+Since `2.4.0-rc.2`:
+
+- The Linux service drops `CAP_SYS_ADMIN` and runs with `ProtectSystem=full`,
+  `ProtectHome=read-only` and `PrivateTmp=yes` (exposure 5.9 to 5.2). rc hosts get the
+  new units from the update helper. See [Security and trust](../SECURITY_AND_TRUST.md)
+  for the drop-in if a folder you configured later must be writable.
+- `doctor --fix` closes an install folder on Windows that ordinary users can write to,
+  when the folder holds only NCC Orchestrator.
+- A push to `main` no longer replaces the Docker images of a released version.
+- Quieter pages and a reworked sign-in page; the opening title is off by default.
+  Findings filters look like filters.
 
 Since `2.4.0-rc.1`: `verify --online` works. In rc.1 it prints "SKIPPED", although the
-release is signed correctly; use rc.2.
+release is signed correctly.
 
 ## Trying a release candidate
 
@@ -11,12 +23,12 @@ A candidate is a GitHub pre-release. It is never marked Latest, and stable insta
 not offered it. On a test host that runs 2.3.0 or later:
 
 ```bash
-ncc-orchestrator update --target-version 2.4.0-rc.2
+ncc-orchestrator update --target-version 2.4.0-rc.3
 ncc-orchestrator v2-restart
 ```
 
 From rc.1 use **Updates & backups** or `ncc-orchestrator upgrade`. From a candidate,
-updates offer newer candidates and then 2.4.0. Images have the tag `2.4.0-rc.2`. The VM
+updates offer newer candidates and then 2.4.0. Images have the tag `2.4.0-rc.3`. The VM
 templates install the version in `NCC_VERSION`. Please report
 problems with the output of `ncc-orchestrator upgrade --status` and a support bundle
 (`ncc-orchestrator doctor`).

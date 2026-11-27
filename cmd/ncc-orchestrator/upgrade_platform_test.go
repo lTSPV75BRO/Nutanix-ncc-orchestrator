@@ -20,6 +20,9 @@ func unitOf(release string, o installServiceOptions) string {
 		for _, d := range drop[release] {
 			keep = keep && l != d
 		}
+		for _, p := range []string{"ProtectSystem=", "ProtectHome=", "PrivateTmp=", "ReadWritePaths="} {
+			keep = keep && (drop[release] == nil || !strings.HasPrefix(l, p))
+		}
 		if keep {
 			out = append(out, l)
 		}
