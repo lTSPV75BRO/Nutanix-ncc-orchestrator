@@ -1,7 +1,7 @@
 // What a real screen reader says (A11Y-03). The browser suite in ../e2e checks
 // the DOM; this checks the announcements, through NVDA (Windows) or VoiceOver
 // (macOS) driven by Guidepup. Each test signs in with the keyboard first.
-import { expect, expectSpoken, goTo, heard, reach, reachHeading, signInWithKeyboard, startAt, test } from "./sr";
+import { expect, expectSpoken, goTo, h1Pattern, heard, reach, reachHeading, signInWithKeyboard, startAt, test, waitToHear } from "./sr";
 
 test.describe("screen reader on the demo build", () => {
   test("Overview, Findings and Runs: title, h1 and main landmark are announced", async ({ page, screenReader }) => {
@@ -14,8 +14,8 @@ test.describe("screen reader on the demo build", () => {
 
       // Heading navigation finds the page's h1 and says it is a level 1 heading.
       await startAt(page, screenReader);
-      const h1 = await reachHeading(screenReader, new RegExp(`^${name}\\b`, "i"));
-      expectSpoken(h1, `${name} h1`, /heading/, /1/);
+      const h1 = await reachHeading(screenReader, h1Pattern(name));
+      expectSpoken(h1, `${name} h1`, /heading/);
 
       // Landmark navigation reaches the main region and announces it as one.
       await startAt(page, screenReader);
@@ -35,9 +35,11 @@ test.describe("screen reader on the demo build", () => {
     await goTo(page, "Findings");
     await startAt(page, screenReader);
 
-    // "Fail 7. Filter by Fail., toggle button, not pressed" (NVDA); VoiceOver says "off" for the state.
+    // "Fail 7. Filter by Fail., toggle button, not pressed" (NVDA); VoiceOver
+    // says "fail 7. filter by fail. toggle button" and names no state when off.
     const off = await reach(screenReader, /\bfail\b.*\d.*filter by fail/);
-    expectSpoken(off, "Fail filter, off", /toggle|button/, /not pressed|unpressed|\boff\b|not selected/);
+    expectSpoken(off, "Fail filter, off", /toggle|button/);
+    expect(off, "Fail filter announced as pressed before it was pressed").not.toMatch(/(?<!not |un)pressed|(?<!not )selected|\bon\b/);
     // The next severity is a filter too.
     await screenReader.next();
     expectSpoken((await screenReader.lastSpokenPhrase()).toLowerCase(), "next severity filter", /filter by/, /toggle|button/);
@@ -79,7 +81,7 @@ test.describe("screen reader on the demo build", () => {
     await page.keyboard.press("Enter");
     await expect(page.locator(".ant-notification-notice").first()).toBeVisible();
     // "Link to these findings copied" (clipboard allowed) or "Copy this link" (not): both say "link".
-    await expect.poll(() => heard(screenReader), { timeout: 15_000, message: "toast text was never spoken" }).toMatch(/link/);
+    await waitToHear(screenReader, /link/, "toast text was never spoken");
     // The toast is a live region, not a focus move.
     await expect(button).toBeFocused();
   });

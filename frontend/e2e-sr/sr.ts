@@ -47,12 +47,36 @@ export async function reachHeading(sr: SR, pattern: RegExp, max = 12): Promise<s
   throw new Error(`no heading matching ${pattern} in ${max} headings. Heard:\n${(await sr.spokenPhraseLog()).join("\n")}`);
 }
 
-/** Wait for the page to be ready, then put the screen reader at the top of it. */
+/**
+ * Wait for the page to be ready, then put the screen reader at the top of it.
+ * Focus is taken off any control first: on a sidebar menu item NVDA stays in
+ * focus mode, where heading and item navigation keys go to the menu instead.
+ */
 export async function startAt(page: Page, sr: SR) {
   await settled(page);
   await page.getByRole("heading", { level: 1 }).first().waitFor();
+  await page.evaluate(() => {
+    (document.activeElement as HTMLElement | null)?.blur();
+    window.scrollTo(0, 0);
+  });
   await sr.navigateToWebContent();
   await sr.clearSpokenPhraseLog();
+}
+
+/**
+ * Wait until the screen reader has said something matching `pattern`.
+ * VoiceOver only logs what commands return, so the last phrase is read too:
+ * that is where a live region announcement shows up.
+ */
+export async function waitToHear(sr: SR, pattern: RegExp, message: string, timeout = 15_000) {
+  await expect
+    .poll(async () => `${(await sr.lastSpokenPhrase()).toLowerCase()}\n${await heard(sr)}`, { timeout, message })
+    .toMatch(pattern);
+}
+
+/** "Overview, heading, level 1" (NVDA) or "heading level 1 Overview" (VoiceOver). */
+export function h1Pattern(name: string): RegExp {
+  return new RegExp(`^(?=.*\\b${name}\\b)(?=.*level\\s*1\\b)`, "i");
 }
 
 /**
@@ -65,11 +89,18 @@ export async function signInWithKeyboard(page: Page, sr: SR) {
   await page.goto("./#/overview", { waitUntil: "load" });
   const user = page.getByRole("textbox", { name: "Username" });
   await user.waitFor();
-  await expect(user).toBeFocused();
   await sr.navigateToWebContent();
+  // Moving the screen reader into the page can move focus (VoiceOver does):
+  // put it back on the field the page focuses on arrival.
+  await user.focus();
+  await expect(user).toBeFocused();
   await page.keyboard.type("demo");
+  await expect(user).toHaveValue("demo");
   await page.keyboard.press("Tab");
+  const password = page.getByLabel("Password", { exact: true });
+  await expect(password).toBeFocused();
   await page.keyboard.type("demo");
+  await expect(password).toHaveValue("demo");
   await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Overview");
   await settled(page);
