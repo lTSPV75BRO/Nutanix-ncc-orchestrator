@@ -175,6 +175,11 @@ func containsFiles(set, sub map[string]string) bool {
 // recordTrustedStack adds the installed stack to the ledger. Best-effort:
 // a failure only means a later restore of this version restores data only.
 func recordTrustedStack(installDir, source string) error {
+	if unprivilegedInstall(installDir) {
+		// Root keeps the ledger of an install run by the service user (the
+		// install and the update helper record it); the service cannot.
+		return nil
+	}
 	files := installedStackHashes(installDir)
 	if len(files) == 0 {
 		return nil
@@ -207,6 +212,19 @@ func writeTrustedStack(installDir string, l trustedStackLedger) error {
 		return err
 	}
 	path := filepath.Join(installDir, trustedStackFile)
+	if runtime.GOOS != "windows" {
+		// A fresh, randomly named file: never one the service user planted
+		// in the install (a fixed .tmp name could be a symbolic link).
+		tmp, err := stageBytes(b, path, 0o600)
+		if err != nil {
+			return err
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+		return nil
+	}
 	tmp := path + ".tmp"
 	if err := writeSecretFile(tmp, b); err != nil {
 		return err

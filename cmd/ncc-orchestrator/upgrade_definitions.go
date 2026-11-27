@@ -163,7 +163,7 @@ var unitIdentityKeys = map[string]bool{
 
 // planUnit decides how an installed unit becomes the desired one. Lines that
 // this program never wrote move to a drop-in, which wins over the unit.
-func planUnit(title, path, installed, desired string) defChange {
+func planUnit(title, path, installed, desired string, dirs ...string) defChange {
 	c := defChange{ID: fileDefPrefix + path, Title: title, body: desired}
 	if installed == "" {
 		c.Action = defCreate
@@ -178,7 +178,7 @@ func planUnit(title, path, installed, desired string) defChange {
 	for _, l := range unitLines(installed) {
 		if want[l] {
 			have[l] = true
-		} else if !retiredUnitLines[l.text] {
+		} else if !retiredUnitLine(l, dirs...) {
 			extra = append(extra, l)
 		}
 	}

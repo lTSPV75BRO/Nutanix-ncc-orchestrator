@@ -498,30 +498,90 @@ that directory as sensitive — payloads can contain check details.
 
 ### systemd sandbox (Linux service)
 
-The units written by `v2-install-service` (supervisor, log maintenance) and by
-systemd schedules run as root in a sandbox that the API, UI and NCC runs inherit:
+Since LIN-02 (phase U5 of [UPGRADE_HELPER_PLAN.md](UPGRADE_HELPER_PLAN.md)) the
+supervisor, API, UI, NCC runs, systemd schedules and log maintenance run as the
+system user `ncc` (group `ncc`, no home, no login shell). `v2-install-service`
+creates it with `useradd --system`; the update helper does the same when it
+adopts an older install.
 
-- Processes: `NoNewPrivileges`, `RestrictSUIDSGID`, `LockPersonality`,
+- Files: `bin/`, `frontend-dist/` and `helper/` stay root's and are mounted
+  read-only for the service, so it cannot change the programs it runs. The
+  install folder and `run/` are `root:ncc` with the sticky bit, so the service
+  cannot rename or replace what root owns there (the update helper's
+  `run/upgrade/` and the trusted-stack ledger `.ncc-trusted-stack.json`).
+  Configuration, state, outputs, logs and TLS material belong to `ncc`; secrets
+  stay owner-only (`0600`). Folders outside the install that the configuration
+  names are not changed; the install prints a warning with the `chown` to run.
+- Processes: `User=ncc`, `Group=ncc`, `CapabilityBoundingSet=` and
+  `AmbientCapabilities=` empty (only `CAP_NET_BIND_SERVICE` when the saved API or
+  UI port is below 1024), `NoNewPrivileges`, `RestrictSUIDSGID`, `LockPersonality`,
   `RestrictRealtime`, `RestrictNamespaces`, `SystemCallArchitectures=native`,
-  sockets limited to Unix, IPv4, IPv6 and netlink, and capabilities such as
-  `CAP_SYS_ADMIN`, `CAP_SYS_MODULE`, `CAP_SYS_BOOT`, `CAP_SYS_TIME` and
-  `CAP_NET_RAW` removed. `systemctl` and `chcon` work without `CAP_SYS_ADMIN`.
+  `SystemCallFilter=@system-service`, `MemoryDenyWriteExecute`, `PrivateDevices`,
+  `ProtectProc=invisible`, `RemoveIPC`, sockets limited to Unix, IPv4, IPv6 and
+  netlink.
 - Kernel: `ProtectKernelTunables`, `ProtectKernelModules`, `ProtectKernelLogs`,
   `ProtectControlGroups`, `ProtectClock`.
-- File system (since 2.4.0-rc.3): `ProtectSystem=full` (`/usr`, `/boot`, `/efi`
-  and `/etc` read-only), `ProtectHome=read-only` and `PrivateTmp=yes`, with
-  `ReadWritePaths=` for the install folder, `/etc/systemd/system` (schedule
-  units) and every folder under those trees that the configuration names when
-  the unit is written. `PrivateTmp` is left out when the install or a configured
-  folder is under `/tmp` or `/var/tmp`.
+- File system: `ProtectSystem=strict` (everything read-only), `ProtectHome=read-only`
+  and `PrivateTmp=yes`, with `ReadWritePaths=` for the install folder and the
+  folders the configuration names when the unit is written (never a top-level
+  folder or one under `/usr`, `/etc`, `/boot`, `/run` and the like), and
+  `ReadOnlyPaths=` for the program folders. `PrivateTmp` is left out when the
+  install or a configured folder is under `/tmp` or `/var/tmp`.
 
-The update watcher's restart helper gets the process part only. This limits
-damage; it does not contain a compromised service, which can still write files
-as root and manage units. Existing installs get the sandbox, schedules included, from
-the update helper after the upgrade to 2.4.0. With `NCC_UPGRADE_ADOPT=0` run
-`sudo ncc-orchestrator upgrade-adopt`, or re-run `v2-install-service`, restart the
-service and save a systemd schedule again. A unit whose command or user was changed by
-hand is kept as it is and reported.
+`systemd-analyze security ncc-orchestrator` gives 1.6 (systemd 257; it was 5.2
+with the root service).
+
+What needs root is done by root units that take no instructions from the
+service other than request files they validate:
+
+- the update helper (`ncc-orchestrator-upgrade.path`, `run/upgrade/`), as before;
+- the service helper `ncc-orchestrator-ops.service`, started by
+  `ncc-orchestrator-ops.path` when a file appears in `run/ops/req/`. It installs
+  and removes schedule units (`ncc-sched-<task>`, units with our marker only),
+  restarts the stack after a restore or a TLS change, and starts an upgrade,
+  rollback or adoption (stage 1 of the update helper). A request is one JSON
+  file of at most 16 KiB, opened without following links, owned by `ncc`, with
+  a fixed schema (unknown fields are refused), a known operation, and names
+  and paths checked against strict patterns (task names, `OnCalendar=`,
+  absolute paths without quoting or `%` specifiers, the runner script
+  `<install>/…/ncc-sched-<task>.sh`, pre-update backups in `<install>/backups`
+  only). A package path (`--bundle`) is never taken from the service. The
+  answer is written to `run/ops/res/`, which only root can write.
+  `PUT /api/v1/schedule` with `apply=true` waits for the answer (up to 45 s)
+  and returns its error.
+
+A compromised service can therefore change configuration, reports and
+schedules of its own install, but no longer the programs, other units, `/etc`
+or anything root runs.
+
+**Upgrades and rollback.** The update helper moves units of 2.3.x, 2.4.0-rc and
+2.4.0 (root) to the `ncc` unit, gives the files to `ncc`, adds the service
+helper, and moves a schedule from root's crontab to a systemd timer of `ncc`.
+A rollback puts the units, the owners and root's crontab back exactly as they
+were (the `ncc` user stays). A unit whose command or user was changed by hand
+is kept as it is and reported. With `NCC_UPGRADE_ADOPT=0` run
+`sudo ncc-orchestrator upgrade-adopt` or re-run `v2-install-service`.
+
+**Staying root.** `v2-install-service --service-user root`, or for upgrades and
+adoption the environment variable `NCC_SERVICE_USER=root` or the file
+`/etc/ncc-orchestrator/service-user` containing `root`, keep the service as
+root with the sandbox of 2.4.0 below. An install the `ncc` user cannot reach
+(for example under `/root`) stays root and says why. A unit with `User=root`
+stays root on upgrades.
+
+Root mode (`--service-user root`) keeps the older sandbox: the process and kernel
+settings above without the system call filter, `MemoryDenyWriteExecute`,
+`PrivateDevices` and `ProtectProc`, capabilities such as `CAP_SYS_ADMIN`,
+`CAP_SYS_MODULE`, `CAP_SYS_BOOT`, `CAP_SYS_TIME` and `CAP_NET_RAW` removed, and
+`ProtectSystem=full` with `ReadWritePaths=` for the install folder,
+`/etc/systemd/system` and the configured folders. This limits damage; it does
+not contain a compromised service, which can still write files as root and
+manage units.
+
+**SELinux.** The service helper relabels the programs (`chcon -R -t bin_t` on `bin/`) when it
+restarts the stack. An enforcing SELinux host has not been tested with the `ncc`
+service: the self-heal fix-ups that run `chcon` or `systemctl` from the API fail
+as `ncc` and are reported instead of applied.
 
 If a setting breaks something on your host, override it with a drop-in, which
 survives a reinstall. `226/NAMESPACE` in `systemctl status` means the host
@@ -537,18 +597,11 @@ ProtectControlGroups=no
 ProtectClock=no
 ```
 
-To allow everything again, also set `NoNewPrivileges=no`, `RestrictSUIDSGID=no`,
-`LockPersonality=no`, `RestrictRealtime=no`, `RestrictNamespaces=no`, and
-`RestrictAddressFamilies=`, `SystemCallArchitectures=`, `CapabilityBoundingSet=~`
-(these three as shown), then `systemctl restart ncc-orchestrator`.
-
-If you point an output, log or backup folder at a new place under `/usr`, `/etc`,
-`/home` or `/root` after the unit was written, it stays read-only for the service
-until the unit is written again (`sudo ncc-orchestrator upgrade-adopt` or
-`v2-install-service`) or you allow it in the same drop-in:
-`ReadWritePaths=-/the/folder`. To turn the file system protections off, set
-`ProtectSystem=no`, `ProtectHome=no` and `PrivateTmp=no`. Check with
-`systemd-analyze security ncc-orchestrator` (5.2 on systemd 257, was 5.9).
+If you point an output, log or backup folder at a new place outside the install
+after the unit was written, it stays read-only for the service until the unit is
+written again (`sudo ncc-orchestrator upgrade-adopt` or `v2-install-service`) or
+you allow it in the same drop-in: `ReadWritePaths=-/the/folder`; give the folder
+to `ncc` too (`sudo chown -R ncc:ncc /the/folder`).
 
 ### api-server access control (RBAC + login)
 

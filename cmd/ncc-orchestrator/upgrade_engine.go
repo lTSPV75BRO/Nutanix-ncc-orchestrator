@@ -60,14 +60,43 @@ func helperAcceptedPath(installDir string) string { return helperFile(installDir
 // rollbackAvailable returns the upgrade that can still be rolled back by hand.
 func rollbackAvailable(installDir string) (rollbackInfo, bool) {
 	var info rollbackInfo
-	if readHelperJSON(helperRollbackPath(installDir), &info) != nil {
+	err := readHelperJSON(helperRollbackPath(installDir), &info)
+	public := false
+	if os.IsPermission(err) {
+		// An unprivileged service sees the copy that the helper publishes; the
+		// rollback itself is root's, which checks the real one.
+		err, public = readHelperJSON(publicRollbackPath(installDir), &info), true
+	}
+	if err != nil {
 		return info, false
 	}
 	at, err := time.Parse(time.RFC3339, info.At)
-	if err != nil || time.Since(at) > helperKeepSnapshot || !existingDir(helperSnapshotDir(installDir)) {
+	if err != nil || time.Since(at) > helperKeepSnapshot || (!public && !existingDir(helperSnapshotDir(installDir))) {
 		return info, false
 	}
 	return info, true
+}
+
+// publicRollbackPath is what the service may know of the kept snapshot.
+func publicRollbackPath(installDir string) string {
+	return filepath.Join(installDir, "run", "upgrade-rollback.json")
+}
+
+// publishRollback writes that copy (without the configuration's hashes).
+func publishRollback(installDir string, info rollbackInfo) {
+	info.Config = nil
+	b, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		return
+	}
+	path := publicRollbackPath(installDir)
+	staged, err := stageBytes(b, path, 0o644)
+	if err != nil {
+		return
+	}
+	if renameWithRetry(staged, path) != nil {
+		_ = os.Remove(staged)
+	}
 }
 
 // maxHelperAttempts: how often one job is started again after a crash.
@@ -721,6 +750,7 @@ func (e *helperEngine) keepSnapshot() {
 		e.dropSnapshot()
 		return
 	}
+	publishRollback(e.installDir, info)
 	e.log.edit(func(j *upgradeJob) { j.RollbackUntil = time.Now().Add(helperKeepSnapshot).UTC().Format(time.RFC3339) })
 }
 
@@ -728,6 +758,7 @@ func (e *helperEngine) dropSnapshot() { dropHelperSnapshot(e.installDir) }
 
 func dropHelperSnapshot(installDir string) {
 	_ = os.Remove(helperRollbackPath(installDir))
+	_ = os.Remove(publicRollbackPath(installDir))
 	_ = os.RemoveAll(helperSnapshotDir(installDir))
 	_ = os.Remove(helperSnapshotSums(installDir))
 }

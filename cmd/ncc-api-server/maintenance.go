@@ -625,7 +625,9 @@ func detachedSystemdRestartScript(installDir string, inService bool) string {
 // response flush before the stop signal lands.
 func (s *apiServer) spawnDetachedRestart(installDir string) bool {
 	base := s.orchestratorBaseCommand()
-	useSystemd := hasSystemdStackService()
+	// An unprivileged service (LIN-02) cannot call systemctl: v2-restart asks
+	// its service helper (root) instead.
+	useSystemd := !serviceUnprivileged() && hasSystemdStackService()
 	if !useSystemd && len(base) == 0 {
 		return false
 	}
@@ -701,7 +703,7 @@ func (s *apiServer) ensureApplyUpdateWatcher() {
 	if s.capabilities.Kubernetes || s.capabilities.ImmutableUpdates {
 		return
 	}
-	if !hasSystemdStackService() {
+	if serviceUnprivileged() || !hasSystemdStackService() {
 		return
 	}
 	go guard("update watcher install", func() {
@@ -710,4 +712,11 @@ func (s *apiServer) ensureApplyUpdateWatcher() {
 			"--install-dir", s.maintenanceInstallDir(),
 		}, 45*time.Second)
 	})
+}
+
+// serviceUnprivileged: this server runs as an ordinary user on Linux (the
+// service user of LIN-02, or a stack started by hand), which can neither write
+// units nor call systemctl.
+func serviceUnprivileged() bool {
+	return runtime.GOOS == "linux" && os.Geteuid() != 0
 }

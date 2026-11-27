@@ -1517,6 +1517,7 @@ When using --binary-url for install, --binary-sha256 is required.`,
 	updateCmd.Flags().Bool("skip-checksum-verify", false, "Skip SHA-256 verification of the downloaded asset against the release checksums.txt (not recommended; for air-gapped/mirrored installs)")
 	cmd.AddCommand(updateCmd)
 	cmd.AddCommand(newUpgradeCommands()...)
+	cmd.AddCommand(newServiceOpsCommands()...)
 	cmd.AddCommand(newWatchdogCommand())
 
 	v2BootstrapCmd := &cobra.Command{
@@ -1836,6 +1837,7 @@ requires root/Administrator.`,
 			printOnly, _ := cmd.Flags().GetBool("print-only")
 			apiListen, _ := cmd.Flags().GetString("api-listen")
 			uiListen, _ := cmd.Flags().GetString("ui-listen")
+			serviceUser, _ := cmd.Flags().GetString("service-user")
 			return runV2InstallService(installServiceOptions{
 				InstallDir:      installDir,
 				ServiceName:     serviceName,
@@ -1844,6 +1846,7 @@ requires root/Administrator.`,
 				PrintOnly:       printOnly,
 				APIListen:       strings.TrimSpace(apiListen),
 				UIListen:        strings.TrimSpace(uiListen),
+				ServiceUser:     serviceUser,
 			})
 		},
 	}
@@ -1854,6 +1857,7 @@ requires root/Administrator.`,
 	v2InstallServiceCmd.Flags().String("orchestrator-bin", "", "Path to the ncc-orchestrator binary the service runs (default: this executable)")
 	v2InstallServiceCmd.Flags().Bool("now", true, "Also enable+start the service immediately (Linux: enable --now; Windows: schtasks /Run; macOS: launchctl load -w)")
 	v2InstallServiceCmd.Flags().Bool("print-only", false, "Preview the unit/task and the commands without applying them")
+	v2InstallServiceCmd.Flags().String("service-user", "", "Linux (systemd): the user the stack runs as. Default ncc (created as a system user), or what the installed unit or /etc/ncc-orchestrator/service-user says; root keeps the service as root, as before 2.5")
 	cmd.AddCommand(v2InstallServiceCmd)
 
 	v2InstallUpdateWatcherCmd := &cobra.Command{

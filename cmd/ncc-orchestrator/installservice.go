@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -35,6 +36,11 @@ type installServiceOptions struct {
 	PrintOnly       bool
 	// APIListen, UIListen: saved for the supervisor, which starts with them.
 	APIListen, UIListen string
+	// ServiceUser runs the stack under systemd: "ncc" by default, "root" for
+	// the service as before 2.5, "" for a unit written before 2.5 (root).
+	ServiceUser string
+	// userNote says why the service stays root although nobody asked for it.
+	userNote string
 }
 
 func (o *installServiceOptions) resolve() error {
@@ -92,8 +98,17 @@ func systemdSupervisorUnit(o installServiceOptions) string {
 		"# the kernel should pick something else first.",
 		"OOMScoreAdjust=-500",
 	}
-	// The supervisor writes schedule units, and replaces its own programs.
-	lines = append(lines, systemdHardening(o.InstallDir, systemdUnitDir, path.Dir(filepath.ToSlash(o.OrchestratorBin)))...)
+	if rootService(o.ServiceUser) {
+		if o.ServiceUser == "root" {
+			lines = append(lines, "# Runs as root on purpose (v2-install-service --service-user root).", "User=root")
+		}
+		// The supervisor writes schedule units, and replaces its own programs.
+		lines = append(lines, systemdHardening(o.InstallDir, systemdUnitDir, path.Dir(filepath.ToSlash(o.OrchestratorBin)))...)
+	} else {
+		// Units, systemctl and programs are the service helper's and the
+		// update helper's (root); the stack writes its own folders only.
+		lines = append(lines, systemdUnprivilegedHardening(o.InstallDir, o.ServiceUser, listenNeedsBind(o.InstallDir))...)
+	}
 	lines = append(lines,
 		"",
 		"[Install]",
@@ -278,11 +293,51 @@ func uninstallApplyUpdateWatcher(o installServiceOptions) error {
 	return nil
 }
 
+// resolveServiceUser decides as whom the service runs: the flag, else the
+// operator's setting, else what the installed unit says, else ncc (root when
+// ncc cannot reach the install folder).
+func (o *installServiceOptions) resolveServiceUser() error {
+	u, err := normalizeServiceUser(o.ServiceUser)
+	if err != nil {
+		return err
+	}
+	if u != "" {
+		if !rootService(u) {
+			if err := installReachable(o.InstallDir); err != nil {
+				return fmt.Errorf("the service user %s cannot run this install: %v; move it, or use --service-user root", u, err)
+			}
+		}
+		o.ServiceUser = u
+		return nil
+	}
+	installed, _ := os.ReadFile(filepath.Join(systemdUnitDir, o.ServiceName+".service"))
+	o.ServiceUser, o.userNote = desiredServiceUser(o.InstallDir, string(installed))
+	return nil
+}
+
+// systemdOps is the service helper of this install.
+func (o installServiceOptions) systemdOps() *systemdService {
+	return &systemdService{o: o, unitDir: systemdUnitDir}
+}
+
 func installSupervisorSystemd(o installServiceOptions) error {
-	unit := systemdSupervisorUnit(o)
+	if err := o.resolveServiceUser(); err != nil {
+		return err
+	}
+	if o.userNote != "" {
+		fmt.Fprintln(os.Stderr, "note: "+o.userNote)
+	}
+	unprivileged := !rootService(o.ServiceUser)
+	ops := o.systemdOps()
+	opsBase := filepath.Join(systemdUnitDir, opsServiceName(o.ServiceName))
 	unitPath := filepath.Join(systemdUnitDir, o.ServiceName+".service")
 	if o.PrintOnly {
+		unit := systemdSupervisorUnit(o)
 		fmt.Printf("Would write %s:\n\n%s\n", unitPath, unit)
+		if unprivileged {
+			fmt.Printf("Would create the system user %s (if missing), give it the install except bin/, frontend-dist/ and helper/, and write %s:\n\n%s\n", o.ServiceUser, opsBase+".service", ops.opsUnit())
+			fmt.Printf("Would write %s:\n\n%s\n", opsBase+".path", ops.opsPathUnit())
+		}
 		fmt.Printf("Would write %s:\n\n%s\n", applyUpdateWatcherPathPath(o), systemdApplyUpdatePathUnit(o))
 		fmt.Printf("Would write %s:\n\n%s\n", applyUpdateWatcherServicePath(o), systemdApplyUpdateOneshotUnit(o))
 		fmt.Printf("Would write %s:\n\n%s\n", logMaintenanceServicePath(), systemdLogMaintenanceServiceUnit(o))
@@ -294,8 +349,38 @@ func installSupervisorSystemd(o installServiceOptions) error {
 	if !systemctlAvailable() {
 		return fmt.Errorf("systemd is not available (systemctl not found or systemd is not the init system)")
 	}
+	if unprivileged {
+		if os.Geteuid() != 0 {
+			return errors.New("v2-install-service needs root")
+		}
+		created, err := ensureServiceUser(o.ServiceUser)
+		if err != nil {
+			return err
+		}
+		if created {
+			fmt.Printf("Created the system user %s\n", o.ServiceUser)
+		}
+		uid, gid, _ := lookupServiceIDs(o.ServiceUser)
+		if err := applyServiceOwnership(o.InstallDir, uid, gid); err != nil {
+			return fmt.Errorf("give the install to %s: %w", o.ServiceUser, err)
+		}
+		// The service cannot write the ledger of trusted program files.
+		recordTrustedStackQuiet(o.InstallDir, "install")
+		for _, w := range outsideFoldersNotWritable(o.InstallDir, uid, gid) {
+			fmt.Fprintf(os.Stderr, "warning: the configuration names %s, which %s cannot write (chown -R %s: %s)\n", w, o.ServiceUser, o.ServiceUser, w)
+		}
+	}
+	unit := systemdSupervisorUnit(o)
 	if err := os.WriteFile(unitPath, []byte(unit), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", unitPath, err)
+	}
+	if unprivileged {
+		if err := writeDefinitionFile(opsBase+".service", ops.opsUnit()); err != nil {
+			return err
+		}
+		if err := writeDefinitionFile(opsBase+".path", ops.opsPathUnit()); err != nil {
+			return err
+		}
 	}
 	// SELinux: a binary under a home dir (e.g. /root) is typically labeled
 	// admin_home_t by policy default. The init_t domain systemd execs units
@@ -326,6 +411,12 @@ func installSupervisorSystemd(o installServiceOptions) error {
 	}
 	if out, err := exec.Command("systemctl", "daemon-reload").CombinedOutput(); err != nil {
 		return fmt.Errorf("systemctl daemon-reload: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	if unprivileged {
+		name := opsServiceName(o.ServiceName) + ".path"
+		if out, err := exec.Command("systemctl", "enable", "--now", name).CombinedOutput(); err != nil {
+			return fmt.Errorf("systemctl enable --now %s: %v (%s)", name, err, strings.TrimSpace(string(out)))
+		}
 	}
 	enableArgs := []string{"enable"}
 	if o.Now {
@@ -359,6 +450,13 @@ func uninstallSupervisorSystemd(o installServiceOptions) error {
 	removeHelperForService(o.InstallDir)
 	_ = uninstallApplyUpdateWatcher(o)
 	uninstallLogMaintenanceTimer()
+	if systemctlAvailable() {
+		_, _ = exec.Command("systemctl", "disable", "--now", opsServiceName(o.ServiceName)+".path").CombinedOutput()
+		_, _ = exec.Command("systemctl", "stop", opsServiceName(o.ServiceName)+".service").CombinedOutput()
+	}
+	for _, n := range []string{".path", ".service"} {
+		_ = os.Remove(filepath.Join(systemdUnitDir, opsServiceName(o.ServiceName)+n))
+	}
 	if systemctlAvailable() {
 		_, _ = exec.Command("systemctl", "disable", "--now", o.ServiceName+".service").CombinedOutput()
 	}
