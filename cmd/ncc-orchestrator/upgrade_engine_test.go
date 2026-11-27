@@ -40,6 +40,8 @@ type fakeService struct {
 	helperDef  string
 	// outside: a service program outside bin/.
 	outside string
+	// activeRun: a scheduled run that is going on.
+	activeRun string
 }
 
 func (s *fakeService) kind() string { return s.kindV }
@@ -79,12 +81,16 @@ func (s *fakeService) stop() error {
 	s.up = false
 	return nil
 }
-func (s *fakeService) plan() []defChange {
+func (s *fakeService) plan(replace bool) []defChange {
 	b, _ := os.ReadFile(s.def)
-	return []defChange{planUnit("Service", s.def, string(b), s.desired)}
+	out := []defChange{planUnit("Service", s.def, string(b), s.desired)}
+	if replace {
+		out = replaceEdited(out)
+	}
+	return out
 }
-func (s *fakeService) migrate() ([]defChange, error) {
-	changes := s.plan()
+func (s *fakeService) migrate(replace bool) ([]defChange, error) {
+	changes := s.plan(replace)
 	for _, c := range changes {
 		if err := applyUnit(c); err != nil {
 			return changes, err
@@ -109,6 +115,7 @@ func (s *fakeService) restore(defs []savedDefinition) error {
 	return nil
 }
 func (s *fakeService) holdRestarts() func() { s.held++; return func() { s.held-- } }
+func (s *fakeService) runActive() string    { return s.activeRun }
 
 // fakeVersion reads the version out of a fake program ("version 2.4.0 ...").
 func fakeVersion(path string) string {

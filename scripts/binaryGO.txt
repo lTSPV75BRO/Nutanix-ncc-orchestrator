@@ -1038,6 +1038,21 @@ if [ "$NO_STACKS" != 1 ]; then
   HELPER_PROTOCOL=$(sed -n 's/^const helperProtocol = \([0-9][0-9]*\).*$/\1/p' cmd/ncc-orchestrator/upgrade_stage.go)
   [ -n "$HELPER_PROTOCOL" ] || die "helperProtocol not found in cmd/ncc-orchestrator/upgrade_stage.go"
   printf '{"schema":1,"version":"%s","helper_protocol":%s}\n' "$VERSION" "$HELPER_PROTOCOL" > dist/upgrade-manifest.json
+  # Optional: NCC_UPGRADE_MIN_FROM (oldest version that may upgrade straight to
+  # this one) and NCC_UPGRADE_DOWNTIME_HINT (shown in the upgrade plan).
+  extra=""
+  if [ -n "${NCC_UPGRADE_MIN_FROM:-}" ]; then
+    [[ "$NCC_UPGRADE_MIN_FROM" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "NCC_UPGRADE_MIN_FROM is not a version like 2.4.0"
+    extra="$extra,\"min_from\":\"$NCC_UPGRADE_MIN_FROM\""
+  fi
+  if [ -n "${NCC_UPGRADE_DOWNTIME_HINT:-}" ]; then
+    [[ "$NCC_UPGRADE_DOWNTIME_HINT" =~ ^[A-Za-z0-9\ .,-]{1,60}$ ]] || die "NCC_UPGRADE_DOWNTIME_HINT: letters, digits, spaces and .,- only"
+    extra="$extra,\"downtime_hint\":\"$NCC_UPGRADE_DOWNTIME_HINT\""
+  fi
+  if [ -n "$extra" ]; then
+    manifest="$(cat dist/upgrade-manifest.json)"
+    printf '%s%s}\n' "${manifest%\}}" "$extra" > dist/upgrade-manifest.json
+  fi
   echo "wrote dist/upgrade-manifest.json"
 
   if [ "$SKIP_SBOM" != 1 ] && command -v cyclonedx-gomod >/dev/null 2>&1; then

@@ -31,6 +31,9 @@ const (
 	helperActionUpgrade  = "upgrade"
 	helperActionAdopt    = "adopt"    // same programs, new service definitions
 	helperActionRollback = "rollback" // put the last snapshot back
+	// helperActionUpdate is not a job: it names a snapshot that `update`
+	// (programs only) kept, which a rollback puts back like any other.
+	helperActionUpdate = "update"
 )
 
 // Phases of a job the helper carries out (or, for the first four, that the
@@ -98,6 +101,9 @@ type helperRequest struct {
 	// Steps taken so far, so the progress list does not start over.
 	Steps     []upgradeStep `json:"steps,omitempty"`
 	StartedAt string        `json:"started_at,omitempty"`
+	// ReplaceEdited: definitions edited on this host are replaced, not kept
+	// (upgrade --replace-edited). Their saved copy comes back on a rollback.
+	ReplaceEdited bool `json:"replace_edited,omitempty"`
 }
 
 // helperJournal is the job the helper is working on.
@@ -112,6 +118,8 @@ type helperJournal struct {
 	Changes    []string `json:"changes,omitempty"`   // what was migrated
 	// UserRollback: a rollback somebody asked for, not one after a failure.
 	UserRollback bool `json:"user_rollback,omitempty"`
+	// RollbackOf: what that rollback undoes (rollbackInfo.Action).
+	RollbackOf string `json:"rollback_of,omitempty"`
 }
 
 var helperIDPattern = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$`)

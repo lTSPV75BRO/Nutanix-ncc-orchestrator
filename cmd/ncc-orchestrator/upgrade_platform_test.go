@@ -153,7 +153,7 @@ func TestSystemdService(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := map[string]string{}
-	changes, err := svc.migrate()
+	changes, err := svc.migrate(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestSystemdService(t *testing.T) {
 	if saved, err = svc.save(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.migrate(); err != nil || !fileExists(timer) || !strings.Contains(strings.Join(*calls, "\n"), "enable --now "+logMaintenanceUnitName+".timer") {
+	if _, err := svc.migrate(false); err != nil || !fileExists(timer) || !strings.Contains(strings.Join(*calls, "\n"), "enable --now "+logMaintenanceUnitName+".timer") {
 		t.Fatalf("no log timer (%v), calls %v", err, *calls)
 	}
 	if err := svc.restore(saved); err != nil || fileExists(timer) || !strings.Contains(strings.Join(*calls, "\n"), "disable --now "+logMaintenanceUnitName+".timer") {
@@ -229,7 +229,7 @@ func TestSystemdService(t *testing.T) {
 	fakeSvcCommands(t, func(cmd string) (string, error) {
 		return "LoadState=bad-setting\n", nil
 	})
-	if _, err := svc.migrate(); err == nil {
+	if _, err := svc.migrate(false); err == nil {
 		t.Error("a unit that cannot be loaded was accepted")
 	}
 }
@@ -261,7 +261,7 @@ func TestWindowsServicePlan(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		return
 	}
-	svc, _ := windowsServiceFromTask(`c:\ncc data`, ours).(*windowsService)
+	svc, _ := windowsServiceFromTask(`c:\ncc data`, supervisorServiceName, ours).(*windowsService)
 	if svc == nil || svc.orchestratorBin() != o.OrchestratorBin {
 		t.Fatalf("found %+v", svc)
 	}
@@ -281,7 +281,7 @@ func TestWindowsServicePlan(t *testing.T) {
 		return stored, true
 	}
 	// A host from before 2.4.0 has no watchdog; putting that back removes it.
-	if c := svc.plan(); len(c) != 2 || c[0].Action != defUnchanged || c[1].Action != defCreate {
+	if c := svc.plan(false); len(c) != 2 || c[0].Action != defUnchanged || c[1].Action != defCreate {
 		t.Errorf("plan without a watchdog: %v", c)
 	}
 	saved, err := svc.save()
@@ -289,7 +289,7 @@ func TestWindowsServicePlan(t *testing.T) {
 		t.Fatalf("saved %v (%v)", saved, err)
 	}
 	haveWatchdog = true
-	if c := svc.plan(); c[1].Action != defUnchanged {
+	if c := svc.plan(false); c[1].Action != defUnchanged {
 		t.Errorf("plan with a watchdog: %v", c)
 	}
 	calls := fakeSvcCommands(t, nil)
@@ -300,7 +300,7 @@ func TestWindowsServicePlan(t *testing.T) {
 		t.Error("restored a task that is not the service's")
 	}
 	watchdog = strings.Replace(watchdog, "v2-watchdog", "v2-other", 1)
-	if c := svc.plan(); c[1].Action != defReplace {
+	if c := svc.plan(false); c[1].Action != defReplace {
 		t.Errorf("plan with another watchdog: %v", c)
 	}
 	if !strings.Contains(stored, "<BootTrigger />") || !svc.helperCurrent(helper) {
@@ -309,7 +309,7 @@ func TestWindowsServicePlan(t *testing.T) {
 	if svc.helperCurrent(`C:\Other\helper.exe`) {
 		t.Error("another program's task looks current")
 	}
-	if windowsServiceFromTask(`C:\Other`, ours) != nil {
+	if windowsServiceFromTask(`C:\Other`, supervisorServiceName, ours) != nil {
 		t.Error("found the service of another folder")
 	}
 	if armed := svc.helperXML(`C:\x.exe`, true); !strings.Contains(armed, "<BootTrigger>") || strings.Count(armed, "<Repetition>") != 1 {
@@ -342,20 +342,20 @@ func TestLaunchdService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if changes, err := svc.migrate(); err != nil || changes[0].Action != defReplace {
+	if changes, err := svc.migrate(false); err != nil || changes[0].Action != defReplace {
 		t.Fatal(changes, err)
 	}
 	if b, _ := os.ReadFile(path); string(b) != plist {
 		t.Error("not migrated")
 	}
-	if svc.plan()[0].Action != defUnchanged {
+	if svc.plan(false)[0].Action != defUnchanged {
 		t.Error("not up to date after the migration")
 	}
-	if err := svc.restore(saved); err != nil || svc.plan()[0].Action != defReplace {
+	if err := svc.restore(saved); err != nil || svc.plan(false)[0].Action != defReplace {
 		t.Error("not restored", err)
 	}
 	writeTestFile(t, path, strings.Replace(plist, "<key>Label</key>", "<key>UserName</key><string>ncc</string><key>Label</key>", 1))
-	if c := svc.plan()[0]; c.Action != defKeep || !strings.Contains(c.Detail, "UserName") {
+	if c := svc.plan(false)[0]; c.Action != defKeep || !strings.Contains(c.Detail, "UserName") {
 		t.Errorf("%+v", c)
 	}
 	if svc.restore([]savedDefinition{{ID: "file:/Library/LaunchDaemons/other.plist"}}) == nil {

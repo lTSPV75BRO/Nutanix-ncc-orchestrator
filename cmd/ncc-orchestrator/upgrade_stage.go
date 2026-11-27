@@ -31,7 +31,13 @@ type upgradeManifest struct {
 	Version        string `json:"version"`
 	MinFrom        string `json:"min_from,omitempty"`
 	HelperProtocol int    `json:"helper_protocol"`
+	// DowntimeHint says how long the services are down, when the release
+	// knows better than the usual "under a minute" (for example "5 minutes").
+	DowntimeHint string `json:"downtime_hint,omitempty"`
 }
+
+// defaultDowntime is what an upgrade usually takes from stop to healthy.
+const defaultDowntime = "under a minute"
 
 const upgradeManifestName = "upgrade-manifest.json"
 
@@ -62,8 +68,9 @@ type stageOne struct {
 	logf       func(string, ...any)
 	runCmd     func(timeout time.Duration, name string, args ...string) (string, error)
 
-	bundle     string // a local archive instead of a download
-	prerelease bool
+	bundle        string // a local archive instead of a download
+	prerelease    bool
+	replaceEdited bool // replace definitions edited on this host
 
 	probeTimeout, takeTimeout time.Duration
 	poll                      time.Duration
@@ -90,6 +97,11 @@ var errUpToDate = errors.New("already on the latest version")
 func (s *stageOne) run(ctx context.Context, target string) error {
 	unlock, err := s.lock()
 	if err != nil {
+		// A second request while one runs must not overwrite its progress.
+		if cur, rerr := readUpgradeJob(s.installDir); rerr == nil && cur.ID != s.log.snapshot().ID &&
+			(upgradeActive(cur.Phase) || helperPhaseActive(cur.Phase)) {
+			return err
+		}
 		s.log.fail(upgFailed, err, "Not started: %v. Nothing was changed.", err)
 		return err
 	}
@@ -283,6 +295,9 @@ func (s *stageOne) fetchBundle(dir string) (stagedRelease, error) {
 	if err := checkUpgradePath(s.from, st.Version); err != nil {
 		return st, err
 	}
+	if err := checkBundleManifest(folder, sums, s.from); err != nil {
+		return st, err
+	}
 	return st, saveStage(dir, st.Archive, body, sums, sig)
 }
 
@@ -371,24 +386,57 @@ func fetchReleaseChecksums(client *http.Client, rel *githubRelease) (sums, sig [
 
 // checkReleaseManifest enforces the release's upgrade manifest, if it has one.
 func checkReleaseManifest(client *http.Client, rel *githubRelease, sums []byte, from string) error {
+	m, err := fetchReleaseManifest(client, rel, sums)
+	if err != nil || m == nil {
+		return err
+	}
+	return m.allows(from)
+}
+
+// fetchReleaseManifest returns the release's verified upgrade manifest (nil
+// when it has none).
+func fetchReleaseManifest(client *http.Client, rel *githubRelease, sums []byte) (*upgradeManifest, error) {
 	asset, ok := findAsset(*rel, func(name string) bool { return name == upgradeManifestName })
 	if !ok {
 		// Listed but not there: somebody removed it.
 		if parseChecksumFile(sums, upgradeManifestName) != "" {
-			return fmt.Errorf("release %s lists %s but does not have it", rel.TagName, upgradeManifestName)
+			return nil, fmt.Errorf("release %s lists %s but does not have it", rel.TagName, upgradeManifestName)
 		}
-		return nil
+		return nil, nil
 	}
 	body, err := fetchURL(asset.BrowserDownloadURL, client)
 	if err != nil {
-		return fmt.Errorf("fetch %s: %w", upgradeManifestName, err)
+		return nil, fmt.Errorf("fetch %s: %w", upgradeManifestName, err)
 	}
+	return verifiedManifest(sums, body)
+}
+
+func verifiedManifest(sums, body []byte) (*upgradeManifest, error) {
 	if err := matchChecksum(sums, upgradeManifestName, body); err != nil {
-		return err
+		return nil, err
 	}
 	var m upgradeManifest
 	if err := decodeManifest(body, &m); err != nil {
-		return fmt.Errorf("%s: %w", upgradeManifestName, err)
+		return nil, fmt.Errorf("%s: %w", upgradeManifestName, err)
+	}
+	return &m, nil
+}
+
+// checkBundleManifest enforces the manifest beside a release archive on disk:
+// when checksums.txt lists one, it has to be there.
+func checkBundleManifest(folder string, sums []byte, from string) error {
+	body, err := os.ReadFile(filepath.Join(folder, upgradeManifestName))
+	switch {
+	case os.IsNotExist(err) && parseChecksumFile(sums, upgradeManifestName) == "":
+		return nil
+	case os.IsNotExist(err):
+		return fmt.Errorf("checksums.txt lists %s, which has to be in the same folder", upgradeManifestName)
+	case err != nil:
+		return err
+	}
+	m, err := verifiedManifest(sums, body)
+	if err != nil {
+		return err
 	}
 	return m.allows(from)
 }
@@ -541,7 +589,7 @@ func (s *stageOne) handOver(ctx context.Context, action string) error {
 	req := helperRequest{
 		ID: job.ID, Action: action, Kind: s.svc.kind(), From: job.FromVersion, Target: job.TargetVersion,
 		BackupPath: job.BackupPath, RequestedBy: job.RequestedBy, RequestedAt: job.RequestedAt,
-		StartedAt: job.StartedAt, Steps: s.log.snapshot().Steps,
+		StartedAt: job.StartedAt, Steps: s.log.snapshot().Steps, ReplaceEdited: s.replaceEdited,
 	}
 	if err := req.validate(); err != nil {
 		return err

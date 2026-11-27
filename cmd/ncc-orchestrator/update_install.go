@@ -175,7 +175,21 @@ func copyFilePlain(src, dst string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
+	if err := writeFault(dst); err != nil {
+		return err
+	}
 	return os.WriteFile(dst, data, mode)
+}
+
+// writeFaultHook makes writes under a path fail, as a full disk would. Tests
+// set it (fault injection); it is nil otherwise.
+var writeFaultHook func(path string) error
+
+func writeFault(path string) error {
+	if writeFaultHook == nil {
+		return nil
+	}
+	return writeFaultHook(path)
 }
 
 // rollback restores every replaced file in reverse order. It returns the
@@ -250,6 +264,9 @@ func stageFileCopy(src, dst string, mode os.FileMode) (string, error) {
 func stageBytes(data []byte, dst string, mode os.FileMode) (string, error) {
 	dir := filepath.Dir(dst)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	if err := writeFault(dst); err != nil {
 		return "", err
 	}
 	tmp, err := os.CreateTemp(dir, ".ncc-update-")

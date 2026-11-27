@@ -88,6 +88,9 @@ func (s *apiServer) startHandStartedUpgrade(req upgradeRequest) error {
 	if req.TargetVersion != "" {
 		args = append(args, "--to", req.TargetVersion)
 	}
+	if req.ReplaceEdited {
+		args = append(args, "--replace-edited")
+	}
 	logDir := filepath.Join(installDir, "logs")
 	_ = os.MkdirAll(logDir, 0o755) // #nosec G301 -- same mode as the stack's own log folder
 	f, err := os.OpenFile(filepath.Join(logDir, "upgrade-helper.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
@@ -132,6 +135,9 @@ func (s *apiServer) handleUpdatePlan(w http.ResponseWriter, r *http.Request) {
 	if target != "" {
 		args = append(args, "--to", target)
 	}
+	if v := r.URL.Query().Get("replace_edited"); v == "1" || v == "true" {
+		args = append(args, "--replace-edited")
+	}
 	out, err := s.runOrchestrator(args, 60*time.Second)
 	var plan map[string]interface{}
 	if start, end := strings.Index(out, "{"), strings.LastIndex(out, "}"); err != nil || start < 0 || end < start || json.Unmarshal([]byte(out[start:end+1]), &plan) != nil {
@@ -139,6 +145,43 @@ func (s *apiServer) handleUpdatePlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: plan})
+}
+
+// rollbackOffer is the saved previous version a Roll back puts back: after an
+// upgrade, an adoption or `update` (run/upgrade/rollback.json, kept 24 hours).
+type rollbackOffer struct {
+	To    string `json:"to"`   // the version that comes back
+	From  string `json:"from"` // the version now installed
+	Of    string `json:"of"`   // upgrade | adopt | update
+	Until string `json:"until"`
+}
+
+// rollbackKeep mirrors helperKeepSnapshot in the orchestrator.
+const rollbackKeep = 24 * time.Hour
+
+func (s *apiServer) readRollbackOffer(now time.Time) *rollbackOffer {
+	dir := filepath.Join(s.maintenanceInstallDir(), "run", "upgrade")
+	b, err := os.ReadFile(filepath.Join(dir, "rollback.json"))
+	if err != nil || len(b) > 1<<20 {
+		return nil
+	}
+	var info struct {
+		From   string `json:"from"`
+		To     string `json:"to"`
+		At     string `json:"at"`
+		Action string `json:"action"`
+	}
+	if json.Unmarshal(b, &info) != nil {
+		return nil
+	}
+	at, err := time.Parse(time.RFC3339, info.At)
+	if err != nil || now.Sub(at) > rollbackKeep {
+		return nil
+	}
+	if st, err := os.Stat(filepath.Join(dir, "snapshot")); err != nil || !st.IsDir() {
+		return nil
+	}
+	return &rollbackOffer{To: info.From, From: info.To, Of: info.Action, Until: at.Add(rollbackKeep).UTC().Format(time.RFC3339)}
 }
 
 // handleUpdateRollback (POST /api/v1/settings/update/rollback) puts the version

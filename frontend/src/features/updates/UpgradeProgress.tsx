@@ -3,7 +3,7 @@ import { ReloadOutlined, RollbackOutlined } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
 import { api } from "../../api/client";
-import type { UpgradeJob, UpgradePhase } from "../../api/types";
+import type { RollbackOffer, UpgradeJob, UpgradePhase } from "../../api/types";
 import { sectionHref } from "../../navigation";
 import { notify, notifyError } from "../../notify";
 import { formatDateTime, formatTime } from "../../utils/datetime";
@@ -22,11 +22,29 @@ function helperJob(job: UpgradeJob): boolean {
   return job.runner === "helper" || job.runner === "stage";
 }
 
-/** Whether the previous version can still be put back by hand. */
-export function canRollBack(job: UpgradeJob | undefined, now = Date.now()): boolean {
+/**
+ * Whether the previous version can still be put back by hand: after an upgrade,
+ * an adoption (service definitions) or `update` (programs), for 24 hours. The
+ * server's offer decides; without one (older servers) the job does.
+ */
+export function canRollBack(job: UpgradeJob | undefined, offer?: RollbackOffer, now = Date.now()): boolean {
+  if (upgradeActive(job)) return false;
+  if (offer) return Date.parse(offer.until) > now;
   return Boolean(
-    job?.phase === "done" && job.runner === "helper" && job.action === "upgrade" && job.rollback_until && Date.parse(job.rollback_until) > now,
+    job?.phase === "done" &&
+      job.runner === "helper" &&
+      (job.action === "upgrade" || job.action === "adopt") &&
+      job.rollback_until &&
+      Date.parse(job.rollback_until) > now,
   );
+}
+
+/** Phases from which on the stack was changed. */
+const CHANGING: UpgradePhase[] = ["stopping", "swapping", "migrating", "starting", "checking", "restoring", "restarting", "verifying", "rolling_back"];
+
+/** A failed job that ended before anything of the stack was changed. */
+export function nothingChanged(job: UpgradeJob): boolean {
+  return job.phase === "failed" && !(job.steps ?? []).some((s) => CHANGING.includes(s.phase));
 }
 
 /** The phases as the five steps shown to the user. */
@@ -127,9 +145,47 @@ export function UpgradeProgress() {
     retry: false,
   });
   const job = q.data?.upgrade;
+  const offer = q.data?.rollback;
   const supervised = q.data?.supervised_upgrades;
   const active = upgradeActive(job);
+
+  const confirmRollback = () => {
+    const definitionsOnly = offer?.of === "adopt" || (!offer && job?.action === "adopt");
+    const back = v(offer?.to) || (job?.action === "adopt" ? "" : v(job?.from_version));
+    Modal.confirm({
+      title: definitionsOnly ? "Put the service definitions back?" : `Roll back to ${back || "the previous version"}?`,
+      icon: <RollbackOutlined style={{ color: "var(--ui-accent)" }} />,
+      content: definitionsOnly
+        ? "The service definitions from before this version's first start are put back, and the services restart. The programs stay as they are."
+        : "The programs, the web UI, the service definitions and the configuration layout from before the upgrade are put back, and the services restart. Runs and settings made since the upgrade are kept.",
+      okText: "Roll back",
+      cancelText: "Cancel",
+      onOk: async () => {
+        try {
+          const res = await api.rollbackUpdate();
+          notify.info(res.message ?? "Rollback started.");
+          void qc.invalidateQueries({ queryKey: UPGRADE_QUERY_KEY });
+        } catch (e) {
+          notifyError(e, "Couldn't start the rollback");
+        }
+      },
+    });
+  };
+  const rollbackButton = (
+    <Button size="small" icon={<RollbackOutlined />} onClick={confirmRollback}>
+      Roll back
+    </Button>
+  );
+  const offerText = offer
+    ? offer.of === "adopt"
+      ? `The service definitions from before v${offer.from} can be put back until ${formatDateTime(offer.until)}`
+      : `${v(offer.to)} can be put back until ${formatDateTime(offer.until)}`
+    : "";
+
   if (!job) {
+    if (offer && canRollBack(undefined, offer)) {
+      return <Alert type="info" showIcon title={offerText} action={rollbackButton} />;
+    }
     if (!supervised) return null;
     return (
       <Typography.Paragraph type="secondary" className="upgrade-note">
@@ -153,25 +209,8 @@ export function UpgradeProgress() {
     </div>
   ) : null;
 
-  const confirmRollback = () => {
-    Modal.confirm({
-      title: `Roll back to ${from || "the previous version"}?`,
-      icon: <RollbackOutlined style={{ color: "var(--ui-accent)" }} />,
-      content:
-        "The programs, the web UI, the service definitions and the configuration layout from before the upgrade are put back, and the services restart. Runs and settings made since the upgrade are kept.",
-      okText: "Roll back",
-      cancelText: "Cancel",
-      onOk: async () => {
-        try {
-          const res = await api.rollbackUpdate();
-          notify.info(res.message ?? "Rollback started.");
-          void qc.invalidateQueries({ queryKey: UPGRADE_QUERY_KEY });
-        } catch (e) {
-          notifyError(e, "Couldn't start the rollback");
-        }
-      },
-    });
-  };
+  const rollBack = canRollBack(job, offer);
+  const unchanged = nothingChanged(job);
 
   return (
     <Card
@@ -228,9 +267,27 @@ export function UpgradeProgress() {
           />
         ) : null}
         {job.phase === "rolled_back" && !rollback ? (
-          <Alert type="warning" showIcon title="The update was rolled back; the previous version is running" description={job.error} />
+          <Alert
+            type="warning"
+            showIcon
+            title="Rolled back; the previous version is running"
+            description={job.error ? `Why: ${job.error}` : job.message}
+          />
         ) : null}
-        {job.phase === "failed" ? (
+        {job.phase === "failed" && unchanged ? (
+          <Alert
+            type="info"
+            showIcon
+            title="Nothing was changed"
+            description={
+              <>
+                {job.error ? `Why: ${job.error}` : job.message}
+                {backupLink}
+              </>
+            }
+          />
+        ) : null}
+        {job.phase === "failed" && !unchanged ? (
           <Alert
             type="error"
             showIcon
@@ -243,6 +300,7 @@ export function UpgradeProgress() {
             }
           />
         ) : null}
+        {job.phase !== "done" && rollBack && offer ? <Alert type="info" showIcon title={offerText} action={rollbackButton} /> : null}
         {job.phase === "done" ? (
           <Alert
             type="success"
@@ -267,7 +325,12 @@ export function UpgradeProgress() {
                     ))}
                   </ul>
                 ) : null}
-                {canRollBack(job) ? <div style={{ marginTop: 4 }}>{from || "The previous version"} can be put back until {formatDateTime(job.rollback_until)}.</div> : null}
+                {rollBack ? (
+                  <div style={{ marginTop: 4 }}>
+                    {offerText ||
+                      `${job.action === "adopt" ? "The service definitions from before" : from || "The previous version"} can be put back until ${formatDateTime(job.rollback_until)}`}
+                  </div>
+                ) : null}
               </>
             }
             action={
@@ -275,11 +338,7 @@ export function UpgradeProgress() {
                 <Button size="small" icon={<ReloadOutlined />} onClick={() => window.location.reload()}>
                   Reload page
                 </Button>
-                {canRollBack(job) ? (
-                  <Button size="small" icon={<RollbackOutlined />} onClick={confirmRollback}>
-                    Roll back
-                  </Button>
-                ) : null}
+                {rollBack ? rollbackButton : null}
               </Space>
             }
           />

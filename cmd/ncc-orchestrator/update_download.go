@@ -169,9 +169,29 @@ func installPackageUpdate(stackURL, stackName string, rel *githubRelease, target
 	installDir := resolvePackageInstallDir(selfPath)
 	fmt.Fprintf(os.Stderr, "Installing package into %s ...\n", installDir)
 
+	// Kept for a rollback by hand (upgrade --rollback) for 24 hours.
+	snap, snapErr := saveUpdateSnapshot(installDir, runUpgradeCommand)
+	if snapErr != nil {
+		fmt.Fprintf(os.Stderr, "The previous version is not kept for a rollback: %v\n", snapErr)
+	}
+	done := false
+	defer func() {
+		if snap == nil {
+			return
+		}
+		if !done {
+			snap.drop()
+		} else if err := snap.keep(targetVer); err != nil {
+			fmt.Fprintf(os.Stderr, "The previous version is not kept for a rollback: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "The previous version (v%s) can be put back for 24 hours: ncc-orchestrator upgrade --rollback\n", snap.from)
+		}
+	}()
+
 	if err := installStackComponents(tmpRoot, installDir); err != nil {
 		return fmt.Errorf("install stack components: %w", err)
 	}
+	done = true // the programs changed: from here on the snapshot is worth keeping
 
 	// Locate the new binary that matches the currently-running one so we
 	// can self-replace. We honor the user's renamed binaries by matching

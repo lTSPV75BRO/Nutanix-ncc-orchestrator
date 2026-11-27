@@ -14,10 +14,12 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"goncc/internal/plural"
 )
 
 // errNoStack: upgrade has nothing to work on.
-var errNoStack = errors.New("no NCC stack runs from this folder as a service, or was started with v2-start; use `update` to replace the programs only")
+var errNoStack = errors.New("no NCC stack runs from this folder as a service, or was started with v2-start; use `update --programs-only` to replace the programs only")
 
 // resolveStackDir turns the --install-dir flag into an absolute folder.
 func resolveStackDir(flag string) (string, error) {
@@ -35,7 +37,7 @@ func stackServiceToUpgrade(installDir string) (stackService, error) {
 		return svc, nil
 	}
 	if st, err := readSupervisorState(installDir); err == nil && processIsAlive(st.PID) {
-		return nil, errors.New("the supervisor of this stack was not started by a service manager; install the service (v2-install-service) first, or use `update` and restart it yourself")
+		return nil, errors.New("the supervisor of this stack was not started by a service manager; install the service (v2-install-service) first, or use `update --programs-only` and restart it yourself")
 	}
 	m := newManualService(installDir)
 	if !m.running() {
@@ -72,6 +74,9 @@ type upgradeOptions struct {
 	InstallDir, To, Bundle         string
 	Prerelease, SkipBackup, NoWait bool
 	ID, BackupPath, RequestedBy    string // from the API server
+	// ReplaceEdited replaces definitions edited on this host (Decision 3 keeps
+	// them by default).
+	ReplaceEdited bool
 }
 
 // runStackUpgrade is the `upgrade` command.
@@ -93,6 +98,9 @@ func runStackUpgrade(ctx context.Context, o upgradeOptions, out io.Writer) error
 	if job, busy := jobRunning(installDir); busy {
 		return fmt.Errorf("another upgrade is in progress (%s)", job.Phase)
 	}
+	if o.ReplaceEdited {
+		printReplacements(out, svc.plan(false))
+	}
 	if o.BackupPath == "" && !o.SkipBackup {
 		fmt.Fprintln(out, "Taking a pre-update backup ...")
 		if o.BackupPath, err = preUpgradeBackup(installDir); err != nil {
@@ -107,7 +115,7 @@ func runStackUpgrade(ctx context.Context, o upgradeOptions, out io.Writer) error
 	}
 	log := newJobLog(installDir, logf, newJob(o.ID, helperActionUpgrade, o.To, o.BackupPath, o.RequestedBy))
 	s := newStageOne(installDir, svc, log, logf)
-	s.bundle, s.prerelease = o.Bundle, o.Prerelease
+	s.bundle, s.prerelease, s.replaceEdited = o.Bundle, o.Prerelease, o.ReplaceEdited
 	if o.Bundle != "" {
 		if s.bundle, err = filepath.Abs(o.Bundle); err != nil {
 			return err
@@ -120,6 +128,26 @@ func runStackUpgrade(ctx context.Context, o upgradeOptions, out io.Writer) error
 	done := make(chan error, 1)
 	go func() { done <- s.run(ctx, o.To) }()
 	return followJob(ctx, installDir, id, out, done)
+}
+
+// printReplacements shows what --replace-edited replaces, before it does.
+func printReplacements(out io.Writer, changes []defChange) {
+	n := 0
+	for _, c := range changes {
+		if c.Action != defKeep {
+			continue
+		}
+		n++
+		fmt.Fprintf(out, "Replacing %s (%s):\n", c.Title, c.Detail)
+		if d := c.Diff(); d != "" {
+			for _, l := range strings.Split(strings.TrimRight(d, "\n"), "\n") {
+				fmt.Fprintln(out, "  "+l)
+			}
+		}
+	}
+	if n == 0 {
+		fmt.Fprintln(out, "No definition was edited on this host; --replace-edited changes nothing.")
+	}
 }
 
 // preUpgradeBackup saves a backup with the programs in it.
@@ -224,13 +252,21 @@ func runStackRollback(ctx context.Context, installDirFlag, id, by string, wait b
 		return errors.New("an upgrade is being prepared")
 	}
 	defer unlock()
+	// After `update` or on a host the helper never ran on, it is not there yet.
+	if err := ensureHelper(ctx, installDir, svc); err != nil {
+		return fmt.Errorf("the update helper could not be installed (nothing was changed): %w", err)
+	}
 	if by == "" {
 		by = "command line"
 	}
 	job := newJob(id, helperActionRollback, info.From, info.Backup, by)
 	job.FromVersion = info.To
 	log := newJobLog(installDir, func(string, ...any) {}, job)
-	log.step(upgHandover, "The update helper puts v%s back", info.From)
+	if info.Action == helperActionAdopt {
+		log.step(upgHandover, "The update helper puts the service definitions from before v%s back", info.To)
+	} else {
+		log.step(upgHandover, "The update helper puts v%s back", info.From)
+	}
 	req := helperRequest{ID: job.ID, Action: helperActionRollback, Kind: info.Kind, From: info.From, Target: info.To,
 		BackupPath: info.Backup, RequestedBy: by, RequestedAt: job.RequestedAt, StartedAt: job.StartedAt, Steps: log.snapshot().Steps}
 	if err := giveToHelper(installDir, svc, req, time.Minute, 250*time.Millisecond); err != nil {
@@ -243,29 +279,100 @@ func runStackRollback(ctx context.Context, installDirFlag, id, by string, wait b
 	return followJob(ctx, installDir, job.ID, out, nil)
 }
 
-// upgradePlan is what an upgrade would do (`upgrade --plan --json`).
-type upgradePlan struct {
-	Current        string   `json:"current_version"`
-	Target         string   `json:"target_version,omitempty"`
-	UpToDate       bool     `json:"up_to_date,omitempty"`
-	Service        string   `json:"service,omitempty"`
-	Kind           string   `json:"kind,omitempty"`
-	Helper         string   `json:"helper"` // ready | missing | off | unavailable
-	Problems       []string `json:"problems,omitempty"`
-	Definitions    []string `json:"definitions,omitempty"`
-	DiskNeeded     uint64   `json:"disk_needed_bytes,omitempty"`
-	DiskFree       uint64   `json:"disk_free_bytes,omitempty"`
-	RollbackTo     string   `json:"rollback_to,omitempty"`
-	RollbackUntil  string   `json:"rollback_until,omitempty"`
-	ReleaseProblem string   `json:"release_problem,omitempty"`
+// ensureHelper installs this program as the update helper when none is
+// installed, and proves that it works. An installed one stays: it may be
+// newer than this program (after a rollback).
+func ensureHelper(ctx context.Context, installDir string, svc stackService) error {
+	helper := helperBinaryPath(installDir)
+	if fileExists(helper) && svc.helperCurrent(helper) {
+		return nil
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if err := prepareHelperDir(installDir); err != nil {
+		return err
+	}
+	body, err := os.ReadFile(self)
+	if err != nil {
+		return err
+	}
+	version := stripGoBuildGitSuffix(Version)
+	undo, err := installHelperProgram(installDir, svc, body, version, runUpgradeCommand)
+	if err != nil {
+		return err
+	}
+	if err := probeInstalledHelper(ctx, installDir, svc, version, 90*time.Second, 250*time.Millisecond); err != nil {
+		undo()
+		return fmt.Errorf("it does not work on this host: %w", err)
+	}
+	waitForHelperExit(ctx, installDir, 15*time.Second)
+	return nil
 }
 
-func planUpgrade(installDir, to string, prerelease, online bool) upgradePlan {
-	p := upgradePlan{Current: stripGoBuildGitSuffix(Version), Helper: "unavailable"}
+// upgradePlan is what an upgrade would do (`upgrade --plan --json`).
+type upgradePlan struct {
+	Current       string   `json:"current_version"`
+	Target        string   `json:"target_version,omitempty"`
+	UpToDate      bool     `json:"up_to_date,omitempty"`
+	Service       string   `json:"service,omitempty"`
+	Kind          string   `json:"kind,omitempty"`
+	Helper        string   `json:"helper"` // ready | missing | off | unavailable
+	Problems      []string `json:"problems,omitempty"`
+	Definitions   []string `json:"definitions,omitempty"`
+	DiskNeeded    uint64   `json:"disk_needed_bytes,omitempty"`
+	DiskFree      uint64   `json:"disk_free_bytes,omitempty"`
+	RollbackTo    string   `json:"rollback_to,omitempty"`
+	RollbackUntil string   `json:"rollback_until,omitempty"`
+	// RollbackOf: what a rollback undoes ("upgrade", "adopt" or "update").
+	RollbackOf     string `json:"rollback_of,omitempty"`
+	ReleaseProblem string `json:"release_problem,omitempty"`
+
+	// Checks: what was checked before anything happens, passed or not.
+	Checks []planCheck `json:"checks,omitempty"`
+	// Changes: each service definition, with the diff of what changes.
+	Changes []planChange `json:"changes,omitempty"`
+	// Edited: definitions edited on this host, kept unless ReplaceEdited.
+	Edited        int  `json:"edited,omitempty"`
+	ReplaceEdited bool `json:"replace_edited,omitempty"`
+	// Programs and Config: what is replaced, and what is saved to be put back.
+	Programs []string `json:"programs,omitempty"`
+	Config   []string `json:"config,omitempty"`
+	// Downtime: how long the services are expected to be down.
+	Downtime string `json:"downtime,omitempty"`
+}
+
+type planCheck struct {
+	Title  string `json:"title"`
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"`
+}
+
+type planChange struct {
+	Title  string `json:"title"`
+	Action string `json:"action"`
+	Detail string `json:"detail,omitempty"`
+	Diff   string `json:"diff,omitempty"`
+}
+
+func planUpgrade(installDir, to string, prerelease, online, replace bool) upgradePlan {
+	p := upgradePlan{Current: stripGoBuildGitSuffix(Version), Helper: "unavailable", ReplaceEdited: replace, Downtime: defaultDowntime}
+	check := func(title string, err error, okDetail string) {
+		c := planCheck{Title: title, OK: err == nil, Detail: okDetail}
+		if err != nil {
+			c.Detail = err.Error()
+			p.Problems = append(p.Problems, err.Error())
+		}
+		p.Checks = append(p.Checks, c)
+	}
 	svc, err := stackServiceToUpgrade(installDir)
-	if err != nil {
-		p.Problems = append(p.Problems, err.Error())
+	if svc != nil {
+		check("Service", nil, svc.title())
 	} else {
+		check("Service", err, "")
+	}
+	if svc != nil {
 		p.Kind, p.Service, p.Helper = svc.kind(), svc.title(), "missing"
 		if fileExists(helperBinaryPath(installDir)) && svc.helperCurrent(helperBinaryPath(installDir)) {
 			p.Helper = "ready"
@@ -273,22 +380,49 @@ func planUpgrade(installDir, to string, prerelease, online bool) upgradePlan {
 		if !upgradeHelperEnabled() {
 			p.Helper = "off"
 		}
-		if err := svc.privileged(); err != nil {
-			p.Problems = append(p.Problems, err.Error())
+		check("Permissions", svc.privileged(), "may stop the service and change its definitions")
+		var busy error
+		if job, running := jobRunning(installDir); running {
+			busy = fmt.Errorf("another upgrade is in progress (%s)", job.Phase)
 		}
-		for _, c := range svc.plan() {
+		check("No other upgrade", busy, "")
+		changes := svc.plan(false)
+		p.Edited = editedKept(changes)
+		if replace {
+			changes = replaceEdited(changes)
+		}
+		for _, c := range changes {
 			p.Definitions = append(p.Definitions, c.String())
+			p.Changes = append(p.Changes, planChange{Title: c.Title, Action: c.Action, Detail: c.Detail, Diff: c.Diff()})
 		}
 	}
 	need := dirSize(filepath.Join(installDir, "bin")) + dirSize(filepath.Join(installDir, "frontend-dist"))
 	p.DiskNeeded = need*4 + 250<<20
 	if free, ok := diskFreeBytes(installDir); ok {
-		if p.DiskFree = free; free < p.DiskNeeded {
-			p.Problems = append(p.Problems, fmt.Sprintf("only %s free, about %s needed", humanBytes(free), humanBytes(p.DiskNeeded)))
+		p.DiskFree = free
+		var low error
+		if free < p.DiskNeeded {
+			low = fmt.Errorf("only %s free, about %s needed", humanBytes(free), humanBytes(p.DiskNeeded))
+		}
+		check("Disk space", low, fmt.Sprintf("%s free, about %s needed", humanBytes(free), humanBytes(p.DiskNeeded)))
+	}
+	if entries, err := os.ReadDir(filepath.Join(installDir, "bin")); err == nil {
+		for _, en := range entries {
+			if !en.IsDir() && !strings.HasPrefix(en.Name(), ".") && !strings.Contains(en.Name(), updateAsideMarker) {
+				p.Programs = append(p.Programs, en.Name())
+			}
+		}
+	}
+	if existingDir(filepath.Join(installDir, "frontend-dist")) {
+		p.Programs = append(p.Programs, "web UI (frontend-dist)")
+	}
+	for _, f := range configFiles(installDir) {
+		if rel, err := filepath.Rel(installDir, f); err == nil {
+			p.Config = append(p.Config, filepath.ToSlash(rel))
 		}
 	}
 	if info, ok := rollbackAvailable(installDir); ok {
-		p.RollbackTo = info.From
+		p.RollbackTo, p.RollbackOf = info.From, info.Action
 		if at, err := time.Parse(time.RFC3339, info.At); err == nil {
 			p.RollbackUntil = at.Add(helperKeepSnapshot).UTC().Format(time.RFC3339)
 		}
@@ -305,13 +439,22 @@ func planUpgrade(installDir, to string, prerelease, online bool) upgradePlan {
 		p.ReleaseProblem = err.Error()
 	default:
 		p.Target = strings.TrimPrefix(rel.TagName, "v")
+		var m *upgradeManifest
 		sums, _, err := fetchReleaseChecksums(client, rel)
 		if err == nil {
-			err = checkReleaseManifest(client, rel, sums, p.Current)
+			m, err = fetchReleaseManifest(client, rel, sums)
 		}
+		if err == nil && m != nil {
+			err = m.allows(p.Current)
+			if m.DowntimeHint != "" {
+				p.Downtime = m.DowntimeHint
+			}
+		}
+		c := planCheck{Title: "Release v" + p.Target, OK: err == nil, Detail: "signature, checksums and upgrade path"}
 		if err != nil {
-			p.ReleaseProblem = err.Error()
+			p.ReleaseProblem, c.Detail = err.Error(), err.Error()
 		}
+		p.Checks = append(p.Checks, c)
 	}
 	return p
 }
@@ -328,12 +471,27 @@ func (p upgradePlan) print(out io.Writer) {
 		fmt.Fprintf(out, "Runs as:            %s (%s)\n", p.Service, p.Kind)
 	}
 	fmt.Fprintf(out, "Update helper:      %s\n", p.Helper)
-	for _, d := range p.Definitions {
-		fmt.Fprintf(out, "Service definition: %s\n", d)
+	for _, c := range p.Checks {
+		fmt.Fprintf(out, "Check:              %s: %s%s\n", c.Title, ifThen(c.OK, "ok", "FAILED"), ifThen(c.Detail != "", " ("+c.Detail+")", ""))
 	}
-	if p.DiskFree > 0 {
-		fmt.Fprintf(out, "Disk space:         %s free, about %s needed\n", humanBytes(p.DiskFree), humanBytes(p.DiskNeeded))
+	for _, c := range p.Changes {
+		fmt.Fprintf(out, "Service definition: %s: %s%s\n", c.Title, c.Action, ifThen(c.Detail != "", " ("+c.Detail+")", ""))
+		if c.Diff != "" && c.Action != defUnchanged {
+			for _, l := range strings.Split(strings.TrimRight(c.Diff, "\n"), "\n") {
+				fmt.Fprintf(out, "                      %s\n", l)
+			}
+		}
 	}
+	if p.Edited > 0 && !p.ReplaceEdited {
+		fmt.Fprintf(out, "Edited on this host: %s kept as they are (upgrade --replace-edited replaces them)\n", plural.Count(p.Edited, "definition"))
+	}
+	if len(p.Programs) > 0 {
+		fmt.Fprintf(out, "Replaced:           %s\n", strings.Join(p.Programs, ", "))
+	}
+	if len(p.Config) > 0 {
+		fmt.Fprintf(out, "Saved for rollback: %s\n", strings.Join(p.Config, ", "))
+	}
+	fmt.Fprintf(out, "Expected downtime:  %s\n", p.Downtime)
 	if p.RollbackTo != "" {
 		fmt.Fprintf(out, "Roll back:          to v%s until %s (upgrade --rollback)\n", p.RollbackTo, p.RollbackUntil)
 	}
@@ -356,7 +514,7 @@ type adoptRecord struct {
 // runUpgradeAdopt brings a stack that an older release installed (or upgraded)
 // up to this version: the update helper, the service definitions, and the
 // supervisor, which such an upgrade left on the old program.
-func runUpgradeAdopt(ctx context.Context, installDir string, auto, checkOnly bool, out io.Writer) error {
+func runUpgradeAdopt(ctx context.Context, installDir string, auto, checkOnly, replace bool, out io.Writer) error {
 	version := stripGoBuildGitSuffix(Version)
 	if !upgradeTargetPattern.MatchString(version) {
 		return fmt.Errorf("this is a development build (%s)", version)
@@ -372,7 +530,7 @@ func runUpgradeAdopt(ctx context.Context, installDir string, auto, checkOnly boo
 	if _, busy := jobRunning(installDir); busy || helperUnfinished(installDir) {
 		return errors.New("an upgrade is in progress")
 	}
-	changes := svc.plan()
+	changes := svc.plan(replace)
 	pending := pendingChanges(changes)
 	oldSupervisor := ""
 	if st, err := readSupervisorState(installDir); err == nil && processIsAlive(st.PID) && st.Version != "" && st.Version != version {
@@ -388,6 +546,9 @@ func runUpgradeAdopt(ctx context.Context, installDir string, auto, checkOnly boo
 	}
 	helperStaleNow := !sameContent(self, helper) || !svc.helperCurrent(helper)
 	fmt.Fprintf(out, "Service definitions: %s\n", describeChanges(changes))
+	if replace {
+		printReplacements(out, svc.plan(false))
+	}
 	if oldSupervisor != "" {
 		fmt.Fprintf(out, "The supervisor still runs v%s\n", oldSupervisor)
 	}
@@ -437,7 +598,7 @@ func runUpgradeAdopt(ctx context.Context, installDir string, auto, checkOnly boo
 	job.FromVersion = version
 	log := newJobLog(installDir, func(string, ...any) {}, job)
 	log.step(upgHandover, "Bringing the service up to v%s: %s", version, describeChanges(changes))
-	req := helperRequest{ID: job.ID, Action: helperActionAdopt, Kind: svc.kind(), From: version, Target: version,
+	req := helperRequest{ID: job.ID, Action: helperActionAdopt, Kind: svc.kind(), From: version, Target: version, ReplaceEdited: replace,
 		RequestedBy: job.RequestedBy, RequestedAt: job.RequestedAt, StartedAt: job.StartedAt, Steps: log.snapshot().Steps}
 	if err := giveToHelper(installDir, svc, req, time.Minute, 250*time.Millisecond); err != nil {
 		log.fail(upgFailed, err, "The service was not updated: %v. Nothing was changed.", err)
@@ -600,7 +761,7 @@ The previous version is kept for 24 hours: upgrade --rollback returns to it.`,
 			out := cmd.OutOrStdout()
 			switch {
 			case is("plan"):
-				p := planUpgrade(dir, get("to"), is("include-prerelease"), !is("offline"))
+				p := planUpgrade(dir, get("to"), is("include-prerelease"), !is("offline"), is("replace-edited"))
 				if is("json") {
 					return json.NewEncoder(out).Encode(p)
 				}
@@ -627,7 +788,7 @@ The previous version is kept for 24 hours: upgrade --rollback returns to it.`,
 			return runStackUpgrade(cmd.Context(), upgradeOptions{
 				InstallDir: dir, To: get("to"), Bundle: get("bundle"),
 				Prerelease: is("include-prerelease"), SkipBackup: is("skip-backup"), NoWait: is("no-wait"),
-				ID: get("id"), BackupPath: get("backup-path"), RequestedBy: get("requested-by"),
+				ID: get("id"), BackupPath: get("backup-path"), RequestedBy: get("requested-by"), ReplaceEdited: is("replace-edited"),
 			}, out)
 		},
 	}
@@ -643,6 +804,7 @@ The previous version is kept for 24 hours: upgrade --rollback returns to it.`,
 	f.Bool("no-wait", false, "Return when the update helper has taken over")
 	f.Bool("offline", false, "With --plan: do not look for a newer release")
 	f.Bool("json", false, "With --plan or --status: machine-readable output")
+	f.Bool("replace-edited", false, "Replace service definitions edited on this host instead of keeping them (shows the diff first; a rollback puts them back)")
 	for _, n := range []string{"id", "backup-path", "requested-by"} {
 		f.String(n, "", "Set by the API server")
 		_ = f.MarkHidden(n)
@@ -672,11 +834,13 @@ The previous version is kept for 24 hours: upgrade --rollback returns to it.`,
 			}
 			auto, _ := cmd.Flags().GetBool("auto")
 			check, _ := cmd.Flags().GetBool("check")
-			return runUpgradeAdopt(cmd.Context(), dir, auto, check, cmd.OutOrStdout())
+			replace, _ := cmd.Flags().GetBool("replace-edited")
+			return runUpgradeAdopt(cmd.Context(), dir, auto, check, replace, cmd.OutOrStdout())
 		},
 	}
 	adopt.Flags().String("install-dir", "", "Install folder (default: auto-detect)")
 	adopt.Flags().Bool("auto", false, "Try once per version, and do not wait")
+	adopt.Flags().Bool("replace-edited", false, "Replace service definitions edited on this host (shows the diff first)")
 	adopt.Flags().Bool("check", false, "Only show what would change")
 
 	check := &cobra.Command{

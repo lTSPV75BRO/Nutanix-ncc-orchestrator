@@ -224,6 +224,18 @@ export type UpdateStatus = {
   supervised_upgrades?: boolean;
   /** The supervisor's current or last upgrade (run/v2-upgrade-state.json). */
   upgrade?: UpgradeJob;
+  /** The previous version that Roll back puts back, kept for 24 hours. */
+  rollback?: RollbackOffer;
+};
+
+export type RollbackOffer = {
+  /** The version that comes back. */
+  to: string;
+  /** The version installed now. */
+  from: string;
+  /** What is undone: an upgrade, an adoption (service definitions only) or `update` (programs). */
+  of: "upgrade" | "adopt" | "update";
+  until: string;
 };
 
 export type UpgradePhase =
@@ -293,7 +305,20 @@ export type UpgradePlan = {
   disk_free_bytes?: number;
   rollback_to?: string;
   rollback_until?: string;
+  rollback_of?: "upgrade" | "adopt" | "update";
   release_problem?: string;
+  /** What was checked before anything happens. */
+  checks?: { title: string; ok: boolean; detail?: string }[];
+  /** Each service definition and what the upgrade does to it, with its diff. */
+  changes?: { title: string; action: "unchanged" | "replace" | "merge" | "keep" | "create"; detail?: string; diff?: string }[];
+  /** Definitions edited on this host, kept unless replace_edited. */
+  edited?: number;
+  replace_edited?: boolean;
+  /** Programs replaced, and configuration files saved to be put back. */
+  programs?: string[];
+  config?: string[];
+  /** Expected downtime, such as "under a minute". */
+  downtime?: string;
 };
 
 /** One archive in the server-side backups directory. */

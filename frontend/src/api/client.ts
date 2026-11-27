@@ -689,12 +689,13 @@ export const api = {
   disableTLS: () => callApi<TLSApplyResult>("/api/v1/settings/tls", { method: "DELETE" }),
   updateStatus: () => callApi<UpdateStatus>("/api/v1/settings/update"),
   checkUpdate: () => callApi<UpdateStatus>("/api/v1/settings/update?check=1"),
-  applyUpdate: (payload?: { target_version?: string }) =>
+  applyUpdate: (payload?: { target_version?: string; replace_edited?: boolean }) =>
     callApiEnvelope<UpdateJob>("/api/v1/settings/update/apply", {
       method: "POST",
       body: JSON.stringify(payload ?? {}),
     }),
-  updatePlan: () => callApi<UpgradePlan>("/api/v1/settings/update/plan"),
+  updatePlan: (replaceEdited = false) =>
+    callApi<UpgradePlan>(`/api/v1/settings/update/plan${replaceEdited ? "?replace_edited=1" : ""}`),
   rollbackUpdate: () => callApiEnvelope<unknown>("/api/v1/settings/update/rollback", { method: "POST", body: "{}" }),
   listBackups: () =>
     callApi<{ backups: BackupEntry[]; encryption_policy?: { required: boolean; server_key_configured: boolean } }>(
