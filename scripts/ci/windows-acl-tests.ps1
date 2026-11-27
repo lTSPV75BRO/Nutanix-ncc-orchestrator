@@ -53,15 +53,16 @@ function Invoke-AsSystem([string]$exe, [string]$dir, [string]$run, [string]$log,
     "move /y `"$exitFile.tmp`" `"$exitFile`" > nul"
   ) | Set-Content -Path $cmdFile -Encoding ascii
 
-  & schtasks /Create /TN $taskName /RU SYSTEM /SC ONCE /ST 00:00 /TR "`"$cmdFile`"" /F
+  # Out-Host: in a function, anything a command writes would become part of its return value.
+  & schtasks /Create /TN $taskName /RU SYSTEM /SC ONCE /ST 00:00 /TR "`"$cmdFile`"" /F | Out-Host
   if ($LASTEXITCODE -ne 0) { throw "schtasks /Create failed ($LASTEXITCODE)" }
   try {
-    & schtasks /Run /TN $taskName
+    & schtasks /Run /TN $taskName | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "schtasks /Run failed ($LASTEXITCODE)" }
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while (-not (Test-Path $exitFile)) {
       if ((Get-Date) -gt $deadline) {
-        & schtasks /End /TN $taskName 2>$null
+        & schtasks /End /TN $taskName 2>$null | Out-Host
         throw "SYSTEM task $taskName did not finish within $TimeoutSeconds s"
       }
       Start-Sleep -Seconds 2
