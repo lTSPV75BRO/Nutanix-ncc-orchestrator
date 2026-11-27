@@ -2,6 +2,7 @@
 // differently ("Overview, heading, level 1" against "Overview, heading level
 // 1"), so every check is a tolerant pattern on the lower-cased phrase, never
 // an exact string.
+import { NVDAKeyCodeCommands, WindowsKeyCodes, WindowsModifiers } from "@guidepup/guidepup";
 import { screenReaderTest } from "@guidepup/playwright";
 import { expect, type Page } from "@playwright/test";
 import { prepare, settled } from "../e2e/helpers";
@@ -47,12 +48,22 @@ export async function reachHeading(sr: SR, pattern: RegExp, max = 12): Promise<s
   throw new Error(`no heading matching ${pattern} in ${max} headings. Heard:\n${(await sr.spokenPhraseLog()).join("\n")}`);
 }
 
+/** The workflow runs NVDA on Windows and VoiceOver on macOS. */
+const onNVDA = process.platform === "win32";
+
 /**
  * Guidepup's navigateToWebContent clicks the middle of the page to give it
- * focus. On Runs or Overview that click lands on a row and opens it. Cover the
- * page with an empty, hidden layer for the click, then take it away.
+ * focus. On Runs or Overview that click lands on a row and opens it.
+ * VoiceOver: cover the page with an empty, hidden layer for the click, then
+ * take it away. NVDA loses its place when that layer goes, so on NVDA this is
+ * used only on the sign-in page, where the click is harmless; after that,
+ * nvdaToTop moves NVDA without clicking.
  */
 async function enterPage(page: Page, sr: SR) {
+  if (onNVDA) {
+    await sr.navigateToWebContent();
+    return;
+  }
   await page.evaluate(() => {
     const cover = document.createElement("div");
     cover.id = "sr-click-guard";
@@ -75,12 +86,35 @@ async function enterPage(page: Page, sr: SR) {
 export async function startAt(page: Page, sr: SR) {
   await settled(page);
   await page.getByRole("heading", { level: 1 }).first().waitFor();
+  if (onNVDA) {
+    await nvdaToTop(page, sr);
+  } else {
+    await page.evaluate(() => {
+      (document.activeElement as HTMLElement | null)?.blur();
+      window.scrollTo(0, 0);
+    });
+    await enterPage(page, sr);
+  }
+  await sr.clearSpokenPhraseLog();
+}
+
+/**
+ * NVDA already has the browser (from signing in). Put focus on the main
+ * region, which is not a control, so NVDA is in browse mode; reload its view
+ * of the page after the route change; then move to the top of the page.
+ */
+async function nvdaToTop(page: Page, sr: SR) {
+  await page.bringToFront();
   await page.evaluate(() => {
     (document.activeElement as HTMLElement | null)?.blur();
+    document.getElementById("main-content")?.focus({ preventScroll: true });
     window.scrollTo(0, 0);
   });
-  await enterPage(page, sr);
-  await sr.clearSpokenPhraseLog();
+  await sr.perform(NVDAKeyCodeCommands.exitFocusMode, { capture: false });
+  await sr.perform(NVDAKeyCodeCommands.refreshBrowseDocument, { capture: false });
+  await page.waitForTimeout(500);
+  await sr.perform({ keyCode: [WindowsKeyCodes.Home], modifiers: [WindowsModifiers.Control] }, { capture: false });
+  await page.waitForTimeout(200);
 }
 
 /**
