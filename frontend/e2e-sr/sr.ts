@@ -100,20 +100,31 @@ export async function startAt(page: Page, sr: SR) {
 
 /**
  * NVDA already has the browser (from signing in). Put focus on the main
- * region, which is not a control, so NVDA is in browse mode; reload its view
- * of the page after the route change; then move to the top of the page.
+ * region, then make sure NVDA is in browse mode: after a focus change it can
+ * stay in focus mode, where heading keys are typed as letters ("h"). The
+ * browse/focus key toggles, so probe with "next heading" and toggle only when
+ * no heading is read. Then move to the top of the page.
  */
 async function nvdaToTop(page: Page, sr: SR) {
+  const toTop = { keyCode: [WindowsKeyCodes.Home], modifiers: [WindowsModifiers.Control] };
   await page.bringToFront();
   await page.evaluate(() => {
     (document.activeElement as HTMLElement | null)?.blur();
     document.getElementById("main-content")?.focus({ preventScroll: true });
     window.scrollTo(0, 0);
   });
-  await sr.perform(NVDAKeyCodeCommands.exitFocusMode, { capture: false });
-  await sr.perform(NVDAKeyCodeCommands.refreshBrowseDocument, { capture: false });
-  await page.waitForTimeout(500);
-  await sr.perform({ keyCode: [WindowsKeyCodes.Home], modifiers: [WindowsModifiers.Control] }, { capture: false });
+  let browsing = false;
+  for (let i = 0; i < 3 && !browsing; i++) {
+    await sr.perform(toTop, { capture: false });
+    await sr.nextHeading();
+    browsing = /\bheading\b/i.test(await sr.lastSpokenPhrase());
+    if (!browsing) {
+      await sr.perform(NVDAKeyCodeCommands.toggleBetweenBrowseAndFocusMode, { capture: false });
+      await page.waitForTimeout(300);
+    }
+  }
+  if (!browsing) throw new Error(`NVDA did not enter browse mode. Heard:\n${(await sr.spokenPhraseLog()).join("\n")}`);
+  await sr.perform(toTop, { capture: false });
   await page.waitForTimeout(200);
 }
 
