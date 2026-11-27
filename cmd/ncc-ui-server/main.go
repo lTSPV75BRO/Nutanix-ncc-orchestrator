@@ -606,6 +606,8 @@ func main() {
 		applyHeaders(w, isTLS, uiCSP)
 		// Isolate the dashboard from windows it did not open.
 		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+		// Read by the Helm post-upgrade check: the UI's own version.
+		w.Header().Set("X-NCC-UI-Version", Version)
 	}
 	applyAPIHeaders := func(w http.ResponseWriter, isTLS bool) { applyHeaders(w, isTLS, apiCSP) }
 	proxy := newAPIProxy(apiProxyConfig{

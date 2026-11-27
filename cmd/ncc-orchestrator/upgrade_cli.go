@@ -696,5 +696,5 @@ The previous version is kept for 24 hours: upgrade --rollback returns to it.`,
 	check.Flags().String("expect", "", "Expected version (optional)")
 	check.Flags().Duration("timeout", 3*time.Minute, "How long to wait")
 
-	return []*cobra.Command{upgrade, helper, adopt, check}
+	return append([]*cobra.Command{upgrade, helper, adopt, check}, newK8sCheckCommands()...)
 }

@@ -161,8 +161,12 @@ step "helm upgrade: image and version checks, rollback"
 h() { helm --kube-context "$CTX" upgrade ncc "${chart[@]}" --timeout 300s "$@"; }
 version="$(k -n "$NS" exec deploy/ncc-v2-api -c api -- wget -q -O- http://127.0.0.1:8081/api/v1/health | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')"
 [ -n "$version" ] || fail "the API does not say its version"
+backups_before="$(api GET /api/v1/settings/backups | grep -o '"name":"[^"]*"' | wc -l)"
 h --set "upgradeCheck.expectVersion=$version" --set api.replicas=1 || fail "an upgrade to the same version"
 echo "ok: upgraded, v$version expected and found"
+backups_after="$(api GET /api/v1/settings/backups | grep -o '"name":"[^"]*"' | wc -l)"
+[ "$backups_after" -gt "$backups_before" ] || fail "the pre-upgrade hook took no backup ($backups_before -> $backups_after)"
+echo "ok: the pre-upgrade hook took a backup ($backups_before -> $backups_after)"
 if h --set images.ui.tag=missing --set upgradeCheck.pullTimeoutSeconds=20 2>&1; then fail "a missing image was not noticed"; fi
 [ "$(k -n "$NS" get deploy ncc-v2-ui -o 'jsonpath={.spec.template.spec.containers[0].image}')" = "$REG/ncc-ui-server:$TAG" ] \
   || fail "the UI was changed before its image was checked"
@@ -171,5 +175,24 @@ if h --set upgradeCheck.expectVersion=9.9.9 --set upgradeCheck.timeout=10s --set
 [ "$(k -n "$NS" get deploy ncc-v2-api -o 'jsonpath={.spec.replicas}')" = 1 ] || fail "the failed upgrade was not rolled back"
 k -n "$NS" rollout status deployment/ncc-v2-api --timeout=240s
 echo "ok: the wrong version rolls the upgrade back"
+
+# Each pre-upgrade check must stop the upgrade before anything changes, and
+# --atomic must leave the old revision in place. api.replicas=2 would show up
+# in the Deployment if anything had been applied.
+precheck_fails() { # precheck_fails DESCRIPTION TEXT-IN-THE-HOOK-LOG ARGS...
+  local what="$1" text="$2" rev out
+  shift 2
+  rev="$(helm --kube-context "$CTX" history ncc -o json | sed -n 's/.*"revision":\([0-9]*\).*/\1/p' | tail -1)"
+  if h --set api.replicas=2 --atomic "$@" 2>&1; then fail "$what was not noticed"; fi
+  out="$(k -n "$NS" logs job/ncc-v2-upgrade-preflight 2>&1 || true)"
+  echo "$out" | tail -5
+  case "$out" in *"$text"*) ;; *) fail "$what: the hook log does not say '$text'" ;; esac
+  [ "$(k -n "$NS" get deploy ncc-v2-api -o 'jsonpath={.spec.replicas}')" = 1 ] || fail "$what: the failed upgrade was not rolled back"
+  helm --kube-context "$CTX" status ncc -o json | grep -q '"status":"deployed"' || fail "$what: the release is not deployed again"
+  k -n "$NS" rollout status deployment/ncc-v2-api --timeout=240s
+  echo "ok: $what stops the upgrade and --atomic keeps the old revision (was $rev)"
+}
+precheck_fails "too little free space" "free space" --set upgradeCheck.preCheck.minFreeSpace=100Ti
+precheck_fails "a version older than min_from" "upgrade to v9.0.0 first" --set upgradeCheck.preCheck.minFrom=9.0.0
 
 printf '\nHELM_SMOKE_OK\n'

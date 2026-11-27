@@ -297,7 +297,7 @@ kept and reported. Runs cannot start during an upgrade.
 | After the step from 2.3.x | 2.4.0 installs the helper and brings the service up to its definitions by itself, two minutes after it starts and when no run is going on. `NCC_UPGRADE_ADOPT=0` turns this off; `ncc-orchestrator upgrade-adopt` does it by hand. |
 | Turn the helper off | `NCC_UPGRADE_HELPER=0` for the service: the supervisor upgrades as described below |
 | Logs and state | `logs/upgrade-helper.log`, `run/v2-upgrade-state.json`, and `run/upgrade/` (root or SYSTEM only) |
-| Kubernetes | `helm upgrade` runs two checks (`upgradeCheck` in `values.yaml`); for kustomize see `k8s/upgrade-check-job.yaml` |
+| Kubernetes | `helm upgrade` checks version skew, write access, free space and a verified backup before the rollout, and that the API, UI and runner report the new version after it (`upgradeCheck` in `values.yaml`); for kustomize see `k8s/upgrade-check-job.yaml` |
 
 The API audits the result as `settings.update.result`.
 
