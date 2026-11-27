@@ -16,9 +16,9 @@ export type FeatureSpec = {
 };
 
 export const FEATURE_GROUPS: Array<{ key: FeatureGroup; title: string; description: string }> = [
-  { key: "views", title: "Views", description: "Optional pages and panels." },
-  { key: "actions", title: "Actions", description: "Changes people can make from the app." },
-  { key: "signin", title: "Sign-in", description: "What everyone sees before they sign in." },
+  { key: "views", title: "Views", description: "Optional pages and panels" },
+  { key: "actions", title: "Actions", description: "Changes people can make from the app" },
+  { key: "signin", title: "Sign-in", description: "What everyone sees before they sign in" },
 ];
 
 export const FEATURE_CATALOG: FeatureSpec[] = [

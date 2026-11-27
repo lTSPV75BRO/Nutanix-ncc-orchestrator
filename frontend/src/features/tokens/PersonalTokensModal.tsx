@@ -119,7 +119,7 @@ export function PersonalTokensModal({
       render: (_: unknown, row: PersonalToken) => (
         <Popconfirm
           title="Revoke this token?"
-          description="Any client using it will stop working immediately."
+          description="Any client using it will stop working immediately"
           okText="Revoke"
           okButtonProps={{ danger: true }}
           onConfirm={() => revokeMutation.mutate(row.id)}

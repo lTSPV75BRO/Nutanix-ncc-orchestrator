@@ -112,7 +112,7 @@ export function SloPanel({ sloDashboard, nccClusterSummary, regressionSummary, c
 
       <Typography.Title level={3} className="section-subheading">SLO by cluster</Typography.Title>
       {clusters.length === 0 ? (
-        <Empty description="No SLO cluster data found." />
+        <Empty description="No SLO cluster data found" />
       ) : (
         <Table size="small" columns={columns} dataSource={clusters} pagination={{ pageSize: 8, showSizeChanger: false }} />
       )}

@@ -73,7 +73,7 @@ export function FlakyChecksPanel({ flakyChecks, clusterNameMap }: Props) {
         </Col>
       </Row>
       {checks.length === 0 ? (
-        <Empty description="No flaky checks identified in this run history window." />
+        <Empty description="No flaky checks identified in this run history window" />
       ) : (
         <Table size="small" columns={columns} dataSource={checks} pagination={{ pageSize: 8, showSizeChanger: false }} />
       )}

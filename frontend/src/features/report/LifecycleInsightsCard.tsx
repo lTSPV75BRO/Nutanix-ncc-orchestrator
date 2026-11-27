@@ -57,7 +57,7 @@ export function LifecycleInsightsCard({ enabled }: { enabled: boolean }) {
           Alert history is not available from this server.
         </Typography.Paragraph>
       ) : (alerts.data ?? []).length === 0 ? (
-        <Empty style={{ marginTop: 16 }} description="No NCC finding history yet." />
+        <Empty style={{ marginTop: 16 }} description="No NCC finding history yet" />
       ) : (
         <>
           <Row gutter={[12, 12]} style={{ marginTop: 16 }}>

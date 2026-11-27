@@ -346,14 +346,14 @@ function HeaderTriggerRunButton() {
     if (isActive) {
       notify.warning({
         message: "A run is already in progress",
-        description: "Wait for the current run to finish before triggering another.",
+        description: "Wait for the current run to finish before triggering another",
       });
       return;
     }
     notify.loading({
       key: RUN_TOAST_KEY,
       message: "Starting run…",
-      description: "Triggering an NCC run from the header.",
+      description: "Triggering an NCC run from the header",
     });
     try {
       const out = await api.runTrigger({ extra_args: [] });

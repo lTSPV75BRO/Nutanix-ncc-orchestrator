@@ -676,7 +676,7 @@ export function ConfigSection({ onError }: Props) {
   const switchTarget = async (next: string) => {
     if (next === target) return;
     if (dirty) {
-      notify.warning({ message: "Unsaved changes", description: "Save or revert them before opening another file." });
+      notify.warning({ message: "Unsaved changes", description: "Save or revert them before opening another file" });
       return;
     }
     await load(false, true, undefined, next);
@@ -872,7 +872,7 @@ export function ConfigSection({ onError }: Props) {
             type="warning"
             showIcon
             title="The form is unavailable while the YAML has an error"
-            description="Switch to YAML to fix it, or Revert to the saved file."
+            description="Switch to YAML to fix it, or Revert to the saved file"
           />
         ) : (
           <Row gutter={[16, 16]}>

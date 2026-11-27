@@ -160,7 +160,9 @@ pulse while a run is actually running, which is live. The wave is your choice.
 
 ## Order of work
 
-**Status (2026-11-27):** steps 1 to 3 are done. Not done from them: the
+**Status (2026-11-27):** steps 1 to 5 are done. In step 4 the Run activity
+chart keeps its original full-width bars (the owner's choice); only its
+figures are neutral now. Steps 1 to 3: Not done from them: the
 comparison line on stat cards ("1 more than the previous run") needs data from
 the previous run on each page, and the role, Beta and difficulty pills on the
 Access and Integrations pages are left for the page-by-page pass.

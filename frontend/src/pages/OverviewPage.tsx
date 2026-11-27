@@ -112,7 +112,7 @@ function ClusterHealthList({ clusters }: { clusters: ClusterRow[] }) {
         />
       ) : null}
       {shown.length === 0 ? (
-        <EmptyState title="No matching clusters" description="Try another search or filter." />
+        <EmptyState title="No matching clusters" description="Try another search or filter" />
       ) : (
         <VirtualList
           className="overview-clusters"
@@ -188,6 +188,7 @@ export function OverviewPage() {
   const runSummary = asRecord(data?.run_summary);
   const timestamp = String(runSummary.timestamp || "");
   const totalChecks = toNumber(counts.total_plugins);
+  const maxProblem = Math.max(0, ...SEVERITIES.map((s) => s.count(counts)));
   const score = weightedHealthScore(counts);
   const fresh = freshness(timestamp);
   const clustersOk = toNumber(runSummary.clusters_ok);
@@ -294,7 +295,7 @@ export function OverviewPage() {
       <ReportCacheNotice cache={data?.cache} />
 
       {report.isError && !data ? (
-        <Alert type="error" showIcon title="Couldn't load the latest results" description="Refresh to try again." />
+        <Alert type="error" showIcon title="Couldn't load the latest results" description="Refresh to try again" />
       ) : null}
 
       {overdueSchedules.length > 0 ? (
@@ -401,13 +402,15 @@ export function OverviewPage() {
           <div className="overview-grid">
             <Panel
               title="Checks by result" icon={<PieChartOutlined />}
-              description="From the latest run. Select one to see those findings."
+              description="From the latest run; select one to see those findings"
               flush
             >
               <ul className="overview-severity">
                 {SEVERITIES.map((s) => {
                   const n = s.count(counts);
-                  const pct = totalChecks > 0 ? (n / totalChecks) * 100 : 0;
+                  // Bars are scaled to the largest problem count, not to every
+                  // check: passes would otherwise shrink problems to slivers.
+                  const pct = maxProblem > 0 ? (n / maxProblem) * 100 : 0;
                   return (
                     <li key={s.key}>
                       <Link to={`/findings?sev=${s.key}`} className="overview-severity-row">
@@ -421,13 +424,12 @@ export function OverviewPage() {
                   );
                 })}
                 <li>
-                  <div className="overview-severity-row is-static">
+                  <div className="overview-severity-row is-static is-pass">
                     <StatusBadge tone="ok">Pass</StatusBadge>
-                    <span className="overview-bar" aria-hidden="true">
-                      <span
-                        className="overview-bar-fill tone-ok"
-                        style={{ width: `${totalChecks > 0 ? Math.min(100, (toNumber(counts.pass) / totalChecks) * 100) : 0}%` }}
-                      />
+                    <span className="overview-pass-share">
+                      {totalChecks > 0
+                        ? `${((toNumber(counts.pass) / totalChecks) * 100).toFixed(1)}% of ${totalChecks.toLocaleString()} checks`
+                        : null}
                     </span>
                     <span className="overview-count">{toNumber(counts.pass).toLocaleString()}</span>
                   </div>
@@ -459,9 +461,9 @@ export function OverviewPage() {
               }
             >
               {clusters.length === 0 ? (
-                <EmptyState icon={<ClusterOutlined />} title="No per-cluster results" description="The latest run did not record results per cluster." />
+                <EmptyState icon={<ClusterOutlined />} title="No per-cluster results" description="The latest run did not record results per cluster" />
               ) : shownClusters.length === 0 ? (
-                <EmptyState icon={<ClusterOutlined />} title={`No ${environment} clusters in the latest run`} description="Run this environment to see its clusters here." />
+                <EmptyState icon={<ClusterOutlined />} title={`No ${environment} clusters in the latest run`} description="Run this environment to see its clusters here" />
               ) : (
                 <ClusterHealthList key={environment} clusters={shownClusters} />
               )}
@@ -485,7 +487,7 @@ export function OverviewPage() {
           runs={(runs.data ?? []).slice(0, 5)}
           loading={runs.isLoading}
           onOpen={(r) => navigate(`/runs/${encodeURIComponent(r.id)}`)}
-          empty={<EmptyState title="No runs yet" description="Runs you start, and scheduled runs, appear here." />}
+          empty={<EmptyState title="No runs yet" description="Runs you start, and scheduled runs, appear here" />}
         />
       </Panel>
     </div>

@@ -121,7 +121,7 @@ export function NewRunDrawer({
 
   const triggerRun = async () => {
     setBusy("start");
-    notify.loading({ key: RUN_TOAST_KEY, message: "Starting run…", description: "Submitting the run to the API server." });
+    notify.loading({ key: RUN_TOAST_KEY, message: "Starting run…", description: "Submitting the run to the API server" });
     try {
       const out = await api.runTrigger({
         environment: envName || undefined,

@@ -33,7 +33,7 @@ import { draftIsCurrent, storedDraftBase, useDraftBase } from "../../hooks/useDr
 import { notify } from "../../notify";
 import { formatDateTime, relativeTime } from "../../utils/datetime";
 import type { ConfigListItem, ScheduleSaveResult, ScheduleState } from "../../api/types";
-import { SaveBar, StatTile, StatusBadge, type Tone } from "../../ui";
+import { SaveBar, StatusBadge, type Tone } from "../../ui";
 import { LoadingStateCard } from "../../components/UxStates";
 import { describeCron, describeEvery, kubernetesCronFor, nextCronRuns, parseCron } from "./cron";
 
@@ -591,7 +591,7 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
           {!isKubernetes && health?.installed ? (
             <Popconfirm
               title="Remove the schedule?"
-              description="Scheduled runs stop until you save a schedule again."
+              description="Scheduled runs stop until you save a schedule again"
               okText="Remove"
               okButtonProps={{ danger: true }}
               onConfirm={() => void removeSchedule()}
@@ -608,38 +608,42 @@ export function ScheduleSection({ backendConfigPath, onError, isKubernetes = fal
       </div>
 
       {health ? (
-        <div className="overview-stats">
-          <StatTile
-            label="Schedule"
-            value={
-              !isKubernetes && !health.installed && !health.saved
-                ? "None"
-                : describeSchedule(health.every, health.cron) === "—"
-                  ? "Custom"
-                  : describeSchedule(health.every, health.cron)
-            }
-          />
-          <StatTile
-            label="Next run"
-            value={
-              healthNext ? (
-                <Tooltip title={formatDateTime(healthNext.toISOString())}>{relativeTime(healthNext.toISOString())}</Tooltip>
-              ) : status?.label === "Active" ? (
-                "Soon"
-              ) : (
-                "Not scheduled"
-              )
-            }
-          />
-          <StatTile
-            label="Last run"
-            value={lastRunAt ? <Tooltip title={formatDateTime(lastRunAt)}>{relativeTime(lastRunAt)}</Tooltip> : "Not yet"}
-          />
-          <StatTile
-            label="Last outcome"
-            value={outcomeLabel}
-            tone={outcome === "succeeded" ? "ok" : outcome === "failed" ? "fail" : undefined}
-          />
+        // Only "Next run" is a figure; the rest are facts, so they read as a
+        // small list instead of four equal stat cards of words.
+        <div className="schedule-summary">
+          <div className="schedule-next">
+            <span className="schedule-next-label">Next run</span>
+            <span className="schedule-next-value">
+              {healthNext ? relativeTime(healthNext.toISOString()) : status?.label === "Active" ? "Soon" : "Not scheduled"}
+            </span>
+            {healthNext ? <span className="schedule-next-at">{formatDateTime(healthNext.toISOString())}</span> : null}
+          </div>
+          <dl className="schedule-facts">
+            <div>
+              <dt>Schedule</dt>
+              <dd>
+                {!isKubernetes && !health.installed && !health.saved
+                  ? "None"
+                  : describeSchedule(health.every, health.cron) === "—"
+                    ? "Custom"
+                    : describeSchedule(health.every, health.cron)}
+              </dd>
+            </div>
+            <div>
+              <dt>Last run</dt>
+              <dd>{lastRunAt ? <Tooltip title={formatDateTime(lastRunAt)}>{relativeTime(lastRunAt)}</Tooltip> : "Not yet"}</dd>
+            </div>
+            <div>
+              <dt>Last outcome</dt>
+              <dd>
+                {outcome === "succeeded" || outcome === "failed" ? (
+                  <StatusBadge tone={outcome === "succeeded" ? "ok" : "fail"}>{outcomeLabel}</StatusBadge>
+                ) : (
+                  outcomeLabel
+                )}
+              </dd>
+            </div>
+          </dl>
         </div>
       ) : (
         <LoadingStateCard rows={2} />

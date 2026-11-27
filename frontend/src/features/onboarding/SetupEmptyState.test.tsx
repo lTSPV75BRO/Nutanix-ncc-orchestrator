@@ -104,7 +104,7 @@ describe("SetupEmptyState", () => {
   it("tells a restricted account it sees no clusters, with no admin buttons", async () => {
     renderEmpty(restricted, NO_CLUSTERS);
     expect(await screen.findByText("Your account sees no clusters")).toBeInTheDocument();
-    expect(screen.getByText("Ask an administrator to add you to a cluster group.")).toBeInTheDocument();
+    expect(screen.getByText("Ask an administrator to add you to a cluster group")).toBeInTheDocument();
     expect(buttons()).toEqual([]);
   });
 

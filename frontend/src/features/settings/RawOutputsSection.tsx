@@ -151,7 +151,7 @@ export function RawOutputsSection({ onError }: Props) {
               type="info"
               showIcon
               title="Run files are unavailable"
-              description="This server is not set up to list run files."
+              description="This server is not set up to list run files"
             />
           ) : filtered.length === 0 ? (
             <Empty description="No files" />

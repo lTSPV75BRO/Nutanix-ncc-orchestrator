@@ -77,7 +77,7 @@ export function DrilldownDiffPanel({ drilldownDiff, clusterNameMap }: Props) {
         </Col>
       </Row>
       {clusters.length === 0 ? (
-        <Empty description="No drilldown diff clusters found." />
+        <Empty description="No drilldown diff clusters found" />
       ) : (
         <Table size="small" columns={columns} dataSource={clusters} pagination={{ pageSize: 8, showSizeChanger: false }} />
       )}

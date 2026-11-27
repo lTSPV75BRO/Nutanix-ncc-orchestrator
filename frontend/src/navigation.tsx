@@ -59,17 +59,17 @@ export type SectionDef = {
 export const SECTIONS: SectionDef[] = [
   // Viewers may read run history (GET /api/v1/runs); starting/cancelling stays operator-only.
   { key: "runs", path: "/runs", label: "Runs", title: "Runs", icon: <ThunderboltOutlined />, group: "main", access: "viewer" },
-  { key: "config", path: "/settings/config", label: "Clusters & config", title: "Clusters & config", description: "Which clusters to check, how to sign in to them, and how runs behave.", icon: <SettingOutlined />, group: "settings", access: "admin" },
-  { key: "schedule", path: "/settings/schedule", label: "Schedule", title: "Schedule", description: "Run NCC automatically on a timetable.", icon: <CalendarOutlined />, group: "settings", access: "operator" },
-  { key: "notifications", path: "/settings/notifications", label: "Notifications", title: "Notifications", description: "Who hears about runs and failures, and how.", icon: <BellOutlined />, group: "settings", access: "admin" },
-  { key: "access", path: "/settings/access", label: "Access", title: "Access", description: "Accounts, sign-in methods, cluster groups, API tokens and HTTPS.", icon: <TeamOutlined />, group: "settings", access: "admin", needsLogin: true },
-  { key: "features", path: "/settings/features", label: "Features", title: "Features", description: "Turn optional parts of the app on or off for everyone.", icon: <ControlOutlined />, group: "settings", access: "admin" },
-  { key: "connection", path: "/system/status", label: "Status", title: "System status", description: "Whether the API server is up, what it is running and on what, and what the supervisor is doing.", icon: <ApiOutlined />, group: "system", access: "operator" },
-  { key: "health", path: "/system/health", label: "Health & repair", title: "Health & repair", description: "Checks of this installation, what heals automatically, and the history of repairs.", icon: <HeartOutlined />, group: "system", access: "admin" },
-  { key: "updates", path: "/system/updates", label: "Updates & backups", title: "Updates & backups", description: "Update the software (checked, with automatic rollback), back up and restore, and migrate the config.", icon: <CloudSyncOutlined />, group: "system", access: "admin" },
-  { key: "logs", path: "/system/logs", label: "Logs", title: "Logs", description: "Live output from the runner and the servers.", icon: <FileTextOutlined />, group: "system", access: "operator" },
-  { key: "audit", path: "/system/audit", label: "Audit log", title: "Audit log", description: "Who did what, and when.", icon: <AuditOutlined />, group: "system", access: "operator" },
-  { key: "developer", path: "/system/developer", label: "Developer", title: "Developer tools", description: "The API explorer, saved reports and raw run files.", icon: <CodeOutlined />, group: "system", access: "admin" },
+  { key: "config", path: "/settings/config", label: "Clusters & config", title: "Clusters & config", description: "Which clusters to check, how to sign in to them, and how runs behave", icon: <SettingOutlined />, group: "settings", access: "admin" },
+  { key: "schedule", path: "/settings/schedule", label: "Schedule", title: "Schedule", description: "Run NCC automatically on a timetable", icon: <CalendarOutlined />, group: "settings", access: "operator" },
+  { key: "notifications", path: "/settings/notifications", label: "Notifications", title: "Notifications", description: "Who hears about runs and failures, and how", icon: <BellOutlined />, group: "settings", access: "admin" },
+  { key: "access", path: "/settings/access", label: "Access", title: "Access", description: "Accounts, sign-in methods, cluster groups, API tokens and HTTPS", icon: <TeamOutlined />, group: "settings", access: "admin", needsLogin: true },
+  { key: "features", path: "/settings/features", label: "Features", title: "Features", description: "Turn optional parts of the app on or off for everyone", icon: <ControlOutlined />, group: "settings", access: "admin" },
+  { key: "connection", path: "/system/status", label: "Status", title: "System status", description: "Whether the API server is up, what it is running and on what, and what the supervisor is doing", icon: <ApiOutlined />, group: "system", access: "operator" },
+  { key: "health", path: "/system/health", label: "Health & repair", title: "Health & repair", description: "Checks of this installation, what heals automatically, and the history of repairs", icon: <HeartOutlined />, group: "system", access: "admin" },
+  { key: "updates", path: "/system/updates", label: "Updates & backups", title: "Updates & backups", description: "Update the software (checked, with automatic rollback), back up and restore, and migrate the config", icon: <CloudSyncOutlined />, group: "system", access: "admin" },
+  { key: "logs", path: "/system/logs", label: "Logs", title: "Logs", description: "Live output from the runner and the servers", icon: <FileTextOutlined />, group: "system", access: "operator" },
+  { key: "audit", path: "/system/audit", label: "Audit log", title: "Audit log", description: "Who did what, and when", icon: <AuditOutlined />, group: "system", access: "operator" },
+  { key: "developer", path: "/system/developer", label: "Developer", title: "Developer tools", description: "The API explorer, saved reports and raw run files", icon: <CodeOutlined />, group: "system", access: "admin" },
 ];
 
 /** Where signed-in people land; `/` redirects here. */

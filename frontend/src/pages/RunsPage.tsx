@@ -151,7 +151,7 @@ export function RunsPage() {
           pagination={shown.length > 15 ? { pageSize: 15, showSizeChanger: false } : false}
           empty={
             filter === "problems" ? (
-              <EmptyState title="No runs with problems" description="Every recorded run finished cleanly." />
+              <EmptyState title="No runs with problems" description="Every recorded run finished cleanly" />
             ) : (
               <SetupEmptyState onStartRun={() => setDrawerOpen(true)} />
             )
@@ -160,7 +160,7 @@ export function RunsPage() {
       </Panel>
 
       {!clusterRestricted && (artifacts.data?.length ?? 0) > 0 ? (
-        <Panel title="Files from the latest run" icon={<FolderOpenOutlined />} description="Reports and exports written by the most recent run." flush>
+        <Panel title="Files from the latest run" icon={<FolderOpenOutlined />} description="Reports and exports written by the most recent run" flush>
           <Table<ArtifactInfo>
             size="middle"
             rowKey="name"

@@ -259,7 +259,7 @@ export function LDAPCard({ embedded }: { embedded?: boolean }) {
           showIcon
           style={{ marginBottom: 16 }}
           title="Users sign in on the normal login form with their AD credentials. Local accounts are tried first, then AD — so the built-in admin keeps working even if AD is unreachable."
-          description="With several domains or forests, the directory below is the default one; add the others under Other domains or forests."
+          description="With several domains or forests, the directory below is the default one; add the others under Other domains or forests"
         />
       )}
       <Form

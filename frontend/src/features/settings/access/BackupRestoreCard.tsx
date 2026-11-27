@@ -551,7 +551,7 @@ export function BackupRestoreCard() {
           showIcon
           style={{ marginBottom: 8 }}
           title={SAFETY_TIER_TEXT.destructive}
-          description="Restoring overwrites current runtime config, users, and tokens, then restarts services."
+          description="Restoring overwrites current runtime config, users, and tokens, then restarts services"
         />
         <Input.Password
           placeholder="Decryption passphrase (only for encrypted archives)"

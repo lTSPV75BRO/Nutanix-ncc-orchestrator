@@ -521,13 +521,9 @@ export function ApiExplorerSection({ onError }: Props) {
         </Col>
       </Row>
 
-      <Alert
-        type="info"
-        showIcon
-        icon={<SafetyCertificateOutlined />}
-        style={{ marginTop: 12 }}
-        title="Sensitive request headers/body are not persisted in browser storage."
-      />
+      <p className="ui-field-help api-explorer-privacy">
+        <SafetyCertificateOutlined aria-hidden /> Sensitive headers and request bodies are not kept in browser storage
+      </p>
 
       {response ? (
         <Card size="small" style={{ marginTop: 12 }} className="api-response-card">

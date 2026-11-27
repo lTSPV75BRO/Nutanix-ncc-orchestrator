@@ -294,7 +294,7 @@ export function RunDetailPage() {
             children: (
               <Panel flush>
                 {clusters.length === 0 ? (
-                  <EmptyState title="No per-cluster results" description="This run did not record results per cluster." />
+                  <EmptyState title="No per-cluster results" description="This run did not record results per cluster" />
                 ) : (
                   <>
                   <ListToolbar
@@ -318,7 +318,7 @@ export function RunDetailPage() {
                     dataSource={shownClusters}
                     pagination={PAGE}
                     scroll={{ x: 640 }}
-                    locale={{ emptyText: <EmptyState title="No matching clusters" description="Try another search or filter." /> }}
+                    locale={{ emptyText: <EmptyState title="No matching clusters" description="Try another search or filter" /> }}
                     columns={[
                       {
                         title: "Cluster",
@@ -464,7 +464,7 @@ export function RunDetailPage() {
                     />
                   </Panel>
                 ) : null}
-                <Panel title="Saved files" icon={<FolderOpenOutlined />} description="JSON documents archived with this run." flush>
+                <Panel title="Saved files" icon={<FolderOpenOutlined />} description="JSON documents archived with this run" flush>
                   {Object.keys(files).length === 0 ? (
                     <EmptyState title="No files saved" />
                   ) : (

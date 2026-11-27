@@ -84,7 +84,7 @@ export function ScheduledBackupCard() {
           showIcon
           style={{ marginBottom: 12 }}
           title="No backup encryption key configured"
-          description="Set NCC_BACKUP_KEY_FILE, NCC_BACKUP_KEY, or NCC_BACKUP_PASSPHRASE on the API server to enable encrypted scheduled backups."
+          description="Set NCC_BACKUP_KEY_FILE, NCC_BACKUP_KEY, or NCC_BACKUP_PASSPHRASE on the API server to enable encrypted scheduled backups"
         />
       ) : null}
 

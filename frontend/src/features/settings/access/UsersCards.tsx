@@ -208,7 +208,7 @@ export function UsersCard() {
                   </Button>
                   <Popconfirm
                     title={`Sign out all sessions for ${rec.username}?`}
-                    description="Existing tokens for this user stop working immediately."
+                    description="Existing tokens for this user stop working immediately"
                     onConfirm={() => revokeMut.mutate(rec.username)}
                     okButtonProps={{ danger: true }}
                   >

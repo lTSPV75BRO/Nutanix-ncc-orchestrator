@@ -633,7 +633,7 @@ export function FindingsPage() {
           type="info"
           showIcon
           title="Cluster-group view active"
-          description="Severity totals and findings are scoped to your allowed cluster groups."
+          description="Severity totals and findings are scoped to your allowed cluster groups"
         />
       ) : null}
 
@@ -642,7 +642,7 @@ export function FindingsPage() {
           type="info"
           showIcon
           title="Loading the rest of this run"
-          description="A preview is shown while the full results load."
+          description="A preview is shown while the full results load"
         />
       )}
 
@@ -670,10 +670,10 @@ export function FindingsPage() {
               prefix={<SearchOutlined className="filter-control-icon" />}
               value={filterText}
               onChange={(e) => setFilterText(e.target.value)}
-              placeholder="Search findings (e.g. cluster:10.1)"
+              placeholder="Search findings"
               autoComplete="off"
               suffix={
-                <Tooltip title={<div style={{ fontSize: 12 }}><strong>Supported tokens:</strong><br /><code>sev:FAIL</code> <code>cluster:10.1</code> <code>changed:true</code> <code>flaky:true</code></div>}>
+                <Tooltip title={<div style={{ fontSize: 12 }}>Search by text, or narrow with<br /><code>sev:FAIL</code> <code>cluster:10.1</code> <code>changed:true</code> <code>flaky:true</code></div>}>
                   <InfoCircleOutlined className="filter-control-icon" style={{ cursor: "pointer" }} />
                 </Tooltip>
               }

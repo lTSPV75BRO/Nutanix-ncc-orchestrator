@@ -251,9 +251,9 @@ export function ClusterPage() {
               <Skeleton active paragraph={{ rows: 4 }} title={false} />
             </div>
           ) : alerts.isError ? (
-            <EmptyState title="Finding history is not available" description="This API server does not track NCC findings over time." />
+            <EmptyState title="Finding history is not available" description="This API server does not track NCC findings over time" />
           ) : open.length === 0 ? (
-            <EmptyState title="No open findings" description="Every NCC result on this cluster is resolved or passing." />
+            <EmptyState title="No open findings" description="Every NCC result on this cluster is resolved or passing" />
           ) : (
             <>
               <ListToolbar
@@ -277,7 +277,7 @@ export function ClusterPage() {
                 dataSource={shownOpen}
                 pagination={shownOpen.length > 25 ? { pageSize: 25, showSizeChanger: false } : false}
                 scroll={{ x: 560 }}
-                locale={{ emptyText: <EmptyState title="No matching findings" description="Try another search or filter." /> }}
+                locale={{ emptyText: <EmptyState title="No matching findings" description="Try another search or filter" /> }}
                 onRow={(a) => ({
                   onClick: () => navigate(`${findingsHref}&q=${encodeURIComponent(a.check)}`),
                   className: "cluster-page-row",
@@ -325,7 +325,7 @@ export function ClusterPage() {
             <KeyValueList items={about} />
           </Panel>
 
-          <Panel title="Recently closed" icon={<HistoryOutlined />} description="Findings that were resolved or stopped being reported.">
+          <Panel title="Recently closed" icon={<HistoryOutlined />} description="Findings that were resolved or stopped being reported">
             {closed.length === 0 ? (
               <Typography.Text type="secondary">Nothing closed yet.</Typography.Text>
             ) : (

@@ -463,7 +463,7 @@ export function LoginPage({
           type="info"
           showIcon
           title="No sign-in method is configured"
-          description="An administrator needs to enable local accounts, Active Directory, or SSO on the server."
+          description="An administrator needs to enable local accounts, Active Directory, or SSO on the server"
         />
       ) : null}
 

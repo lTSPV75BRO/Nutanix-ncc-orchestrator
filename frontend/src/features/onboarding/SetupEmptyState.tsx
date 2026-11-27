@@ -71,14 +71,14 @@ export function emptyCopy(gap: SetupGap, v: Pick<Viewer, "isAdmin" | "canOperate
       return {
         icon: "lock",
         title: "Your account sees no clusters",
-        description: "Ask an administrator to add you to a cluster group.",
+        description: "Ask an administrator to add you to a cluster group",
         actions: [],
       };
     case "running":
       return {
         icon: "run",
         title: "The first run is in progress",
-        description: "Results appear here as soon as it finishes.",
+        description: "Results appear here as soon as it finishes",
         actions: [{ label: "Watch the run", to: RUNS }],
       };
     case "no_config":

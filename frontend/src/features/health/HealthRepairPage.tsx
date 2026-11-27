@@ -100,7 +100,7 @@ export function HealHistoryPanel() {
       <Panel>
         <EmptyState
           title="Nothing repaired yet"
-          description="Fixes from this page, the background checks and doctor --fix show up here."
+          description="Fixes from this page, the background checks and doctor --fix show up here"
         />
       </Panel>
     );

@@ -17,7 +17,7 @@ import {
   Typography,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { AimOutlined, AppstoreOutlined, BarsOutlined, CheckOutlined, ClockCircleOutlined, CloseCircleOutlined, ClusterOutlined, ColumnWidthOutlined, CopyOutlined, DownOutlined, ExclamationCircleOutlined, ExportOutlined, FileTextOutlined, FullscreenExitOutlined, FullscreenOutlined, HistoryOutlined, InfoCircleOutlined, MessageOutlined, ProfileOutlined, QuestionCircleOutlined, ReadOutlined, RightOutlined, SearchOutlined, TableOutlined, ToolOutlined, WarningOutlined } from "@ant-design/icons";
+import { AimOutlined, AppstoreOutlined, BarsOutlined, CheckOutlined, ClockCircleOutlined, CloseCircleOutlined, ClusterOutlined, ColumnHeightOutlined, ColumnWidthOutlined, CopyOutlined, DownOutlined, ExclamationCircleOutlined, ExportOutlined, FileTextOutlined, FullscreenExitOutlined, FullscreenOutlined, HistoryOutlined, InfoCircleOutlined, MessageOutlined, ProfileOutlined, QuestionCircleOutlined, ReadOutlined, RightOutlined, SearchOutlined, TableOutlined, ToolOutlined, WarningOutlined } from "@ant-design/icons";
 import { Link } from "react-router";
 import { KeyValueList, Panel, StatusBadge, severityLabel, toneFor, type KeyValueItem } from "../../ui";
 import { clusterPath } from "../../navigation";
@@ -84,11 +84,11 @@ const HANDLING_FILTERS: Array<{
   hint: string;
   tone: string;
 }> = [
-  { value: "all", label: "All", hint: "Every finding that matches the current filters.", tone: "all" },
-  { value: "open", label: "Needs attention", hint: "Open findings that still need a decision.", tone: "open" },
-  { value: "acknowledged", label: "Acknowledged", hint: "Noted, and still open.", tone: "acked" },
+  { value: "all", label: "All", hint: "Every finding that matches the current filters", tone: "all" },
+  { value: "open", label: "Needs attention", hint: "Open findings that still need a decision", tone: "open" },
+  { value: "acknowledged", label: "Acknowledged", hint: "Noted, and still open", tone: "acked" },
   { value: "resolved", label: "Resolved", hint: "Marked done. If a later run finds it again, it moves to Returned.", tone: "resolved" },
-  { value: "returned", label: "Returned", hint: "Resolved earlier, then found again on a later run.", tone: "returned" },
+  { value: "returned", label: "Returned", hint: "Resolved earlier, then found again on a later run", tone: "returned" },
 ];
 
 type RowRecord = {
@@ -514,10 +514,10 @@ function VersionsCell({ row }: { row: RowRecord }) {
 type FindingsView = "table" | "focused" | "grouped" | "list";
 
 const VIEW_OPTIONS: Array<{ value: FindingsView; label: string; icon: ReactNode; hint: string }> = [
-  { value: "table", label: "Table", icon: <TableOutlined />, hint: "Every column, including versions and detail." },
-  { value: "focused", label: "Focused", icon: <ProfileOutlined />, hint: "Fewer columns: the finding with its detail, cluster, KB and status." },
-  { value: "grouped", label: "By check", icon: <AppstoreOutlined />, hint: "One row per check, with the clusters it fails on." },
-  { value: "list", label: "List", icon: <BarsOutlined />, hint: "Each finding as a short sentence, easiest to scan." },
+  { value: "table", label: "Table", icon: <TableOutlined />, hint: "Every column, including versions and detail" },
+  { value: "focused", label: "Focused", icon: <ProfileOutlined />, hint: "Fewer columns: the finding with its detail, cluster, KB and status" },
+  { value: "grouped", label: "By check", icon: <AppstoreOutlined />, hint: "One row per check, with the clusters it fails on" },
+  { value: "list", label: "List", icon: <BarsOutlined />, hint: "Each finding as a short sentence, easiest to scan" },
 ];
 const VIEW_KEYS = new Set<string>(VIEW_OPTIONS.map((v) => v.value));
 
@@ -1545,23 +1545,24 @@ export function ClusterTable({
               </Button>
             </Tooltip>
           ) : null}
-          <Tooltip title={density === "compact" ? "Switch to comfortable rows" : "Switch to compact rows"}>
+          {/* Row density and full page are small tools next to the view
+              switch: icons with a tooltip, so the row reads as one control. */}
+          <Tooltip title={density === "compact" ? "Compact rows; switch to comfortable" : "Comfortable rows; switch to compact"}>
             <Button
               size="small"
+              aria-label={density === "compact" ? "Row density: compact" : "Row density: comfortable"}
+              aria-pressed={density === "compact"}
+              icon={<ColumnHeightOutlined />}
               onClick={() => setDensity(density === "compact" ? "comfortable" : "compact")}
-            >
-              {density === "compact" ? "Compact" : "Comfortable"}
-            </Button>
+            />
           </Tooltip>
-          <Tooltip title={expanded ? "Leave full page (Esc)" : "Show the findings across the page. Filters and details stay available."}>
+          <Tooltip title={expanded ? "Leave full page (Esc)" : "Full page: the findings across the page, filters and details stay available"}>
             <Button
               size="small"
               aria-label={expanded ? "Exit full page" : "Full page, expand findings"}
               icon={expanded ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
               onClick={() => setExpanded(!expanded)}
-            >
-              {expanded ? "Exit full page" : "Full page"}
-            </Button>
+            />
           </Tooltip>
         </Space>
       </div>

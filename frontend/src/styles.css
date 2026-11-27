@@ -3451,6 +3451,12 @@ a.overview-cluster-row:focus-visible {
   background: var(--ui-info);
 }
 
+.overview-pass-share {
+  color: var(--ui-text-tertiary);
+  font-size: var(--ui-text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
 .overview-count {
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -4829,6 +4835,74 @@ html[data-theme="light"] .site-intro-skip {
   }
 }
 
+/* System status: its stat cards hold words and paths (Healthy, token,
+   linux/amd64), not figures, so they use the heading size, not the 30 px
+   figure size. */
+.status-page .ui-stat-value {
+  font-size: var(--ui-text-xl);
+  letter-spacing: 0;
+}
+
+.api-explorer-privacy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 0;
+}
+
+/* Schedule summary: one figure (the next run) and a short list of facts. */
+.schedule-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--ui-space-4) var(--ui-space-6);
+  padding: 20px var(--ui-space-5);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-lg);
+  background: var(--ui-surface);
+}
+
+.schedule-next {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.schedule-next-label,
+.schedule-facts dt {
+  font-size: var(--ui-text-xs);
+  color: var(--ui-text-secondary);
+}
+
+.schedule-next-value {
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  color: var(--ui-text);
+}
+
+.schedule-next-at {
+  font-size: var(--ui-text-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--ui-text-tertiary);
+}
+
+.schedule-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ui-space-4) var(--ui-space-6);
+  margin: 0;
+}
+
+.schedule-facts dd {
+  margin: 4px 0 0;
+  font-size: var(--ui-text-sm);
+  color: var(--ui-text);
+}
+
 /* Status → Run activity */
 .run-activity {
   display: flex;
@@ -4861,14 +4935,6 @@ html[data-theme="light"] .site-intro-skip {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.run-activity-stats dd.is-ok {
-  color: var(--ui-ok-text);
-}
-
-.run-activity-stats dd.is-fail {
-  color: var(--ui-fail-text);
 }
 
 .run-activity-chart {
@@ -5332,27 +5398,22 @@ html[data-theme="light"] .site-intro-skip {
   line-clamp: 2;
 }
 
+/* KB links are plain link text: a pill on every row made violet the
+   loudest colour on the page. */
 a.alerts-kb-link {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 1px 8px;
-  border: 1px solid color-mix(in srgb, var(--link-color) 30%, transparent);
-  border-radius: 999px;
-  font-size: var(--ui-text-xs);
-  font-weight: 500;
-  line-height: 20px;
+  font-size: var(--ui-text-sm);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   color: var(--link-color);
-  background: color-mix(in srgb, var(--link-color) 10%, transparent);
-  transition: background var(--anim-fast, 150ms) var(--anim-ease, ease), border-color var(--anim-fast, 150ms) var(--anim-ease, ease);
 }
 
 a.alerts-kb-link:hover,
 a.alerts-kb-link:focus-visible {
-  background: color-mix(in srgb, var(--link-color) 20%, transparent);
-  border-color: color-mix(in srgb, var(--link-color) 55%, transparent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .alerts-empty-cell,

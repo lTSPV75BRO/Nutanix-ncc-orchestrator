@@ -62,7 +62,7 @@ export function IntegrationsPage() {
         <div className="integrations-page">
           <EmptyState
             title="No such integration"
-            description="It may have been renamed."
+            description="It may have been renamed"
             actions={
               <Link to="/integrations">
                 <Button>All integrations</Button>
@@ -109,7 +109,7 @@ function IntegrationCatalog({ rawAddress, onAddress, address }: { rawAddress: st
         <Input
           allowClear
           prefix={<SearchOutlined aria-hidden />}
-          placeholder="Search, e.g. Splunk"
+          placeholder="Search"
           aria-label="Search integrations"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -126,7 +126,7 @@ function IntegrationCatalog({ rawAddress, onAddress, address }: { rawAddress: st
       ) : (
         <EmptyState
           title="No integration matches"
-          description="Any tool that can call a REST API can still connect: see “Your own scripts”."
+          description="Any tool that can call a REST API can still connect: see “Your own scripts”"
           actions={<Button onClick={() => { setSearch(""); setCategory("All"); }}>Show all</Button>}
         />
       )}
@@ -508,7 +508,7 @@ function NotificationChannelStatus() {
   const channels = statusQuery.data?.channels ?? [];
   const name = (c: string) => (c === "email" ? "Email" : c === "slack" ? "Slack" : "Webhook");
   return (
-    <Panel title="Your channels now" description="From Settings → Notifications.">
+    <Panel title="Your channels now" description="From Settings → Notifications">
       {statusQuery.isLoading ? (
         <p className="integration-hint">Loading…</p>
       ) : (

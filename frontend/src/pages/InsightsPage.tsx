@@ -520,7 +520,7 @@ export function InsightsPage() {
           <EmptyState
             icon={<BarChartOutlined />}
             title="Nothing to analyse yet"
-            description="Insights appear after the first run that records check results: health per cluster, trends across runs, and how findings are being handled."
+            description="Insights appear after the first run that records check results: health per cluster, trends across runs, and how findings are being handled"
             actions={
               <Link to={sectionHref("runs")}>
                 <Button type="primary">Go to Runs</Button>
@@ -675,7 +675,7 @@ export function InsightsPage() {
 
   const summaryTab = (
     <div className="insights-tab">
-      <Panel title="What this run is saying" icon={<BulbOutlined />} description="Highlights from this run and the one before it.">
+      <Panel title="What this run is saying" icon={<BulbOutlined />} description="Highlights from this run and the one before it">
         <ul className="insights-brief">
           {briefing.map((item) => (
             <li key={item.text} className={`tone-${item.tone}`}>
@@ -737,7 +737,7 @@ export function InsightsPage() {
             locale={{ emptyText: <EmptyState title="No failures, errors or warnings" /> }}
           />
         </Panel>
-        <Panel title="Review first" icon={<FlagOutlined />} description="The critical findings most worth a look." flush>
+        <Panel title="Review first" icon={<FlagOutlined />} description="The critical findings most worth a look" flush>
           {actionableFindings.length === 0 ? (
             <EmptyState title="No critical findings in this run" />
           ) : (
@@ -787,14 +787,14 @@ export function InsightsPage() {
   const clustersTab = (
     <div className="insights-tab">
       <div className="insights-grid">
-        <Panel title="Cluster health" icon={<DashboardOutlined />} description="Worst first, by weighted health." flush>
+        <Panel title="Cluster health" icon={<DashboardOutlined />} description="Worst first, by weighted health" flush>
           {clusterRanking.length === 0 ? (
             <EmptyState title="No per-cluster results" />
           ) : (
             <ClusterRanking ranking={clusterRanking} needsByName={needsByName} ages={clusterAges} />
           )}
         </Panel>
-        <Panel title="Run reliability" icon={<SafetyCertificateOutlined />} description="Clusters that could not be checked, and versions seen.">
+        <Panel title="Run reliability" icon={<SafetyCertificateOutlined />} description="Clusters that could not be checked, and versions seen">
           {failureClassEntries.length === 0 ? (
             <p className="insights-ok">
               <CheckCircleOutlined /> Every cluster completed this run.
@@ -840,7 +840,7 @@ export function InsightsPage() {
         }
       >
         {recentTrends.length === 0 ? (
-          <EmptyState title="Not enough runs for a trend" description="A trend appears after a few runs have finished." />
+          <EmptyState title="Not enough runs for a trend" description="A trend appears after a few runs have finished" />
         ) : trendView === "table" ? (
           <Table
             size="small"
@@ -964,7 +964,7 @@ export function InsightsPage() {
       <LifecycleInsightsCard enabled={features.isFetched && !insightsOff} />
 
       {sharedChecks.length > 0 ? (
-        <Panel title="Same check, several clusters" icon={<ApartmentOutlined />} description="The same critical check failing on more than one cluster." flush>
+        <Panel title="Same check, several clusters" icon={<ApartmentOutlined />} description="The same critical check failing on more than one cluster" flush>
           <Table
             size="middle"
             pagination={false}
@@ -983,7 +983,7 @@ export function InsightsPage() {
         </Panel>
       ) : null}
 
-      <Panel title="Knowledge base articles" icon={<ReadOutlined />} description="Articles referenced by failing checks.">
+      <Panel title="Knowledge base articles" icon={<ReadOutlined />} description="Articles referenced by failing checks">
         {kbIndex.length === 0 ? (
           <EmptyState title="No articles referenced in this run" />
         ) : (

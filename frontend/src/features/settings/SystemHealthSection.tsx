@@ -318,7 +318,7 @@ export function SystemHealthSection() {
             <Space.Compact>
               <Popconfirm
                 title="Apply safe fixes?"
-                description="Only fixes that don't restart anything: missing folders, file permissions, config repairs, the self-signed certificate, log rotation, backups and leftover temporary files."
+                description="Only fixes that don't restart anything: missing folders, file permissions, config repairs, the self-signed certificate, log rotation, backups and leftover temporary files"
                 okText="Fix"
                 onConfirm={() => heal.mutate({ verify_after_fix: true, no_disruptive: true })}
               >
@@ -375,7 +375,7 @@ export function SystemHealthSection() {
         />
       ) : null}
 
-      <Panel title="Readiness" icon={<CheckCircleOutlined />} description="What this installation needs before it can be relied on." flush>
+      <Panel title="Readiness" icon={<CheckCircleOutlined />} description="What this installation needs before it can be relied on" flush>
         <ItemList
           items={readinessChecks}
           itemKey={(c) => c.key}

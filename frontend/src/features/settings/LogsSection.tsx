@@ -349,7 +349,7 @@ export function LogsSection({ onError }: Props) {
         ) : !logQuery.data && logQuery.isLoading ? (
           <EmptyState title="Loading…" />
         ) : logQuery.data && !logQuery.data.exists ? (
-          <EmptyState icon={<FileTextOutlined />} title="This log hasn't been written yet" description="It appears here once the process writes to it." />
+          <EmptyState icon={<FileTextOutlined />} title="This log hasn't been written yet" description="It appears here once the process writes to it" />
         ) : shown.length === 0 ? (
           <EmptyState icon={<FilterOutlined />} title={entries.length ? "No lines match" : "The log is empty"} description={entries.length ? "Try another search or level." : undefined} />
         ) : raw ? (

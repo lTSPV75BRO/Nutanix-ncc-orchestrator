@@ -128,11 +128,11 @@ export function RunActivityChart({ days = 7 }: { days?: number }) {
         </div>
         <div>
           <dt>Succeeded</dt>
-          <dd className={activity.ok ? "is-ok" : undefined}>{activity.ok}</dd>
+          <dd>{activity.ok}</dd>
         </div>
         <div>
           <dt>Failed or partial</dt>
-          <dd className={activity.problem ? "is-fail" : undefined}>{activity.problem}</dd>
+          <dd>{activity.problem}</dd>
         </div>
         <div>
           <dt>Last run</dt>

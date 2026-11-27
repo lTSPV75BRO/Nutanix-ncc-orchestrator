@@ -57,7 +57,7 @@ export const SECTIONS: SectionDef[] = [
   {
     id: "targets",
     title: "Clusters",
-    description: "Which clusters each run checks: a list you keep, or everything a Prism Central manages.",
+    description: "Which clusters each run checks: a list you keep, or everything a Prism Central manages",
     icon: "cluster",
     fields: [
       {
@@ -137,7 +137,7 @@ export const SECTIONS: SectionDef[] = [
   {
     id: "connection",
     title: "Sign-in & connection",
-    description: "The account runs sign in with, certificate checks, and which Nutanix APIs to call.",
+    description: "The account runs sign in with, certificate checks, and which Nutanix APIs to call",
     icon: "connection",
     fields: [
       {
@@ -220,7 +220,7 @@ export const SECTIONS: SectionDef[] = [
   {
     id: "execution",
     title: "Run behavior",
-    description: "Timeouts, parallelism, retries, and what a run does when something goes wrong.",
+    description: "Timeouts, parallelism, retries, and what a run does when something goes wrong",
     icon: "perf",
     fields: [
       { key: "timeout", label: "Per-cluster timeout", type: "duration", path: R("execution", "timeout"), group: "Timing", defaultValue: "15m" },
@@ -317,7 +317,7 @@ export const SECTIONS: SectionDef[] = [
   {
     id: "outputs",
     title: "Reports & history",
-    description: "What each run saves, where, and for how long.",
+    description: "What each run saves, where, and for how long",
     icon: "outputs",
     fields: [
       {
@@ -353,7 +353,7 @@ export const SECTIONS: SectionDef[] = [
   {
     id: "filtering",
     title: "Filtering & policy",
-    description: "Which findings reports include, and the conditions that fail a run.",
+    description: "Which findings reports include, and the conditions that fail a run",
     icon: "policy",
     fields: [
       {
@@ -458,7 +458,7 @@ export const SECTIONS: SectionDef[] = [
   {
     id: "logging",
     title: "Logging",
-    description: "The runner's own log file and how much it writes.",
+    description: "The runner's own log file and how much it writes",
     icon: "logs",
     fields: [
       { key: "log-file", label: "Log file", type: "string", path: ["logging", "file"], group: "Runner log", defaultValue: "logs/ncc-runner.log", wide: true },
@@ -483,7 +483,7 @@ export const SECTIONS: SectionDef[] = [
   {
     id: "secrets",
     title: "Secrets",
-    description: "Where secret:// references in this file are looked up.",
+    description: "Where secret:// references in this file are looked up",
     icon: "secrets",
     fields: [
       {

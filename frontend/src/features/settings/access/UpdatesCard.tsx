@@ -355,8 +355,7 @@ export function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }
           <Alert
             type="info"
             showIcon
-            title="In-app updates are not available"
-            description="This build has no ncc-orchestrator binary to replace. Update from the release package instead."
+            title="In-app updates are not available in this build: there is no ncc-orchestrator binary to replace. Update from the release package instead."
           />
         ) : null}
 
@@ -373,7 +372,7 @@ export function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }
             type="warning"
             showIcon
             title={`Update available: v${status?.latest_version}`}
-            description="Back up and update installs it and restarts the services."
+            description="Back up and update installs it and restarts the services"
             action={
               <Button type="primary" icon={<CloudDownloadOutlined />} onClick={confirmApply}>
                 Back up and update

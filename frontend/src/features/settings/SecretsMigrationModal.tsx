@@ -180,7 +180,7 @@ export function SecretsMigrationModal({
               type="info"
               showIcon
               title="A secrets-provider is already configured"
-              description="The wizard will overwrite the existing provider/file settings and the password key."
+              description="The wizard will overwrite the existing provider/file settings and the password key"
             />
           ) : null}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>

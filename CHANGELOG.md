@@ -185,6 +185,14 @@ Release candidates: `2.4.0-rc.1` and `2.4.0-rc.2` (fixes `verify --online`), 202
   counts above the findings list are now labelled "Show" and drawn as
   bordered buttons. A selected one is filled and gets a check mark, a tooltip
   says what a click does, and "Show all" clears the filter.
+- **Page details.** Overview's "Checks by result" bars are scaled to the
+  problems, so Fail, Error and Warning are no longer slivers next to Pass;
+  Pass shows its share of all checks. Schedule shows the next run as its one
+  figure with the exact time, and the rest as a short list. The Findings
+  toolbar keeps the view switch and turns row density and full page into
+  icon buttons; KB links are plain links; the search box says "Search
+  findings" with the syntax in its help icon. Single-sentence captions no
+  longer end with a period.
 - **Sign-in page.** Lighter headings, spacing on a 4 px grid, and shorter copy;
   the layout, the accent on "health checks", the flowing wave and the feature
   list stay as they were.
