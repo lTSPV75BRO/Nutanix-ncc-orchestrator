@@ -42,12 +42,16 @@ func findSystemdService(installDir, unitDir string) stackService {
 		if !strings.Contains(cmd, " v2-supervise") || !sameDir(installDirFromCommand(cmd), installDir) {
 			continue
 		}
-		return &systemdService{unitDir: unitDir, o: installServiceOptions{
+		o := installServiceOptions{
 			// As the unit spells it, so that its lines compare equal.
 			InstallDir:      installDirFromCommand(cmd),
 			ServiceName:     strings.TrimSuffix(filepath.Base(p), ".service"),
 			OrchestratorBin: strings.Trim(strings.Fields(cmd)[0], `"'`),
-		}}
+		}
+		// The user it is to run as: what the operator chose, else what the
+		// unit says, else ncc (LIN-02).
+		o.ServiceUser, o.userNote = desiredServiceUser(o.InstallDir, string(b))
+		return &systemdService{unitDir: unitDir, o: o}
 	}
 	return nil
 }
@@ -219,8 +223,9 @@ func relabelPrograms(dirs ...string) {
 	}
 }
 
-// scheduleUnit rebuilds a schedule's service from the installed one.
-func scheduleUnit(installed string) (string, bool) {
+// scheduleUnit rebuilds a schedule's service from the installed one, for the
+// service user.
+func scheduleUnit(installed, user string) (service, workDir string, ok bool) {
 	const descPrefix = "Description=NCC Orchestrator scheduled run ("
 	var task, dir, script, marker string
 	for _, raw := range strings.Split(installed, "\n") {
@@ -237,10 +242,10 @@ func scheduleUnit(installed string) (string, bool) {
 		}
 	}
 	if task == "" || dir == "" || script == "" || marker == "" {
-		return "", false
+		return "", "", false
 	}
-	service, _ := buildSystemdScheduleUnits(task, "", script, dir, marker)
-	return service, true
+	service, _ = buildSystemdScheduleUnitsFor(task, "", script, dir, marker, user)
+	return service, dir, true
 }
 
 // savedScheduleTask is the name of the saved schedule ("" when there is none).
@@ -259,20 +264,26 @@ func savedScheduleTask(installDir string) string {
 	return supervisorServiceName
 }
 
+// unprivileged: the stack is to run as a user of its own.
+func (s *systemdService) unprivileged() bool { return !rootService(s.o.ServiceUser) }
+
 // plan looks at the service itself and at what belongs to it: the update
-// watcher, the log timer and the saved schedule, as far as they are installed.
+// watcher, the log timer, the saved schedule, and for an unprivileged service
+// the service helper and the owners of the install.
 func (s *systemdService) plan(replace bool) []defChange {
 	read := func(path string) string {
 		b, _ := os.ReadFile(path)
 		return string(b)
 	}
+	dir := s.o.InstallDir
 	main := s.unit(s.title())
-	out := []defChange{planUnit("Service "+s.title(), main, read(main), systemdSupervisorUnit(s.o))}
+	out := []defChange{planUnit("Service "+s.title(), main, read(main), systemdSupervisorUnit(s.o), dir)}
 	// Installs from before 2.4.0 have no log timer, and no sandboxing either.
 	// Later it is not put back: an administrator may have removed it.
 	beforeLogTimer := !strings.Contains(read(main), "NoNewPrivileges=") &&
 		!fileExists(s.unit(logMaintenanceUnitName+".service")) && !fileExists(s.unit(logMaintenanceUnitName+".timer"))
 	watcher := applyUpdateWatcherName(s.o.ServiceName)
+	ops := opsServiceName(s.o.ServiceName)
 	for _, u := range []struct {
 		name, title, body string
 		add               bool
@@ -281,17 +292,31 @@ func (s *systemdService) plan(replace bool) []defChange {
 		{watcher + ".service", "Update watcher service", systemdApplyUpdateOneshotUnit(s.o), false},
 		{logMaintenanceUnitName + ".service", "Log maintenance", systemdLogMaintenanceServiceUnit(s.o), beforeLogTimer},
 		{logMaintenanceUnitName + ".timer", "Log maintenance timer", systemdLogMaintenanceTimerUnit(), beforeLogTimer},
+		{ops + ".service", "Service helper", s.opsUnit(), s.unprivileged()},
+		{ops + ".path", "Service helper trigger", s.opsPathUnit(), s.unprivileged()},
 	} {
 		if have := read(s.unit(u.name)); have != "" || u.add {
-			out = append(out, planUnit(u.title, s.unit(u.name), have, u.body))
+			out = append(out, planUnit(u.title, s.unit(u.name), have, u.body, dir))
 		}
 	}
-	if task := savedScheduleTask(s.o.InstallDir); task != "" {
+	if task := savedScheduleTask(dir); task != "" {
 		path := s.unit(systemdUnitBase(task) + ".service")
 		if have := read(path); have != "" {
-			if want, ok := scheduleUnit(have); ok {
-				out = append(out, planUnit("Schedule "+task, path, have, want))
+			if want, workDir, ok := scheduleUnit(have, s.o.ServiceUser); ok {
+				out = append(out, planUnit("Schedule "+task, path, have, want, dir, workDir))
 			}
+		}
+	}
+	if s.unprivileged() {
+		c := defChange{ID: ownerDefPrefix + dir, Title: "File owners", Action: defReplace, Detail: ownershipPlanDetail(s.o.ServiceUser)}
+		if uid, gid, ok := lookupServiceIDs(s.o.ServiceUser); ok && ownershipCurrent(dir, uid, gid) {
+			c.Action, c.Detail = defUnchanged, ""
+		} else if !ok {
+			c.Detail += "; the system user " + s.o.ServiceUser + " is created"
+		}
+		out = append(out, c)
+		if c, ok := s.cronScheduleToMove(); ok {
+			out = append(out, c)
 		}
 	}
 	if replace {
@@ -317,10 +342,27 @@ func (s *systemdService) runActive() string {
 }
 
 func (s *systemdService) migrate(replace bool) ([]defChange, error) {
+	if s.unprivileged() {
+		// The user first: the units name its group.
+		if _, err := ensureServiceUser(s.o.ServiceUser); err != nil {
+			return nil, err
+		}
+	}
 	changes := s.plan(replace)
 	for _, c := range changes {
+		if !strings.HasPrefix(c.ID, fileDefPrefix) {
+			continue
+		}
 		if err := applyUnit(c); err != nil {
 			return changes, err
+		}
+	}
+	if s.unprivileged() {
+		// Always: what root wrote into the install since (a restored
+		// configuration, say) goes to the service user too.
+		uid, gid, _ := lookupServiceIDs(s.o.ServiceUser)
+		if err := applyServiceOwnership(s.o.InstallDir, uid, gid); err != nil {
+			return changes, fmt.Errorf("give the install to %s: %w", s.o.ServiceUser, err)
 		}
 	}
 	// Refuse a unit systemd cannot load before the stack depends on it.
@@ -335,8 +377,16 @@ func (s *systemdService) migrate(replace bool) ([]defChange, error) {
 		return changes, fmt.Errorf("systemd does not accept the new %s: %s", s.title(), strings.Join(strings.Fields(out), " "))
 	}
 	for _, c := range changes {
-		if c.Action == defCreate && strings.HasSuffix(c.ID, ".timer") {
-			if _, err := svcCommand("systemctl", "enable", "--now", filepath.Base(strings.TrimPrefix(c.ID, fileDefPrefix))); err != nil {
+		name := strings.TrimPrefix(c.ID, fileDefPrefix)
+		if c.Action == defCreate && strings.HasPrefix(c.ID, fileDefPrefix) && (strings.HasSuffix(name, ".timer") || strings.HasSuffix(name, ".path")) {
+			if _, err := svcCommand("systemctl", "enable", "--now", filepath.Base(name)); err != nil {
+				return changes, err
+			}
+		}
+	}
+	for _, c := range changes {
+		if task, ok := strings.CutPrefix(c.ID, cronDefPrefix); ok {
+			if err := s.moveCronSchedule(task); err != nil {
 				return changes, err
 			}
 		}
@@ -347,6 +397,22 @@ func (s *systemdService) migrate(replace bool) ([]defChange, error) {
 func (s *systemdService) save() ([]savedDefinition, error) {
 	var out []savedDefinition
 	for _, c := range s.plan(false) {
+		if strings.HasPrefix(c.ID, ownerDefPrefix) {
+			rec, err := captureOwnership(s.o.InstallDir)
+			if err != nil {
+				return nil, fmt.Errorf("record the owners of %s: %w", s.o.InstallDir, err)
+			}
+			out = append(out, savedDefinition{ID: c.ID, Body: rec.encode()})
+			continue
+		}
+		if task, ok := strings.CutPrefix(c.ID, cronDefPrefix); ok {
+			d, err := saveCron(task)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, d)
+			continue
+		}
 		path := strings.TrimPrefix(c.ID, fileDefPrefix)
 		for _, p := range []string{path, unitDropInPath(path)} {
 			d, err := saveFileDefinition(p)
@@ -361,15 +427,39 @@ func (s *systemdService) save() ([]savedDefinition, error) {
 
 func (s *systemdService) restore(defs []savedDefinition) error {
 	var errs []error
+	var owners []ownershipRecord
+	var crons []savedDefinition
 	for _, d := range defs {
+		if dir, ok := strings.CutPrefix(d.ID, ownerDefPrefix); ok {
+			if !sameDir(dir, s.o.InstallDir) {
+				return fmt.Errorf("not this install: %s", d.ID)
+			}
+			rec, err := decodeOwnershipRecord(d.Body)
+			if err != nil {
+				return fmt.Errorf("the saved owners cannot be read: %w", err)
+			}
+			owners = append(owners, rec)
+			continue
+		}
+		if strings.HasPrefix(d.ID, cronDefPrefix) {
+			crons = append(crons, d)
+			continue
+		}
 		path, ok := strings.CutPrefix(d.ID, fileDefPrefix)
 		if !ok || filepath.Clean(path) != path || !pathWithin(path, s.unitDir) {
 			return fmt.Errorf("not a service definition: %s", d.ID)
 		}
-		if d.Missing && strings.HasSuffix(path, ".timer") && fileExists(path) {
+		if d.Missing && (strings.HasSuffix(path, ".timer") || strings.HasSuffix(path, ".path")) && fileExists(path) {
 			_, _ = svcCommand("systemctl", "disable", "--now", filepath.Base(path))
 		}
 		errs = append(errs, restoreFileDefinition(d))
+	}
+	for _, d := range crons {
+		errs = append(errs, s.restoreCron(d))
+	}
+	// Last: the programs and the configuration are back already.
+	for _, rec := range owners {
+		errs = append(errs, restoreOwnership(s.o.InstallDir, rec))
 	}
 	_, err := svcCommand("systemctl", "daemon-reload")
 	return errors.Join(append(errs, err)...)

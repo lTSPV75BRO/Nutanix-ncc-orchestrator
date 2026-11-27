@@ -92,10 +92,14 @@ func runStackUpgrade(ctx context.Context, o upgradeOptions, out io.Writer) error
 	if err != nil {
 		return err
 	}
+	forward := false
 	if err := svc.privileged(); err != nil {
-		return err
+		if _, ok := opsAvailable(installDir); !ok {
+			return err
+		}
+		forward = true // the service runs unprivileged: the service helper prepares it
 	}
-	if job, busy := jobRunning(installDir); busy {
+	if job, busy := jobRunning(installDir); busy && (o.ID == "" || job.ID != o.ID) {
 		return fmt.Errorf("another upgrade is in progress (%s)", job.Phase)
 	}
 	if o.ReplaceEdited {
@@ -107,6 +111,9 @@ func runStackUpgrade(ctx context.Context, o upgradeOptions, out io.Writer) error
 			return fmt.Errorf("the pre-update backup failed (nothing was changed): %w; --skip-backup goes on without one", err)
 		}
 		fmt.Fprintln(out, "Saved", o.BackupPath)
+	}
+	if forward {
+		return forwardStackUpgrade(ctx, installDir, o, out)
 	}
 	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, format+"\n", a...) }
 	if o.RequestedBy == "" {
@@ -148,6 +155,32 @@ func printReplacements(out io.Writer, changes []defChange) {
 	if n == 0 {
 		fmt.Fprintln(out, "No definition was edited on this host; --replace-edited changes nothing.")
 	}
+}
+
+// forwardStackUpgrade gives stage 1 to the service helper (root): the service
+// runs unprivileged and cannot install programs or a helper itself.
+func forwardStackUpgrade(ctx context.Context, installDir string, o upgradeOptions, out io.Writer) error {
+	if o.Bundle != "" {
+		return errors.New("an upgrade from a file (--bundle) needs root: run it with sudo")
+	}
+	id := o.ID
+	if id == "" {
+		id = time.Now().UTC().Format("20060102T150405Z")
+	}
+	by := o.RequestedBy
+	if by == "" {
+		by = "command line"
+	}
+	req := opsRequest{Op: opUpgrade, Target: strings.TrimPrefix(o.To, "v"), JobID: id, BackupPath: o.BackupPath, RequestedBy: by, ReplaceEdited: o.ReplaceEdited}
+	done := make(chan error, 1)
+	go func() {
+		_, err := submitOps(installDir, req, 30*time.Second, 20*time.Minute)
+		done <- err
+	}()
+	if o.NoWait {
+		return <-done
+	}
+	return followJob(ctx, installDir, id, out, done)
 }
 
 // preUpgradeBackup saves a backup with the programs in it.
@@ -242,7 +275,22 @@ func runStackRollback(ctx context.Context, installDirFlag, id, by string, wait b
 		return err
 	}
 	if err := svc.privileged(); err != nil {
-		return err
+		if _, ok := opsAvailable(installDir); !ok {
+			return err
+		}
+		if job, busy := jobRunning(installDir); busy {
+			return fmt.Errorf("another upgrade is in progress (%s)", job.Phase)
+		}
+		if id == "" {
+			id = time.Now().UTC().Format("20060102T150405Z")
+		}
+		if _, err := submitOps(installDir, opsRequest{Op: opRollback, JobID: id, RequestedBy: by}, 30*time.Second, 2*time.Minute); err != nil {
+			return err
+		}
+		if !wait {
+			return nil
+		}
+		return followJob(ctx, installDir, id, out, nil)
 	}
 	if job, busy := jobRunning(installDir); busy {
 		return fmt.Errorf("another upgrade is in progress (%s)", job.Phase)
@@ -380,7 +428,13 @@ func planUpgrade(installDir, to string, prerelease, online, replace bool) upgrad
 		if !upgradeHelperEnabled() {
 			p.Helper = "off"
 		}
-		check("Permissions", svc.privileged(), "may stop the service and change its definitions")
+		perm := svc.privileged()
+		if perm != nil {
+			if _, ok := opsAvailable(installDir); ok {
+				perm = nil // the service runs unprivileged: the service helper does it, as root
+			}
+		}
+		check("Permissions", perm, "may stop the service and change its definitions")
 		var busy error
 		if job, running := jobRunning(installDir); running {
 			busy = fmt.Errorf("another upgrade is in progress (%s)", job.Phase)
@@ -525,6 +579,14 @@ func runUpgradeAdopt(ctx context.Context, installDir string, auto, checkOnly, re
 		return nil
 	}
 	if err := svc.privileged(); err != nil {
+		if _, ok := opsAvailable(installDir); !ok || checkOnly {
+			return err
+		}
+		// The service runs unprivileged: the service helper adopts, as root.
+		res, err := submitOps(installDir, opsRequest{Op: opAdopt, ReplaceEdited: replace}, 20*time.Second, 3*time.Minute+20*time.Second)
+		if res.Output != "" {
+			fmt.Fprintln(out, res.Output)
+		}
 		return err
 	}
 	if _, busy := jobRunning(installDir); busy || helperUnfinished(installDir) {

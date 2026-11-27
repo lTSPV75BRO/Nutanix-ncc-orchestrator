@@ -348,6 +348,31 @@ with the upgrade (adoption), from `service-config` (`doctor --fix`) or by
 re-running `v2-install-service`; the sandbox does not come from `doctor`.
 `--api-listen` and `--ui-listen` set the addresses the service starts with.
 
+**Service user (Linux, systemd; LIN-02).** The supervisor, API, UI, NCC runs,
+schedules and log maintenance run as the system user `ncc`, which
+`v2-install-service` creates (`useradd --system`, group `ncc`, no login).
+The programs (`bin/`, `frontend-dist/`, `helper/`) stay root's; the rest of the
+install belongs to `ncc`. A second root unit, the service helper
+(`<service>-ops.path` / `<service>-ops.service`, requests in `run/ops/req/`),
+installs and removes schedule units, restarts the stack after a restore or a
+TLS change, and starts upgrades, rollbacks and adoption for the service
+(details: [systemd sandbox](SECURITY_AND_TRUST.md#systemd-sandbox-linux-service)).
+Upgrades move a root service to `ncc`, and a rollback puts it back.
+
+| Setting | Effect |
+|---------|--------|
+| `v2-install-service --service-user root` | Install the root service of 2.4.0 instead (`User=root` in the unit, no service helper). `--service-user NAME` uses another system user. |
+| `NCC_SERVICE_USER=root` (environment of the upgrade or `upgrade-adopt`) | Upgrades and adoption keep or make the service root. |
+| `/etc/ncc-orchestrator/service-user` (first line: `root` or a user name) | The same, for every upgrade and adoption on this host, including those started from the UI. |
+
+A unit with `User=` already set keeps that user. An install the service user
+cannot reach (a folder above it without `o+x`, for example `/root`) stays root,
+and the install says why. Ports below 1024 get `CAP_NET_BIND_SERVICE`; nothing
+else. Folders outside the install that the configuration names must be writable
+by `ncc` (`sudo chown -R ncc:ncc /the/folder`); the install warns about each.
+`create-schedule --type auto` uses a systemd timer when the service helper is
+there; a schedule in root's crontab is moved to a timer of `ncc` by the upgrade.
+
 **Runtime tuning.** In a container with a memory limit, the API, UI and
 runner set the Go soft memory limit to 90% of it at start (unless
 `GOMEMLIMIT` is set), so the garbage collector works harder before the

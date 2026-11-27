@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"goncc/internal/plural"
@@ -178,6 +179,22 @@ func runV2Restore(opts v2RestoreOptions) error {
 				}
 				files = kept
 			}
+		}
+	}
+	// An unprivileged service (LIN-02) cannot change its programs: restore the
+	// rest, and say how the programs come back.
+	if runtime.GOOS != "windows" && os.Geteuid() != 0 && existingDir(filepath.Join(installDir, "bin")) && dirWritable(filepath.Join(installDir, "bin")) != nil {
+		kept, dropped := files[:0], 0
+		for _, p := range files {
+			if backupRelIsStack(p.rel) {
+				dropped++
+				continue
+			}
+			kept = append(kept, p)
+		}
+		files = kept
+		if dropped > 0 {
+			fmt.Println("note: the program files in the backup were not restored: this user cannot change bin/ (the service runs unprivileged). Run v2-restore as root to restore them, or use upgrade --rollback.")
 		}
 	}
 	if len(files) == 0 {

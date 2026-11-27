@@ -284,6 +284,12 @@ func runsAsSystem() bool {
 }
 
 func restartV2Stack(installDir string) error {
+	if _, ok := opsAvailable(installDir); ok {
+		// The service runs unprivileged: its service helper restarts it.
+		fmt.Println("\nRestarting stack (systemd-managed, by the service helper)...")
+		_, err := submitOps(installDir, opsRequest{Op: opRestart}, 30*time.Second, 0)
+		return err
+	}
 	if systemdStackIsActive() {
 		fmt.Println("\nRestarting stack (systemd-managed)...")
 		return restartSystemdStack()

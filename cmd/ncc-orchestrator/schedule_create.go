@@ -454,6 +454,14 @@ func runCreateSchedule(cmd *cobra.Command, args []string) error {
 	}
 	rawLower := strings.ToLower(strings.TrimSpace(scheduleTypeRaw))
 	isAuto := rawLower == "" || rawLower == "auto"
+	if isAuto && scheduleType == "cron" {
+		// An unprivileged service cannot use crontab (setuid or setgid, which
+		// NoNewPrivileges blocks); its schedules are systemd timers that the
+		// service helper installs.
+		if _, ok := opsAvailable(stackInstallDir()); ok {
+			scheduleType = "systemd"
+		}
+	}
 
 	taskName, _ := cmd.Flags().GetString("task-name")
 	if err := validateScheduleTaskName(taskName); err != nil {
@@ -618,7 +626,7 @@ func runCreateSchedule(cmd *cobra.Command, args []string) error {
 			if workDir == "" {
 				workDir = filepath.Dir(logPath)
 			}
-			svc, tmr := buildSystemdScheduleUnits(taskName, onCalendar, scheduleRunnerScriptPath(taskName, logPath), workDir, marker)
+			svc, tmr := buildSystemdScheduleUnitsFor(taskName, onCalendar, scheduleRunnerScriptPath(taskName, logPath), workDir, marker, stackServiceUser(stackInstallDir()))
 			fmt.Printf("systemd unit preview (%s.service):\n%s\nsystemd unit preview (%s.timer):\n%s\n",
 				systemdUnitBase(taskName), svc, systemdUnitBase(taskName), tmr)
 			return nil

@@ -96,7 +96,7 @@ func helperLogger(installDir string) (logf func(string, ...any), done func()) {
 	if st, err := os.Stat(path); err == nil && st.Size() > 2<<20 {
 		_ = os.Rename(path, path+".1")
 	}
-	if f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640); err == nil {
+	if f, err := openLogNoFollow(path); err == nil {
 		done = func() { _ = f.Close() }
 		w = io.MultiWriter(os.Stderr, f)
 		// A hand-started stack's helper has the log as its stderr already.
@@ -200,7 +200,9 @@ func runHelperJob(ctx context.Context, installDir string, j *helperJournal, logf
 	}
 	check := newStackCheck(installDir, svc)
 	e.check = check.wait
-	e.doctor = func() *upgradeDoctorNote { return runDoctorFixes(runUpgradeCommand, installDir, svc.orchestratorBin()) }
+	e.doctor = func() *upgradeDoctorNote {
+		return runDoctorFixes(serviceUserRunner(installDir), installDir, svc.orchestratorBin())
+	}
 	e.run(ctx)
 }
 

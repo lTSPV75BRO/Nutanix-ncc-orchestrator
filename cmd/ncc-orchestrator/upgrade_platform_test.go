@@ -44,7 +44,7 @@ func TestPlanUnit(t *testing.T) {
 		{"own environment", after(v221, "[Service]", "Environment=HTTPS_PROXY=http://proxy:3128"), defMerge, "Environment", "[Service]\nEnvironment=HTTPS_PROXY=http://proxy:3128\n"},
 		{"own value", strings.Replace(v221, "RestartSec=3", "RestartSec=30", 1), defMerge, "RestartSec", "[Service]\nRestartSec=30\n"},
 		{"own dependency", after(v221, "[Unit]", "RequiresMountsFor=/data"), defMerge, "RequiresMountsFor", "[Unit]\nRequiresMountsFor=/data\n"},
-		{"other user", after(v221, "[Service]", "User=ncc"), defKeep, "User", ""},
+		{"other user", after(v221, "[Service]", "User=svcacct"), defKeep, "User", ""},
 		{"other command", strings.Replace(v221, "v2-supervise", "v2-supervise --x", 1), defKeep, "ExecStart", ""},
 		{"other target", strings.Replace(v221, "WantedBy=multi-user.target", "WantedBy=graphical.target", 1), defKeep, "WantedBy", ""},
 		{"continued line", after(v221, "[Service]", "Environment=A=1 \\\n  B=2"), defMerge, "Environment", "Environment=A=1 B=2\n"},

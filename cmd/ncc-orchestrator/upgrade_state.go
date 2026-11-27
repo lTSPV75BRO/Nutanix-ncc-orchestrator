@@ -267,10 +267,16 @@ func (l *jobLog) saveLocked() {
 	if err != nil {
 		return
 	}
+	// A new file renamed into place: run/ may be the service user's to write
+	// (LIN-02), so never through a name it chose.
 	path := upgradeStatePath(l.installDir)
-	tmp := path + ".tmp"
-	if os.WriteFile(tmp, b, 0o644) == nil {
-		_ = renameWithRetry(tmp, path)
+	staged, err := stageBytes(b, path, 0o644)
+	if err != nil {
+		return
+	}
+	giveToService(l.installDir, staged)
+	if renameWithRetry(staged, path) != nil {
+		_ = os.Remove(staged)
 	}
 }
 

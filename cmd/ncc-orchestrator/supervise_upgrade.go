@@ -288,6 +288,8 @@ func (u *upgrader) loop(ctx context.Context) {
 		if req, ok := u.takeRequest(); ok {
 			if svc := u.helperService(); svc != nil {
 				u.handToHelper(ctx, svc, req)
+			} else if _, ok := opsAvailable(u.installDir); ok && upgradeHelperEnabled() {
+				u.handToServiceHelper(req)
 			} else {
 				u.run(ctx, req)
 			}
@@ -321,6 +323,22 @@ func (u *upgrader) handToHelper(ctx context.Context, svc stackService, req upgra
 	s.replaceEdited = req.ReplaceEdited
 	if err := s.run(ctx, req.TargetVersion); err != nil {
 		u.logf("upgrade: %v", err)
+	}
+}
+
+// handToServiceHelper: this supervisor runs unprivileged (LIN-02), so the
+// service helper (root) prepares the upgrade and gives it to the update helper.
+func (u *upgrader) handToServiceHelper(req upgradeRequest) {
+	job := newJob(req.ID, helperActionUpgrade, req.TargetVersion, req.BackupPath, req.RequestedBy)
+	if req.RequestedAt != "" {
+		job.RequestedAt = req.RequestedAt
+	}
+	log := newJobLog(u.installDir, u.logf, job)
+	log.step(upgDownloading, "The service helper prepares the upgrade")
+	r := opsRequest{Op: opUpgrade, Target: strings.TrimPrefix(req.TargetVersion, "v"), JobID: job.ID, BackupPath: req.BackupPath, RequestedBy: req.RequestedBy, RequestedAt: job.RequestedAt}
+	if _, err := submitOps(u.installDir, r, 30*time.Second, 0); err != nil {
+		u.logf("upgrade: %v", err)
+		log.fail(upgFailed, err, "Not started: %v. Nothing was changed.", err)
 	}
 }
 

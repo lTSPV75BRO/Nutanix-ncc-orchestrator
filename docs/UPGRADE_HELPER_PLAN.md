@@ -1,6 +1,6 @@
 # Upgrade helper: design and plan
 
-**Status:** built for 2.4.0 (phases U0 to U4); U5 is LIN-02, planned for 2.5.0.
+**Status:** built for 2.4.0 (phases U0 to U5; U5 is LIN-02, the `ncc` service on Linux).
 Written 2026-11-24. [How it was built](#how-it-was-built) lists where the code
 differs from this plan. Operating it: `FEATURES_AND_CONFIG_FLAGS.md`, "Upgrades".
 
@@ -201,7 +201,7 @@ failing halfway.
 | U2 | Windows tasks and macOS launchd | RC 2 or 3 | M | same on Windows Server 2022 and macOS; supervisor, folder permissions and schedule migrated |
 | U3 | CLI, hand-started stacks, UI plan and progress, `--bundle` | RC 3 | M | one flow in the UI on every host type; offline upgrade works |
 | U4 | Helm hooks, kustomize Jobs, UI command for containers | RC 3 | M | kind test: failed post-check with `--atomic` returns to the old revision |
-| U5 | LIN-02: unprivileged API and UI, `ProtectSystem` | 2.5.0 | L | service runs as `ncc`; only the helper is root |
+| U5 | LIN-02: unprivileged API and UI, `ProtectSystem` | 2.4.0 (was 2.5.0) | L | built: the service runs as `ncc`; the update helper and the service helper are root |
 
 ### Tests
 
@@ -283,3 +283,31 @@ manager it also kills the supervisor. Under systemd it also replaces an edited
 unit with `--replace-edited` and gets it back with a rollback, and fills the
 disk at the snapshot (a 1 MB tmpfs) when the host can mount one. Adoption was
 rehearsed from 2.2.1 and 2.3.0 under systemd 257, and the Helm hooks on kind.
+
+### U5 (LIN-02)
+
+Code: `serviceuser.go` (who the service runs as, the unprivileged unit),
+`serviceowner*.go` (the file layout and its record for a rollback),
+`serviceops.go` (the service helper), `servicecron.go` (a schedule in root's
+crontab).
+
+| Plan | Built |
+| --- | --- |
+| Only the helper is root | Two root units: the update helper as before, and a service helper (`<service>-ops.path` on `run/ops/req/`) for what the service used to do as root: schedule units, restarts after a restore or a TLS change, and starting an upgrade, rollback or adoption. Requests are validated JSON files; `--bundle` is refused from the service. |
+| `ProtectSystem` | `ProtectSystem=strict`, programs read-only, no capabilities (`CAP_NET_BIND_SERVICE` for a port below 1024), a system call filter; exposure 1.6, was 5.2. |
+| Service runs as `ncc` | `useradd --system`, group `ncc`; the programs and the trusted-stack ledger stay root's in a sticky install folder. Opt out: `--service-user root`, `NCC_SERVICE_USER=root`, `/etc/ncc-orchestrator/service-user`. |
+| Migration | The update helper replaces units of 2.3.x, 2.4.0-rc and 2.4.0 (root), records and changes the owners, adds the service helper, and moves a crontab schedule to a timer of `ncc`. A rollback restores the units, owners and crontab. Locally edited units are kept. |
+
+Rehearsed in the systemd container (systemd 257): a fresh install as `ncc`
+(capabilities 0, exposure 1.6); schedule save, remove and an invalid calendar
+through `PUT /api/v1/schedule`; a scheduled run against `tools/fakeprism`;
+restore and TLS change restarting the stack; log maintenance; the in-app update
+handed from the supervisor to the service helper and stage 1; the full
+`scripts/upgrade-e2e.sh`; adoption of a root install of 2.4.0-rc.3 with a crontab
+schedule, and its rollback to the identical root unit, owners and crontab; the
+root opt-out. Not rehearsed: an enforcing SELinux host.
+
+Known limits: folders outside the install that the configuration names are not
+given to `ncc` (the install warns); the `ncc` user stays after a rollback or an
+uninstall; self-heal fix-ups that need root (`systemctl`, `chcon`) are reported,
+not applied, by the `ncc` service.
