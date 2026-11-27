@@ -14,14 +14,20 @@ Release candidates: `2.4.0-rc.1` and `2.4.0-rc.2` (fixes `verify --online`), 202
 
 ### Security
 
-- **Linux service sandbox, file system (LIN-02).** The units drop `CAP_SYS_ADMIN`
-  and turn on `ProtectSystem=full`, `ProtectHome=read-only` and `PrivateTmp=yes`,
-  with `ReadWritePaths` for the install folder, `/etc/systemd/system` and the
-  folders the configuration names. Exposure in `systemd-analyze security` falls
-  from 5.9 to 5.2. 2.3.x and 2.4.0-rc units are replaced by the update helper.
+- **The Linux service no longer runs as root (LIN-02).** The supervisor, API, UI,
+  NCC runs, schedules and log maintenance run as the system user `ncc`, with no
+  capabilities, `ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateTmp` and
+  read-only programs (`systemd-analyze security` 1.6, was 5.9). A root service
+  helper (`ncc-orchestrator-ops.path`) applies checked requests for schedules,
+  restarts and upgrades. Upgrades move existing root services to `ncc`, schedules
+  in root's crontab included, and a rollback puts them back. To keep the root
+  service: `v2-install-service --service-user root`, or `NCC_SERVICE_USER=root`
+  or `/etc/ncc-orchestrator/service-user` for upgrades.
 - **Windows install folder (WIN-05).** `doctor --fix` removes write access for
   ordinary users from the install folder when it holds only this product; for
   shared or system folders it keeps reporting with the `icacls` command to run.
+- **Windows permissions tested as SYSTEM (WIN-05).** CI checks that its Windows
+  runner is elevated and runs the permission tests elevated and as SYSTEM.
 - **Released images are not replaced (REL-10).** `docker-publish.yml` queues runs
   per branch and skips a branch run that is no longer the newest commit or whose
   version is already tagged.
@@ -193,6 +199,25 @@ Release candidates: `2.4.0-rc.1` and `2.4.0-rc.2` (fixes `verify --online`), 202
   Warning, Info, Pass). Stat figures are no longer coloured; a dot by the
   label carries the state. Card titles have a plain icon instead of a violet
   tile, and buttons have no coloured shadow.
+- **Upgrades.** `upgrade --replace-edited` (also on `upgrade-adopt`, and a
+  checkbox in the UI) replaces a service definition edited on this host after
+  showing its diff; keeping it stays the default. `ncc-orchestrator update` hands
+  over to the update helper when it can, so the whole stack is checked and
+  rolled back if unhealthy (`--programs-only` keeps the old path). **Roll back**
+  is offered for 24 hours after an adoption and after `update` too. The plan in
+  the CLI and the UI lists checks, expected downtime, programs, configuration
+  and each definition's diff; a finished upgrade reads *Upgraded*, *Rolled back*
+  or *Nothing was changed*, with the reason. A Windows service task with its own
+  name is found by what it runs. `min_from` is enforced for `--bundle`, and a
+  `downtime_hint` is shown.
+- **Kubernetes upgrades are checked.** `helm upgrade` checks version skew, write
+  access to the data volume, free space (`upgradeCheck.preCheck.minFreeSpace`,
+  default 512Mi) and a verified backup before the rollout, and afterwards that the
+  API, the UI server and the runner image all report the new version. A failed
+  check stops the upgrade with nothing changed; `--atomic` keeps the old revision.
+  The same Jobs are in `k8s/upgrade-check-job.yaml`.
+- **Screen readers are tested (A11Y-03).** NVDA and VoiceOver run against the
+  demo build in CI (`screenreader.yml`).
 - **Text resize and spacing are tested (A11Y-03).** Every page is checked with
   text at 200% and with the WCAG text-spacing overrides.
 - **Findings filters look like filters.** The Fail, Warning, Error and Info

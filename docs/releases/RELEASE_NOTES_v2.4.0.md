@@ -4,10 +4,15 @@
 
 Since `2.4.0-rc.2`:
 
-- The Linux service drops `CAP_SYS_ADMIN` and runs with `ProtectSystem=full`,
-  `ProtectHome=read-only` and `PrivateTmp=yes` (exposure 5.9 to 5.2). rc hosts get the
-  new units from the update helper. See [Security and trust](../SECURITY_AND_TRUST.md)
-  for the drop-in if a folder you configured later must be writable.
+- **The Linux service runs as the system user `ncc`**, not root, with no capabilities
+  and `ProtectSystem=strict` (exposure 1.6, was 5.9). The update helper moves an rc or
+  2.3.x host over, schedules in root's crontab included, and a rollback puts it back.
+  A folder you configured outside the install folder must be given to `ncc`
+  (`chown -R ncc:ncc`); to keep the root service, see
+  [Security and trust](../SECURITY_AND_TRUST.md).
+- Upgrades: replace a locally edited unit on request (`--replace-edited`), `update`
+  hands over to the update helper, **Roll back** after an adoption or `update`, a
+  fuller plan in the UI, and checks before and after a Helm upgrade.
 - `doctor --fix` closes an install folder on Windows that ordinary users can write to,
   when the folder holds only NCC Orchestrator.
 - A push to `main` no longer replaces the Docker images of a released version.
