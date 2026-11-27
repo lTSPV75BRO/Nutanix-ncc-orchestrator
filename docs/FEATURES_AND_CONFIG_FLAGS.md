@@ -146,10 +146,10 @@ request with `403` and `error_code: NCC_API_FEATURE_DISABLED`:
 | `self_heal` | `POST /api/v1/health/diagnostics` (apply fixes) is refused; `GET` still runs the checks. System → Health & repair has no Fix buttons. |
 | `update_checks` | `GET /api/v1/settings/update` returns `disabled: true` without contacting the release server; `POST /api/v1/settings/update/apply` is refused. |
 
-**Sign-in:** `intro_title` turns the opening title off for everyone. It is
-also returned as `intro_title` on the public `GET /api/v1/health`, because
-the page needs it before anyone signs in; the browser remembers the last
-answer so later visits skip the title from the first frame.
+**Sign-in:** `intro_title` shows the opening title to everyone. It is off by
+default (since 2.4.0). It is also returned as `intro_title` on the public
+`GET /api/v1/health`, because the page needs it before anyone signs in; the
+browser remembers an "on" so later visits play the title from the first frame.
 
 ### 2.3d Dashboard filters, sharing, and pagination
 

@@ -5,7 +5,6 @@ import {
   CopyOutlined,
   DownloadOutlined,
   LockOutlined,
-  LoginOutlined,
   SafetyCertificateOutlined,
   SafetyOutlined,
   UserOutlined,
@@ -318,7 +317,7 @@ export function LoginPage({
         <Title level={2} className="auth-title">
           Sign in
         </Title>
-        <Text type="secondary">Use your NCC Orchestrator{ldapEnabled ? " or directory" : ""} account.</Text>
+        <Text type="secondary">Use your NCC Orchestrator{ldapEnabled ? " or directory" : ""} account</Text>
       </div>
 
       <div className="auth-alerts" aria-live="polite">
@@ -414,7 +413,6 @@ export function LoginPage({
             block
             loading={submitting}
             disabled={locked}
-            icon={<LoginOutlined />}
           >
             Sign in
           </Button>

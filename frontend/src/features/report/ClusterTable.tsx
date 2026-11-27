@@ -19,7 +19,7 @@ import {
 import type { ColumnsType } from "antd/es/table";
 import { AimOutlined, AppstoreOutlined, BarsOutlined, CheckOutlined, ClockCircleOutlined, CloseCircleOutlined, ClusterOutlined, ColumnWidthOutlined, CopyOutlined, DownOutlined, ExclamationCircleOutlined, ExportOutlined, FileTextOutlined, FullscreenExitOutlined, FullscreenOutlined, HistoryOutlined, InfoCircleOutlined, MessageOutlined, ProfileOutlined, QuestionCircleOutlined, ReadOutlined, RightOutlined, SearchOutlined, TableOutlined, ToolOutlined, WarningOutlined } from "@ant-design/icons";
 import { Link } from "react-router";
-import { KeyValueList, Panel, StatusBadge, type KeyValueItem } from "../../ui";
+import { KeyValueList, Panel, StatusBadge, severityLabel, toneFor, type KeyValueItem } from "../../ui";
 import { clusterPath } from "../../navigation";
 import { isClusterAddress, prismURLFor } from "../../utils/prism";
 import type { NCCDisposition } from "../../api/types";
@@ -128,14 +128,6 @@ type RowRecord = {
   searchText: string;
   /** Lower-cased display name and resolved address name, for the cluster filter. */
   clusterKeys: string[];
-};
-
-const SEVERITY_TAG_COLOR: Record<Severity, string> = {
-  FAIL: "error",
-  WARN: "warning",
-  ERR: "volcano",
-  INFO: "processing",
-  UNKNOWN: "default",
 };
 
 function rowKey(cluster: string, check: string): string {
@@ -1308,8 +1300,7 @@ export function ClusterTable({
     defaultSortOrder: "descend" as const,
     render: (value: Severity, row: RowRecord) => {
       const sev = row.isUnknownSeverity ? "UNKNOWN" : value;
-      const className = row.isUnknownSeverity ? "severity-pill severity-pill-unknown" : "severity-pill";
-      return <Tag className={className} color={SEVERITY_TAG_COLOR[sev]}>{sev}</Tag>;
+      return <StatusBadge tone={toneFor(sev)}>{severityLabel(sev)}</StatusBadge>;
     },
   };
   const nccColumns: ColumnsType<RowRecord> = [
@@ -1754,7 +1745,7 @@ export function ClusterTable({
                             aria-label={`Select every cluster for ${g.check}`}
                           />
                         ) : null}
-                        <Tag className="severity-pill" color={SEVERITY_TAG_COLOR[g.severity]}>{g.severity}</Tag>
+                        <StatusBadge tone={toneFor(g.severity)}>{severityLabel(g.severity)}</StatusBadge>
                         <div className="findings-group-main">
                           <span className="findings-group-name" title={g.check}>{g.check}</span>
                           {detail !== "—" ? <span className="findings-group-detail" title={detail}>{detail}</span> : null}
@@ -1892,12 +1883,9 @@ export function ClusterTable({
                 {drawerRow.alert}
               </Typography.Title>
               <Space size={6} wrap>
-                <Tag
-                  color={SEVERITY_TAG_COLOR[drawerRow.severity]}
-                  className={drawerRow.isUnknownSeverity ? "severity-pill severity-pill-unknown" : "severity-pill"}
-                >
-                  {drawerRow.isUnknownSeverity ? "UNKNOWN" : drawerRow.severity}
-                </Tag>
+                <StatusBadge tone={toneFor(drawerRow.isUnknownSeverity ? "UNKNOWN" : drawerRow.severity)}>
+                  {severityLabel(drawerRow.isUnknownSeverity ? "UNKNOWN" : drawerRow.severity)}
+                </StatusBadge>
                 <Tag color={drawerRow.source === "PC" ? "purple" : "blue"}>{drawerRow.source}</Tag>
                 {drawerRow.status !== "—" ? <Tag>{drawerRow.status}</Tag> : null}
               </Space>

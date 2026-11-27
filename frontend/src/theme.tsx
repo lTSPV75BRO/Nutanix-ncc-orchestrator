@@ -37,7 +37,8 @@ const SHARED_TOKENS = {
   fontSizeHeading3: 20,
   fontSizeHeading4: 16,
   fontSizeHeading5: 14,
-  fontWeightStrong: 600,
+  // Hierarchy comes from size and colour; only the big stat figures use 600.
+  fontWeightStrong: 500,
   borderRadius: 8,
   borderRadiusSM: 6,
   borderRadiusLG: 12,
@@ -52,6 +53,8 @@ const SHARED_TOKENS = {
 // background, so text uses a variant that reaches 4.5:1 (WCAG 1.4.3).
 function sharedComponents(surface: string, raised: string, border: string, accentText: string): ThemeConfig["components"] {
   return {
+    // No coloured drop shadow under buttons.
+    Button: { primaryShadow: "none", defaultShadow: "none", dangerShadow: "none", fontWeight: 500 },
     Card: { headerBg: surface, headerFontSize: 16, headerFontSizeSM: 14, headerHeight: 52, headerHeightSM: 44 },
     Table: { headerBg: raised, rowHoverBg: raised, headerSplitColor: "transparent", borderColor: border, cellFontSize: 14 },
     Layout: { bodyBg: "transparent", headerBg: surface },

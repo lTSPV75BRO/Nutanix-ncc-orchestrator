@@ -202,8 +202,8 @@ export function SecretsMigrationModal({
               </Typography.Paragraph>
               {(["bash", "powershell", "systemd"] as const).map((k) => (
                 <div key={k} style={{ width: "100%" }}>
-                  <Typography.Text type="secondary" style={{ fontSize: 12, textTransform: "uppercase" }}>
-                    {k}
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {{ bash: "Bash", powershell: "PowerShell", systemd: "systemd" }[k]}
                   </Typography.Text>
                   <Typography.Paragraph
                     copyable={{ text: snippets[k], onCopy: () => handleCopy(snippets[k], `${k} snippet`) }}

@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Alert, Space, Switch, Tag, Typography } from "antd";
+import { Alert, Space, Switch, Typography } from "antd";
 import { AppstoreOutlined, LoginOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import type { ReactNode } from "react";
 import { api } from "../../api/client";
@@ -45,7 +45,7 @@ export function FeaturesSection() {
               <div>
                 <Space size={8} wrap>
                   <Typography.Text strong>{spec.title}</Typography.Text>
-                  {spec.beta ? <Tag color="gold">Beta</Tag> : null}
+                  {spec.beta ? <span className="feature-beta">Beta</span> : null}
                 </Space>
                 <Typography.Paragraph type="secondary" className="feature-flag-text">
                   Off: {spec.saves.charAt(0).toLowerCase() + spec.saves.slice(1)}

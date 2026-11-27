@@ -289,6 +289,13 @@ certificates. Use `-signing-cert` and `-signing-key` to persist the IdP
 signing pair; this keeps the certificate published in metadata aligned with
 assertions after a provider restart.
 
+## Sign-in page
+
+The opening title is off by default; turn it on under **Settings → Features →
+Opening title**. Installs that saved that switch keep their choice. The
+sign-in page has lighter headings, even spacing and shorter copy, with the
+same layout and flowing wave.
+
 ## Fixes from environment testing
 
 A pass on a multi-node Kubernetes cluster and a Rocky Linux host with SELinux

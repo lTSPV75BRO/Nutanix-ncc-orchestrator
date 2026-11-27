@@ -18,8 +18,8 @@ function Ready({ onReady }: { onReady: () => void }) {
 }
 
 const SEEN_KEY = "ncc.intro.seen";
-/** Last answer from the server's "Opening title" switch (Settings → Features). */
-export const OFF_KEY = "ncc.intro.off";
+/** The server's "Opening title" switch (Settings → Features) was on last time. */
+export const ON_KEY = "ncc.intro.on";
 const NAME = "NCC Orchestrator";
 
 // StrokeText timing (seconds). Outlines finish at DRAW + (len-1)*STAGGER; the
@@ -39,20 +39,26 @@ function prefersReducedMotion(): boolean {
   return typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
-function shouldShowIntro(): boolean {
+type Phase = "wait" | "show" | "leaving" | "done";
+
+/**
+ * The switch is off by default, so the title plays from the first frame only
+ * when the server said "on" last time; otherwise it waits for the answer.
+ */
+function initialPhase(): Phase {
+  if (prefersReducedMotion()) return "done";
   try {
-    if (window.sessionStorage.getItem(SEEN_KEY)) return false;
-    if (window.localStorage.getItem(OFF_KEY) === "1") return false;
+    if (window.sessionStorage.getItem(SEEN_KEY)) return "done";
+    return window.localStorage.getItem(ON_KEY) === "1" ? "show" : "wait";
   } catch {
-    // storage unavailable — still show it
+    return "wait";
   }
-  return !prefersReducedMotion();
 }
 
 function rememberSwitch(on: boolean) {
   try {
-    if (on) window.localStorage.removeItem(OFF_KEY);
-    else window.localStorage.setItem(OFF_KEY, "1");
+    if (on) window.localStorage.setItem(ON_KEY, "1");
+    else window.localStorage.removeItem(ON_KEY);
   } catch {
     // not remembered; the next visit asks the server again
   }
@@ -71,12 +77,12 @@ function markSeen() {
  * The page underneath (normally sign-in) is already rendered and shows
  * through frosted while the name draws itself (React Bits StrokeText); then
  * the name fades and the frost smoothly clears. Click, Escape, Enter or Space
- * skips it. Not shown when the OS asks for reduced motion, or when an
- * administrator turned "Opening title" off (read from the public /health; the
- * answer is remembered so later visits skip it from the first frame).
+ * skips it. Shown only when an administrator turned "Opening title" on (off
+ * by default; read from the public /health and remembered, so later visits
+ * play it from the first frame), and not when the OS asks for reduced motion.
  */
 export function SiteIntro() {
-  const [phase, setPhase] = useState<"show" | "leaving" | "done">(() => (shouldShowIntro() ? "show" : "done"));
+  const [phase, setPhase] = useState<Phase>(initialPhase);
   const [ready, setReady] = useState(false);
   const onReady = useCallback(() => setReady(true), []);
 
@@ -85,12 +91,13 @@ export function SiteIntro() {
     api
       .health()
       .then((h) => {
-        const on = h.intro_title !== false;
+        const on = h.intro_title === true;
         rememberSwitch(on);
-        if (!on && live) setPhase("done");
+        if (live) setPhase((p) => (!on ? "done" : p === "wait" ? "show" : p));
       })
       .catch(() => {
-        // Unknown: keep whatever the last answer was.
+        // Unknown: keep a title that is already playing, start none.
+        if (live) setPhase((p) => (p === "wait" ? "done" : p));
       });
     return () => {
       live = false;
@@ -122,7 +129,7 @@ export function SiteIntro() {
     return undefined;
   }, [phase, ready, leave]);
 
-  if (phase === "done") return null;
+  if (phase === "done" || phase === "wait") return null;
 
   return (
     <div
@@ -150,14 +157,14 @@ export function SiteIntro() {
             fillMode="wipe"
             wipeFrom="left"
             fontSize={128}
-            fontWeight={800}
-            letterSpacing={-4}
+            fontWeight={500}
+            letterSpacing={-2}
             marching={false}
             hoverRedraw={false}
             shadow={false}
           />
         </Suspense>
-        {ready ? <div className="site-intro-tagline">Cluster healthcheck platform</div> : null}
+        {ready ? <div className="site-intro-tagline">NCC health checks for every cluster</div> : null}
       </div>
       <button
         type="button"

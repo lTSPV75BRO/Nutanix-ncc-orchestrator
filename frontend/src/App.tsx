@@ -12,7 +12,7 @@ import {
   ThunderboltOutlined,
   UserOutlined,
 } from "@ant-design/icons";
-import { Alert, Button, Dropdown, Tag, Tooltip } from "antd";
+import { Alert, Button, Dropdown, Tooltip } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, Route, Routes, useLocation } from "react-router";
 import { AppShell } from "./components/AppShell";
@@ -42,7 +42,6 @@ import { sessionDeadline } from "./utils/sessionTime";
 import { openSetupChecklist, SetupHeaderButton } from "./features/onboarding/SetupChecklist";
 import { CommandJump } from "./components/CommandJump";
 import { formatDateTime, formatTime, localDateKey, parseInstant } from "./utils/datetime";
-import { roleColor } from "./auth/roleColor";
 
 // The tokens dialog is the only thing on the first screens that needs antd's
 // Table, Select and Popconfirm (about 280 kB), so it loads when first opened.
@@ -510,9 +509,7 @@ function HeaderUserMenu({
     >
       <Button className="header-user-btn" icon={<UserOutlined />}>
         <span className="header-user-name">{username || "user"}</span>
-        <Tag color={roleColor(role)} className="header-user-role">
-          {role || "user"}
-        </Tag>
+        <span className="header-user-role">{role || "user"}</span>
       </Button>
     </Dropdown>
   );

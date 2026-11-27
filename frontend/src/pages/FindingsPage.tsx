@@ -21,6 +21,7 @@ import {
 } from "antd";
 import {
   CheckCircleOutlined,
+  CheckOutlined,
   ClockCircleOutlined,
   ClearOutlined,
   CloseCircleOutlined,
@@ -54,6 +55,7 @@ import { useLocalStorageState } from "../hooks/useLocalStorageState";
 import { formatDateTime, formatTime, relativeTime } from "../utils/datetime";
 import { freshness } from "../utils/freshness";
 import { ArcSpinner, GridLoader } from "../components/Loaders";
+import { StatusBadge } from "../ui";
 
 type Severity = "FAIL" | "WARN" | "ERR" | "INFO";
 type CompareMode = "all" | "changed" | "flaky";
@@ -64,10 +66,10 @@ type CompareMode = "all" | "changed" | "flaky";
 // chips) and the Alerts table's severity sort (see severityRank in
 // ClusterTable.tsx, which must be kept in sync with this ordering).
 const SEVERITY_META: Array<{ key: Severity; color: string; label: string; icon: ReactNode }> = [
-  { key: "FAIL", color: "var(--ui-fail-text)", label: "FAIL", icon: <ExclamationCircleOutlined /> },
-  { key: "WARN", color: "var(--ui-warn-text)", label: "WARN", icon: <WarningOutlined /> },
-  { key: "ERR", color: "var(--ui-fail-text)", label: "ERR", icon: <CloseCircleOutlined /> },
-  { key: "INFO", color: "var(--ui-info-text)", label: "INFO", icon: <InfoCircleOutlined /> },
+  { key: "FAIL", color: "var(--ui-fail-text)", label: "Fail", icon: <ExclamationCircleOutlined /> },
+  { key: "WARN", color: "var(--ui-warn-text)", label: "Warning", icon: <WarningOutlined /> },
+  { key: "ERR", color: "var(--ui-fail-text)", label: "Error", icon: <CloseCircleOutlined /> },
+  { key: "INFO", color: "var(--ui-info-text)", label: "Info", icon: <InfoCircleOutlined /> },
 ];
 
 
@@ -533,12 +535,10 @@ export function FindingsPage() {
           <Tag icon={<ClockCircleOutlined />}>Loading…</Tag>
           <div className="severity-totals-row">
             {SEVERITY_META.map((sm) => (
-              <div key={sm.key} className="severity-total-pill" style={{ borderColor: sm.color }}>
+              <div key={sm.key} className="severity-total-pill">
                 <Badge color={sm.color} />
-                <Typography.Text strong style={{ color: sm.color }}>
-                  {sm.label}
-                </Typography.Text>
-                <Typography.Text strong>—</Typography.Text>
+                <span>{sm.label}</span>{" "}
+                <span className="severity-total-count">—</span>
               </div>
             ))}
           </div>
@@ -572,32 +572,51 @@ export function FindingsPage() {
       {/* Which run these findings come from, and how many of each severity. */}
       <div className="findings-summary">
         <Tooltip title={runTimestamp ? formatDateTime(runTimestamp) : "No completed run yet"}>
-          <Tag icon={<ClockCircleOutlined />} color={fresh.color}>
-            {runTimestamp ? `${fresh.label} · run ${relativeTime(runTimestamp)}` : "No run yet"}
-          </Tag>
+          <span>
+            <StatusBadge tone={runTimestamp ? fresh.tone : "neutral"}>
+              {runTimestamp ? `${fresh.label} · run ${relativeTime(runTimestamp)}` : "No run yet"}
+            </StatusBadge>
+          </span>
         </Tooltip>
-        <div className="severity-totals-row">
-          {SEVERITY_META.map((sm) => (
-            <button
-              type="button"
-              key={sm.key}
-              className={`severity-total-pill${severityFilters.includes(sm.key) ? " is-active" : ""}`}
-              style={{ borderColor: sm.color }}
-              aria-pressed={severityFilters.includes(sm.key)}
-              aria-label={`${sm.label} ${displayedSevTotals[sm.key].toLocaleString()}. Filter by ${sm.label}.`}
-              onClick={() => toggleSeverity(sm.key)}
-            >
-              <Badge color={sm.color} />
-              <Typography.Text strong style={{ color: sm.color }}>
-                {sm.label}
-              </Typography.Text>{" "}
-              <Typography.Text strong>{displayedSevTotals[sm.key].toLocaleString()}</Typography.Text>
-            </button>
-          ))}
-          <div className="severity-total-pill subtle">
-            <Typography.Text type="secondary">UNKNOWN</Typography.Text>
-            <Typography.Text strong>{(tableSummary?.unknown ?? unknownCount).toLocaleString()}</Typography.Text>
-          </div>
+        {/* The totals double as the severity filter: each one is a toggle. */}
+        <div className="severity-totals-row" role="group" aria-labelledby="severity-filter-label">
+          <span id="severity-filter-label" className="severity-filter-label">
+            Show
+          </span>
+          {SEVERITY_META.map((sm) => {
+            const on = severityFilters.includes(sm.key);
+            const count = displayedSevTotals[sm.key].toLocaleString();
+            return (
+              <Tooltip
+                key={sm.key}
+                title={on ? `Stop filtering by ${sm.label}` : `Show only ${sm.label} findings; pick more to combine`}
+                mouseEnterDelay={0.4}
+              >
+                <button
+                  type="button"
+                  className={`severity-total-pill${on ? " is-active" : ""}`}
+                  aria-pressed={on}
+                  aria-label={`${sm.label} ${count}. Filter by ${sm.label}.`}
+                  onClick={() => toggleSeverity(sm.key)}
+                >
+                  {on ? <CheckOutlined className="severity-total-check" aria-hidden /> : <Badge color={sm.color} />}
+                  <span>{sm.label}</span>{" "}
+                  <span className="severity-total-count">{count}</span>
+                </button>
+              </Tooltip>
+            );
+          })}
+          {severityFilters.length > 0 ? (
+            <Button type="link" size="small" className="severity-filter-clear" onClick={() => setSeverityFilters([])}>
+              Show all
+            </Button>
+          ) : null}
+          {(tableSummary?.unknown ?? unknownCount) > 0 ? (
+            <div className="severity-total-pill subtle">
+              <span>Unknown</span>{" "}
+              <span className="severity-total-count">{(tableSummary?.unknown ?? unknownCount).toLocaleString()}</span>
+            </div>
+          ) : null}
         </div>
         <Button
           icon={<ReloadOutlined />}

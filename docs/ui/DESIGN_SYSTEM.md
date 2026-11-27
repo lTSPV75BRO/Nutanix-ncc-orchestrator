@@ -31,8 +31,14 @@ the settings they may change. Admins see everything. Old links such as
 - All tokens live in [`src/theme.tsx`](../../frontend/src/theme.tsx) (Ant Design
   tokens, set once in `SHARED_TOKENS`) and CSS variables in
   [`src/styles.css`](../../frontend/src/styles.css).
-- Spacing 4 / 8 / 12 / 16 / 24 / 32, type 12 / 13 / 14 / 16 / 20 / 24 / 30,
-  weights 400 and 600, radii 6 / 8 / 12.
+- Spacing on a 4 px grid (4 / 8 / 12 / 16 / 24 / 32), type 12 / 13 / 14 / 16 /
+  20 / 24 / 30, weights 400 and 500 (600 only for big stat figures), radii
+  6 / 8 / 12. Labels are in sentence case; no upper-case tracked labels.
+- Results and states are a status dot and a word (`StatusBadge`), never a
+  tinted pill. The words are the same everywhere: Fail, Error, Warning, Info,
+  Pass (`severityLabel`). Stat figures stay in the text colour; their tone is a
+  dot beside the label. Title icons are a muted 16 px glyph, not an accent tile.
+- No coloured shadows: buttons have none (`primaryShadow: "none"`).
 - One purple accent per theme (light `#7c3aed`, dark and IT Professional
   `#8b5cf6`). The accent is a fill colour. For accent-coloured **text**
   (selected menu item, active tab) use the per-theme text variant set in

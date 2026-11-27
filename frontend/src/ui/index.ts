@@ -4,7 +4,7 @@
 export { PageHeader } from "./PageHeader";
 export { Panel } from "./Panel";
 export { StatTile } from "./StatTile";
-export { StatusBadge, toneFor, type Tone } from "./StatusBadge";
+export { StatusBadge, severityLabel, toneFor, type Tone } from "./StatusBadge";
 export { EmptyState } from "./EmptyState";
 export { KeyValueList, middleEllipsis, type KeyValueItem } from "./KeyValueList";
 export { ItemList } from "./ItemList";

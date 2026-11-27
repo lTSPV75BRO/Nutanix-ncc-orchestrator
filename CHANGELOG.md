@@ -171,6 +171,24 @@ Release candidates: `2.4.0-rc.1` and `2.4.0-rc.2` (fixes `verify --online`), 202
   an admin extra list, and unversioned `ncc-ui` clients by default. Manage
   extras at Settings → Audit log or `GET/PUT /api/v1/settings/ui-versions`.
 
+### Changed
+
+- **The opening title is off by default.** An administrator turns it on under
+  Settings → Features. Installs that saved the switch keep their choice.
+- **Quieter pages.** Headings, table headers and buttons use a lighter weight,
+  labels are in sentence case, spacing follows a 4 px grid, and results show
+  as a status dot and a word with the same words everywhere (Fail, Error,
+  Warning, Info, Pass). Stat figures are no longer coloured; a dot by the
+  label carries the state. Card titles have a plain icon instead of a violet
+  tile, and buttons have no coloured shadow.
+- **Findings filters look like filters.** The Fail, Warning, Error and Info
+  counts above the findings list are now labelled "Show" and drawn as
+  bordered buttons. A selected one is filled and gets a check mark, a tooltip
+  says what a click does, and "Show all" clears the filter.
+- **Sign-in page.** Lighter headings, spacing on a 4 px grid, and shorter copy;
+  the layout, the accent on "health checks", the flowing wave and the feature
+  list stay as they were.
+
 ### Fixed
 
 - **Unsigned local builds work again.** The build no longer expects the Linux

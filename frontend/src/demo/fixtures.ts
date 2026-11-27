@@ -646,7 +646,7 @@ export const HEALTH: HealthData = {
   saml_enabled: false,
   oidc_enabled: false,
   ldap_enabled: false,
-  intro_title: true,
+  intro_title: false,
   cookie_secure: true,
 };
 
@@ -661,7 +661,7 @@ export const FEATURES: FeatureFlags = {
   alert_handling: true,
   self_heal: true,
   update_checks: true,
-  intro_title: true,
+  intro_title: false,
 };
 
 export const ONBOARDING: OnboardingStatus = {

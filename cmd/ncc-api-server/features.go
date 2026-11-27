@@ -27,8 +27,9 @@ type featureFlags struct {
 	// UpdateChecks allows looking up and installing new releases. Off makes
 	// no outbound release lookup, for air-gapped or change-controlled sites.
 	UpdateChecks bool `json:"update_checks"`
-	// IntroTitle shows the opening title before sign-in. It is exposed on the
-	// public /health payload because the page needs it before anyone signs in.
+	// IntroTitle shows the opening title before sign-in; off unless an
+	// administrator turns it on. It is exposed on the public /health payload
+	// because the page needs it before anyone signs in.
 	IntroTitle bool `json:"intro_title"`
 }
 
@@ -50,7 +51,7 @@ func defaultFeatureFlags() featureFlags {
 		AlertHandling: true,
 		SelfHeal:      true,
 		UpdateChecks:  true,
-		IntroTitle:    true,
+		IntroTitle:    false,
 	}
 }
 

@@ -9,17 +9,17 @@ const FEATURES: Array<{ icon: ReactNode; title: string; text: string }> = [
   {
     icon: <ThunderboltOutlined />,
     title: "Parallel execution",
-    text: "Run NCC checks across multiple clusters simultaneously.",
+    text: "Run NCC checks across multiple clusters at the same time",
   },
   {
     icon: <BarChartOutlined />,
     title: "Actionable analysis",
-    text: "Turn NCC results into findings you can triage.",
+    text: "Turn NCC results into findings you can triage",
   },
   {
     icon: <CarryOutOutlined />,
     title: "Unified operations",
-    text: "Track findings through to resolution in one place.",
+    text: "Track findings through to resolution in one place",
   },
 ];
 
@@ -35,7 +35,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
 
   return (
     // Only sizing here; colours are inherited from the app's theme.
-    <ConfigProvider theme={{ token: { controlHeightLG: 46 } }}>
+    <ConfigProvider theme={{ token: { controlHeightLG: 44 } }}>
       <div className="auth-shell">
         <aside className="auth-brand" aria-label="About NCC Orchestrator">
           <WaveRibbon />
@@ -48,7 +48,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
               Automate Nutanix cluster <span className="auth-hero-accent">health checks</span>
             </h1>
             <p className="auth-hero-sub">
-              Run NCC checks in parallel, review the results, and resolve issues faster.
+              Run NCC checks on all your clusters in parallel, then triage what they find in one place
             </p>
             <ul className="auth-features">
               {FEATURES.map((f) => (

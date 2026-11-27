@@ -81,7 +81,7 @@ export const FEATURE_CATALOG: FeatureSpec[] = [
     key: "intro_title",
     title: "Opening title",
     group: "signin",
-    saves: "Skips the animated title shown before sign-in.",
+    saves: "Skips the animated title shown before sign-in. Off by default.",
   },
 ];
 
