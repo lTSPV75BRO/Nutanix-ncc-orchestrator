@@ -12,6 +12,7 @@
     "build:demo": "vite build --config vite.demo.config.ts",
     "preview": "vite preview",
     "test:a11y": "npm run build:demo && playwright test",
+    "test:sr": "npm run build:demo && playwright test -c e2e-sr/playwright.config.ts",
     "typecheck:e2e": "tsc -p tsconfig.e2e.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "coverage": "vitest run --coverage --passWithNoTests"
@@ -29,6 +30,9 @@
     "yaml": "^2.9.1"
   },
   "devDependencies": {
+    "@guidepup/guidepup": "0.40.0",
+    "@guidepup/playwright": "0.21.0",
+    "@guidepup/setup": "0.29.3",
     "@playwright/test": "1.65.0",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
@@ -46,5 +50,8 @@
   },
   "overrides": {
     "dompurify": "^3.4.17"
+  },
+  "allowScripts": {
+    "ffmpeg-static": false
   }
 }

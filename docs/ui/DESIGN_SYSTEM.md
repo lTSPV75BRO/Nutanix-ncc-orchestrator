@@ -133,10 +133,45 @@ The target is WCAG 2.2 AA in all three themes.
    in `EXCLUSIONS` in `e2e/helpers.ts`: one rule, one selector, one page, with a
    reason. Never add a rule without a selector.
 
-3. Still manual: a real screen reader pass (NVDA with Firefox, VoiceOver with
-   Safari) on the Overview, Findings and a settings form; reading order and
-   what is announced cannot be judged from the DOM. Also the keyboard path
-   through every form, and zoom in a real browser at 200% text size.
+3. A real screen reader suite, `frontend/e2e-sr` (Guidepup + Playwright, A11Y-03),
+   on the same demo build. Workflow `screenreader.yml` runs it on pushes to
+   `main` and `v*` branches and by hand (`workflow_dispatch`): NVDA with
+   Chromium on `windows-latest`, VoiceOver with WebKit on `macos-latest`.
+   Each test signs in with the keyboard, then checks what is **spoken**
+   (tolerant patterns, because NVDA and VoiceOver word things differently):
+
+   | Test | Announced |
+   | --- | --- |
+   | landmarks, headings, titles | On Overview, Findings and Runs: the window title changes, heading navigation finds the page's `h1` as a level 1 heading, landmark navigation reaches "main" and the labelled "Primary" sidebar. |
+   | severity filters | "Fail 7. Filter by Fail." as a toggle button, not pressed; after pressing it, pressed. |
+   | table | The Runs table is announced as a table and its column headers (Started, Status, Environment, Duration, Findings) are read. antd tables have no `<caption>`; add one and extend the test if a table needs a name. |
+   | toast | "Copy link" on Findings: the toast text is spoken and focus stays on the button. |
+
+   It needs a machine set up for screen reader automation, which changes system
+   settings (accessibility permissions, NVDA registry keys), so it is meant for
+   CI. To run it on your own machine (Windows for NVDA, macOS for VoiceOver):
+
+   ```bash
+   cd frontend
+   npm ci
+   npx playwright install chromium             # webkit on macOS
+   npx guidepup setup                           # once per machine; read what it changes first
+   npx guidepup install                         # NVDA assets, Windows only
+   npm run test:sr                              # builds the demo, then runs e2e-sr
+   npx playwright test --list -c e2e-sr/playwright.config.ts   # only load the tests, no screen reader needed
+   ```
+
+   The screen reader reads aloud while the tests run and the browser window is
+   visible (Guidepup needs a headed browser). `SR_PORT` changes the port
+   (default 5231). The setup uses the `@guidepup/setup` CLI, pinned in
+   `package.json`, and not `guidepup/setup-action`, whose README says it is no
+   longer supported.
+
+4. Still manual: a screen reader pass on a settings form and on the overlays
+   (drawer, dialogs), and judging reading order and wording as a person would
+   (the suite only checks that the right things are said). Also the keyboard
+   path through every form, JAWS and Narrator (not covered), and zoom in a
+   real browser at 200% text size.
 
 ## Adding or changing a page
 

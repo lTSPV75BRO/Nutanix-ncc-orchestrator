@@ -1,0 +1,97 @@
+name: screen reader
+
+# A11Y-03: what a real screen reader announces, on the demo build. NVDA drives
+# Chromium on Windows, VoiceOver drives WebKit on macOS, both through Guidepup
+# (frontend/e2e-sr, docs/ui/DESIGN_SYSTEM.md). Hosted-runner only: the
+# screen readers are configured on the runner and cannot run on Linux CI.
+#
+# The screen reader is set up with the @guidepup/setup CLI (pinned in
+# frontend/package.json) and not with guidepup/setup-action: that action's
+# README says it is no longer supported and points to the CLI.
+
+on:
+  push:
+    branches: [main, "v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: screenreader-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nvda:
+    name: NVDA (Windows, Chromium)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "26.12.1"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: npm ci
+        run: npm ci
+      - name: type-check the browser tests
+        run: npm run typecheck:e2e
+      - name: install Chromium
+        run: npx playwright install chromium
+      - name: set up the machine for NVDA and fetch the NVDA assets
+        run: |
+          npx guidepup setup --ci
+          npx guidepup install
+      - name: run the screen reader tests
+        run: npm run test:sr
+      - name: upload the report
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sr-report-nvda
+          path: |
+            frontend/playwright-report-sr
+            frontend/test-results-sr
+          retention-days: 7
+          if-no-files-found: ignore
+
+  voiceover:
+    name: VoiceOver (macOS, WebKit)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "26.12.1"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: npm ci
+        run: npm ci
+      - name: install WebKit
+        run: npx playwright install webkit
+      - name: set up the machine for VoiceOver
+        run: npx guidepup setup --ci
+      - name: run the screen reader tests
+        run: npm run test:sr
+      - name: upload the report
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sr-report-voiceover
+          path: |
+            frontend/playwright-report-sr
+            frontend/test-results-sr
+          retention-days: 7
+          if-no-files-found: ignore

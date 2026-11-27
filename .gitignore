@@ -71,6 +71,8 @@ ncc-v2-stack-*.zip
 frontend/dist-demo/
 /frontend/test-results/
 /frontend/playwright-report/
+/frontend/test-results-sr/
+/frontend/playwright-report-sr/
 site/demo/
 _site/
 

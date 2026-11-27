@@ -11,5 +11,5 @@
     "noUnusedParameters": true,
     "types": ["node"]
   },
-  "include": ["e2e", "playwright.config.ts"]
+  "include": ["e2e", "e2e-sr", "playwright.config.ts"]
 }
