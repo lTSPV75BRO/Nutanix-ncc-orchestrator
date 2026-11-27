@@ -37,6 +37,8 @@ type helperEngine struct {
 	entered func(step string)
 
 	j *helperJournal
+	// switched: when this process started the stack (monotonic).
+	switched time.Time
 }
 
 // rollbackInfo describes the kept snapshot (run/upgrade/rollback.json).
@@ -155,8 +157,12 @@ func (e *helperEngine) begin(ctx context.Context) {
 			e.finish()
 			return
 		}
-		e.j.UserRollback, e.j.NewFiles = true, info.NewFiles
+		e.j.UserRollback, e.j.NewFiles, e.j.RollbackOf = true, info.NewFiles, info.Action
 		e.j.From, e.j.Target = info.From, info.To
+		if info.Action == helperActionAdopt {
+			e.restore(ctx, fmt.Errorf("the service definitions from before v%s were asked for", info.To))
+			return
+		}
 		e.restore(ctx, fmt.Errorf("a rollback to v%s was requested", info.From))
 		return
 	}
@@ -174,6 +180,14 @@ func (e *helperEngine) begin(ctx context.Context) {
 	if err := e.enter(upgSaving, "Saving the current version so it can be put back"); err != nil {
 		e.unchanged(err)
 		return
+	}
+	// A run that started meanwhile (the API refuses new ones, a schedule's
+	// timer does not ask) would be cut off by the stop.
+	if r, ok := e.svc.(interface{ runActive() string }); ok {
+		if what := r.runActive(); what != "" {
+			e.unchanged(fmt.Errorf("%s is in progress; upgrade when it has finished", what))
+			return
+		}
 	}
 	if err := e.snapshot(); err != nil {
 		e.dropSnapshot()
@@ -211,7 +225,7 @@ func (e *helperEngine) change(ctx context.Context) error {
 	if err := e.enter(upgMigrating, "Updating the service definitions"); err != nil {
 		return err
 	}
-	changes, err := e.svc.migrate()
+	changes, err := e.svc.migrate(e.j.ReplaceEdited)
 	if err != nil {
 		return fmt.Errorf("the service definitions could not be updated: %w", err)
 	}
@@ -234,7 +248,7 @@ func (e *helperEngine) change(ctx context.Context) error {
 func (e *helperEngine) startAndCheck(ctx context.Context) {
 	target := e.j.Target
 	if e.j.Step != upgChecking || !e.svc.running() {
-		e.j.SwitchedAt = nowRFC3339()
+		e.j.SwitchedAt, e.switched = nowRFC3339(), time.Now()
 		if err := e.enter(upgStarting, "Starting v%s", target); err != nil {
 			e.restore(ctx, err)
 			return
@@ -254,6 +268,8 @@ func (e *helperEngine) startAndCheck(ctx context.Context) {
 	since, err := time.Parse(time.RFC3339, e.j.SwitchedAt)
 	if err != nil {
 		since = time.Now()
+	} else if !e.switched.IsZero() {
+		since = since.Add(clockJump(e.switched, e.switched)) // set while it started
 	}
 	if err := e.check(ctx, since, target); err != nil {
 		if ctx.Err() != nil {
@@ -297,7 +313,10 @@ func (e *helperEngine) restore(ctx context.Context, reason error) {
 		e.finish()
 	}
 	title := "Putting the previous version back"
-	if e.j.UserRollback {
+	switch {
+	case e.j.UserRollback && e.j.RollbackOf == helperActionAdopt:
+		title = "Putting the service definitions back"
+	case e.j.UserRollback:
 		title = "Putting v" + e.j.From + " back"
 	}
 	if err := e.enter(upgRestoring, "%s. %s", reason, title); err != nil {
@@ -357,6 +376,9 @@ func (e *helperEngine) restore(ctx context.Context, reason error) {
 	}
 	recordTrustedStackQuiet(e.installDir, "rollback")
 	switch {
+	case e.j.UserRollback && e.j.RollbackOf == helperActionAdopt:
+		e.log.edit(func(j *upgradeJob) { j.Error = ""; j.ToVersion = e.j.From; j.FromVersion = e.j.Target })
+		e.log.step(upgRolledBack, "The service definitions from before v%s are back; the supervisor, API and UI are healthy", e.j.Target)
 	case e.j.UserRollback:
 		e.log.edit(func(j *upgradeJob) { j.Error = ""; j.ToVersion = e.j.From; j.FromVersion = e.j.Target })
 		e.log.step(upgRolledBack, "Rolled back to v%s; the supervisor, API and UI are healthy", e.j.From)
@@ -708,9 +730,10 @@ func (e *helperEngine) checkSnapshot(snap string) error {
 	return nil
 }
 
-// keepSnapshot leaves the previous version for a rollback by hand.
+// keepSnapshot leaves the previous version for a rollback by hand: after an
+// upgrade the programs and definitions, after an adoption the definitions.
 func (e *helperEngine) keepSnapshot() {
-	if e.j.Action != helperActionUpgrade {
+	if e.j.Action != helperActionUpgrade && e.j.Action != helperActionAdopt {
 		e.dropSnapshot()
 		return
 	}
@@ -744,14 +767,30 @@ type stackCheck struct {
 	manualProbes func() error
 }
 
+// wallClock reads the wall clock, which can jump; time.Since and deadlines use
+// the monotonic one. A variable for tests.
+var wallClock = time.Now
+
+// clockJump is how far the wall clock moved beyond the time that passed since
+// t0 (negative: it was set back).
+func clockJump(t0wall, t0 time.Time) time.Duration {
+	return wallClock().Round(0).Sub(t0wall.Round(0)) - time.Since(t0)
+}
+
 func (c *stackCheck) wait(ctx context.Context, since time.Time, version string) error {
 	since = since.Truncate(time.Second)
+	// The servers stamp their start with the wall clock. Should it be set
+	// while we wait, the stamps move with it, and so does since.
+	t0, t0wall, start := time.Now(), wallClock(), since
 	deadline := time.Now().Add(c.timeout)
 	var last error
 	watches := map[string]*childWatch{}
 	pids := map[int]bool{}
 	healthySince, stoppedSince := time.Time{}, time.Time{}
 	for {
+		if jump := clockJump(t0wall, t0); jump < -time.Second || jump > time.Second {
+			since = start.Add(jump).Truncate(time.Second)
+		}
 		ok, fatal := false, error(nil)
 		if c.svc.kind() == kindManual {
 			if err := c.manualProbes(); err != nil {

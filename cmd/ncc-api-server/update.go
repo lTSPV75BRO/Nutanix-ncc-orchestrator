@@ -118,6 +118,9 @@ func (j *updateJobState) tryBegin(target string) bool {
 // so a compromised admin session can't install an unverified release.
 type updateApplyRequest struct {
 	TargetVersion string `json:"target_version,omitempty"`
+	// ReplaceEdited: replace service definitions edited on this host instead
+	// of keeping them (the update helper only).
+	ReplaceEdited bool `json:"replace_edited,omitempty"`
 }
 
 // handleUpdateCheck (GET /api/v1/settings/update) reports the current version,
@@ -154,6 +157,9 @@ func (s *apiServer) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	if up := s.readUpgradeJob(); up != nil {
 		data["upgrade"] = up
+	}
+	if offer := s.readRollbackOffer(time.Now()); offer != nil {
+		data["rollback"] = offer
 	}
 
 	updateJob.mu.Lock()
@@ -434,6 +440,7 @@ func (s *apiServer) runUpdateJob(req updateApplyRequest, supervised bool, reques
 			BackupPath:    backupPath,
 			RequestedBy:   requestedBy,
 			RequestedAt:   time.Now().UTC().Format(time.RFC3339),
+			ReplaceEdited: req.ReplaceEdited,
 		}); err != nil {
 			s.updateFailedTotal.Add(1)
 			updateJob.fail("could not hand the update over (a pre-update backup was saved as " + filepath.Base(backupPath) + "): " + err.Error())
@@ -455,7 +462,8 @@ func (s *apiServer) runUpdateJob(req updateApplyRequest, supervised bool, reques
 	if req.TargetVersion != "" {
 		args = append(args, "--target-version", req.TargetVersion)
 	}
-	out, err := s.runOrchestrator(args, 12*time.Minute)
+	// Programs only: this server restarts the stack itself below.
+	out, err := s.runOrchestratorEnv(args, 12*time.Minute, []string{"NCC_UPDATE_PROGRAMS_ONLY=1"})
 	if err != nil {
 		s.updateFailedTotal.Add(1)
 		updateJob.fail("update failed and was not applied (a pre-update backup was saved as " + filepath.Base(backupPath) + "): " + redactPaths(firstNonEmptyLine(lastErrorLine(out), err.Error())))

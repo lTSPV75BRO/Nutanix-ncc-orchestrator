@@ -37,8 +37,10 @@ type stackService interface {
 	stop() error
 
 	// plan lists the definitions and what migrate would do with them.
-	plan() []defChange
-	migrate() ([]defChange, error)
+	// replaceEdited: replace a definition that was edited on this host
+	// instead of keeping it (upgrade --replace-edited).
+	plan(replaceEdited bool) []defChange
+	migrate(replaceEdited bool) ([]defChange, error)
 	save() ([]savedDefinition, error)
 	restore([]savedDefinition) error
 
@@ -225,8 +227,8 @@ func (s *manualService) start() error {
 	return nil
 }
 
-func (s *manualService) plan() []defChange                { return nil }
-func (s *manualService) migrate() ([]defChange, error)    { return nil, nil }
-func (s *manualService) save() ([]savedDefinition, error) { return nil, nil }
-func (s *manualService) restore([]savedDefinition) error  { return nil }
-func (s *manualService) holdRestarts() func()             { return func() {} }
+func (s *manualService) plan(bool) []defChange             { return nil }
+func (s *manualService) migrate(bool) ([]defChange, error) { return nil, nil }
+func (s *manualService) save() ([]savedDefinition, error)  { return nil, nil }
+func (s *manualService) restore([]savedDefinition) error   { return nil }
+func (s *manualService) holdRestarts() func()              { return func() {} }

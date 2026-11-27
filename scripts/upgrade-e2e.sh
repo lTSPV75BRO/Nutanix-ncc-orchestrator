@@ -246,6 +246,75 @@ check_version "$A"
 rm -rf "$dir.tampered"
 ok "refused; nothing was changed"
 
+step "a truncated package (its checksum matches)"
+rm -rf "$dir.cut"; mkdir -p "$dir.cut"
+pkg="$(basename "$(bundle "$B")")"
+head -c "$(($(wc -c < "$(bundle "$B")") / 2))" "$(bundle "$B")" > "$dir.cut/$pkg"
+printf '%s  %s\n' "$(sha "$dir.cut/$pkg")" "$pkg" > "$dir.cut/checksums.txt"
+if "$orch" upgrade --install-dir "$dir" --bundle "$dir.cut/$pkg" --skip-backup; then fail "a truncated package was accepted"; fi
+expect_job failed
+"$orch" upgrade --status --install-dir "$dir" | grep -q "Nothing was changed" || fail "the job does not say that nothing was changed"
+check_version "$A"
+rm -rf "$dir.cut"
+ok "refused; nothing was changed"
+
+step "two upgrade requests at once"
+"$orch" upgrade --install-dir "$dir" --bundle "$(bundle "$B")" --skip-backup --no-wait > "$dir.one.log" 2>&1 &
+one=$!
+"$orch" upgrade --install-dir "$dir" --bundle "$(bundle "$B")" --skip-backup --no-wait > "$dir.two.log" 2>&1 &
+two=$!
+s1=0 s2=0
+wait "$one" || s1=$?
+wait "$two" || s2=$?
+cat "$dir.one.log" "$dir.two.log"
+[ $((s1 == 0 ? 1 : 0)) -ne $((s2 == 0 ? 1 : 0)) ] || fail "both or neither request was taken ($s1, $s2)"
+grep -qi "another upgrade" "$dir.one.log" "$dir.two.log" || fail "the second request was not refused as such"
+rm -f "$dir.one.log" "$dir.two.log"
+for ((i = 0; i < 300; i++)); do
+  case "$(job_phase || true)" in done | failed | rolled_back) break ;; esac
+  sleep 1
+done
+expect_job done
+check_version "$B"
+"$orch" upgrade --rollback --install-dir "$dir"
+check_version "$A"
+ok "one upgrade ran, the other was refused"
+
+if [ "$os" = linux ] && [ "$manual" = 0 ]; then
+  step "an edited unit, replaced on request"
+  # Group= decides who the service runs as: never merged, kept by default.
+  sed -i 's/^\[Service\]$/[Service]\nGroup=root/' "$unit"
+  systemctl daemon-reload
+  "$orch" upgrade --plan --offline --install-dir "$dir" | tee "$out/plan.txt"
+  grep -q "keep (changed on this host: .*Group" "$out/plan.txt" || fail "the plan does not keep the edited unit"
+  grep -q -- "-Group=root" "$out/plan.txt" || fail "the plan shows no diff"
+  "$orch" upgrade --install-dir "$dir" --bundle "$(bundle "$B")" --skip-backup --replace-edited | tee "$out/replace.txt"
+  grep -q "^Replacing Service" "$out/replace.txt" || fail "the replacement was not shown before"
+  expect_job done
+  check_version "$B"
+  grep -q '^Group=root' "$unit" && fail "the edited unit was kept"
+  "$orch" upgrade --rollback --install-dir "$dir"
+  check_version "$A"
+  grep -q '^Group=root' "$unit" || fail "the edited unit is not back after the rollback"
+  sed -i '/^Group=root$/d' "$unit"
+  systemctl daemon-reload
+  ok "replaced, and back after the rollback"
+
+  step "a full disk while the current version is saved"
+  snapdir="$dir/run/upgrade/snapshot"
+  mkdir -p "$snapdir"
+  if mount -t tmpfs -o size=1m tmpfs "$snapdir" 2>/dev/null; then
+    if upgrade_to "$B"; then umount "$snapdir"; fail "the upgrade claims to have worked"; fi
+    umount "$snapdir" || umount -l "$snapdir"
+    expect_job failed
+    "$orch" upgrade --status --install-dir "$dir" | grep -q "Nothing was changed" || fail "the job does not say that nothing was changed"
+    check_version "$A"
+    ok "nothing was changed"
+  else
+    echo "skipped: cannot mount a small tmpfs here"
+  fi
+fi
+
 interrupt() { # interrupt PHASE_PATTERN: upgrades to $B and kills the helper in such a phase
   local i p killed=""
   "$orch" upgrade --install-dir "$dir" --bundle "$(bundle "$B")" --skip-backup --no-wait

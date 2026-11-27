@@ -83,6 +83,8 @@ type upgradeRequest struct {
 	BackupPath    string `json:"backup_path,omitempty"`
 	RequestedBy   string `json:"requested_by,omitempty"`
 	RequestedAt   string `json:"requested_at,omitempty"`
+	// ReplaceEdited: replace service definitions edited on this host.
+	ReplaceEdited bool `json:"replace_edited,omitempty"`
 }
 
 type upgradeStep struct {
@@ -316,6 +318,7 @@ func (u *upgrader) handToHelper(ctx context.Context, svc stackService, req upgra
 		job.RequestedAt = req.RequestedAt
 	}
 	s := newStageOne(u.installDir, svc, newJobLog(u.installDir, u.logf, job), u.logf)
+	s.replaceEdited = req.ReplaceEdited
 	if err := s.run(ctx, req.TargetVersion); err != nil {
 		u.logf("upgrade: %v", err)
 	}
@@ -394,7 +397,8 @@ func (u *upgrader) run(ctx context.Context, req upgradeRequest) {
 		target = "v" + strings.TrimPrefix(req.TargetVersion, "v")
 	}
 	u.step(upgInstalling, "Downloading and installing %s (checksum-verified)", target)
-	args := []string{"update"}
+	// Programs only: this supervisor is the one carrying the upgrade out.
+	args := []string{"update", "--programs-only"}
 	if req.TargetVersion != "" {
 		args = append(args, "--target-version", req.TargetVersion)
 	}
@@ -583,6 +587,8 @@ func (u *upgrader) rollback(ctx context.Context, reason string) {
 		return
 	}
 	u.step(upgRollingBack, "%s. Putting the previous version back", reason)
+	// What `update` kept for a rollback by hand is what goes back now.
+	dropUpdateSnapshot(u.installDir)
 	if err := installStackComponents(snap, u.installDir); err != nil {
 		u.step(upgFailed, "%s. Putting the previous version back failed (%v); restore the pre-update backup %s.", reason, err, filepath.Base(u.job.BackupPath))
 		return

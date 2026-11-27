@@ -14,6 +14,35 @@ import (
 	"time"
 )
 
+func TestRollbackOffer(t *testing.T) {
+	s := supervisorTestServer(t)
+	dir := filepath.Join(s.maintenanceInstallDir(), "run", "upgrade")
+	if err := os.MkdirAll(filepath.Join(dir, "snapshot"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().Add(-time.Hour).UTC()
+	write := func(at time.Time, action string) {
+		b, _ := json.Marshal(map[string]string{"from": "2.3.0", "to": "2.4.0", "at": at.Format(time.RFC3339), "action": action, "kind": "systemd"})
+		if err := os.WriteFile(filepath.Join(dir, "rollback.json"), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(at, "update")
+	o := s.readRollbackOffer(time.Now())
+	if o == nil || o.To != "2.3.0" || o.From != "2.4.0" || o.Of != "update" || o.Until != at.Add(24*time.Hour).Format(time.RFC3339) {
+		t.Fatalf("%+v", o)
+	}
+	write(time.Now().Add(-25*time.Hour), "adopt")
+	if s.readRollbackOffer(time.Now()) != nil {
+		t.Error("offered after 24 hours")
+	}
+	write(at, "adopt")
+	_ = os.RemoveAll(filepath.Join(dir, "snapshot"))
+	if s.readRollbackOffer(time.Now()) != nil {
+		t.Error("offered without a snapshot")
+	}
+}
+
 // writeUpgradeJob writes a job as the orchestrator does.
 func writeUpgradeJob(t *testing.T, s *apiServer, j upgradeJob) {
 	t.Helper()

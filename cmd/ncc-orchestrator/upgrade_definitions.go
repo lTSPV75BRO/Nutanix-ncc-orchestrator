@@ -34,8 +34,9 @@ type defChange struct {
 	Action string `json:"action"`
 	Detail string `json:"detail,omitempty"`
 
-	body   string // new content
-	dropIn string // content of the drop-in (merge)
+	body      string // new content
+	dropIn    string // content of the drop-in (merge)
+	installed string // content now, for the diff in a plan
 }
 
 func (c defChange) pending() bool {
@@ -48,6 +49,127 @@ func (c defChange) String() string {
 		s += " (" + c.Detail + ")"
 	}
 	return s
+}
+
+// Diff shows how the definition would change, as a diff of lines ("" when
+// nothing changes or nothing is installed yet).
+func (c defChange) Diff() string {
+	if c.Action == defUnchanged || c.installed == "" || c.body == "" {
+		return ""
+	}
+	return lineDiff(c.installed, c.body, maxDiffLines)
+}
+
+// maxDiffLines keeps a diff readable, and the plan small.
+const maxDiffLines = 200
+
+// replaceEdited turns definitions that were edited on this host, and would be
+// kept, into replacements: what `upgrade --replace-edited` asks for. The saved
+// copy (save) puts them back on a rollback.
+func replaceEdited(changes []defChange) []defChange {
+	out := make([]defChange, len(changes))
+	for i, c := range changes {
+		if c.Action == defKeep && c.body != "" {
+			c.Action = defReplace
+			c.Detail = "replaced on request; " + c.Detail
+		}
+		out[i] = c
+	}
+	return out
+}
+
+// editedKept counts the definitions an upgrade leaves alone because they were
+// edited on this host.
+func editedKept(changes []defChange) (n int) {
+	for _, c := range changes {
+		if c.Action == defKeep {
+			n++
+		}
+	}
+	return n
+}
+
+// lineDiff is a diff of two texts without hunk headers: "-" lines go, "+"
+// lines come, " " lines next to a change stay, "..." skips unchanged lines.
+// At most limit lines are returned.
+func lineDiff(before, after string, limit int) string {
+	split := func(s string) []string {
+		s = strings.TrimRight(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
+		if s == "" {
+			return nil
+		}
+		return strings.Split(s, "\n")
+	}
+	a, b := split(before), split(after)
+	if len(a)*len(b) > 4_000_000 {
+		return "(too large to compare)\n"
+	}
+	// Longest common subsequence, from the end.
+	lcs := make([][]int, len(a)+1)
+	for i := range lcs {
+		lcs[i] = make([]int, len(b)+1)
+	}
+	for i := len(a) - 1; i >= 0; i-- {
+		for j := len(b) - 1; j >= 0; j-- {
+			if a[i] == b[j] {
+				lcs[i][j] = lcs[i+1][j+1] + 1
+			} else {
+				lcs[i][j] = max(lcs[i+1][j], lcs[i][j+1])
+			}
+		}
+	}
+	type op struct {
+		kind byte
+		text string
+	}
+	var ops []op
+	for i, j := 0, 0; i < len(a) || j < len(b); {
+		switch {
+		case i < len(a) && j < len(b) && a[i] == b[j]:
+			ops = append(ops, op{' ', a[i]})
+			i++
+			j++
+		case i < len(a) && (j == len(b) || lcs[i+1][j] >= lcs[i][j+1]):
+			ops = append(ops, op{'-', a[i]})
+			i++
+		default:
+			ops = append(ops, op{'+', b[j]})
+			j++
+		}
+	}
+	keep := make([]bool, len(ops))
+	changed := false
+	for k, o := range ops {
+		if o.kind == ' ' {
+			continue
+		}
+		changed = true
+		for d := k - 1; d <= k+1; d++ {
+			if d >= 0 && d < len(ops) {
+				keep[d] = true
+			}
+		}
+	}
+	if !changed {
+		return ""
+	}
+	var lines []string
+	gap := false
+	for k, o := range ops {
+		if !keep[k] {
+			gap = true
+			continue
+		}
+		if gap && len(lines) > 0 {
+			lines = append(lines, "...")
+		}
+		gap = false
+		lines = append(lines, string(o.kind)+o.text)
+	}
+	if len(lines) > limit {
+		lines = append(lines[:limit], fmt.Sprintf("... (%d more lines)", len(lines)-limit))
+	}
+	return strings.Join(lines, "\n") + "\n"
 }
 
 func pendingChanges(changes []defChange) (n int) {
@@ -164,7 +286,7 @@ var unitIdentityKeys = map[string]bool{
 // planUnit decides how an installed unit becomes the desired one. Lines that
 // this program never wrote move to a drop-in, which wins over the unit.
 func planUnit(title, path, installed, desired string) defChange {
-	c := defChange{ID: fileDefPrefix + path, Title: title, body: desired}
+	c := defChange{ID: fileDefPrefix + path, Title: title, body: desired, installed: installed}
 	if installed == "" {
 		c.Action = defCreate
 		return c

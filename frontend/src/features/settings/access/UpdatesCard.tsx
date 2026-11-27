@@ -3,6 +3,8 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
+  Collapse,
   Modal,
   Space,
   Typography,
@@ -29,20 +31,32 @@ const UPDATE_PHASE_LABEL: Record<string, string> = {
   error: "Failed",
 };
 
-/** What the upgrade does to this host, in the confirm dialog. Modal.confirm is outside the query provider. */
-export function UpgradePlanSummary() {
+const ACTION_LABEL: Record<string, string> = {
+  replace: "replaced",
+  merge: "replaced, this host's lines kept",
+  keep: "kept, edited on this host",
+  create: "added",
+};
+
+/**
+ * What the upgrade does to this host, in the confirm dialog: the checks, the
+ * expected downtime and what changes, with the diff of each service definition.
+ * Modal.confirm is outside the query provider, so it fetches by itself.
+ */
+export function UpgradePlanSummary({ onReplaceEdited }: { onReplaceEdited?: (replace: boolean) => void }) {
   const [plan, setPlan] = useState<UpgradePlan | null>(null);
   const [failed, setFailed] = useState(false);
+  const [replace, setReplace] = useState(false);
   useEffect(() => {
     let cancelled = false;
     api
-      .updatePlan()
+      .updatePlan(replace)
       .then((p) => !cancelled && setPlan(p))
       .catch(() => !cancelled && setFailed(true));
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [replace]);
   if (failed) return null;
   if (!plan) {
     return (
@@ -51,10 +65,18 @@ export function UpgradePlanSummary() {
       </Typography.Paragraph>
     );
   }
-  const definitions = (plan.definitions ?? []).filter((d) => !d.endsWith(": unchanged"));
   const problems = plan.problems ?? [];
+  const checks = plan.checks ?? [];
+  // Older servers send the one-line form only.
+  const changes = plan.changes ?? (plan.definitions ?? []).map((d) => ({ title: d, action: "replace" as const, detail: undefined, diff: undefined }));
+  const shown = changes.filter((c) => c.action !== "unchanged" && !c.title.endsWith(": unchanged"));
+  const toggle = (on: boolean) => {
+    setReplace(on);
+    setPlan(null);
+    onReplaceEdited?.(on);
+  };
   return (
-    <>
+    <div className="upgrade-plan">
       {problems.length ? (
         <Alert
           type="warning"
@@ -66,17 +88,75 @@ export function UpgradePlanSummary() {
           ))}
         />
       ) : null}
-      {definitions.length ? (
+      {checks.length ? (
         <Typography.Paragraph>
-          Changes to the service ({plan.service}):
-          <ul style={{ margin: 0, paddingLeft: 20 }}>
-            {definitions.map((d) => (
-              <li key={d}>{d}</li>
+          Checks
+          <ul style={{ margin: 0, paddingLeft: 20 }} aria-label="Checks">
+            {checks.map((c) => (
+              <li key={c.title}>
+                <StatusBadge tone={c.ok ? "ok" : "fail"}>{c.ok ? "Passed" : "Failed"}</StatusBadge> {c.title}
+                {c.detail ? <Typography.Text type="secondary">{` (${c.detail})`}</Typography.Text> : null}
+              </li>
             ))}
           </ul>
         </Typography.Paragraph>
       ) : null}
-    </>
+      {plan.downtime ? (
+        <Typography.Paragraph>
+          Expected downtime: <b>{plan.downtime}</b>
+        </Typography.Paragraph>
+      ) : null}
+      {plan.programs?.length ? (
+        <Typography.Paragraph>
+          Replaced: {plan.programs.join(", ")}
+          {plan.config?.length ? (
+            <div>
+              <Typography.Text type="secondary">Saved to be put back: {plan.config.join(", ")}</Typography.Text>
+            </div>
+          ) : null}
+        </Typography.Paragraph>
+      ) : null}
+      {shown.length ? (
+        <div style={{ marginBottom: 12 }}>
+          Changes to the service{plan.service ? ` (${plan.service})` : ""}:
+          <Collapse
+            size="small"
+            style={{ marginTop: 4 }}
+            items={shown.map((c, i) => ({
+              key: String(i),
+              label: (
+                <span>
+                  {c.title}
+                  {plan.changes ? `: ${ACTION_LABEL[c.action] ?? c.action}` : ""}
+                  {c.detail ? <Typography.Text type="secondary">{` (${c.detail})`}</Typography.Text> : null}
+                </span>
+              ),
+              collapsible: c.diff ? undefined : ("disabled" as const),
+              showArrow: Boolean(c.diff),
+              children: c.diff ? (
+                <pre className="upgrade-diff" aria-label={`Changes to ${c.title}`} style={{ margin: 0, maxHeight: 240, overflow: "auto", fontSize: 12 }}>
+                  {c.diff.split("\n").map((line, n) => (
+                    <div
+                      key={n}
+                      style={{
+                        color: line.startsWith("+") ? "var(--ui-ok-text)" : line.startsWith("-") ? "var(--ui-fail-text)" : undefined,
+                      }}
+                    >
+                      {line || " "}
+                    </div>
+                  ))}
+                </pre>
+              ) : null,
+            }))}
+          />
+        </div>
+      ) : null}
+      {plan.edited || plan.replace_edited ? (
+        <Checkbox checked={replace} onChange={(e) => toggle(e.target.checked)} style={{ marginBottom: 12 }}>
+          Replace definitions edited on this host (a rollback puts them back)
+        </Checkbox>
+      ) : null}
+    </div>
   );
 }
 
@@ -196,10 +276,13 @@ export function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }
     }
   };
 
+  // The choice made in the plan of the confirm dialog.
+  const replaceEdited = useRef(false);
+
   const doApply = async () => {
     setApplying(true);
     try {
-      const res = await api.applyUpdate();
+      const res = await api.applyUpdate(replaceEdited.current ? { replace_edited: true } : undefined);
       const jobData = (res.data ?? {}) as UpdateStatus["job"];
       setStatus((prev) => ({ ...(prev ?? {}), job: jobData }) as UpdateStatus);
       notify.info(res.message ?? "Update started.");
@@ -211,6 +294,7 @@ export function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }
   };
 
   const confirmApply = () => {
+    replaceEdited.current = false;
     Modal.confirm({
       title: "Confirm software update",
       icon: <CloudDownloadOutlined style={{ color: "var(--ui-accent)" }} />,
@@ -243,7 +327,7 @@ export function UpdatesCard({ isKubernetes = false }: { isKubernetes?: boolean }
               </li>
             )}
           </ol>
-          {supervisedUpgrades ? <UpgradePlanSummary /> : null}
+          {supervisedUpgrades ? <UpgradePlanSummary onReplaceEdited={(on) => (replaceEdited.current = on)} /> : null}
           <Typography.Paragraph style={{ marginBottom: 0 }}>
             This page will reconnect automatically once the restarted stack is healthy. You may be
             prompted to sign in again.

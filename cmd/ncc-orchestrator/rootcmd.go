@@ -1480,6 +1480,12 @@ Run 'ncc-orchestrator --help' for a full list of options.
 Default behavior follows the current major track (v1.x stays on latest v1.x).
 To cross major versions (for example v1 -> v2), pass --allow-major-upgrade.
 
+When a service manager runs the stack (or its update helper is installed),
+update hands over to the update helper: the same as upgrade --to, with a
+backup, health checks and an automatic rollback. Otherwise, or with
+--programs-only, it replaces the programs only and keeps the previous ones for
+upgrade --rollback (24 hours).
+
 Use --check to only validate availability/version without downloading.
 Use --binary-url to work with non-GitHub/custom binary repositories.
 When using --binary-url for install, --binary-sha256 is required.`,
@@ -1493,7 +1499,8 @@ When using --binary-url for install, --binary-sha256 is required.`,
 			targetVersion, _ := cmd.Flags().GetString("target-version")
 			skipChecksumVerify, _ := cmd.Flags().GetBool("skip-checksum-verify")
 			jsonOut, _ := cmd.Flags().GetBool("json")
-			return runUpdate(updateOptions{
+			programsOnly, _ := cmd.Flags().GetBool("programs-only")
+			return runUpdateCommand(cmd.Context(), updateOptions{
 				CheckOnly:          checkOnly,
 				AllowMajorUpgrade:  allowMajorUpgrade,
 				IncludePrerelease:  includePrerelease,
@@ -1503,9 +1510,10 @@ When using --binary-url for install, --binary-sha256 is required.`,
 				TargetVersion:      targetVersion,
 				SkipChecksumVerify: skipChecksumVerify,
 				JSONOut:            jsonOut,
-			})
+			}, programsOnly, cmd.OutOrStdout())
 		},
 	}
+	updateCmd.Flags().Bool("programs-only", false, "Replace the programs only, even when the update helper could upgrade the whole stack (restart it yourself)")
 	updateCmd.Flags().Bool("check", false, "Check update availability without downloading or replacing")
 	updateCmd.Flags().Bool("json", false, "With --check, also emit a machine-readable result line (NCC_UPDATE_JSON {...}) on stdout")
 	updateCmd.Flags().Bool("include-prerelease", false, "Also consider release candidates (an install that runs one always does)")

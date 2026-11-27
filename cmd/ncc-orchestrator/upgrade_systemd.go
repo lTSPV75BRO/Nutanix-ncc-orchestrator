@@ -261,7 +261,7 @@ func savedScheduleTask(installDir string) string {
 
 // plan looks at the service itself and at what belongs to it: the update
 // watcher, the log timer and the saved schedule, as far as they are installed.
-func (s *systemdService) plan() []defChange {
+func (s *systemdService) plan(replace bool) []defChange {
 	read := func(path string) string {
 		b, _ := os.ReadFile(path)
 		return string(b)
@@ -294,11 +294,30 @@ func (s *systemdService) plan() []defChange {
 			}
 		}
 	}
+	if replace {
+		out = replaceEdited(out)
+	}
 	return out
 }
 
-func (s *systemdService) migrate() ([]defChange, error) {
-	changes := s.plan()
+// runActive names the saved schedule's run when its service is running now.
+func (s *systemdService) runActive() string {
+	task := savedScheduleTask(s.o.InstallDir)
+	if task == "" {
+		return ""
+	}
+	unit := systemdUnitBase(task) + ".service"
+	if !fileExists(s.unit(unit)) {
+		return ""
+	}
+	if out, err := svcCommand("systemctl", "is-active", unit); err == nil && strings.TrimSpace(out) == "active" {
+		return "the scheduled run " + task
+	}
+	return ""
+}
+
+func (s *systemdService) migrate(replace bool) ([]defChange, error) {
+	changes := s.plan(replace)
 	for _, c := range changes {
 		if err := applyUnit(c); err != nil {
 			return changes, err
@@ -327,7 +346,7 @@ func (s *systemdService) migrate() ([]defChange, error) {
 
 func (s *systemdService) save() ([]savedDefinition, error) {
 	var out []savedDefinition
-	for _, c := range s.plan() {
+	for _, c := range s.plan(false) {
 		path := strings.TrimPrefix(c.ID, fileDefPrefix)
 		for _, p := range []string{path, unitDropInPath(path)} {
 			d, err := saveFileDefinition(p)

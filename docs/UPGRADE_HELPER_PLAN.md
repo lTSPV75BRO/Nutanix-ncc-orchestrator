@@ -239,22 +239,47 @@ Code: `cmd/ncc-orchestrator/upgrade_*.go` (engine, stage 1, platforms, CLI) and
 | Probe for 15 s with a heartbeat | 5 s after the checks; the job's heartbeat is every 15 s. |
 | The helper downloads the stack | Stage 1 downloads, the helper verifies the signature and checksum again before it unpacks. The helper has no network code path. |
 | The helper's program comes from the release's orchestrator asset | It comes from the same verified stack archive. |
-| `helper_protocol`, `min_from`, `migrations`, `config_schema`, `downtime_hint` in the manifest | `schema`, `version`, `helper_protocol` and optional `min_from`; the rest had no reader. |
-| Replace a locally edited unit on request | Not built: edit or remove the unit and run `v2-install-service`. |
 | Helm pre-upgrade hook checks backup, space and skew | It pulls and starts the new images once. The post-upgrade hook waits for five answers in a row with the new version. |
-| `ncc-orchestrator update` hands over to the helper | Unchanged: it replaces programs only. `upgrade` is the new command. |
+| `helper_protocol`, `min_from`, `migrations`, `config_schema`, `downtime_hint` in the manifest | `schema`, `version`, `helper_protocol`, and optional `min_from` and `downtime_hint` (set at release time by `NCC_UPGRADE_MIN_FROM` and `NCC_UPGRADE_DOWNTIME_HINT`). `min_from` is enforced for a download and for a `--bundle` whose checksums list the manifest. The plan shows `downtime_hint`, or "under a minute" without one. `migrations` and `config_schema` have no reader yet. |
+| Replace a locally edited unit on request | `upgrade --replace-edited` (and `upgrade-adopt --replace-edited`), and a checkbox in the plan in the UI. The plan shows the diff of each definition first. The default stays *keep*. The snapshot holds the edited unit, so a rollback puts it back. |
+| `ncc-orchestrator update` hands over to the helper | `update` hands over to `upgrade` when the helper can do the same job: a stack with an update helper, releases of this repository, and no `--check`, `--binary-url`, `--skip-checksum-verify` or `--allow-major-upgrade`. Otherwise it says why and replaces the programs only (`--programs-only`, or `NCC_UPDATE_PROGRAMS_ONLY=1`, forces this; the supervisor and the API use it). Before it replaces anything it saves the programs and the configuration, so **Roll back** works for 24 hours after it too. |
+| Plan: checks, downtime, changes | `upgrade --plan` and the UI list checks (service, permissions, no other upgrade, disk space, release), the expected downtime, the programs replaced, the configuration saved, and each definition with its action and diff. |
+| End states with the log and Roll back for 24 hours | *Upgraded*, *Rolled back; the previous version is running* (why), and *Nothing was changed* (why) for a job that stopped before it changed anything. **Roll back** is offered from `run/upgrade/rollback.json` while the snapshot is kept: after an upgrade, an adoption (the service definitions go back, the programs stay) or `update`. |
 
 Since then: on Windows the service has a second task, `ncc-orchestrator-watchdog`
 (WIN-07); upgrades, rollback and adoption include it.
 
-Known limits: a Windows task with a name of its own is found only when it is
-`ncc-orchestrator`; the 2.3.x to 2.4.0 step itself is still carried out by the
-2.3.x supervisor, and adoption finishes it two minutes after 2.4.0 starts; a
-manual rollback exists for upgrades the helper carried out.
+A Windows task with a name of its own is found by its action: the task that runs
+`supervise` of this install's `ncc-orchestrator.exe`.
+
+Guards found by fault injection: a second upgrade request no longer overwrites
+the progress of the running job; a scheduled run that started during staging
+stops the upgrade before the service is stopped (systemd), and the job ends as
+*Nothing was changed*; a wall-clock jump while the new version is checked moves
+the deadline instead of failing or passing the checks.
+
+Known limits: the 2.3.x to 2.4.0 step itself is still carried out by the 2.3.x
+supervisor, and adoption finishes it two minutes after 2.4.0 starts. The guard
+for a scheduled run exists for systemd only; Windows and launchd stop the
+service while a run goes on, as before. `update` without the helper (a
+hand-started stack, another repository, `--binary-url`) keeps the programs-only
+path; its rollback needs the snapshot, which is saved only when the helper could
+restart that stack and `update` runs with the rights to change it. A file locked by antivirus, SELinux enforcing and a read-only
+`/etc` are not rehearsed.
+
+Tests: `cmd/ncc-orchestrator/upgrade_gaps_test.go` covers the diff, replace on
+request, rollback after adoption and after `update`, the hand-over rules of
+`update`, a Windows task of another name, `min_from` in a bundle, and fault
+injection: a full disk while staging, at the snapshot and at the swap, a
+truncated archive, two requests at once, a run started during staging, and a
+clock jump.
 
 Rehearsed with `scripts/upgrade-e2e.sh` (also in CI on Ubuntu, macOS and
 Windows): upgrade with a locally added unit line, rollback by hand, a release
-that does not start, a changed package, the helper killed while installing and
+that does not start, a changed package, a truncated package whose checksum
+matches, two upgrade requests at once, the helper killed while installing and
 while checking; each from a service manager and from `v2-start`. With a service
-manager it also kills the supervisor. Adoption was
+manager it also kills the supervisor. Under systemd it also replaces an edited
+unit with `--replace-edited` and gets it back with a rollback, and fills the
+disk at the snapshot (a 1 MB tmpfs) when the host can mount one. Adoption was
 rehearsed from 2.2.1 and 2.3.0 under systemd 257, and the Helm hooks on kind.

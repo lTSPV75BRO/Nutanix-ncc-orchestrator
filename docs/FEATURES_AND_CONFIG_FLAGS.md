@@ -286,12 +286,18 @@ while there is an upgrade to do. No process runs otherwise.
 Where it applies: systemd, Windows Task Scheduler, launchd, and stacks started
 with `v2-start --detach`. Lines that were added to a systemd unit by hand move
 to `<unit>.d/50-local.conf`; a definition with a changed command or user is
-kept and reported. Runs cannot start during an upgrade.
+kept and reported. `--replace-edited` (a checkbox in the UI) replaces such a
+definition with the new one instead; the plan shows the diff first, and a
+rollback puts the edited one back. Runs cannot start during an upgrade, and on
+systemd an upgrade does not stop the service while a scheduled run goes on
+(it ends as *Nothing was changed*).
 
 | What | How |
 |------|-----|
-| In the UI | **System → Updates & backups → Updates**; the dialog shows what changes on this host. **Roll back** stays for 24 hours. |
-| On the host | `ncc-orchestrator upgrade`, `--plan`, `--status`, `--rollback`, `--to VERSION` |
+| In the UI | **System → Updates & backups → Updates**; the dialog shows the checks, the expected downtime and what changes on this host, with the diff of each definition. The result is *Upgraded*, *Rolled back* or *Nothing was changed*, with the reason and the log. **Roll back** stays for 24 hours, also after an adoption or `update`. |
+| On the host | `ncc-orchestrator upgrade`, `--plan`, `--status`, `--rollback`, `--to VERSION`, `--replace-edited` |
+| `ncc-orchestrator update` | Hands over to `upgrade` when an update helper runs the stack and no `--check`, `--binary-url`, `--skip-checksum-verify`, `--allow-major-upgrade` or other `--repo` is given. Otherwise, or with `--programs-only` or `NCC_UPDATE_PROGRAMS_ONLY=1`, it replaces the programs only and says why; restart the stack afterwards. With rights to the service it saves the previous version first, so `upgrade --rollback` works for 24 hours. |
+| Release manifest | `upgrade-manifest.json` may carry `min_from` (refused below it: "go to vX first") and `downtime_hint` (shown in the plan). Release builds set them with `NCC_UPGRADE_MIN_FROM` and `NCC_UPGRADE_DOWNTIME_HINT`. |
 | Without internet | `ncc-orchestrator upgrade --bundle ncc-v2-stack-<os>-<arch>.tar.gz`, with `checksums.txt` and `checksums.txt.sig` in the same folder |
 | API | `GET /api/v1/settings/update/plan`, `POST /api/v1/settings/update/apply`, `POST /api/v1/settings/update/rollback`; progress in `upgrade` of `GET /api/v1/settings/update` |
 | After the step from 2.3.x | 2.4.0 installs the helper and brings the service up to its definitions by itself, two minutes after it starts and when no run is going on. `NCC_UPGRADE_ADOPT=0` turns this off; `ncc-orchestrator upgrade-adopt` does it by hand. |
@@ -315,7 +321,7 @@ the `upgrade` field of `GET /api/v1/settings/update` and
 |-------|--------------|
 | `preflight` | Free disk space for a copy of the current version and the download. |
 | `snapshot` | Copies `bin/`, `frontend-dist/` and the orchestrator binary to `run/upgrade-rollback`. |
-| `installing` | `ncc-orchestrator update [--target-version]` (checksum-verified, 12 minute limit). "Already on the latest version" ends the job as done. |
+| `installing` | `ncc-orchestrator update --programs-only [--target-version]` (checksum-verified, 12 minute limit). "Already on the latest version" ends the job as done. |
 | `restarting` | Restarts the API, then the UI. Each must start, pass a health probe and stay up for 45 s (or the probe interval + 15 s); a cooldown or two unrequested exits fail it. |
 | `verifying` | Every binary reports the same version, then `doctor --json --fix --no-disruptive`. |
 | `done` / `rolled_back` / `failed` | On a failure after the install the copy is put back and the servers restarted (`rolled_back`); a failure before it leaves the old version running (`failed`). |
@@ -1161,6 +1167,8 @@ ncc-orchestrator update
 
 By default, updates remain in the current major track (for example `v1.x` -> latest `v1.x`). Use `--allow-major-upgrade` to move across major versions (for example `v1` to `v2`) after migration review.
 
+On a stack with an update helper, `update` hands over to `upgrade` (the whole stack, checked, rolled back when unhealthy). It replaces the programs only when it cannot: with `--check`, `--binary-url`, `--skip-checksum-verify`, `--allow-major-upgrade`, another `--repo`, without a helper, or when `--programs-only` or `NCC_UPDATE_PROGRAMS_ONLY=1` asks for it. It then prints why, and the stack must be restarted afterwards.
+
 | Flag | Type | Possible values | Default | Detailed explanation |
 |---|---|---|---|---|
 | `--check` | bool | `true`, `false` | `false` | Check-only mode. Reports selected release/binary availability without downloading or replacing. |
@@ -1170,6 +1178,7 @@ By default, updates remain in the current major track (for example `v1.x` -> lat
 | `--binary-url` | string | Direct binary URL | empty | Use a non-GitHub/custom artifact URL for check/update operations. |
 | `--binary-sha256` | string | 64-char SHA256 hex | empty | Required when installing via `--binary-url` (ignored for `--check`). Used to enforce artifact integrity. |
 | `--target-version` | string | Semver-like value | empty | Target version hint, recommended with `--binary-url` for track comparisons/safety checks. |
+| `--programs-only` | bool | `true`, `false` | `false` | Replace the programs only, without handing over to the update helper. Same as `NCC_UPDATE_PROGRAMS_ONLY=1`. |
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
 
 ### 6.5 `gen-test-agg`

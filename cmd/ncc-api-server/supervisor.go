@@ -68,6 +68,7 @@ type upgradeRequest struct {
 	BackupPath    string `json:"backup_path,omitempty"`
 	RequestedBy   string `json:"requested_by,omitempty"`
 	RequestedAt   string `json:"requested_at,omitempty"`
+	ReplaceEdited bool   `json:"replace_edited,omitempty"`
 }
 
 type upgradeJob struct {

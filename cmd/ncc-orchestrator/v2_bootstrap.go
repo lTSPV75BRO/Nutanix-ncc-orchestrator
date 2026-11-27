@@ -123,6 +123,9 @@ func listAssetNames(rel githubRelease) []string {
 }
 
 func extractArchiveByAssetName(archive []byte, assetName string, destDir string) error {
+	if err := writeFault(destDir); err != nil {
+		return err
+	}
 	lower := strings.ToLower(strings.TrimSpace(assetName))
 	switch {
 	case strings.HasSuffix(lower, ".zip"):

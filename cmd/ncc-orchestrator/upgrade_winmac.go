@@ -20,22 +20,70 @@ type windowsService struct {
 	taskXML string
 }
 
+// findWindowsService finds the task that runs the supervisor of installDir:
+// under the usual name, or else under any name (v2-install-service
+// --service-name), by what it starts.
 func findWindowsService(installDir string) stackService {
-	x, ok := queryWindowsTaskXML(supervisorServiceName)
+	if x, ok := queryWindowsTaskXML(supervisorServiceName); ok {
+		if svc := windowsServiceFromTask(installDir, supervisorServiceName, x); svc != nil {
+			return svc
+		}
+	}
+	all, ok := queryAllWindowsTasksXML()
 	if !ok {
 		return nil
 	}
-	return windowsServiceFromTask(installDir, x)
+	for _, t := range splitWindowsTasks(all) {
+		if svc := windowsServiceFromTask(installDir, t.name, t.xml); svc != nil {
+			return svc
+		}
+	}
+	return nil
 }
 
-func windowsServiceFromTask(installDir, taskXML string) stackService {
+// queryAllWindowsTasksXML reads every task's definition in one document. A
+// variable so tests never see the host's tasks.
+var queryAllWindowsTasksXML = func() (string, bool) {
+	out, err := runPlatformCommand(time.Minute, "schtasks", "/Query", "/XML", "ONE")
+	if err != nil {
+		return "", false
+	}
+	return strings.ReplaceAll(out, "\x00", ""), true
+}
+
+type windowsTaskDoc struct{ name, xml string }
+
+// splitWindowsTasks splits `schtasks /Query /XML ONE`: each <Task> follows a
+// comment with its path ("<!-- \Folder\Name -->").
+func splitWindowsTasks(doc string) []windowsTaskDoc {
+	var out []windowsTaskDoc
+	for _, part := range strings.Split(doc, "<!-- ")[1:] {
+		name, body, ok := strings.Cut(part, "-->")
+		if !ok {
+			continue
+		}
+		name = strings.TrimSpace(name)
+		// Root folder tasks go by their plain name, as v2-install-service
+		// registers them; others keep their folder.
+		if strings.Count(name, `\`) == 1 {
+			name = strings.TrimPrefix(name, `\`)
+		}
+		if name == "" || !strings.Contains(body, "<Task") {
+			continue
+		}
+		out = append(out, windowsTaskDoc{name: name, xml: body})
+	}
+	return out
+}
+
+func windowsServiceFromTask(installDir, name, taskXML string) stackService {
 	args := xmlElement(taskXML, "Arguments")
 	dir := installDirFromCommand(args)
 	if !strings.HasPrefix(args, "v2-supervise") || !sameDir(dir, installDir) {
 		return nil
 	}
 	bin := strings.Trim(xmlElement(taskXML, "Command"), `"`)
-	return &windowsService{taskXML: taskXML, o: installServiceOptions{InstallDir: dir, ServiceName: supervisorServiceName, OrchestratorBin: bin}}
+	return &windowsService{taskXML: taskXML, o: installServiceOptions{InstallDir: dir, ServiceName: name, OrchestratorBin: bin}}
 }
 
 func (s *windowsService) kind() string            { return kindWindows }
@@ -163,12 +211,16 @@ func planWindowsTask(o installServiceOptions, installed string) defChange {
 	return c
 }
 
-func (s *windowsService) plan() []defChange {
+func (s *windowsService) plan(replace bool) []defChange {
 	x, ok := queryWindowsTaskXML(s.o.ServiceName)
 	if !ok {
 		x = s.taskXML
 	}
 	main := planWindowsTask(s.o, x)
+	main.installed = x
+	if replace {
+		main = replaceEdited([]defChange{main})[0]
+	}
 	out := []defChange{main}
 	if main.Action == defKeep {
 		return out // not started as we would: nothing is added to it
@@ -178,13 +230,13 @@ func (s *windowsService) plan() []defChange {
 	case !ok:
 		w.Action, w.Detail = defCreate, "starts the supervisor again when it has died"
 	case !watchdogTaskCurrent(x, s.o):
-		w.Action = defReplace
+		w.Action, w.installed = defReplace, x
 	}
 	return append(out, w)
 }
 
-func (s *windowsService) migrate() ([]defChange, error) {
-	changes := s.plan()
+func (s *windowsService) migrate(replace bool) ([]defChange, error) {
+	changes := s.plan(replace)
 	for _, c := range changes {
 		if c.pending() {
 			if err := registerWindowsTaskXML(strings.TrimPrefix(c.ID, taskDefPrefix), c.body); err != nil {
@@ -382,10 +434,11 @@ func (s *launchdService) stop() error {
 
 func (s *launchdService) start() error { return launchctlLoad(s.title(), s.path) }
 
-func (s *launchdService) plan() []defChange {
+func (s *launchdService) plan(replace bool) []defChange {
 	c := defChange{ID: fileDefPrefix + s.path, Title: "Daemon " + s.title(), body: launchdSupervisorPlist(s.o)}
 	b, _ := os.ReadFile(s.path)
 	have := string(b)
+	c.installed = have
 	known := map[string]bool{}
 	for _, m := range plistKey.FindAllStringSubmatch(c.body, -1) {
 		known[m[1]] = true
@@ -405,11 +458,14 @@ func (s *launchdService) plan() []defChange {
 	default:
 		c.Action = defReplace
 	}
+	if replace {
+		return replaceEdited([]defChange{c})
+	}
 	return []defChange{c}
 }
 
-func (s *launchdService) migrate() ([]defChange, error) {
-	changes := s.plan()
+func (s *launchdService) migrate(replace bool) ([]defChange, error) {
+	changes := s.plan(replace)
 	for _, c := range changes {
 		if c.pending() {
 			if err := writeDefinitionFile(s.path, c.body); err != nil {
