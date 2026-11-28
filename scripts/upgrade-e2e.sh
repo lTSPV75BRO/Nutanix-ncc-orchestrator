@@ -109,6 +109,15 @@ helper_running() {
   if [ "$os" = windows ]; then tasklist //FI "IMAGENAME eq ncc-upgrade-helper.exe" | grep -q ncc-upgrade-helper
   else pgrep -f 'helper/ncc-upgrade-helper upgrade-helper' >/dev/null; fi
 }
+# The helper writes "done" and then exits: give it up to 30 s to be gone.
+helper_gone() {
+  local i
+  for i in $(seq 1 30); do
+    helper_running || return 0
+    sleep 1
+  done
+  return 1
+}
 kill_helper() {
   if [ "$os" = windows ]; then taskkill //F //IM ncc-upgrade-helper.exe
   else pkill -9 -f 'helper/ncc-upgrade-helper upgrade-helper'; fi
@@ -175,7 +184,7 @@ if [ "$os" = linux ] && [ "$manual" = 0 ]; then
   [ "$(systemctl show -p TasksMax --value ncc-orchestrator.service)" = 777 ] || fail "the host's limit does not apply"
   [ -e "$helper_unit.path" ] || fail "the helper has no path unit"
 fi
-helper_running && fail "the helper still runs"
+helper_gone || fail "the helper still runs 30 s after the upgrade finished"
 if [ "$os" = windows ] && [ "$manual" = 0 ]; then
   task="$(schtasks //Query //TN ncc-orchestrator-upgrade //XML)" || fail "the helper has no task"
   [[ "$task" == *"<BootTrigger"* ]] || fail "the helper's task does not start at boot: $task"
