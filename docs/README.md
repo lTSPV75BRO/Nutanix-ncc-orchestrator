@@ -8,7 +8,7 @@ Orchestrator. If you are new, start with the
 
 | Guide | What it covers |
 | --- | --- |
-| [Setup guides](setup/README.md) | Clusters, sign-in (LDAP, OIDC, SAML), HTTPS, notifications, schedules and backups, integrations |
+| [Setup guides](setup/README.md) | Clusters, sign-in (LDAP, OIDC, SAML), HTTPS, notifications, schedules and backups, upgrades without internet access, integrations |
 | [Configuration reference](FEATURES_AND_CONFIG_FLAGS.md) | Every config key, environment variable and flag |
 | [Kubernetes](../k8s/README.md), [Helm chart](../helm/ncc-orchestrator/README.md) | Manifests, chart values, runbook |
 | [VM provisioning](../deploy/README.md) | cloud-init and Windows Sysprep |

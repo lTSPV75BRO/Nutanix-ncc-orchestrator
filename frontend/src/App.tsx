@@ -14,6 +14,7 @@ import {
 } from "@ant-design/icons";
 import { Alert, Button, Dropdown, Tooltip } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { UpdateBanner } from "./features/updates/UpdateBanner";
 import { Navigate, Route, Routes, useLocation } from "react-router";
 import { AppShell } from "./components/AppShell";
 import { DataLoader } from "./components/DataLoader";
@@ -729,6 +730,7 @@ export default function App() {
     <AuthContext.Provider value={authValue}>
     <AppShell
       viewer={viewer}
+      notice={appReady && isAdmin ? <UpdateBanner /> : null}
       brand={
         <BrandVersionTag
           version={healthRecord?.version}

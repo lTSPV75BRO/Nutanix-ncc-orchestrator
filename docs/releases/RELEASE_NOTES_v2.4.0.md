@@ -313,6 +313,22 @@ Opening title**. Installs that saved that switch keep their choice. The
 sign-in page has lighter headings, even spacing and shorter copy, with the
 same layout and flowing wave.
 
+## Update banner
+
+Admins see **Version X is available** above every page, with a link to
+**Updates & backups**. Close it and it stays away until a newer version comes
+out. The API server asks GitHub at most once a day and keeps the answer on
+disk, so neither page loads nor restarts add lookups. Turn it off with
+**Settings → Features → Update checks**.
+
+## More guides in Integrations
+
+**Integrations** has a new **Sign-in** category with guides for Active
+Directory / LDAP, OpenID Connect, SAML and cluster access by team. The OpenID
+Connect and SAML guides fill in this dashboard's redirect URI and SAML
+addresses. A new **Upgrades** guide covers servers without internet access;
+the same steps are in [`docs/setup/OFFLINE_UPGRADES.md`](../setup/OFFLINE_UPGRADES.md).
+
 ## Fixes from environment testing
 
 A pass on a multi-node Kubernetes cluster and a Rocky Linux host with SELinux

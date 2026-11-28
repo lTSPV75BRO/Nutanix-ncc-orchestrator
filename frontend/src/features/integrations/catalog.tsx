@@ -2,20 +2,26 @@
 // used the tool before. Every endpoint, header and metric named here exists in
 // the API server; the third-party side (ServiceNow tables, Splunk inputs, …)
 // is an example to adapt and says so. Snippets use {{API}} (the API server's
-// base URL), {{HOST}} and {{SCHEME}}, filled in from the page's address field.
+// base URL), {{HOST}} and {{SCHEME}}, filled in from the page's address field,
+// and {{DASHBOARD}}, this page's own address (sign-in URLs).
 import type { ReactNode } from "react";
 import {
   BellOutlined,
+  CloudDownloadOutlined,
+  ClusterOutlined,
   CodeOutlined,
   FileSearchOutlined,
   LineChartOutlined,
+  LoginOutlined,
   RobotOutlined,
+  SafetyCertificateOutlined,
+  TeamOutlined,
   ToolOutlined,
 } from "@ant-design/icons";
 
-export type IntegrationCategory = "Ticketing" | "Monitoring" | "Logs & security" | "Chat & email" | "AI assistants" | "Scripts";
+export type IntegrationCategory = "Ticketing" | "Monitoring" | "Logs & security" | "Chat & email" | "AI assistants" | "Scripts" | "Sign-in" | "Upgrades";
 
-export const CATEGORIES: IntegrationCategory[] = ["Ticketing", "Monitoring", "Logs & security", "Chat & email", "AI assistants", "Scripts"];
+export const CATEGORIES: IntegrationCategory[] = ["Ticketing", "Monitoring", "Logs & security", "Chat & email", "AI assistants", "Scripts", "Sign-in", "Upgrades"];
 
 export type Snippet = {
   /** What the snippet is, e.g. "prometheus.yml". */
@@ -26,7 +32,7 @@ export type Snippet = {
 };
 
 /** In-app shortcut a step offers. */
-export type StepAction = "access" | "token" | "notifications" | "test" | "developer";
+export type StepAction = "access" | "signin" | "groups" | "https" | "updates" | "features" | "token" | "notifications" | "test" | "developer";
 
 export type Step = {
   id: string;
@@ -141,6 +147,16 @@ export const TERMS: Record<string, { term: string; meaning: string }> = {
     term: "MCP",
     meaning:
       "Model Context Protocol: a standard way for AI assistants (Claude Desktop, Cursor, VS Code and others) to use tools. The NCC MCP server lets the assistant read results and, if you allow it, start runs.",
+  },
+  groupMapping: {
+    term: "Group mapping",
+    meaning:
+      "A list of which directory or SSO group gives which NCC role (viewer, operator or admin). The highest role a person matches wins; anyone who matches no group gets the default role.",
+  },
+  redirect: {
+    term: "Redirect URI",
+    meaning:
+      "The address on this dashboard where the identity provider sends people back after they sign in. It must be registered in the provider exactly as NCC shows it, including https, host and port.",
   },
   openapi: {
     term: "OpenAPI",
@@ -871,6 +887,476 @@ What changed between the last two runs?`,
       },
     ],
   },
+  {
+    id: "ldap",
+    name: "Active Directory / LDAP",
+    alsoFor: "OpenLDAP, FreeIPA and other LDAP directories",
+    category: "Sign-in",
+    icon: <TeamOutlined />,
+    summary: "People sign in with their usual Windows username and password, and get their role from their AD groups.",
+    youGet: [
+      "One password for people: the one they already use for Windows.",
+      "Roles from AD groups, so joining or leaving a team changes access.",
+      "Several domains or forests, each with its own directory settings.",
+    ],
+    youNeed: [
+      "An NCC admin",
+      "A domain controller address, ideally LDAPS (port 636)",
+      "A read-only service account (its DN and password)",
+      "The DNs of the groups that should map to roles",
+    ],
+    time: "About 15 minutes",
+    level: "Moderate",
+    direction: "NCC asks your domain controllers to check each sign-in; nothing needs to reach NCC.",
+    role: "none",
+    terms: ["groupMapping"],
+    doc: "docs/setup/SIGN_IN.md#active-directory--ldap",
+    steps: [
+      {
+        id: "details",
+        title: "Get the directory details",
+        where: "From your AD team",
+        body: (
+          <>
+            <p>
+              Ask for a domain controller address (LDAPS if possible, for example <code>ldaps://dc1.corp.example.com:636</code>; add a second one
+              after a comma for failover), a read-only <b>service account</b> used only to look people up, the <b>base DN</b> to search, and the
+              DNs of the groups that should become NCC roles.
+            </p>
+            <p className="integration-hint">If the domain controller uses an internal certificate authority, ask for its CA certificate (PEM) too.</p>
+          </>
+        ),
+      },
+      {
+        id: "configure",
+        title: "Fill in the directory",
+        where: "In NCC Orchestrator (admin)",
+        action: "signin",
+        body: (
+          <>
+            <p>
+              Open <b>Settings → Access → Sign-in</b>, choose the provider <b>LDAP / Active Directory</b> and turn on <b>Enable LDAP/AD login</b>.
+              Fill in the server URLs, the service account and its password, the base DN, and one <b>group → role</b> line per group.
+            </p>
+            <p className="integration-hint">
+              For Active Directory leave <b>User filter</b>, <b>Username attribute</b> and <b>Group attribute</b> empty: the defaults fit. With
+              plain <code>ldap://</code>, turn on <b>StartTLS</b> so passwords are not sent in clear text.
+            </p>
+          </>
+        ),
+        snippets: [
+          {
+            label: "Group → role mapping (one per line)",
+            code: "CN=NCC-Admins,OU=Groups,DC=corp,DC=example,DC=com=admin\nCN=NCC-Operators,OU=Groups,DC=corp,DC=example,DC=com=operator\nNCC-Viewers=viewer",
+            note: "A full DN or just the group's CN; the highest role a person matches wins.",
+          },
+        ],
+      },
+      {
+        id: "test",
+        title: "Test with a real account, then save",
+        where: "In NCC Orchestrator (admin)",
+        body: (
+          <p>
+            Click <b>Test connection…</b> and sign in as a real AD user. The result shows whether the lookup worked, the groups found and the role
+            the person would get. Then <b>Save LDAP configuration</b>: it applies right away, with no restart.
+          </p>
+        ),
+      },
+      {
+        id: "forests",
+        title: "More than one domain or forest",
+        where: "In NCC Orchestrator (admin)",
+        optional: true,
+        body: (
+          <p>
+            For child domains in one forest, point the server URL at a Global Catalog (<code>ldaps://gc.corp.example.com:3269</code>) and set{" "}
+            <b>Username attribute</b> to <code>userPrincipalName</code>. For separate forests, use <b>Other domains or forests → Add directory</b>{" "}
+            and give each one its UPN suffixes (<code>emea.corp.example.com</code>) and NetBIOS domain (<code>EMEA</code>).
+          </p>
+        ),
+      },
+      {
+        id: "check",
+        title: "Check it from a private window",
+        where: "In a browser",
+        body: (
+          <p>
+            Sign in as one person from each mapped group and check the role in the user menu (top right). Keep the local <code>admin</code>{" "}
+            account: it still works when the directory is down. Every sign-in and failure is in <b>System → Audit log</b>.
+          </p>
+        ),
+      },
+    ],
+  },
+  {
+    id: "oidc",
+    name: "OpenID Connect (SSO)",
+    alsoFor: "Microsoft Entra ID, Okta, Google Workspace, Keycloak, Auth0, Ping, ADFS 2019+",
+    category: "Sign-in",
+    icon: <LoginOutlined />,
+    summary: "A “Sign in with …” button that uses your company's identity provider, with its MFA and Conditional Access rules.",
+    youGet: [
+      "Single sign-on, with the provider's MFA.",
+      "Roles from the provider's groups.",
+      "People outside the mapped groups can be refused.",
+    ],
+    youNeed: ["An NCC admin", "Someone who can register an app in your identity provider", "The address people use for this dashboard"],
+    time: "About 15 minutes",
+    level: "Moderate",
+    direction: "People's browsers go to your provider and come back to NCC; NCC reads the provider's public keys over HTTPS.",
+    role: "none",
+    terms: ["redirect", "groupMapping"],
+    doc: "docs/setup/SIGN_IN.md#openid-connect",
+    steps: [
+      {
+        id: "redirect",
+        title: "Copy the redirect URI",
+        where: "In NCC Orchestrator (admin)",
+        action: "signin",
+        body: (
+          <p>
+            Open this dashboard at the address people will use. In <b>Settings → Access → Sign-in</b>, choose <b>OpenID Connect</b> and check{" "}
+            <b>Dashboard URL</b>; the box at the top shows the redirect URI. For this page it is:
+          </p>
+        ),
+        snippets: [{ label: "Redirect URI", code: "{{DASHBOARD}}/api/v1/auth/oidc/callback", note: "It must match exactly in the provider: scheme, host, port and path." }],
+      },
+      {
+        id: "register",
+        title: "Register a web application",
+        where: "In your identity provider",
+        body: (
+          <>
+            <p>
+              Create a <b>web application</b> (not a single-page or native app), add the redirect URI, and turn on a <b>groups</b> claim in the ID
+              token. Note the <b>issuer URL</b>, the <b>client ID</b> and a <b>client secret</b>.
+            </p>
+            <ul className="integration-list">
+              <li>
+                <b>Entra ID:</b> App registrations → New registration, platform Web. Token configuration → Add groups claim. Issuer{" "}
+                <code>https://login.microsoftonline.com/&lt;tenant-id&gt;/v2.0</code>. Entra sends group object IDs, so map those.
+              </li>
+              <li>
+                <b>Okta:</b> Create App Integration → OIDC, Web Application. Groups claim <code>groups</code>, filter Starts with <code>ncc-</code>.
+                Issuer <code>https://&lt;your-org&gt;.okta.com</code>.
+              </li>
+              <li>
+                <b>Google Workspace:</b> OAuth client ID, Web application, issuer <code>https://accounts.google.com</code>. Google sends no groups,
+                so everyone gets the default role.
+              </li>
+              <li>
+                <b>Keycloak:</b> Clients → Create client, client authentication on; mapper Group Membership, claim <code>groups</code>. Issuer{" "}
+                <code>https://&lt;host&gt;/realms/&lt;realm&gt;</code>.
+              </li>
+            </ul>
+          </>
+        ),
+      },
+      {
+        id: "configure",
+        title: "Turn it on in NCC",
+        where: "In NCC Orchestrator (admin)",
+        action: "signin",
+        body: (
+          <p>
+            Turn on <b>Enable OpenID Connect sign-in</b>, paste the issuer URL, client ID and client secret, and click <b>Test discovery</b>. Add
+            the role mapping, pick <b>Role when no group matches</b> (<code>viewer</code>, or <code>none</code> to refuse everyone else), name the
+            button, and save.
+          </p>
+        ),
+        snippets: [{ label: "Role mapping", code: "ncc-admins=admin,ncc-ops=operator", note: "group=role pairs, comma-separated. For Entra ID use the group object IDs." }],
+      },
+      {
+        id: "check",
+        title: "Sign in from a private window",
+        where: "In a browser",
+        body: (
+          <p>
+            The sign-in page now has <b>Sign in with …</b>. Try one person from each mapped group and check the role in the user menu. Keep a local
+            admin account for when the provider is down.
+          </p>
+        ),
+      },
+    ],
+  },
+  {
+    id: "saml",
+    name: "SAML single sign-on",
+    alsoFor: "Microsoft Entra ID, Okta, ADFS and other SAML 2.0 providers",
+    category: "Sign-in",
+    icon: <SafetyCertificateOutlined />,
+    summary: "Single sign-on through a SAML 2.0 provider, for identity teams that prefer SAML or have no OpenID Connect.",
+    youGet: ["Single sign-on with the provider's MFA.", "Roles from a group attribute.", "Optional sign-in from the provider's app portal."],
+    youNeed: [
+      "An NCC admin",
+      "Someone who can create a SAML app in your identity provider",
+      "The dashboard on HTTPS, at the address people use",
+    ],
+    time: "About 20 minutes",
+    level: "Advanced",
+    direction: "People's browsers carry a signed message from your provider to NCC; NCC can fetch the provider's metadata over HTTPS.",
+    role: "none",
+    terms: ["groupMapping"],
+    doc: "docs/setup/SIGN_IN.md#saml",
+    steps: [
+      {
+        id: "https",
+        title: "Check the dashboard is on HTTPS",
+        where: "In NCC Orchestrator (admin)",
+        action: "https",
+        body: (
+          <p>
+            SAML needs HTTPS, which is the default. For production, install a certificate your browsers trust under <b>Settings → Access → HTTPS</b>
+            , and open the dashboard at the address people will use.
+          </p>
+        ),
+      },
+      {
+        id: "idp",
+        title: "Create a SAML application",
+        where: "In your identity provider",
+        body: (
+          <>
+            <p>
+              Use the values below. Set the NameID to the username (for example <code>user.userprincipalname</code> or the email), and send the
+              user's groups in an attribute.
+            </p>
+            <ul className="integration-list">
+              <li>
+                <b>Entra ID:</b> Enterprise applications → Create your own → non-gallery, Single sign-on → SAML. Add a group claim (security
+                groups); its attribute name is the long <code>…/claims/groups</code> URL and the values are object IDs.
+              </li>
+              <li>
+                <b>Okta:</b> Create App Integration → SAML 2.0. Group attribute statement named <code>groups</code>.
+              </li>
+              <li>
+                <b>ADFS:</b> Add Relying Party Trust; send UPN as Name ID and group membership as the <code>Role</code> claim.
+              </li>
+            </ul>
+          </>
+        ),
+        snippets: [
+          { label: "Entity ID / Identifier / Audience", code: "{{DASHBOARD}}/saml/metadata" },
+          { label: "Reply URL / ACS URL", code: "{{DASHBOARD}}/saml/acs" },
+          { label: "Sign-on URL (optional)", code: "{{DASHBOARD}}/saml/login" },
+        ],
+      },
+      {
+        id: "configure",
+        title: "Turn it on in NCC",
+        where: "In NCC Orchestrator (admin)",
+        action: "signin",
+        body: (
+          <p>
+            In <b>Settings → Access → Sign-in</b>, choose <b>SAML single sign-on</b> and turn on <b>Enable SAML SSO</b>. Set <b>Server root URL</b>{" "}
+            to the dashboard address, paste the provider's metadata URL (or its XML), set <b>Role/group attribute</b> to the attribute's exact name,
+            add the role mapping and save. NCC creates its own signing key and shows its SP metadata URL, if the provider wants to import it.
+          </p>
+        ),
+        snippets: [{ label: "Role mapping", code: "ncc-admins=admin,ncc-ops=operator", note: "value=role pairs. Entra ID sends group object IDs." }],
+      },
+      {
+        id: "check",
+        title: "Sign in from a private window",
+        where: "In a browser",
+        body: (
+          <p>
+            Use <b>Sign in with SAML</b> on the sign-in page and check the role in the user menu. Leave <b>Allow IdP-initiated login</b> off unless
+            people must start from the provider's portal. Keep a local admin account for when the provider is down.
+          </p>
+        ),
+      },
+    ],
+  },
+  {
+    id: "cluster-groups",
+    name: "Cluster access by team",
+    alsoFor: "Uses local accounts, AD groups and SSO groups",
+    category: "Sign-in",
+    icon: <ClusterOutlined />,
+    summary: "Show each team only its own clusters, using the same groups people already sign in with.",
+    youGet: ["Each team sees and acts on only its clusters.", "Prism Central members join automatically.", "Admins still see everything."],
+    youNeed: ["An NCC admin", "Sign-in set up for the teams (local, AD, OpenID Connect or SAML)"],
+    time: "About 10 minutes",
+    level: "Easy",
+    direction: "Inside NCC only.",
+    role: "none",
+    terms: ["groupMapping"],
+    doc: "docs/setup/SIGN_IN.md#limit-people-to-some-clusters",
+    steps: [
+      {
+        id: "group",
+        title: "Add a cluster group",
+        where: "In NCC Orchestrator (admin)",
+        action: "groups",
+        body: (
+          <p>
+            Open <b>Settings → Access → Cluster groups</b>, add a group (for example <code>Platform</code>) and pick its clusters. Adding a Prism
+            Central adds every cluster under it, now and later.
+          </p>
+        ),
+      },
+      {
+        id: "members",
+        title: "Add the team",
+        where: "In NCC Orchestrator (admin)",
+        action: "groups",
+        body: (
+          <p>
+            Add members: local accounts, AD users or groups (users of other forests by UPN, groups by full DN), and SSO groups. Someone in one or
+            more groups sees only those groups' clusters; someone in no group still sees everything.
+          </p>
+        ),
+      },
+      {
+        id: "check",
+        title: "Check what a member sees",
+        where: "In a browser",
+        body: <p>Sign in as a member from a private window: Overview, Findings and Runs show only the group's clusters.</p>,
+      },
+    ],
+  },
+  {
+    id: "offline-upgrades",
+    name: "Upgrades without internet access",
+    alsoFor: "Dark sites, air-gapped networks, Kubernetes with an internal registry",
+    category: "Upgrades",
+    icon: <CloudDownloadOutlined />,
+    summary: "Carry a release in on a USB drive or through a jump host; the update helper checks it and installs it with the same backup and automatic rollback.",
+    youGet: [
+      "Upgrades on servers that can't reach GitHub or Docker Hub.",
+      "The release signature and checksums checked on the server before anything changes.",
+      "A backup first, automatic rollback if the new version is unhealthy, and Roll back for 24 hours.",
+    ],
+    youNeed: [
+      "A machine with internet access",
+      "A way to move files to the server (USB, SCP, file share)",
+      "root (Linux) or an Administrator prompt (Windows) on the server",
+      "Version 2.4.0 or later on the server",
+    ],
+    time: "About 20 minutes",
+    level: "Moderate",
+    direction: "Files move by hand from a connected machine to the server; the server contacts nothing.",
+    role: "none",
+    terms: [],
+    doc: "docs/setup/OFFLINE_UPGRADES.md",
+    steps: [
+      {
+        id: "download",
+        title: "Download the release",
+        where: "On a machine with internet access",
+        body: (
+          <>
+            <p>
+              From the release page, download four files into one folder and keep their names: the stack archive for the server's platform,{" "}
+              <code>checksums.txt</code>, <code>checksums.txt.sig</code> and <code>upgrade-manifest.json</code>.
+            </p>
+            <p className="integration-hint">
+              Linux x86-64: <code>ncc-v2-stack-linux-amd64.tar.gz</code>. Windows x86-64: <code>ncc-v2-stack-windows-amd64.zip</code>. ARM64 and
+              macOS archives are on the same page.
+            </p>
+          </>
+        ),
+        snippets: [
+          {
+            label: "With the GitHub CLI",
+            code: "gh release download v2.4.0 -R lTSPV75BRO/Nutanix-ncc-orchestrator -D ncc-upgrade \\\n  -p ncc-v2-stack-linux-amd64.tar.gz -p checksums.txt -p checksums.txt.sig -p upgrade-manifest.json",
+            note: "Replace the version and the archive name.",
+          },
+        ],
+      },
+      {
+        id: "verify",
+        title: "Check the files",
+        where: "On the connected machine",
+        optional: true,
+        body: <p>The server checks everything again, so this is optional: it catches a bad download before you carry it across.</p>,
+        snippets: [
+          {
+            label: "Checksums and attestation",
+            code: "cd ncc-upgrade\nsha256sum -c --ignore-missing checksums.txt\ngh attestation verify ncc-v2-stack-linux-amd64.tar.gz -R lTSPV75BRO/Nutanix-ncc-orchestrator",
+          },
+        ],
+      },
+      {
+        id: "copy",
+        title: "Copy the folder to the server",
+        where: "Your transfer method",
+        body: (
+          <p>
+            Put all four files in one folder on the server, for example <code>/var/tmp/ncc-upgrade</code> or <code>C:\ncc-upgrade</code>. The
+            helper looks for the checksums, signature and manifest next to the archive.
+          </p>
+        ),
+      },
+      {
+        id: "install",
+        title: "Install with --bundle",
+        where: "On the server, as root or Administrator",
+        body: (
+          <p>
+            Run <code>ncc-orchestrator</code> from the install folder. It checks the signature, the checksum and the upgrade rules, takes a
+            backup, then hands over to the update helper, which replaces everything and starts the new version. If the new version is not healthy,
+            the previous one comes back by itself. The dashboard can't install a carried-in release.
+          </p>
+        ),
+        snippets: [
+          { label: "Linux", code: "sudo /opt/ncc/ncc-orchestrator upgrade --bundle /var/tmp/ncc-upgrade/ncc-v2-stack-linux-amd64.tar.gz" },
+          { label: "Windows (Administrator PowerShell)", code: "C:\\ncc\\ncc-orchestrator.exe upgrade --bundle C:\\ncc-upgrade\\ncc-v2-stack-windows-amd64.zip" },
+        ],
+      },
+      {
+        id: "check",
+        title: "Check, or roll back",
+        where: "On the server",
+        action: "updates",
+        body: (
+          <p>
+            <b>System → Updates &amp; backups</b> shows the new version and the upgrade's steps. For 24 hours the previous version is kept, and
+            rolling back needs no internet access either.
+          </p>
+        ),
+        snippets: [{ label: "Status and rollback", code: "sudo /opt/ncc/ncc-orchestrator upgrade --status\nsudo /opt/ncc/ncc-orchestrator upgrade --rollback" }],
+      },
+      {
+        id: "features",
+        title: "Stop the server looking for updates",
+        where: "In NCC Orchestrator (admin)",
+        optional: true,
+        action: "features",
+        body: (
+          <p>
+            A server without internet access can only fail to reach GitHub. Turn off <b>Settings → Features → Update checks</b>; carried-in
+            upgrades still work.
+          </p>
+        ),
+      },
+      {
+        id: "kubernetes",
+        title: "Kubernetes: mirror the images",
+        where: "On a machine that reaches both registries",
+        optional: true,
+        body: (
+          <p>
+            Copy the three NCC images and <code>busybox:1.37</code> to your internal registry, take the chart from the release's source code
+            archive, and run <code>helm upgrade</code> with every image pointed at your registry. The pre-upgrade checks run inside the cluster.
+            The nodes must already be able to pull from the internal registry.
+          </p>
+        ),
+        snippets: [
+          {
+            label: "Mirror with skopeo",
+            code: "V=2.4.0; REG=registry.internal.example.com/ncc\nfor i in nutanix-ncc-orchestrator ncc-api-server ncc-ui-server; do\n  skopeo copy --all docker://docker.io/prajwalnutant/$i:$V docker://$REG/$i:$V\ndone\nskopeo copy --all docker://docker.io/library/busybox:1.37 docker://$REG/busybox:1.37",
+          },
+          {
+            label: "helm upgrade",
+            code: "helm upgrade ncc ./helm/ncc-orchestrator --reuse-values \\\n  --set images.runner.repository=$REG/nutanix-ncc-orchestrator --set images.runner.tag=$V \\\n  --set image.repository=$REG/nutanix-ncc-orchestrator --set image.tag=$V \\\n  --set images.api.repository=$REG/ncc-api-server --set images.api.tag=$V \\\n  --set images.ui.repository=$REG/ncc-ui-server --set images.ui.tag=$V \\\n  --set initImage=$REG/busybox:1.37",
+          },
+        ],
+      },
+    ],
+  },
 ];
 
 export function integrationById(id: string | undefined): Integration | undefined {
@@ -899,6 +1385,23 @@ export function defaultApiAddress(loc: { protocol: string; hostname: string }): 
   return `${loc.protocol}//${loc.hostname}:8081`;
 }
 
-export function fillSnippet(code: string, addr: ApiAddress): string {
-  return code.split("{{API}}").join(addr.api).split("{{HOST}}").join(addr.host).split("{{SCHEME}}").join(addr.scheme);
+/**
+ * Fills {{API}}, {{HOST}} and {{SCHEME}} from the API address, and
+ * {{DASHBOARD}} (sign-in URLs) from this page's own address.
+ */
+export function fillSnippet(code: string, addr: ApiAddress, dashboard = dashboardOrigin()): string {
+  return code
+    .split("{{API}}")
+    .join(addr.api)
+    .split("{{HOST}}")
+    .join(addr.host)
+    .split("{{SCHEME}}")
+    .join(addr.scheme)
+    .split("{{DASHBOARD}}")
+    .join(dashboard);
+}
+
+/** The address people opened this dashboard at, e.g. https://ncc.example.com. */
+export function dashboardOrigin(): string {
+  return typeof window !== "undefined" && window.location?.origin ? window.location.origin : "https://ncc.example.com";
 }

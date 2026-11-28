@@ -255,6 +255,8 @@ type apiServer struct {
 	updateCheckAt        time.Time
 	updateCheckAvailable bool
 	updateLatestVersion  string
+	// Daily cached release lookup behind the update banner (updatenotice.go).
+	updateNotice updateNoticeState
 	// Run-duration accumulator (sum is milliseconds to stay integer-atomic;
 	// exposed as ncc_run_duration_seconds_{sum,count} so Prometheus can derive
 	// rate()/avg over time, and the avg backs the UI queue-ETA estimate).
@@ -895,6 +897,7 @@ func (s *apiServer) buildHandler() http.Handler {
 	mux.HandleFunc("/api/v1/settings/backups/download", s.handleBackupDownloadNamed)
 	mux.HandleFunc("/api/v1/settings/update", s.handleUpdateCheck)
 	mux.HandleFunc("/api/v1/settings/update/apply", s.handleUpdateApply)
+	mux.HandleFunc("/api/v1/settings/update/notice", s.handleUpdateNotice)
 	mux.HandleFunc("/api/v1/settings/update/plan", s.handleUpdatePlan)
 	mux.HandleFunc("/api/v1/settings/update/rollback", s.handleUpdateRollback)
 	mux.HandleFunc("/api/v1/settings/config", s.handleConfig)

@@ -462,6 +462,7 @@ const gets: Record<string, Handler> = {
     total_bytes: 0,
   }),
   "/api/v1/settings/update": () => fx.UPDATE_STATUS,
+  "/api/v1/settings/update/notice": () => ({ current_version: fx.UPDATE_STATUS.current_version, update_available: false }),
   "/api/v1/settings/update/plan": () => ({ current_version: fx.UPDATE_STATUS.current_version, up_to_date: true, helper: "ready", kind: "systemd", service: "systemd service ncc-orchestrator.service" }),
   "/api/v1/settings/sso": () => ({ enabled: false }),
   "/api/v1/settings/oidc": () => ({ enabled: false }),

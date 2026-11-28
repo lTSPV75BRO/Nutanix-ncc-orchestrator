@@ -62,6 +62,7 @@ export function AppShell({
   viewer,
   brand,
   actions,
+  notice,
   children,
 }: {
   viewer: Viewer;
@@ -69,6 +70,8 @@ export function AppShell({
   brand?: ReactNode;
   /** Right side of the top bar. */
   actions?: ReactNode;
+  /** Above every page, under the top bar (the update banner). */
+  notice?: ReactNode;
   children: ReactNode;
 }) {
   const location = useLocation();
@@ -162,6 +165,7 @@ export function AppShell({
           <div className="ui-topbar-actions">{actions}</div>
         </header>
         <main className="ui-content" id="main-content" tabIndex={-1}>
+          {notice}
           <PageErrorBoundary key={location.pathname}>{children}</PageErrorBoundary>
         </main>
       </div>

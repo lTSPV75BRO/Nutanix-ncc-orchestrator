@@ -61,6 +61,7 @@ import type {
   TLSPolicy,
   PublicTLSInfo,
   TLSApplyResult,
+  UpdateNotice,
   UpdateStatus,
   UpgradePlan,
   UpdateJob,
@@ -689,6 +690,7 @@ export const api = {
   disableTLS: () => callApi<TLSApplyResult>("/api/v1/settings/tls", { method: "DELETE" }),
   updateStatus: () => callApi<UpdateStatus>("/api/v1/settings/update"),
   checkUpdate: () => callApi<UpdateStatus>("/api/v1/settings/update?check=1"),
+  updateNotice: () => callApi<UpdateNotice>("/api/v1/settings/update/notice"),
   applyUpdate: (payload?: { target_version?: string; replace_edited?: boolean }) =>
     callApiEnvelope<UpdateJob>("/api/v1/settings/update/apply", {
       method: "POST",

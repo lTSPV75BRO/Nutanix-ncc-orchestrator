@@ -126,3 +126,8 @@ Every option: [`FEATURES_AND_CONFIG_FLAGS.md` §6.14a](../FEATURES_AND_CONFIG_FL
 it: it takes a backup, installs the checksum-verified release and restarts.
 **Rollback last update** goes back to the previous version. On Kubernetes,
 update the image tags with Helm or Kustomize instead.
+
+When a new release is out, admins see **Version X is available** above every
+page. The server checks at most once a day; close the banner to hide it until
+the next version. Servers without internet access:
+[Upgrade without internet access](OFFLINE_UPGRADES.md).

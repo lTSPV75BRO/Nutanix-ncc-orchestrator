@@ -204,6 +204,16 @@ export type UpdateJob = {
   finished_at?: string;
 };
 
+/** GET /api/v1/settings/update/notice: the update banner, from a lookup cached for a day. */
+export type UpdateNotice = {
+  current_version: string;
+  latest_version?: string;
+  update_available: boolean;
+  checked_at?: string;
+  /** Settings → Features "Update checks" is off. */
+  disabled?: boolean;
+};
+
 /** Result of GET /api/v1/settings/update (version check + current job). */
 export type UpdateStatus = {
   current_version: string;

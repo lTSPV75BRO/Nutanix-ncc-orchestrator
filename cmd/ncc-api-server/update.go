@@ -194,6 +194,8 @@ func (s *apiServer) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 			avail, _ := data["update_available"].(bool)
 			latest, _ := data["latest_version"].(string)
 			s.setUpdateCheck(avail, latest)
+			// A manual check also counts as the banner's daily lookup.
+			s.recordUpdateNotice(updateNoticeFromCheck(data))
 		}
 	}
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: data})

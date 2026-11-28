@@ -278,7 +278,7 @@ Metrics: `new-fails`, `resolved-fails`, `fail-rate`, `clusters-failed`, `regress
 
 The sidebar has three groups.
 
-- **Overview, Findings, Insights, Integrations, Runs.** Overview shows the latest run at a glance. Findings lists NCC results and, optionally, live Prism Central alerts; filters live in the URL, so **Copy link** shares the exact view. Open an NCC finding to acknowledge, resolve or reopen it and to see its history: how long it has been open, when a run last reported it, and how often it came back. Insights covers trends, regressions, flaky checks, run-to-run diffs, alert aging and the triage queue. Integrations has step-by-step guides for connecting ServiceNow, Prometheus & Grafana, Splunk/Elastic, Slack/email/webhooks, AI assistants and scripts. Runs starts, follows and cancels runs and keeps their history.
+- **Overview, Findings, Insights, Integrations, Runs.** Overview shows the latest run at a glance. Findings lists NCC results and, optionally, live Prism Central alerts; filters live in the URL, so **Copy link** shares the exact view. Open an NCC finding to acknowledge, resolve or reopen it and to see its history: how long it has been open, when a run last reported it, and how often it came back. Insights covers trends, regressions, flaky checks, run-to-run diffs, alert aging and the triage queue. Integrations has step-by-step guides for connecting ServiceNow, Prometheus & Grafana, Splunk/Elastic, Slack/email/webhooks, AI assistants and scripts, for sign-in with Active Directory / LDAP, OpenID Connect and SAML, and for upgrades without internet access. Runs starts, follows and cancels runs and keeps their history.
 - **Settings:** Clusters & config (form or YAML), Schedule, Notifications, Access (users, sign-in with LDAP/AD, OpenID Connect or SAML, cluster groups, API tokens, HTTPS) and Features.
 - **System:** Status, Health & repair, Updates & backups, Logs, Audit log and Developer (API explorer, saved reports, run files).
 
@@ -472,7 +472,7 @@ Results, measurements and what is still open: [`docs/audit/`](docs/audit/README.
 | Topic | Document |
 | --- | --- |
 | **All documentation, by audience** | [`docs/README.md`](docs/README.md) |
-| **Setup guides:** clusters, sign-in (AD/LDAP, OpenID Connect, SAML), HTTPS, notifications (email, Slack, webhooks, Teams), schedules and backups, integrations | [`docs/setup/`](docs/setup/README.md) |
+| **Setup guides:** clusters, sign-in (AD/LDAP, OpenID Connect, SAML), HTTPS, notifications (email, Slack, webhooks, Teams), schedules and backups, upgrades without internet access, integrations | [`docs/setup/`](docs/setup/README.md) |
 | Every config key, environment variable, and flag | [`docs/FEATURES_AND_CONFIG_FLAGS.md`](docs/FEATURES_AND_CONFIG_FLAGS.md) |
 | Build everything on a clean machine | [`docs/BUILD_FROM_SCRATCH.md`](docs/BUILD_FROM_SCRATCH.md) |
 | Architecture and engineering handover | [`docs/ARCHITECTURE_AND_HANDOVER.md`](docs/ARCHITECTURE_AND_HANDOVER.md) |

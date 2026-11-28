@@ -2812,6 +2812,10 @@ html[data-theme="it-pro"] {
   color: #fff;
 }
 
+.ui-update-banner {
+  margin-bottom: 16px;
+}
+
 .ui-content:focus {
   outline: none;
 }

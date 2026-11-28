@@ -12,6 +12,7 @@ first, see the [README quick start](../../README.md#quick-start) or the
 | [HTTPS and certificates](HTTPS.md) | Your own certificate, trusting the self-signed one, Kubernetes Ingress |
 | [Notifications](NOTIFICATIONS.md) | Email (Microsoft 365, Gmail, relays), Slack, webhooks, Teams / Google Chat / Discord, quiet hours, delivery status |
 | [Schedule, backups and updates](SCHEDULE_AND_BACKUPS.md) | Scheduled runs on Linux, macOS, Windows and Kubernetes, backup keys, restores, in-app updates |
+| [Upgrade without internet access](OFFLINE_UPGRADES.md) | Dark sites: carry a release in, verify it, `upgrade --bundle`, roll back; Kubernetes with an internal registry |
 | [Other tools](INTEGRATIONS.md) | API tokens, ServiceNow, Prometheus and Grafana, CI/CD policy gates, secrets, AI assistants (MCP) |
 
 ## A typical first day

@@ -391,6 +391,11 @@ function StepAction({ action, onTokens }: { action: Step["action"]; onTokens: ()
       <span className="integration-hint">An admin does this step.</span>
     );
   if (action === "access") return link("access", "Open Access settings");
+  if (action === "signin") return link("access", "Open sign-in settings", { view: "signin" });
+  if (action === "groups") return link("access", "Open cluster groups", { view: "groups" });
+  if (action === "https") return link("access", "Open HTTPS settings", { view: "https" });
+  if (action === "updates") return link("updates", "Open Updates & backups");
+  if (action === "features") return link("features", "Open Features");
   if (action === "notifications") return link("notifications", "Open Notifications");
   if (action === "developer") return link("developer", "Open the API explorer");
   return <span />;

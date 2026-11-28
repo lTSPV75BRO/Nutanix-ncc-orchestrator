@@ -167,6 +167,20 @@ Release candidates: `2.4.0-rc.1` and `2.4.0-rc.2` (fixes `verify --online`), 202
     waits until the API and UI run the new version (`upgradeCheck`). With `--atomic` a
     failed check brings the previous revision back. Kustomize: `k8s/upgrade-check-job.yaml`.
   - Releases publish `upgrade-manifest.json`, listed in the signed checksums.
+- **Update banner.** Admins see "Version X is available" above every page, with a link
+  to Updates & backups. Dismissing it hides it until a newer version comes out. The API
+  server looks the release up at most once a day (an hour after a failed lookup), keeps
+  the result in `.ncc-update-check.json` so restarts don't ask again, and answers
+  `GET /api/v1/settings/update/notice` from it. A manual check counts as that day's
+  lookup. Off with **Settings → Features → Update checks**.
+- **Upgrades without internet access.** New guide
+  [`docs/setup/OFFLINE_UPGRADES.md`](docs/setup/OFFLINE_UPGRADES.md) and an
+  **Integrations** guide in the app: which four files to carry in, checking them,
+  `upgrade --bundle`, rollback, and Kubernetes with an internal registry.
+- **Sign-in guides in Integrations.** Step-by-step guides for Active Directory / LDAP,
+  OpenID Connect, SAML and cluster access by team, under a new **Sign-in** category.
+  The OpenID Connect and SAML guides show this dashboard's redirect URI, entity ID and
+  reply URL, ready to copy into the identity provider.
 - **MCP import and agent skill.** Copy-paste host configs in `examples/mcp/`
   (Cursor, Claude Desktop), `examples/mcp/forward-api.sh` for HTTP APIs behind
   a loopback tunnel, and `skills/ncc-mcp/` (linked from `.cursor/skills/ncc-mcp`)

@@ -4,6 +4,11 @@ NCC Orchestrator has a REST API, a Prometheus endpoint and an event feed, so
 other tools can read results and act on findings. This page gets each one
 started and links to the detailed guide.
 
+The **Integrations** page in the app has the same guides step by step, plus
+guides for [sign-in](SIGN_IN.md) (Active Directory / LDAP, OpenID Connect,
+SAML, cluster access by team) and for
+[upgrades without internet access](OFFLINE_UPGRADES.md).
+
 - [API tokens](#api-tokens) (needed by everything else)
 - [ServiceNow and other ticketing tools](#servicenow-and-other-ticketing-tools)
 - [Prometheus and Grafana](#prometheus-and-grafana)

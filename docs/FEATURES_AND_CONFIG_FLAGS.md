@@ -144,7 +144,7 @@ request with `403` and `error_code: NCC_API_FEATURE_DISABLED`:
 | --- | --------- |
 | `alert_handling` | `POST /api/v1/alerts/ncc-dispositions` and `POST /api/v1/alerts/ncc/{id}/{action}` are refused. Findings has no checkboxes, bulk bar or Acknowledge / Resolve / Reopen; earlier marks and history stay visible. |
 | `self_heal` | `POST /api/v1/health/diagnostics` (apply fixes) is refused; `GET` still runs the checks. System → Health & repair has no Fix buttons. |
-| `update_checks` | `GET /api/v1/settings/update` returns `disabled: true` without contacting the release server; `POST /api/v1/settings/update/apply` is refused. |
+| `update_checks` | `GET /api/v1/settings/update` and `GET /api/v1/settings/update/notice` return `disabled: true` without contacting the release server, and the update banner is hidden; `POST /api/v1/settings/update/apply` is refused. |
 
 **Sign-in:** `intro_title` shows the opening title to everyone. It is off by
 default (since 2.4.0). It is also returned as `intro_title` on the public
@@ -298,8 +298,9 @@ systemd an upgrade does not stop the service while a scheduled run goes on
 | On the host | `ncc-orchestrator upgrade`, `--plan`, `--status`, `--rollback`, `--to VERSION`, `--replace-edited` |
 | `ncc-orchestrator update` | Hands over to `upgrade` when an update helper runs the stack and no `--check`, `--binary-url`, `--skip-checksum-verify`, `--allow-major-upgrade` or other `--repo` is given. Otherwise, or with `--programs-only` or `NCC_UPDATE_PROGRAMS_ONLY=1`, it replaces the programs only and says why; restart the stack afterwards. With rights to the service it saves the previous version first, so `upgrade --rollback` works for 24 hours. |
 | Release manifest | `upgrade-manifest.json` may carry `min_from` (refused below it: "go to vX first") and `downtime_hint` (shown in the plan). Release builds set them with `NCC_UPGRADE_MIN_FROM` and `NCC_UPGRADE_DOWNTIME_HINT`. |
-| Without internet | `ncc-orchestrator upgrade --bundle ncc-v2-stack-<os>-<arch>.tar.gz`, with `checksums.txt` and `checksums.txt.sig` in the same folder |
-| API | `GET /api/v1/settings/update/plan`, `POST /api/v1/settings/update/apply`, `POST /api/v1/settings/update/rollback`; progress in `upgrade` of `GET /api/v1/settings/update` |
+| Without internet | `ncc-orchestrator upgrade --bundle ncc-v2-stack-<os>-<arch>.tar.gz`, with `checksums.txt`, `checksums.txt.sig` and `upgrade-manifest.json` in the same folder; see [`setup/OFFLINE_UPGRADES.md`](setup/OFFLINE_UPGRADES.md) |
+| Update banner | Admins see "Version X is available" until they dismiss it for that version. The API server looks the release up at most once a day (an hour after a failure) and keeps the result in `.ncc-update-check.json` in the data folder; `GET /api/v1/settings/update/notice` answers from it |
+| API | `GET /api/v1/settings/update/notice`, `GET /api/v1/settings/update/plan`, `POST /api/v1/settings/update/apply`, `POST /api/v1/settings/update/rollback`; progress in `upgrade` of `GET /api/v1/settings/update` |
 | After the step from 2.3.x | 2.4.0 installs the helper and brings the service up to its definitions by itself, two minutes after it starts and when no run is going on. `NCC_UPGRADE_ADOPT=0` turns this off; `ncc-orchestrator upgrade-adopt` does it by hand. |
 | Turn the helper off | `NCC_UPGRADE_HELPER=0` for the service: the supervisor upgrades as described below |
 | Logs and state | `logs/upgrade-helper.log`, `run/v2-upgrade-state.json`, and `run/upgrade/` (root or SYSTEM only) |

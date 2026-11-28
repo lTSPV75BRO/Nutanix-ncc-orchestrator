@@ -71,6 +71,32 @@ describe("IntegrationsPage", () => {
     expect(within(scrape).getByText(/scheme: https/)).toBeInTheDocument();
   });
 
+  it("shows the redirect URI for this dashboard in the OpenID Connect guide", () => {
+    renderAt("/integrations/oidc", admin);
+    expect(screen.getByRole("heading", { name: "OpenID Connect (SSO)" })).toBeInTheDocument();
+    const redirect = screen.getByText("Redirect URI", { selector: "figcaption span" }).closest("figure") as HTMLElement;
+    expect(within(redirect).getByText(`${window.location.origin}/api/v1/auth/oidc/callback`)).toBeInTheDocument();
+    const open = screen.getAllByRole("link", { name: /Open sign-in settings/ })[0];
+    expect(open.getAttribute("href")).toContain("view=signin");
+  });
+
+  it("groups the sign-in guides under their own category", () => {
+    renderAt("/integrations");
+    fireEvent.click(screen.getByText("Sign-in", { selector: ".ant-segmented-item-label" }));
+    for (const name of [/^Active Directory \/ LDAP/, /^OpenID Connect/, /^SAML single sign-on/, /^Cluster access by team/]) {
+      expect(screen.getByRole("link", { name })).toBeInTheDocument();
+    }
+    expect(screen.queryByRole("link", { name: /^ServiceNow/ })).not.toBeInTheDocument();
+  });
+
+  it("walks through an upgrade without internet access", () => {
+    renderAt("/integrations/offline-upgrades", admin);
+    expect(screen.getByRole("heading", { name: "Upgrades without internet access" })).toBeInTheDocument();
+    const linux = screen.getByText("Linux", { selector: "figcaption span" }).closest("figure") as HTMLElement;
+    expect(within(linux).getByText(/upgrade --bundle \/var\/tmp\/ncc-upgrade\/ncc-v2-stack-linux-amd64\.tar\.gz/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open Updates & backups/ }).getAttribute("href")).toBe("/system/updates");
+  });
+
   it("remembers ticked steps and shows progress", () => {
     renderAt("/integrations/mcp");
     const boxes = screen.getAllByRole("checkbox", { name: "Done" });
@@ -123,5 +149,6 @@ describe("parseApiAddress", () => {
   it("fills every placeholder", () => {
     const addr = parseApiAddress("http://h:1");
     expect(fillSnippet("{{SCHEME}}://{{HOST}} {{API}}/x {{API}}", addr)).toBe("http://h:1 http://h:1/x http://h:1");
+    expect(fillSnippet("{{DASHBOARD}}/saml/acs", addr, "https://ncc.example.com")).toBe("https://ncc.example.com/saml/acs");
   });
 });
