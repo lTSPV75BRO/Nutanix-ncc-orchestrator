@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os/exec"
 	"os/user"
 	"path/filepath"
@@ -87,7 +88,8 @@ func lookupServiceIDs(name string) (uid, gid int, ok bool) {
 	// them to syscall.Credential (uint32) without overflow.
 	u32, err1 := strconv.ParseUint(u.Uid, 10, 32)
 	g32, err2 := strconv.ParseUint(u.Gid, 10, 32)
-	if err1 != nil || err2 != nil {
+	// int is 32-bit on 32-bit platforms: refuse ids that would not fit.
+	if err1 != nil || err2 != nil || u32 > math.MaxInt32 || g32 > math.MaxInt32 {
 		return 0, 0, false
 	}
 	return int(u32), int(g32), true
