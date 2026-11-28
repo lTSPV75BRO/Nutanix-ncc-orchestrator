@@ -32,29 +32,43 @@ type Props = {
 const SECRET_NAME = "NCC_PASSWORD";
 const FILE_KEY = "nutanix_password";
 
+/** A POSIX shell single-quoted word: nothing inside is expanded. */
+function shQuote(v: string) {
+  return "'" + v.split("'").join("'\\''") + "'";
+}
+
+/** A PowerShell single-quoted string: only ' is special, written twice. */
+function psQuote(v: string) {
+  return "'" + v.split("'").join("''") + "'";
+}
+
+/** Inside double quotes (systemd Environment=, YAML): backslash first, then the quote. */
+function dqEscape(v: string) {
+  return v.split("\\").join("\\\\").split('"').join('\\"');
+}
+
 function shellSnippetForOs(secretName: string, value: string) {
-  const safeValue = value.replace(/"/g, '\\"');
+  const assign = `export ${secretName}=${shQuote(value)}`;
   return {
     bash: `# Linux/macOS (bash/zsh)
-export ${secretName}="${safeValue}"
+${assign}
 
 # Persist for future shells:
-echo 'export ${secretName}="${safeValue}"' >> ~/.zshrc`,
+printf '%s\\n' ${shQuote(assign)} >> ~/.zshrc`,
     powershell: `# Windows PowerShell
-$env:${secretName} = "${safeValue}"
+$env:${secretName} = ${psQuote(value)}
 
 # Persist for the user across sessions:
-[Environment]::SetEnvironmentVariable("${secretName}", "${safeValue}", "User")`,
-    systemd: `# systemd unit (drop-in)
+[Environment]::SetEnvironmentVariable("${secretName}", ${psQuote(value)}, "User")`,
+    systemd: `# systemd unit (drop-in; % is written %% for systemd)
 [Service]
-Environment="${secretName}=${safeValue}"`,
+Environment="${secretName}=${dqEscape(value).split("%").join("%%")}"`,
   };
 }
 
 function fileSnippet(value: string) {
-  const safe = value.replace(/"/g, '\\"');
   return `# secrets.yaml (mode 0600, owner-only)
-${FILE_KEY}: "${safe}"`;
+${FILE_KEY}: "${dqEscape(value)}"`;
 }
 
 export function SecretsMigrationModal({

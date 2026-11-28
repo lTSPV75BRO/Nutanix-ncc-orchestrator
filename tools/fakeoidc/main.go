@@ -34,6 +34,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -247,10 +248,32 @@ func validateRedirectURL(raw string, allowedHosts map[string]bool) (*url.URL, er
 		redirect.Hostname() == "" || redirect.User != nil || redirect.Fragment != "" {
 		return nil, errors.New("redirect_uri must be an HTTP(S) URL without credentials or fragments")
 	}
-	if !allowedHosts[strings.ToLower(redirect.Hostname())] {
+	// Rebuild the address from the allowlist entry, a fixed scheme and a
+	// checked port, so the host never comes from the request.
+	host := ""
+	want := strings.ToLower(redirect.Hostname())
+	for h := range allowedHosts {
+		if h == want {
+			host = h
+		}
+	}
+	if host == "" {
 		return nil, errors.New("redirect_uri host is not in the fakeoidc allowlist")
 	}
-	return redirect, nil
+	scheme := "http"
+	if redirect.Scheme == "https" {
+		scheme = "https"
+	}
+	if p := redirect.Port(); p != "" {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 {
+			return nil, errors.New("redirect_uri has an invalid port")
+		}
+		host = net.JoinHostPort(host, strconv.Itoa(n))
+	} else if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	return &url.URL{Scheme: scheme, Host: host, Path: redirect.Path, RawQuery: redirect.RawQuery}, nil
 }
 
 func certificateNames(issuer *url.URL, listen string) []string {
