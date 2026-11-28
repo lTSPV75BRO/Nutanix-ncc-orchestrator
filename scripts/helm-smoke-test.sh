@@ -142,7 +142,26 @@ poll-jitter: "200ms"
 outputs: "html,csv,json"
 EOF
 k -n "$NS" create job --from=cronjob/ncc-orchestrator smoke-run
-k -n "$NS" wait --for=condition=Complete job/smoke-run --timeout=240s
+# Wait for the run, keeping its output as it goes: when the container fails
+# twice the Job deletes its pod, and with it the only copy of the log.
+run_log="$WORK/smoke-run.log"
+run_state=""
+for _ in $(seq 1 120); do
+  {
+    k -n "$NS" logs job/smoke-run --all-containers --previous 2>/dev/null | sed 's/^/[previous] /'
+    k -n "$NS" logs job/smoke-run --all-containers 2>/dev/null
+  } > "$run_log.new" || true
+  [ -s "$run_log.new" ] && mv "$run_log.new" "$run_log"
+  run_state="$(k -n "$NS" get job smoke-run -o 'jsonpath={.status.conditions[?(@.status=="True")].type}')"
+  case "$run_state" in *Complete*|*Failed*) break ;; esac
+  sleep 2
+done
+# Conditions read "SuccessCriteriaMet Complete" or "FailureTarget Failed".
+if ! case "$run_state" in *Failed*) false ;; *Complete*) true ;; *) false ;; esac; then
+  echo "the run did not complete (job conditions: ${run_state:-none}); its output:"
+  tail -60 "$run_log" 2>/dev/null || echo "(no output was captured)"
+  fail "the CronJob run"
+fi
 api GET /api/v1/freshness | must '"address":"fakeprism.fakeprism"' "the run reached the simulated cluster"
 api GET /api/v1/report/data | must "fakeprism.fakeprism" "its report is served"
 
