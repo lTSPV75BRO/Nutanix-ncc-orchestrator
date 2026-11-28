@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [2.4.0] - Unreleased
+## [2.4.0] - 2026-11-28
 
 Release candidates: `2.4.0-rc.1` and `2.4.0-rc.2` (fixes `verify --online`), 2026-11-24; `2.4.0-rc.3` (Linux and Windows hardening, quieter pages), 2026-11-27.
 

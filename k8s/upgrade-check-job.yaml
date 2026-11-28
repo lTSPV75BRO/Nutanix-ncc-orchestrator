@@ -57,7 +57,7 @@ spec:
                 matchLabels: { app: ncc-orchestrator-v2, component: api }
       containers:
         - name: check
-          image: docker.io/prajwalnutant/nutanix-ncc-orchestrator:2.4.0-rc.3
+          image: docker.io/prajwalnutant/nutanix-ncc-orchestrator:2.4.0
           command: ["/usr/local/bin/ncc-orchestrator"]
           args: ["upgrade-preflight", "--api", "http://ncc-v2-api:8081", "--data-dir", "/data", "--min-free", "512Mi"]
           env:
@@ -99,12 +99,12 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: check
-          image: docker.io/prajwalnutant/nutanix-ncc-orchestrator:2.4.0-rc.3
+          image: docker.io/prajwalnutant/nutanix-ncc-orchestrator:2.4.0
           command: ["/usr/local/bin/ncc-orchestrator"]
           args: ["upgrade-verify", "--api", "http://ncc-v2-api:8081", "--ui", "https://ncc-v2-ui", "--expect", "$(NCC_IMAGE_TAG)", "--timeout", "5m"]
           env:
             - name: NCC_IMAGE_TAG
-              value: "2.4.0-rc.3"
+              value: "2.4.0"
           resources: { requests: { cpu: 10m, memory: 32Mi } }
           securityContext:
             allowPrivilegeEscalation: false

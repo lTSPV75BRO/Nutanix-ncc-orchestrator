@@ -1,46 +1,40 @@
 # NCC Orchestrator — v2.4.0
 
-**Status:** release candidate 3 (`2.4.0-rc.3`).
+**Released:** 2026-11-28.
 
-Since `2.4.0-rc.2`:
+> **Affiliation:** This is an independent open-source project. It is not
+> affiliated with or endorsed by Nutanix, Inc. The project is MIT licensed.
 
-- **The Linux service runs as the system user `ncc`**, not root, with no capabilities
-  and `ProtectSystem=strict` (exposure 1.6, was 5.9). The update helper moves an rc or
-  2.3.x host over, schedules in root's crontab included, and a rollback puts it back.
-  A folder you configured outside the install folder must be given to `ncc`
-  (`chown -R ncc:ncc`); to keep the root service, see
-  [Security and trust](../SECURITY_AND_TRUST.md).
-- Upgrades: replace a locally edited unit on request (`--replace-edited`), `update`
-  hands over to the update helper, **Roll back** after an adoption or `update`, a
-  fuller plan in the UI, and checks before and after a Helm upgrade.
-- `doctor --fix` closes an install folder on Windows that ordinary users can write to,
-  when the folder holds only NCC Orchestrator.
-- A push to `main` no longer replaces the Docker images of a released version.
-- Quieter pages and a reworked sign-in page; the opening title is off by default.
-  Findings filters look like filters.
+v2.4.0 upgrades the whole stack from outside the service, with a backup first,
+a health check after and an automatic rollback; runs the Linux service as the
+unprivileged user `ncc`; signs every release; and adds cluster pages, data
+freshness, an update banner and step-by-step guides for sign-in and dark-site
+upgrades. Release candidates rc.1 to rc.3 were published on 2026-11-24 and
+2026-11-27.
 
-Since `2.4.0-rc.1`: `verify --online` works. In rc.1 it prints "SKIPPED", although the
-release is signed correctly.
+## Upgrading
 
-## Trying a release candidate
+- **From 2.3.x:** **System → Updates & backups → Update**, or on the host
+  `ncc-orchestrator update` and then `ncc-orchestrator v2-restart`. 2.4.0 then
+  installs its update helper and brings the service up to the new definitions
+  by itself (once, when no run is going on, with rollback).
+- **From a 2.4.0 release candidate:** **Updates & backups**, or
+  `ncc-orchestrator upgrade`.
+- **Without internet access:** carry the release in and run
+  `ncc-orchestrator upgrade --bundle`; see
+  [Upgrade without internet access](../setup/OFFLINE_UPGRADES.md).
+- **Kubernetes:** images have the tag `2.4.0`; `helm upgrade` runs the
+  pre-upgrade checks.
+- **Linux:** the service now runs as `ncc`. A folder you configured outside the
+  install folder must be given to it (`chown -R ncc:ncc`); to keep the root
+  service, see [Security and trust](../SECURITY_AND_TRUST.md).
 
-A candidate is a GitHub pre-release. It is never marked Latest, and stable installs are
-not offered it. On a test host that runs 2.3.0 or later:
+Report problems with the output of `ncc-orchestrator upgrade --status` and a
+support bundle (`ncc-orchestrator doctor`).
 
-```bash
-ncc-orchestrator update --target-version 2.4.0-rc.3
-ncc-orchestrator v2-restart
-```
-
-From rc.1 use **Updates & backups** or `ncc-orchestrator upgrade`. From a candidate,
-updates offer newer candidates and then 2.4.0. Images have the tag `2.4.0-rc.3`. The VM
-templates install the version in `NCC_VERSION`. Please report
-problems with the output of `ncc-orchestrator upgrade --status` and a support bundle
-(`ncc-orchestrator doctor`).
-
-Not tested yet: an upgrade on a real Windows Server, Rocky or macOS host (CI rehearses
-it on hosted Windows, macOS and Ubuntu machines; in a systemd container 2.3.0 was
-updated to rc.1 and rc.1 to rc.2 and back, from GitHub), and an upgrade from the dashboard.
+Not tested on real hosts: an upgrade on Windows Server, Rocky and macOS (CI
+rehearses it on hosted Windows, macOS and Ubuntu machines) and an upgrade
+started from the dashboard.
 
 ## Upgrades that cover everything
 
