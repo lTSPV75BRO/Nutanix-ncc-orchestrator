@@ -3515,6 +3515,32 @@ func TestNormalizeGitHubRepo(t *testing.T) {
 	}
 }
 
+func TestFetchLatestGitHubTagFollowsReleaseRedirect(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/owner/repo/releases/latest":
+			http.Redirect(w, r, "/owner/repo/releases/tag/v2.3.0", http.StatusFound)
+		case "/owner/repo/releases/tag/v2.3.0":
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	oldBase := githubWebBaseURL
+	githubWebBaseURL = srv.URL
+	defer func() { githubWebBaseURL = oldBase }()
+
+	got, err := fetchLatestGitHubTag("owner/repo", srv.Client())
+	if err != nil {
+		t.Fatalf("fetchLatestGitHubTag returned error: %v", err)
+	}
+	if got != "v2.3.0" {
+		t.Fatalf("fetchLatestGitHubTag = %q, want v2.3.0", got)
+	}
+}
+
 func TestEnforceMajorUpgradePolicy(t *testing.T) {
 	if err := enforceMajorUpgradePolicy("1.1.0", "1.9.0", false); err != nil {
 		t.Fatalf("same-major upgrade should be allowed, got err: %v", err)
@@ -3534,11 +3560,18 @@ func TestPickLatestSemverRelease(t *testing.T) {
 		{TagName: "v1.2.9"},
 		{TagName: "v2.1.0-rc1", Prerelease: true},
 	}
-	gotV1 := pickLatestSemverRelease(releases, 1)
+	gotV1 := pickLatestSemverRelease(releases, 1, false)
 	if gotV1 == nil || gotV1.TagName != "v1.3.0" {
 		t.Fatalf("pickLatestSemverRelease(v1) got %+v", gotV1)
 	}
-	gotAny := pickLatestSemverRelease(releases, 0)
+	rc := append(append([]githubRelease{}, releases...), githubRelease{TagName: "v99.0.0-rc.1"}, githubRelease{TagName: "v98.0.0", Prerelease: true}, githubRelease{TagName: "v97.0.0-rc.9", Draft: true})
+	if got := pickLatestSemverRelease(rc, 0, false); got == nil || strings.HasPrefix(got.TagName, "v9") {
+		t.Fatalf("a release candidate was offered to a stable install: %+v", got)
+	}
+	if got := pickLatestSemverRelease(rc, 0, true); got == nil || got.TagName != "v99.0.0-rc.1" {
+		t.Fatalf("release candidate not found: %+v", got)
+	}
+	gotAny := pickLatestSemverRelease(releases, 0, false)
 	if gotAny == nil || gotAny.TagName != "v2.0.0" {
 		t.Fatalf("pickLatestSemverRelease(any) got %+v", gotAny)
 	}
@@ -4748,7 +4781,9 @@ func TestPreUpdateBackupRestoresSoftwareVersion(t *testing.T) {
 		t.Fatalf("v2-backup --include-stack: %v", err)
 	}
 
-	dst := t.TempDir()
+	// A rollback restores into the same install, where v2-backup recorded the
+	// old program files as trusted (SEC-07); the install has since moved on.
+	dst := src
 	mustDst := func(rel, content string) {
 		p := filepath.Join(dst, rel)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {

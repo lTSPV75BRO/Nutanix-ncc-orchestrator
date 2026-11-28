@@ -24,7 +24,7 @@ export const THEME_OPTIONS: Array<{ value: AppThemeSelection; label: string }> =
   { value: "it-pro", label: "IT Professional" },
 ];
 
-// One design system for every theme (docs/ui/redesign-plan.md): the same
+// One design system for every theme (docs/ui/DESIGN_SYSTEM.md): the same
 // purple accent, radii, type scale and component shapes; only the surfaces,
 // text greys and status shades differ per theme.
 const SHARED_TOKENS = {
@@ -37,7 +37,8 @@ const SHARED_TOKENS = {
   fontSizeHeading3: 20,
   fontSizeHeading4: 16,
   fontSizeHeading5: 14,
-  fontWeightStrong: 600,
+  // Hierarchy comes from size and colour; only the big stat figures use 600.
+  fontWeightStrong: 500,
   borderRadius: 8,
   borderRadiusSM: 6,
   borderRadiusLG: 12,
@@ -47,12 +48,18 @@ const SHARED_TOKENS = {
   boxShadowSecondary: "0 8px 24px rgba(0, 0, 0, 0.18)",
 } as const;
 
-function sharedComponents(surface: string, raised: string, border: string): ThemeConfig["components"] {
+// accentText is the purple used for selected menu items and tabs. The
+// primary fill (#7c3aed / #8b5cf6) is only 2.4:1 against the selected menu
+// background, so text uses a variant that reaches 4.5:1 (WCAG 1.4.3).
+function sharedComponents(surface: string, raised: string, border: string, accentText: string): ThemeConfig["components"] {
   return {
+    // No coloured drop shadow under buttons.
+    Button: { primaryShadow: "none", defaultShadow: "none", dangerShadow: "none", fontWeight: 500 },
     Card: { headerBg: surface, headerFontSize: 16, headerFontSizeSM: 14, headerHeight: 52, headerHeightSM: 44 },
     Table: { headerBg: raised, rowHoverBg: raised, headerSplitColor: "transparent", borderColor: border, cellFontSize: 14 },
     Layout: { bodyBg: "transparent", headerBg: surface },
-    Tabs: { titleFontSize: 14, horizontalItemGutter: 24 },
+    Tabs: { titleFontSize: 14, horizontalItemGutter: 24, itemSelectedColor: accentText, itemActiveColor: accentText, itemHoverColor: accentText },
+    Menu: { itemSelectedColor: accentText },
     Tag: { defaultBg: raised },
     Alert: { withDescriptionPadding: "12px 16px", withDescriptionIconSize: 16, defaultPadding: "8px 12px" },
     Typography: { titleMarginBottom: 8, titleMarginTop: 0 },
@@ -62,7 +69,12 @@ function sharedComponents(surface: string, raised: string, border: string): Them
   };
 }
 
-function toAntThemeConfig(theme: AppThemeKey): ThemeConfig {
+function toAntThemeConfig(theme: AppThemeKey, motion: boolean): ThemeConfig {
+  const config = toBaseThemeConfig(theme);
+  return { ...config, token: { ...config.token, motion } };
+}
+
+function toBaseThemeConfig(theme: AppThemeKey): ThemeConfig {
   if (theme === "light") {
     return {
       algorithm: antdTheme.defaultAlgorithm,
@@ -82,10 +94,12 @@ function toAntThemeConfig(theme: AppThemeKey): ThemeConfig {
         // antd's default muted greys fall short of WCAG AA (4.5:1) on white.
         colorTextDescription: "#52525b",
         colorTextPlaceholder: "#6b7280",
+        // Labels in Descriptions use the tertiary grey (#8c8c8c, 3.4:1 on white).
+        colorTextTertiary: "#6b7280",
         colorBorder: "#e4e4e7",
         colorBorderSecondary: "#f4f4f5",
       },
-      components: sharedComponents("#ffffff", "#fafafa", "#e4e4e7"),
+      components: sharedComponents("#ffffff", "#fafafa", "#e4e4e7", "#6d28d9"),
     };
   }
   if (theme === "it-pro") {
@@ -106,10 +120,12 @@ function toAntThemeConfig(theme: AppThemeKey): ThemeConfig {
         colorTextSecondary: "#b6c9e6",
         colorTextDescription: "#a8bcd9",
         colorTextPlaceholder: "#90a6c6",
+        // Descriptions labels: antd's derived tertiary is 4.4:1 on this surface.
+        colorTextTertiary: "#90a6c6",
         colorBorder: "#24324a",
         colorBorderSecondary: "#1b2840",
       },
-      components: sharedComponents("#111b2e", "#172540", "#24324a"),
+      components: sharedComponents("#111b2e", "#172540", "#24324a", "#c4b5fd"),
     };
   }
   return {
@@ -133,7 +149,7 @@ function toAntThemeConfig(theme: AppThemeKey): ThemeConfig {
       colorBorder: "#262626",
       colorBorderSecondary: "#1f1f1f",
     },
-    components: sharedComponents("#111111", "#1a1a1a", "#262626"),
+    components: sharedComponents("#111111", "#1a1a1a", "#262626", "#c4b5fd"),
   };
 }
 
@@ -151,6 +167,21 @@ function getSystemTheme(): AppThemeKey {
     return "dark";
   }
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+/** True when the user asks the system for less motion. */
+function usePrefersReducedMotion(): boolean {
+  const query = "(prefers-reduced-motion: reduce)";
+  const [reduced, setReduced] = useState(() => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia(query).matches);
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia(query);
+    const apply = () => setReduced(media.matches);
+    apply();
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, []);
+  return reduced;
 }
 
 export function AppThemeProvider({ children }: { children: ReactNode }) {
@@ -174,6 +205,7 @@ export function AppThemeProvider({ children }: { children: ReactNode }) {
   }, [setSystemTheme]);
 
   const theme: AppThemeKey = selectedTheme === "auto" ? systemTheme : selectedTheme;
+  const reducedMotion = usePrefersReducedMotion();
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -184,7 +216,7 @@ export function AppThemeProvider({ children }: { children: ReactNode }) {
   return (
     <ThemeContext.Provider value={{ selectedTheme, theme, setTheme }}>
       <ConfigProvider
-        theme={toAntThemeConfig(theme)}
+        theme={toAntThemeConfig(theme, !reducedMotion)}
         spin={{ indicator: <BarsLoader /> }}
         button={{ loadingIcon: <ArcSpinner /> }}
         empty={{ image: <span className="ui-empty-icon"><InboxOutlined /></span> }}

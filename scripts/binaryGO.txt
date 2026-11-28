@@ -126,7 +126,8 @@ Images (packages the linux binaries this script built)
                          The tag is name:VERSION, not name:VERSION-ARCH.
   --registry HOST        default: $NCC_DOCKER_REGISTRY or docker.io
   --image-prefix NAME    default: $NCC_IMAGE_PREFIX or prajwalnutant
-  --no-latest            Do not tag :latest (latest is on for Stream=Release)
+  --no-latest            Do not tag :latest (on for Stream=Release; never for a
+                         pre-release version such as 2.4.0-rc.1)
 
 Env: VERSION, STREAM, BUILD_DATE, GIT_REVISION, NCC_RELEASE_PUBKEY,
      NCC_RELEASE_SIGN_KEY, NCC_MACOS_*, NCC_WINDOWS_*, NCC_LINUX_GPG_KEY_ID,
@@ -457,6 +458,11 @@ pkg = root / "frontend" / "package.json"
 text = pkg.read_text()
 pkg.write_text(re.sub(r'("version": ")[^"]+"', r"\g<1>" + ver + '"', text, count=1))
 
+# The lockfile names the version twice, both before the first dependency.
+lock = root / "frontend" / "package-lock.json"
+lt = lock.read_text(encoding="utf-8")
+lock.write_text(re.sub(r'("version": ")[^"]+"', r"\g<1>" + ver + '"', lt, count=2), encoding="utf-8")
+
 chart = root / "helm" / "ncc-orchestrator" / "Chart.yaml"
 ct = chart.read_text()
 ct = re.sub(r'(?m)^version:\s*\S+', "version: " + ver, ct, count=1)
@@ -477,6 +483,7 @@ img = re.compile(r'(docker\.io/prajwalnutant/(?:nutanix-ncc-orchestrator|ncc-api
 for path in (root / "k8s").glob("*.yaml"):
     raw = path.read_text()
     updated = img.sub(r"\g<1>" + ver, raw)
+    updated = re.sub(r'(name: NCC_(?:ORCHESTRATOR_|UI_)?IMAGE_TAG\s+value: ")[^"]+"', r"\g<1>" + ver + '"', updated)
     if updated != raw:
         path.write_text(updated)
 print("stamped version", ver)
@@ -522,6 +529,13 @@ check_versions() {
       failed=1
     fi
   done
+  # The API compares these with what runs: a stale one reports version skew.
+  for tag in $(awk '/name: NCC_.*IMAGE_TAG/{getline; gsub(/[" \r]/, ""); sub(/^value:/, ""); print}' k8s/*.yaml); do
+    if [ "$tag" != "$VERSION" ]; then
+      echo "version mismatch: k8s IMAGE_TAG $tag, VERSION is $VERSION" >&2
+      failed=1
+    fi
+  done
   if [ "$failed" -ne 0 ]; then
     echo "fix the stamps or re-run with --set-version $VERSION (or --skip-version-check)" >&2
     return 1
@@ -561,6 +575,14 @@ GIT_REVISION="${GIT_REVISION:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}
 GIT_DIRTY=""
 if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
   GIT_DIRTY="-dirty"
+fi
+# The release public key goes into -ldflags: one line of base64. A PEM key is
+# converted, and a value that is not an Ed25519 public key stops the build (it
+# would produce programs that skip signature checks).
+if [ -n "${NCC_RELEASE_PUBKEY:-}" ] && ! [[ "$NCC_RELEASE_PUBKEY" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
+  NCC_RELEASE_PUBKEY="$(go run ./cmd/ncc-orchestrator release-pubkey --public "$NCC_RELEASE_PUBKEY")" \
+    || die "NCC_RELEASE_PUBKEY is not an Ed25519 public key"
+  export NCC_RELEASE_PUBKEY
 fi
 if [ "$REQUIRE_CLEAN" = 1 ] && [ -n "$GIT_DIRTY" ]; then
   die "worktree is dirty; commit or stash, or omit --require-clean"
@@ -729,7 +751,7 @@ build_one() {
   name=$(basename "$pkg")
   flags="$LDFLAGS"
   if [ "$name" = "ncc-mcp-server" ]; then
-    flags="$flags -X main.serverVersion=${VERSION}${GIT_DIRTY}"
+    flags="$flags -X main.serverVersion=${VERSION}${GIT_DIRTY} -X main.productVersion=${VERSION}${GIT_DIRTY}"
   fi
   echo "build ${name}-${goos}-${goarch}${ext}"
   CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath -buildvcs=true -ldflags "$flags" -o "dist/${name}-${goos}-${goarch}${ext}" "$pkg"
@@ -829,14 +851,24 @@ sign_binaries() {
     shopt -u nullglob
   fi
   if [ -n "${NCC_WINDOWS_PFX_PATH:-}" ] && command -v osslsigncode >/dev/null 2>&1 && in_csv "$OS_LIST" windows; then
-    local f
+    local f timestamp_url
+    timestamp_url="${NCC_WINDOWS_TIMESTAMP_URL:-http://timestamp.digicert.com}"
+    # A self-signed certificate used for a local test cannot obtain useful
+    # third-party timestamping. Set this to "none" to sign without a network
+    # request; public releases should retain the default timestamp service.
     shopt -s nullglob
     for f in dist/ncc-orchestrator-windows-*.exe dist/ncc-api-server-windows-*.exe dist/ncc-ui-server-windows-*.exe; do
-      osslsigncode sign -pkcs12 "$NCC_WINDOWS_PFX_PATH" -pass "${NCC_WINDOWS_PFX_PASSWORD:-}" \
-        -h sha256 -t "${NCC_WINDOWS_TIMESTAMP_URL:-http://timestamp.digicert.com}" \
-        -n "NCC Orchestrator (open-source project)" \
-        -i "https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator" \
-        -in "$f" -out "$f.signed"
+      if [ "$timestamp_url" = "none" ]; then
+        osslsigncode sign -pkcs12 "$NCC_WINDOWS_PFX_PATH" -pass "${NCC_WINDOWS_PFX_PASSWORD:-}" \
+          -h sha256 -n "NCC Orchestrator (open-source project)" \
+          -i "https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator" \
+          -in "$f" -out "$f.signed"
+      else
+        osslsigncode sign -pkcs12 "$NCC_WINDOWS_PFX_PATH" -pass "${NCC_WINDOWS_PFX_PASSWORD:-}" \
+          -h sha256 -t "$timestamp_url" -n "NCC Orchestrator (open-source project)" \
+          -i "https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator" \
+          -in "$f" -out "$f.signed"
+      fi
       mv "$f.signed" "$f"
     done
     shopt -u nullglob
@@ -845,10 +877,29 @@ sign_binaries() {
     local f
     shopt -s nullglob
     for f in dist/ncc-orchestrator-linux-*; do
-      gpg --batch --yes --local-user "$NCC_LINUX_GPG_KEY_ID" --detach-sign --armor --output "$f.asc" "$f"
+      gpg_detach_sign "$f"
     done
     shopt -u nullglob
   fi
+}
+
+# gpg_detach_sign signs "$1" with a loopback pinentry so a CI runner can use an
+# encrypted signing key. The passphrase never appears on a command line (where
+# `ps` could show it): NCC_LINUX_GPG_PASSPHRASE_FILE (a mode-0600 file whose
+# first line is the passphrase) is preferred; NCC_LINUX_GPG_PASSPHRASE is still
+# honoured for local runs and is handed to gpg on file descriptor 3.
+gpg_detach_sign() {
+  local in="$1"
+  local -a args=(--batch --yes --local-user "$NCC_LINUX_GPG_KEY_ID")
+  if [ -n "${NCC_LINUX_GPG_PASSPHRASE_FILE:-}" ]; then
+    [ -r "$NCC_LINUX_GPG_PASSPHRASE_FILE" ] || die "NCC_LINUX_GPG_PASSPHRASE_FILE is not readable"
+    args+=(--pinentry-mode loopback --passphrase-file "$NCC_LINUX_GPG_PASSPHRASE_FILE")
+  elif [ -n "${NCC_LINUX_GPG_PASSPHRASE:-}" ]; then
+    args+=(--pinentry-mode loopback --passphrase-fd 3)
+    gpg "${args[@]}" --detach-sign --armor --output "$in.asc" "$in" 3<<<"$NCC_LINUX_GPG_PASSPHRASE"
+    return
+  fi
+  gpg "${args[@]}" --detach-sign --armor --output "$in.asc" "$in"
 }
 sign_binaries
 
@@ -885,6 +936,9 @@ if [ "$NO_STACKS" != 1 ]; then
   cp examples/example_config.yaml dist/ 2>/dev/null || true
   if [ -f "docs/releases/RELEASE_NOTES_v${VERSION}.md" ]; then
     cp "docs/releases/RELEASE_NOTES_v${VERSION}.md" dist/
+  elif [ -f "docs/releases/RELEASE_NOTES_v${VERSION%%-*}.md" ]; then
+    # A release candidate ships the notes of the version it leads to.
+    cp "docs/releases/RELEASE_NOTES_v${VERSION%%-*}.md" "dist/RELEASE_NOTES_v${VERSION}.md"
   fi
   rm -rf dist/.stack
   mkdir -p dist/.stack
@@ -925,9 +979,12 @@ if [ "$NO_STACKS" != 1 ]; then
   if [ -n "${NCC_LINUX_GPG_KEY_ID:-}" ] && command -v gpg >/dev/null 2>&1; then
     shopt -s nullglob
     for f in dist/ncc-v2-stack-linux-*; do
-      gpg --batch --yes --local-user "$NCC_LINUX_GPG_KEY_ID" --detach-sign --armor --output "$f.asc" "$f"
+      gpg_detach_sign "$f"
     done
     shopt -u nullglob
+    # Consumers need the matching public key to verify the detached
+    # signatures. It is safe to publish and is included in checksums.txt.
+    gpg --batch --armor --export "$NCC_LINUX_GPG_KEY_ID" > dist/ncc-release-signing.gpg
   fi
 
   GIT_REV_FULL=$(git rev-parse HEAD 2>/dev/null || echo unknown)
@@ -953,10 +1010,13 @@ if [ "$NO_STACKS" != 1 ]; then
     echo "  \"artifacts\": ["
     first=1
     shopt -s nullglob
-    for f in dist/ncc-orchestrator-* dist/ncc-v2-stack-* dist/example_config.yaml "dist/RELEASE_NOTES_v${VERSION}.md"; do
+    for f in dist/ncc-orchestrator-* dist/ncc-v2-stack-* dist/ncc-release-signing.gpg dist/example_config.yaml "dist/RELEASE_NOTES_v${VERSION}.md"; do
       case "$f" in
         *.asc|*.sig) continue ;;
       esac
+      # nullglob does not discard an explicit missing filename. The public GPG
+      # key is present only for Linux-signed builds.
+      [ -f "$f" ] || continue
       base=$(basename "$f")
       sz=$(wc -c < "$f" | tr -d ' ')
       sha=$(sha256_file "$f")
@@ -974,6 +1034,27 @@ if [ "$NO_STACKS" != 1 ]; then
   } > dist/release-attestation.json
   echo "wrote dist/release-attestation.json"
 
+  # What an upgrade to this release needs (cmd/ncc-orchestrator/upgrade_stage.go).
+  HELPER_PROTOCOL=$(sed -n 's/^const helperProtocol = \([0-9][0-9]*\).*$/\1/p' cmd/ncc-orchestrator/upgrade_stage.go)
+  [ -n "$HELPER_PROTOCOL" ] || die "helperProtocol not found in cmd/ncc-orchestrator/upgrade_stage.go"
+  printf '{"schema":1,"version":"%s","helper_protocol":%s}\n' "$VERSION" "$HELPER_PROTOCOL" > dist/upgrade-manifest.json
+  # Optional: NCC_UPGRADE_MIN_FROM (oldest version that may upgrade straight to
+  # this one) and NCC_UPGRADE_DOWNTIME_HINT (shown in the upgrade plan).
+  extra=""
+  if [ -n "${NCC_UPGRADE_MIN_FROM:-}" ]; then
+    [[ "$NCC_UPGRADE_MIN_FROM" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "NCC_UPGRADE_MIN_FROM is not a version like 2.4.0"
+    extra="$extra,\"min_from\":\"$NCC_UPGRADE_MIN_FROM\""
+  fi
+  if [ -n "${NCC_UPGRADE_DOWNTIME_HINT:-}" ]; then
+    [[ "$NCC_UPGRADE_DOWNTIME_HINT" =~ ^[A-Za-z0-9\ .,-]{1,60}$ ]] || die "NCC_UPGRADE_DOWNTIME_HINT: letters, digits, spaces and .,- only"
+    extra="$extra,\"downtime_hint\":\"$NCC_UPGRADE_DOWNTIME_HINT\""
+  fi
+  if [ -n "$extra" ]; then
+    manifest="$(cat dist/upgrade-manifest.json)"
+    printf '%s%s}\n' "${manifest%\}}" "$extra" > dist/upgrade-manifest.json
+  fi
+  echo "wrote dist/upgrade-manifest.json"
+
   if [ "$SKIP_SBOM" != 1 ] && command -v cyclonedx-gomod >/dev/null 2>&1; then
     for spec in "ncc-orchestrator:./cmd/ncc-orchestrator" "ncc-api-server:./cmd/ncc-api-server" "ncc-ui-server:./cmd/ncc-ui-server"; do
       name="${spec%%:*}"
@@ -989,10 +1070,11 @@ if [ "$NO_STACKS" != 1 ]; then
     cd dist
     : > checksums.txt
     shopt -s nullglob
-    for f in ncc-orchestrator-* ncc-v2-stack-* example_config.yaml "RELEASE_NOTES_v${VERSION}.md" release-attestation.json bom-*.cdx.json; do
+    for f in ncc-orchestrator-* ncc-v2-stack-* ncc-release-signing.gpg example_config.yaml "RELEASE_NOTES_v${VERSION}.md" release-attestation.json upgrade-manifest.json bom-*.cdx.json; do
       case "$f" in
         *.asc|*.sig) continue ;;
       esac
+      [ -f "$f" ] || continue
       printf '%s  %s\n' "$(sha256_file "$f")" "$f" >> checksums.txt
     done
     shopt -u nullglob
@@ -1007,6 +1089,10 @@ fi
 
 build_images() {
   local arch stage name file tag_version tag_latest
+  # A candidate must not become what `docker pull` gives everyone.
+  case "$VERSION" in
+    *-*) DO_LATEST=0 ;;
+  esac
   if [ -z "$ENGINE" ]; then
     resolve_container_engine
   fi

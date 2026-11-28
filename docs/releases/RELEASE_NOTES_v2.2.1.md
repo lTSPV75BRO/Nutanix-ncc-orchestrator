@@ -130,7 +130,7 @@ Published images were not affected (they package prebuilt binaries).
 
 ## Security
 
-Details and evidence: [`docs/security/security-assessment-2026-10.md`](../security/security-assessment-2026-10.md).
+Details and evidence: `docs/security/security-assessment-2026-10.md`.
 
 - **Backups are encrypted by default** (`NCC_BACKUP_ENCRYPTION=required`):
   snapshots, downloads, scheduled backups, and pre-update rollback points are

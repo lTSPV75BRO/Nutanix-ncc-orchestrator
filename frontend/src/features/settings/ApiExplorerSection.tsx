@@ -31,6 +31,7 @@ import {
 } from "@ant-design/icons";
 import { CodeEditor } from "../../components/CodeEditor";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
+import { uiRequestHeaders } from "../../api/client";
 import { notify } from "../../notify";
 import { ItemList, TitleIcon } from "../../ui";
 import { roleColor } from "../../auth/roleColor";
@@ -73,7 +74,7 @@ const PRESETS: EndpointPreset[] = [
   },
   { label: "NCC handling", method: "GET", path: "/api/v1/alerts/ncc-dispositions" },
   {
-    label: "Acknowledge NCC alert",
+    label: "Acknowledge NCC finding",
     method: "POST",
     path: "/api/v1/alerts/ncc-dispositions",
     body: JSON.stringify({ cluster: "", check: "", action: "acknowledge", note: "" }, null, 2),
@@ -265,7 +266,7 @@ export function ApiExplorerSection({ onError }: Props) {
   // the OpenAPI entry where present and filling any gaps (and empty
   // descriptions / sample bodies) from the catalog.
   const loadRoutes = async () => {
-    const headers = { "X-Requested-With": "ncc-ui" };
+    const headers = uiRequestHeaders();
     const byPath = new Map<string, RouteMeta>();
     let loadedAny = false;
     let lastError = "";
@@ -339,7 +340,10 @@ export function ApiExplorerSection({ onError }: Props) {
       }
       setIsLoading(true);
       const extraHeaders = parseHeaderLines(headerLines);
-      const headers = new Headers({ "X-Requested-With": "ncc-ui", ...extraHeaders });
+      // Our own API gets the dashboard headers (version, CSRF); a request to an
+      // external URL gets only what the user typed, so nothing of ours leaks.
+      const sameOrigin = !/^https?:\/\//i.test(effectiveUrl);
+      const headers = new Headers({ ...(sameOrigin ? uiRequestHeaders(method) : {}), ...extraHeaders });
       const init: RequestInit = { method, credentials: "include", headers };
       if (method === "POST" || method === "PUT" || method === "DELETE") {
         const payload = body.trim();
@@ -517,13 +521,9 @@ export function ApiExplorerSection({ onError }: Props) {
         </Col>
       </Row>
 
-      <Alert
-        type="info"
-        showIcon
-        icon={<SafetyCertificateOutlined />}
-        style={{ marginTop: 12 }}
-        title="Sensitive request headers/body are not persisted in browser storage."
-      />
+      <p className="ui-field-help api-explorer-privacy">
+        <SafetyCertificateOutlined aria-hidden /> Sensitive headers and request bodies are not kept in browser storage
+      </p>
 
       {response ? (
         <Card size="small" style={{ marginTop: 12 }} className="api-response-card">

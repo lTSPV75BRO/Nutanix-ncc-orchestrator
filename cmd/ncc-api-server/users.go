@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,6 +21,8 @@ import (
 	"golang.org/x/term"
 
 	yaml "go.yaml.in/yaml/v3"
+
+	"goncc/internal/uiversion"
 )
 
 // account is a single local user record persisted in the user database.
@@ -132,6 +135,14 @@ type usersDBFile struct {
 	ClusterGroups []clusterGroup         `json:"cluster_groups,omitempty"`
 	Tokens        []personalToken        `json:"personal_tokens,omitempty"`
 	Deleted       []deletedAccount       `json:"deleted_accounts,omitempty"`
+	UIVersions    *uiVersionPolicy       `json:"ui_versions,omitempty"`
+}
+
+// uiVersionPolicy is the admin-managed extra blacklist for NCC UI / UI-server
+// versions, on top of the shipped builtin list (2.2.1 node2shell).
+type uiVersionPolicy struct {
+	BlockUnversioned bool              `json:"block_unversioned"`
+	Extra            []uiversion.Entry `json:"extra,omitempty"`
 }
 
 // deletedAccount is the tombstone a deleted local account leaves behind.
@@ -195,6 +206,7 @@ type userDB struct {
 	resets        []passwordResetRequest
 	clusterGroups []clusterGroup
 	tokens        []personalToken
+	uiVersions    *uiVersionPolicy
 	deleted       map[string]deletedAccount // lower-cased username -> tombstone
 	refreshMu     sync.Mutex
 	lastRefresh   time.Time
@@ -261,6 +273,7 @@ func (db *userDB) applyDocument(f usersDBFile) error {
 	db.resets = f.Resets
 	db.clusterGroups = f.ClusterGroups
 	db.tokens = f.Tokens
+	db.uiVersions = f.UIVersions
 	db.deleted = map[string]deletedAccount{}
 	for _, d := range f.Deleted {
 		if key := strings.ToLower(strings.TrimSpace(d.Username)); key != "" {
@@ -272,13 +285,20 @@ func (db *userDB) applyDocument(f usersDBFile) error {
 
 const userDBReloadMinInterval = 2 * time.Second
 
-func (db *userDB) refreshIfStale() {
+func (db *userDB) refreshIfStale() { db.refresh(false) }
+
+// refreshNow re-reads the store immediately, ignoring the minimum interval.
+// Account-management endpoints call it so a user another replica just wrote is
+// visible to the admin who asks for it, instead of up to a reload tick later.
+func (db *userDB) refreshNow() { db.refresh(true) }
+
+func (db *userDB) refresh(force bool) {
 	if db == nil || db.backend == nil {
 		return
 	}
 	db.refreshMu.Lock()
 	defer db.refreshMu.Unlock()
-	if time.Since(db.lastRefresh) < userDBReloadMinInterval {
+	if !force && time.Since(db.lastRefresh) < userDBReloadMinInterval {
 		return
 	}
 	raw, version, err := backendLoad(db.backend)
@@ -330,7 +350,7 @@ func (s *apiServer) startUserDBReloadLoop(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				s.users.refreshIfStale()
+				guard("user store reload", func() { s.users.refreshIfStale() })
 			}
 		}
 	}()
@@ -433,7 +453,7 @@ func (db *userDB) saveLocked() error {
 	if db.backend == nil {
 		return nil // in-memory store
 	}
-	out := usersDBFile{SAML: db.saml, OIDC: db.oidc, LDAP: db.ldapCfg, Session: db.session, TLS: db.tls, Resets: db.resets, ClusterGroups: db.clusterGroups, Tokens: db.tokens}
+	out := usersDBFile{SAML: db.saml, OIDC: db.oidc, LDAP: db.ldapCfg, Session: db.session, TLS: db.tls, Resets: db.resets, ClusterGroups: db.clusterGroups, Tokens: db.tokens, UIVersions: db.uiVersions}
 	keys := make([]string, 0, len(db.accounts))
 	for k := range db.accounts {
 		keys = append(keys, k)
@@ -551,17 +571,61 @@ func (db *userDB) verify(username, password string) (Role, bool, bool) {
 	}
 	key := strings.ToLower(strings.TrimSpace(username))
 	db.mu.RLock()
-	a, found := db.accounts[key]
+	var a account
+	stored, found := db.accounts[key]
+	if found {
+		// Copied under the lock: writers change accounts in place.
+		a = *stored
+	}
 	db.mu.RUnlock()
 	if !found {
-		_ = bcrypt.CompareHashAndPassword([]byte(dummyBcryptHash), []byte(password))
+		_ = bcrypt.CompareHashAndPassword(dummyHash(passwordHashCost), []byte(password))
 		return RoleNone, false, false
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(a.PasswordHash), []byte(password)); err != nil {
+		// A hash from before the cost was raised answers sooner than the dummy
+		// comparison above, which would tell existing accounts from unknown
+		// names. Each comparison at cost k takes 2^k steps, so the costs from
+		// the stored one up to the target add up to exactly the difference.
+		if cost, cerr := bcrypt.Cost([]byte(a.PasswordHash)); cerr == nil {
+			for ; cost < passwordHashCost; cost++ {
+				_ = bcrypt.CompareHashAndPassword(dummyHash(cost), []byte(password))
+			}
+		}
 		return RoleNone, false, false
 	}
+	db.upgradePasswordHash(key, a.PasswordHash, password)
 	role, _ := parseRole(a.Role)
 	return role, true, a.MustChange
+}
+
+// upgradePasswordHash replaces a hash made at a lower bcrypt cost, using the
+// password the user just proved. It is not a password change: sessions stay
+// valid and the must-change flag is kept. The stored hash is compared again
+// under the write lock so a password change made meanwhile wins. Failure is
+// logged only; the sign-in already succeeded.
+func (db *userDB) upgradePasswordHash(key, stored, password string) {
+	if !db.writable() {
+		return
+	}
+	if cost, err := bcrypt.Cost([]byte(stored)); err != nil || cost >= passwordHashCost {
+		return
+	}
+	hash, err := hashPassword(password)
+	if err != nil {
+		return
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
+	a, ok := db.accounts[key]
+	if !ok || a.PasswordHash != stored {
+		return
+	}
+	a.PasswordHash = hash
+	if err := db.saveLocked(); err != nil {
+		log.Printf("user store: could not upgrade the password hash of %q: %v", a.Username, err)
+	}
 }
 
 // lookup returns a copy of an account by username.
@@ -1279,6 +1343,45 @@ func (db *userDB) setSessionTTLSeconds(seconds int) error {
 	return db.saveLocked()
 }
 
+func (db *userDB) extraBlockedUIVersions() []uiversion.Entry {
+	if db == nil {
+		return nil
+	}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	if db.uiVersions == nil {
+		return nil
+	}
+	out := make([]uiversion.Entry, 0, len(db.uiVersions.Extra))
+	for _, e := range db.uiVersions.Extra {
+		e.Builtin = false
+		out = append(out, e)
+	}
+	return out
+}
+
+func (db *userDB) blockUnversionedUI() bool {
+	if db == nil {
+		return true
+	}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	if db.uiVersions == nil {
+		return true
+	}
+	return db.uiVersions.BlockUnversioned
+}
+
+func (db *userDB) setUIVersionPolicy(p uiVersionPolicy) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	defer db.beginWriteLocked()()
+	c := p
+	c.Extra = append([]uiversion.Entry(nil), p.Extra...)
+	db.uiVersions = &c
+	return db.saveLocked()
+}
+
 var (
 	errUserNotFound        = errors.New("user not found")
 	errLastAdmin           = errors.New("cannot remove or demote the last admin account")
@@ -1286,9 +1389,16 @@ var (
 	errReservedAdminDelete = errors.New("the built-in admin account cannot be deleted")
 )
 
-// dummyBcryptHash is a valid bcrypt hash used only to equalize timing for
-// unknown usernames. It never matches a real password.
-const dummyBcryptHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+// passwordHashCost is the bcrypt cost of new password hashes. Hashes made at a
+// lower cost are replaced at the account's next sign-in. A variable so tests can
+// lower it.
+var passwordHashCost = 12
+
+// dummyHash is a valid bcrypt hash of the given cost, used only to equalize
+// sign-in timing. It never matches a real password.
+func dummyHash(cost int) []byte {
+	return []byte(fmt.Sprintf("$2a$%02d$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy", cost))
+}
 
 // randPassword returns a URL-safe random password string (~24 chars).
 func randPassword() (string, error) {
@@ -1301,7 +1411,7 @@ func randPassword() (string, error) {
 
 // hashPassword returns a bcrypt hash suitable for the user database.
 func hashPassword(password string) (string, error) {
-	b, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	b, err := bcrypt.GenerateFromPassword([]byte(password), passwordHashCost)
 	if err != nil {
 		return "", err
 	}
@@ -1483,7 +1593,7 @@ func writeInitialPasswordFile(dbPath, username, password string) (string, error)
 	dir := filepath.Dir(dbPath)
 	p := filepath.Join(dir, ".ncc-initial-admin-password")
 	body := fmt.Sprintf("username: %s\npassword: %s\nnote: you must change this password on first login; this file is deleted afterward.\n", username, password)
-	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+	if err := writeSecretFile(p, []byte(body)); err != nil {
 		return "", err
 	}
 	return p, nil

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -27,7 +28,18 @@ func (s *apiServer) handleComponents(w http.ResponseWriter, r *http.Request) {
 			"ui-server":    componentVersion(ui, "version"),
 		}
 	}
-	components["consistent"] = componentVersionsMatch(components)
+	consistent := componentVersionsMatch(components)
+	components["consistent"] = consistent
+	if !consistent {
+		msg := componentSkewMessage(components, s.capabilities.Kubernetes)
+		if note, ok := components["runner_note"].(string); ok && note != "" {
+			msg = strings.TrimSpace(msg + " " + note)
+		}
+		if msg != "" {
+			components["message"] = msg
+		}
+	}
+	delete(components, "runner_note")
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{"components": components}})
 }
 
@@ -37,7 +49,14 @@ func (s *apiServer) k8sComponentStatus() map[string]interface{} {
 	if apiVer == "" {
 		apiVer = imageTag
 	}
-	orch := strings.TrimSpace(os.Getenv("NCC_ORCHESTRATOR_IMAGE_TAG"))
+	// The live CronJob image wins over the configured tag: it is what the
+	// next scheduled run will actually use.
+	configured := strings.TrimSpace(os.Getenv("NCC_ORCHESTRATOR_IMAGE_TAG"))
+	orch, _ := s.k8sRunnerVersion()
+	note := ""
+	if configured != "" && orch != "" && componentVersionCore(orch) != componentVersionCore(configured) {
+		note = fmt.Sprintf("The %s CronJob runs %s but NCC_ORCHESTRATOR_IMAGE_TAG is %s.", s.runnerCronJobName(), orch, configured)
+	}
 	if orch == "" {
 		orch = imageTag
 	}
@@ -54,11 +73,16 @@ func (s *apiServer) k8sComponentStatus() map[string]interface{} {
 	if apiVer == "" {
 		apiVer = orch
 	}
-	return map[string]interface{}{
+	out := map[string]interface{}{
 		"orchestrator": component{Version: orch, Status: "ok"},
 		"api-server":   component{Version: apiVer, Status: "ok"},
 		"ui-server":    component{Version: ui, Status: "ok"},
 	}
+	if note != "" {
+		// handleComponents adds this to the skew message, then removes it.
+		out["runner_note"] = note
+	}
+	return out
 }
 
 type component struct {

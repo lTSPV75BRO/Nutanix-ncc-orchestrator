@@ -1,6 +1,11 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { afterEach } from "vitest";
+
+// waitFor and findBy* give up after one second by default, which a loaded
+// machine (the full suite in parallel, a CI runner) can exceed on an Ant Design
+// render. Passing tests are not slower: both return as soon as they succeed.
+configure({ asyncUtilTimeout: 5_000 });
 
 // Testing Library only unmounts automatically when Vitest globals are on, and
 // they are off here. Without this, every rendered tree stays mounted after its

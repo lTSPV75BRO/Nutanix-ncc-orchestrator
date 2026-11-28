@@ -13,16 +13,16 @@ write_files:
   - path: /etc/ncc/ncc-install.env
     permissions: "0600"
     content: |
-      NCC_VERSION="2.3.0"
+      NCC_VERSION="2.4.0"
       NCC_RELEASE_BASE_URL="https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download"
+      NCC_VERIFY_ATTESTATION="auto"
       NCC_INSTALL_DIR="/opt/ncc-v2"
-      NCC_CONFIG="/opt/ncc-v2/config.yaml"
       NCC_API_PORT="8081"
       NCC_UI_PORT="8080"
       NCC_CLUSTERS=""
       NCC_PCS=""
       NCC_USERNAME="admin"
-      NCC_PASSWORD="CHANGE_ME"
+      NCC_PASSWORD='CHANGE_ME'
 
   - path: /usr/local/sbin/install-ncc-v2
     permissions: "0750"
@@ -40,14 +40,26 @@ write_files:
       esac
 
       archive="ncc-v2-stack-linux-${arch}.tar.gz"
-      base="${NCC_RELEASE_BASE_URL%/}/${NCC_VERSION}"
       tmp="$(mktemp -d)"
       trap 'rm -rf "$tmp"' EXIT
 
+      # GitHub release tags start with "v" (v2.4.0). A mirror may use either
+      # form, so try the tag first and the bare version next.
+      version="${NCC_VERSION#v}"
+      base=""
+      for tag in "v$version" "$version"; do
+        if curl --fail --location --silent --show-error \
+          "${NCC_RELEASE_BASE_URL%/}/$tag/checksums.txt" -o "$tmp/checksums.txt"; then
+          base="${NCC_RELEASE_BASE_URL%/}/$tag"
+          break
+        fi
+      done
+      [ -n "$base" ] || {
+        echo "No release $NCC_VERSION found under $NCC_RELEASE_BASE_URL" >&2
+        exit 1
+      }
       curl --fail --location --silent --show-error \
         "$base/$archive" -o "$tmp/$archive"
-      curl --fail --location --silent --show-error \
-        "$base/checksums.txt" -o "$tmp/checksums.txt"
       expected="$(awk -v name="$archive" '$2 == name { print $1; exit }' "$tmp/checksums.txt")"
       actual="$(sha256sum "$tmp/$archive" | awk '{print $1}')"
       [ -n "$expected" ] && [ "$expected" = "$actual" ] || {
@@ -55,14 +67,56 @@ write_files:
         exit 1
       }
 
-      rm -rf "$NCC_INSTALL_DIR"
+      # The checksum comes from the same place as the archive, so it only proves
+      # the download is complete. The build attestation proves the archive came
+      # from this project's release workflow. "auto" checks it when the GitHub
+      # CLI is installed and signed in (or GH_TOKEN is set); "require" fails
+      # without it; "off" skips it.
+      attest="${NCC_VERIFY_ATTESTATION:-auto}"
+      case "$attest" in auto|require|off) ;; *)
+        echo "NCC_VERIFY_ATTESTATION must be auto, require or off" >&2; exit 1 ;;
+      esac
+      if [ "$attest" != "off" ]; then
+        if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+          gh attestation verify "$tmp/$archive" --repo "${NCC_RELEASE_REPO:-lTSPV75BRO/Nutanix-ncc-orchestrator}" || {
+            echo "Build attestation verification failed for $archive. Set NCC_VERIFY_ATTESTATION=off only if you trust the source." >&2
+            exit 1
+          }
+        elif [ "$attest" = "require" ]; then
+          echo "NCC_VERIFY_ATTESTATION=require needs the GitHub CLI (gh), signed in or with GH_TOKEN set" >&2
+          exit 1
+        else
+          echo "Build attestation not checked: the GitHub CLI is missing or not signed in." >&2
+        fi
+      fi
+
+      # Never wipe an existing install: it holds the user database, API token,
+      # backups and reports. To upgrade, stop the service and replace bin and
+      # frontend-dist, or set NCC_FORCE_CLEAN=1 to delete everything on purpose.
+      if [ -d "$NCC_INSTALL_DIR" ] && [ -n "$(ls -A "$NCC_INSTALL_DIR")" ]; then
+        if [ "${NCC_FORCE_CLEAN:-0}" != "1" ]; then
+          echo "$NCC_INSTALL_DIR already contains files. Refusing to delete user data and backups. Stop the service and replace bin and frontend-dist to upgrade, or set NCC_FORCE_CLEAN=1 to remove the directory." >&2
+          exit 1
+        fi
+        rm -rf "$NCC_INSTALL_DIR"
+      fi
       mkdir -p "$NCC_INSTALL_DIR"
-      tar -xzf "$tmp/$archive" -C "$NCC_INSTALL_DIR"
+      tar --no-same-owner -xzf "$tmp/$archive" -C "$NCC_INSTALL_DIR"
       bin="$NCC_INSTALL_DIR/bin/ncc-orchestrator"
       chmod 0755 "$NCC_INSTALL_DIR"/bin/*
 
-      mkdir -p "$(dirname "$NCC_CONFIG")" "$NCC_INSTALL_DIR/outputfiles" "$NCC_INSTALL_DIR/logs"
-      cat > "$NCC_CONFIG" <<EOF
+      mkdir -p "$NCC_INSTALL_DIR/outputfiles" "$NCC_INSTALL_DIR/logs"
+      # The service looks for its configuration here.
+      config="$NCC_INSTALL_DIR/config.yaml"
+      # The service, schedules and runs from a shell all read the password from
+      # this file; an environment variable would reach only some of them.
+      secrets="$NCC_INSTALL_DIR/secrets.json"
+      password="$(printf '%s' "$NCC_PASSWORD" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+      # chmod as well: the umask has no effect in a folder with a default ACL.
+      (umask 077; : > "$secrets")
+      chmod 0600 "$secrets"
+      printf '{"NCC_PASSWORD": "%s"}\n' "$password" > "$secrets"
+      cat > "$config" <<EOF
       schema-version: 1
       runner:
         targets:
@@ -91,9 +145,10 @@ write_files:
       deployment:
         platform: host
         self-heal: true
-      secrets-provider: env
+      secrets-provider: file
+      secrets-file: "${secrets}"
       EOF
-      chmod 0600 "$NCC_CONFIG"
+      chmod 0600 "$config"
 
       if command -v ufw >/dev/null 2>&1; then
         ufw allow "$NCC_UI_PORT/tcp"
@@ -104,41 +159,14 @@ write_files:
         firewall-cmd --reload
       fi
 
-      "$bin" v2-install-service \
-        --install-dir "$NCC_INSTALL_DIR" \
-        --config-path "$NCC_CONFIG" \
-        --output-dir "$NCC_INSTALL_DIR/outputfiles" \
-        --log-dir "$NCC_INSTALL_DIR/logs" \
-        --orchestrator-bin "$bin" \
-        --token-file "$NCC_INSTALL_DIR/.ncc-api-token" \
-        --api-listen ":$NCC_API_PORT" \
-        --ui-listen ":$NCC_UI_PORT" \
-        --self-heal --now
+      # Also installs the update helper and the log maintenance timer. The ports
+      # are passed only when they are not the standard ones.
+      set --
+      [ "$NCC_API_PORT" = 8081 ] || set -- "$@" --api-listen ":$NCC_API_PORT"
+      [ "$NCC_UI_PORT" = 8080 ] || set -- "$@" --ui-listen ":$NCC_UI_PORT"
+      "$bin" v2-install-service --install-dir "$NCC_INSTALL_DIR" --orchestrator-bin "$bin" --now "$@"
 
-      cat > /etc/systemd/system/ncc-log-maintenance.service <<EOF
-      [Unit]
-      Description=NCC log size check and rotation
-
-      [Service]
-      Type=oneshot
-      ExecStart=/bin/sh -c '${bin} doctor --install-dir ${NCC_INSTALL_DIR} --fix --only-checks log-sizes --json >> ${NCC_INSTALL_DIR}/logs/doctor.log 2>&1 || true'
-      EOF
-      cat > /etc/systemd/system/ncc-log-maintenance.timer <<EOF
-      [Unit]
-      Description=Check NCC log sizes every 15 minutes
-
-      [Timer]
-      OnBootSec=5min
-      OnUnitActiveSec=15min
-      Persistent=true
-
-      [Install]
-      WantedBy=timers.target
-      EOF
-      systemctl daemon-reload
-      systemctl enable --now ncc-log-maintenance.timer
-
-      echo "NCC v${NCC_VERSION} installed. Edit $NCC_CONFIG and replace CHANGE_ME before running checks."
+      echo "NCC v${version} installed. Set the Prism password in $secrets and the clusters in $config before running checks."
 
 runcmd:
   - [sh, -c, /usr/local/sbin/install-ncc-v2]

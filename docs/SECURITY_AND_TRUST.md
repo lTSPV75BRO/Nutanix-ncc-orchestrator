@@ -21,8 +21,9 @@ Linux when the OS warns that the binary is "untrusted".
 > 3. Run `ncc-orchestrator verify` to print the embedded build metadata
 >    (version, git revision, vendor, self-hash) for the file you have
 >    on disk.
-> 4. (Optional) Verify the GPG-signed git tag (`git tag -v v2.3.0`) and
->    release-attestation.json provenance once published.
+> 4. Run `verify --online --require-signature` to verify the Ed25519
+>    signature over `checksums.txt`; Linux users can additionally verify
+>    the detached GPG signature with the published public key.
 
 ---
 
@@ -37,14 +38,19 @@ Every GitHub release publishes the following on its release page:
 | `example_config.yaml` | Reference configuration (works as `config.yaml` if you copy it). |
 | `RELEASE_NOTES_v<X.Y.Z>.md` | Per-release notes, including known issues and upgrade guidance. |
 | `checksums.txt` | One line per artifact: `<sha256>  <filename>`. |
+| `checksums.txt.sig` | Ed25519 signature over the complete checksum manifest. |
+| `ncc-release-signing.gpg` | Public OpenPGP key for Linux detached-signature verification. |
 | `release-attestation.json` | Single-file machine-readable provenance (vendor, git rev, build host, full artifact set with sizes/hashes). |
 
-Optionally, when the maintainer's personal signing keys are configured
-at build time:
+The free release pipeline always signs `checksums.txt` with an Ed25519
+release key embedded into the binaries and signs Linux binaries and stack
+archives with GPG. macOS and Windows artifacts remain unsigned unless the
+maintainer later configures paid Apple Developer ID/notarization or
+Authenticode credentials:
 
-- macOS binaries are signed with the maintainer's Apple Developer ID and notarized.
-- Windows `.exe` files are signed with the maintainer's Authenticode certificate.
-- Linux binaries / stack archives ship a `<file>.asc` GPG detached signature against the maintainer's published public key.
+- macOS binaries can be signed with the maintainer's Apple Developer ID and notarized.
+- Windows `.exe` files can be signed with the maintainer's Authenticode certificate.
+- Linux binaries / stack archives ship a `<file>.asc` GPG detached signature.
 
 These signing chains attest to the project maintainer's identity (the
 github.com/lTSPV75BRO account / `Prajwal Vernekar` per LICENSE), **not**
@@ -76,6 +82,30 @@ Get-FileHash .\ncc-orchestrator-windows-amd64.exe -Algorithm SHA256
 
 If the hashes do not match, **do not run the binary**. Re-download or
 report the discrepancy on the [issue tracker](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/issues).
+
+---
+
+## Step 1b — Verify the signed release manifest
+
+The release binary embeds the Ed25519 public key for its release stream.
+After downloading the matching binary and release assets, verify the
+checksum manifest online:
+
+```bash
+./ncc-orchestrator-linux-amd64 verify --online --require-signature
+```
+
+It fails when `checksums.txt.sig` is absent, invalid, or was signed by a
+different key. This verifies release integrity without requiring an Apple,
+Windows, or commercial code-signing identity.
+
+Linux users can independently verify a detached signature after importing
+the public key shipped with the release:
+
+```bash
+gpg --import ncc-release-signing.gpg
+gpg --verify ncc-orchestrator-linux-amd64.asc ncc-orchestrator-linux-amd64
+```
 
 ---
 
@@ -233,7 +263,7 @@ the matching GitHub release tag.
 $ ncc-orchestrator verify
 ncc-orchestrator verify
 -----------------------
-version:           2.3.0
+version:           2.4.0
 stream:            Release
 build_date:        2026-09-25T20:00:00Z
 go_version:        go1.27.1
@@ -246,7 +276,7 @@ license:           MIT
 project_url:       https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator
 affiliation:       independent open-source project; not affiliated with or endorsed by Nutanix, Inc.
 verify:            compare executable_sha256 against checksums.txt at
-                   https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.3.0
+                   https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.4.0
 ```
 
 ### `go version -m <binary>`
@@ -276,9 +306,9 @@ Starting in v2.2.0 the dialog shows:
 | Field | Value |
 | ----- | ----- |
 | File description | NCC Orchestrator (CLI + v2 lifecycle manager) |
-| File version | 2.3.0.0 |
+| File version | 2.4.0.0 |
 | Product name | NCC Orchestrator |
-| Product version | 2.3.0 |
+| Product version | 2.4.0 |
 | Company | ncc-orchestrator (open-source project) |
 | Copyright | (c) 2025-2026 Prajwal Vernekar and contributors. MIT licensed; see LICENSE. |
 | Legal trademarks | NCC and Nutanix are trademarks of their respective owners; this project is not affiliated with or endorsed by Nutanix, Inc. |
@@ -298,7 +328,7 @@ GPG-signed. After importing that key:
 
 ```bash
 git fetch --tags
-git tag -v v2.3.0
+git tag -v v2.4.0
 # expected: "Good signature from <maintainer>"
 ```
 
@@ -321,7 +351,7 @@ blobs.
 ```json
 {
   "product": "NCC Orchestrator",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "stream": "Release",
   "git_revision": "914c71d27fb10cd4...",
   "git_dirty": false,
@@ -465,6 +495,113 @@ body with the shared secret and rejects mismatches.
 fails to deliver after retries (channel, cluster, error, payload) as a
 `0600` JSON file, so a transient outage does not silently lose an alert. Treat
 that directory as sensitive — payloads can contain check details.
+
+### systemd sandbox (Linux service)
+
+Since LIN-02 (phase U5 of [UPGRADE_HELPER_PLAN.md](UPGRADE_HELPER_PLAN.md)) the
+supervisor, API, UI, NCC runs, systemd schedules and log maintenance run as the
+system user `ncc` (group `ncc`, no home, no login shell). `v2-install-service`
+creates it with `useradd --system`; the update helper does the same when it
+adopts an older install.
+
+- Files: `bin/`, `frontend-dist/` and `helper/` stay root's and are mounted
+  read-only for the service, so it cannot change the programs it runs. The
+  install folder and `run/` are `root:ncc` with the sticky bit, so the service
+  cannot rename or replace what root owns there (the update helper's
+  `run/upgrade/` and the trusted-stack ledger `.ncc-trusted-stack.json`).
+  Configuration, state, outputs, logs and TLS material belong to `ncc`; secrets
+  stay owner-only (`0600`). Folders outside the install that the configuration
+  names are not changed; the install prints a warning with the `chown` to run.
+- Processes: `User=ncc`, `Group=ncc`, `CapabilityBoundingSet=` and
+  `AmbientCapabilities=` empty (only `CAP_NET_BIND_SERVICE` when the saved API or
+  UI port is below 1024), `NoNewPrivileges`, `RestrictSUIDSGID`, `LockPersonality`,
+  `RestrictRealtime`, `RestrictNamespaces`, `SystemCallArchitectures=native`,
+  `SystemCallFilter=@system-service`, `MemoryDenyWriteExecute`, `PrivateDevices`,
+  `ProtectProc=invisible`, `RemoveIPC`, sockets limited to Unix, IPv4, IPv6 and
+  netlink.
+- Kernel: `ProtectKernelTunables`, `ProtectKernelModules`, `ProtectKernelLogs`,
+  `ProtectControlGroups`, `ProtectClock`.
+- File system: `ProtectSystem=strict` (everything read-only), `ProtectHome=read-only`
+  and `PrivateTmp=yes`, with `ReadWritePaths=` for the install folder and the
+  folders the configuration names when the unit is written (never a top-level
+  folder or one under `/usr`, `/etc`, `/boot`, `/run` and the like), and
+  `ReadOnlyPaths=` for the program folders. `PrivateTmp` is left out when the
+  install or a configured folder is under `/tmp` or `/var/tmp`.
+
+`systemd-analyze security ncc-orchestrator` gives 1.6 (systemd 257; it was 5.2
+with the root service).
+
+What needs root is done by root units that take no instructions from the
+service other than request files they validate:
+
+- the update helper (`ncc-orchestrator-upgrade.path`, `run/upgrade/`), as before;
+- the service helper `ncc-orchestrator-ops.service`, started by
+  `ncc-orchestrator-ops.path` when a file appears in `run/ops/req/`. It installs
+  and removes schedule units (`ncc-sched-<task>`, units with our marker only),
+  restarts the stack after a restore or a TLS change, and starts an upgrade,
+  rollback or adoption (stage 1 of the update helper). A request is one JSON
+  file of at most 16 KiB, opened without following links, owned by `ncc`, with
+  a fixed schema (unknown fields are refused), a known operation, and names
+  and paths checked against strict patterns (task names, `OnCalendar=`,
+  absolute paths without quoting or `%` specifiers, the runner script
+  `<install>/…/ncc-sched-<task>.sh`, pre-update backups in `<install>/backups`
+  only). A package path (`--bundle`) is never taken from the service. The
+  answer is written to `run/ops/res/`, which only root can write.
+  `PUT /api/v1/schedule` with `apply=true` waits for the answer (up to 45 s)
+  and returns its error.
+
+A compromised service can therefore change configuration, reports and
+schedules of its own install, but no longer the programs, other units, `/etc`
+or anything root runs.
+
+**Upgrades and rollback.** The update helper moves units of 2.3.x, 2.4.0-rc and
+2.4.0 (root) to the `ncc` unit, gives the files to `ncc`, adds the service
+helper, and moves a schedule from root's crontab to a systemd timer of `ncc`.
+A rollback puts the units, the owners and root's crontab back exactly as they
+were (the `ncc` user stays). A unit whose command or user was changed by hand
+is kept as it is and reported. With `NCC_UPGRADE_ADOPT=0` run
+`sudo ncc-orchestrator upgrade-adopt` or re-run `v2-install-service`.
+
+**Staying root.** `v2-install-service --service-user root`, or for upgrades and
+adoption the environment variable `NCC_SERVICE_USER=root` or the file
+`/etc/ncc-orchestrator/service-user` containing `root`, keep the service as
+root with the sandbox of 2.4.0 below. An install the `ncc` user cannot reach
+(for example under `/root`) stays root and says why. A unit with `User=root`
+stays root on upgrades.
+
+Root mode (`--service-user root`) keeps the older sandbox: the process and kernel
+settings above without the system call filter, `MemoryDenyWriteExecute`,
+`PrivateDevices` and `ProtectProc`, capabilities such as `CAP_SYS_ADMIN`,
+`CAP_SYS_MODULE`, `CAP_SYS_BOOT`, `CAP_SYS_TIME` and `CAP_NET_RAW` removed, and
+`ProtectSystem=full` with `ReadWritePaths=` for the install folder,
+`/etc/systemd/system` and the configured folders. This limits damage; it does
+not contain a compromised service, which can still write files as root and
+manage units.
+
+**SELinux.** The service helper relabels the programs (`chcon -R -t bin_t` on `bin/`) when it
+restarts the stack. An enforcing SELinux host has not been tested with the `ncc`
+service: the self-heal fix-ups that run `chcon` or `systemctl` from the API fail
+as `ncc` and are reported instead of applied.
+
+If a setting breaks something on your host, override it with a drop-in, which
+survives a reinstall. `226/NAMESPACE` in `systemctl status` means the host
+cannot create the mount namespace the kernel settings need:
+
+```ini
+# sudo systemctl edit ncc-orchestrator     (same for ncc-log-maintenance, ncc-sched-<task>)
+[Service]
+ProtectKernelTunables=no
+ProtectKernelModules=no
+ProtectKernelLogs=no
+ProtectControlGroups=no
+ProtectClock=no
+```
+
+If you point an output, log or backup folder at a new place outside the install
+after the unit was written, it stays read-only for the service until the unit is
+written again (`sudo ncc-orchestrator upgrade-adopt` or `v2-install-service`) or
+you allow it in the same drop-in: `ReadWritePaths=-/the/folder`; give the folder
+to `ncc` too (`sudo chown -R ncc:ncc /the/folder`).
 
 ### api-server access control (RBAC + login)
 
@@ -713,6 +850,95 @@ kubectl -n ncc-orchestrator-v2 get secret ncc-v2-users \
 kubectl -n ncc-orchestrator-v2 logs deploy/ncc-v2-api | grep -A4 "FIRST-RUN ADMIN"
 ```
 
+#### Windows file permissions
+
+File modes such as `0600` do nothing on Windows, and folders under
+`C:\ProgramData` let every local user read files and add new ones. `v2-start`
+and `v2-supervise` therefore set NTFS permissions before the stack runs:
+
+| Path | Ordinary users |
+| ---- | -------------- |
+| `.ncc-*` state files (API token, user database, initial admin password, start settings), `config*.yaml` and its copies, `*.env`, `secrets*`, the files named by `--config-path`, `--token-file`, `--users-db`, `secrets-file`, `--api-session-secret-file`, `NCC_MASTER_KEY_FILE` and `NCC_BACKUP_KEY_FILE` | no access |
+| `backups\`, `tls\`, `configs\`, `config\`, `auth\`, `secrets\`, `logs\` | no access, new files included |
+| `bin\`, `frontend-dist\`, `run\` and product binaries in the install folder | read and run only |
+
+- Full control goes to SYSTEM, Administrators and the account that runs the
+  stack. Access you gave to a specific user, service account or group stays;
+  only broad groups (Everyone, Authenticated Users, Users, Guests, INTERACTIVE,
+  NETWORK, Domain Users and the like) and CREATOR OWNER entries are removed. To
+  run the stack later under another account that is not an administrator, grant
+  that account access first.
+- Nothing is changed when no broad group has access. Rewritten files keep their
+  permissions. A failure, or a volume without permissions (FAT32, exFAT), is one
+  warning and never stops the start.
+- The install folder itself, `outputfiles\`, the NCC log folder and TLS keys
+  outside the install folder are not changed. A start and the `secrets-perms`
+  doctor check warn when the folder or such a key is open. To close the folder:
+
+```powershell
+icacls "C:\NCC" /inheritance:d
+icacls "C:\NCC" /remove:g *S-1-1-0 *S-1-5-11 *S-1-5-32-545
+```
+
+Check with `ncc-orchestrator doctor --only-checks secrets-perms`; add `--fix` to
+repair.
+
+CI (`test-windows`) runs these permission tests under three identities: the
+runner's standard `go test`, an elevated administrator (asserted with
+`scripts/ci/assert-elevated.ps1`; includes taking over files owned by another
+account), and SYSTEM through a one-shot scheduled task
+(`scripts/ci/windows-acl-tests.ps1`), where `doctor --fix` on an installer-layout
+folder must leave SYSTEM and Administrators with full control and Users with
+read-only access. `NCC_TEST_EXPECT_ELEVATED=1` / `NCC_TEST_EXPECT_SYSTEM=1` make
+a missing token fail those tests instead of skipping them. Someone who could write to the folder before the first start may have
+left files of their own, so install into a new folder.
+
+#### Restored program files (SEC-07)
+
+Pre-update rollback points also hold the program files (`bin/ncc-*` and
+`frontend-dist/`). A restore writes them back, and they then run as the
+service account, so a crafted archive would be a way from "can restore a
+backup" (an admin, or anyone holding the backup key) to code execution on the
+host. To close that, the install dir keeps `.ncc-trusted-stack.json`: the
+SHA-256 of every stack file set this host has installed or run, recorded when
+the stack or supervisor starts, after a supervised upgrade, and on every
+`v2-backup` (so rollback points are always covered). It keeps the newest 20
+sets, is written `0600`, is never included in a backup and is never taken
+from one.
+
+On restore the stack is put back only when the program files on disk
+afterwards would be exactly **one recorded set**, or exactly the files
+installed now. A backup that mixes files of versions that each ran here (an
+old API server with a newer UI) is refused, and so is part of a version unless
+the installed binaries complete that same set. A restore replaces
+`frontend-dist/` as a whole, so no installed asset stays; installed binaries
+the backup does not hold do stay, so they count. Other spellings of a program
+file's path (case, trailing dot, 8.3 name) count as program files. Otherwise
+no program file is restored: the data is restored, the installed version keeps
+running, and the output says so (`stack restored: no (program files not
+trusted)`, then `reason: unknown version`, `mixed versions` or `incomplete
+version`; the UI adds a note). `--verify-only` applies the same rule and
+reports it as **Program files**. Trusting sets the host already ran adds no
+code it was not running. An operator with a shell on the server can
+override with `v2-restore --trust-stack`; the API never passes that flag.
+
+#### Files a restore never takes (SEC-19)
+
+A backup holds data and, for rollback points, the program files above. These
+are never taken from an archive, whatever it holds (they are skipped with a
+reason, and `--verify-only` lists them as **Protected files**): anything under
+`run/`, `tls/` or `backups/`, anything else in `bin/`, scripts, executables and
+libraries, and certificates and private keys (except `.ncc-api-*`). Links and special files are
+refused, and a file cannot replace a folder. Restored data is never executable.
+`--trust-stack` does not change this.
+
+Before putting back a failed in-app update, the supervisor checks that its
+saved copy (`run/upgrade-rollback/`) is what it saved, or exactly one recorded
+set; otherwise the update ends as failed and the installed files stay. A restore
+over an existing install keeps this server's listener, origin, backend and HTTPS
+settings, even empty ones. Scheduler log paths and `log-file` may not name a
+script or program, and scheduler log paths may not hold control characters.
+
 #### Backup archive encryption
 
 A backup is a **secrets bundle** — it bundles the API token, bcrypt/PAT hashes,
@@ -753,8 +979,30 @@ the api-server's environment (`NCC_BACKUP_KEY_FILE`, `NCC_BACKUP_KEY`, or
 `NCC_BACKUP_PASSPHRASE`), the in-app updater's pre-update snapshot is written
 encrypted (`pre-update-<stamp>.tar.gz.enc`). The auto-rollback restore reads the
 same environment key, so recovery stays transparent — but the rollback secrets
-bundle is no longer left plaintext on disk. With no key configured, behavior is
-unchanged (plaintext `.tar.gz`).
+bundle is no longer left plaintext on disk.
+
+**Policy (`NCC_BACKUP_ENCRYPTION`, default `required`).** The server refuses to
+write a plaintext backup: a manual snapshot needs a per-request passphrase or a
+server key, a download needs a passphrase (a server key would be useless to the
+recipient), and scheduled and pre-update backups need the server key. Without
+one the request fails with `412 NCC_BACKUP_ENCRYPTION_REQUIRED` and nothing is
+written. After creating an archive the server checks the AES-GCM envelope and
+deletes the file if it is not sealed, and the audit entry records the real
+result and the key source (`request_passphrase` or `server_key`), never key
+material. Set `NCC_BACKUP_ENCRYPTION=optional` only if plaintext archives are
+acceptable; each one is then audited as `encrypted: false`. On Kubernetes add the
+optional `backup-key` entry to the credentials Secret.
+
+**Retiring old plaintext backups.** Archives made before this policy are not
+protected by it. List `<install>/backups/*.tar.gz` (the ones without `.enc`) and
+any copies taken off the host. For each one you still need: verify it
+(`POST /api/v1/settings/backups/verify`), take a fresh encrypted snapshot, copy
+that off the host, then delete the plaintext archives and their copies. Treat
+secrets in a plaintext archive that left the host as exposed and rotate them
+(API token, LDAP bind password, SAML SP key, Prism password). Keep a copy of the
+backup key outside the host: an encrypted backup cannot be restored without it.
+To rotate the key, set the new one, take a new snapshot, and keep the old key
+until the old archives age out.
 
 Server-side snapshots also honor an optional **retention cap**: set
 `NCC_BACKUPS_RETAIN=<N>` to keep at most the N newest **manual** snapshots
@@ -893,7 +1141,11 @@ Login attempts are protected at two layers. The global per-IP rate limiter
 throttles bursts, and a **per-account lockout** (`--login-lockout-threshold`,
 default 5 within `--login-lockout-window` 15m) temporarily locks an account for
 `--login-lockout-duration` (15m), returning `429 NCC_API_ACCOUNT_LOCKED` with a
-`Retry-After` header. Because it keys on the username rather than the IP, it
+`Retry-After` header. Both 429s (lockout and rate limit) also carry
+`retry_after_seconds` in the JSON body; the sign-in page uses it to count down
+and re-enable the Sign in button. The lockout response has the same shape and
+wording for existing and unknown usernames, and never reports attempts left.
+Because it keys on the username rather than the IP, it
 stops an attacker who rotates source IPs while grinding one account — something
 the IP limiter alone cannot. A successful login or any password reset clears the
 lockout; set the threshold to `0` to disable. The built-in `admin` is not
@@ -1166,6 +1418,33 @@ should passthrough (or use an HTTPS backend) so the browser sees that UI
 certificate.
 
 ---
+
+## Blocked dashboard versions
+
+A release found to carry a known vulnerability can be refused by the API. A
+dashboard that declares a blocked version (header `X-NCC-UI-Version`, and the UI
+server's `X-NCC-UI-Server-Version`) gets HTTP 403 with error code
+`NCC_API_UI_VERSION_BLOCKED`, the advisory ids, the severity and the version that
+fixes it, and the dashboard shows an error screen with the same details. The
+shipped list comes from scanning every tagged release (see
+[`audit/release-scan.md`](audit/release-scan.md)); administrators can add entries
+and decide whether dashboards that declare no version (every build before 2.4.0)
+are refused, under System, Updates & backups, Blocked versions or
+`PUT /api/v1/settings/ui-versions`. Every refusal is audited as `ui.blocked`.
+
+Only our own tools are version-checked: the dashboard (`ncc-ui`) and
+`ncc-mcp-server`. A custom dashboard or a third-party integration is never refused
+for its version. A custom client should send `X-NCC-Client: <name>`; the API then
+records it as `client_kind: custom` with that name instead of treating it as our
+dashboard. Every non-dashboard client is watched: ten refusals (401, 403 or 429)
+from one address within five minutes, or one token used from four addresses within
+ten, raises an `access.suspicious` audit record (with the reasons) and a warning in
+the server log, once per burst. Nothing is blocked by this; it is for review and
+for alerting on the audit stream.
+
+This is a guard against an outdated dashboard that is honest about what it is. It
+checks headers the client sends, so it does not stop a hostile client; that is what
+authentication, roles and the other controls on this page do.
 
 ## Reporting suspected tampering
 

@@ -58,7 +58,7 @@ func nccAlertOpenAPISchemas() oaObj {
 		},
 		"NCCAlert": oaObj{
 			"type":        "object",
-			"description": "One NCC alert instance: an episode of a finding. Optional fields are omitted when empty.",
+			"description": "One NCC finding instance: an episode of a finding (the API path keeps the older name, alerts). Optional fields are omitted when empty.",
 			"required": []string{
 				"id", "finding_id", "correlation_key", "source", "type", "cluster", "check",
 				"state", "detection", "closed", "created_at", "updated_at", "revision",
@@ -108,7 +108,7 @@ func nccAlertOpenAPISchemas() oaObj {
 			"properties": oaObj{
 				"id":              oaObj{"type": "string", "format": "uuid", "description": "Event UUIDv4."},
 				"alert_id":        oaObj{"type": "string", "format": "uuid", "description": "The NCCAlert this event belongs to."},
-				"correlation_key": oaStr("Finding identity of that alert."),
+				"correlation_key": oaStr("Finding identity of that instance."),
 				"type": oaEnum("Event type.",
 					alertEvtDetected, alertEvtRedetected, alertEvtNotDetected, alertEvtSeverityChanged,
 					alertEvtAcknowledged, alertEvtResolved, alertEvtReopened, alertEvtRecurred,
@@ -235,7 +235,7 @@ func nccAlertOpenAPIPaths() oaObj {
 	common := oaObj{
 		"401": errResp("Missing or invalid credentials."),
 		"429": errResp("Rate limited."),
-		"500": errResp("The alert store could not be read or updated."),
+		"500": errResp("The finding lifecycle store could not be read or updated."),
 	}
 	with := func(extra oaObj) oaObj {
 		out := oaObj{}
@@ -251,8 +251,8 @@ func nccAlertOpenAPIPaths() oaObj {
 	return oaObj{
 		"/api/v1/alerts/ncc": oaObj{"get": oaObj{
 			"operationId": "listNCCAlerts",
-			"tags":        []string{"NCC alerts"},
-			"summary":     "List NCC alert instances",
+			"tags":        []string{"NCC findings"},
+			"summary":     "List NCC finding instances",
 			"description": "Ordered by (updated_at, id) ascending, so cursor paging is stable while alerts change. Cluster-group scoped.",
 			"parameters": []oaObj{
 				oaQuery("state", "Filter by operator state.", stateEnum),
@@ -272,8 +272,8 @@ func nccAlertOpenAPIPaths() oaObj {
 		}},
 		"/api/v1/alerts/ncc/events": oaObj{"get": oaObj{
 			"operationId": "listNCCAlertEvents",
-			"tags":        []string{"NCC alerts"},
-			"summary":     "Read the append-only NCC alert event feed",
+			"tags":        []string{"NCC findings"},
+			"summary":     "Read the append-only NCC finding event feed",
 			"description": "Events with seq greater than cursor, in seq order. Store next_cursor and send it back to receive only new events. Cluster-group scoped.",
 			"parameters": []oaObj{
 				oaQuery("cursor", "next_cursor from the previous response (a seq number); omit to start from the beginning.", oaObj{"type": "string", "pattern": "^[0-9]+$"}),
@@ -287,15 +287,15 @@ func nccAlertOpenAPIPaths() oaObj {
 		}},
 		"/api/v1/alerts/ncc/{id}": oaObj{"get": oaObj{
 			"operationId": "getNCCAlert",
-			"tags":        []string{"NCC alerts"},
-			"summary":     "Get one NCC alert instance with its history",
+			"tags":        []string{"NCC findings"},
+			"summary":     "Get one NCC finding instance with its history",
 			"parameters": []oaObj{{
-				"name": "id", "in": "path", "required": true, "description": "Alert instance UUIDv4.",
+				"name": "id", "in": "path", "required": true, "description": "Finding instance UUIDv4.",
 				"schema": oaObj{"type": "string", "format": "uuid"},
 			}},
 			"responses": with(oaObj{
 				"200": oaJSON("The instance, its events, and the other instances of the same finding.", oaEnvelope(oaRef("NCCAlertDetail"))),
-				"404": errResp("No such alert, or it is outside the caller's cluster groups."),
+				"404": errResp("No such finding instance, or it is outside the caller's cluster groups."),
 			}),
 		}},
 	}

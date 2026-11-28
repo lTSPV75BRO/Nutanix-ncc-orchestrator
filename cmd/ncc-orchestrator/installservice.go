@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -32,6 +34,13 @@ type installServiceOptions struct {
 	OrchestratorBin string
 	Now             bool // start/enable immediately (Linux: enable --now; macOS: load -w)
 	PrintOnly       bool
+	// APIListen, UIListen: saved for the supervisor, which starts with them.
+	APIListen, UIListen string
+	// ServiceUser runs the stack under systemd: "ncc" by default, "root" for
+	// the service as before 2.5, "" for a unit written before 2.5 (root).
+	ServiceUser string
+	// userNote says why the service stays root although nobody asked for it.
+	userNote string
 }
 
 func (o *installServiceOptions) resolve() error {
@@ -61,7 +70,7 @@ func (o *installServiceOptions) resolve() error {
 }
 
 func systemdSupervisorUnit(o installServiceOptions) string {
-	return strings.Join([]string{
+	lines := []string{
 		"[Unit]",
 		"Description=NCC Orchestrator v2 stack supervisor (API + UI)",
 		"Documentation=https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator",
@@ -88,11 +97,25 @@ func systemdSupervisorUnit(o installServiceOptions) string {
 		"# The supervisor is what restarts everything else; under memory pressure",
 		"# the kernel should pick something else first.",
 		"OOMScoreAdjust=-500",
+	}
+	if rootService(o.ServiceUser) {
+		if o.ServiceUser == "root" {
+			lines = append(lines, "# Runs as root on purpose (v2-install-service --service-user root).", "User=root")
+		}
+		// The supervisor writes schedule units, and replaces its own programs.
+		lines = append(lines, systemdHardening(o.InstallDir, systemdUnitDir, path.Dir(filepath.ToSlash(o.OrchestratorBin)))...)
+	} else {
+		// Units, systemctl and programs are the service helper's and the
+		// update helper's (root); the stack writes its own folders only.
+		lines = append(lines, systemdUnprivilegedHardening(o.InstallDir, o.ServiceUser, listenNeedsBind(o.InstallDir))...)
+	}
+	lines = append(lines,
 		"",
 		"[Install]",
 		"WantedBy=multi-user.target",
 		"",
-	}, "\n")
+	)
+	return strings.Join(lines, "\n")
 }
 
 func runV2InstallService(o installServiceOptions) error {
@@ -101,6 +124,11 @@ func runV2InstallService(o installServiceOptions) error {
 	}
 	if err := o.resolve(); err != nil {
 		return err
+	}
+	if !o.PrintOnly {
+		if err := saveListenAddresses(o.InstallDir, o.APIListen, o.UIListen); err != nil {
+			return err
+		}
 	}
 	switch runtime.GOOS {
 	case "linux":
@@ -196,7 +224,9 @@ func systemdApplyUpdatePathUnit(o installServiceOptions) string {
 
 // systemdApplyUpdateOneshotUnit restarts the supervisor after a short delay so
 // all three binaries finish copying. The ExecStart if/then stays on one line
-// (`then chcon`, never `then;`) so /bin/sh -c accepts it.
+// (`then chcon`, never `then;`) so /bin/sh -c accepts it. It gets the process
+// hardening only: the API rewrites this unit when it starts, so it must also
+// work on existing installs whose host cannot create mount namespaces.
 func systemdApplyUpdateOneshotUnit(o installServiceOptions) string {
 	bins := applyUpdateWatcherBinaries(o)
 	quoted := make([]string, 0, len(bins))
@@ -204,7 +234,7 @@ func systemdApplyUpdateOneshotUnit(o installServiceOptions) string {
 		quoted = append(quoted, systemdQuote(bin))
 	}
 	script := "sleep 5; if command -v chcon >/dev/null 2>&1; then chcon -t bin_t " + strings.Join(quoted, " ") + " >/dev/null 2>&1 || true; fi; systemctl restart " + o.ServiceName + ".service"
-	return strings.Join([]string{
+	lines := []string{
 		"[Unit]",
 		"Description=Restart NCC stack after binaries change",
 		"Documentation=https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator",
@@ -212,8 +242,9 @@ func systemdApplyUpdateOneshotUnit(o installServiceOptions) string {
 		"[Service]",
 		"Type=oneshot",
 		"ExecStart=/bin/sh -c " + systemdQuote(script),
-		"",
-	}, "\n")
+	}
+	lines = append(lines, systemdProcessHardening()...)
+	return strings.Join(append(lines, ""), "\n")
 }
 
 func installApplyUpdateWatcher(o installServiceOptions) error {
@@ -262,22 +293,94 @@ func uninstallApplyUpdateWatcher(o installServiceOptions) error {
 	return nil
 }
 
+// resolveServiceUser decides as whom the service runs: the flag, else the
+// operator's setting, else what the installed unit says, else ncc (root when
+// ncc cannot reach the install folder).
+func (o *installServiceOptions) resolveServiceUser() error {
+	u, err := normalizeServiceUser(o.ServiceUser)
+	if err != nil {
+		return err
+	}
+	if u != "" {
+		if !rootService(u) {
+			if err := installReachable(o.InstallDir); err != nil {
+				return fmt.Errorf("the service user %s cannot run this install: %v; move it, or use --service-user root", u, err)
+			}
+		}
+		o.ServiceUser = u
+		return nil
+	}
+	installed, _ := os.ReadFile(filepath.Join(systemdUnitDir, o.ServiceName+".service"))
+	o.ServiceUser, o.userNote = desiredServiceUser(o.InstallDir, string(installed))
+	return nil
+}
+
+// systemdOps is the service helper of this install.
+func (o installServiceOptions) systemdOps() *systemdService {
+	return &systemdService{o: o, unitDir: systemdUnitDir}
+}
+
 func installSupervisorSystemd(o installServiceOptions) error {
-	unit := systemdSupervisorUnit(o)
+	if err := o.resolveServiceUser(); err != nil {
+		return err
+	}
+	if o.userNote != "" {
+		fmt.Fprintln(os.Stderr, "note: "+o.userNote)
+	}
+	unprivileged := !rootService(o.ServiceUser)
+	ops := o.systemdOps()
+	opsBase := filepath.Join(systemdUnitDir, opsServiceName(o.ServiceName))
 	unitPath := filepath.Join(systemdUnitDir, o.ServiceName+".service")
 	if o.PrintOnly {
+		unit := systemdSupervisorUnit(o)
 		fmt.Printf("Would write %s:\n\n%s\n", unitPath, unit)
+		if unprivileged {
+			fmt.Printf("Would create the system user %s (if missing), give it the install except bin/, frontend-dist/ and helper/, and write %s:\n\n%s\n", o.ServiceUser, opsBase+".service", ops.opsUnit())
+			fmt.Printf("Would write %s:\n\n%s\n", opsBase+".path", ops.opsPathUnit())
+		}
 		fmt.Printf("Would write %s:\n\n%s\n", applyUpdateWatcherPathPath(o), systemdApplyUpdatePathUnit(o))
 		fmt.Printf("Would write %s:\n\n%s\n", applyUpdateWatcherServicePath(o), systemdApplyUpdateOneshotUnit(o))
-		fmt.Printf("Then run:\n  systemctl daemon-reload\n  systemctl enable%s %s.service\n  systemctl enable --now %s.path\n",
-			ifThen(o.Now, " --now", ""), o.ServiceName, applyUpdateWatcherName(o.ServiceName))
+		fmt.Printf("Would write %s:\n\n%s\n", logMaintenanceServicePath(), systemdLogMaintenanceServiceUnit(o))
+		fmt.Printf("Would write %s:\n\n%s\n", logMaintenanceTimerPath(), systemdLogMaintenanceTimerUnit())
+		fmt.Printf("Then run:\n  systemctl daemon-reload\n  systemctl enable%s %s.service\n  systemctl enable --now %s.path\n  systemctl enable --now %s.timer\n",
+			ifThen(o.Now, " --now", ""), o.ServiceName, applyUpdateWatcherName(o.ServiceName), logMaintenanceUnitName)
 		return nil
 	}
 	if !systemctlAvailable() {
 		return fmt.Errorf("systemd is not available (systemctl not found or systemd is not the init system)")
 	}
+	if unprivileged {
+		if os.Geteuid() != 0 {
+			return errors.New("v2-install-service needs root")
+		}
+		created, err := ensureServiceUser(o.ServiceUser)
+		if err != nil {
+			return err
+		}
+		if created {
+			fmt.Printf("Created the system user %s\n", o.ServiceUser)
+		}
+		uid, gid, _ := lookupServiceIDs(o.ServiceUser)
+		if err := applyServiceOwnership(o.InstallDir, uid, gid); err != nil {
+			return fmt.Errorf("give the install to %s: %w", o.ServiceUser, err)
+		}
+		// The service cannot write the ledger of trusted program files.
+		recordTrustedStackQuiet(o.InstallDir, "install")
+		for _, w := range outsideFoldersNotWritable(o.InstallDir, uid, gid) {
+			fmt.Fprintf(os.Stderr, "warning: the configuration names %s, which %s cannot write (chown -R %s: %s)\n", w, o.ServiceUser, o.ServiceUser, w)
+		}
+	}
+	unit := systemdSupervisorUnit(o)
 	if err := os.WriteFile(unitPath, []byte(unit), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", unitPath, err)
+	}
+	if unprivileged {
+		if err := writeDefinitionFile(opsBase+".service", ops.opsUnit()); err != nil {
+			return err
+		}
+		if err := writeDefinitionFile(opsBase+".path", ops.opsPathUnit()); err != nil {
+			return err
+		}
 	}
 	// SELinux: a binary under a home dir (e.g. /root) is typically labeled
 	// admin_home_t by policy default. The init_t domain systemd execs units
@@ -309,6 +412,12 @@ func installSupervisorSystemd(o installServiceOptions) error {
 	if out, err := exec.Command("systemctl", "daemon-reload").CombinedOutput(); err != nil {
 		return fmt.Errorf("systemctl daemon-reload: %v (%s)", err, strings.TrimSpace(string(out)))
 	}
+	if unprivileged {
+		name := opsServiceName(o.ServiceName) + ".path"
+		if out, err := exec.Command("systemctl", "enable", "--now", name).CombinedOutput(); err != nil {
+			return fmt.Errorf("systemctl enable --now %s: %v (%s)", name, err, strings.TrimSpace(string(out)))
+		}
+	}
 	enableArgs := []string{"enable"}
 	if o.Now {
 		enableArgs = append(enableArgs, "--now")
@@ -320,6 +429,12 @@ func installSupervisorSystemd(o installServiceOptions) error {
 	if err := installApplyUpdateWatcher(o); err != nil {
 		return err
 	}
+	// Log rotation is housekeeping: a failure to install the timer must not
+	// undo a working service install.
+	if err := installLogMaintenanceTimer(o); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: log maintenance timer not installed: %v\n", err)
+	}
+	installHelperOrWarn(o)
 	fmt.Printf("Installed systemd service %s.service (ExecStart=%s v2-supervise --install-dir %s)\n", o.ServiceName, o.OrchestratorBin, o.InstallDir)
 	fmt.Printf("Enabled at boot%s. Manage with: systemctl status|restart|stop %s\n", ifThen(o.Now, " and started now", ""), o.ServiceName)
 	return nil
@@ -332,7 +447,16 @@ func uninstallSupervisorSystemd(o installServiceOptions) error {
 		fmt.Printf("  systemctl disable --now %s.path\n  rm -f %s %s\n", applyUpdateWatcherName(o.ServiceName), applyUpdateWatcherPathPath(o), applyUpdateWatcherServicePath(o))
 		return nil
 	}
+	removeHelperForService(o.InstallDir)
 	_ = uninstallApplyUpdateWatcher(o)
+	uninstallLogMaintenanceTimer()
+	if systemctlAvailable() {
+		_, _ = exec.Command("systemctl", "disable", "--now", opsServiceName(o.ServiceName)+".path").CombinedOutput()
+		_, _ = exec.Command("systemctl", "stop", opsServiceName(o.ServiceName)+".service").CombinedOutput()
+	}
+	for _, n := range []string{".path", ".service"} {
+		_ = os.Remove(filepath.Join(systemdUnitDir, opsServiceName(o.ServiceName)+n))
+	}
 	if systemctlAvailable() {
 		_, _ = exec.Command("systemctl", "disable", "--now", o.ServiceName+".service").CombinedOutput()
 	}
@@ -352,19 +476,43 @@ func windowsSupervisorTaskCmd(o installServiceOptions) string {
 	return fmt.Sprintf("\"%s\" v2-supervise --install-dir \"%s\"", o.OrchestratorBin, o.InstallDir)
 }
 
-// windowsSupervisorTaskXML is the Task Scheduler definition for the
-// supervisor. Plain `schtasks /SC ONSTART` leaves the defaults, which stop the
-// task after 72 hours, never restart it when it dies, and stop it on battery.
-func windowsSupervisorTaskXML(o installServiceOptions) string {
+// windowsTaskSpec is a task that runs as SYSTEM at startup or on demand.
+type windowsTaskSpec struct {
+	Description, Command, Arguments, WorkingDir string
+	Retries                                     int
+	// EveryMinute also starts it every minute, unless it runs already.
+	EveryMinute bool
+	NotAtBoot   bool
+	TimeLimit   string // ISO 8601 duration; "" = none
+}
+
+const windowsMinuteTrigger = `<TimeTrigger><Repetition><Interval>PT1M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>` +
+	`<StartBoundary>2020-01-01T00:00:00</StartBoundary><Enabled>true</Enabled></TimeTrigger>`
+
+// windowsTaskXML is its Task Scheduler definition. Plain `schtasks /SC ONSTART`
+// leaves the defaults, which stop the task after 72 hours, never restart it
+// when it dies, and stop it on battery.
+func windowsTaskXML(t windowsTaskSpec) string {
 	esc := func(s string) string {
 		r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;")
 		return r.Replace(s)
 	}
+	escArgs := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace
+	triggers := `<BootTrigger><Enabled>true</Enabled></BootTrigger>`
+	if t.NotAtBoot {
+		triggers = ""
+	}
+	if t.EveryMinute {
+		triggers += windowsMinuteTrigger
+	}
+	if t.TimeLimit == "" {
+		t.TimeLimit = "PT0S"
+	}
 	return strings.Join([]string{
 		`<?xml version="1.0" encoding="UTF-16"?>`,
 		`<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">`,
-		`  <RegistrationInfo><Description>NCC Orchestrator v2 stack supervisor (API + UI)</Description></RegistrationInfo>`,
-		`  <Triggers><BootTrigger><Enabled>true</Enabled></BootTrigger></Triggers>`,
+		`  <RegistrationInfo><Description>` + esc(t.Description) + `</Description></RegistrationInfo>`,
+		`  <Triggers>` + triggers + `</Triggers>`,
 		`  <Principals><Principal id="Author"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>`,
 		`  <Settings>`,
 		`    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>`,
@@ -379,18 +527,29 @@ func windowsSupervisorTaskXML(o installServiceOptions) string {
 		`    <Hidden>false</Hidden>`,
 		`    <RunOnlyIfIdle>false</RunOnlyIfIdle>`,
 		`    <WakeToRun>false</WakeToRun>`,
-		`    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>`,
+		`    <ExecutionTimeLimit>` + t.TimeLimit + `</ExecutionTimeLimit>`,
 		`    <Priority>5</Priority>`,
-		`    <RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure>`,
+		fmt.Sprintf(`    <RestartOnFailure><Interval>PT1M</Interval><Count>%d</Count></RestartOnFailure>`, t.Retries),
 		`  </Settings>`,
 		`  <Actions Context="Author"><Exec>`,
-		`    <Command>` + esc(o.OrchestratorBin) + `</Command>`,
-		`    <Arguments>v2-supervise --install-dir "` + esc(o.InstallDir) + `"</Arguments>`,
-		`    <WorkingDirectory>` + esc(o.InstallDir) + `</WorkingDirectory>`,
+		`    <Command>` + esc(t.Command) + `</Command>`,
+		`    <Arguments>` + escArgs(t.Arguments) + `</Arguments>`,
+		`    <WorkingDirectory>` + esc(t.WorkingDir) + `</WorkingDirectory>`,
 		`  </Exec></Actions>`,
 		`</Task>`,
 		``,
 	}, "\r\n")
+}
+
+// windowsSupervisorTaskXML is the supervisor's task.
+func windowsSupervisorTaskXML(o installServiceOptions) string {
+	return windowsTaskXML(windowsTaskSpec{
+		Description: "NCC Orchestrator v2 stack supervisor (API + UI)",
+		Command:     o.OrchestratorBin,
+		Arguments:   `v2-supervise --install-dir "` + o.InstallDir + `"`,
+		WorkingDir:  o.InstallDir,
+		Retries:     999,
+	})
 }
 
 // utf16LEWithBOM encodes s the way schtasks /XML expects.
@@ -402,23 +561,43 @@ func utf16LEWithBOM(s string) []byte {
 	return out
 }
 
-// registerWindowsSupervisorTask writes the task XML to a temp file and
-// (re)registers it, replacing an existing definition.
+// registerWindowsSupervisorTask (re)registers the supervisor's task, replacing
+// an existing definition, and the one that watches it.
 func registerWindowsSupervisorTask(o installServiceOptions) error {
+	if x, ok := queryWindowsTaskXML(o.ServiceName); ok && windowsScanTask(x) {
+		// A schedule saved by an earlier release under the same name.
+		moved := windowsScheduleTaskName(o.ServiceName)
+		if moved == o.ServiceName {
+			return fmt.Errorf("scheduled task %q already runs a scan schedule; remove it or use another --service-name", o.ServiceName)
+		}
+		if err := registerWindowsTaskXML(moved, x); err != nil {
+			return fmt.Errorf("keep the existing scan schedule as %q: %w", moved, err)
+		}
+		fmt.Printf("Moved the existing scan schedule %q to %q\n", o.ServiceName, moved)
+	}
+	if err := registerWindowsTaskXML(o.ServiceName, windowsSupervisorTaskXML(o)); err != nil {
+		return err
+	}
+	return installWatchdogTask(o)
+}
+
+// registerWindowsTaskXML (re)registers a task from its definition.
+func registerWindowsTaskXML(taskName, taskXML string) error {
 	f, err := os.CreateTemp("", "ncc-supervisor-task-*.xml")
 	if err != nil {
 		return err
 	}
 	name := f.Name()
 	defer os.Remove(name)
-	if _, err := f.Write(utf16LEWithBOM(windowsSupervisorTaskXML(o))); err != nil {
+	if _, err := f.Write(utf16LEWithBOM(taskXML)); err != nil {
 		_ = f.Close()
 		return err
 	}
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if out, err := exec.Command("schtasks", "/Create", "/TN", o.ServiceName, "/XML", name, "/F").CombinedOutput(); err != nil {
+	// #nosec G702 -- fixed program, argv only; the administrator's task name
+	if out, err := exec.Command("schtasks", "/Create", "/TN", taskName, "/XML", name, "/F").CombinedOutput(); err != nil {
 		return fmt.Errorf("create scheduled task: %v (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil
@@ -428,12 +607,14 @@ func installSupervisorWindows(o installServiceOptions) error {
 	tr := windowsSupervisorTaskCmd(o)
 	if o.PrintOnly {
 		fmt.Printf("Would register scheduled task %q from this definition (schtasks /Create /XML /F):\n\n%s\n", o.ServiceName, windowsSupervisorTaskXML(o))
+		fmt.Printf("Would register scheduled task %q (starts it again every minute if it has died):\n\n%s\n", watchdogTaskName(o.ServiceName), windowsWatchdogTaskXML(o))
 		return nil
 	}
 	if err := registerWindowsSupervisorTask(o); err != nil {
 		return err
 	}
-	fmt.Printf("Created Windows Scheduled Task %q (trigger: at system startup, run as SYSTEM, no time limit, restarts on failure)\n", o.ServiceName)
+	installHelperOrWarn(o)
+	fmt.Printf("Created Windows Scheduled Task %q (trigger: at system startup, run as SYSTEM, no time limit; started again by %q)\n", o.ServiceName, watchdogTaskName(o.ServiceName))
 	fmt.Printf("Command: %s\n", tr)
 	if o.Now {
 		if out, err := exec.Command("schtasks", "/Run", "/TN", o.ServiceName).CombinedOutput(); err != nil {
@@ -446,9 +627,11 @@ func installSupervisorWindows(o installServiceOptions) error {
 
 func uninstallSupervisorWindows(o installServiceOptions) error {
 	if o.PrintOnly {
-		fmt.Printf("Would run:\n  schtasks /End /TN %q\n  schtasks /Delete /TN %q /F\n", o.ServiceName, o.ServiceName)
+		fmt.Printf("Would run:\n  schtasks /Delete /TN %q /F\n  schtasks /End /TN %q\n  schtasks /Delete /TN %q /F\n", watchdogTaskName(o.ServiceName), o.ServiceName, o.ServiceName)
 		return nil
 	}
+	removeHelperForService(o.InstallDir)
+	removeWatchdogTask(o.ServiceName)
 	_, _ = exec.Command("schtasks", "/End", "/TN", o.ServiceName).CombinedOutput()
 	if out, err := exec.Command("schtasks", "/Delete", "/TN", o.ServiceName, "/F").CombinedOutput(); err != nil {
 		return fmt.Errorf("delete scheduled task: %v (%s)", err, strings.TrimSpace(string(out)))
@@ -459,8 +642,10 @@ func uninstallSupervisorWindows(o installServiceOptions) error {
 
 // ---- macOS / launchd ----
 
+const launchdLabelPrefix = "io.github.ncc-orchestrator."
+
 func launchdLabel(serviceName string) string {
-	return "io.github.ncc-orchestrator." + sanitizeSystemdName(serviceName)
+	return launchdLabelPrefix + sanitizeSystemdName(serviceName)
 }
 
 func launchdPlistPath(serviceName string) string {
@@ -522,6 +707,7 @@ func installSupervisorLaunchd(o installServiceOptions) error {
 	if out, err := exec.Command("launchctl", "load", "-w", plistPath).CombinedOutput(); err != nil {
 		return fmt.Errorf("launchctl load: %v (%s)", err, strings.TrimSpace(string(out)))
 	}
+	installHelperOrWarn(o)
 	fmt.Printf("Installed launchd daemon %s (%s)\n", launchdLabel(o.ServiceName), plistPath)
 	return nil
 }
@@ -532,12 +718,21 @@ func uninstallSupervisorLaunchd(o installServiceOptions) error {
 		fmt.Printf("Would run:\n  launchctl unload -w %s\n  rm -f %s\n", plistPath, plistPath)
 		return nil
 	}
+	removeHelperForService(o.InstallDir)
 	_, _ = exec.Command("launchctl", "unload", "-w", plistPath).CombinedOutput()
 	if err := os.Remove(plistPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove %s: %w", plistPath, err)
 	}
 	fmt.Printf("Removed launchd daemon %s\n", launchdLabel(o.ServiceName))
 	return nil
+}
+
+// installHelperOrWarn installs the update helper beside the service. Without it
+// the first upgrade installs it, so a failure is only reported.
+func installHelperOrWarn(o installServiceOptions) {
+	if err := installHelperForService(o); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: update helper not installed (the first upgrade tries again): %v\n", err)
+	}
 }
 
 func ifThen(cond bool, yes, no string) string {

@@ -76,7 +76,7 @@ func TestRequestLogNamesUserAndError(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r = withPrincipal(r, principal{role: RoleOperator, subject: "alex", method: authSessionCookie})
 		addRequestLogAttrs(r, "run_id", "r1")
-		writeJSON(w, http.StatusConflict, envelope{Success: false, Error: "A run is already in progress.", ErrorCode: "NCC_API_RUN_IN_PROGRESS"})
+		writeJSON(w, http.StatusConflict, envelope{Success: false, Error: "A run is already in progress.", ErrorCode: "NCC_API_RUN_IN_PROGRESS", Remediation: "Wait for the active run to finish."})
 	})
 	h := s.withRequestMeta(withErrorCapture(inner))
 	rr := httptest.NewRecorder()
@@ -91,7 +91,7 @@ func TestRequestLogNamesUserAndError(t *testing.T) {
 	if line == nil {
 		t.Fatalf("no request line: %s", buf)
 	}
-	want := map[string]interface{}{"level": "WARN", "user": "alex", "role": "operator", "auth": "session-cookie", "status": float64(409), "error": "A run is already in progress.", "error_code": "NCC_API_RUN_IN_PROGRESS", "run_id": "r1", "query": "password=[redacted]"}
+	want := map[string]interface{}{"level": "WARN", "user": "alex", "role": "operator", "auth": "session-cookie", "status": float64(409), "error": "A run is already in progress.", "error_code": "NCC_API_RUN_IN_PROGRESS", "remediation": "Wait for the active run to finish.", "run_id": "r1", "query": "password=[redacted]"}
 	for k, v := range want {
 		if line[k] != v {
 			t.Errorf("%s = %v, want %v", k, line[k], v)

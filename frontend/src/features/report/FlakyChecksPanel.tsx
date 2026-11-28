@@ -36,7 +36,7 @@ export function FlakyChecksPanel({ flakyChecks, clusterNameMap }: Props) {
       title: "Instability",
       key: "instability",
       width: 190,
-      render: (_, row) => <Progress percent={Number(row.instability.toFixed(1))} size="small" status={row.instability >= 30 ? "exception" : row.instability >= 15 ? "active" : "normal"} />,
+      render: (_, row) => <Progress percent={Number(row.instability.toFixed(1))} size="small" aria-label={`${row.cluster} ${row.check} instability`} status={row.instability >= 30 ? "exception" : row.instability >= 15 ? "active" : "normal"} />,
     },
     {
       title: "Current",
@@ -49,7 +49,7 @@ export function FlakyChecksPanel({ flakyChecks, clusterNameMap }: Props) {
 
   return (
     <Card className="page-card">
-      <Typography.Title level={4} className="section-title">
+      <Typography.Title level={2} className="section-title">
         Flaky checks
 </Typography.Title>
       <Typography.Text type="secondary" className="section-subtitle">
@@ -73,7 +73,7 @@ export function FlakyChecksPanel({ flakyChecks, clusterNameMap }: Props) {
         </Col>
       </Row>
       {checks.length === 0 ? (
-        <Empty description="No flaky checks identified in this run history window." />
+        <Empty description="No flaky checks identified in this run history window" />
       ) : (
         <Table size="small" columns={columns} dataSource={checks} pagination={{ pageSize: 8, showSizeChanger: false }} />
       )}

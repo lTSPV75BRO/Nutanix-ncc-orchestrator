@@ -6,6 +6,8 @@ export type Envelope<T> = {
   error_code?: string;
   /** Set on errors; quote it to an administrator to find the matching log/audit line. */
   request_id?: string;
+  /** On 429s (sign-in lockout, rate limit): seconds until a retry can succeed. */
+  retry_after_seconds?: number;
 };
 
 export type HealthData = {
@@ -202,6 +204,16 @@ export type UpdateJob = {
   finished_at?: string;
 };
 
+/** GET /api/v1/settings/update/notice: the update banner, from a lookup cached for a day. */
+export type UpdateNotice = {
+  current_version: string;
+  latest_version?: string;
+  update_available: boolean;
+  checked_at?: string;
+  /** Settings → Features "Update checks" is off. */
+  disabled?: boolean;
+};
+
 /** Result of GET /api/v1/settings/update (version check + current job). */
 export type UpdateStatus = {
   current_version: string;
@@ -211,6 +223,8 @@ export type UpdateStatus = {
   update_available?: boolean;
   supported?: boolean;
   check_error?: string;
+  /** The latest tag was found, but release assets were unavailable (usually API rate limiting). */
+  check_degraded?: boolean;
   check_skipped?: string;
   /** Settings → Features "Update checks" is off: no release lookup or install. */
   disabled?: boolean;
@@ -220,6 +234,18 @@ export type UpdateStatus = {
   supervised_upgrades?: boolean;
   /** The supervisor's current or last upgrade (run/v2-upgrade-state.json). */
   upgrade?: UpgradeJob;
+  /** The previous version that Roll back puts back, kept for 24 hours. */
+  rollback?: RollbackOffer;
+};
+
+export type RollbackOffer = {
+  /** The version that comes back. */
+  to: string;
+  /** The version installed now. */
+  from: string;
+  /** What is undone: an upgrade, an adoption (service definitions only) or `update` (programs). */
+  of: "upgrade" | "adopt" | "update";
+  until: string;
 };
 
 export type UpgradePhase =
@@ -231,7 +257,20 @@ export type UpgradePhase =
   | "done"
   | "rolling_back"
   | "rolled_back"
-  | "failed";
+  | "failed"
+  // Phases of the update helper (and of the preparation for it).
+  | "downloading"
+  | "helper_install"
+  | "helper_check"
+  | "handover"
+  | "staging"
+  | "saving"
+  | "stopping"
+  | "swapping"
+  | "migrating"
+  | "starting"
+  | "checking"
+  | "restoring";
 
 export type UpgradeJob = {
   id: string;
@@ -252,6 +291,44 @@ export type UpgradeJob = {
   steps: { at: string; phase: UpgradePhase; message: string }[] | null;
   doctor?: { summary?: Record<string, number>; fixed?: string[]; failing?: string[]; error?: string };
   supervisor_restart_pending?: boolean;
+  /** "adopt": same version, new service definitions. */
+  action?: "upgrade" | "adopt" | "rollback";
+  /** "helper": the update helper; "stage": preparation for it; none: the supervisor of an older release. */
+  runner?: "stage" | "helper";
+  /** What changed besides the programs (service definitions, configuration). */
+  migrations?: string[];
+  /** Until when the previous version can be put back. */
+  rollback_until?: string;
+};
+
+/** GET /api/v1/settings/update/plan: what an upgrade would do. */
+export type UpgradePlan = {
+  current_version: string;
+  target_version?: string;
+  up_to_date?: boolean;
+  service?: string;
+  kind?: string;
+  helper: "ready" | "missing" | "off" | "unavailable";
+  problems?: string[];
+  definitions?: string[];
+  disk_needed_bytes?: number;
+  disk_free_bytes?: number;
+  rollback_to?: string;
+  rollback_until?: string;
+  rollback_of?: "upgrade" | "adopt" | "update";
+  release_problem?: string;
+  /** What was checked before anything happens. */
+  checks?: { title: string; ok: boolean; detail?: string }[];
+  /** Each service definition and what the upgrade does to it, with its diff. */
+  changes?: { title: string; action: "unchanged" | "replace" | "merge" | "keep" | "create"; detail?: string; diff?: string }[];
+  /** Definitions edited on this host, kept unless replace_edited. */
+  edited?: number;
+  replace_edited?: boolean;
+  /** Programs replaced, and configuration files saved to be put back. */
+  programs?: string[];
+  config?: string[];
+  /** Expected downtime, such as "under a minute". */
+  downtime?: string;
 };
 
 /** One archive in the server-side backups directory. */
@@ -263,6 +340,27 @@ export type BackupEntry = {
   rollback_candidate?: boolean;
   encrypted?: boolean;
   includes_stack?: boolean;
+};
+
+/** One check from POST /settings/backups/verify (v2-restore --verify-only). */
+export type BackupVerifyCheck = {
+  name: string;
+  status: "pass" | "warn" | "fail";
+  message: string;
+};
+
+/** The verify endpoint's report: checks, secret names (never values), versions. */
+export type BackupVerifyReport = {
+  archive: string;
+  encrypted: boolean;
+  backup_version?: string;
+  running_version: string;
+  created_at?: string;
+  files: number;
+  bytes: number;
+  secrets: string[];
+  checks: BackupVerifyCheck[];
+  ok: boolean;
 };
 
 export type BackupScheduleState = {
@@ -599,10 +697,42 @@ export type AuditLogEntry = {
   /** Acting principal (set by withAuth-attributed entries). */
   user?: string;
   role?: string;
+  /** How the request authenticated (personal-access-token, session-cookie, …). */
+  auth?: string;
+  /** Personal access token id when auth used a PAT. */
+  pat_id?: string;
+  /** Operator-supplied PAT label. */
+  pat_name?: string;
+  error?: string;
+  error_code?: string;
+  remediation?: string;
+  channel?: string;
+  mcp_tool?: string;
+  client_kind?: string;
+  ui_version?: string;
+  ui_server_version?: string;
+  ui_compromised?: boolean;
   /** Some auth-flow entries (login/password change) carry an explicit username. */
   username?: string;
   /** All other audit fields land here. */
   [key: string]: unknown;
+};
+
+export type BlockedUIVersion = {
+  version: string;
+  component?: string;
+  reason: string;
+  advisories?: string[];
+  severity?: string;
+  fixed_in?: string;
+  builtin?: boolean;
+};
+
+export type UIVersionPolicy = {
+  block_unversioned: boolean;
+  builtin: BlockedUIVersion[];
+  extra: BlockedUIVersion[];
+  blocked: BlockedUIVersion[];
 };
 
 export type AuditLogData = {
@@ -764,7 +894,7 @@ export type ScheduleState = {
   task_name?: string;
   print_only: boolean;
   updated_at: string;
-  /** Kubernetes: the CronJob version the schedule was read at; sent back on save so a stale form can't overwrite a newer change (409). */
+  /** The version the schedule was read at (Kubernetes: the CronJob resourceVersion; host: a hash of the saved file, "none" when nothing is saved). Sent back on save so a stale form cannot overwrite a newer change (409). */
   resource_version?: string;
 };
 
@@ -946,6 +1076,47 @@ export type ConfigMigrationResult = {
   backup?: string;
   content?: string;
   message: string;
+};
+
+/** One cluster's data age, from GET /api/v1/freshness. */
+export type ClusterFreshness = {
+  address: string;
+  /** Newest run that tried the cluster. */
+  last_checked_at: string;
+  /** That run's result for the cluster. */
+  ok: boolean;
+  error?: string;
+  error_class?: string;
+  /** "" = main config. */
+  environment?: string;
+  /** Newest run that returned data; missing when none did. */
+  last_success_at?: string;
+  /** Newest consecutive runs that failed for it. */
+  failed_runs?: number;
+  fail_count: number;
+  warn_count: number;
+  err_count: number;
+  health_score?: number;
+};
+
+export type ScheduleFreshness = {
+  kind: "main" | "environment";
+  id?: string;
+  environment?: string;
+  every: string;
+  interval_s: number;
+  last_run_at?: string;
+  since?: string;
+  overdue: boolean;
+  missed_runs?: number;
+  overdue_by_s?: number;
+};
+
+export type FreshnessData = {
+  generated_at: string;
+  clusters: ClusterFreshness[];
+  schedules: ScheduleFreshness[];
+  schedule_overdue: boolean;
 };
 
 export type ScheduleHealthData = {
@@ -1167,6 +1338,24 @@ export type LoggingSettings = {
   persistence?: string;
 };
 
+/** State of the server's report cache (GET /api/v1/report/data `cache`). */
+export type ReportCacheState = "cold" | "warm" | "refreshing" | "stale" | "failed";
+
+export type ReportCacheInfo = {
+  state: ReportCacheState;
+  /** When the oldest part of the served report was built. */
+  built_at?: string;
+  /** Set while a newer report is being built. */
+  refresh_started_at?: string;
+  /** Why the last refresh failed (state "failed"). */
+  last_error?: string;
+  failed_at?: string;
+  source_run_id?: string;
+  source_run_time?: string;
+  /** Set by the client when /report/data failed and the report was read from the saved files instead. */
+  fallback?: boolean;
+};
+
 export type ReportData = {
   run_summary: unknown;
   ncc_summary_counts?: Record<string, number>;
@@ -1184,6 +1373,8 @@ export type ReportData = {
   artifact_links?: Record<string, string>;
   report_meta?: Record<string, unknown>;
   ncc_logs?: Array<{ name: string; path: string }>;
+  /** Report cache state (absent from servers before v2.4.0). */
+  cache?: ReportCacheInfo;
   pagination?: Record<
     string,
     {
@@ -1209,6 +1400,8 @@ export type ComponentsData = {
     "api-server": ComponentStatus;
     "ui-server": ComponentStatus;
     consistent: boolean;
+    /** Which components differ from the API server, when not consistent. */
+    message?: string;
   };
 };
 
@@ -1426,4 +1619,34 @@ export type ExtraArgOption = {
   path?: boolean;
   admin_only?: boolean;
   advanced?: boolean;
+};
+
+/** One file or run folder a retention rule would remove. */
+export type RetentionPreviewItem = {
+  path: string;
+  name: string;
+  bytes: number;
+  modified?: string;
+};
+
+/** GET /api/v1/settings/retention/preview: one rule's settings and what is past it. */
+export type RetentionPreviewRule = {
+  id: "runs" | "artifacts" | "raw-logs" | string;
+  title: string;
+  dir: string;
+  enabled: boolean;
+  settings: Record<string, number>;
+  count: number;
+  bytes: number;
+  items: RetentionPreviewItem[];
+  error?: string;
+};
+
+export type RetentionPreview = {
+  dry_run: boolean;
+  generated_at: string;
+  rules: RetentionPreviewRule[];
+  total_count: number;
+  total_bytes: number;
+  errors?: string[];
 };

@@ -95,7 +95,7 @@ describe("ConfigSection", { timeout: 15_000 }, () => {
     expect(await screen.findByText("Editing the prod environment")).toBeInTheDocument();
     // Server-side sections are not offered for an environment.
     expect(screen.queryByRole("switch", { name: /Keep run history/ })).toBeInTheDocument();
-    expect(screen.queryByText("Notifications", { selector: "h3" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Notifications", { selector: "h2" })).not.toBeInTheDocument();
     // Unset settings show what the main config supplies.
     expect(screen.getAllByText(/From the main config:/).length).toBeGreaterThan(0);
 

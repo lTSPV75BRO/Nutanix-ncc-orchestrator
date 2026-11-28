@@ -30,6 +30,7 @@ import type {
   ScheduleSaveResult,
   ScheduleState,
   ScheduleHealthData,
+  FreshnessData,
   DiagnosticsData,
   AutoHealer,
   PlatformData,
@@ -60,11 +61,15 @@ import type {
   TLSPolicy,
   PublicTLSInfo,
   TLSApplyResult,
+  UpdateNotice,
   UpdateStatus,
+  UpgradePlan,
   UpdateJob,
   BackupEntry,
   BackupScheduleResponse,
+  RetentionPreview,
   BackupScheduleState,
+  BackupVerifyReport,
   NotificationState,
   NotificationStatusResponse,
   PCAlertsData,
@@ -79,7 +84,9 @@ import type {
   OnboardingStatus,
   OnboardingUpdate,
   ExtraArgOption,
+  UIVersionPolicy,
 } from "./types";
+import { inspectForBlock } from "./blocked";
 
 // ApiError preserves both the human-readable message and the structured `data`
 // payload from a failed API response. Callers that want to react to specific
@@ -90,13 +97,30 @@ export class ApiError extends Error {
   data: unknown;
   /** Server-assigned X-Request-ID, when the API returned one. */
   requestId?: string;
-  constructor(message: string, status: number, data: unknown, requestId?: string) {
+  /** Seconds to wait before retrying (429 lockout / rate limit), when the API said. */
+  retryAfterSec?: number;
+  constructor(message: string, status: number, data: unknown, requestId?: string, retryAfterSec?: number) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.data = data;
     this.requestId = requestId || undefined;
+    this.retryAfterSec = retryAfterSec && retryAfterSec > 0 ? retryAfterSec : undefined;
   }
+}
+
+/**
+ * Retry time from a 429: the envelope's retry_after_seconds, the older
+ * data.retry_after_sec, or a numeric Retry-After header.
+ */
+function retryAfterFrom(response: Response, payload: { retry_after_seconds?: number; data?: unknown }): number | undefined {
+  if (response.status !== 429 && response.status !== 503) return undefined;
+  const fromBody = payload.retry_after_seconds;
+  if (typeof fromBody === "number" && fromBody > 0) return Math.ceil(fromBody);
+  const legacy = (payload.data as { retry_after_sec?: unknown } | undefined)?.retry_after_sec;
+  if (typeof legacy === "number" && legacy > 0) return Math.ceil(legacy);
+  const header = Number.parseInt(response.headers?.get?.("retry-after") ?? "", 10);
+  return Number.isFinite(header) && header > 0 ? header : undefined;
 }
 
 // readCookie returns the value of a document cookie by name, or "" if absent.
@@ -160,24 +184,40 @@ function csrfHeaders(method: string): Record<string, string> {
   return csrf ? { "X-CSRF-Token": csrf } : {};
 }
 
+/**
+ * Headers every request to our own API must carry. The API identifies the
+ * dashboard by these, and refuses a request that claims to be the dashboard
+ * (X-Requested-With) without declaring its version, so any code that calls
+ * fetch directly (API explorer, downloads) must use this and not its own copy.
+ */
+export function uiRequestHeaders(method = "GET"): Record<string, string> {
+  return {
+    "X-Requested-With": "ncc-ui",
+    "X-NCC-UI-Version": typeof __NCC_UI_VERSION__ === "string" && __NCC_UI_VERSION__ ? __NCC_UI_VERSION__ : "2.4.0",
+    ...csrfHeaders(method.toUpperCase()),
+  };
+}
+
 async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const method = (init?.method ?? "GET").toUpperCase();
   const response = await fetch(path, {
     ...init,
     credentials: API_CREDENTIALS,
     headers: {
-      "X-Requested-With": "ncc-ui",
-      ...csrfHeaders(method),
+      ...uiRequestHeaders(method),
       ...(init?.headers ?? {}),
     },
   });
   maybeRedirectToLogin(path, response.status);
+  void inspectForBlock(response);
   return response;
 }
 
 export type AuditQuery = {
   limit?: number;
   action?: string;
+  /** Comma-separated action prefixes to leave out (the automatic request records). */
+  exclude?: string;
   failures?: boolean;
   user?: string;
   since?: string;
@@ -189,6 +229,7 @@ function buildAuditPath(opts?: AuditQuery): string {
   const params = new URLSearchParams();
   if (typeof opts?.limit === "number" && opts.limit > 0) params.set("limit", String(opts.limit));
   if (opts?.action) params.set("action", opts.action);
+  if (opts?.exclude) params.set("exclude", opts.exclude);
   if (opts?.failures) params.set("failures", "1");
   if (opts?.user) params.set("user", opts.user);
   if (opts?.since) params.set("since", opts.since);
@@ -254,6 +295,7 @@ async function requestJSON<T>(path: string, init?: RequestInit, timeoutMs = 30_0
       response.status,
       payload.data,
       payload.request_id ?? response.headers.get("x-request-id") ?? undefined,
+      retryAfterFrom(response, payload),
     );
   }
   return payload;
@@ -317,6 +359,7 @@ async function loadReportDataFallback(): Promise<ReportData> {
     regression_summary: await readArtifactJSON("regression-summary.json", {}),
     slo_dashboard: await readArtifactJSON("slo-dashboard.json", {}),
     policy_violations: policyViolations,
+    cache: { state: "failed", fallback: true },
   };
 }
 
@@ -361,6 +404,7 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   scheduleHealth: () => callApi<ScheduleHealthData>("/api/v1/schedule/health"),
+  freshness: () => callApi<FreshnessData>("/api/v1/freshness"),
   diagnostics: () => callApi<DiagnosticsData>("/api/v1/health/diagnostics"),
   healDiagnostics: (payload?: { check_ids?: string[]; verify_after_fix?: boolean; no_disruptive?: boolean; allow_disruptive?: boolean }) =>
     callApi<DiagnosticsData>("/api/v1/health/diagnostics", {
@@ -498,14 +542,15 @@ export const api = {
     const path = buildAuditPath(opts);
     return callApi<AuditLogData>(path);
   },
+  uiVersionPolicy: () => callApi<UIVersionPolicy>("/api/v1/settings/ui-versions"),
+  updateUIVersionPolicy: (payload: { block_unversioned: boolean; extra: { version: string; component?: string; reason: string }[] }) =>
+    callApi<UIVersionPolicy>("/api/v1/settings/ui-versions", { method: "PUT", body: JSON.stringify(payload) }),
   // auditExportCSV fetches the filtered audit log as CSV text (the backend
   // streams a downloadable file). Returns the raw CSV so the caller can build a
   // Blob download; uses a raw fetch because the response is not JSON.
   auditExportCSV: async (opts?: AuditQuery): Promise<string> => {
     const path = buildAuditPath({ ...opts, format: "csv" });
-    const response = await apiFetch(path, {
-      headers: { "X-Requested-With": "ncc-ui" },
-    });
+    const response = await apiFetch(path);
     if (!response.ok) {
       throw new ApiError(`audit export failed (${response.status})`, response.status, undefined);
     }
@@ -645,11 +690,15 @@ export const api = {
   disableTLS: () => callApi<TLSApplyResult>("/api/v1/settings/tls", { method: "DELETE" }),
   updateStatus: () => callApi<UpdateStatus>("/api/v1/settings/update"),
   checkUpdate: () => callApi<UpdateStatus>("/api/v1/settings/update?check=1"),
-  applyUpdate: (payload?: { target_version?: string }) =>
+  updateNotice: () => callApi<UpdateNotice>("/api/v1/settings/update/notice"),
+  applyUpdate: (payload?: { target_version?: string; replace_edited?: boolean }) =>
     callApiEnvelope<UpdateJob>("/api/v1/settings/update/apply", {
       method: "POST",
       body: JSON.stringify(payload ?? {}),
     }),
+  updatePlan: (replaceEdited = false) =>
+    callApi<UpgradePlan>(`/api/v1/settings/update/plan${replaceEdited ? "?replace_edited=1" : ""}`),
+  rollbackUpdate: () => callApiEnvelope<unknown>("/api/v1/settings/update/rollback", { method: "POST", body: "{}" }),
   listBackups: () =>
     callApi<{ backups: BackupEntry[]; encryption_policy?: { required: boolean; server_key_configured: boolean } }>(
       "/api/v1/settings/backups",
@@ -690,6 +739,7 @@ export const api = {
       "/api/v1/settings/notifications/test",
       { method: "POST", body: JSON.stringify(kind === "digest" ? { channel, kind } : { channel }) },
     ),
+  retentionPreview: () => callApi<RetentionPreview>("/api/v1/settings/retention/preview", undefined, 75_000),
   getBackupSchedule: () => callApi<BackupScheduleResponse>("/api/v1/settings/backups/schedule"),
   updateBackupSchedule: (payload: {
     enabled: boolean;
@@ -704,7 +754,7 @@ export const api = {
     }),
   verifyNamedBackup: (name: string, passphrase?: string) => {
     const pass = (passphrase ?? "").trim();
-    return callApiEnvelope<{ output?: string }>(
+    return callApiEnvelope<{ output?: string; report?: BackupVerifyReport }>(
       "/api/v1/settings/backups/verify",
       {
         method: "POST",

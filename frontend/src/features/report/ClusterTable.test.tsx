@@ -1,13 +1,19 @@
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it } from "vitest";
 import { ClusterTable } from "./ClusterTable";
 
-// The alert drawer loads lifecycle history through React Query.
+// The alert drawer loads lifecycle history through React Query, and cluster
+// names link to the cluster page.
 function render(ui: ReactNode) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return rtlRender(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+  return rtlRender(
+    <MemoryRouter>
+      <QueryClientProvider client={client}>{ui}</QueryClientProvider>
+    </MemoryRouter>,
+  );
 }
 
 const baseProps = {
@@ -43,8 +49,14 @@ describe("ClusterTable alert sources", () => {
 
     expect(screen.getByText("NCC finding")).toBeInTheDocument();
     expect(screen.queryByText("PC finding")).not.toBeInTheDocument();
-    expect(screen.getByText("Alert")).toBeInTheDocument();
+    expect(screen.getByText("Finding")).toBeInTheDocument();
     expect(screen.queryByText("Source")).not.toBeInTheDocument();
+  });
+
+  it("says Prism Central has nothing open instead of blaming filters", () => {
+    render(<ClusterTable {...baseProps} alertSource="PC" pcAlerts={[]} />);
+    expect(screen.getByText("Prism Central reports no alerts")).toBeInTheDocument();
+    expect(screen.queryByText("No findings match the current filters")).not.toBeInTheDocument();
   });
 
   it("filters rows by the selected source", () => {
@@ -160,14 +172,38 @@ describe("ClusterTable alert sources", () => {
     );
 
     fireEvent.click(screen.getByText("Disk almost full"));
-    expect(screen.getByText("Alert message")).toBeInTheDocument();
+    expect(screen.getByText("What Prism Central reports")).toBeInTheDocument();
     expect(screen.getByText("Capacity is high")).toBeInTheDocument();
     expect(screen.getByText("Root cause")).toBeInTheDocument();
     expect(screen.getByText("CVM disk /home is 92% full")).toBeInTheDocument();
-    expect(screen.getByText("Timeline")).toBeInTheDocument();
+    expect(within(document.querySelector(".finding-inspector") as HTMLElement).getByText("Last occurred")).toBeInTheDocument();
     expect(screen.getByText("Stargate")).toBeInTheDocument();
-    expect(screen.getAllByText("KB 1234").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Open in Prism").length).toBeGreaterThan(0);
+    const drawer = within(document.querySelector(".finding-inspector") as HTMLElement);
+    expect(drawer.getByRole("link", { name: /KB 1234/ })).toHaveAttribute("href", "https://portal.nutanix.com/kb/1234");
+    expect(drawer.getByRole("link", { name: /Open in Prism/ })).toHaveAttribute("href", "https://10.1.2.3:9440");
+    expect(drawer.getByRole("link", { name: /Cluster page/ }).getAttribute("href")).toMatch(/^\/clusters\//);
+  });
+
+  it("puts the KB article and cluster actions in an NCC finding's details", () => {
+    render(
+      <ClusterTable
+        {...baseProps}
+        alertSource="NCC"
+        aggRows={[
+          { cluster: "10.1.2.3", check: "disk_usage_check", severity: "FAIL", detail: "Disk full. See https://portal.nutanix.com/kb/5678" },
+          { cluster: "10.1.2.4", check: "ntp_check", severity: "WARN", detail: "Clock drift" },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("disk_usage_check"));
+    const drawer = within(document.querySelector(".finding-inspector") as HTMLElement);
+    expect(drawer.getByRole("link", { name: /KB 5678/ })).toHaveAttribute("href", "https://portal.nutanix.com/kb/5678");
+    expect(drawer.getByRole("link", { name: /Open in Prism/ })).toBeInTheDocument();
+    expect(drawer.getByRole("link", { name: /This check on all clusters/ })).toHaveAttribute("href", "/findings?q=disk_usage_check");
+
+    fireEvent.click(screen.getByText("ntp_check"));
+    expect(within(document.querySelector(".finding-inspector") as HTMLElement).getByText("No KB article")).toBeInTheDocument();
   });
 
   it("fills the page under the header and keeps the alerts toolbar", () => {
@@ -179,9 +215,9 @@ describe("ClusterTable alert sources", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Expand alerts" }));
+    fireEvent.click(screen.getByRole("button", { name: /Full page/ }));
     expect(document.documentElement.classList.contains("alerts-expanded")).toBe(true);
-    expect(screen.getByText("Alerts")).toBeInTheDocument();
+    expect(screen.getByText("Findings")).toBeInTheDocument();
     expect(screen.getByText("Needs attention")).toBeInTheDocument();
     expect(screen.getByText("NCC finding")).toBeInTheDocument();
 
@@ -203,7 +239,7 @@ describe("ClusterTable alert sources", () => {
     );
 
     expect(screen.queryByText("NCC finding 100")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Expand alerts" }));
+    fireEvent.click(screen.getByRole("button", { name: /Full page/ }));
     expect(document.querySelector(".alerts-pagination")).not.toBeNull();
     expect(screen.getByText("1–100 of 120")).toBeInTheDocument();
   });
@@ -272,5 +308,81 @@ describe("ClusterTable alert sources", () => {
     expect(screen.queryByText(/Settings → Features/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Acknowledge" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Resolve" })).not.toBeInTheDocument();
+  });
+});
+
+describe("ClusterTable views and columns", () => {
+  const rows = [
+    { cluster: "10.0.0.5", check: "ntp_check", severity: "FAIL", detail: "NTP server not reachable" },
+    { cluster: "10.0.0.6", check: "ntp_check", severity: "FAIL", detail: "NTP server not reachable" },
+    { cluster: "10.0.0.6", check: "disk_check", severity: "WARN", detail: "Disk 82% used" },
+  ];
+  const names = { "10.0.0.5": "pe-east", "10.0.0.6": "pe-west" };
+
+  afterEach(() => {
+    cleanup();
+    try {
+      window.localStorage?.clear();
+    } catch {
+      // ignore
+    }
+  });
+
+  it("opens details from the finding name instead of an icon column", () => {
+    render(<ClusterTable {...baseProps} alertSource="NCC" aggRows={rows} clusterNameMap={names} />);
+    expect(screen.queryByRole("columnheader", { name: "" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open details for disk_check on pe-west" }));
+    const drawer = document.querySelector(".ant-drawer-open") as HTMLElement;
+    expect(within(drawer).getByText("disk_check")).toBeInTheDocument();
+  });
+
+  it("resizes a column from the keyboard and remembers it", () => {
+    render(<ClusterTable {...baseProps} alertSource="NCC" aggRows={rows} clusterNameMap={names} />);
+    const handle = screen.getByRole("separator", { name: "Resize the Cluster column" });
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    const stored = JSON.parse(window.localStorage.getItem("dashboard.alerts.columnWidths") || "{}");
+    expect(stored["NCC.table.clusterName"]).toBeGreaterThanOrEqual(64);
+    fireEvent.click(screen.getByRole("button", { name: /Reset columns/ }));
+    expect(JSON.parse(window.localStorage.getItem("dashboard.alerts.columnWidths") || "{}")).toEqual({});
+  });
+
+  it("groups findings by check", () => {
+    render(<ClusterTable {...baseProps} alertSource="NCC" aggRows={rows} clusterNameMap={names} />);
+    fireEvent.click(screen.getByText("By check"));
+    expect(window.localStorage.getItem("dashboard.alerts.view")).toBe(JSON.stringify("grouped"));
+    const group = screen.getByText("ntp_check").closest("section") as HTMLElement;
+    expect(within(group).getByText(/of 2 open/)).toBeInTheDocument();
+    expect(within(group).getByRole("link", { name: "pe-east" })).toBeInTheDocument();
+    fireEvent.click(within(group).getByRole("button", { name: "Show the clusters for ntp_check" }));
+    expect(within(group).getByRole("button", { name: "Open details for ntp_check on pe-west" })).toBeInTheDocument();
+    expect(screen.getByText(/of 2 checks/)).toBeInTheDocument();
+  });
+
+  it("lists findings as sentences, worst first", () => {
+    window.localStorage.setItem("dashboard.alerts.view", JSON.stringify("list"));
+    render(<ClusterTable {...baseProps} alertSource="NCC" aggRows={rows} clusterNameMap={names} />);
+    const items = screen.getAllByRole("listitem").filter((li) => li.classList.contains("findings-list-item"));
+    expect(items).toHaveLength(3);
+    expect(items[0]).toHaveClass("sev-fail");
+    expect(items[2]).toHaveClass("sev-warn");
+    expect(within(items[2]).getByText("on")).toBeInTheDocument();
+    expect(within(items[2]).getByText("Disk 82% used")).toBeInTheDocument();
+  });
+
+  it("shows the finding with its detail in the focused view", () => {
+    window.localStorage.setItem("dashboard.alerts.view", JSON.stringify("focused"));
+    render(<ClusterTable {...baseProps} alertSource="NCC" aggRows={rows} clusterNameMap={names} />);
+    expect(screen.queryByText("Versions")).not.toBeInTheDocument();
+    expect(screen.getByText("Status")).toBeInTheDocument();
+    expect(screen.getAllByText("NTP server not reachable").length).toBe(2);
+  });
+
+  it("keeps Prism Central alerts in the table", () => {
+    window.localStorage.setItem("dashboard.alerts.view", JSON.stringify("list"));
+    render(
+      <ClusterTable {...baseProps} alertSource="PC" pcAlerts={[{ cluster: "pc-a", title: "PC finding", severity: "FAIL", resolved: false }]} />,
+    );
+    expect(screen.queryByRole("radiogroup", { name: "Findings view" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Open details for PC finding/ })).toBeInTheDocument();
   });
 });

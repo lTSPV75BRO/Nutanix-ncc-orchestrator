@@ -44,6 +44,21 @@ type superviseChild struct {
 	logPath    string   // child stdout/stderr is appended here
 	healthArgs []string // argv for a `--health-check` self-probe (nil = liveness-only)
 	waitToken  string   // optional: gate the first start until this file exists
+
+	lastPID int // last process this supervisor started; read after its loop ended
+}
+
+// removeOwnPIDFile removes the pid file only while it names the process this
+// supervisor started last. A server started by hand beside the service writes
+// its own pid there, and v2-stop still needs it to find that server (INS-01).
+func (c *superviseChild) removeOwnPIDFile() {
+	pid, err := readPIDFromFile(c.pidPath)
+	if err == nil && pid != c.lastPID {
+		if known, matches := processIdentityMatches(pid, filepath.Base(c.bin)); processIsAlive(pid) && (!known || matches) {
+			return
+		}
+	}
+	_ = os.Remove(c.pidPath)
 }
 
 // superviseConfig is the policy + child set for runV2Supervise.
@@ -123,6 +138,7 @@ func runV2Supervise(cfg superviseConfig) error {
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return fmt.Errorf("supervisor: prepare log dir: %w", err)
 	}
+	recordTrustedStackQuiet(cfg.installDir, "supervisor")
 	unlock, err := acquireSupervisorLock(filepath.Join(runDir, "v2-supervisor.lock"))
 	if err != nil {
 		return fmt.Errorf("supervisor: another instance is already running: %w", err)
@@ -145,7 +161,7 @@ func runV2Supervise(cfg superviseConfig) error {
 		_, _ = os.Stderr.WriteString(line)
 	}
 
-	supPIDPath := filepath.Join(runDir, "v2-supervisor.pid")
+	supPIDPath := filepath.Join(runDir, supervisorPIDFile)
 	// Single-instance guard: refuse to start if another supervisor is already
 	// live. A second supervisor can never bind the shared ports anyway (its
 	// children crash-loop on "address already in use"), and on exit it would
@@ -164,7 +180,8 @@ func runV2Supervise(cfg superviseConfig) error {
 	if err := os.WriteFile(supPIDPath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644); err != nil {
 		return fmt.Errorf("supervisor: write pid file: %w", err)
 	}
-	defer os.Remove(supPIDPath)
+	// Removed after a clean stop only: a pid file that stays behind tells the
+	// Windows watchdog that the supervisor died.
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -189,6 +206,7 @@ func runV2Supervise(cfg superviseConfig) error {
 		cfg.installDir, cfg.maxRestarts, cfg.window, cfg.probeInterval, cfg.unhealthyThreshold, cfg.startGrace, cfg.stableAfter)
 
 	superviseRun(ctx, &cfg, logf)
+	_ = os.Remove(supPIDPath)
 	logf("stopped")
 	return nil
 }
@@ -215,7 +233,7 @@ func superviseRun(ctx context.Context, cfg *superviseConfig, logf func(string, .
 	// Best-effort: drop the children's pid files now that they are stopped so a
 	// later `v2-status` does not report stale PIDs.
 	for _, child := range cfg.children {
-		_ = os.Remove(child.pidPath)
+		child.removeOwnPIDFile()
 	}
 }
 
@@ -340,6 +358,7 @@ func runChildOnce(ctx context.Context, cfg *superviseConfig, c *superviseChild, 
 		return childExited
 	}
 	pid := cmd.Process.Pid
+	c.lastPID = pid
 	startedAt := time.Now()
 	_ = os.WriteFile(c.pidPath, []byte(fmt.Sprintf("%d\n", pid)), 0o644)
 	logf("%s started pid=%d", c.name, pid)
@@ -376,7 +395,7 @@ func runChildOnce(ctx context.Context, cfg *superviseConfig, c *superviseChild, 
 			if _, err := os.Stat(requestPath); err != nil {
 				continue
 			}
-			_ = os.Remove(requestPath)
+			_ = removeWithRetry(requestPath)
 			logf("%s restart requested; stopping pid=%d gracefully", c.name, pid)
 			_ = stopChild(cmd, waitCh, cfg.stopGrace)
 			recordChildExit(cfg, c, "requested", "restart requested from Status → Supervisor", false)
@@ -468,7 +487,7 @@ func waitOrRestartRequest(ctx context.Context, cfg *superviseConfig, c *supervis
 	deadline := time.Now().Add(d)
 	for {
 		if _, err := os.Stat(requestPath); err == nil {
-			_ = os.Remove(requestPath)
+			_ = removeWithRetry(requestPath)
 			cfg.state.event(c.name, "restart-requested", "starting now instead of waiting")
 			return ctx.Err() == nil
 		}

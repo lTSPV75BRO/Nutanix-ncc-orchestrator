@@ -1,0 +1,111 @@
+
+Detailed information for check_cvm_ssh_security:
+Node 10.10.20.31:
+INFO: Password-based remote login is enabled on the cluster. It is recommended to use key-based ssh access instead of password-based ssh access for better security.
+Refer to KB 14104 (http://portal.nutanix.com/kb/14104) for details on check_cvm_ssh_security
+
+---------------------------------------
+Detailed information for ec_enablement_check:
+Node 10.10.20.31:
+INFO: Consider enabling erasure coding on container ctr-general to get 19% space savings.
+INFO: Consider enabling erasure coding on container ctr-archive to get 23% space savings.
+Refer to KB 14293 (http://portal.nutanix.com/kb/14293) for details on ec_enablement_check
+
+---------------------------------------
+Detailed information for gflags_diff_check:
+Node 10.10.20.31:
+INFO: Non-default gflags found:
+  Found following non-default flags for component security_service:
+    10.10.20.31 flags:
+      --set_ahv_host_access=public
+    10.10.20.32 flags:
+      --set_ahv_host_access=public
+    10.10.20.33 flags:
+      --set_ahv_host_access=public
+Refer to KB 1530 (http://portal.nutanix.com/kb/1530) for details on gflags_diff_check
+
+---------------------------------------
+Detailed information for backup_schedule_check:
+Node 10.10.20.31:
+WARN: Backup schedule does not exist for protection domain pd-gold protecting some entities. If this protection domain is created for use by backup software, this warning can be ignored.
+WARN: Backup schedule does not exist for protection domain pd-silver protecting some entities. If this protection domain is created for use by backup software, this warning can be ignored.
+Refer to KB 1910 (http://portal.nutanix.com/kb/1910) for details on backup_schedule_check
+
+---------------------------------------
+Detailed information for host_boot_disk_uvm_check:
+Node 10.10.20.32:
+WARN: Found 2 user VMs on hostbootdisk:
+  vm-migrate-01
+  vm-migrate-02
+Node 10.10.20.33:
+WARN: Found 1 user VMs on hostbootdisk:
+  vm-tools-01
+Refer to KB 9963 (http://portal.nutanix.com/kb/9963) for details on host_boot_disk_uvm_check
+
+---------------------------------------
+Detailed information for uvm_ide_disk_check:
+Node 10.10.20.33:
+ERR : node (service_vm_id: 11) : Vdisk adapter in vmdk file of a UVM is not ide, but config file shows it its ide. Discrepancy found.
+Node 10.10.20.31:
+WARN: 2 Virtual Machine on this node has an IDE attached disk: ['vm-legacy-01', 'vm-legacy-02']
+Refer to KB 2998 (http://portal.nutanix.com/kb/2998) for details on uvm_ide_disk_check
+
+---------------------------------------
+Detailed information for file_server_container_check:
+Node 10.10.20.31:
+WARN: Unexpected VMs are present on fileserver containers.
+Container ctr-files has unexpected VMs: ['vm-app-01', 'vm-app-02']
+
+Refer to KB 6944 (http://portal.nutanix.com/kb/6944) for details on file_server_container_check
+
+---------------------------------------
+Detailed information for ngt_installer_version_check:
+Node 10.10.20.31:
+INFO: Following VMs do not have latest NGT version installed:
+ VM: vm-db-01 - NGT installed version: 4.3, NGT latest version: 4.6
+ VM: vm-jump-01 - NGT installed version: 4.3, NGT latest version: 4.6
+
+Refer to KB 5487 (http://portal.nutanix.com/kb/5487) for details on ngt_installer_version_check
+
+---------------------------------------
+Detailed information for remote_site_config_check:
+Node 10.10.20.32:
+FAIL: Remote site: dr-site-01
+Number of vstores mapped for the local site on the remote site are not same.
+
+Refer to KB 3335 (http://portal.nutanix.com/kb/3335) for details on remote_site_config_check
+
+---------------------------------------
+Detailed information for vg_space_usage_check:
+Node 10.10.20.31:
+FAIL: Volume Group vg-data-01 space usage (91 %) above 90 %
+Refer to KB 4600 (http://portal.nutanix.com/kb/4600) for details on vg_space_usage_check
+
+---------------------------------------
+Detailed information for storage_pool_space_usage_check:
+Node 10.10.20.31:
+FAIL: StoragePool sp-default space usage (90.5 %) above 90 %
+Refer to KB 2475 (http://portal.nutanix.com/kb/2475) for details on storage_pool_space_usage_check
+
+---------------------------------------
+Detailed information for ngt_client_cert_expiry_check:
+Node 10.10.20.31:
+FAIL: NGT Client Cert is already expired for VM : vm-app-03 (vm-app-03)(3f1a0c2e-0000-4000-8000-000000000001) before 47 days
+
+Refer to KB 10075 (http://portal.nutanix.com/kb/10075) for details on ngt_client_cert_expiry_check
+
+---------------------------------------
+Detailed information for sufficient_disk_space_check:
+Node 10.10.20.31:
+INFO: Cluster current space usage of 18669067265024 bytes(16.98 TiB) is approaching the 1 node failure tolerance limit of 18676157813127 bytes(16.99 TiB).
+Refer to KB 1863 (http://portal.nutanix.com/kb/1863) for details on sufficient_disk_space_check
+
+---------------------------------------
+Detailed information for weekly_pre_expiry:
+Node 10.10.20.31:
+INFO: The setup has license(s) that are about to expire. Detailed license info:
+LIC-00000001 - 80 CORES NCI Ultimate is expiring on 2026-12-31
+NUS Pro is expiring on 2026-12-31
+Refer to KB 2469 (http://portal.nutanix.com/kb/2469) for details on weekly_pre_expiry
+
+---------------------------------------

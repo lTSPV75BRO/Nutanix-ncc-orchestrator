@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -38,6 +39,13 @@ const systemdUnitDir = "/etc/systemd/system"
 func systemctlAvailable() bool {
 	if _, err := exec.LookPath("systemctl"); err != nil {
 		return false
+	}
+	// An unprivileged service may have no D-Bus to ask: sd_booted() checks
+	// this folder, which only a running systemd creates.
+	if os.Geteuid() != 0 {
+		if st, err := os.Stat("/run/systemd/system"); err == nil && st.IsDir() {
+			return true
+		}
 	}
 	// `systemctl is-system-running` returns non-zero for degraded/offline, but
 	// any parseable answer other than a hard failure means systemd is the
@@ -254,7 +262,13 @@ func onCalendarFromSchedule(cronSpec string, every time.Duration) (string, error
 
 // buildSystemdScheduleUnits returns the .service and .timer unit file contents.
 func buildSystemdScheduleUnits(taskName, onCalendar, scriptPath, workDir, marker string) (service, timer string) {
-	service = strings.Join([]string{
+	return buildSystemdScheduleUnitsFor(taskName, onCalendar, scriptPath, workDir, marker, "")
+}
+
+// buildSystemdScheduleUnitsFor builds them for a service that runs as user
+// ("" or root: as before 2.5).
+func buildSystemdScheduleUnitsFor(taskName, onCalendar, scriptPath, workDir, marker, user string) (service, timer string) {
+	serviceLines := []string{
 		"[Unit]",
 		"Description=NCC Orchestrator scheduled run (" + taskName + ")",
 		"Documentation=https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator",
@@ -264,8 +278,10 @@ func buildSystemdScheduleUnits(taskName, onCalendar, scriptPath, workDir, marker
 		"Type=oneshot",
 		"WorkingDirectory=" + workDir,
 		"ExecStart=/bin/sh " + scriptPath,
-		"",
-	}, "\n")
+	}
+	// The run writes its log next to the script.
+	serviceLines = append(serviceLines, serviceHardening(workDir, user, path.Dir(filepath.ToSlash(scriptPath)))...)
+	service = strings.Join(append(serviceLines, ""), "\n")
 	timer = strings.Join([]string{
 		"[Unit]",
 		"Description=NCC Orchestrator scheduled run timer (" + taskName + ")",
@@ -305,7 +321,14 @@ func writeScheduleRunnerScript(taskName, runCmd, logPath string) (string, error)
 		"NCC_RUN_SOURCE=scheduled exec " + runCmd + " >> " + shellQuotePOSIX(logPath) + " 2>&1",
 		"",
 	}, "\n")
-	if err := os.WriteFile(scriptPath, []byte(content), 0o755); err != nil {
+	// A new file renamed into place: never through a link someone left there.
+	staged, err := stageBytes([]byte(content), scriptPath, 0o755)
+	if err == nil {
+		if err = renameWithRetry(staged, scriptPath); err != nil {
+			_ = os.Remove(staged)
+		}
+	}
+	if err != nil {
 		return "", fmt.Errorf("write scheduler script: %w", err)
 	}
 	return scriptPath, nil
@@ -329,10 +352,25 @@ func installSystemdSchedule(taskName, cronSpec string, every time.Duration, runC
 		return err
 	}
 	marker := scheduleMarker(taskName)
-	service, timer := buildSystemdScheduleUnits(taskName, onCalendar, scriptPath, workDir, marker)
 	base := systemdUnitBase(taskName)
 	servicePath := filepath.Join(systemdUnitDir, base+".service")
 	timerPath := filepath.Join(systemdUnitDir, base+".timer")
+	if os.Geteuid() != 0 {
+		// The service runs unprivileged: the service helper (root) writes the
+		// units, for the service user, and enables the timer.
+		svc, ok := opsAvailable(stackInstallDir())
+		if !ok {
+			return errors.New("installing a systemd timer needs root (no service helper runs for this install)")
+		}
+		if _, err := submitOps(svc.o.InstallDir, opsRequest{Op: opScheduleInstall, Task: taskName, OnCalendar: onCalendar, Script: filepath.ToSlash(scriptPath), WorkDir: filepath.ToSlash(workDir)}, 20*time.Second, 45*time.Second); err != nil {
+			return fmt.Errorf("install the systemd timer: %w", err)
+		}
+		fmt.Printf("Installed systemd timer %s.timer with marker %q (by the service helper)\n", base, marker)
+		fmt.Printf("OnCalendar=%s\n", onCalendar)
+		fmt.Printf("Service: %s\nTimer:   %s\nRunner:  %s\n", servicePath, timerPath, scriptPath)
+		return nil
+	}
+	service, timer := buildSystemdScheduleUnitsFor(taskName, onCalendar, scriptPath, workDir, marker, stackServiceUser(stackInstallDir()))
 	if err := os.WriteFile(servicePath, []byte(service), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", servicePath, err)
 	}
@@ -362,6 +400,20 @@ func removeSystemdSchedule(taskName, logPath string) (bool, error) {
 	_, timerErr := os.Stat(timerPath)
 	if os.IsNotExist(serviceErr) && os.IsNotExist(timerErr) {
 		return false, nil
+	}
+	if os.Geteuid() != 0 {
+		svc, ok := opsAvailable(stackInstallDir())
+		if !ok {
+			return true, errors.New("removing a systemd timer needs root (no service helper runs for this install)")
+		}
+		if _, err := submitOps(svc.o.InstallDir, opsRequest{Op: opScheduleRemove, Task: taskName}, 20*time.Second, 45*time.Second); err != nil {
+			return true, fmt.Errorf("remove the systemd timer: %w", err)
+		}
+		if strings.TrimSpace(logPath) != "" {
+			_ = os.Remove(scheduleRunnerScriptPath(taskName, logPath))
+		}
+		fmt.Printf("Removed systemd timer %s.timer for marker %q (by the service helper)\n", base, scheduleMarker(taskName))
+		return true, nil
 	}
 	if systemctlAvailable() {
 		// Best-effort: ignore "not loaded" errors so a partial state still cleans up.
@@ -411,10 +463,10 @@ func listSystemdSchedules(taskName string) error {
 	// Emit a line carrying the marker so detectInstalledSchedule matches.
 	fmt.Printf("# %s systemd timer %s.timer (OnCalendar=%s)\n", marker, base, onCalendar)
 	if systemctlAvailable() {
-		if out, err := exec.Command("systemctl", "is-enabled", base+".timer").CombinedOutput(); err == nil {
+		if out, err := exec.Command("systemctl", "is-enabled", base+".timer").CombinedOutput(); err == nil { // #nosec G702 -- no shell; base is "ncc-sched-" plus a sanitized name
 			fmt.Printf("timer enabled: %s", string(out))
 		}
-		if out, err := exec.Command("systemctl", "list-timers", "--all", base+".timer").CombinedOutput(); err == nil {
+		if out, err := exec.Command("systemctl", "list-timers", "--all", base+".timer").CombinedOutput(); err == nil { // #nosec G702 -- no shell; base is "ncc-sched-" plus a sanitized name
 			fmt.Print(string(out))
 		}
 	}

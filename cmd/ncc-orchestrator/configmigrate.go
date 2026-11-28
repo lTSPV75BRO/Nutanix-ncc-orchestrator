@@ -435,10 +435,10 @@ func migrateConfigToNested(raw []byte) ([]byte, configMigrationResult, error) {
 	res.Content = string(out)
 	parts := []string{}
 	if n := len(res.Moved); n > 0 {
-		parts = append(parts, fmt.Sprintf("%d setting%s moved to the nested layout", n, plural(n)))
+		parts = append(parts, fmt.Sprintf("%d setting%s moved to the nested layout", n, pluralS(n)))
 	}
 	if n := len(res.Removed); n > 0 {
-		parts = append(parts, fmt.Sprintf("%d duplicate spelling%s removed", n, plural(n)))
+		parts = append(parts, fmt.Sprintf("%d duplicate spelling%s removed", n, pluralS(n)))
 	}
 	if len(parts) == 0 {
 		parts = append(parts, "added schema-version: 1")
@@ -447,7 +447,7 @@ func migrateConfigToNested(raw []byte) ([]byte, configMigrationResult, error) {
 	return out, res, nil
 }
 
-func plural(n int) string {
+func pluralS(n int) string {
 	if n == 1 {
 		return ""
 	}
@@ -491,7 +491,7 @@ func migrateConfigFile(path string, dryRun bool) (configMigrationResult, error) 
 		mode = st.Mode().Perm()
 	}
 	backup := fmt.Sprintf("%s.pre-migrate-%s.bak", path, time.Now().UTC().Format("20060102T150405Z"))
-	if err := os.WriteFile(backup, raw, 0o600); err != nil {
+	if err := writeSecretFile(backup, raw); err != nil {
 		return res, fmt.Errorf("could not save a backup of the config: %w", err)
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".ncc-migrate-*")
@@ -509,7 +509,7 @@ func migrateConfigFile(path string, dryRun bool) (configMigrationResult, error) 
 		return res, err
 	}
 	_ = os.Chmod(tmpName, mode)
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := renameSecretFile(tmpName, path); err != nil {
 		_ = os.Remove(tmpName)
 		return res, err
 	}

@@ -81,10 +81,10 @@ func (s *apiServer) saveEnvironmentSchedules(list []environmentSchedule) error {
 		return err
 	}
 	tmp := s.environmentSchedulesPath() + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	if err := writeSecretFile(tmp, b); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.environmentSchedulesPath())
+	return renameSecretFile(tmp, s.environmentSchedulesPath())
 }
 
 func (s *apiServer) removeEnvironmentSchedules(env string) {
@@ -272,7 +272,7 @@ func (s *apiServer) startEnvironmentScheduleLoop(ctx context.Context) {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for {
-			s.runDueEnvironmentSchedules(time.Now())
+			guard("environment schedules", func() { s.runDueEnvironmentSchedules(time.Now()) })
 			select {
 			case <-ctx.Done():
 				return
@@ -292,6 +292,9 @@ func (s *apiServer) runDueEnvironmentSchedules(now time.Time) {
 	}
 	if len(list) == 0 {
 		return
+	}
+	if s.upgradeInProgress() != "" {
+		return // due again at the next tick, after the restart
 	}
 	changed := false
 	for i := range list {

@@ -377,7 +377,7 @@ export function NotificationsSection() {
       <Card className="page-card" title={<IconTitle icon={<FilterOutlined />}>What to send</IconTitle>}>
         <div className="notif-groups">
           <div className="notif-group">
-            <Typography.Title level={5} className="notif-group-title">Alerts</Typography.Title>
+            <Typography.Title level={2} className="notif-group-title">Alerts</Typography.Title>
             <Typography.Text type="secondary" className="notif-group-desc">
               Sent by this server when something happens.
             </Typography.Text>
@@ -405,7 +405,7 @@ export function NotificationsSection() {
           </div>
 
           <div className="notif-group">
-            <Typography.Title level={5} className="notif-group-title">Health digest</Typography.Title>
+            <Typography.Title level={2} className="notif-group-title">Health digest</Typography.Title>
             <Typography.Text type="secondary" className="notif-group-desc">
               A summary of the latest run: clusters, FAIL and WARN totals, top policy violations.
             </Typography.Text>
@@ -433,7 +433,7 @@ export function NotificationsSection() {
           </div>
 
           <div className="notif-group">
-            <Typography.Title level={5} className="notif-group-title">Run reports</Typography.Title>
+            <Typography.Title level={2} className="notif-group-title">Run reports</Typography.Title>
             <Typography.Text type="secondary" className="notif-group-desc">
               Sent by the runner itself after each run, to every channel that is on (pausing alerts does not stop them).
             </Typography.Text>
@@ -461,7 +461,7 @@ export function NotificationsSection() {
       <Card className="page-card" title={<IconTitle icon={<ClockCircleOutlined />}>Quiet times</IconTitle>}>
         <div className="notif-groups">
           <div className="notif-group">
-            <Typography.Title level={5} className="notif-group-title">Quiet hours</Typography.Title>
+            <Typography.Title level={2} className="notif-group-title">Quiet hours</Typography.Title>
             <Typography.Text type="secondary" className="notif-group-desc">Hold alerts every day during these hours.</Typography.Text>
             <ToggleRow
               label="Use quiet hours"
@@ -514,7 +514,7 @@ export function NotificationsSection() {
           </div>
 
           <div className="notif-group">
-            <Typography.Title level={5} className="notif-group-title">Maintenance windows</Typography.Title>
+            <Typography.Title level={2} className="notif-group-title">Maintenance windows</Typography.Title>
             <Typography.Text type="secondary" className="notif-group-desc">
               Mute every alert and the digest during planned work. Times are in this browser's time zone.
             </Typography.Text>

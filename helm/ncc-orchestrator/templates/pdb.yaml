@@ -1,0 +1,26 @@
+{{- /*
+PodDisruptionBudgets, matching k8s/pdb.yaml. Rendered only for a component
+with more than one replica: minAvailable 1 on a single pod would block every
+node drain.
+*/}}
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- range $c := list "api" "ui" }}
+{{- $v := index $.Values $c }}
+{{- if and $v.enabled (gt (int $v.replicas) 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ncc-v2-{{ $c }}
+  namespace: {{ $.Values.namespace }}
+spec:
+  minAvailable: {{ $.Values.podDisruptionBudget.minAvailable }}
+  {{- if semverCompare ">=1.27.0-0" $.Capabilities.KubeVersion.Version }}
+  # Pods that are running but not Ready must not block a node drain.
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  {{- end }}
+  selector:
+    matchLabels: { app: ncc-orchestrator-v2, component: {{ $c }} }
+{{- end }}
+{{- end }}
+{{- end }}

@@ -44,7 +44,7 @@ export function DrilldownDiffPanel({ drilldownDiff, clusterNameMap }: Props) {
 
   return (
     <Card className="page-card">
-      <Typography.Title level={4} className="section-title">
+      <Typography.Title level={2} className="section-title">
         Changes since the previous run
 </Typography.Title>
       <Typography.Text type="secondary" className="section-subtitle">
@@ -77,7 +77,7 @@ export function DrilldownDiffPanel({ drilldownDiff, clusterNameMap }: Props) {
         </Col>
       </Row>
       {clusters.length === 0 ? (
-        <Empty description="No drilldown diff clusters found." />
+        <Empty description="No drilldown diff clusters found" />
       ) : (
         <Table size="small" columns={columns} dataSource={clusters} pagination={{ pageSize: 8, showSizeChanger: false }} />
       )}

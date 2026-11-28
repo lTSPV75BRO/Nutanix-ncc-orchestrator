@@ -1,12 +1,14 @@
-# Continuous-integration quality gates. Runs on every push to main and on all
-# pull requests. Keeps the default branch releasable: Go build/vet/race tests,
-# golangci-lint, govulncheck, frontend tests + npm audit, and a Trivy
-# filesystem scan.
+# Continuous-integration quality gates. Runs on every push to main and to a
+# release branch (v2.4.0), and on all pull requests. Keeps the default branch releasable: Go build/vet/race tests,
+# golangci-lint, govulncheck, gosec, gitleaks, frontend tests + npm audit,
+# browser accessibility checks (axe-core on the demo build), a Helm install on
+# kind, and a Trivy filesystem scan. Checkouts never keep the job token
+# (persist-credentials: false) and every action is pinned by commit SHA.
 name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "v[0-9]+.[0-9]+.[0-9]+"]
   pull_request:
 
 permissions:
@@ -21,8 +23,10 @@ jobs:
     name: build, vet & race tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: 'go.mod'
           cache: true
@@ -48,8 +52,10 @@ jobs:
     name: build & tests (windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: 'go.mod'
           cache: true
@@ -57,13 +63,29 @@ jobs:
         run: go vet ./...
       - name: go test
         run: go test -count=1 ./...
+      # WIN-05: the Windows permission code (NTFS ACLs, owner takeover) behaves
+      # differently for a standard user, an elevated administrator and SYSTEM
+      # (the account the Task Scheduler service runs the stack as). The steps
+      # below run it as the last two and fail, not skip, when the token is not
+      # what the test needs (NCC_TEST_EXPECT_ELEVATED / NCC_TEST_EXPECT_SYSTEM).
+      - name: assert the runner session is elevated
+        shell: pwsh
+        run: ./scripts/ci/assert-elevated.ps1
+      - name: permission tests, elevated administrator
+        shell: pwsh
+        run: ./scripts/ci/windows-acl-tests.ps1 -Identity Elevated
+      - name: permission tests, as SYSTEM (scheduled task)
+        shell: pwsh
+        run: ./scripts/ci/windows-acl-tests.ps1 -Identity System -TimeoutSeconds 900
 
   lint:
     name: golangci-lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: 'go.mod'
           cache: true
@@ -90,8 +112,10 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "26.12.1" # >= 26.12.1: Oct 21 2026 Node security release; runner toolcache may lag
           cache: npm
@@ -118,12 +142,58 @@ jobs:
           NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
         run: npm run build
 
+  a11y:
+    # Accessibility in a real browser (A11Y-02): axe-core with colour contrast
+    # on every route in all three themes with populated demo data, overlays,
+    # 400% zoom reflow, keyboard and screen-reader proxies. jsdom cannot see
+    # contrast or layout, so the frontend job cannot do this. A real screen
+    # reader pass stays manual (docs/ui/DESIGN_SYSTEM.md).
+    name: browser accessibility (demo build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "26.12.1" # >= 26.12.1: Oct 21 2026 Node security release; runner toolcache may lag
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: npm ci
+        env:
+          NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
+        run: npm ci
+      - name: type-check the browser tests
+        run: npm run typecheck:e2e
+      - name: install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: build the demo and run the accessibility suite
+        env:
+          NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
+        run: npm run test:a11y
+      - name: upload the report
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: a11y-report
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+          retention-days: 7
+          if-no-files-found: ignore
+
   govulncheck:
     name: govulncheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: 'go.mod'
           cache: true
@@ -136,11 +206,77 @@ jobs:
           set -o pipefail
           govulncheck -format json ./cmd/... ./internal/... ./tools/... | go run ./tools/vulngate scripts/govulncheck-accepted.txt
 
+  helm-smoke:
+    # The chart once shipped with an API pod that could not start and a CronJob
+    # that could not complete a run; nothing installed it before a release.
+    name: helm install smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - name: install kind and kubeconform
+        run: |
+          go install sigs.k8s.io/kind@v0.33.0
+          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.8.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: validate the chart and the k8s/ manifests
+        run: |
+          set -o pipefail
+          helm lint helm/ncc-orchestrator
+          helm template ncc helm/ncc-orchestrator | kubeconform -strict -summary -ignore-missing-schemas
+          helm template ncc helm/ncc-orchestrator --set ingress.enabled=true --set networkPolicy.egress.enabled=true --set prometheusRule.enabled=true | kubeconform -strict -summary -ignore-missing-schemas
+          kubectl kustomize k8s | kubeconform -strict -summary -ignore-missing-schemas
+          kubeconform -strict -summary k8s/upgrade-check-job.yaml
+      - name: install on a kind cluster and run it
+        run: scripts/helm-smoke-test.sh
+
+  upgrade-e2e:
+    # Real upgrades, rollbacks and an interrupted helper under systemd, launchd
+    # and the Windows Task Scheduler, with test releases built here.
+    name: upgrade rehearsal (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, dir: /opt/ncc-e2e, sudo: sudo }
+          - { os: macos-latest, dir: /usr/local/ncc-e2e, sudo: sudo }
+          - { os: windows-latest, dir: "C:/ncc-e2e", sudo: "" }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - name: build the test releases
+        run: bash scripts/upgrade-e2e.sh build e2e
+      - name: rehearse with the service manager
+        run: ${{ matrix.sudo }} bash scripts/upgrade-e2e.sh run e2e "${{ matrix.dir }}"
+      - name: rehearse without one (v2-start)
+        run: bash scripts/upgrade-e2e.sh run e2e "$PWD/manual-e2e" manual 18081 18080
+      - name: run the VM provisioning template
+        if: runner.os != 'macOS'
+        run: ${{ matrix.sudo }} bash scripts/vm-template-test.sh e2e
+
   trivy:
     name: trivy filesystem scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Trivy vulnerability + config scan
         # Pinned to the v0.35.0 commit SHA rather than a floating tag: in
         # March 2026 an attacker force-pushed malicious code onto 75 of 76
@@ -154,3 +290,30 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: '1'
+
+  security-scan:
+    name: gosec & gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # gitleaks scans the whole history
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - name: install gosec and gitleaks
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.30.0
+          go install github.com/zricethezav/gitleaks/v8@v8.30.1
+      - name: gosec (high severity, high confidence)
+        # Fails on any high/high finding not marked `#nosec <rule> -- reason`
+        # after review. G703 (path taint) is excluded: its 80+ hits are paths
+        # from the server's own config and names the handlers already
+        # validate; path handling is covered by the API tests instead.
+        run: gosec -quiet -severity high -confidence high -exclude G703 -exclude-dir frontend ./...
+      - name: gitleaks (full history)
+        # Reviewed false positives (test passwords, prose) are listed by
+        # fingerprint in .gitleaksignore.
+        run: gitleaks git --no-banner --redact --exit-code 1 .

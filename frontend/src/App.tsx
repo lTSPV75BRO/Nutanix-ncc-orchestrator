@@ -11,10 +11,10 @@ import {
   RocketOutlined,
   ThunderboltOutlined,
   UserOutlined,
-  WifiOutlined,
 } from "@ant-design/icons";
-import { Alert, Button, Dropdown, Tag, Tooltip } from "antd";
+import { Alert, Button, Dropdown, Tooltip } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { UpdateBanner } from "./features/updates/UpdateBanner";
 import { Navigate, Route, Routes, useLocation } from "react-router";
 import { AppShell } from "./components/AppShell";
 import { DataLoader } from "./components/DataLoader";
@@ -38,19 +38,25 @@ import { notify, notifyError } from "./notify";
 import { AuthContext, useAuth, type AuthValue } from "./auth/AuthContext";
 import { LoginPage, setLoginNotice } from "./pages/LoginPage";
 import { ChangePasswordPage, ChangePasswordModal } from "./pages/ChangePasswordPage";
-import { PersonalTokensModal } from "./features/tokens/PersonalTokensModal";
-import { SessionIdleGuard } from "./components/SessionIdleGuard";
+import { SessionIdleGuard, SessionTimeLeft } from "./components/SessionIdleGuard";
+import { sessionDeadline } from "./utils/sessionTime";
 import { openSetupChecklist, SetupHeaderButton } from "./features/onboarding/SetupChecklist";
 import { CommandJump } from "./components/CommandJump";
 import { formatDateTime, formatTime, localDateKey, parseInstant } from "./utils/datetime";
-import { roleColor } from "./auth/roleColor";
 
+// The tokens dialog is the only thing on the first screens that needs antd's
+// Table, Select and Popconfirm (about 280 kB), so it loads when first opened.
+const PersonalTokensModal = lazy(() =>
+  import("./features/tokens/PersonalTokensModal").then((m) => ({ default: m.PersonalTokensModal })),
+);
 const OverviewPage = lazy(() => import("./pages/OverviewPage").then((m) => ({ default: m.OverviewPage })));
 const FindingsPage = lazy(() => import("./pages/FindingsPage").then((m) => ({ default: m.FindingsPage })));
 const RunsPage = lazy(() => import("./pages/RunsPage").then((m) => ({ default: m.RunsPage })));
 const RunDetailPage = lazy(() => import("./pages/RunDetailPage").then((m) => ({ default: m.RunDetailPage })));
+const ClusterPage = lazy(() => import("./pages/ClusterPage").then((m) => ({ default: m.ClusterPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 const InsightsPage = lazy(() => import("./pages/InsightsPage").then((m) => ({ default: m.InsightsPage })));
+const IntegrationsPage = lazy(() => import("./pages/IntegrationsPage").then((m) => ({ default: m.IntegrationsPage })));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage").then((m) => ({ default: m.NotFoundPage })));
 
 /** A Settings/System section route; sends viewers who may not open it to their landing. */
@@ -125,35 +131,41 @@ function useDocumentTitleSync(health: HealthStatePayload, runActive: boolean) {
   }, [health.state, runActive, page]);
 }
 
-function HeaderHealthPill({
-  health,
-  onRetry,
-}: {
-  health: HealthStatePayload;
-  onRetry?: () => void;
-}) {
-  const title =
-    health.state === "err"
-      ? "API did not answer through this UI. Click to retry."
-      : health.authMode
-        ? `API through this UI · auth: ${health.authMode}`
-        : "API through this UI. Click to refresh.";
-  return (
-    <Tooltip title={title}>
-      <button
-        type="button"
-        className={`header-health-pill ${health.state}`}
-        role="status"
-        aria-live="polite"
-        aria-label={`${health.label}. Retry API health.`}
-        onClick={() => onRetry?.()}
-      >
-        <span className="header-health-dot" />
-        <WifiOutlined className="header-health-icon" />
-        <span className="header-health-label">{health.label}</span>
-      </button>
-    </Tooltip>
-  );
+const API_DOWN_TOAST_KEY = "ncc-api-unreachable";
+
+/**
+ * Tell the user when the dashboard cannot reach the API. The state itself
+ * lives on the Status page; here a sticky notice appears once when the API stops
+ * answering (with a Retry button) and is replaced by a short confirmation when it
+ * is back, instead of a permanent indicator in the header.
+ */
+export function useApiReachabilityNotice(unreachable: boolean, retry: () => void) {
+  const announced = useRef(false);
+  const retryRef = useRef(retry);
+  retryRef.current = retry;
+  useEffect(() => {
+    if (unreachable) {
+      if (announced.current) return;
+      announced.current = true;
+      notify.error({
+        key: API_DOWN_TOAST_KEY,
+        message: "API unreachable",
+        description: "This dashboard cannot reach the API server, so what you see may be out of date. It keeps trying every 10 seconds; the Status page has details.",
+        duration: 0,
+        btn: (
+          <Button size="small" onClick={() => retryRef.current()}>
+            Retry now
+          </Button>
+        ),
+      });
+      return;
+    }
+    if (announced.current) {
+      announced.current = false;
+      notify.close(API_DOWN_TOAST_KEY);
+      notify.success({ message: "API reachable again", duration: 4 });
+    }
+  }, [unreachable]);
 }
 
 function BootstrapSplash({
@@ -335,14 +347,14 @@ function HeaderTriggerRunButton() {
     if (isActive) {
       notify.warning({
         message: "A run is already in progress",
-        description: "Wait for the current run to finish before triggering another.",
+        description: "Wait for the current run to finish before triggering another",
       });
       return;
     }
     notify.loading({
       key: RUN_TOAST_KEY,
       message: "Starting run…",
-      description: "Triggering an NCC run from the header.",
+      description: "Triggering an NCC run from the header",
     });
     try {
       const out = await api.runTrigger({ extra_args: [] });
@@ -432,7 +444,10 @@ function HeaderUserMenu({
   onLogoutEverywhere,
   onAbout,
   canSeeSetup,
+  sessionEndsAt,
 }: {
+  /** When the session ends (epoch ms); null for sessions without a known end. */
+  sessionEndsAt?: number | null;
   username: string;
   role: UserRole;
   canChangePassword: boolean;
@@ -451,6 +466,7 @@ function HeaderUserMenu({
       label: (
         <span>
           Signed in as <strong>{username || "user"}</strong>
+          {sessionEndsAt ? <SessionTimeLeft expiresAt={sessionEndsAt} /> : null}
         </span>
       ),
       disabled: true,
@@ -479,18 +495,22 @@ function HeaderUserMenu({
           if (key.startsWith("theme:")) onTheme(key.slice("theme:".length) as AppThemeSelection);
           else if (key === "logout") onLogout();
           else if (key === "logout-all") onLogoutEverywhere();
-          else if (key === "change-password") onChangePassword();
-          else if (key === "tokens") onManageTokens();
-          else if (key === "about") onAbout();
-          else if (key === "setup") openSetupChecklist();
+          else {
+            // The menu item that was clicked is about to disappear. Put focus
+            // back on the menu button first, so the dialog (or drawer) opened
+            // below remembers it and gives focus back there when it closes.
+            document.querySelector<HTMLElement>(".header-user-btn")?.focus();
+            if (key === "change-password") onChangePassword();
+            else if (key === "tokens") onManageTokens();
+            else if (key === "about") onAbout();
+            else if (key === "setup") openSetupChecklist();
+          }
         },
       }}
     >
       <Button className="header-user-btn" icon={<UserOutlined />}>
         <span className="header-user-name">{username || "user"}</span>
-        <Tag color={roleColor(role)} className="header-user-role">
-          {role || "user"}
-        </Tag>
+        <span className="header-user-role">{role || "user"}</span>
       </Button>
     </Dropdown>
   );
@@ -523,6 +543,8 @@ export default function App() {
     refetchOnWindowFocus: true,
   });
   const me = meQuery.data as MeData | undefined;
+  // When this session ends, measured from when /auth/me answered.
+  const sessionEndsAt = me?.authenticated ? sessionDeadline(me, meQuery.dataUpdatedAt) : null;
   const loginEnabled = Boolean(me?.login_enabled);
   const authenticated = Boolean(me?.authenticated);
   const role: UserRole = (me?.role as UserRole) ?? "";
@@ -533,6 +555,9 @@ export default function App() {
   const authValue: AuthValue = { me: me ?? null, role, isAdmin, canOperate, loginEnabled, authenticated };
   const [changePwOpen, setChangePwOpen] = useState(false);
   const [tokensOpen, setTokensOpen] = useState(false);
+  // Mount the (lazy) tokens dialog on first open and keep it, so closing animates.
+  const [tokensMounted, setTokensMounted] = useState(false);
+  if (tokensOpen && !tokensMounted) setTokensMounted(true);
 
   const handleLogout = async () => {
     try {
@@ -588,7 +613,8 @@ export default function App() {
   const healthQuery = useQuery({
     queryKey: ["health"],
     queryFn: api.health,
-    refetchInterval: 30_000,
+    // Poll faster while the API is not answering so the notice clears soon after it returns.
+    refetchInterval: (query) => (query.state.status === "error" ? 10_000 : 30_000),
     staleTime: 15_000,
     retry: 1,
   });
@@ -633,6 +659,7 @@ export default function App() {
     | undefined;
 
   useDocumentTitleSync(healthState, runActive);
+  useApiReachabilityNotice(healthQuery.isError, () => void healthQuery.refetch());
 
   // Wait for /auth/me before routing. While it is in flight, login_enabled is
   // unknown (falsy), so rendering the app would mount Dashboard queries that
@@ -703,6 +730,7 @@ export default function App() {
     <AuthContext.Provider value={authValue}>
     <AppShell
       viewer={viewer}
+      notice={appReady && isAdmin ? <UpdateBanner /> : null}
       brand={
         <BrandVersionTag
           version={healthRecord?.version}
@@ -717,7 +745,6 @@ export default function App() {
         <>
           <CommandJump viewer={viewer} />
           {appReady && canSeeSettings ? <SetupHeaderButton /> : null}
-          <HeaderHealthPill health={healthState} onRetry={() => void healthQuery.refetch()} />
           <HeaderTriggerRunButton />
           {signedIn ? (
             <HeaderUserMenu
@@ -732,6 +759,7 @@ export default function App() {
               onLogoutEverywhere={handleLogoutEverywhere}
               onAbout={() => setAboutOpen(true)}
               canSeeSetup={appReady && canSeeSettings}
+              sessionEndsAt={sessionEndsAt}
             />
           ) : (
             // No user menu without sign-in: theme and About get a small menu.
@@ -771,8 +799,11 @@ export default function App() {
               <Route path="/findings" element={<FindingsPage />} />
               <Route path="/login" element={<Navigate to={OVERVIEW_PATH} replace />} />
               <Route path="/insights" element={<InsightsPage />} />
+              <Route path="/integrations" element={<IntegrationsPage />} />
+              <Route path="/integrations/:id" element={<IntegrationsPage />} />
               <Route path="/runs" element={<RunsPage />} />
               <Route path="/runs/:id" element={<RunDetailPage />} />
+              <Route path="/clusters/:key" element={<ClusterPage />} />
               <Route path="/settings" element={<LegacySettingsRedirect viewer={viewer} />} />
               <Route path="/settings/:section" element={<SectionRoute viewer={viewer} />} />
               <Route path="/system/:section" element={<SectionRoute viewer={viewer} />} />
@@ -787,11 +818,16 @@ export default function App() {
           void meQuery.refetch();
         }}
       />
-      <PersonalTokensModal open={tokensOpen} onClose={() => setTokensOpen(false)} role={role} />
+      {tokensMounted ? (
+        <Suspense fallback={null}>
+          <PersonalTokensModal open={tokensOpen} onClose={() => setTokensOpen(false)} role={role} />
+        </Suspense>
+      ) : null}
       {loginEnabled && authenticated && !me?.must_change_password ? (
         <SessionIdleGuard
           onLogout={handleLogout}
           onStayLoggedIn={() => void meQuery.refetch()}
+          expiresAt={sessionEndsAt}
         />
       ) : null}
       <AboutDialog

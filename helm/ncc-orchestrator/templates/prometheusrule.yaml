@@ -1,0 +1,83 @@
+{{- /*
+Alert rules for the Prometheus Operator (kind PrometheusRule). Off by
+default: it needs the monitoring.coreos.com CRDs, kube-state-metrics for the
+CronJob, Deployment and Job rules, and kubelet volume stats for the PVC rule.
+The ncc_* rules need Prometheus to scrape the API's /metrics.
+*/}}
+{{- if .Values.prometheusRule.enabled }}
+{{- $r := .Values.prometheusRule }}
+{{- $ns := .Values.namespace }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: ncc-orchestrator
+  namespace: {{ $ns }}
+  labels:
+    app.kubernetes.io/name: ncc-orchestrator
+    {{- with $r.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: ncc-orchestrator.kubernetes
+      rules:
+        - alert: NCCRunnerJobFailed
+          expr: sum by (namespace, job_name) (kube_job_status_failed{namespace="{{ $ns }}", job_name=~"ncc-orchestrator-.*"}) > 0
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "NCC runner job {{ "{{" }} $labels.job_name {{ "}}" }} failed"
+            description: "A scheduled NCC run did not complete. Check the job's pod logs, then Runs in the UI."
+        - alert: NCCRunnerNoRecentSuccess
+          expr: time() - max by (namespace) (kube_cronjob_status_last_successful_time{namespace="{{ $ns }}", cronjob="ncc-orchestrator"}) > {{ mul (int $r.staleReportHours) 3600 }}
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "No successful NCC run for over {{ $r.staleReportHours }} hours"
+            description: "The ncc-orchestrator CronJob has not finished successfully recently, so the dashboard shows old data. Check whether the CronJob is suspended or failing."
+        - alert: NCCApiUnavailable
+          expr: kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment="ncc-v2-api"} < 1
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "No NCC API replica is available"
+            description: "The UI and scheduled environment runs need the API. Check the ncc-v2-api pods."
+        - alert: NCCApiReplicasDegraded
+          expr: kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment="ncc-v2-api"} < kube_deployment_spec_replicas{namespace="{{ $ns }}", deployment="ncc-v2-api"}
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "NCC API is running fewer replicas than requested"
+        - alert: NCCDataVolumeFilling
+          expr: |
+            kubelet_volume_stats_available_bytes{namespace="{{ $ns }}", persistentvolumeclaim="{{ .Values.pvcName }}"}
+              / kubelet_volume_stats_capacity_bytes{namespace="{{ $ns }}", persistentvolumeclaim="{{ .Values.pvcName }}"}
+              < {{ $r.pvcFreeRatio }}
+          for: 30m
+          labels: { severity: warning }
+          annotations:
+            summary: "NCC data volume {{ .Values.pvcName }} is almost full"
+            description: "Less than {{ mulf $r.pvcFreeRatio 100 }}% free. Lower run or artifact retention, or grow the volume."
+    - name: ncc-orchestrator.app
+      rules:
+        - alert: NCCVersionSkew
+          expr: count by (namespace) (count by (namespace, version) (ncc_build_info{namespace="{{ $ns }}"})) > 1
+          for: 30m
+          labels: { severity: warning }
+          annotations:
+            summary: "NCC API replicas run different versions"
+            description: "Finish the rollout or roll back so every replica serves the same version."
+        - alert: NCCBackgroundPanic
+          expr: increase(ncc_api_background_panics_total{namespace="{{ $ns }}"}[15m]) > 0
+          labels: { severity: warning }
+          annotations:
+            summary: "An NCC API background job panicked and recovered"
+            description: "Schedules keep running, but the job that panicked did not finish. The API log has the stack trace."
+        - alert: NCCReportStale
+          expr: time() - max by (namespace) (ncc_alerts_last_ingested_run_timestamp_seconds{namespace="{{ $ns }}"}) > {{ mul (int $r.staleReportHours) 3600 }}
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "Newest NCC report is older than {{ $r.staleReportHours }} hours"
+            description: "No new run has reached the API. The Overview shows which clusters and schedules are behind."
+{{- end }}

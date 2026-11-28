@@ -1,0 +1,38 @@
+
+Detailed information for check_pcvm_ssh_security:
+Node 10.10.30.11:
+INFO: Password-based remote login is enabled on the PCVM. It is recommended to use key-based ssh access instead of password-based ssh access for better security.
+Refer to KB 14104 (http://portal.nutanix.com/kb/14104) for details on check_pcvm_ssh_security
+
+---------------------------------------
+Detailed information for pcvm_disk_usage_check:
+Node 10.10.30.11:
+WARN: Platform disk space usage in Prism Central VM 10.10.30.11 exceeds 75% for disk(s): b'/dev/sdf1'
+Refer to KB 5228 (http://portal.nutanix.com/kb/5228) for details on pcvm_disk_usage_check
+
+---------------------------------------
+Detailed information for recovery_plan_entities_protection_check:
+Node 10.10.30.11:
+WARN: Unprotected entities in recovery_plan rp-tier1: VMs: vm-app-01, vm-app-02
+Refer to KB 5795 (http://portal.nutanix.com/kb/5795) for details on recovery_plan_entities_protection_check
+
+---------------------------------------
+Detailed information for recovery_plan_modified_network_check:
+Node 10.10.30.11:
+WARN: Recovery Plan(s) rp-tier1,rp-tier2 have network(s) which are modified
+Refer to KB 11044 (http://portal.nutanix.com/kb/11044) for details on recovery_plan_modified_network_check
+
+---------------------------------------
+Detailed information for recovery_plan_last_test_status_check:
+Node 10.10.30.11:
+INFO: Test Failover has not been run on Recovery Plans rp-tier1, rp-tier2
+Refer to KB 5793 (http://portal.nutanix.com/kb/5793) for details on recovery_plan_last_test_status_check
+
+---------------------------------------
+Detailed information for weekly_pre_expiry:
+Node 10.10.30.11:
+INFO: The setup has license(s) that are about to expire. Detailed license info:
+Cluster UUID: 00000000-0000-4000-8000-000000000002 has license(s) that are about to expire: LIC-00000002 - 80 CORES NCM Ultimate is expiring on 2026-12-31
+Refer to KB 2469 (http://portal.nutanix.com/kb/2469) for details on weekly_pre_expiry
+
+---------------------------------------

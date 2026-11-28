@@ -1,23 +1,96 @@
 # NCC Orchestrator MCP Server
 
-The **NCC MCP server** exposes the Nutanix NCC Orchestrator to AI assistants (Cursor, Claude Desktop, etc.) via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). The AI can validate configs, run preflight checks, run NCC checks, discover clusters from Prism Central, read run summaries, and replay reports.
+The **NCC MCP server** exposes the Nutanix NCC Orchestrator to AI assistants (Cursor, Claude Desktop, Claude Code, etc.) via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). The AI can validate configs, run preflight checks, run NCC checks, discover clusters from Prism Central, read run summaries, and replay reports.
+
+**Import this into an assistant in five minutes** — jump to [Import in five minutes](#import-in-five-minutes). Agents should follow the shipped skill [`skills/ncc-mcp/SKILL.md`](../skills/ncc-mcp/SKILL.md) (also linked from `.cursor/skills/ncc-mcp`).
+
+How it works: `ncc-mcp-server` is an MCP **stdio** process that is a **strict HTTP client of `ncc-api-server`**. It does not exec `ncc-orchestrator`. Every tool and resource maps to a REST call with:
+
+- `Authorization: Bearer` personal access token (`NCC_MCP_TOKEN`)
+- `X-NCC-MCP-Version` and a time-bound HMAC proof (`X-NCC-MCP-Proof`, protocol `ncc-mcp-proof-v1` keyed by the PAT)
+- `X-NCC-MCP-Tool` naming the MCP tool (for audit)
+
+The proof is a **compatibility check, not a security boundary**: it is an HMAC keyed by the same PAT the client already sends, so anyone holding the PAT can compute it, and a client that does not identify as `ncc-mcp-server` is not subject to it at all. What actually limits a client is the PAT: its role (viewer, operator or admin) is enforced by the API on every call, and every call is audited. The 2.4.0 API refuses a caller that claims to be MCP with a missing or invalid proof (`NCC_API_MCP_UPGRADE_REQUIRED` / `NCC_API_MCP_PROOF_INVALID`). Third-party HTTP clients that do not identify as `ncc-mcp-server` keep using normal API auth. MCP-originated API requests are audited as `mcp.call` with `channel=mcp`, `mcp_tool`, PAT id/name when a PAT was used, and error/remediation on failures.
+
+This matches MCP practice: stdio transport, JSON-RPC, tool annotations, JSON Schema arguments, no secrets in tool arguments, confirmation for mutations, and host-side RBAC on the API.
 
 Current server implementation version: **`3.0.0`** (overridable at build time via `-ldflags "-X main.serverVersion=<v>"`). Version 3 is a breaking MCP contract: every tool advertises an output schema and returns a versioned structured envelope.
 
 Every tool advertises MCP **annotations** (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) and a human-readable title, so MCP hosts can present read-only tools differently from mutating/destructive ones (e.g. ask for confirmation before `delete_schedule`).
 
+## Is it part of the stack?
+
+No, on purpose. `ncc-mcp-server` is optional: few installations need it, and every
+extra binary is more to ship, verify and keep patched. The stack archives
+(`ncc-orchestrator`, `ncc-api-server`, `ncc-ui-server`, the dashboard) do not
+contain it, nothing in the stack starts it, and the API does not need it. It runs
+on the computer that runs the AI assistant, is started by the assistant, and
+calls the API like any other client. Build it where you need it (below), or
+produce release-style binaries with `scripts/binaryGO.txt --with-mcp`.
+
+Older builds (0.1.13 to 2.3.0) had no sign-in at all. Do not keep them; use a build
+from 2.4.0 or later. The in-app guide is **Integrations, AI assistants (MCP)**.
+
+## Import in five minutes
+
+**Automated:** `scripts/ncc-mcp-setup.sh --api https://<api-host>:8081` (with `NCC_ADMIN_TOKEN` set) creates a
+viewer account, mints its token, builds the binary and writes the host config for you; the token is never
+printed. The manual steps follow.
+
+You need a running **ncc-api-server**, the **2.4.0+** `ncc-mcp-server` binary, and a dashboard PAT.
+
+1. **Mint a token** in the dashboard: user menu (top right) → **Personal access tokens → Create token**. Use **viewer** for read-only assistants, **operator** to trigger runs. Copy `ncc_pat_…` once.
+2. **Get the binary** (build from this repo; it is not required on the API host):
+
+   ```bash
+   go build -o ncc-mcp-server ./cmd/ncc-mcp-server/
+   ```
+
+3. **Point at the API.** Default is `http://127.0.0.1:8081`. Off the same machine you must use `https://host:8081`. Cleartext HTTP to a LAN IP is refused. If the API is HTTP-only on another host, tunnel it:
+
+   ```bash
+   examples/mcp/forward-api.sh user@api-host
+   # then NCC_MCP_API_URL=http://127.0.0.1:18091
+   ```
+
+4. **Drop in a host config** (replace the binary path and token):
+
+   | Host | File |
+   | --- | --- |
+   | Cursor | copy [`examples/mcp/cursor.mcp.json`](../examples/mcp/cursor.mcp.json) into `~/.cursor/mcp.json` or the project `.cursor/mcp.json` |
+   | Claude Desktop | merge [`examples/mcp/claude_desktop.json`](../examples/mcp/claude_desktop.json) into Claude’s MCP settings (`claude_desktop_config.json`) |
+   | Claude Code / other skill hosts | add the same `command` + `env`, and copy [`skills/ncc-mcp/`](../skills/ncc-mcp/) into the product’s skills directory |
+
+   Start **readonly** (`NCC_MCP_PROFILE`: `readonly`). Do not put the PAT in chat or in tool arguments.
+
+5. **Reload MCP** in the host. Ask: “Call `get_run_summary` and list FAIL/ERR findings.” If that works, import is done.
+
+Agent skill (how the model should use the tools): [`skills/ncc-mcp/SKILL.md`](../skills/ncc-mcp/SKILL.md). Safety and workflows: [`AI_INTEGRATION.md`](AI_INTEGRATION.md).
+
 ## Prerequisites
 
-- **Go 1.27.3+** (same as the main orchestrator; see `go.mod`)
-- **ncc-orchestrator** binary on your `PATH`, or set `NCC_ORCHESTRATOR_BIN` to its path
+- **Go 1.27.4+** to build from source (same as the main orchestrator; see `go.mod`)
+- A running **ncc-api-server** (default `http://127.0.0.1:8081`)
+- A dashboard **personal access token** (`ncc_pat_…`) in `NCC_MCP_TOKEN`
 
 ## Build
 
-From the repo root:
+You need Go 1.27.4 or newer and a copy of the repository. From its root:
 
 ```bash
-go build -o ncc-mcp-server ./cmd/ncc-mcp-server/
+# macOS or Linux
+go build -trimpath -o ncc-mcp-server ./cmd/ncc-mcp-server
 ```
+
+```powershell
+# Windows (PowerShell)
+go build -trimpath -o ncc-mcp-server.exe ./cmd/ncc-mcp-server
+```
+
+To stamp the build with a version (shown in the audit log), add
+`-ldflags "-X main.serverVersion=<version>"`. Build on the machine that runs the
+assistant or copy the single file there; it has no other files to install. Keep it
+where only you can change it, and give the host its absolute path.
 
 Or install into `$GOPATH/bin` (or `$HOME/go/bin`):
 
@@ -27,49 +100,49 @@ go install ./cmd/ncc-mcp-server/
 
 ## Tools Exposed to the AI
 
-Hints below: **RO** = read-only, **OW** = open-world (contacts clusters/external services), **D** = destructive.
+Hints below: **RO** = read-only, **OW** = open-world (contacts the API / clusters), **D** = destructive.
 
 | Tool | Hints | Description |
 | --- | --- | --- |
-| **run_ncc** | OW | Run NCC across clusters. Options: `config_path`, `clusters`, `username`, `password`, `insecure_skip_verify` (skip TLS verify for lab/self-signed certs), `dry_run`. Returns CLI output and run summary when available. |
-| **discover_clusters** | RO, OW | List cluster IPs from Prism Central (default v4 `clustermgmt` API; optional `discover_api_version`: `v4` or `v3`; optional `nutanix_v4_api_version` such as `v4.2`, `v4.0.a1`). Requires `prism_central_url`; optional `config_path`, `username`, `password`, `insecure_skip_verify`, `output_path`. |
-| **validate_config** | RO | Validate a config file without contacting clusters. Requires `config_path`; set `include_secrets: true` to also validate `secret://` references and secret-source accessibility. Run before `run_ncc` to catch misconfiguration early. |
-| **preflight_check** | RO | Run the combined config/secrets/path preflight checks and return the structured JSON report (per-check `id`/`status`/`title`/`message` with remediation). Requires `config_path`. Broader than `validate_config`. |
-| **get_run_summary** | RO | Read `run-summary.json` from a previous run (per-cluster `clusters[]`, `exit_code`, `health_score` rollups). Optional `output_dir` (default `outputfiles`). |
-| **replay_reports** | OW | Regenerate HTML/CSV from existing logs (no NCC API; may send notifications). Requires `config_path`. |
-| **list_run_artifacts** | RO | List files in an NCC run output directory (run-summary.json, ncc-run-record.json, regression-summary.json, checks-snapshot.json, drilldown-diff.json, flaky-checks.json, slo-dashboard.json, index.html, per-cluster .log/.html/.csv/.sarif). Optional `output_dir` (default `outputfiles`). |
-| **list_run_history** | RO | List archived runs from `outputfiles/runs` with timestamps, duration, cluster success/failure counts, exit codes, and run IDs. Supports `output_dir` and a bounded `limit` (maximum 100). |
-| **get_sample_config** | RO | Return the shipped `examples/example_config.yaml` so the AI can explain or help create a configuration. |
-| **get_metrics** | RO | Read `.prom` files from `promfiles` (or a supplied `prom_dir`) with a bounded response size. |
-| **troubleshoot_v2_stack** | RO | Run read-only `doctor` diagnostics for the v2 stack, including layout, health, service status, environment names, and recent log tails. Uses `--no-bundle --json --no-disruptive`; it never applies fixes. |
-| **check_upgrade** | RO, OW | Check for a newer orchestrator release using `update --check --json` without downloading, installing, or modifying files. Optional `repo`, `binary_url`, `target_version`, and `allow_major_upgrade`. |
-| **preview_install_service** | RO | Render the v2 service/task installation for the host OS using `v2-install-service --print-only`; it never installs, enables, starts, or changes a service. |
-| **get_report** | RO | Read the aggregated index.html or a specific cluster report file. Optional `output_dir` (default `outputfiles`), `file` (`index` or a filename like `10.0.0.1.html`). The `file` is confined to `output_dir` (no `../` traversal). For `*.log` files, `KB NNNN` references are turned into markdown links to `portal.nutanix.com/kb/NNNN` for Cursor/IDE. Large reports are truncated for context. |
-| **get_findings** | RO | Return bounded structured findings from `checks-snapshot.json`, filtered by run, cluster, check, and severity. |
-| **compare_runs** | RO | Compare two archived run summaries and return failure, warning, health, status, and delta data. |
-| **apply_upgrade** | D | Apply an orchestrator upgrade. Requires `confirm: "APPLY"`; checksum verification remains enabled by default. |
-| **bootstrap_v2_stack** | D | Download and prepare the v2 API/UI binaries and startup scripts. Requires `confirm: "APPLY"`. |
-| **install_service** | D | Install the boot-persistent v2 service and optionally start it. Requires `confirm: "APPLY"`; use `preview_install_service` first. |
-| **uninstall_service** | D | Remove the boot-persistent v2 service. Requires `confirm: "APPLY"`. |
-| **start_v2_stack** | D | Start the v2 API/UI stack detached. Requires `confirm: "APPLY"`. |
-| **stop_v2_stack** | D | Stop the detached v2 stack, optionally forcing termination. Requires `confirm: "APPLY"`. |
-| **restart_v2_stack** | D | Restart the v2 stack. Requires `confirm: "APPLY"`. |
-| **repair_v2_stack** | D | Apply doctor self-heal remediations without a support bundle. Requires `confirm: "APPLY"` and disables disruptive checks. |
-| **restore_v2_backup** | D | Restore a v2 backup archive into an install directory. Requires `confirm: "APPLY"` and an `input_file`. |
-| **create_schedule** | — | Create/update scheduler entries via `create-schedule` (`type`, `task_name`, `config`, `command`, `cron`, `every`, `log_path`, `print_only`). A custom `command` installs an arbitrary recurring command line, so it is refused unless the MCP server runs with `NCC_MCP_ALLOW_SCHEDULE_COMMAND=true`. |
-| **list_schedules** | RO | List scheduler entries for a task name (`type`, `task_name`). |
-| **delete_schedule** | D | Remove scheduler entries for a task name (`type`, `task_name`, `print_only`). |
-| **backup_v2_stack** | — | Create a v2 configuration/state backup archive. Requires `confirm: "APPLY"`; backups contain secrets and must be stored securely. |
-| **orchestrator_action** | D/RO | Run an allowlisted operator action such as `v2-status`, `v2-check`, `verify`, `config-schema`, validation, `quickstart`, `uninstall`, or password recovery. Mutating actions require `confirm: "APPLY"`; arbitrary subprocess arguments are not accepted. |
+| **run_ncc** | OW | `POST /api/v1/runs/trigger`. Requires `confirm: "APPLY"` and `NCC_MCP_ALLOW_MUTATIONS`. Options: `config_path`, `clusters`, `dry_run`. Usernames, passwords, and `insecure_skip_verify` are refused. |
+| **discover_clusters** | RO, OW | `GET /api/v1/settings/pc-clusters`. Requires `prism_central_url`. Credentials stay on the API server. |
+| **validate_config** | RO | `POST /api/v1/runs/preflight` for the given `config_path`. |
+| **preflight_check** | RO | Same preflight endpoint; structured report. Requires `config_path`. |
+| **get_run_summary** | RO | `GET /api/v1/runs/summary`. |
+| **replay_reports** | OW | Triggers a run with `--replay`. Requires `config_path`, `confirm: "APPLY"`, and mutations enabled. |
+| **list_run_artifacts** | RO | `GET /api/v1/artifacts`. |
+| **list_run_history** | RO | `GET /api/v1/runs` with a bounded `limit` (maximum 100). |
+| **get_sample_config** | RO | `GET /api/v1/settings/config`. |
+| **get_metrics** | RO | `GET /api/v1/health`. |
+| **troubleshoot_v2_stack** | RO | `GET /api/v1/health/diagnostics`. |
+| **check_upgrade** | RO, OW | `GET /api/v1/settings/update`. Its `upgrade` field follows a running upgrade, including the update helper's steps. |
+| **preview_install_service** | RO | `GET /api/v1/health/supervisor` (status only; does not install a host service). |
+| **get_report** | RO | `GET /api/v1/artifacts/{file}` (`index.html` or a basename; no path traversal). |
+| **get_findings** | RO | `GET /api/v1/alerts/ncc` with optional `cluster`, `check`, `severity` (comma list), `limit` (default 50, max 200) and `cursor` (the previous `next_cursor`). |
+| **compare_runs** | RO | Fetches two archived runs from `GET /api/v1/runs/{id}` and returns both payloads. |
+| **apply_upgrade** | D | `POST /api/v1/settings/update/apply`. Requires `confirm: "APPLY"` and `NCC_MCP_ALLOW_MUTATIONS=true`. Checksum skip is refused. |
+| **bootstrap_v2_stack** | D | Refused over MCP (host installer only). Still requires `confirm: "APPLY"` so clients fail closed. |
+| **install_service** / **uninstall_service** | D | Refused over MCP (host installer only). |
+| **start_v2_stack** / **stop_v2_stack** | D | Refused over MCP (the API is already the running stack). |
+| **restart_v2_stack** | D | `POST /api/v1/health/supervisor/restart`. Requires `confirm: "APPLY"`. |
+| **repair_v2_stack** | D | `POST /api/v1/health/autoheal`. Requires `confirm: "APPLY"`. |
+| **restore_v2_backup** | D | `POST /api/v1/settings/restore`. Requires `confirm: "APPLY"` and `input_file`, which must be the name of a server-side backup (`manual-<time>.tar.gz.enc`), never a path. |
+| **create_schedule** | — | `PUT /api/v1/schedule`. Custom `command` is never accepted. Mutating calls need `confirm: "APPLY"`. |
+| **list_schedules** | RO | `GET /api/v1/schedule`. |
+| **delete_schedule** | D | `PUT /api/v1/schedule` with `action=remove`. Requires `confirm: "APPLY"` unless `print_only`. |
+| **backup_v2_stack** | — | `POST /api/v1/settings/backups` (a snapshot kept on the server; returns its name). Requires `confirm: "APPLY"`. No passphrase is accepted over MCP: the server's backup key applies, and without one the API answers 412. |
+| **orchestrator_action** | D/RO | Allowlisted read-only API maps: `version`, `v2-status`, `v2-check`, `verify`, `config-schema`, `validate-config`, `validate-secrets`, `preflight-check`. Host-only actions (uninstall, password recovery, custom argv) are refused. |
+
+API RBAC still applies: a viewer PAT cannot trigger runs even if the MCP tool is advertised.
 
 ## Resources (read-only)
 
-The server exposes two **resources** that clients can list and read via MCP resources/list and resources/read:
+The server exposes **resources** that clients can list and read via MCP resources/list and resources/read (authenticated):
 
 | URI | Description |
 | --- | --- |
-| **ncc://run-summary** | Latest `run-summary.json` from the default output directory (`outputfiles`). MIME: `application/json`. |
-| **ncc://report** | Latest aggregated NCC report (`index.html`) from the default output directory. MIME: `text/html`. Large content may be truncated. |
+| **ncc://run-summary** | Latest run summary from `GET /api/v1/runs/summary`. MIME: `application/json`. |
+| **ncc://report** | Aggregated report from `GET /api/v1/artifacts/index.html`. MIME: `text/html`. Large content may be truncated. |
 
 Version 3 also exposes:
 
@@ -77,7 +150,7 @@ Version 3 also exposes:
 | --- | --- |
 | **ncc://config-schema** | Versioned configuration schema and secret-reference guidance. |
 | **ncc://runs/{run_id}/summary** | Archived machine-readable summary for one run. |
-| **ncc://runs/{run_id}/report/{file}** | Bounded archived report artifact confined to the run directory. |
+| **ncc://runs/{run_id}/report/{file}** | Bounded archived report artifact via the API. |
 
 ## Structured result contract
 
@@ -99,12 +172,29 @@ when the operation fails. `DELETE /api/v1/jobs/{id}` requests cancellation.
 
 Use these when the AI only needs to read the latest run summary or report without calling a tool (e.g. for context or summarization).
 
+## Authentication
+
+The MCP server refuses to start, and refuses `tools/call` and `resources/read`,
+until a personal access token is configured. Mint a PAT in the dashboard
+(**user menu → Personal access tokens**) and set it as `NCC_MCP_TOKEN` in the
+MCP host environment. Tokens must be at least 16 characters.
+
+When the MCP client talks over HTTP, it must also send the same value as
+`Authorization: Bearer …` or `X-API-Token`. Stdio hosts (Cursor, Claude
+Desktop) authenticate by placing the token in the server process environment;
+the assistant cannot call tools until that is set.
+
+Set `NCC_MCP_API_URL` to the API base (`https://ncc.example.com:8081`). Default
+is `http://127.0.0.1:8081`. The server checks the token with
+`GET /api/v1/auth/me` (HMAC proof required) and refuses work if the API reports
+`authenticated: false`. `http://` is accepted only on loopback.
+
 ## Run the Server (stdio)
 
 The server uses **stdio** transport by default (stdin/stdout for JSON-RPC). Run it and connect your MCP client to the process:
 
 ```bash
-./ncc-mcp-server
+NCC_MCP_TOKEN=ncc_pat_… NCC_MCP_API_URL=http://127.0.0.1:8081 ./ncc-mcp-server
 ```
 
 Do not use it interactively; Cursor or another MCP host will start it and talk over stdin/stdout.
@@ -114,102 +204,72 @@ Do not use it interactively; Cursor or another MCP host will start it and talk o
 Mutating tools are disabled by default. To enable them, explicitly set
 `NCC_MCP_ALLOW_MUTATIONS=true` in the MCP server environment and include
 `confirm: "APPLY"` in each mutating request. Preview and read-only tools do not
-need this setting. The server also rejects arbitrary subprocess commands,
-sanitizes inherited dynamic-loader/runtime variables, and caps orchestrator
-output returned to MCP clients at 1 MiB.
+need this setting. `confirm` is an argument the model fills in, so on its own it stops accidents, not a model that has been told to apply a change.
+
+**Human confirmation (`NCC_MCP_CONFIRM`).** When the connected client supports MCP elicitation, every mutating call (any tool that takes `confirm`, except print-only previews) first shows the person a yes/no dialog with the tool name and its arguments (secrets masked, long values cut, control characters removed), and runs only if they accept. Decline, cancel, an error or no answer within 2 minutes refuses the call. The existing checks run first, so a call that would be refused anyway never prompts.
+
+- `auto` (default): ask when the client supports elicitation; otherwise behave as before (`confirm: "APPLY"` plus `NCC_MCP_ALLOW_MUTATIONS`).
+- `require`: refuse mutating calls from clients that cannot ask.
+- `off`: never ask.
+
+Any other value stops the server at startup. This server speaks stdio only (there is no stateless HTTP mode, which could not ask). It negotiates MCP protocol revisions before 2026-07-28, because later revisions replace server-initiated elicitation. Honest limits: elicitation proves that the *host* showed a dialog, not that a person read it; a malicious or auto-approving host can still answer yes. It raises the bar against a prompt-injected model, and the PAT's role stays the hard limit, so keep the role as low as the job allows. The role is checked by the API after the dialog, so a call the role will refuse can still prompt once. Other controls: mutations are off by default, and your MCP host's own approval prompt for tools marked destructive. Custom schedule commands and passwords in tool arguments are
+never accepted. API responses returned to MCP clients are capped at 1 MiB. The
+HTTP client does not honour `HTTP(S)_PROXY`.
 
 ## Configure in Cursor
 
-1. Open **Cursor Settings → MCP** (or edit your MCP config file).
-2. Add the NCC MCP server.
+Ready-to-edit JSON: [`examples/mcp/cursor.mcp.json`](../examples/mcp/cursor.mcp.json).
 
-**Option A – config file (recommended)**  
-Edit the MCP config (e.g. `~/.cursor/mcp.json` or project `.cursor/mcp.json`) and add:
+1. Open **Cursor Settings → MCP** (or edit `~/.cursor/mcp.json` / project `.cursor/mcp.json`).
+2. Merge the `ncc-orchestrator` server block. `command` must be an **absolute path** to `ncc-mcp-server` unless the binary is on `PATH`.
+3. Set `NCC_MCP_TOKEN` and `NCC_MCP_API_URL`. Keep `NCC_MCP_PROFILE` at `readonly` until you need runs or schedules.
+4. Reload MCP.
 
-```json
-{
-  "mcpServers": {
-    "ncc-orchestrator": {
-      "command": "/absolute/path/to/ncc-mcp-server"
-    }
-  }
-}
-```
-
-If the binary is on your PATH:
-
-```json
-{
-  "mcpServers": {
-    "ncc-orchestrator": {
-      "command": "ncc-mcp-server"
-    }
-  }
-}
-```
-
-**Option B – custom binary path**  
-If the orchestrator binary is not on PATH, point the MCP server to it with an env var and use the same env when starting Cursor (or in the MCP config if your client supports env):
-
-```json
-{
-  "mcpServers": {
-    "ncc-orchestrator": {
-      "command": "/path/to/ncc-mcp-server",
-      "env": {
-        "NCC_ORCHESTRATOR_BIN": "/path/to/ncc-orchestrator"
-      }
-    }
-  }
-}
-```
-
-Restart Cursor (or reload MCP) so it picks up the new server.
-
-## Finding the orchestrator binary
-
-The MCP server looks for the `ncc-orchestrator` binary in this order:
-
-1. **`NCC_ORCHESTRATOR_BIN`** env var (full path)
-2. **Same directory as the MCP server executable** — if you run the MCP server from the project root (e.g. `"command": "/path/to/Nutanix-ncc-orchestrator/ncc-mcp-server"`) and keep `ncc-orchestrator` in that same directory, no env var is needed
-3. **`ncc-orchestrator`** on `PATH`
-
-So the easiest setup is: build both binaries in the project root, and in Cursor MCP config set `command` to the **full path** to `ncc-mcp-server` (e.g. `/Volumes/Mac/Programs/Nutanix-ncc-orchestrator/ncc-mcp-server`). The server will then find `ncc-orchestrator` in the same folder.
+To let Cursor agents follow the NCC workflow automatically, the repo already links [`.cursor/skills/ncc-mcp`](../.cursor/skills/ncc-mcp) → [`skills/ncc-mcp`](../skills/ncc-mcp). Copy that folder into `~/.cursor/skills/ncc-mcp` to use it in other projects.
 
 ## Environment Variables
 
 | Variable | Description |
 | --- | --- |
-| `NCC_ORCHESTRATOR_BIN` | Path to the `ncc-orchestrator` binary. If unset, the server looks next to its own executable, then on PATH. |
-| `NCC_PASSWORD` | Prism password (used by the orchestrator when you don’t pass `password` in tool args). |
+| `NCC_MCP_TOKEN` | Required. Personal access token (`ncc_pat_…`) or other bearer secret. The server will not start without it. |
+| `NCC_MCP_API_URL` | API base URL (default `http://127.0.0.1:8081`). Each tool/resource call checks `GET /api/v1/auth/me` and then the mapped REST route. Non-loopback `http://` is rejected. |
+| `NCC_MCP_ALLOW_MUTATIONS` | Set `true` to allow mutating tools that also send `confirm: "APPLY"`. |
+| `NCC_MCP_CONFIRM` | `auto` (default), `require` or `off`: ask the human through MCP elicitation before a mutating call. See Mutation safety. |
 | `NCC_MCP_PROFILE` | Advertised capability profile: `readonly`, `operator` (default), or `admin`. Admin-only tools are not registered outside the `admin` profile. |
 
-Credentials are best supplied via config file or env; avoid putting passwords in tool arguments when possible.
-
-### Important discovery security behavior
-
-- `https://` Prism Central URLs are the default and recommended mode.
-- `http://` Prism Central URLs are accepted only when `insecure_skip_verify=true` is explicitly set.
+Never put passwords in tool arguments. Store Prism credentials with `secret://` on the API server.
 
 ## Security Notes
 
-- The MCP server runs the orchestrator as a subprocess; it inherits your environment (including `NCC_PASSWORD`).
-- Use a dedicated config file for MCP-driven runs and restrict who can edit it.
-- Prefer `NCC_PASSWORD` (or config file) over passing `password` in tool arguments.
+- Configure `NCC_MCP_TOKEN` (a dashboard PAT, not the API process's `NCC_API_TOKEN`) in the MCP host. Without it the server exits on start and tools/resources are refused.
+- The MCP process never execs the orchestrator and never puts passwords on a command line.
+- The API tags MCP traffic in the JSONL audit log (`action=mcp.call`, `channel=mcp`, `mcp_tool`, `mcp_client_version`). When auth used a PAT, entries also carry `pat_id`, `pat_name`, and the owning `user`. Failures include `error`, `error_code`, and `remediation`. Filter with `GET /api/v1/audit?channel=mcp`.
+- Use a dedicated config file and a least-privilege PAT (viewer vs operator vs admin).
+- Prefer `secret://` on the API server over any credential in the MCP host environment.
+- Everything a tool returns is read by the model. Tool results are scrubbed before they are returned: the configuration tool returns only the server's redacted copy, and values under credential-like names (`password`, `token`, `secret`, `api_key`, `webhook`, `hmac`, ...) are masked whatever the endpoint sent. Treat finding text and report content as untrusted input, since it comes from the clusters.
 
 ## Troubleshooting
 
-- **“ncc-orchestrator: command not found”**  
-  Put the orchestrator binary on your PATH or set `NCC_ORCHESTRATOR_BIN` to its full path in the MCP server’s env.
+- **“this MCP server is too old for this stack” / `NCC_API_MCP_UPGRADE_REQUIRED`**  
+  The host is still running ncc-mcp-server 2.3.x (or it did not send a client version). Replace it with the 2.4.0 binary, set `NCC_MCP_TOKEN`, and reload MCP.
 
-- **Tools fail with “permission denied” or path errors**  
-  The server’s working directory is set by the MCP host (e.g. Cursor). Use absolute paths in `config_path` and `output_dir` when needed.
+- **`NCC_API_MCP_PROOF_INVALID`**  
+  The caller claimed to be MCP without a valid HMAC proof. Use the 2.4.0 `ncc-mcp-server` binary; stamping a version string is not enough.
 
-- **No run summary in run_ncc output**  
-  The server looks for `outputfiles/run-summary.json` (relative to the process cwd) or, if `config_path` is set, `<config_dir>/outputfiles/run-summary.json`. Ensure the orchestrator wrote to that path (check `output-dir-filtered` in config).
+- **Server exits with `NCC_MCP_TOKEN must be set`**  
+  Mint a PAT in the dashboard and set `NCC_MCP_TOKEN` in the MCP host `env`. Reload MCP after saving the config.
 
-- **discover_clusters returns HTTP URL policy errors**  
-  Use an `https://` Prism Central URL, or set `insecure_skip_verify: true` intentionally for trusted lab-only `http://` endpoints.
+- **Tool calls return `PERMISSION_DENIED` / “authentication required”**  
+  The HTTP request is missing `Authorization: Bearer` (or `X-API-Token`), the value does not match `NCC_MCP_TOKEN`, the PAT is revoked, or the API URL is wrong.
+
+- **Connection refused / API request failed**  
+  Start `ncc-api-server` and set `NCC_MCP_API_URL` to its base URL. Use `https://` off-loopback.
+
+- **Host lifecycle tools fail with “not available over MCP”**  
+  Bootstrap, OS service install, start/stop of the stack, and password recovery stay on the host or dashboard. That is intentional.
+
+- **Tools fail with “permission denied”**  
+  The PAT role is too low for that API, or `NCC_MCP_ALLOW_MUTATIONS` / `confirm=APPLY` is missing.
 
 ## Possible future additions
 

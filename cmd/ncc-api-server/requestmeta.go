@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"goncc/internal/mcpclient"
 )
 
 // Request IDs and per-route HTTP metrics.
@@ -102,7 +104,41 @@ func (s *apiServer) withRequestMeta(next http.Handler) http.Handler {
 		}()
 		defer recoverPanic(rec, r, rec)
 		next.ServeHTTP(rec, r)
+		status := rec.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		defer s.watchClient(r, status)
+		if info.wasAudited() {
+			return
+		}
+		if isMCPHTTPRequest(r) && r.URL.Path != mcpclient.AuthMePath {
+			s.audit(r, "mcp.call", status < 400, map[string]interface{}{
+				"http_status": status,
+				"route":       routeLabel(r.URL.Path),
+			})
+			return
+		}
+		if shouldAutoAudit(r, status) {
+			s.audit(r, "http.request", status < 400, map[string]interface{}{
+				"http_status": status,
+				"route":       routeLabel(r.URL.Path),
+			})
+		}
 	})
+}
+
+func shouldAutoAudit(r *http.Request, status int) bool {
+	if r == nil || r.Method == http.MethodOptions || r.Method == http.MethodHead {
+		return false
+	}
+	if isQuietPath(r.URL.Path) && status < 400 {
+		return false
+	}
+	if isMutating(r) || status >= 400 {
+		return true
+	}
+	return isNCCUIRequest(r) && status >= 400
 }
 
 // routeLabel maps a request path onto a bounded set of metric labels: an

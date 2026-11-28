@@ -21,6 +21,7 @@ import {
 } from "antd";
 import {
   CheckCircleOutlined,
+  CheckOutlined,
   ClockCircleOutlined,
   ClearOutlined,
   CloseCircleOutlined,
@@ -34,11 +35,13 @@ import {
 import type { AlertSource, MeData } from "../api/types";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { SetupEmptyState, seesNoClusters } from "../features/onboarding/SetupEmptyState";
 import { NCC_ALERTS_QUERY_KEY } from "../utils/alertLifecycle";
 import { notify, notifyError } from "../notify";
 import { FeatureDisabled } from "../features/features/FeatureDisabled";
 import { useFeatureFlags } from "../features/features/useFeatureFlags";
 import { ClusterTable } from "../features/report/ClusterTable";
+import { ReportCacheNotice, reportRefetchInterval } from "../features/report/ReportCacheNotice";
 import {
   asArray,
   asRecord,
@@ -52,6 +55,7 @@ import { useLocalStorageState } from "../hooks/useLocalStorageState";
 import { formatDateTime, formatTime, relativeTime } from "../utils/datetime";
 import { freshness } from "../utils/freshness";
 import { ArcSpinner, GridLoader } from "../components/Loaders";
+import { StatusBadge } from "../ui";
 
 type Severity = "FAIL" | "WARN" | "ERR" | "INFO";
 type CompareMode = "all" | "changed" | "flaky";
@@ -62,10 +66,10 @@ type CompareMode = "all" | "changed" | "flaky";
 // chips) and the Alerts table's severity sort (see severityRank in
 // ClusterTable.tsx, which must be kept in sync with this ordering).
 const SEVERITY_META: Array<{ key: Severity; color: string; label: string; icon: ReactNode }> = [
-  { key: "FAIL", color: "var(--ui-fail-text)", label: "FAIL", icon: <ExclamationCircleOutlined /> },
-  { key: "WARN", color: "var(--ui-warn-text)", label: "WARN", icon: <WarningOutlined /> },
-  { key: "ERR", color: "var(--ui-fail-text)", label: "ERR", icon: <CloseCircleOutlined /> },
-  { key: "INFO", color: "var(--ui-info-text)", label: "INFO", icon: <InfoCircleOutlined /> },
+  { key: "FAIL", color: "var(--ui-fail-text)", label: "Fail", icon: <ExclamationCircleOutlined /> },
+  { key: "WARN", color: "var(--ui-warn-text)", label: "Warning", icon: <WarningOutlined /> },
+  { key: "ERR", color: "var(--ui-fail-text)", label: "Error", icon: <CloseCircleOutlined /> },
+  { key: "INFO", color: "var(--ui-info-text)", label: "Info", icon: <InfoCircleOutlined /> },
 ];
 
 
@@ -73,7 +77,6 @@ const SEVERITY_META: Array<{ key: Severity; color: string; label: string; icon: 
 // would make it rebuild every row (200k at fleet scale) on every render.
 const NO_ROWS: unknown[] = [];
 const NO_FLAGS: Record<string, unknown> = {};
-const NO_LOGS: Array<{ name: string; path: string }> = [];
 
 /**
  * Findings: every NCC (and, in beta, Prism Central) alert from the latest run,
@@ -210,7 +213,25 @@ export function FindingsPage() {
     queryFn: () => api.reportDataWithPagination({ limit: PREVIEW_LIMIT }),
     staleTime: 30_000,
     enabled: !fullReport.data,
+    // While the server builds a newer report, check back until it is ready.
+    refetchInterval: (q) => reportRefetchInterval(q.state.data),
   });
+
+  // The full report is large, so while the server builds a newer one a
+  // one-row request watches the cache, and the full report is fetched again
+  // once the newer one is ready.
+  const fullCacheState = fullReport.data?.cache?.state;
+  const cacheWatch = useQuery({
+    queryKey: ["report-data", "cache-watch"],
+    queryFn: () => api.reportDataWithPagination({ limit: 1 }),
+    enabled: Boolean(fullReport.data) && reportRefetchInterval(fullReport.data) !== false,
+    refetchInterval: (q) => reportRefetchInterval(q.state.data ?? fullReport.data),
+  });
+  const watchedState = cacheWatch.data?.cache?.state;
+  const refetchFull = fullReport.refetch;
+  useEffect(() => {
+    if (watchedState === "warm" && fullCacheState && fullCacheState !== "warm") void refetchFull();
+  }, [watchedState, fullCacheState, refetchFull]);
 
   const nccDispositionsQuery = useQuery({
     queryKey: ["ncc-dispositions"],
@@ -225,7 +246,7 @@ export function FindingsPage() {
         queryClient.invalidateQueries({ queryKey: [NCC_ALERTS_QUERY_KEY] }),
       ]);
       const count = variables.items?.length ?? 1;
-      const noun = count === 1 ? "alert" : `${count} alerts`;
+      const noun = count === 1 ? "the finding" : `${count} findings`;
       if (variables.action === "resolve") {
         notify.success(`Resolved ${noun}. A later run that generates the same check clears the mark.`);
       } else if (variables.action === "acknowledge") {
@@ -234,12 +255,12 @@ export function FindingsPage() {
         notify.success(`Reopened ${noun}.`);
       }
     },
-    onError: (err) => notifyError(err, "Couldn't update the NCC alert"),
+    onError: (err) => notifyError(err, "Couldn't update the finding"),
   });
 
   const features = useFeatureFlags();
   // Viewers see handling marks but cannot change them (the API answers 403).
-  const { canOperate } = useAuth();
+  const { canOperate, isAdmin } = useAuth();
   const pcAlertsOn = !features.isSuccess || features.data.pc_alerts !== false;
   const pcBlocked = alertSource === "PC" && features.data?.pc_alerts === false;
   const pcUnresolvedAlertsQuery = useQuery({
@@ -514,12 +535,10 @@ export function FindingsPage() {
           <Tag icon={<ClockCircleOutlined />}>Loading…</Tag>
           <div className="severity-totals-row">
             {SEVERITY_META.map((sm) => (
-              <div key={sm.key} className="severity-total-pill" style={{ borderColor: sm.color }}>
+              <div key={sm.key} className="severity-total-pill">
                 <Badge color={sm.color} />
-                <Typography.Text strong style={{ color: sm.color }}>
-                  {sm.label}
-                </Typography.Text>
-                <Typography.Text strong>—</Typography.Text>
+                <span>{sm.label}</span>{" "}
+                <span className="severity-total-count">—</span>
               </div>
             ))}
           </div>
@@ -543,35 +562,61 @@ export function FindingsPage() {
 
   return (
     <div className="dashboard-page">
+      <ReportCacheNotice
+        cache={
+          fullReport.data && cacheWatch.data && cacheWatch.dataUpdatedAt > fullReport.dataUpdatedAt
+            ? cacheWatch.data.cache
+            : reportData.cache
+        }
+      />
       {/* Which run these findings come from, and how many of each severity. */}
       <div className="findings-summary">
         <Tooltip title={runTimestamp ? formatDateTime(runTimestamp) : "No completed run yet"}>
-          <Tag icon={<ClockCircleOutlined />} color={fresh.color}>
-            {runTimestamp ? `${fresh.label} · run ${relativeTime(runTimestamp)}` : "No run yet"}
-          </Tag>
+          <span>
+            <StatusBadge tone={runTimestamp ? fresh.tone : "neutral"}>
+              {runTimestamp ? `${fresh.label} · run ${relativeTime(runTimestamp)}` : "No run yet"}
+            </StatusBadge>
+          </span>
         </Tooltip>
-        <div className="severity-totals-row">
-          {SEVERITY_META.map((sm) => (
-            <button
-              type="button"
-              key={sm.key}
-              className={`severity-total-pill${severityFilters.includes(sm.key) ? " is-active" : ""}`}
-              style={{ borderColor: sm.color }}
-              aria-pressed={severityFilters.includes(sm.key)}
-              aria-label={`${sm.label}: ${displayedSevTotals[sm.key]}. Filter by ${sm.label}.`}
-              onClick={() => toggleSeverity(sm.key)}
-            >
-              <Badge color={sm.color} />
-              <Typography.Text strong style={{ color: sm.color }}>
-                {sm.label}
-              </Typography.Text>
-              <Typography.Text strong>{displayedSevTotals[sm.key].toLocaleString()}</Typography.Text>
-            </button>
-          ))}
-          <div className="severity-total-pill subtle">
-            <Typography.Text type="secondary">UNKNOWN</Typography.Text>
-            <Typography.Text strong>{(tableSummary?.unknown ?? unknownCount).toLocaleString()}</Typography.Text>
-          </div>
+        {/* The totals double as the severity filter: each one is a toggle. */}
+        <div className="severity-totals-row" role="group" aria-labelledby="severity-filter-label">
+          <span id="severity-filter-label" className="severity-filter-label">
+            Show
+          </span>
+          {SEVERITY_META.map((sm) => {
+            const on = severityFilters.includes(sm.key);
+            const count = displayedSevTotals[sm.key].toLocaleString();
+            return (
+              <Tooltip
+                key={sm.key}
+                title={on ? `Stop filtering by ${sm.label}` : `Show only ${sm.label} findings; pick more to combine`}
+                mouseEnterDelay={0.4}
+              >
+                <button
+                  type="button"
+                  className={`severity-total-pill${on ? " is-active" : ""}`}
+                  aria-pressed={on}
+                  aria-label={`${sm.label} ${count}. Filter by ${sm.label}.`}
+                  onClick={() => toggleSeverity(sm.key)}
+                >
+                  {on ? <CheckOutlined className="severity-total-check" aria-hidden /> : <Badge color={sm.color} />}
+                  <span>{sm.label}</span>{" "}
+                  <span className="severity-total-count">{count}</span>
+                </button>
+              </Tooltip>
+            );
+          })}
+          {severityFilters.length > 0 ? (
+            <Button type="link" size="small" className="severity-filter-clear" onClick={() => setSeverityFilters([])}>
+              Show all
+            </Button>
+          ) : null}
+          {(tableSummary?.unknown ?? unknownCount) > 0 ? (
+            <div className="severity-total-pill subtle">
+              <span>Unknown</span>{" "}
+              <span className="severity-total-count">{(tableSummary?.unknown ?? unknownCount).toLocaleString()}</span>
+            </div>
+          ) : null}
         </div>
         <Button
           icon={<ReloadOutlined />}
@@ -588,7 +633,7 @@ export function FindingsPage() {
           type="info"
           showIcon
           title="Cluster-group view active"
-          description="Severity totals and findings are scoped to your allowed cluster groups."
+          description="Severity totals and findings are scoped to your allowed cluster groups"
         />
       ) : null}
 
@@ -597,7 +642,7 @@ export function FindingsPage() {
           type="info"
           showIcon
           title="Loading the rest of this run"
-          description="A preview is shown while the full results load."
+          description="A preview is shown while the full results load"
         />
       )}
 
@@ -620,15 +665,15 @@ export function FindingsPage() {
             <Input
               id="alerts-search"
               name="alerts-search"
-              aria-label="Search alerts"
+              aria-label="Search findings"
               allowClear
               prefix={<SearchOutlined className="filter-control-icon" />}
               value={filterText}
               onChange={(e) => setFilterText(e.target.value)}
-              placeholder="Search alerts (e.g. cluster:10.1)"
+              placeholder="Search findings"
               autoComplete="off"
               suffix={
-                <Tooltip title={<div style={{ fontSize: 12 }}><strong>Supported tokens:</strong><br /><code>sev:FAIL</code> <code>cluster:10.1</code> <code>changed:true</code> <code>flaky:true</code></div>}>
+                <Tooltip title={<div style={{ fontSize: 12 }}>Search by text, or narrow with<br /><code>sev:FAIL</code> <code>cluster:10.1</code> <code>changed:true</code> <code>flaky:true</code></div>}>
                   <InfoCircleOutlined className="filter-control-icon" style={{ cursor: "pointer" }} />
                 </Tooltip>
               }
@@ -637,7 +682,7 @@ export function FindingsPage() {
           {filterableEnvironments.length > 0 && alertSource === "NCC" ? (
             <Select
               aria-label="Filter by environment"
-              className="findings-toolbar-select"
+              className="findings-toolbar-select findings-toolbar-select-wide"
               value={environment}
               onChange={setEnvironment}
               popupMatchSelectWidth={false}
@@ -650,7 +695,7 @@ export function FindingsPage() {
           <div className="findings-toolbar-clusters">
             <Select
               id="dashboard-cluster-filter"
-              aria-label="Filter alerts by cluster"
+              aria-label="Filter findings by cluster"
               mode="multiple"
               allowClear
               placeholder="All clusters"
@@ -715,7 +760,7 @@ export function FindingsPage() {
           type="warning"
           showIcon
           message="Prism Central alerts unavailable"
-          description="NCC alerts remain available. Check the configured Prism Central URL, credentials, and TLS settings."
+          description="NCC findings remain available. Check the configured Prism Central URL, credentials, and TLS settings."
         />
       ) : null}
 
@@ -739,6 +784,10 @@ export function FindingsPage() {
             const hasPriorRun = Boolean(runTimestamp);
             const priorRunWasSuccessful =
               hasPriorRun && (runSummary.success === true || (failCount === 0 && errorCount === 0 && warnCount === 0));
+
+            // An account whose cluster groups hold no clusters sees nothing,
+            // whatever ran: say so instead of "all clean".
+            if (seesNoClusters(me ?? null, isAdmin)) return <SetupEmptyState gap={{ kind: "restricted" }} />;
 
             if (runActive) {
               const startedAt = runActiveQuery.data?.started_at
@@ -784,7 +833,11 @@ export function FindingsPage() {
               );
             }
 
-            // Either no run yet, or last run produced an error before any
+            // No run yet: say which setup step is missing, with the next step
+            // this viewer may take.
+            if (!hasPriorRun) return <SetupEmptyState />;
+
+            // The last run produced an error before any
             // alerts were collected (e.g. orchestrator failed pre-flight).
             const sourceLabel =
               runSource === "scheduled" ? "scheduled run" : runSource === "manual" ? "manual run" : "latest run";
@@ -800,38 +853,19 @@ export function FindingsPage() {
               <Empty
                 description={
                   <Space orientation="vertical" size={4} align="center">
-                    <Typography.Text strong>
-                      {hasPriorRun ? "Latest run produced no alerts data" : "No alerts yet"}
-                    </Typography.Text>
+                    <Typography.Text strong>The latest run saved no findings</Typography.Text>
                     <Typography.Text type="secondary">
-                      {hasPriorRun
-                        ? likelyEarlyFailure
-                          ? `The ${sourceLabel} finished before any check results were saved. ${summaryHint}${errorHint} Start it again from Runs and review the live output.`
-                          : artifactGap
-                            ? `The ${sourceLabel} summary is available, but the check results are missing. Open Runs, review the latest run, then start it again.`
-                            : `The ${sourceLabel} completed without check results. Start it again from Runs.`
-                        : "Start a run from Runs. Add clusters or Prism Central under Clusters & config first."}
+                      {likelyEarlyFailure
+                        ? `The ${sourceLabel} finished before any check results were saved. ${summaryHint}${errorHint} Start it again from Runs and review the live output.`
+                        : artifactGap
+                          ? `The ${sourceLabel} summary is available, but the check results are missing. Open Runs, review the latest run, then start it again.`
+                          : `The ${sourceLabel} completed without check results. Start it again from Runs.`}
                     </Typography.Text>
-                    {hasPriorRun ? (
-                      <Link to={sectionHref("runs")}>
-                        <Button size="small" type="link">
-                          Open Runs →
-                        </Button>
-                      </Link>
-                    ) : (
-                      <Space>
-                        <Link to={sectionHref("config")}>
-                          <Button size="small" type="primary">
-                            Open config
-                          </Button>
-                        </Link>
-                        <Link to={sectionHref("runs")}>
-                          <Button size="small">
-                            Open Runs
-                          </Button>
-                        </Link>
-                      </Space>
-                    )}
+                    <Link to={sectionHref("runs")}>
+                      <Button size="small" type="link">
+                        Open Runs →
+                      </Button>
+                    </Link>
                   </Space>
                 }
               />
@@ -849,8 +883,11 @@ export function FindingsPage() {
           }
           diffFlags={(reportData.diff_flags || NO_FLAGS) as Record<string, unknown>}
           flakyKeys={(reportData.flaky_keys || NO_FLAGS) as Record<string, unknown>}
-          nccLogs={Array.isArray(reportData.ncc_logs) ? reportData.ncc_logs : NO_LOGS}
           filterText={filterText}
+          onShowCheck={(check) => {
+            setFilterText(check);
+            setSelectedClusters([]);
+          }}
           selectedClusters={selectedClusters}
           environmentClusters={alertSource === "NCC" ? environmentClusters : null}
           clusterNameMap={clusterNameMap}

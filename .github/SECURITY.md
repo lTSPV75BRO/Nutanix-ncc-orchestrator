@@ -4,9 +4,9 @@
 
 | Version | Security fixes |
 | --- | --- |
-| 2.3.x | Yes (current) |
-| 2.2.x | Yes, until 2.3.0 has been out for 90 days |
-| < 2.2 | No; upgrade first |
+| 2.4.x | Yes (current) |
+| 2.3.x | Yes, until 2.4.0 has been out for 90 days |
+| < 2.3 | No; upgrade first |
 
 ## Reporting a vulnerability
 

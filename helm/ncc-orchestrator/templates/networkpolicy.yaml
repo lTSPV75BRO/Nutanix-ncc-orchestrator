@@ -1,0 +1,118 @@
+{{- /*
+NetworkPolicies, matching k8s/networkpolicy-*.yaml. Ingress is locked down by
+default: nothing reaches the pods except the UI port, and the API only from
+UI pods. Egress is opt-in (networkPolicy.egress.enabled) because it must also
+allow your LDAP, OIDC, webhook and Kubernetes API destinations.
+*/}}
+{{- $np := .Values.networkPolicy }}
+{{- if $np.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ncc-v2-default-deny-ingress
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ncc-v2-ui-ingress
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector:
+    matchLabels: { app: ncc-orchestrator-v2, component: ui }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- range $np.uiIngressFrom }}
+        - ipBlock: { cidr: {{ . | quote }} }
+        {{- end }}
+        # In-cluster clients such as an ingress controller in another
+        # namespace (pod IPs are not reliably matched by ipBlock).
+        - namespaceSelector: {}
+      ports:
+        - { protocol: TCP, port: 8080 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ncc-v2-api-ingress-from-ui
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector:
+    matchLabels: { app: ncc-orchestrator-v2, component: api }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: ncc-orchestrator-v2, component: ui }
+        {{- if .Values.upgradeCheck.enabled }}
+        - podSelector:
+            matchLabels: { app: ncc-orchestrator-v2, component: upgrade-check }
+        {{- end }}
+        {{- with $np.apiIngressFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - { protocol: TCP, port: 8081 }
+{{- if $np.egress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ncc-v2-allow-egress
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector:
+    matchLabels: { app: ncc-orchestrator-v2 }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - podSelector:
+            matchLabels: { app: ncc-orchestrator-v2, component: api }
+      ports:
+        - { protocol: TCP, port: 8081 }
+    {{- if .Values.upgradeCheck.enabled }}
+    - to:
+        - podSelector:
+            matchLabels: { app: ncc-orchestrator-v2, component: ui }
+      ports:
+        - { protocol: TCP, port: 8080 }
+    {{- end }}
+    - to:
+        {{- range $np.egress.cidrs }}
+        - ipBlock: { cidr: {{ . | quote }} }
+        {{- end }}
+      ports:
+        {{- range $np.egress.ports }}
+        - { protocol: TCP, port: {{ . }} }
+        {{- end }}
+{{- if or (eq (toString $np.egress.ciliumKubeAPI) "true") (and (eq (toString $np.egress.ciliumKubeAPI) "auto") (.Capabilities.APIVersions.Has "cilium.io/v2/CiliumNetworkPolicy")) }}
+---
+# The API needs the Kubernetes API (user store Secret, CronJob schedule).
+# Plain NetworkPolicy cannot name it reliably; Cilium can.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: ncc-v2-allow-kube-api
+  namespace: {{ .Values.namespace }}
+spec:
+  endpointSelector:
+    matchLabels: { app: ncc-orchestrator-v2 }
+  egress:
+    - toEntities: [kube-apiserver]
+      toPorts:
+        - ports:
+            - { port: "443", protocol: TCP }
+            - { port: "6443", protocol: TCP }
+{{- end }}
+{{- end }}
+{{- end }}

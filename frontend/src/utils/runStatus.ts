@@ -40,7 +40,7 @@ export function runStatusDisplay(row: Pick<RunInfo, "source" | "status" | "succe
     case "success":
       return { label: "Success", color: "success", hint: legacyHint };
     case "partial":
-      return { label: `Partial${exit}`, color: "warning", hint: "Some clusters could not be checked." };
+      return { label: `Partial${exit}`, color: "warning", hint: "Some clusters could not be checked" };
     case "failed":
       return { label: `Failed${exit}`, color: "error" };
     case "running":
@@ -68,6 +68,6 @@ export function runStatusDisplay(row: Pick<RunInfo, "source" | "status" | "succe
   return {
     label: "Unknown",
     color: "default",
-    hint: "The run did not record an outcome (for example, it was interrupted before writing its summary).",
+    hint: "The run did not record an outcome (for example, it was interrupted before writing its summary)",
   };
 }

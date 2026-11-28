@@ -71,6 +71,22 @@ func renameWithRetry(from, to string) error {
 	return err
 }
 
+// removeWithRetry removes a file that another process may still be writing.
+// Windows refuses that, and a request file left behind is acted on twice.
+func removeWithRetry(path string) error {
+	var err error
+	for attempt := 0; attempt < 20; attempt++ {
+		if err = os.Remove(path); err == nil || os.IsNotExist(err) {
+			return nil
+		}
+		if !isTransientFileError(err) {
+			return err
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return err
+}
+
 // isTransientFileError reports errors worth retrying: Windows sharing and
 // lock violations (often an antivirus scanner holding a new file for a moment)
 // and access-denied while another process has the file open.
@@ -159,7 +175,21 @@ func copyFilePlain(src, dst string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
+	if err := writeFault(dst); err != nil {
+		return err
+	}
 	return os.WriteFile(dst, data, mode)
+}
+
+// writeFaultHook makes writes under a path fail, as a full disk would. Tests
+// set it (fault injection); it is nil otherwise.
+var writeFaultHook func(path string) error
+
+func writeFault(path string) error {
+	if writeFaultHook == nil {
+		return nil
+	}
+	return writeFaultHook(path)
 }
 
 // rollback restores every replaced file in reverse order. It returns the
@@ -234,6 +264,9 @@ func stageFileCopy(src, dst string, mode os.FileMode) (string, error) {
 func stageBytes(data []byte, dst string, mode os.FileMode) (string, error) {
 	dir := filepath.Dir(dst)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	if err := writeFault(dst); err != nil {
 		return "", err
 	}
 	tmp, err := os.CreateTemp(dir, ".ncc-update-")

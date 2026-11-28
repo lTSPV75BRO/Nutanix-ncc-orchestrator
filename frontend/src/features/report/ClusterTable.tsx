@@ -1,14 +1,15 @@
-import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type ThHTMLAttributes } from "react";
 import {
   Alert,
   Button,
   Card,
-  Descriptions,
+  Checkbox,
   Drawer,
   Empty,
   Grid,
   Input,
   Pagination,
+  Segmented,
   Space,
   Table,
   Tag,
@@ -16,8 +17,11 @@ import {
   Typography,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { AimOutlined, CheckOutlined, ClockCircleOutlined, ClusterOutlined, CopyOutlined, ExpandAltOutlined, ExportOutlined, FileTextOutlined, FullscreenExitOutlined, FullscreenOutlined, HistoryOutlined, LinkOutlined, MessageOutlined, ReadOutlined, ToolOutlined } from "@ant-design/icons";
-import { IconTitle } from "../../ui";
+import { AimOutlined, AppstoreOutlined, BarsOutlined, CheckOutlined, ClockCircleOutlined, CloseCircleOutlined, ClusterOutlined, ColumnHeightOutlined, ColumnWidthOutlined, CopyOutlined, DownOutlined, ExclamationCircleOutlined, ExportOutlined, FileTextOutlined, FullscreenExitOutlined, FullscreenOutlined, HistoryOutlined, InfoCircleOutlined, MessageOutlined, ProfileOutlined, QuestionCircleOutlined, ReadOutlined, RightOutlined, SearchOutlined, TableOutlined, ToolOutlined, WarningOutlined } from "@ant-design/icons";
+import { Link } from "react-router";
+import { KeyValueList, Panel, StatusBadge, severityLabel, toneFor, type KeyValueItem } from "../../ui";
+import { clusterPath } from "../../navigation";
+import { isClusterAddress, prismURLFor } from "../../utils/prism";
 import type { NCCDisposition } from "../../api/types";
 import { asArray, asRecord, displayClusterName, nccDispositionKey, resolveClusterName } from "../../utils/report";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
@@ -31,8 +35,9 @@ type Props = {
   aggRows?: unknown[];
   diffFlags?: Record<string, unknown>;
   flakyKeys?: Record<string, unknown>;
-  nccLogs?: Array<{ name: string; path: string }>;
   filterText: string;
+  /** Search the table for one check across every cluster (the drawer's "This check on all clusters"). */
+  onShowCheck?: (check: string) => void;
   selectedClusters: string[];
   /** Only rows on these clusters (an environment's list); null for all. */
   environmentClusters?: string[] | null;
@@ -79,11 +84,11 @@ const HANDLING_FILTERS: Array<{
   hint: string;
   tone: string;
 }> = [
-  { value: "all", label: "All", hint: "Every alert that matches the current filters.", tone: "all" },
-  { value: "open", label: "Needs attention", hint: "Open alerts that still need a decision.", tone: "open" },
-  { value: "acknowledged", label: "Acknowledged", hint: "Noted, and still open.", tone: "acked" },
-  { value: "resolved", label: "Resolved", hint: "Marked done. If a later run finds the same alert, it moves to Returned.", tone: "resolved" },
-  { value: "returned", label: "Returned", hint: "Resolved earlier, then found again on a later run.", tone: "returned" },
+  { value: "all", label: "All", hint: "Every finding that matches the current filters", tone: "all" },
+  { value: "open", label: "Needs attention", hint: "Open findings that still need a decision", tone: "open" },
+  { value: "acknowledged", label: "Acknowledged", hint: "Noted, and still open", tone: "acked" },
+  { value: "resolved", label: "Resolved", hint: "Marked done. If a later run finds it again, it moves to Returned.", tone: "resolved" },
+  { value: "returned", label: "Returned", hint: "Resolved earlier, then found again on a later run", tone: "returned" },
 ];
 
 type RowRecord = {
@@ -119,20 +124,10 @@ type RowRecord = {
   nccVersion: string;
   isChanged: boolean;
   isFlaky: boolean;
-  logName: string;
-  logPath: string;
   /** Lower-cased "name address severity alert", built once for search. */
   searchText: string;
   /** Lower-cased display name and resolved address name, for the cluster filter. */
   clusterKeys: string[];
-};
-
-const SEVERITY_TAG_COLOR: Record<Severity, string> = {
-  FAIL: "error",
-  WARN: "warning",
-  ERR: "volcano",
-  INFO: "processing",
-  UNKNOWN: "default",
 };
 
 function rowKey(cluster: string, check: string): string {
@@ -221,19 +216,6 @@ function normalizeCheckTitle(check: string): string {
   return check.replace(/^detailed information for\s*/i, "").replace(/:$/, "").trim();
 }
 
-function isIPv4Like(value: string): boolean {
-  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(value);
-}
-
-function normalizeClusterHost(cluster: string): string {
-  let clean = cluster.trim();
-  if (!clean) return "";
-  clean = clean.replace(/^https?:\/\//i, "");
-  clean = clean.replace(/\/+$/, "");
-  clean = clean.replace(/:\d+$/, "");
-  return clean;
-}
-
 function clusterPrismURL(
   cluster: string,
   clusterNameMap: Record<string, string>,
@@ -241,40 +223,32 @@ function clusterPrismURL(
 ): string {
   const candidates = [cluster, displayName].map((value) => value.trim()).filter(Boolean);
   for (const candidate of candidates) {
-    const clean = normalizeClusterHost(candidate);
-    if (isIPv4Like(clean)) return `https://${clean}:9440`;
+    const url = prismURLFor(candidate);
+    if (url) return url;
   }
-  const mappedIP = Object.entries(clusterNameMap).find(
+  const mapped = Object.entries(clusterNameMap).find(
     ([key, name]) =>
-      isIPv4Like(normalizeClusterHost(key)) &&
+      isClusterAddress(key) &&
       candidates.some((candidate) => name.trim().toLowerCase() === candidate.toLowerCase()),
   )?.[0];
-  return mappedIP ? `https://${normalizeClusterHost(mappedIP)}:9440` : "";
+  return mapped ? prismURLFor(mapped) : "";
 }
-
-type NCCLog = { name: string; path: string };
 
 /**
- * Builds a cluster → raw NCC log lookup. Logs are named "<cluster>.log", so
- * an exact name is found directly; anything else falls back to the substring
- * match, once per cluster. Scanning every log for every row was 7,000 × 200,000
- * comparisons at fleet scale and froze the page.
+ * One-line summary of a finding for the list and By check views. The KB article
+ * has its own badge, so the "Refer to KB 1234 (http://…) for details on <check>"
+ * boilerplate that NCC appends (raw URL included) is dropped here.
  */
-function logLookup(logs: NCCLog[]): (cluster: string) => NCCLog | undefined {
-  const byName = new Map<string, NCCLog>();
-  for (const l of logs) byName.set(l.name.replace(/\.log$/i, "").trim(), l);
-  const seen = new Map<string, NCCLog | undefined>();
-  return (cluster: string) => {
-    const key = (cluster || "").trim();
-    if (!key) return undefined;
-    if (seen.has(key)) return seen.get(key);
-    const found = byName.get(key) ?? logs.find((l) => l.name.includes(key) || l.path.includes(key));
-    seen.set(key, found);
-    return found;
-  };
+export function previewDetail(detail: string): string {
+  if (!detail) return "—";
+  const text = detail
+    .replace(/\s+/g, " ")
+    .replace(/\s*Refer to KB\s*\d+(?:\s*\(\s*https?:\/\/[^)\s]*\s*\))?(?:\s*for details on\s*[\w.-]+)?[.\s]*/gi, " ")
+    .trim();
+  return cleanPreview(text);
 }
 
-function previewDetail(detail: string): string {
+function cleanPreview(detail: string): string {
   if (!detail) return "—";
   return detail
     .replace(/\s+/g, " ")
@@ -284,12 +258,77 @@ function previewDetail(detail: string): string {
     .slice(0, 220);
 }
 
-function PCMetric({ label, children }: { label: string; children: ReactNode }) {
+/**
+ * What can be done from a finding: read the KB article (the main action when
+ * there is one), open the cluster in Prism or on its own page, and, for NCC,
+ * see the same check on every cluster.
+ */
+function FindingActions({
+  row,
+  clusterNameMap,
+  onShowCheck,
+}: {
+  row: RowRecord;
+  clusterNameMap: Record<string, string>;
+  /** Shows this check on every cluster in place; without it the link opens Findings. */
+  onShowCheck?: (check: string) => void;
+}) {
+  const kbLinks = kbLinksOf(row);
+  const prismURL = clusterPrismURL(row.cluster, clusterNameMap, row.clusterName);
+  const card = (icon: ReactNode, title: string, sub: string, trail: ReactNode) => (
+    <>
+      <span className="finding-link-icon" aria-hidden="true">
+        {icon}
+      </span>
+      <span className="finding-link-body">
+        <span className="finding-link-title">{title}</span>
+        <span className="finding-link-sub">{sub}</span>
+      </span>
+      <span className="finding-link-trail" aria-hidden="true">
+        {trail}
+      </span>
+    </>
+  );
+  const checkHref = `/findings?q=${encodeURIComponent(row.alert)}`;
   return (
-    <div className="pc-alert-metric">
-      <div className="pc-alert-metric-label">{label}</div>
-      <div className="pc-alert-metric-value">{children}</div>
-    </div>
+    <nav className="finding-links" aria-label="Next steps">
+      {kbLinks.length > 0 ? (
+        kbLinks.map((url, i) => (
+          <a
+            key={url}
+            className={`finding-link${i === 0 ? " is-primary" : ""}`}
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {card(<ReadOutlined />, kbLabel(url), "Nutanix knowledge base", <ExportOutlined />)}
+          </a>
+        ))
+      ) : (
+        <div className="finding-link is-empty">
+          {card(<ReadOutlined />, "No KB article", "This result names no article", null)}
+        </div>
+      )}
+      {prismURL ? (
+        <a className="finding-link" href={prismURL} target="_blank" rel="noopener noreferrer">
+          {card(<ExportOutlined />, "Open in Prism", prismURL.replace(/^https?:\/\//, ""), <ExportOutlined />)}
+        </a>
+      ) : null}
+      <Link className="finding-link" to={clusterPath(row.cluster)}>
+        {card(<ClusterOutlined />, "Cluster page", row.clusterName, <RightOutlined />)}
+      </Link>
+      {row.source === "NCC" ? (
+        onShowCheck ? (
+          <button type="button" className="finding-link" onClick={() => onShowCheck(row.alert)}>
+            {card(<SearchOutlined />, "This check on all clusters", "Search the findings table", <RightOutlined />)}
+          </button>
+        ) : (
+          <Link className="finding-link" to={checkHref}>
+            {card(<SearchOutlined />, "This check on all clusters", "Open in Findings", <RightOutlined />)}
+          </Link>
+        )
+      ) : null}
+    </nav>
   );
 }
 
@@ -300,7 +339,6 @@ function PCAlertInspector({
   row: RowRecord;
   clusterNameMap: Record<string, string>;
 }) {
-  const prismURL = clusterPrismURL(row.cluster, clusterNameMap, row.clusterName);
   const clusterSubtitle = row.clusterIP && row.clusterIP !== row.clusterName ? row.clusterIP : "";
   const showRootCause = Boolean(row.rootCause) && row.rootCause !== row.detail;
   const timeline = [
@@ -310,114 +348,50 @@ function PCAlertInspector({
     { label: "Resolved", value: row.resolvedAt },
   ].filter((item) => item.value && item.value !== "—");
 
+  const status = row.status !== "—" ? row.status : row.resolved === "Yes" ? "Resolved" : "Open";
+  const facts: KeyValueItem[] = [
+    { label: "Status", value: status },
+    { label: "Resolved", value: row.autoResolved ? "Automatically" : row.resolved },
+    { label: "Acknowledged", value: row.acknowledged },
+  ];
+  if (row.impactType !== "—") facts.push({ label: "Impact", value: row.impactType.replace(/_/g, " ") });
+  if (row.entityName && row.entityName !== "—") {
+    facts.push({ label: "Affects", value: row.entityType !== "—" ? `${row.entityName} (${row.entityType})` : row.entityName });
+  }
+  facts.push({
+    label: "Cluster",
+    value: (
+      <DrawerClusterLink row={row}>
+        {row.clusterName}
+        {clusterSubtitle ? <span className="mono drawer-cluster-address">{clusterSubtitle}</span> : null}
+      </DrawerClusterLink>
+    ),
+    title: row.clusterName,
+  });
+  if (row.clusterUUID) facts.push({ label: "Cluster UUID", value: row.clusterUUID, mono: true, copy: row.clusterUUID });
+  timeline.forEach((item) => facts.push({ label: item.label, value: formatStamp(item.value) }));
+  if (row.alertType !== "—") facts.push({ label: "Alert type", value: row.alertType, mono: true });
+  if (row.serviceName) facts.push({ label: "Service", value: row.serviceName });
+  if (row.extId) facts.push({ label: "Alert ID", value: row.extId, mono: true, copy: row.extId });
+
   return (
-    <div className="pc-alert-inspector">
-      <div className="pc-alert-metric-grid">
-        <PCMetric label="Status">{row.status !== "—" ? row.status : row.resolved === "Yes" ? "Resolved" : "Open"}</PCMetric>
-        <PCMetric label="Resolved">
-          <Tag color={row.resolved === "Yes" ? "success" : "processing"} style={{ margin: 0 }}>
-            {row.autoResolved ? "Auto resolved" : row.resolved}
-          </Tag>
-        </PCMetric>
-        <PCMetric label="Acknowledged">
-          <Tag color={row.acknowledged === "Yes" ? "success" : "default"} style={{ margin: 0 }}>
-            {row.acknowledged}
-          </Tag>
-        </PCMetric>
-        <PCMetric label="Impact">{row.impactType !== "—" ? row.impactType.replace(/_/g, " ") : "—"}</PCMetric>
-      </div>
-
-      <div className="pc-alert-pair">
-        <Card size="small" className="pc-alert-entity-card" title={<Space size={6}><ClusterOutlined /> Entity</Space>}>
-          <Typography.Text strong>{row.entityName || "—"}</Typography.Text>
-          <div>
-            <Typography.Text type="secondary">{row.entityType !== "—" ? row.entityType : "Unknown type"}</Typography.Text>
-          </div>
-        </Card>
-        <Card size="small" className="pc-alert-entity-card" title={<Space size={6}><ExportOutlined /> Cluster</Space>}>
-          {prismURL ? (
-            <a href={prismURL} target="_blank" rel="noreferrer">
-              {row.clusterName}
-            </a>
-          ) : (
-            <Typography.Text strong>{row.clusterName}</Typography.Text>
-          )}
-          {clusterSubtitle ? (
-            <div>
-              <Typography.Text type="secondary" className="mono">
-                {clusterSubtitle}
-              </Typography.Text>
-            </div>
-          ) : null}
-          {row.clusterUUID ? (
-            <Typography.Paragraph type="secondary" copyable={{ text: row.clusterUUID }} style={{ margin: "6px 0 0", fontSize: 12 }}>
-              {row.clusterUUID}
-            </Typography.Paragraph>
-          ) : null}
-          {prismURL ? (
-            <div style={{ marginTop: 8 }}>
-              <a href={prismURL} target="_blank" rel="noreferrer">
-                Open in Prism
-              </a>
-            </div>
-          ) : null}
-        </Card>
-      </div>
-
-      {timeline.length > 0 ? (
-        <Card size="small" title={<Space size={6}><ClockCircleOutlined /> Timeline</Space>}>
-          <div className="pc-alert-timeline">
-            {timeline.map((item) => (
-              <div key={item.label} className="pc-alert-timeline-item">
-                <div className="pc-alert-metric-label">{item.label}</div>
-                <div>{formatStamp(item.value)}</div>
-              </div>
-            ))}
-          </div>
-        </Card>
-      ) : null}
-
-      <Card size="small" title={<IconTitle icon={<MessageOutlined />}>Alert message</IconTitle>}>
-        <Typography.Paragraph className="pc-alert-message" style={{ margin: 0 }}>
-          {row.detail || "(no message)"}
-        </Typography.Paragraph>
-      </Card>
-
-      {showRootCause ? (
-        <Card size="small" title={<IconTitle icon={<AimOutlined />}>Root cause</IconTitle>}>
-          <Typography.Paragraph className="pc-alert-message" style={{ margin: 0 }}>
-            {row.rootCause}
-          </Typography.Paragraph>
-        </Card>
-      ) : null}
-
-      {kbLinksOf(row).length > 0 ? (
-        <Card size="small" title={<IconTitle icon={<ReadOutlined />}>Knowledge base</IconTitle>}>
-          <Space size={[8, 8]} wrap>
-            {kbLinksOf(row).map((url) => (
-              <a key={url} href={url} target="_blank" rel="noreferrer">
-                <Tag color="processing" icon={<LinkOutlined />} style={{ margin: 0 }}>
-                  {kbLabel(url)}
-                </Tag>
-              </a>
-            ))}
-          </Space>
-        </Card>
-      ) : null}
-
-      <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }} title="Identifiers">
-        <Descriptions.Item label="Alert type">{row.alertType !== "—" ? row.alertType : "—"}</Descriptions.Item>
-        <Descriptions.Item label="Service">{row.serviceName || "—"}</Descriptions.Item>
-        <Descriptions.Item label="Alert ID">
-          {row.extId ? (
-            <Typography.Text copyable={{ text: row.extId }} className="mono">
-              {row.extId}
+    <div className="finding-inspector">
+      <Panel title="What Prism Central reports" icon={<MessageOutlined />}>
+        <Typography.Paragraph className="finding-message">{row.detail || "Prism Central sent no message."}</Typography.Paragraph>
+        {showRootCause ? (
+          <>
+            <Typography.Text type="secondary" className="finding-subhead">
+              <AimOutlined /> Root cause
             </Typography.Text>
-          ) : (
-            "—"
-          )}
-        </Descriptions.Item>
-      </Descriptions>
+            <Typography.Paragraph className="finding-message">{row.rootCause}</Typography.Paragraph>
+          </>
+        ) : null}
+        <FindingActions row={row} clusterNameMap={clusterNameMap} />
+      </Panel>
+
+      <Panel title="Details" icon={<ClockCircleOutlined />}>
+        <KeyValueList items={facts} />
+      </Panel>
     </div>
   );
 }
@@ -441,28 +415,69 @@ function ClusterCell({ row, url, subtitle }: { row: RowRecord; url?: string; sub
   const sub = subtitle && subtitle !== row.clusterName ? subtitle : "";
   return (
     <div className="alerts-cluster-cell">
-      {url ? (
-        <a
-          href={url}
-          target="_blank"
-          rel="noreferrer"
-          className="cluster-link kb-like-link"
-          title={row.clusterName}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {row.clusterName}
-        </a>
-      ) : (
-        <span className="alerts-cluster-name" title={row.clusterName}>
-          {row.clusterName}
-        </span>
-      )}
+      <ClusterNameLine row={row} url={url} />
       {sub ? (
         <span className="alerts-cluster-meta" title={sub}>
           {sub}
         </span>
       ) : null}
     </div>
+  );
+}
+
+/** The cluster in a detail drawer: opens Prism when the address is known, else the cluster page. */
+function DrawerClusterLink({ row, children }: { row: RowRecord; children: ReactNode }) {
+  const prism = clusterPrismURL(row.cluster, {}, row.clusterName);
+  return prism ? (
+    <a href={prism} target="_blank" rel="noopener noreferrer" className="drawer-cluster-link" title={`Open ${row.clusterName} in Prism`}>
+      {children}
+    </a>
+  ) : (
+    <Link to={clusterPath(row.cluster)} className="drawer-cluster-link" title={`Open the ${row.clusterName} cluster page`}>
+      {children}
+    </Link>
+  );
+}
+
+function ClusterNameLine({ row, url }: { row: RowRecord; url?: string }) {
+  // The name opens the cluster in Prism (the place to act on a finding); the
+  // small icon opens its page in this dashboard. Without a known address the
+  // name falls back to the dashboard page.
+  return (
+    <span className="alerts-cluster-name-line">
+      {url ? (
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="alerts-cluster-link"
+          title={`Open ${row.clusterName} in Prism`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {row.clusterName}
+        </a>
+      ) : (
+        <Link
+          to={clusterPath(row.cluster)}
+          className="alerts-cluster-link"
+          title={`Open the ${row.clusterName} cluster page`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {row.clusterName}
+        </Link>
+      )}
+      {url ? (
+        <Link
+          to={clusterPath(row.cluster)}
+          className="alerts-cluster-prism"
+          aria-label={`Open the ${row.clusterName} cluster page`}
+          title="Open the cluster page in this dashboard"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <ClusterOutlined />
+        </Link>
+      ) : null}
+    </span>
   );
 }
 
@@ -493,6 +508,120 @@ function VersionsCell({ row }: { row: RowRecord }) {
       </div>
     </dl>
   );
+}
+
+/** How the NCC findings are laid out; PC alerts always use the table. */
+type FindingsView = "table" | "focused" | "grouped" | "list";
+
+const VIEW_OPTIONS: Array<{ value: FindingsView; label: string; icon: ReactNode; hint: string }> = [
+  { value: "table", label: "Table", icon: <TableOutlined />, hint: "Every column, including versions and detail" },
+  { value: "focused", label: "Focused", icon: <ProfileOutlined />, hint: "Fewer columns: the finding with its detail, cluster, KB and status" },
+  { value: "grouped", label: "By check", icon: <AppstoreOutlined />, hint: "One row per check, with the clusters it fails on" },
+  { value: "list", label: "List", icon: <BarsOutlined />, hint: "Each finding as a short sentence, easiest to scan" },
+];
+const VIEW_KEYS = new Set<string>(VIEW_OPTIONS.map((v) => v.value));
+
+const SEVERITY_RANK: Record<Severity, number> = { FAIL: 5, WARN: 4, ERR: 3, INFO: 2, UNKNOWN: 1 };
+
+function severityOf(row: RowRecord): Severity {
+  return row.isUnknownSeverity ? "UNKNOWN" : row.severity;
+}
+
+function SeverityIcon({ severity }: { severity: Severity }) {
+  const icon =
+    severity === "FAIL" ? <CloseCircleOutlined /> :
+    severity === "WARN" ? <WarningOutlined /> :
+    severity === "ERR" ? <ExclamationCircleOutlined /> :
+    severity === "INFO" ? <InfoCircleOutlined /> :
+    <QuestionCircleOutlined />;
+  return (
+    <span className={`findings-sev-icon sev-${severity.toLowerCase()}`} role="img" aria-label={severity}>
+      {icon}
+    </span>
+  );
+}
+
+const COLUMN_MIN_WIDTH = 64;
+const COLUMN_MAX_WIDTH = 900;
+
+type ResizableHeaderProps = ThHTMLAttributes<HTMLTableCellElement> & {
+  onResize?: (width: number) => void;
+  onResetWidth?: () => void;
+  resizeLabel?: string;
+};
+
+/**
+ * Table header cell with a drag handle on its right edge. Drag (or focus it
+ * and use the arrow keys) to resize; double-click puts the default back.
+ */
+function ResizableHeaderCell({ onResize, onResetWidth, resizeLabel, children, className, ...rest }: ResizableHeaderProps) {
+  if (!onResize) {
+    return (
+      <th className={className} {...rest}>
+        {children}
+      </th>
+    );
+  }
+  const clamp = (w: number) => Math.min(COLUMN_MAX_WIDTH, Math.max(COLUMN_MIN_WIDTH, Math.round(w)));
+  const startDrag = (event: ReactPointerEvent<HTMLSpanElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const th = event.currentTarget.parentElement;
+    if (!th) return;
+    const startX = event.clientX;
+    const startWidth = th.getBoundingClientRect().width;
+    const move = (e: PointerEvent) => onResize(clamp(startWidth + e.clientX - startX));
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      document.body.classList.remove("is-col-resizing");
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    document.body.classList.add("is-col-resizing");
+  };
+  const onKey = (event: ReactKeyboardEvent<HTMLSpanElement>) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const th = event.currentTarget.parentElement;
+    const current = th ? th.getBoundingClientRect().width : 120;
+    onResize(clamp(current + (event.key === "ArrowRight" ? 16 : -16)));
+  };
+  return (
+    <th className={`${className ?? ""} is-resizable`} {...rest}>
+      {children}
+      <span
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={resizeLabel}
+        aria-valuemin={COLUMN_MIN_WIDTH}
+        aria-valuemax={COLUMN_MAX_WIDTH}
+        // A focusable separator is a slider: it must report its value (the column
+        // width in px). Read it from the header cell after each render.
+        ref={(el) => {
+          const th = el?.parentElement;
+          if (el && th) el.setAttribute("aria-valuenow", String(Math.round(th.getBoundingClientRect().width)));
+        }}
+        tabIndex={0}
+        title="Drag to resize · double-click to reset"
+        className="alerts-col-resizer"
+        onPointerDown={startDrag}
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          onResetWidth?.();
+        }}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={onKey}
+      />
+    </th>
+  );
+}
+
+const TABLE_COMPONENTS = { header: { cell: ResizableHeaderCell } };
+
+/** Distinct checks among rows (the By check view pages by check). */
+function groupCountFor(rows: RowRecord[]): number {
+  return new Set(rows.map((r) => r.alert)).size;
 }
 
 const SELECTION_COLUMN_WIDTH = 42;
@@ -550,6 +679,8 @@ function handlingLabel(status: string): { text: string; color: string } {
 
 function NCCAlertInspector({
   row,
+  clusterNameMap,
+  onShowCheck,
   mark,
   note,
   onNote,
@@ -558,6 +689,8 @@ function NCCAlertInspector({
   readOnlyReason,
 }: {
   row: RowRecord;
+  clusterNameMap: Record<string, string>;
+  onShowCheck?: (check: string) => void;
   mark?: NCCDisposition;
   note: string;
   onNote: (value: string) => void;
@@ -569,18 +702,50 @@ function NCCAlertInspector({
   const current = handlingLabel(mark?.status || "");
   const history = [...(mark?.history || [])].reverse();
   const hasMark = mark?.status === "acknowledged" || mark?.status === "resolved" || mark?.status === "reopened";
+  const address = row.clusterIP || (row.cluster !== row.clusterName ? row.cluster : "");
+  const facts: KeyValueItem[] = [
+    {
+      label: "Cluster",
+      value: (
+        <DrawerClusterLink row={row}>
+          {row.clusterName}
+          {address && address !== row.clusterName ? <span className="mono drawer-cluster-address">{address}</span> : null}
+        </DrawerClusterLink>
+      ),
+      title: row.clusterName,
+    },
+    { label: "AOS", value: row.clusterVersion || "Not reported" },
+    { label: "NCC", value: row.nccVersion || "Not reported" },
+  ];
   return (
-    <div className="ncc-alert-inspector">
+    <div className="finding-inspector">
       {mark?.status === "reopened" ? (
         <Alert
           type="warning"
           showIcon
-          title="This alert came back"
+          title="This finding came back"
           description={mark.reason || "It was resolved, then found again on a later run."}
         />
       ) : null}
 
-      <Card size="small" className="ncc-handling-card" title={<IconTitle icon={<ToolOutlined />}>Handling</IconTitle>} extra={<Tag color={current.color}>{current.text}</Tag>}>
+      <Panel
+        title="What it found"
+        icon={<FileTextOutlined />}
+        extra={
+          row.isChanged || row.isFlaky ? (
+            <Space size={4}>
+              {row.isChanged ? <StatusBadge tone="warn">Changed since last run</StatusBadge> : null}
+              {row.isFlaky ? <StatusBadge tone="info">Flaky</StatusBadge> : null}
+            </Space>
+          ) : undefined
+        }
+      >
+        <Typography.Paragraph className="finding-message">{row.detail || "The check reported no detail."}</Typography.Paragraph>
+        <FindingActions row={row} clusterNameMap={clusterNameMap} onShowCheck={onShowCheck} />
+        <KeyValueList items={facts} />
+      </Panel>
+
+      <Panel title="Handling" icon={<ToolOutlined />} extra={<Tag color={current.color}>{current.text}</Tag>}>
         {mark?.by && mark.status ? (
           <Typography.Paragraph className="ncc-handling-who">
             {current.text} by <Typography.Text strong>{mark.by}</Typography.Text>
@@ -589,7 +754,7 @@ function NCCAlertInspector({
           </Typography.Paragraph>
         ) : (
           <Typography.Paragraph type="secondary" className="ncc-handling-who">
-            Nobody has acknowledged or resolved this alert yet.
+            Nobody has acknowledged or resolved this finding yet.
           </Typography.Paragraph>
         )}
         {mark?.note ? <Typography.Paragraph className="ncc-handling-note">{mark.note}</Typography.Paragraph> : null}
@@ -621,15 +786,15 @@ function NCCAlertInspector({
               ) : null}
             </Space>
             <Typography.Paragraph type="secondary" className="ncc-handling-hint">
-              Acknowledge notes that you have seen it. Resolve marks it done until a later run finds the same alert.
+              Acknowledge notes that you have seen it. Resolve marks it done until a later run finds it again.
             </Typography.Paragraph>
           </>
         ) : (
           <Typography.Paragraph type="secondary" className="ncc-handling-hint">
-            {readOnlyReason || "Alert handling is turned off under Settings → Features, so marks are read-only."}
+            {readOnlyReason || "Finding handling is turned off under Settings → Features, so marks are read-only."}
           </Typography.Paragraph>
         )}
-      </Card>
+      </Panel>
 
       <NCCLifecyclePanel
         cluster={row.cluster}
@@ -638,53 +803,8 @@ function NCCAlertInspector({
         onResolve={onAction ? () => onAction("resolve") : undefined}
       />
 
-      <div className="pc-alert-metric-grid">
-        <div className="pc-alert-metric">
-          <div className="pc-alert-metric-label">Cluster</div>
-          <div className="pc-alert-metric-value">{row.clusterName}</div>
-          {row.cluster && row.cluster !== row.clusterName ? (
-            <Typography.Text type="secondary" className="mono">{row.cluster}</Typography.Text>
-          ) : null}
-        </div>
-        <div className="pc-alert-metric">
-          <div className="pc-alert-metric-label">Versions</div>
-          <div className="pc-alert-metric-value">{row.clusterVersion || "AOS not reported"}</div>
-          <Typography.Text type="secondary">{row.nccVersion ? `NCC ${row.nccVersion}` : "NCC not reported"}</Typography.Text>
-        </div>
-        <div className="pc-alert-metric">
-          <div className="pc-alert-metric-label">Status</div>
-          <Space size={4} wrap>
-            {row.isChanged ? <Tag color="gold">Changed</Tag> : null}
-            {row.isFlaky ? <Tag color="purple">Flaky</Tag> : null}
-            {!row.isChanged && !row.isFlaky ? <Typography.Text type="secondary">None</Typography.Text> : null}
-          </Space>
-        </div>
-        <div className="pc-alert-metric">
-          <div className="pc-alert-metric-label">Log</div>
-          <div className="pc-alert-metric-value">{row.logName || "—"}</div>
-        </div>
-      </div>
-
-      {kbLinksOf(row).length > 0 ? (
-        <Card size="small" title={<IconTitle icon={<ReadOutlined />}>Knowledge base</IconTitle>}>
-          <Space size={[8, 8]} wrap>
-            {kbLinksOf(row).map((url) => (
-              <a key={url} href={url} target="_blank" rel="noreferrer">
-                <Tag color="processing" icon={<LinkOutlined />} style={{ margin: 0 }}>{kbLabel(url)}</Tag>
-              </a>
-            ))}
-          </Space>
-        </Card>
-      ) : null}
-
-      <Card size="small" title={<IconTitle icon={<FileTextOutlined />}>Alert detail</IconTitle>}>
-        <Typography.Paragraph className="pc-alert-message" style={{ margin: 0 }}>
-          {row.detail || "No additional detail."}
-        </Typography.Paragraph>
-      </Card>
-
       {history.length > 0 ? (
-        <Card size="small" title={<IconTitle icon={<HistoryOutlined />}>History</IconTitle>}>
+        <Panel title="Handling history" icon={<HistoryOutlined />}>
           <ol className="ncc-handling-history">
             {history.map((event, index) => {
               const label = handlingLabel(event.status).text;
@@ -701,7 +821,7 @@ function NCCAlertInspector({
               );
             })}
           </ol>
-        </Card>
+        </Panel>
       ) : null}
     </div>
   );
@@ -712,8 +832,8 @@ export function ClusterTable({
   aggRows,
   diffFlags,
   flakyKeys,
-  nccLogs,
   filterText,
+  onShowCheck,
   selectedClusters,
   environmentClusters = null,
   clusterNameMap,
@@ -736,18 +856,21 @@ export function ClusterTable({
   const [handling, setHandling] = useLocalStorageState<HandlingFilter>("dashboard.alerts.handling", "all");
   const [legacyNeeds, setLegacyNeeds] = useLocalStorageState("dashboard.alerts.needsAttention", false);
   const [drawerRow, setDrawerRow] = useState<RowRecord | null>(null);
+  const [view, setView] = useLocalStorageState<FindingsView>("dashboard.alerts.view", "table");
+  const [columnWidths, setColumnWidths] = useLocalStorageState<Record<string, number>>("dashboard.alerts.columnWidths", {});
+  const [openGroups, setOpenGroups] = useState<string[]>([]);
   const [handlingNote, setHandlingNote] = useState("");
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
   const screens = Grid.useBreakpoint();
   // NCC rows can be marked unless alert handling is off (no onDisposition).
   const canHandle = alertSource !== "PC" && Boolean(onDisposition);
+  const activeView: FindingsView = alertSource === "PC" || !VIEW_KEYS.has(view) ? "table" : view;
 
   // Rows are built once per data change; typing in search only re-filters
   // them (below). The search text is deferred so the input stays responsive
   // while 200k rows are filtered.
   const baseRows = useMemo<RowRecord[]>(() => {
-    const findLog = logLookup(nccLogs || []);
     const dflags = diffFlags || {};
     const fkeys = flakyKeys || {};
     const pickDiff = (cluster: string, alert: string) => {
@@ -809,7 +932,6 @@ export function ClusterTable({
       const diff = pickDiff(cluster, alert);
       const isChanged = Boolean(diff.new_fail || diff.resolved_fail || diff.severity_changed);
       const isFlaky = Boolean(fkeys[rowKey(cluster, alert)]);
-      const log = findLog(cluster);
       const clusterName = nameOf(displayClusterName(raw));
       return {
         key: `${cluster}-${alert}-${idx}`,
@@ -848,8 +970,6 @@ export function ClusterTable({
         nccVersion: String(raw.nccVersion || raw.ncc_version || ""),
         isChanged,
         isFlaky,
-        logName: log?.name || "",
-        logPath: log?.path || "",
       };
     };
 
@@ -888,7 +1008,7 @@ export function ClusterTable({
       }
     }
     return built;
-  }, [checksSnapshot, aggRows, diffFlags, flakyKeys, nccLogs, clusterNameMap, pcAlerts, alertSource]);
+  }, [checksSnapshot, aggRows, diffFlags, flakyKeys, clusterNameMap, pcAlerts, alertSource]);
 
   const deferredFilterText = useDeferredValue(filterText);
   const rows = useMemo<RowRecord[]>(() => {
@@ -1014,21 +1134,54 @@ export function ClusterTable({
   }, [expanded, drawerRow, setExpanded]);
 
   const pageSize = Math.max(1, rowsPerPage);
-  const pageCount = Math.max(1, Math.ceil(shownRows.length / pageSize) || 1);
+  const pageCount = Math.max(1, Math.ceil((activeView === "grouped" ? groupCountFor(shownRows) : shownRows.length) / pageSize) || 1);
   const currentPage = Math.min(page, pageCount);
+  // The list and grouped views have no column sorters: worst first.
+  const orderedRows = useMemo(() => {
+    if (activeView === "table" || activeView === "focused") return shownRows;
+    return [...shownRows].sort(
+      (a, b) =>
+        SEVERITY_RANK[severityOf(b)] - SEVERITY_RANK[severityOf(a)] ||
+        a.alert.localeCompare(b.alert) ||
+        a.clusterName.localeCompare(b.clusterName),
+    );
+  }, [shownRows, activeView]);
+  // By check: one group per check, worst and most widespread first.
+  const groups = useMemo(() => {
+    if (activeView !== "grouped") return [];
+    const byCheck = new Map<string, RowRecord[]>();
+    for (const row of orderedRows) {
+      const list = byCheck.get(row.alert);
+      if (list) list.push(row);
+      else byCheck.set(row.alert, [row]);
+    }
+    return Array.from(byCheck, ([check, rows]) => {
+      const severity = rows.reduce<Severity>((worst, r) => (SEVERITY_RANK[severityOf(r)] > SEVERITY_RANK[worst] ? severityOf(r) : worst), "UNKNOWN");
+      const open = rows.filter((r) => {
+        const st = handlingStatus(r);
+        return st !== "acknowledged" && st !== "resolved";
+      }).length;
+      return { check, rows, severity, open };
+    }).sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || b.rows.length - a.rows.length || a.check.localeCompare(b.check));
+  }, [orderedRows, activeView, dispositionByKey]);
+  const pagerTotal = activeView === "grouped" ? groups.length : shownRows.length;
   const pagedRows = useMemo(() => {
     const start = (currentPage - 1) * pageSize;
-    return shownRows.slice(start, start + pageSize);
-  }, [shownRows, currentPage, pageSize]);
+    return orderedRows.slice(start, start + pageSize);
+  }, [orderedRows, currentPage, pageSize]);
+  const pagedGroups = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return groups.slice(start, start + pageSize);
+  }, [groups, currentPage, pageSize]);
 
   useEffect(() => {
     if (page > pageCount) setPage(pageCount);
   }, [page, pageCount]);
 
   useEffect(() => {
-    const body = hostRef.current?.querySelector(".ant-table-body");
+    const body = hostRef.current?.querySelector(".ant-table-body") ?? hostRef.current;
     if (body) body.scrollTop = 0;
-  }, [currentPage, pageSize, hostRef]);
+  }, [currentPage, pageSize, hostRef, activeView]);
 
   const severityCounts = useMemo(() => {
     const counts: Record<Severity, number> = { FAIL: 0, WARN: 0, ERR: 0, INFO: 0, UNKNOWN: 0 };
@@ -1043,25 +1196,98 @@ export function ClusterTable({
   // check is generally more actionable than an unclassified runtime error),
   // then ERR, then INFO, then UNKNOWN lowest. Keep in sync with
   // DashboardPage's SEVERITY_META ordering.
-  const severityRank: Record<Severity, number> = { FAIL: 5, WARN: 4, ERR: 3, INFO: 2, UNKNOWN: 1 };
+  const severityRank = SEVERITY_RANK;
+
+  const openDetails = (row: RowRecord) => setDrawerRow(row);
+  // The finding name opens its details (row clicks do too); it is a real
+  // button so keyboard users get there without a separate icon column.
+  const findingButton = (row: RowRecord, className = "alerts-title") => (
+    <button
+      type="button"
+      className={`${className} alerts-title-button`}
+      title={row.alert}
+      aria-label={`Open details for ${row.alert} on ${row.clusterName || row.cluster}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        openDetails(row);
+      }}
+    >
+      {row.alert}
+    </button>
+  );
+  const flagsFor = (row: RowRecord) =>
+    row.isChanged || row.isFlaky ? (
+      <span className="alerts-title-flags">
+        {row.isChanged ? <Tag color="gold" bordered={false}>changed</Tag> : null}
+        {row.isFlaky ? <Tag color="purple" bordered={false}>flaky</Tag> : null}
+      </span>
+    ) : null;
+  const kbLink = (row: RowRecord) => {
+    const kb = kbOf(row);
+    return kb ? (
+      <a
+        className="alerts-kb-link"
+        href={kb}
+        target="_blank"
+        rel="noreferrer"
+        title="Open the Nutanix KB article"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <ReadOutlined aria-hidden />
+        {kbLabel(kb)}
+      </a>
+    ) : null;
+  };
+  const statusFor = (row: RowRecord) => {
+    const mark = markFor(row);
+    if (mark?.status === "acknowledged") return <HandlingStatus tone="ack" label="Acknowledged" />;
+    if (mark?.status === "resolved") return <HandlingStatus tone="resolved" label="Resolved" />;
+    if (mark?.status === "reopened") {
+      return (
+        <Tooltip title={mark.reason || "This finding was resolved, then found again on a later run."}>
+          <HandlingStatus tone="returned" label="Returned" />
+        </Tooltip>
+      );
+    }
+    return <HandlingStatus tone="open" label="Open" />;
+  };
+  const isSelected = (key: string) => selectedKeys.includes(key);
+  const setSelected = (keys: string[], on: boolean) =>
+    setSelectedKeys((prev) => (on ? Array.from(new Set([...prev, ...keys])) : prev.filter((k) => !keys.includes(k))));
+
+  const clusterColumn = {
+    title: "Cluster",
+    dataIndex: "clusterName",
+    key: "clusterName",
+    width: 170,
+    sorter: (a: RowRecord, b: RowRecord) => a.clusterName.localeCompare(b.clusterName),
+    render: (_: unknown, row: RowRecord) => (
+      <ClusterCell row={row} url={clusterPrismURL(row.cluster, clusterNameMap)} subtitle={row.cluster} />
+    ),
+  };
+  const kbColumn = {
+    title: "KB",
+    key: "kb",
+    width: 92,
+    render: (_: unknown, row: RowRecord) => kbLink(row) ?? <span className="alerts-empty-cell">—</span>,
+  };
+  const handlingColumn = {
+    title: "Handling",
+    key: "handling",
+    width: 120,
+    render: (_: unknown, row: RowRecord) => statusFor(row),
+  };
 
   const titleColumn = {
-    title: "Alert",
+    title: "Finding",
     dataIndex: "alert",
     key: "alert",
     width: 210,
     sorter: (a: RowRecord, b: RowRecord) => a.alert.localeCompare(b.alert),
-    render: (value: string, row: RowRecord) => (
+    render: (_: string, row: RowRecord) => (
       <div className="alerts-title-cell">
-        <span className="alerts-title" title={value}>
-          {value}
-        </span>
-        {row.isChanged || row.isFlaky ? (
-          <span className="alerts-title-flags">
-            {row.isChanged ? <Tag color="gold" bordered={false}>changed</Tag> : null}
-            {row.isFlaky ? <Tag color="purple" bordered={false}>flaky</Tag> : null}
-          </span>
-        ) : null}
+        {findingButton(row)}
+        {flagsFor(row)}
       </div>
     ),
   };
@@ -1074,42 +1300,12 @@ export function ClusterTable({
     defaultSortOrder: "descend" as const,
     render: (value: Severity, row: RowRecord) => {
       const sev = row.isUnknownSeverity ? "UNKNOWN" : value;
-      const className = row.isUnknownSeverity ? "severity-pill severity-pill-unknown" : "severity-pill";
-      return <Tag className={className} color={SEVERITY_TAG_COLOR[sev]}>{sev}</Tag>;
+      return <StatusBadge tone={toneFor(sev)}>{severityLabel(sev)}</StatusBadge>;
     },
   };
-  const actionColumn = {
-    title: " ",
-    key: "actions",
-    width: 44,
-    align: "center" as const,
-    render: (_: unknown, row: RowRecord) => (
-      <Tooltip title="Open details">
-        <Button
-          type="text"
-          size="small"
-          icon={<ExpandAltOutlined />}
-          onClick={(e) => {
-            e.stopPropagation();
-            setDrawerRow(row);
-          }}
-        />
-      </Tooltip>
-    ),
-  };
-
   const nccColumns: ColumnsType<RowRecord> = [
     severityColumn,
-    {
-      title: "Cluster",
-      dataIndex: "clusterName",
-      key: "clusterName",
-      width: 170,
-      sorter: (a, b) => a.clusterName.localeCompare(b.clusterName),
-      render: (_, row) => (
-        <ClusterCell row={row} url={clusterPrismURL(row.cluster, clusterNameMap)} subtitle={row.cluster} />
-      ),
-    },
+    clusterColumn,
     {
       title: "Versions",
       key: "versions",
@@ -1120,24 +1316,7 @@ export function ClusterTable({
       render: (_, row) => <VersionsCell row={row} />,
     },
     titleColumn,
-    {
-      title: "KB",
-      key: "kb",
-      width: 92,
-      render: (_, row) => kbOf(row) ? (
-        <a
-          className="alerts-kb-link"
-          href={kbOf(row)}
-          target="_blank"
-          rel="noreferrer"
-          title="Open the Nutanix KB article"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <LinkOutlined aria-hidden />
-          {kbLabel(kbOf(row))}
-        </a>
-      ) : <span className="alerts-empty-cell">—</span>,
-    },
+    kbColumn,
     {
       title: "Detail",
       dataIndex: "detail",
@@ -1151,29 +1330,46 @@ export function ClusterTable({
         );
       },
     },
+    handlingColumn,
+  ];
+
+  // Focused: the finding and its detail in one cell, a severity edge
+  // instead of a severity column, and no versions (they are in the drawer).
+  const focusedColumns: ColumnsType<RowRecord> = [
     {
-      title: "Handling",
-      key: "handling",
-      width: 120,
+      title: <span className="sr-only">Severity</span>,
+      key: "severityEdge",
+      width: 28,
+      sorter: (a, b) => SEVERITY_RANK[severityOf(a)] - SEVERITY_RANK[severityOf(b)],
+      defaultSortOrder: "descend",
+      render: (_, row) => (
+        <span className={`alerts-sev-edge sev-${severityOf(row).toLowerCase()}`} title={severityOf(row)} role="img" aria-label={severityOf(row)} />
+      ),
+    },
+    {
+      title: "Finding",
+      key: "finding",
+      sorter: (a, b) => a.alert.localeCompare(b.alert),
       render: (_, row) => {
-        const mark = markFor(row);
-        if (mark?.status === "acknowledged") {
-          return <HandlingStatus tone="ack" label="Acknowledged" />;
-        }
-        if (mark?.status === "resolved") {
-          return <HandlingStatus tone="resolved" label="Resolved" />;
-        }
-        if (mark?.status === "reopened") {
-          return (
-            <Tooltip title={mark.reason || "This alert was resolved, then found again on a later run."}>
-              <HandlingStatus tone="returned" label="Returned" />
-            </Tooltip>
-          );
-        }
-        return <HandlingStatus tone="open" label="Open" />;
+        const text = previewDetail(row.detail);
+        return (
+          <div className="alerts-focus-cell">
+            <span className="alerts-focus-title">
+              {findingButton(row, "alerts-focus-name")}
+              {flagsFor(row)}
+            </span>
+            {text !== "—" ? (
+              <span className="alerts-focus-detail" title={text}>
+                {text}
+              </span>
+            ) : null}
+          </div>
+        );
       },
     },
-    actionColumn,
+    { ...clusterColumn, width: 190 },
+    kbColumn,
+    { ...handlingColumn, title: "Status" },
   ];
 
   const pcColumns: ColumnsType<RowRecord> = [
@@ -1183,6 +1379,7 @@ export function ClusterTable({
       key: "title",
       width: 250,
       sorter: (a, b) => a.alert.localeCompare(b.alert),
+      render: (_, row) => findingButton(row),
     },
     severityColumn,
     {
@@ -1239,14 +1436,40 @@ export function ClusterTable({
       key: "impactType",
       width: 130,
     },
-    actionColumn,
   ];
   // Below 1600px (a 14" laptop) the PC table drops the two least-used
   // columns rather than scroll sideways; both stay in the details drawer.
-  const columns =
+  const baseColumns =
     alertSource === "PC"
       ? pcColumns.filter((c) => screens.xxl || !PC_WIDE_ONLY_COLUMNS.has(String(c.key)))
-      : nccColumns;
+      : activeView === "focused"
+        ? focusedColumns
+        : nccColumns;
+  // Widths the user dragged, per source and view; the rest keep defaults.
+  const widthKey = (key: string) => `${alertSource}.${activeView}.${key}`;
+  const hasCustomWidths = Object.keys(columnWidths).some((k) => k.startsWith(`${alertSource}.${activeView}.`));
+  const columns: ColumnsType<RowRecord> = baseColumns.map((c) => {
+    const key = String(c.key);
+    const width = columnWidths[widthKey(key)] ?? c.width;
+    const label = typeof c.title === "string" ? c.title : key === "severityEdge" ? "Severity" : key;
+    return {
+      ...c,
+      width,
+      onHeaderCell: () =>
+        ({
+          onResize: (w: number) => setColumnWidths((prev) => ({ ...prev, [widthKey(key)]: w })),
+          onResetWidth: () =>
+            setColumnWidths((prev) => {
+              const next = { ...prev };
+              delete next[widthKey(key)];
+              return next;
+            }),
+          resizeLabel: `Resize the ${label} column`,
+        }) as ResizableHeaderProps,
+    };
+  });
+  const resetColumnWidths = () =>
+    setColumnWidths((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => !k.startsWith(`${alertSource}.${activeView}.`))));
   // Fixed columns plus room for the flexible Detail column (and checkboxes).
   const scrollX =
     columns.reduce((sum, c) => sum + (typeof c.width === "number" ? c.width : DETAIL_MIN_WIDTH), 0) +
@@ -1256,7 +1479,7 @@ export function ClusterTable({
     try {
       await navigator.clipboard.writeText(text);
       setCopyState("copied");
-      notify.success("Alert copied to clipboard.");
+      notify.success("Copied to clipboard.");
       setTimeout(() => setCopyState("idle"), 1600);
     } catch {
       notify.warning("Couldn't copy to the clipboard.");
@@ -1285,33 +1508,61 @@ export function ClusterTable({
     <Card className={`alerts-card page-card${expanded ? " alerts-card-expanded" : ""}`}>
       <div className="alerts-header">
         <div>
-          <Typography.Title level={4} className="tile-title">
-            Alerts
+          <Typography.Title level={2} className="tile-title">
+            Findings
           </Typography.Title>
           <Typography.Text type="secondary" className="tile-subtitle">
-            {shownRows.length.toLocaleString()} {shownRows.length === 1 ? "alert" : "alerts"} shown
+            {shownRows.length.toLocaleString()} {shownRows.length === 1 ? "finding" : "findings"} shown
             {shownRows.length !== totalRows ? ` · ${totalRows.toLocaleString()} match the dashboard filters` : ""}
           </Typography.Text>
         </div>
         {/* Severity totals sit above the filters; no second copy here. */}
         <Space size={[8, 8]} wrap className="alerts-summary-pills">
-          <Tooltip title={density === "compact" ? "Switch to comfortable rows" : "Switch to compact rows"}>
+          {alertSource !== "PC" ? (
+            <Segmented<FindingsView>
+              size="small"
+              aria-label="Findings view"
+              className="alerts-view-switch"
+              value={activeView}
+              onChange={(v) => setView(v)}
+              options={VIEW_OPTIONS.map((o) => ({
+                value: o.value,
+                label: (
+                  <Tooltip title={o.hint}>
+                    <span className="alerts-view-option">
+                      {o.icon}
+                      <span>{o.label}</span>
+                    </span>
+                  </Tooltip>
+                ),
+              }))}
+            />
+          ) : null}
+          {hasCustomWidths && (activeView === "table" || activeView === "focused") ? (
+            <Tooltip title="Put every column back to its default width">
+              <Button size="small" icon={<ColumnWidthOutlined />} onClick={resetColumnWidths}>
+                Reset columns
+              </Button>
+            </Tooltip>
+          ) : null}
+          {/* Row density and full page are small tools next to the view
+              switch: icons with a tooltip, so the row reads as one control. */}
+          <Tooltip title={density === "compact" ? "Compact rows; switch to comfortable" : "Comfortable rows; switch to compact"}>
             <Button
               size="small"
+              aria-label={density === "compact" ? "Row density: compact" : "Row density: comfortable"}
+              aria-pressed={density === "compact"}
+              icon={<ColumnHeightOutlined />}
               onClick={() => setDensity(density === "compact" ? "comfortable" : "compact")}
-            >
-              {density === "compact" ? "Compact" : "Comfortable"}
-            </Button>
+            />
           </Tooltip>
-          <Tooltip title={expanded ? "Leave full page (Esc)" : "Show the alert list across the page. Filters and details stay available."}>
+          <Tooltip title={expanded ? "Leave full page (Esc)" : "Full page: the findings across the page, filters and details stay available"}>
             <Button
               size="small"
-              aria-label={expanded ? "Exit full page" : "Expand alerts"}
+              aria-label={expanded ? "Exit full page" : "Full page, expand findings"}
               icon={expanded ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
               onClick={() => setExpanded(!expanded)}
-            >
-              {expanded ? "Exit full page" : "Full page"}
-            </Button>
+            />
           </Tooltip>
         </Space>
       </div>
@@ -1327,7 +1578,7 @@ export function ClusterTable({
                     type="button"
                     role="radio"
                     aria-checked={selected}
-                    aria-label={`${item.label}, ${count} ${count === 1 ? "alert" : "alerts"}`}
+                    aria-label={`${item.label} ${count} ${count === 1 ? "finding" : "findings"}`}
                     className={`alerts-handling-chip alerts-handling-chip-${item.tone}${selected ? " is-selected" : ""}${count === 0 && item.value !== "all" ? " is-empty" : ""}`}
                     onClick={() => setHandling(item.value)}
                   >
@@ -1340,8 +1591,8 @@ export function ClusterTable({
           </div>
           <Typography.Text type="secondary" className="alerts-handling-hint">
             {handlingCounts.returned > 0
-              ? `${handlingCounts.returned} resolved ${handlingCounts.returned === 1 ? "alert was" : "alerts were"} found again`
-              : "Resolved alerts return here if a later run finds them again"}
+              ? `${handlingCounts.returned} resolved ${handlingCounts.returned === 1 ? "finding was" : "findings were"} found again`
+              : "Resolved findings return here if a later run finds them again"}
           </Typography.Text>
         </div>
       ) : null}
@@ -1394,18 +1645,184 @@ export function ClusterTable({
           description={
             <Space orientation="vertical" size={2} align="center">
               <Typography.Text strong>
-                {totalRows > 0 ? "No alerts in this handling view" : "No alerts match the current filters"}
+                {totalRows > 0
+                  ? "No findings in this handling view"
+                  : baseRows.length === 0
+                    ? alertSource === "PC"
+                      ? "Prism Central reports no alerts"
+                      : "No findings in the latest run"
+                    : "No findings match the current filters"}
               </Typography.Text>
               <Typography.Text type="secondary">
-                {totalRows > 0 ? "Choose All to see acknowledged and resolved rows again." : "Try clearing severity chips or the cluster filter."}
+                {totalRows > 0
+                  ? "Choose All to see acknowledged and resolved rows again."
+                  : baseRows.length === 0
+                    ? alertSource === "PC"
+                      ? "Nothing is open on the Prism Central instances in this report."
+                      : "Every check passed on the clusters in this report."
+                    : "Try clearing severity chips or the cluster filter."}
               </Typography.Text>
             </Space>
           }
         />
       ) : (
         <>
+          {activeView === "list" ? (
+            <div className="alerts-table-host alerts-view-host" ref={hostRef}>
+              <ul className="findings-list" aria-label="Findings">
+                {pagedRows.map((row) => {
+                  const sev = severityOf(row);
+                  const text = previewDetail(row.detail);
+                  return (
+                    <li
+                      key={row.key}
+                      className={`findings-list-item sev-${sev.toLowerCase()}${isSelected(row.key) ? " is-selected" : ""}`}
+                      onClick={(e) => {
+                        if ((e.target as HTMLElement).closest("a, button, .ant-checkbox-wrapper")) return;
+                        openDetails(row);
+                      }}
+                    >
+                      {canHandle ? (
+                        <Checkbox
+                          checked={isSelected(row.key)}
+                          onChange={(e) => setSelected([row.key], e.target.checked)}
+                          aria-label={`Select ${row.alert} on ${row.clusterName}`}
+                        />
+                      ) : null}
+                      <SeverityIcon severity={sev} />
+                      <div className="findings-list-main">
+                        <div className="findings-list-title">
+                          {findingButton(row, "findings-list-name")}
+                          <span className="findings-list-on">on</span>
+                          <ClusterNameLine row={row} url={clusterPrismURL(row.cluster, clusterNameMap)} />
+                          {flagsFor(row)}
+                        </div>
+                        {text !== "—" ? (
+                          <div className="findings-list-detail" title={text}>
+                            {text}
+                          </div>
+                        ) : null}
+                      </div>
+                      <div className="findings-list-side">
+                        {kbLink(row)}
+                        {statusFor(row)}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ) : activeView === "grouped" ? (
+            <div className="alerts-table-host alerts-view-host" ref={hostRef}>
+              <div className="findings-groups">
+                {pagedGroups.map((g) => {
+                  const open = openGroups.includes(g.check);
+                  const keys = g.rows.map((r) => r.key);
+                  const chosen = keys.filter((k) => isSelected(k)).length;
+                  const toggle = () => setOpenGroups((prev) => (open ? prev.filter((c) => c !== g.check) : [...prev, g.check]));
+                  const kbRow = g.rows.find((r) => kbOf(r));
+                  const detail = previewDetail(g.rows[0].detail);
+                  const shownClusters = g.rows.slice(0, 3);
+                  return (
+                    <section key={g.check} className={`findings-group sev-${g.severity.toLowerCase()}${open ? " is-open" : ""}`}>
+                      <div className={`findings-group-head${canHandle ? " has-select" : ""}`} onClick={(e) => {
+                        if ((e.target as HTMLElement).closest("a, button, .ant-checkbox-wrapper")) return;
+                        toggle();
+                      }}>
+                        <button
+                          type="button"
+                          className="findings-group-toggle"
+                          aria-expanded={open}
+                          aria-label={`${open ? "Hide" : "Show"} the clusters for ${g.check}`}
+                          onClick={toggle}
+                        >
+                          {open ? <DownOutlined /> : <RightOutlined />}
+                        </button>
+                        {canHandle ? (
+                          <Checkbox
+                            checked={chosen === keys.length}
+                            indeterminate={chosen > 0 && chosen < keys.length}
+                            onChange={(e) => setSelected(keys, e.target.checked)}
+                            aria-label={`Select every cluster for ${g.check}`}
+                          />
+                        ) : null}
+                        <StatusBadge tone={toneFor(g.severity)}>{severityLabel(g.severity)}</StatusBadge>
+                        <div className="findings-group-main">
+                          <span className="findings-group-name" title={g.check}>{g.check}</span>
+                          {detail !== "—" ? <span className="findings-group-detail" title={detail}>{detail}</span> : null}
+                        </div>
+                        <div className="findings-group-clusters" aria-label="Clusters">
+                          {shownClusters.map((r) => {
+                            const prism = clusterPrismURL(r.cluster, clusterNameMap, r.clusterName);
+                            return prism ? (
+                              <a key={r.key} href={prism} target="_blank" rel="noopener noreferrer" className="findings-group-chip" title={`Open ${r.clusterName} in Prism`}>
+                                {r.clusterName}
+                              </a>
+                            ) : (
+                              <Link key={r.key} to={clusterPath(r.cluster)} className="findings-group-chip" title={`Open the ${r.clusterName} cluster page`}>
+                                {r.clusterName}
+                              </Link>
+                            );
+                          })}
+                          {g.rows.length > shownClusters.length ? (
+                            <span className="findings-group-chip is-more">+{g.rows.length - shownClusters.length}</span>
+                          ) : null}
+                        </div>
+                        <span className="findings-group-count" title="Clusters where this check still needs attention">
+                          <b>{g.open}</b> of {g.rows.length} open
+                        </span>
+                        {kbRow ? kbLink(kbRow) : <span className="findings-group-kb-empty" />}
+                      </div>
+                      {open ? (
+                        <ul className="findings-group-rows">
+                          {g.rows.map((row) => {
+                            const text = previewDetail(row.detail);
+                            return (
+                              <li
+                                key={row.key}
+                                className={[canHandle ? "has-select" : "", isSelected(row.key) ? "is-selected" : ""].filter(Boolean).join(" ") || undefined}
+                                onClick={(e) => {
+                                  if ((e.target as HTMLElement).closest("a, button, .ant-checkbox-wrapper")) return;
+                                  openDetails(row);
+                                }}
+                              >
+                                {canHandle ? (
+                                  <Checkbox
+                                    checked={isSelected(row.key)}
+                                    onChange={(e) => setSelected([row.key], e.target.checked)}
+                                    aria-label={`Select ${row.alert} on ${row.clusterName}`}
+                                  />
+                                ) : null}
+                                <SeverityIcon severity={severityOf(row)} />
+                                <ClusterCell row={row} url={clusterPrismURL(row.cluster, clusterNameMap)} subtitle={row.cluster} />
+                                <span className="findings-group-versions">
+                                  {[row.clusterVersion && `AOS ${row.clusterVersion}`, row.nccVersion && `NCC ${row.nccVersion}`].filter(Boolean).join(" · ") || "—"}
+                                </span>
+                                <span className="findings-group-row-detail" title={text}>{text}</span>
+                                {statusFor(row)}
+                                <button
+                                  type="button"
+                                  className="findings-group-open"
+                                  aria-label={`Open details for ${row.alert} on ${row.clusterName || row.cluster}`}
+                                  onClick={() => openDetails(row)}
+                                >
+                                  Details
+                                </button>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      ) : null}
+                    </section>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
           <div className="alerts-table-host" ref={hostRef} data-scroll-y={tableY}>
             <Table<RowRecord>
+              key={`${alertSource}-${activeView}`}
+              components={TABLE_COMPONENTS}
               virtual
               className="alerts-table"
               tableLayout="fixed"
@@ -1436,14 +1853,17 @@ export function ClusterTable({
               scroll={{ x: scrollX, y: tableY }}
             />
           </div>
+          )}
           <Pagination
             className="alerts-pagination"
             current={currentPage}
             pageSize={pageSize}
-            total={shownRows.length}
+            total={pagerTotal}
             showSizeChanger
             pageSizeOptions={[50, 100, 200, 500]}
-            showTotal={(total, range) => `${range[0].toLocaleString()}–${range[1].toLocaleString()} of ${total.toLocaleString()}`}
+            showTotal={(total, range) =>
+              `${range[0].toLocaleString()}–${range[1].toLocaleString()} of ${total.toLocaleString()}${activeView === "grouped" ? (total === 1 ? " check" : " checks") : ""}`
+            }
             onChange={(nextPage, nextPageSize) => {
               setPage(nextPage);
               if (nextPageSize && nextPageSize !== rowsPerPage) setRowsPerPage(nextPageSize);
@@ -1456,20 +1876,17 @@ export function ClusterTable({
         open={Boolean(drawerRow)}
         title={
           drawerRow ? (
-            <Space orientation="vertical" size={4} style={{ width: "100%" }}>
-              <Typography.Text type="secondary" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                {drawerRow.source === "PC" ? "Prism Central alert" : "NCC alert"}
+            <Space orientation="vertical" size={4} className="finding-drawer-head">
+              <Typography.Text type="secondary" className="finding-drawer-eyebrow">
+                {drawerRow.source === "PC" ? "Prism Central alert" : "NCC finding"} · {drawerRow.clusterName}
               </Typography.Text>
-              <Typography.Title level={4} style={{ margin: 0, paddingRight: 24 }}>
+              <Typography.Title level={4} className="finding-drawer-title">
                 {drawerRow.alert}
               </Typography.Title>
               <Space size={6} wrap>
-                <Tag
-                  color={SEVERITY_TAG_COLOR[drawerRow.severity]}
-                  className={drawerRow.isUnknownSeverity ? "severity-pill severity-pill-unknown" : "severity-pill"}
-                >
-                  {drawerRow.isUnknownSeverity ? "UNKNOWN" : drawerRow.severity}
-                </Tag>
+                <StatusBadge tone={toneFor(drawerRow.isUnknownSeverity ? "UNKNOWN" : drawerRow.severity)}>
+                  {severityLabel(drawerRow.isUnknownSeverity ? "UNKNOWN" : drawerRow.severity)}
+                </StatusBadge>
                 <Tag color={drawerRow.source === "PC" ? "purple" : "blue"}>{drawerRow.source}</Tag>
                 {drawerRow.status !== "—" ? <Tag>{drawerRow.status}</Tag> : null}
               </Space>
@@ -1489,21 +1906,6 @@ export function ClusterTable({
               >
                 {copyState === "copied" ? "Copied" : drawerRow.source === "PC" ? "Copy alert" : "Copy detail"}
               </Button>
-              {drawerRow.source === "PC" && clusterPrismURL(drawerRow.cluster, clusterNameMap, drawerRow.clusterName) ? (
-                <Button
-                  icon={<ExportOutlined />}
-                  href={clusterPrismURL(drawerRow.cluster, clusterNameMap, drawerRow.clusterName)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  Open in Prism
-                </Button>
-              ) : null}
-              {drawerRow.source === "PC" && kbOf(drawerRow) ? (
-                <Button type="primary" icon={<LinkOutlined />} href={kbOf(drawerRow)} target="_blank" rel="noopener noreferrer">
-                  {kbLabel(kbOf(drawerRow))}
-                </Button>
-              ) : null}
             </Space>
           ) : null
         }
@@ -1514,6 +1916,15 @@ export function ClusterTable({
           ) : (
             <NCCAlertInspector
               row={drawerRow}
+              clusterNameMap={clusterNameMap}
+              onShowCheck={
+                onShowCheck
+                  ? (check) => {
+                      setDrawerRow(null);
+                      onShowCheck(check);
+                    }
+                  : undefined
+              }
               mark={markFor(drawerRow)}
               note={handlingNote}
               onNote={setHandlingNote}

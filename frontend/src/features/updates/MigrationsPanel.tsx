@@ -59,7 +59,7 @@ function ConfigLayoutCard() {
             <Typography.Text type="secondary" className="mono">{res.config_path}</Typography.Text>
           </Space>
           {!res.changed ? (
-            <Alert type="success" showIcon title="Nothing to migrate" description="The config file already uses the nested schema-version: 1 layout and sets each setting once." />
+            <Alert type="success" showIcon title="Nothing to migrate" description="The config file already uses the nested schema-version: 1 layout and sets each setting once" />
           ) : (
             <>
               <Typography.Paragraph style={{ margin: 0 }}>
@@ -106,7 +106,7 @@ function ConfigLayoutCard() {
               <Space>
                 <Popconfirm
                   title="Migrate config.yaml to the nested layout?"
-                  description="The file is rewritten in place; the original is kept as a .bak next to it."
+                  description="The file is rewritten in place; the original is kept as a .bak next to it"
                   okText="Migrate"
                   onConfirm={() => apply.mutate()}
                 >
@@ -134,7 +134,7 @@ function SecretsCard() {
       {cfg.isLoading ? <Skeleton active paragraph={{ rows: 1 }} /> : null}
       {cfg.data ? (
         plain.length === 0 ? (
-          <Alert type="success" showIcon title="No plain-text secrets" description="Passwords and webhook secrets are empty or secret:// references." />
+          <Alert type="success" showIcon title="No plain-text secrets" description="Passwords and webhook secrets are empty or secret:// references" />
         ) : (
           <Space orientation="vertical" size={8} style={{ width: "100%" }}>
             <Alert

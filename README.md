@@ -6,9 +6,9 @@
 
 Run **Nutanix Cluster Check (NCC)** across many clusters in parallel, keep the results in one place, and work through them in a web dashboard.
 
-[![Version](https://img.shields.io/badge/version-2.3.0-7c3aed)](docs/releases/RELEASE_NOTES_v2.3.0.md)
+[![Version](https://img.shields.io/badge/version-2.4.0-7c3aed)](docs/releases/RELEASE_NOTES_v2.4.0.md)
 [![CI](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/actions/workflows/ci.yml)
-[![Go](https://img.shields.io/badge/go-1.27.3-00ADD8)](go.mod)
+[![Go](https://img.shields.io/badge/go-1.27.4-00ADD8)](go.mod)
 [![Node](https://img.shields.io/badge/node-26.12.1%2B-5FA04E)](frontend/package.json)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -45,7 +45,8 @@ History, alert handling, scheduling, role-based access with SSO, and an API for 
 - [Operating the stack](#operating-the-stack)
 - [Verifying release binaries](#verifying-release-binaries)
 - [Exit codes and output files](#exit-codes-and-output-files)
-- [Upgrading to v2.3.0](#upgrading-to-v230)
+- [Upgrading](#upgrading)
+- [Quality and security review](#quality-and-security-review)
 - [Documentation](#documentation)
 - [Development](#development)
 
@@ -101,7 +102,7 @@ flowchart LR
 | `ncc-orchestrator` | [`cmd/ncc-orchestrator`](cmd/ncc-orchestrator) | Runs NCC on many clusters, writes reports, schedules runs, and manages the API + UI stack (`v2-start`, `v2-status`, …) |
 | `ncc-api-server` | [`cmd/ncc-api-server`](cmd/ncc-api-server) | REST API: runs, reports, alert lifecycle, settings, users, audit log, metrics |
 | `ncc-ui-server` | [`cmd/ncc-ui-server`](cmd/ncc-ui-server), [`frontend/`](frontend) | Serves the React dashboard and proxies `/api` to the API server |
-| `ncc-mcp-server` | [`cmd/ncc-mcp-server`](cmd/ncc-mcp-server) | Optional [Model Context Protocol](docs/MCP_SERVER.md) bridge for AI assistants |
+| `ncc-mcp-server` | [`cmd/ncc-mcp-server`](cmd/ncc-mcp-server) | Optional [Model Context Protocol](docs/MCP_SERVER.md) client: AI tools call the REST API with a PAT (no orchestrator subprocess) |
 
 Each binary runs on its own. Use the CLI alone for batch or cron jobs, or the full stack for the dashboard.
 
@@ -115,6 +116,8 @@ Each binary runs on its own. Use the CLI alone for batch or cron jobs, or the fu
 | Run the dashboard on a VM or laptop | [Full stack with `v2-start`](#2-start-the-full-stack) |
 | Run the dashboard in containers | [Docker Compose](#docker-compose) |
 | Deploy to a cluster | [Kubernetes](#kubernetes) |
+| Let an AI agent deploy and tune it for me | [Deploy with an AI agent](#deploy-with-an-ai-agent) |
+| Connect Cursor / Claude to the API | [MCP import](docs/MCP_SERVER.md#import-in-five-minutes) |
 | Hack on the code | [Build from source](#build-from-source) |
 
 ### 1. Download a release
@@ -122,7 +125,7 @@ Each binary runs on its own. Use the CLI alone for batch or cron jobs, or the fu
 Each [release](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases) has a stack archive per platform (`ncc-v2-stack-<os>-<arch>.tar.gz`, `.zip` on Windows). It contains `bin/` (`ncc-orchestrator`, `ncc-api-server`, `ncc-ui-server`), `frontend-dist/`, and `example_config.yaml` **at the top level**, so extract it into its own folder:
 
 ```bash
-VERSION=v2.3.0
+VERSION=v2.4.0
 BASE=https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download/$VERSION
 curl -LO $BASE/ncc-v2-stack-linux-amd64.tar.gz
 curl -LO $BASE/checksums.txt
@@ -189,11 +192,29 @@ kubectl apply -k k8s/          # runner CronJob + API + UI + NetworkPolicies
 
 Create `ncc-v2-secrets` first with the Prism password, API token, and a `jwt-secret` (`openssl rand -base64 32`); add `backup-key` and `master-key` if you want encrypted backups and an encrypted user store. The kustomize manifests run 1 API and 2 UI replicas; the [Helm chart](helm/ncc-orchestrator/README.md) runs 2 of each. See [`k8s/README.md`](k8s/README.md) for TLS, backups, and rollback.
 
-Published images (Docker Hub): `prajwalnutant/nutanix-ncc-orchestrator`, `prajwalnutant/ncc-api-server`, and `prajwalnutant/ncc-ui-server`, tagged with the version (for example `:2.3.0`).
+Published images (Docker Hub): `prajwalnutant/nutanix-ncc-orchestrator`, `prajwalnutant/ncc-api-server`, and `prajwalnutant/ncc-ui-server`, tagged with the version (for example `:2.4.0`).
+
+### Deploy with an AI agent
+
+Give an AI agent that can run shell commands (Claude Code, Cursor agent mode) this prompt and
+tell it where to deploy: a local machine, a VM, Kubernetes or a public cloud. It asks a few
+questions (or takes the defaults), shows a plan and waits for your go, then installs,
+verifies, hardens and tunes the stack, and troubleshoots it if something fails. It deploys the
+MCP server and connects itself only if you agree.
+
+> Fetch and follow the prompt in `docs/AGENT_PROMPT.md` of
+> <https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator> (the block under "The prompt").
+> Deploy NCC Orchestrator for me on: *<this machine / a VM at … / Kubernetes / AWS, Azure or GCP>*.
+> Ask me your questions first; I accept the defaults unless I say otherwise.
+
+If the agent cannot reach the repository, paste the full prompt from
+[`deploy/README.md`](deploy/README.md#deploy-with-an-ai-agent) or
+[`docs/AGENT_PROMPT.md`](docs/AGENT_PROMPT.md). Passwords stay in environment variables, never in
+the chat. Details and limits: [`docs/AGENT_PROMPT.md`](docs/AGENT_PROMPT.md).
 
 ### Build from source
 
-Requires **Go 1.27.3+** (the `go` directive in [`go.mod`](go.mod)) and **Node.js 26.12.1+** (the first 26.x with the CVE-2026-111497 fix).
+Requires **Go 1.27.4+** (the `go` directive in [`go.mod`](go.mod)) and **Node.js 26.12.1+** (the first 26.x with the CVE-2026-111497 fix).
 
 ```bash
 git clone https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator.git
@@ -257,11 +278,11 @@ Metrics: `new-fails`, `resolved-fails`, `fail-rate`, `clusters-failed`, `regress
 
 The sidebar has three groups.
 
-- **Overview, Findings, Insights, Runs.** Overview shows the latest run at a glance. Findings lists NCC results and, optionally, live Prism Central alerts; filters live in the URL, so **Copy link** shares the exact view. Open an NCC finding to acknowledge, resolve or reopen it and to see its history: how long it has been open, when a run last reported it, and how often it came back. Insights covers trends, regressions, flaky checks, run-to-run diffs, alert aging and the triage queue. Runs starts, follows and cancels runs and keeps their history.
+- **Overview, Findings, Insights, Integrations, Runs.** Overview shows the latest run at a glance. Findings lists NCC results and, optionally, live Prism Central alerts; filters live in the URL, so **Copy link** shares the exact view. Open an NCC finding to acknowledge, resolve or reopen it and to see its history: how long it has been open, when a run last reported it, and how often it came back. Insights covers trends, regressions, flaky checks, run-to-run diffs, alert aging and the triage queue. Integrations has step-by-step guides for connecting ServiceNow, Prometheus & Grafana, Splunk/Elastic, Slack/email/webhooks, AI assistants and scripts, for sign-in with Active Directory / LDAP, OpenID Connect and SAML, and for upgrades without internet access. Runs starts, follows and cancels runs and keeps their history.
 - **Settings:** Clusters & config (form or YAML), Schedule, Notifications, Access (users, sign-in with LDAP/AD, OpenID Connect or SAML, cluster groups, API tokens, HTTPS) and Features.
 - **System:** Status, Health & repair, Updates & backups, Logs, Audit log and Developer (API explorer, saved reports, run files).
 
-Operators see Overview, Findings, Insights, Runs, Schedule, Status, Logs and Audit log. **Ctrl+K / ⌘K** jumps to any page or setting.
+Operators see Overview, Findings, Insights, Integrations, Runs, Schedule, Status, Logs and Audit log. **Ctrl+K / ⌘K** jumps to any page or setting.
 
 Themes: Light, Dark, IT Pro, or match the system. The UI is keyboard friendly and runs under a strict Content Security Policy (`script-src 'self'`). An admin can turn optional parts off (Insights, Prism Central alerts, run comparison, flaky checks, SLO, NCC log index and more) in **Settings → Features**.
 
@@ -269,11 +290,11 @@ Themes: Light, Dark, IT Pro, or match the system. The UI is keyboard friendly an
 
 ## Alerts and integrations
 
-**NCC alert lifecycle.** Each NCC finding becomes an alert instance with a server-generated UUIDv4. Acknowledge, resolve, and reopen actions, plus run-driven events (detected, no longer reported, severity changed, came back), are kept in an append-only history. If a resolved finding is detected again, the old instance is closed and a new one opens, linked to it. The store is `.ncc-api-alert-lifecycle.json` in the install folder — outside `outputfiles/`, so report retention never deletes it — and is included in `v2-backup`. `outputfiles/ncc-alert-dispositions.json` is kept only as a mirror for rolling back to v2.2.0.
+**NCC finding lifecycle.** Each NCC finding becomes an instance with a server-generated UUIDv4. Acknowledge, resolve, and reopen actions, plus run-driven events (detected, no longer reported, severity changed, came back), are kept in an append-only history. If a resolved finding is detected again, the old instance is closed and a new one opens, linked to it. The store is `.ncc-api-alert-lifecycle.json` in the install folder — outside `outputfiles/`, so report retention never deletes it — and is included in `v2-backup`. `outputfiles/ncc-alert-dispositions.json` is kept only as a mirror for rolling back to v2.2.0.
 
 **Prism Central alerts.** Configure `pcs` or `prism-central-url` and pick **PC · Beta** on the dashboard. Alerts are fetched on demand, cached briefly (`pc-alerts-cache-ttl`, default `5m`), and keep their own status in Prism Central.
 
-**Third-party tools.** ServiceNow, SIEMs, and scripts can poll `GET /api/v1/alerts/ncc` and the incremental `GET /api/v1/alerts/ncc/events` feed with a viewer [personal access token](#http-api), and write back with `POST /api/v1/alerts/ncc/{id}/resolve`. The OpenAPI spec includes typed schemas for these endpoints. Step-by-step guide, field mappings, and examples: [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/third-party-alert-integrations.md). Prometheus setup: [`Prometheus.md`](docs/PROMETHEUS.md).
+**Third-party tools.** ServiceNow, SIEMs, and scripts can poll `GET /api/v1/alerts/ncc` and the incremental `GET /api/v1/alerts/ncc/events` feed with a viewer [personal access token](#http-api), and write back with `POST /api/v1/alerts/ncc/{id}/resolve`. The OpenAPI spec includes typed schemas for these endpoints. In the app, **Integrations** walks through each setup. Full reference, field mappings, and examples: [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/third-party-alert-integrations.md). Prometheus setup: [`docs/PROMETHEUS.md`](docs/PROMETHEUS.md).
 
 ---
 
@@ -289,8 +310,8 @@ The full route list is at `GET /api/v1/meta/routes`, the OpenAPI 3 spec at `GET 
 | `/api/v1/runs/active` | GET, DELETE | Current run; `DELETE` cancels it |
 | `/api/v1/jobs/{id}` | GET, DELETE | Poll or cancel a long-running job with phase, progress, and typed errors |
 | `/api/v1/runs/preflight` | POST | Preflight check with machine-readable remediation codes |
-| `/api/v1/report/data`, `/report/trends` | GET | Report data (paged with `limit`/`offset`) and trends |
-| `/api/v1/alerts/ncc` | GET | NCC alert instances; filter by `state`, `detection`, `cluster`, `check`, `updated_since`; cursor paging |
+| `/api/v1/report/data`, `/report/trends` | GET | Report data (paged with `limit`/`offset`; `cache` gives the report cache state) and trends |
+| `/api/v1/alerts/ncc` | GET | NCC finding instances; filter by `state`, `detection`, `cluster`, `check`, `updated_since`; cursor paging |
 | `/api/v1/alerts/ncc/events` | GET | Append-only lifecycle events; pass `next_cursor` back to get only new ones |
 | `/api/v1/alerts/ncc/{id}` | GET | One alert with its full history and related instances |
 | `/api/v1/alerts/ncc/{id}/{action}` | POST | `acknowledge`, `resolve`, or `reopen` (operator+) |
@@ -352,7 +373,7 @@ security model.
 | Audit | Every change is audited; rotated logs are kept (`--audit-log-keep`, default 10) and can be forwarded |
 | Supply chain | `govulncheck`, `npm audit --omit=dev`, golangci-lint, CodeQL, and Trivy in CI; SHA-256 checksums, CycloneDX SBOMs, and SLSA provenance attestations for releases |
 
-Details: [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md) and the [October 2026 security assessment](docs/security/security-assessment-2026-10.md).
+Details: [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md) and the [security assessment](docs/audit/security-assessment.md). To report a vulnerability, see [`.github/SECURITY.md`](.github/SECURITY.md).
 
 ---
 
@@ -365,13 +386,14 @@ Details: [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md) and the [Oct
 | Restart the stack | `ncc-orchestrator v2-restart` |
 | Start at boot (systemd, Windows Task Scheduler, or launchd) | `ncc-orchestrator v2-install-service` (`--print-only` to preview) |
 | Back up / restore config, users, tokens, and state | `ncc-orchestrator v2-backup` / `v2-restore` |
-| Update to the latest release | `ncc-orchestrator update --check`, then `update` (or **System → Updates & backups**) |
+| Update to the latest release | **System → Updates & backups**, or `ncc-orchestrator upgrade --plan`, then `upgrade` (from 2.3.x: `update --check`, then `update`) |
+| Follow or undo an upgrade | `ncc-orchestrator upgrade --status`, `upgrade --rollback` (24 hours) |
 | Recover a lost password | `ncc-orchestrator v2-reset-password --user admin` |
 | Shell completion | `ncc-orchestrator completion bash\|zsh\|fish\|powershell` |
 
 **Self-healing.** `v2-start --detach --self-heal` (or the boot-time service) restarts a crashed or hung API/UI process using each server's built-in `--health-check` probe, with exponential back-off and a restart budget per window (`--self-heal-max-restarts`, `--self-heal-window`, `--self-heal-probe-interval`, `--self-heal-unhealthy-threshold`).
 
-**Metrics.** The API server exposes Prometheus metrics at `/metrics` (build info, run counters, per-cluster health and severity counts from the latest run, rate-limit and alert-store gauges). It needs the API token unless you start the API with `--metrics-public`. See [`Prometheus.md`](docs/PROMETHEUS.md) and the Grafana dashboard in [`deploy/grafana/`](deploy/grafana/).
+**Metrics.** The API server exposes Prometheus metrics at `/metrics` (build info, run counters, per-cluster health and severity counts from the latest run, rate-limit and alert-store gauges). It needs the API token unless you start the API with `--metrics-public`. See [`docs/PROMETHEUS.md`](docs/PROMETHEUS.md) and the Grafana dashboard in [`deploy/grafana/`](deploy/grafana/).
 
 **Running one component.** `ncc-api-server` and `ncc-ui-server` also run on their own (for example the API behind your own ingress with `--cors-origin`, or the UI against a remote API with `--backend-url`). Started from a stack's `bin/` folder, they find the stack's paths automatically and print a `[stack-aware]` line listing what they resolved. Run any binary with `-h` for its flags.
 
@@ -379,7 +401,7 @@ Details: [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md) and the [Oct
 
 ## Verifying release binaries
 
-Release binaries are not yet code-signed, so macOS and Windows may warn on first launch.
+From 2.4.0 on, `checksums.txt` is signed (Ed25519) and Linux binaries and stack archives have GPG signatures. Windows and macOS programs are not code-signed yet, so those systems may warn on first launch.
 
 1. **Check the hash** against `checksums.txt` from the same release; stop if it does not match.
    ```bash
@@ -391,7 +413,7 @@ Release binaries are not yet code-signed, so macOS and Windows may warn on first
    ```
 2. **Clear the OS warning** for that file only:
    macOS `xattr -dr com.apple.quarantine <folder>` · Windows `Get-ChildItem -Recurse <folder> | Unblock-File` · Linux `chmod +x bin/*`
-3. **Confirm provenance:** `ncc-orchestrator verify` prints the version, git revision, and the SHA-256 of the running executable. With the GitHub CLI, `gh attestation verify <file> --owner lTSPV75BRO` checks the SLSA build-provenance attestation.
+3. **Confirm provenance:** `ncc-orchestrator verify` prints the version, git revision, and the SHA-256 of the running executable; `verify --online --require-signature` also checks the signed checksums. With the GitHub CLI, `gh attestation verify <file> --owner lTSPV75BRO` checks the SLSA build-provenance attestation.
 
 More (GPG, Windows file properties, antivirus quarantine): [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md).
 
@@ -417,13 +439,31 @@ Written to `outputfiles/`:
 - `<cluster>.html` / `.csv` / `.json` / `.md` / `.sarif` — per-cluster reports
 - `feature-flags.json` — views an admin turned off
 
-Raw NCC output goes to `nccfiles/`, runner logs to `logs/ncc-runner.log`, and the NCC alert history to `.ncc-api-alert-lifecycle.json` in the install folder.
+Raw NCC output goes to `nccfiles/`, runner logs to `logs/ncc-runner.log`, and the NCC finding history to `.ncc-api-alert-lifecycle.json` in the install folder.
 
 ---
 
-## Upgrading to v2.3.0
+## Upgrading
 
-Before upgrading, configure a backup key: backups are now **encrypted by default**, and the in-app updater refuses to run without a server-side key (it takes an encrypted backup first). Set `NCC_BACKUP_KEY_FILE` (recommended), `NCC_BACKUP_KEY`, or `NCC_BACKUP_PASSPHRASE` on the API server — in Kubernetes, add `backup-key` to `ncc-v2-secrets` — or set `NCC_BACKUP_ENCRYPTION=optional` to keep plaintext backups. Existing acknowledge/resolve marks are imported automatically. Other changes and rollback notes: [`RELEASE_NOTES_v2.3.0.md`](docs/releases/RELEASE_NOTES_v2.3.0.md).
+**To v2.4.0.** Configure a backup key first: backups are **encrypted by default**, and the in-app updater refuses to run without a server-side key because it takes an encrypted backup before it changes anything. Set `NCC_BACKUP_KEY_FILE` (recommended), `NCC_BACKUP_KEY` or `NCC_BACKUP_PASSPHRASE` on the API server (on Kubernetes add `backup-key` to the credentials Secret), or set `NCC_BACKUP_ENCRYPTION=optional` to keep plaintext backups. Existing acknowledge and resolve marks are imported automatically.
+
+- **Helm:** the chart now passes the full set of path flags (the API pod could not start without them), the runner CronJob runs from `/data`, and the PVC takes `persistence.accessMode`, `persistence.storageClass` and `persistence.size`. With Helm 4, `helm upgrade` can report a server-side-apply conflict after someone edited the CronJob schedule in the UI; pass `--force-conflicts`. See [`helm/ncc-orchestrator/README.md`](helm/ncc-orchestrator/README.md).
+- **Windows:** `setup-ncc.ps1` now refuses to run over an existing install (set `NCC_FORCE_CLEAN=1` to delete it on purpose) and keeps the Prism password in `secrets.json`. To upgrade, use **System → Updates & backups** or `ncc-orchestrator update`.
+- **Linux, macOS, Windows:** about two minutes after 2.4.0 starts it installs the [update helper](docs/FEATURES_AND_CONFIG_FLAGS.md) and brings the service up to its current definition (Linux: systemd sandbox and log maintenance timer; Windows: the watchdog task), with one short restart. Turn this off with `NCC_UPGRADE_ADOPT=0`.
+
+Other changes and rollback notes: [`RELEASE_NOTES_v2.4.0.md`](docs/releases/RELEASE_NOTES_v2.4.0.md).
+
+**Between v2 releases.** Use **System → Updates & backups** or `ncc-orchestrator upgrade`. It takes a backup, installs the verified release (programs, web UI, service definitions), restarts the services and puts everything back if they do not come up. `ncc-orchestrator upgrade --bundle <archive>` works without internet access. `ncc-orchestrator update` replaces the programs only, and is the command to use up to 2.3.x. Read the release notes for the version you are moving to.
+
+**From v1.** `ncc-orchestrator update` stays on the v1.x track unless you pass `--allow-major-upgrade`, and it replaces only the command-line binary. The API and UI are separate programs: install them from a stack archive (see [Quick start](#quick-start)) or run `ncc-orchestrator v2-bootstrap`. Your configuration file keeps working; run `validate-config` and `preflight-check` before the first run, and keep the old binary and a copy of the config until the new setup has produced a good run.
+
+---
+
+## Quality and security review
+
+v2.4.0 went through a full review of the code, dependencies, deployment files, installers and web UI. The Go and frontend test suites pass (Go under the race detector), `gosec`, `golangci-lint`, `govulncheck`, `npm audit` and a full-history `gitleaks` scan are clean apart from one reviewed false positive, and the built container images scan clean. The review also installed the Helm chart on Kubernetes, ran the Windows installer end to end and scanned every UI page for accessibility in a real browser; the defects that turned up were fixed and are covered by tests.
+
+Results, measurements and what is still open: [`docs/audit/`](docs/audit/README.md) ([findings register](docs/audit/findings.md), [security assessment](docs/audit/security-assessment.md)). Planned work: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ---
 
@@ -431,7 +471,8 @@ Before upgrading, configure a backup key: backups are now **encrypted by default
 
 | Topic | Document |
 | --- | --- |
-| **Setup guides:** clusters, sign-in (AD/LDAP, OpenID Connect, SAML), HTTPS, notifications (email, Slack, webhooks, Teams), schedules and backups, integrations | [`docs/setup/`](docs/setup/README.md) |
+| **All documentation, by audience** | [`docs/README.md`](docs/README.md) |
+| **Setup guides:** clusters, sign-in (AD/LDAP, OpenID Connect, SAML), HTTPS, notifications (email, Slack, webhooks, Teams), schedules and backups, upgrades without internet access, integrations | [`docs/setup/`](docs/setup/README.md) |
 | Every config key, environment variable, and flag | [`docs/FEATURES_AND_CONFIG_FLAGS.md`](docs/FEATURES_AND_CONFIG_FLAGS.md) |
 | Build everything on a clean machine | [`docs/BUILD_FROM_SCRATCH.md`](docs/BUILD_FROM_SCRATCH.md) |
 | Architecture and engineering handover | [`docs/ARCHITECTURE_AND_HANDOVER.md`](docs/ARCHITECTURE_AND_HANDOVER.md) |
@@ -440,15 +481,17 @@ Before upgrading, configure a backup key: backups are now **encrypted by default
 | AI assistants, MCP, schemas, jobs, and LLM evaluation | [`docs/AI_INTEGRATION.md`](docs/AI_INTEGRATION.md) |
 | Prometheus | [`docs/PROMETHEUS.md`](docs/PROMETHEUS.md) |
 | Security, trust, and binary verification | [`docs/SECURITY_AND_TRUST.md`](docs/SECURITY_AND_TRUST.md), [`docs/RELEASE_CHECKSUMS.md`](docs/RELEASE_CHECKSUMS.md) |
-| Security assessment (October 2026) | [`docs/security/security-assessment-2026-10.md`](docs/security/security-assessment-2026-10.md) |
+| Quality and security review (findings, results, open items) | [`docs/audit/`](docs/audit/README.md) |
+| Roadmap | [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 | Compliance: NIST CSF 2.0 profile, SSDF (SP 800-218), risk register, incident response | [`docs/compliance/`](docs/compliance/README.md) |
 | Reporting a vulnerability | [`.github/SECURITY.md`](.github/SECURITY.md) |
 | Kubernetes and Helm | [`k8s/README.md`](k8s/README.md), [`helm/ncc-orchestrator/README.md`](helm/ncc-orchestrator/README.md) |
 | VM provisioning (cloud-init, Windows Sysprep) | [`deploy/README.md`](deploy/README.md) |
 | MCP server for AI assistants | [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md) |
-| Migrating from v1 / from v2.0.2 | [`docs/MIGRATION_v1_TO_v2.md`](docs/MIGRATION_v1_TO_v2.md), [`docs/MIGRATION_v2.0.2_TO_v2.1.0.md`](docs/MIGRATION_v2.0.2_TO_v2.1.0.md) |
+| API and UI architecture | [`docs/API_AND_UI_ARCHITECTURE.md`](docs/API_AND_UI_ARCHITECTURE.md) |
+| Web UI design system and accessibility rules | [`docs/ui/DESIGN_SYSTEM.md`](docs/ui/DESIGN_SYSTEM.md) |
 | Website and live demo (how they are built and deployed) | [Website](https://ltspv75bro.github.io/Nutanix-ncc-orchestrator/), [live demo](https://ltspv75bro.github.io/Nutanix-ncc-orchestrator/demo/), [`site/README.md`](site/README.md) |
-| Release notes and history | [`docs/releases/`](docs/releases) (latest: [v2.3.0](docs/releases/RELEASE_NOTES_v2.3.0.md)), [`CHANGELOG.md`](CHANGELOG.md) |
+| Release notes and history | [`docs/releases/`](docs/releases) (latest: [v2.4.0](docs/releases/RELEASE_NOTES_v2.4.0.md)), [`CHANGELOG.md`](CHANGELOG.md) |
 
 ---
 

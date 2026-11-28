@@ -1,0 +1,112 @@
+# Optional checks around an upgrade with `kubectl apply -k k8s/` (the same ones
+# the Helm chart runs as hooks). Not part of the kustomization. Two Jobs, picked
+# with a label; set the image tag and NCC_IMAGE_TAG to the NEW version first.
+#
+# 1. BEFORE applying the new manifests: version skew, write permission on the
+#    data volume, free space, and a verified backup taken through the API.
+#
+#      kubectl -n ncc-orchestrator-v2 delete job ncc-v2-upgrade-preflight --ignore-not-found
+#      kubectl apply -f k8s/upgrade-check-job.yaml -l ncc/upgrade-step=preflight
+#      kubectl -n ncc-orchestrator-v2 wait --for=condition=Complete job/ncc-v2-upgrade-preflight --timeout=660s
+#
+#    When it does not complete, nothing was changed: read why with
+#    `kubectl -n ncc-orchestrator-v2 logs job/ncc-v2-upgrade-preflight`. Edit the
+#    args to change a limit (--min-free 1Gi, --min-from X, --backup=false,
+#    --allow-downgrade=true).
+#
+# 2. AFTER applying: the API, UI and runner image all answer with the new
+#    version, five times in a row.
+#
+#      kubectl -n ncc-orchestrator-v2 delete job ncc-v2-upgrade-check --ignore-not-found
+#      kubectl apply -f k8s/upgrade-check-job.yaml -l ncc/upgrade-step=verify
+#      kubectl -n ncc-orchestrator-v2 wait --for=condition=Complete job/ncc-v2-upgrade-check --timeout=330s
+#
+# When it does not complete: kubectl -n ncc-orchestrator-v2 logs job/ncc-v2-upgrade-check,
+# and go back with `kubectl -n ncc-orchestrator-v2 rollout undo deployment/ncc-v2-api`
+# (and deployment/ncc-v2-ui).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ncc-v2-upgrade-preflight
+  namespace: ncc-orchestrator-v2
+  labels:
+    ncc/upgrade-step: preflight
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: { app: ncc-orchestrator-v2, component: upgrade-check }
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      # The API's user and group, on the node the API runs on (the volume may
+      # be ReadWriteOnce).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels: { app: ncc-orchestrator-v2, component: api }
+      containers:
+        - name: check
+          image: docker.io/prajwalnutant/nutanix-ncc-orchestrator:2.4.0
+          command: ["/usr/local/bin/ncc-orchestrator"]
+          args: ["upgrade-preflight", "--api", "http://ncc-v2-api:8081", "--data-dir", "/data", "--min-free", "512Mi"]
+          env:
+            - name: NCC_API_TOKEN
+              valueFrom:
+                secretKeyRef: { name: ncc-v2-secrets, key: api-token }
+          terminationMessagePolicy: FallbackToLogsOnError
+          resources: { requests: { cpu: 10m, memory: 32Mi } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: ncc-v2-data }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ncc-v2-upgrade-check
+  namespace: ncc-orchestrator-v2
+  labels:
+    ncc/upgrade-step: verify
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: { app: ncc-orchestrator-v2, component: upgrade-check }
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: check
+          image: docker.io/prajwalnutant/nutanix-ncc-orchestrator:2.4.0
+          command: ["/usr/local/bin/ncc-orchestrator"]
+          args: ["upgrade-verify", "--api", "http://ncc-v2-api:8081", "--ui", "https://ncc-v2-ui", "--expect", "$(NCC_IMAGE_TAG)", "--timeout", "5m"]
+          env:
+            - name: NCC_IMAGE_TAG
+              value: "2.4.0"
+          resources: { requests: { cpu: 10m, memory: 32Mi } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }

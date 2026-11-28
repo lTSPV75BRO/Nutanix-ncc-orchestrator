@@ -4,6 +4,11 @@ NCC Orchestrator has a REST API, a Prometheus endpoint and an event feed, so
 other tools can read results and act on findings. This page gets each one
 started and links to the detailed guide.
 
+The **Integrations** page in the app has the same guides step by step, plus
+guides for [sign-in](SIGN_IN.md) (Active Directory / LDAP, OpenID Connect,
+SAML, cluster access by team) and for
+[upgrades without internet access](OFFLINE_UPGRADES.md).
+
 - [API tokens](#api-tokens) (needed by everything else)
 - [ServiceNow and other ticketing tools](#servicenow-and-other-ticketing-tools)
 - [Prometheus and Grafana](#prometheus-and-grafana)
@@ -131,11 +136,22 @@ plain-text Prism password into a reference for you. Reference: [`FEATURES_AND_CO
 
 ## AI assistants (MCP)
 
+`ncc-mcp-server` is optional and is not in the stack download: build it once
+(Go 1.27.4 or newer, `go build -trimpath -o ncc-mcp-server ./cmd/ncc-mcp-server`)
+on the computer that runs the assistant. The dashboard has a step-by-step guide at
+**Integrations, AI assistants (MCP)** that covers the account, token, build and
+assistant configuration. Builds before 2.4.0 had no sign-in and must not be used.
+
 `ncc-mcp-server` lets assistants such as Claude Desktop or Cursor validate
 configs, run preflight checks and NCC runs, and read summaries through the
-Model Context Protocol. Destructive tools are marked so the assistant asks
-first. Setup and the tool list: [`MCP_SERVER.md`](../MCP_SERVER.md) and
-[`AI_INTEGRATION.md`](../AI_INTEGRATION.md).
+Model Context Protocol. It is an authenticated client of the REST API (not a
+local orchestrator wrapper). It requires a personal access token in
+`NCC_MCP_TOKEN` (see [API tokens](#api-tokens)); tool calls and resource reads
+are refused without it. Destructive tools are marked so the assistant asks
+first, and host-only actions are refused. API audit logs tag MCP traffic as
+`channel=mcp` (PAT id/name and failure remediation when applicable). Import in five minutes, example host configs, and the agent
+skill: [`MCP_SERVER.md`](../MCP_SERVER.md#import-in-five-minutes),
+[`examples/mcp/`](../../examples/mcp/), [`skills/ncc-mcp/`](../../skills/ncc-mcp/).
 
 ## Chat tools
 

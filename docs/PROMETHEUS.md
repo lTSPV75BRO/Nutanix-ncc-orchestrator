@@ -60,14 +60,54 @@ Prometheus's counter semantics):
 | `ncc_update_applied_total` / `ncc_update_failed_total` | counter | In-app software-update outcomes |
 | `ncc_ratelimit_allowed_total` / `ncc_ratelimit_blocked_total` | counter | Rate-limiter decisions (when enabled) |
 
-#### NCC alert lifecycle metrics (v2.2.1+)
+#### Data freshness metrics
+
+Computed from the run history, the same data as the Overview's data age and
+stopped-schedule banner (`GET /api/v1/freshness`). Refreshed at most once a
+minute. Like the other per-cluster series, these cover every cluster: `/metrics`
+is not limited to a user's cluster groups.
 
 | Metric | Type | Description |
 | --- | --- | --- |
-| `ncc_alerts_active{state,detection,severity}` | gauge | Active NCC alert instances by operator state (`open`/`acknowledged`/`resolved`), detection (`detected`/`not_detected`/`unknown`) and severity |
+| `ncc_cluster_last_success_timestamp_seconds{cluster}` | gauge | Unix time of the newest run that returned data for the cluster; `0` when no run in the history did. Clusters not checked for 30 days drop off |
+| `ncc_schedule_overdue{schedule,environment}` | gauge | `1` when an active schedule has gone two intervals without a run, else `0`. `schedule` is `main` for the `config.yaml` schedule, or the environment schedule's ID |
+
+Example alerts:
+
+```yaml
+- alert: NCCClusterDataStale
+  expr: time() - ncc_cluster_last_success_timestamp_seconds > 86400
+  for: 15m
+  annotations:
+    summary: "No NCC data for {{ $labels.cluster }} in over a day"
+- alert: NCCScheduleOverdue
+  expr: ncc_schedule_overdue == 1
+  for: 15m
+  annotations:
+    summary: "NCC schedule {{ $labels.schedule }} has stopped running"
+```
+
+#### NCC finding lifecycle metrics (v2.2.1+)
+
+| Metric | Type | Description |
+| --- | --- | --- |
+| `ncc_alerts_active{state,detection,severity}` | gauge | Active NCC finding instances by operator state (`open`/`acknowledged`/`resolved`), detection (`detected`/`not_detected`/`unknown`) and severity |
 | `ncc_alerts_store_up` | gauge | `1` when the alert lifecycle store is readable |
 | `ncc_alerts_last_ingested_run_timestamp_seconds` | gauge | Run timestamp last applied to the lifecycle |
 | `ncc_alerts_events_total` | gauge | Lifecycle events retained in history |
+
+#### Report cache metrics (v2.4.0+)
+
+The api-server keeps the parsed current report in memory and rebuilds the
+NCC log summaries in the background after a run, serving the previous report
+meanwhile. The same state is returned as `cache` by `GET /api/v1/report/data`.
+
+| Metric | Type | Description |
+| --- | --- | --- |
+| `ncc_report_cache_state{state}` | gauge | `1` for the current state, `0` for the others: `cold` (nothing built yet), `warm` (matches the report on disk), `refreshing` (a newer report is being built), `stale` (the report files changed; no rebuild started yet), `failed` (the last rebuild failed; the previous report is served, retried after 30 s) |
+| `ncc_report_cache_age_seconds` | gauge | Seconds since the oldest part of the served report was built (absent while `cold`) |
+
+Example alert: `ncc_report_cache_state{state="failed"} == 1` for 10 minutes.
 
 See [`docs/integrations/third-party-alert-integrations.md`](integrations/third-party-alert-integrations.md#11-prometheus) for scrape authentication with a viewer PAT and example alerting rules.
 
@@ -187,12 +227,16 @@ Use Topology A for runner textfile metrics, and optionally scrape API runtime me
 scrape_configs:
   - job_name: ncc-api-rate-limit
     metrics_path: /api/v1/metrics/rate-limit
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/ncc-viewer-token
     static_configs:
       - targets: ["ncc-api-host:8081"]
 ```
 
 Notes:
 
+- Since 2.4.0 the endpoint needs a viewer token (a personal access token or the static viewer token), sent as `Authorization: Bearer` or `X-API-Token`.
 - Endpoint returns JSON (not Prometheus exposition). Scrape with JSON-capable pipeline/exporter, or keep it for ops automation and dashboards via API polling.
 - Keep standard Prometheus scraping for node_exporter textfile metrics.
 
@@ -205,6 +249,29 @@ Typical pattern:
 - Prometheus scrapes node_exporter target(s).
 
 If v2 API is exposed in-cluster, also collect `/api/v1/metrics/rate-limit` through your API monitoring path.
+
+### Kubernetes alert rules
+
+The Helm chart renders a `PrometheusRule` when `prometheusRule.enabled: true`
+(Prometheus Operator CRDs required). Thresholds come from
+`prometheusRule.staleReportHours` (default 26) and
+`prometheusRule.pvcFreeRatio` (default 0.1).
+
+| Alert | Fires when | Needs |
+| --- | --- | --- |
+| `NCCRunnerJobFailed` | A runner Job (`ncc-orchestrator-*`) has failed pods for 5 minutes. | kube-state-metrics |
+| `NCCRunnerNoRecentSuccess` | The `ncc-orchestrator` CronJob has not succeeded for `staleReportHours`. | kube-state-metrics |
+| `NCCApiUnavailable` | `ncc-v2-api` has no available replica for 5 minutes (critical). | kube-state-metrics |
+| `NCCApiReplicasDegraded` | Fewer available API replicas than requested for 15 minutes. | kube-state-metrics |
+| `NCCDataVolumeFilling` | The data PVC has less than `pvcFreeRatio` free for 30 minutes. | kubelet volume stats |
+| `NCCVersionSkew` | API replicas report different `ncc_build_info` versions for 30 minutes. | API `/metrics` |
+| `NCCBackgroundPanic` | `ncc_api_background_panics_total` increased in the last 15 minutes. | API `/metrics` |
+| `NCCReportStale` | `ncc_alerts_last_ingested_run_timestamp_seconds` is older than `staleReportHours`. | API `/metrics`, alert lifecycle on |
+
+The `ncc_*` rules match on a `namespace` label, which Prometheus adds when it
+discovers the API pods (ServiceMonitor or pod discovery). Without the
+operator, copy the expressions from
+`helm/ncc-orchestrator/templates/prometheusrule.yaml` into a rule file.
 
 ## Prometheus scrape baseline
 

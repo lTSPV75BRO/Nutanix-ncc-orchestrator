@@ -429,10 +429,10 @@ export function SetupHeaderButton() {
         <Button
           className="header-setup-btn"
           icon={<ClockCircleOutlined />}
-          aria-label={`Setup checklist: ${status.required_done} of ${status.required_total} required steps done`}
+          aria-label={`Setup ${status.required_done}/${status.required_total} required steps done`}
           onClick={() => setOpen(true)}
         >
-          <span className="header-setup-label">Setup</span>
+          <span className="header-setup-label">Setup</span>{" "}
           <span className="header-setup-count">
             {status.required_done}/{status.required_total}
           </span>

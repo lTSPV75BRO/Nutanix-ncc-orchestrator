@@ -176,7 +176,7 @@ function ConnectionTab({
             ]}
           />
         </Panel>
-        <Panel title="Run activity" icon={<ThunderboltOutlined />} description="Runs per day over the last 7 days, by outcome.">
+        <Panel title="Run activity" icon={<ThunderboltOutlined />} description="Runs per day over the last 7 days, by outcome">
           <RunActivityChart />
         </Panel>
       </div>

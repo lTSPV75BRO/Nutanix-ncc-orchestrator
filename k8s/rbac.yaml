@@ -1,11 +1,14 @@
-# RBAC for the api-server's Kubernetes Secret user-database store.
+# RBAC for the API server. Keep in step with helm/ncc-orchestrator/templates/rbac.yaml.
 #
-# The api-server reads/creates/patches a single Secret (ncc-v2-users) that
-# holds local accounts (bcrypt hashes), roles, the must-change flag, the SAML
-# SP private key, and the first-run admin password. This grants the *minimum*
-# permissions needed: create at the namespace scope (Kubernetes cannot scope
-# `create` to a resourceName) and get/update/patch limited to that one Secret.
-# It also reads and patches the ncc-v2-runner CronJob for Settings > Schedule.
+# The API server calls the Kubernetes API for two things only, each with its
+# own Role:
+#   - ncc-v2-users-secret: the Secret ncc-v2-users that holds the user
+#     database (local accounts with bcrypt hashes, roles, the must-change
+#     flag, the SAML SP private key and the first-run admin password).
+#   - ncc-v2-runner-cronjob: the runner CronJob ncc-v2-runner, which
+#     Settings > Schedule reads and patches.
+# It never lists, watches or deletes anything, and never touches Jobs, Pods,
+# ConfigMaps or Events. The runner itself gets no API token.
 #
 # Apply before the api-server Deployment:
 #   kubectl apply -f k8s/rbac.yaml
@@ -29,22 +32,18 @@ metadata:
   name: ncc-v2-users-secret
   namespace: ncc-orchestrator-v2
 rules:
-  # `create` cannot be restricted by resourceName, so it is scoped to the
-  # namespace only. The Deployment fixes the name to `ncc-v2-users`.
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "create"]
-  # Settings > Schedule reads and patches the runner CronJob's schedule and
-  # suspend flag; nothing else in batch is touched.
-  - apiGroups: ["batch"]
-    resources: ["cronjobs"]
-    resourceNames: ["ncc-v2-runner"]
-    verbs: ["get", "patch"]
-  # Read/modify limited to the single Secret backing the user database.
+  # Load and save the user database: GET and a JSON merge PATCH on the one
+  # Secret named in --users-db-secret (api-deployment.yaml).
   - apiGroups: [""]
     resources: ["secrets"]
     resourceNames: ["ncc-v2-users"]
-    verbs: ["get", "update", "patch"]
+    verbs: ["get", "patch"]
+  # First start creates that Secret when it is missing. Kubernetes cannot
+  # limit `create` to a name, so this rule is namespace-wide; the API only
+  # ever POSTs the Secret above.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -58,4 +57,33 @@ subjects:
 roleRef:
   kind: Role
   name: ncc-v2-users-secret
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ncc-v2-runner-cronjob
+  namespace: ncc-orchestrator-v2
+rules:
+  # Settings > Schedule reads the runner CronJob and patches its schedule and
+  # suspend flag. The same GET gives the runner image tag for the
+  # version-skew check. Run now does not create Jobs: the API pod runs the
+  # orchestrator itself.
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    resourceNames: ["ncc-v2-runner"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ncc-v2-api-runner-cronjob
+  namespace: ncc-orchestrator-v2
+subjects:
+  - kind: ServiceAccount
+    name: ncc-v2-api
+    namespace: ncc-orchestrator-v2
+roleRef:
+  kind: Role
+  name: ncc-v2-runner-cronjob
   apiGroup: rbac.authorization.k8s.io

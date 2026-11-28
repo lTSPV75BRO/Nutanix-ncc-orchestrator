@@ -43,7 +43,7 @@ func TestNewFeatureFlagsDefaultOnAndRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	s := &apiServer{repoRoot: dir}
 	got := s.loadFeatureFlags()
-	if !got.AlertHandling || !got.SelfHeal || !got.UpdateChecks || !got.IntroTitle {
+	if !got.AlertHandling || !got.SelfHeal || !got.UpdateChecks || got.IntroTitle {
 		t.Fatalf("defaults = %#v", got)
 	}
 
@@ -143,11 +143,11 @@ func TestHealthTellsSignInPageAboutIntroTitle(t *testing.T) {
 		}
 		return body.Data["intro_title"]
 	}
-	if read() != true {
-		t.Fatal("intro_title should default to true")
-	}
-	disableFeatures(t, s, func(f *featureFlags) { f.IntroTitle = false })
 	if read() != false {
+		t.Fatal("intro_title should default to false")
+	}
+	disableFeatures(t, s, func(f *featureFlags) { f.IntroTitle = true })
+	if read() != true {
 		t.Fatal("intro_title should follow the saved switch")
 	}
 }

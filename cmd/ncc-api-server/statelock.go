@@ -30,6 +30,9 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if err != nil {
 		return err
 	}
+	if perm&0o077 == 0 {
+		restrictNewSecret(tmp)
+	}
 	if _, err := f.Write(data); err != nil {
 		_ = f.Close()
 		_ = os.Remove(tmp)
@@ -44,7 +47,11 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		_ = os.Remove(tmp)
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	rename := os.Rename
+	if perm&0o077 == 0 {
+		rename = renameSecretFile
+	}
+	if err := rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}

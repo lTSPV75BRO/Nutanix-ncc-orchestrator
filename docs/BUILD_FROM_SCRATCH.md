@@ -45,7 +45,7 @@ Supporting assets:
 
 Install these first:
 
-- Go 1.27.3+ (use the version in `go.mod`)
+- Go 1.27.4+ (use the version in `go.mod`)
 - Node.js 26+ + npm (for frontend build/tests; `frontend/package.json` engines)
 - Git
 - `kubectl` (for Kubernetes deployment flow)
@@ -65,7 +65,7 @@ Environment/access prerequisites:
 ```bash
 git clone https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator.git
 cd Nutanix-ncc-orchestrator
-git checkout v2.3.0
+git checkout v2.4.0
 ```
 
 Sanity-check important paths:
@@ -264,11 +264,59 @@ npm run build
 cd ..
 ```
 
-Optional race tests:
+Race detector (needs a C compiler: gcc or MinGW on Windows):
 
 ```bash
-go test -race ./...
+CGO_ENABLED=1 go test -race -count=1 ./...
 ```
+
+Static checks the CI also runs:
+
+```bash
+golangci-lint run ./...
+gosec -quiet -severity high -confidence high -exclude G703 -exclude-dir frontend ./...
+govulncheck ./...
+cd frontend && npm audit
+```
+
+Deployment files:
+
+```bash
+helm lint helm/ncc-orchestrator
+helm template t helm/ncc-orchestrator | kubeconform -strict -summary -ignore-missing-schemas
+kubectl kustomize k8s
+```
+
+Accessibility: the frontend tests include axe-core checks (`*.a11y.test.tsx`).
+They cannot measure colour contrast because jsdom has no layout. To check
+contrast, serve the production build (`npm run build`, then `ncc-ui-server --dir
+frontend/dist`), open it in a browser, inject `node_modules/axe-core/axe.min.js`
+and run `axe.run(document)` on each route in each theme.
+
+### Test an installer against your own build
+
+The installers download a stack archive and a `checksums.txt` from a release URL.
+To test one without publishing a release, build the archive yourself and point
+`NCC_RELEASE_BASE_URL` at a local web server:
+
+1. Build `ncc-orchestrator`, `ncc-api-server` and `ncc-ui-server` for the target
+   OS with `-ldflags "-X main.Version=<version>"`, and the frontend
+   (`npm run build`).
+2. Lay out `bin/` (the three executables), `frontend-dist/` (the build output)
+   and `example_config.yaml`, and zip (Windows) or tar.gz (Linux) them as
+   `ncc-v2-stack-<os>-<arch>.<ext>`. `scripts/binaryGO.txt` builds the real
+   archives.
+3. Write `checksums.txt` with one line, `<sha256>  <archive name>`, and put both
+   files in a folder `<version>/`.
+4. Serve the parent folder (`python -m http.server 18099`) and run the installer
+   with `NCC_VERSION=<version> NCC_RELEASE_BASE_URL=http://127.0.0.1:18099
+   NCC_INSTALL_DIR=<a scratch folder> NCC_API_PORT=<free port>
+   NCC_UI_PORT=<free port>`.
+5. Remove what it created afterwards: the scheduled tasks or systemd units, the
+   firewall rules, and the install folder.
+
+Run installers only on a machine or VM you can reset. The Windows installer
+registers tasks that run as SYSTEM and needs an elevated prompt.
 
 ---
 
@@ -348,7 +396,6 @@ See `k8s/README.md` for the full operations runbook.
 
 - `README.md` (overall quickstart and feature map)
 - `docs/FEATURES_AND_CONFIG_FLAGS.md` (full flag/config reference)
-- `docs/V2_BACKEND_FRONTEND_MVP.md` (API/UI architecture details)
-- `docs/MIGRATION_v1_TO_v2.md` (v1 to v2 cutover)
+- `docs/API_AND_UI_ARCHITECTURE.md` (API and UI architecture)
 - `k8s/README.md` (Kubernetes deployment + operations)
 - `docs/PROMETHEUS.md` (monitoring and alerting)

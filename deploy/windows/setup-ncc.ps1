@@ -1,48 +1,110 @@
 # Run elevated during Sysprep specialize or manually as Administrator.
 $ErrorActionPreference = "Stop"
 
-$NccVersion = if ($env:NCC_VERSION) { $env:NCC_VERSION } else { "2.3.0" }
+$NccVersion = if ($env:NCC_VERSION) { $env:NCC_VERSION } else { "2.4.0" }
 $ReleaseBaseUrl = if ($env:NCC_RELEASE_BASE_URL) {
     $env:NCC_RELEASE_BASE_URL.TrimEnd("/")
 } else {
     "https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/download"
 }
 $InstallDir = if ($env:NCC_INSTALL_DIR) { $env:NCC_INSTALL_DIR } else { "C:\ProgramData\NCC\v2" }
-$ConfigPath = if ($env:NCC_CONFIG) { $env:NCC_CONFIG } else { "$InstallDir\config.yaml" }
+# The service looks for its configuration here.
+$ConfigPath = "$InstallDir\config.yaml"
 $ApiPort = if ($env:NCC_API_PORT) { $env:NCC_API_PORT } else { "8081" }
 $UiPort = if ($env:NCC_UI_PORT) { $env:NCC_UI_PORT } else { "8080" }
 $Clusters = if ($env:NCC_CLUSTERS) { $env:NCC_CLUSTERS } else { "" }
 $Pcs = if ($env:NCC_PCS) { $env:NCC_PCS } else { "" }
 $Username = if ($env:NCC_USERNAME) { $env:NCC_USERNAME } else { "admin" }
+$Password = if ($env:NCC_PASSWORD) { $env:NCC_PASSWORD } else { "CHANGE_ME" }
 
 $arch = if ([Environment]::Is64BitOperatingSystem) { "amd64" } else { throw "64-bit Windows is required" }
 $archive = "ncc-v2-stack-windows-$arch.zip"
-$baseUrl = "$ReleaseBaseUrl/$NccVersion"
+$NccVersion = $NccVersion -replace '^v', ''
+# The checksum comes from the same place as the archive, so it only proves the
+# download is complete. The build attestation proves the archive came from this
+# project's release workflow. "auto" checks it when the GitHub CLI is installed
+# and signed in (or GH_TOKEN is set); "require" fails without it; "off" skips it.
+$Attest = if ($env:NCC_VERIFY_ATTESTATION) { $env:NCC_VERIFY_ATTESTATION } else { "auto" }
+if ($Attest -notin @("auto", "require", "off")) { throw "NCC_VERIFY_ATTESTATION must be auto, require or off" }
+$ReleaseRepo = if ($env:NCC_RELEASE_REPO) { $env:NCC_RELEASE_REPO } else { "lTSPV75BRO/Nutanix-ncc-orchestrator" }
+
+# Runs gh without its stderr turning into a terminating error, and returns the
+# exit code.
+function Invoke-Gh {
+    param([string[]]$Arguments)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try { & gh @Arguments 2>&1 | ForEach-Object { Write-Host $_ } } finally { $ErrorActionPreference = $previous }
+    return $LASTEXITCODE
+}
+
 $tempDir = Join-Path $env:TEMP ("ncc-" + [Guid]::NewGuid().ToString("N"))
 $archivePath = Join-Path $tempDir $archive
 $checksumPath = Join-Path $tempDir "checksums.txt"
 
 New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 try {
-    Invoke-WebRequest -Uri "$baseUrl/$archive" -OutFile $archivePath
-    Invoke-WebRequest -Uri "$baseUrl/checksums.txt" -OutFile $checksumPath
+    # GitHub release tags start with "v" (v2.4.0). A mirror may use either form,
+    # so try the tag first and the bare version next.
+    $baseUrl = $null
+    foreach ($tag in @("v$NccVersion", $NccVersion)) {
+        try {
+            Invoke-WebRequest -Uri "$ReleaseBaseUrl/$tag/checksums.txt" -OutFile $checksumPath -UseBasicParsing
+            $baseUrl = "$ReleaseBaseUrl/$tag"
+            break
+        } catch {
+            Write-Host "No release at $ReleaseBaseUrl/$tag ($($_.Exception.Message))"
+        }
+    }
+    if (!$baseUrl) { throw "No release $NccVersion found under $ReleaseBaseUrl" }
+    Invoke-WebRequest -Uri "$baseUrl/$archive" -OutFile $archivePath -UseBasicParsing
 
-    $expected = (Get-Content $checksumPath |
+    $line = Get-Content $checksumPath |
         Where-Object { $_ -match "\s$([regex]::Escape($archive))$" } |
-        Select-Object -First 1).Split(" ")[0]
+        Select-Object -First 1
+    $expected = if ($line) { $line.Split(" ")[0] } else { "" }
     $actual = (Get-FileHash $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
     if (!$expected -or $expected.ToLowerInvariant() -ne $actual) {
         throw "Release checksum verification failed for $archive"
     }
 
-    if (Test-Path $InstallDir) { Remove-Item $InstallDir -Recurse -Force }
+    if ($Attest -ne "off") {
+        $haveGh = [bool](Get-Command gh -ErrorAction SilentlyContinue)
+        if ($haveGh -and (Invoke-Gh @("auth", "status")) -eq 0) {
+            if ((Invoke-Gh @("attestation", "verify", $archivePath, "--repo", $ReleaseRepo)) -ne 0) {
+                throw "Build attestation verification failed for $archive. Set NCC_VERIFY_ATTESTATION=off only if you trust the source."
+            }
+        } elseif ($Attest -eq "require") {
+            throw "NCC_VERIFY_ATTESTATION=require needs the GitHub CLI (gh), signed in or with GH_TOKEN set"
+        } else {
+            Write-Host "Build attestation not checked: the GitHub CLI is missing or not signed in."
+        }
+    }
+
+    # Never wipe an existing install: it holds the user database, API token and
+    # backups. A re-run used to delete the directory item by item, failed on the
+    # first locked executable and left a half-deleted install with its
+    # backups already gone. Upgrade by stopping the stack and replacing bin and
+    # frontend-dist, or set NCC_FORCE_CLEAN=1 to delete everything on purpose.
+    if ((Test-Path $InstallDir) -and (Get-ChildItem $InstallDir -Force -ErrorAction SilentlyContinue)) {
+        if ($env:NCC_FORCE_CLEAN -ne "1") {
+            throw "$InstallDir already contains files. Refusing to delete user data and backups. Stop the stack and replace bin and frontend-dist to upgrade, or set NCC_FORCE_CLEAN=1 to remove the directory."
+        }
+        Remove-Item $InstallDir -Recurse -Force
+    }
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     Expand-Archive -Path $archivePath -DestinationPath $InstallDir -Force
 
-    $configDir = Split-Path $ConfigPath -Parent
-    New-Item -ItemType Directory -Path $configDir -Force | Out-Null
     New-Item -ItemType Directory -Path "$InstallDir\outputfiles" -Force | Out-Null
     New-Item -ItemType Directory -Path "$InstallDir\logs" -Force | Out-Null
+
+    # Restrict the install directory to SYSTEM and Administrators. Under
+    # C:\ProgramData the inherited ACL lets every local user create files in
+    # subfolders, which would let them replace the binaries the SYSTEM task
+    # starts, or read the API token and user database. SIDs keep this
+    # independent of the Windows display language.
+    & icacls.exe $InstallDir /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Could not restrict permissions on $InstallDir" }
     @"
 schema-version: 1
 runner:
@@ -63,17 +125,25 @@ runner:
     max-delay: "8s"
     circuit-breaker: 3
 storage:
-  output-dir: "$InstallDir\outputfiles"
-  logs-dir: "$InstallDir\logs"
-  run-history-dir: "$InstallDir\outputfiles\runs"
+  # Single quotes: inside double quotes YAML reads \P, \N, \o as escapes and the
+  # whole config fails to parse. Paths containing a quote are not supported.
+  output-dir: '$InstallDir\outputfiles'
+  logs-dir: '$InstallDir\logs'
+  run-history-dir: '$InstallDir\outputfiles\runs'
 api:
   cache:
     pc-alerts-cache-ttl: "5m"
 deployment:
   platform: host
   self-heal: true
-secrets-provider: env
+secrets-provider: file
+secrets-file: '$InstallDir\secrets.json'
 "@ | Set-Content -Path $ConfigPath -Encoding UTF8
+
+    # The SYSTEM task, schedules and runs from a shell all read the password from
+    # this file; an environment variable of this script would reach none of them.
+    # Without a byte order mark, which is not valid JSON.
+    [IO.File]::WriteAllText("$InstallDir\secrets.json", (@{ NCC_PASSWORD = $Password } | ConvertTo-Json))
 
     New-NetFirewallRule -DisplayName "NCC Orchestrator UI ($UiPort)" `
         -Direction Inbound -Action Allow -Protocol TCP -LocalPort $UiPort `
@@ -83,17 +153,14 @@ secrets-provider: env
         -Profile Domain,Private | Out-Null
 
     $bin = "$InstallDir\bin\ncc-orchestrator.exe"
-    $args = "v2-start --install-dir `"$InstallDir`" --config-path `"$ConfigPath`" " +
-        "--output-dir `"$InstallDir\outputfiles`" --log-dir `"$InstallDir\logs`" " +
-        "--orchestrator-bin `"$bin`" --api-listen :$ApiPort --ui-listen :$UiPort " +
-        "--detach --self-heal"
-    $action = New-ScheduledTaskAction -Execute $bin -Argument $args
-    $trigger = New-ScheduledTaskTrigger -AtStartup
-    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-    Register-ScheduledTask -TaskName "NCC Orchestrator v2" -Action $action `
-        -Trigger $trigger -Principal $principal -Force | Out-Null
-    Start-ScheduledTask -TaskName "NCC Orchestrator v2"
+    # Also installs the update helper and the task that starts the supervisor
+    # again when it has died.
+    $install = @("v2-install-service", "--install-dir", $InstallDir, "--orchestrator-bin", $bin,
+        "--api-listen", ":$ApiPort", "--ui-listen", ":$UiPort", "--now")
+    & $bin @install
+    if ($LASTEXITCODE -ne 0) { throw "v2-install-service failed ($LASTEXITCODE)" }
 
+    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
     $doctorArgs = "doctor --install-dir `"$InstallDir`" --fix --only-checks log-sizes --json"
     $doctorAction = New-ScheduledTaskAction -Execute $bin -Argument $doctorArgs
     $doctorTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5) `
@@ -103,7 +170,7 @@ secrets-provider: env
         -Trigger $doctorTrigger -Principal $principal -Force | Out-Null
 
     Write-Host "NCC v$NccVersion installed at $InstallDir."
-    Write-Host "Edit $ConfigPath and replace CHANGE_ME before running checks."
+    Write-Host "Set the Prism password in $InstallDir\secrets.json and the clusters in $ConfigPath before running checks."
 } finally {
     Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
 }

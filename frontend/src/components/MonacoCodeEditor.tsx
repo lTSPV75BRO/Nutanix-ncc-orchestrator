@@ -71,7 +71,7 @@ function ensureAppThemes() {
     colors: {
       "editor.background": "#ffffff",
       "editor.foreground": "#18181b",
-      "editorLineNumber.foreground": "#a1a1aa",
+      "editorLineNumber.foreground": "#71717a",
       "editorLineNumber.activeForeground": "#18181b",
       "editor.selectionBackground": "#ede9fe",
       "editor.inactiveSelectionBackground": "#e4e4e7",
@@ -103,7 +103,7 @@ function ensureAppThemes() {
     colors: {
       "editor.background": "#141414",
       "editor.foreground": "#ededed",
-      "editorLineNumber.foreground": "#52525b",
+      "editorLineNumber.foreground": "#8b8b94",
       "editorLineNumber.activeForeground": "#d4d4d8",
       "editor.selectionBackground": "#3b2f6b",
       "editor.inactiveSelectionBackground": "#262626",
@@ -133,7 +133,7 @@ function ensureAppThemes() {
     colors: {
       "editor.background": "#152238",
       "editor.foreground": "#dbeafe",
-      "editorLineNumber.foreground": "#475569",
+      "editorLineNumber.foreground": "#8497b3",
       "editorLineNumber.activeForeground": "#bae6fd",
       "editor.selectionBackground": "#1e3a5f",
       "editor.inactiveSelectionBackground": "#1f3b57",

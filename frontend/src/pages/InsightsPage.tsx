@@ -16,16 +16,19 @@ import {
 import { api } from "../api/client";
 import { FeatureDisabled } from "../features/features/FeatureDisabled";
 import { useFeatureFlags } from "../features/features/useFeatureFlags";
+import { SetupEmptyState } from "../features/onboarding/SetupEmptyState";
 import { DrilldownDiffPanel } from "../features/report/DrilldownDiffPanel";
 import { FlakyChecksPanel } from "../features/report/FlakyChecksPanel";
 import { LifecycleInsightsCard } from "../features/report/LifecycleInsightsCard";
 import { SloPanel } from "../features/report/SloPanel";
-import { sectionHref } from "../navigation";
+import { clusterPath, sectionHref } from "../navigation";
 import { notifyError } from "../notify";
-import { EmptyState, KeyValueList, ListToolbar, matchesSearch, Panel, StatTile, StatusBadge, toneFor, VirtualList, type Tone } from "../ui";
+import { ChartViewToggle, EmptyState, KeyValueList, ListToolbar, matchesSearch, Panel, StatTile, StatusBadge, toneFor, VirtualList, type ChartView, type Tone } from "../ui";
 import { formatDateTime, relativeTime } from "../utils/datetime";
-import { formatDuration, freshness } from "../utils/freshness";
+import { clusterDataAges, formatDuration, freshness, lookupDataAge, type ClusterDataAge } from "../utils/freshness";
+import { useFreshness } from "../hooks/useClusterDirectory";
 import { nutanixKbUrl, safeExternalUrl } from "../utils/url";
+import { plural } from "../utils/text";
 
 // ---------- helpers ----------
 
@@ -75,9 +78,20 @@ function kbUrl(row: Record<string, unknown>): string {
 
 function scoreTone(score: number | null): "ok" | "warn" | "fail" | undefined {
   if (score == null) return undefined;
-  if (score >= 90) return "ok";
+  if (score >= 75) return "ok";
   if (score >= 60) return "warn";
   return "fail";
+}
+
+/**
+ * The newest run's outcome in the words Runs and Run details use: exit 3
+ * means some clusters could not be checked ("Partial").
+ */
+function runOutcome(runSummary: Record<string, unknown>): string {
+  const exit = toNumber(runSummary.exit_code);
+  if (exit === 0) return "Completed";
+  if (exit === 3) return `Partial · exit ${exit}`;
+  return `Failed · exit ${exit}`;
 }
 
 function healthGrade(score: number): string {
@@ -136,7 +150,16 @@ const BRIEF_ICON: Record<Tone, React.ReactNode> = {
 type RankedCluster = { address: string; name: string; health: number; fail: number; err: number; warn: number; info: number };
 
 /** Worst-first cluster health, searchable, rendering only the rows in view. */
-function ClusterRanking({ ranking, needsByName }: { ranking: RankedCluster[]; needsByName: Map<string, number> }) {
+function ClusterRanking({
+  ranking,
+  needsByName,
+  ages,
+}: {
+  ranking: RankedCluster[];
+  needsByName: Map<string, number>;
+  /** Data age per cluster (clusterDataAges). */
+  ages?: Map<string, ClusterDataAge>;
+}) {
   const [search, setSearch] = useState("");
   const shown = useMemo(() => ranking.filter((c) => matchesSearch(search, c.name, c.address)), [ranking, search]);
   return (
@@ -155,10 +178,13 @@ function ClusterRanking({ ranking, needsByName }: { ranking: RankedCluster[]; ne
           renderRow={(c) => {
             const needs = needsByName.get(c.name) ?? 0;
             const t = scoreTone(c.health) ?? "neutral";
+            const age = lookupDataAge(ages, c.address, c.name);
             return (
               <div className="insights-ranking-row">
                 <div className="insights-ranking-head">
-                  <strong>{c.name}</strong>
+                  <Link to={clusterPath(c.address || c.name)} className="cluster-page-link">
+                    <strong>{c.name}</strong>
+                  </Link>
                   <span className={`insights-score tone-${t}`}>
                     {c.health.toFixed(1)}% · {healthGrade(c.health)}
                   </span>
@@ -171,6 +197,14 @@ function ClusterRanking({ ranking, needsByName }: { ranking: RankedCluster[]; ne
                     .filter(Boolean)
                     .join(" · ") || "No findings"}
                   {needs > 0 ? ` · ${needs} not yet handled` : ""}
+                  {age ? (
+                    <>
+                      {" · "}
+                      <span className={`insights-ranking-age${age.old ? " is-old" : ""}`} title={age.title}>
+                        {age.text}
+                      </span>
+                    </>
+                  ) : null}
                 </span>
               </div>
             );
@@ -188,6 +222,7 @@ export function InsightsPage() {
   const trends = useQuery({ queryKey: ["report-trends"], queryFn: () => api.reportTrends(24), enabled: features.isFetched && !insightsOff });
   const nccMarks = useQuery({ queryKey: ["ncc-dispositions"], queryFn: api.nccDispositions, staleTime: 15_000, enabled: features.isFetched && !insightsOff });
   const [drillCheck, setDrillCheck] = useState<DrillRow | null>(null);
+  const [trendView, setTrendView] = useState<ChartView>("chart");
   const [searchParams, setSearchParams] = useSearchParams();
   const requested = searchParams.get("tab") as TabKey | null;
   const tab: TabKey = requested && TABS.includes(requested) ? requested : "summary";
@@ -234,6 +269,12 @@ export function InsightsPage() {
         regressionSummary: data.regression_summary,
       }),
     [data],
+  );
+  // Each cluster's data age, shared with the Overview and Findings.
+  const freshnessQuery = useFreshness(features.isFetched && !insightsOff);
+  const clusterAges = useMemo(
+    () => clusterDataAges(freshnessQuery.data?.clusters, (address) => resolveClusterName(address, clusterNameMap)),
+    [freshnessQuery.data, clusterNameMap],
   );
 
   const trendPoints = asArray(asRecord(trends.data || {}).points).map((p) => asRecord(p));
@@ -472,16 +513,21 @@ export function InsightsPage() {
     return (
       <div className="insights-page">
         <Panel>
+          {!runTimestamp ? (
+            // No run yet: say what setup step is missing.
+            <SetupEmptyState />
+          ) : (
           <EmptyState
             icon={<BarChartOutlined />}
             title="Nothing to analyse yet"
-            description="Insights appear after the first run that records check results: health per cluster, trends across runs, and how findings are being handled."
+            description="Insights appear after the first run that records check results: health per cluster, trends across runs, and how findings are being handled"
             actions={
               <Link to={sectionHref("runs")}>
                 <Button type="primary">Go to Runs</Button>
               </Link>
             }
           />
+          )}
         </Panel>
       </div>
     );
@@ -527,14 +573,14 @@ export function InsightsPage() {
   if (triage.returned > 0) {
     briefing.push({
       tone: "warn",
-      text: `${triage.returned} resolved ${triage.returned === 1 ? "alert was" : "alerts were"} found again on this run.`,
+      text: `${triage.returned} resolved ${triage.returned === 1 ? "finding was" : "findings were"} found again on this run.`,
     });
   }
   if (triage.needsAttention > 0) {
     const hottest = triage.clusters.find((c) => c.needs > 0);
     briefing.push({
       tone: "warn",
-      text: `${triage.needsAttention} critical ${triage.needsAttention === 1 ? "alert has" : "alerts have"} not been acknowledged or resolved.${hottest ? ` ${hottest.name} still has ${hottest.needs}.` : ""}`,
+      text: `${triage.needsAttention} critical ${triage.needsAttention === 1 ? "finding has" : "findings have"} not been acknowledged or resolved.${hottest ? ` ${hottest.name} still has ${hottest.needs}.` : ""}`,
     });
   }
   if (sharedChecks.length > 0) {
@@ -547,7 +593,7 @@ export function InsightsPage() {
   if (triage.missingKb > 0) {
     briefing.push({
       tone: "info",
-      text: `${triage.missingKb} critical ${triage.missingKb === 1 ? "alert has" : "alerts have"} no knowledge-base article.`,
+      text: `${triage.missingKb} critical ${triage.missingKb === 1 ? "finding has" : "findings have"} no knowledge-base article.`,
     });
   }
   if (triage.nccVersions.length > 1) {
@@ -560,8 +606,8 @@ export function InsightsPage() {
     briefing.push({
       tone: "ok",
       text: previousTs
-        ? "Every cluster completed, there are no new failures since the previous run, and no critical alerts are waiting."
-        : "Every cluster completed, and no critical alerts are waiting. There is no earlier run to compare.",
+        ? "Every cluster completed, there are no new failures since the previous run, and no critical findings are waiting."
+        : "Every cluster completed, and no critical findings are waiting. There is no earlier run to compare.",
     });
   }
 
@@ -629,7 +675,7 @@ export function InsightsPage() {
 
   const summaryTab = (
     <div className="insights-tab">
-      <Panel title="What this run is saying" icon={<BulbOutlined />} description="Highlights from this run and the one before it.">
+      <Panel title="What this run is saying" icon={<BulbOutlined />} description="Highlights from this run and the one before it">
         <ul className="insights-brief">
           {briefing.map((item) => (
             <li key={item.text} className={`tone-${item.tone}`}>
@@ -691,7 +737,7 @@ export function InsightsPage() {
             locale={{ emptyText: <EmptyState title="No failures, errors or warnings" /> }}
           />
         </Panel>
-        <Panel title="Review first" icon={<FlagOutlined />} description="The critical findings most worth a look." flush>
+        <Panel title="Review first" icon={<FlagOutlined />} description="The critical findings most worth a look" flush>
           {actionableFindings.length === 0 ? (
             <EmptyState title="No critical findings in this run" />
           ) : (
@@ -741,26 +787,26 @@ export function InsightsPage() {
   const clustersTab = (
     <div className="insights-tab">
       <div className="insights-grid">
-        <Panel title="Cluster health" icon={<DashboardOutlined />} description="Worst first, by weighted health." flush>
+        <Panel title="Cluster health" icon={<DashboardOutlined />} description="Worst first, by weighted health" flush>
           {clusterRanking.length === 0 ? (
             <EmptyState title="No per-cluster results" />
           ) : (
-            <ClusterRanking ranking={clusterRanking} needsByName={needsByName} />
+            <ClusterRanking ranking={clusterRanking} needsByName={needsByName} ages={clusterAges} />
           )}
         </Panel>
-        <Panel title="Run reliability" icon={<SafetyCertificateOutlined />} description="Clusters that could not be checked, and versions seen.">
+        <Panel title="Run reliability" icon={<SafetyCertificateOutlined />} description="Clusters that could not be checked, and versions seen">
           {failureClassEntries.length === 0 ? (
             <p className="insights-ok">
               <CheckCircleOutlined /> Every cluster completed this run.
             </p>
           ) : (
-            <KeyValueList items={failureClassEntries.map((e) => ({ label: e.name.replace(/_/g, " "), value: `${e.count} cluster(s)` }))} />
+            <KeyValueList items={failureClassEntries.map((e) => ({ label: e.name.replace(/_/g, " "), value: plural(e.count, "cluster") }))} />
           )}
           <KeyValueList
             items={[
               { label: "Clusters completed", value: String(clustersOk) },
               { label: "Clusters not completed", value: String(clustersFailed) },
-              { label: "Run result", value: toNumber(runSummary.exit_code) === 0 ? "Completed" : `Failed (exit ${toNumber(runSummary.exit_code)})` },
+              { label: "Run result", value: runOutcome(runSummary) },
               ...(triage.nccVersions.length
                 ? [{ label: "NCC versions", value: triage.nccVersions.map((v) => `${v.version} (${v.clusters.length})`).join(", ") }]
                 : []),
@@ -784,6 +830,7 @@ export function InsightsPage() {
     <div className="insights-tab">
       <Panel
         title="Failures over recent runs" icon={<LineChartOutlined />}
+        extra={recentTrends.length ? <ChartViewToggle value={trendView} onChange={setTrendView} what="Failures over recent runs" /> : undefined}
         description={
           recentTrends.length
             ? `Failing and error checks in the last ${recentTrends.length} runs.${
@@ -793,9 +840,29 @@ export function InsightsPage() {
         }
       >
         {recentTrends.length === 0 ? (
-          <EmptyState title="Not enough runs for a trend" description="A trend appears after a few runs have finished." />
+          <EmptyState title="Not enough runs for a trend" description="A trend appears after a few runs have finished" />
+        ) : trendView === "table" ? (
+          <Table
+            size="small"
+            pagination={false}
+            rowKey="key"
+            aria-label="Failures over recent runs"
+            columns={[
+              { title: "Run", dataIndex: "when", key: "when" },
+              { title: "FAIL", dataIndex: "fail", key: "fail", align: "right" as const },
+              { title: "ERR", dataIndex: "err", key: "err", align: "right" as const },
+              { title: "FAIL + ERR", dataIndex: "total", key: "total", align: "right" as const },
+            ]}
+            dataSource={recentTrends.map((p, idx) => ({
+              key: `${String(p.timestamp || "")}-${idx}`,
+              when: formatDateTime(String(p.timestamp || "")),
+              fail: toNumber(p.fail_total),
+              err: toNumber(p.err_total),
+              total: toNumber(p.fail_total) + toNumber(p.err_total),
+            }))}
+          />
         ) : (
-          <div className="insights-trend" role="img" aria-label={`Failures across ${recentTrends.length} runs`}>
+          <div className="insights-trend" role="img" aria-label={`Failures across ${recentTrends.length} runs, oldest first: ${recentTrends.map((p) => toNumber(p.fail_total) + toNumber(p.err_total)).join(", ")}. Switch to Table for the details.`}>
             {recentTrends.map((p, idx) => {
               const value = toNumber(p.fail_total) + toNumber(p.err_total);
               const ts = String(p.timestamp || "");
@@ -852,16 +919,16 @@ export function InsightsPage() {
 
   const triageTab = (
     <div className="insights-tab">
-      <Panel title="Triage queue" icon={<OrderedListOutlined />} description="Critical alerts and how they have been handled. Resolved alerts come back here if a later run finds them again.">
+      <Panel title="Triage queue" icon={<OrderedListOutlined />} description="Critical findings and how they have been handled. Resolved findings come back here if a later run finds them again.">
         <div className="overview-stats">
           <StatTile label="Need attention" value={triage.needsAttention} tone={triage.needsAttention > 0 ? "fail" : "ok"} />
           <StatTile label="Acknowledged, still open" value={triage.acknowledged} />
           <StatTile label="Resolved" value={triage.resolved} />
-          <StatTile label="Most acknowledgements" value={triage.topOwner || "—"} hint={triage.topCount > 0 ? `${triage.topCount} alerts` : undefined} />
+          <StatTile label="Most acknowledgements" value={triage.topOwner || "—"} hint={triage.topCount > 0 ? `${triage.topCount} ${triage.topCount === 1 ? "finding" : "findings"}` : undefined} />
         </div>
         {triage.returned > 0 ? (
           <p className="ui-field-help">
-            {triage.returned} resolved {triage.returned === 1 ? "alert was" : "alerts were"} found again on this run.
+            {triage.returned} resolved {triage.returned === 1 ? "finding was" : "findings were"} found again on this run.
           </p>
         ) : null}
         {triage.clusters.some((c) => c.needs > 0) ? (
@@ -872,14 +939,23 @@ export function InsightsPage() {
             rowKey="name"
             dataSource={triage.clusters.filter((c) => c.needs > 0).slice(0, 8)}
             columns={[
-              { title: "Cluster", dataIndex: "name", key: "name" },
+              {
+                title: "Cluster",
+                dataIndex: "name",
+                key: "name",
+                render: (v: string) => (
+                  <Link to={clusterPath(v)} className="cluster-page-link">
+                    {v}
+                  </Link>
+                ),
+              },
               { title: "Need attention", dataIndex: "needs", key: "needs", width: 150, align: "right" },
               { title: "Acknowledged", dataIndex: "acknowledged", key: "acknowledged", width: 140, align: "right" },
               { title: "Resolved", dataIndex: "resolved", key: "resolved", width: 120, align: "right" },
             ]}
           />
         ) : null}
-        {triage.missingKb > 0 ? <p className="ui-field-help">{triage.missingKb} of these alerts have no knowledge-base article.</p> : null}
+        {triage.missingKb > 0 ? <p className="ui-field-help">{triage.missingKb} of these findings have no knowledge-base article.</p> : null}
         <Link to="/findings">
           <Button>Work through them in Findings</Button>
         </Link>
@@ -888,7 +964,7 @@ export function InsightsPage() {
       <LifecycleInsightsCard enabled={features.isFetched && !insightsOff} />
 
       {sharedChecks.length > 0 ? (
-        <Panel title="Same check, several clusters" icon={<ApartmentOutlined />} description="The same critical check failing on more than one cluster." flush>
+        <Panel title="Same check, several clusters" icon={<ApartmentOutlined />} description="The same critical check failing on more than one cluster" flush>
           <Table
             size="middle"
             pagination={false}
@@ -907,7 +983,7 @@ export function InsightsPage() {
         </Panel>
       ) : null}
 
-      <Panel title="Knowledge base articles" icon={<ReadOutlined />} description="Articles referenced by failing checks.">
+      <Panel title="Knowledge base articles" icon={<ReadOutlined />} description="Articles referenced by failing checks">
         {kbIndex.length === 0 ? (
           <EmptyState title="No articles referenced in this run" />
         ) : (
@@ -956,7 +1032,7 @@ export function InsightsPage() {
           tone={scoreTone(weightedHealth)}
           hint={weightedHealth == null ? "No completed checks" : `${healthGrade(weightedHealth)} · pass rate ${rawPassRate.toFixed(1)}%`}
         />
-        <StatTile label="Checks" value={totalPlugins.toLocaleString()} hint={`${clusterSummary.length} cluster(s)`} />
+        <StatTile label="Checks" value={totalPlugins.toLocaleString()} hint={plural(clusterSummary.length, "cluster")} />
         <StatTile
           label="Clusters at risk"
           value={`${affectedClusters.length}/${clusterSummary.length}`}

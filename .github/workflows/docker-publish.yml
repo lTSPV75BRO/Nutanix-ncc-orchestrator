@@ -13,8 +13,24 @@ on:
       - "scripts/binaryGO.txt"
       - "VERSION"
       - ".github/workflows/docker-publish.yml"
-  release:
-    types: [published]
+  # Called by release.yml for a tag (a release that workflow publishes cannot
+  # trigger this one).
+  workflow_call:
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: false
+      DOCKERHUB_TOKEN:
+        required: false
+  workflow_dispatch:
+
+# Publishing runs for one ref are queued, never overlapped and never cancelled
+# half way (a cancelled push can leave :<version> and :latest on different
+# builds). A run that is no longer at the head of its branch skips itself, see
+# the "Decide whether to publish" step. The group name differs from release.yml's
+# (release-<ref>) so a release calling this workflow cannot wait on itself.
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   NCC_DOCKER_REGISTRY: docker.io
@@ -30,25 +46,71 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
 
+      # A tag run (release.yml calls this workflow for v* tags) is the release
+      # flow and always publishes. A branch run (push to main, manual dispatch)
+      # publishes only when it is still the newest commit of its branch and
+      # VERSION has not been released yet, so it can never replace the images
+      # of a released version or :latest, and an older run cannot win.
+      - name: Decide whether to publish
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          REF_TYPE: ${{ github.ref_type }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < VERSION)"
+          publish=true
+          reason=""
+          if [ "$REF_TYPE" != "tag" ]; then
+            head="$(gh api "repos/${REPO}/git/ref/${REF#refs/}" --jq .object.sha)"
+            if [ "$head" != "$SHA" ]; then
+              publish=false
+              reason="${SHA:0:12} is no longer the head of ${REF#refs/heads/} (${head:0:12}); the newer commit publishes."
+            elif gh api "repos/${REPO}/git/ref/tags/v${version}" --silent 2>/dev/null; then
+              publish=false
+              reason="v${version} is already released; its images come from the tag run and are never replaced from a branch. Bump VERSION to publish new images."
+            fi
+          fi
+          echo "publish=${publish}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Docker images ${version}"
+            if [ "$publish" = true ]; then
+              echo "Publishing from \`${REF}\` at \`${SHA:0:12}\`."
+            else
+              echo "Skipped: ${reason}"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$publish" != true ]; then
+            echo "::notice::Image push skipped. ${reason}"
+          fi
+
       - name: Set up Go
-        uses: actions/setup-go@v7
+        if: steps.plan.outputs.publish == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
+          cache: false
 
       - name: Set up Node
-        uses: actions/setup-node@v7
+        if: steps.plan.outputs.publish == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "26.12.1" # >= 26.12.1: Oct 21 2026 Node security release; runner toolcache may lag
           # No dependency cache in a publishing workflow: a cache written by a
           # less-privileged run could poison the pushed images.
+          package-manager-cache: false
 
       - name: Check Docker Hub credentials
         id: creds
+        if: steps.plan.outputs.publish == 'true'
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -61,14 +123,14 @@ jobs:
           fi
 
       - name: Log in to Docker Hub
-        if: steps.creds.outputs.ok == 'true'
+        if: steps.plan.outputs.publish == 'true' && steps.creds.outputs.ok == 'true'
         uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push
-        if: steps.creds.outputs.ok == 'true'
+        if: steps.plan.outputs.publish == 'true' && steps.creds.outputs.ok == 'true'
         env:
           STREAM: Release
           GIT_REVISION: ${{ github.sha }}

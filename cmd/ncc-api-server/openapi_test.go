@@ -37,6 +37,7 @@ func TestBuildOpenAPISpecIncludesCorePaths(t *testing.T) {
 		"/api/v1/settings/cluster-groups",
 		"/api/v1/settings/clusters",
 		"/api/v1/settings/session",
+		"/api/v1/settings/ui-versions",
 		"/api/v1/settings/password-resets",
 		"/api/v1/settings/password-resets/{name}",
 		"/api/v1/settings/backup",

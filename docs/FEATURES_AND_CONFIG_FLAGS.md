@@ -1,4 +1,4 @@
-# Features and Config Flags (v2.3.0)
+# Features and Config Flags (v2.4.0)
 
 Comprehensive reference for NCC Orchestrator features, configuration keys, and CLI flags.
 
@@ -8,7 +8,7 @@ Comprehensive reference for NCC Orchestrator features, configuration keys, and C
 
 `ncc-orchestrator` runs Nutanix NCC checks across one or more clusters, collects and parses results, and generates automation-friendly artifacts plus human-readable reports.
 
-The v2.3.0 dashboard can also fetch Prism Central serviceability alerts on
+The v2.4.0 dashboard can also fetch Prism Central serviceability alerts on
 demand from configured `pcs` or `prism-central-url` targets. The API/UI source
 selector keeps these live PC · Beta alerts separate from persisted NCC findings.
 Unresolved alerts are fetched first for fast initial rendering; the complete
@@ -137,19 +137,19 @@ lists them in three groups.
 table, or related panel shows a note instead of loading extra files or
 calling Prism Central. Health checks keep running.
 
-**Actions** (v2.3.0). Off is enforced by the API, which answers the refused
+**Actions** (v2.4.0). Off is enforced by the API, which answers the refused
 request with `403` and `error_code: NCC_API_FEATURE_DISABLED`:
 
 | Key | Off means |
 | --- | --------- |
 | `alert_handling` | `POST /api/v1/alerts/ncc-dispositions` and `POST /api/v1/alerts/ncc/{id}/{action}` are refused. Findings has no checkboxes, bulk bar or Acknowledge / Resolve / Reopen; earlier marks and history stay visible. |
 | `self_heal` | `POST /api/v1/health/diagnostics` (apply fixes) is refused; `GET` still runs the checks. System → Health & repair has no Fix buttons. |
-| `update_checks` | `GET /api/v1/settings/update` returns `disabled: true` without contacting the release server; `POST /api/v1/settings/update/apply` is refused. |
+| `update_checks` | `GET /api/v1/settings/update` and `GET /api/v1/settings/update/notice` return `disabled: true` without contacting the release server, and the update banner is hidden; `POST /api/v1/settings/update/apply` is refused. |
 
-**Sign-in:** `intro_title` turns the opening title off for everyone. It is
-also returned as `intro_title` on the public `GET /api/v1/health`, because
-the page needs it before anyone signs in; the browser remembers the last
-answer so later visits skip the title from the first frame.
+**Sign-in:** `intro_title` shows the opening title to everyone. It is off by
+default (since 2.4.0). It is also returned as `intro_title` on the public
+`GET /api/v1/health`, because the page needs it before anyone signs in; the
+browser remembers an "on" so later visits play the title from the first frame.
 
 ### 2.3d Dashboard filters, sharing, and pagination
 
@@ -166,7 +166,7 @@ shared:
 | `resolved` | PC resolved filter (`No` / `Yes` / `all`) |
 
 **Copy link** copies that URL. **⌘K / Ctrl+K** jumps to Settings cards via
-`/settings?tab=&focus=`. The Alerts table grows with leftover viewport
+`/settings?tab=&focus=`. The Findings table grows with leftover viewport
 height; pagination sits under the table (not clipped) and slices the
 virtual `dataSource` so changing page actually changes rows. Expanding a
 PC alert opens the inspector (status, entity/cluster, timeline, message,
@@ -224,7 +224,7 @@ More checks, each fixed by `doctor --fix` (or **Heal** in the UI):
 |---|---|---|
 | `config-layout` | A setting spelled twice (flat and nested, or two nested spellings); only one is used | Keeps the value in use, removes the other spelling; original kept as `.bak` |
 | `temp-files` | Leftovers of interrupted backups, restores and updates older than 6 hours (system temp, install dir, logs, output dir) | Deletes them. Never touches a `ncc-backup-*.tar.gz` file |
-| `output-retention` | Report files and run snapshots past `artifact-retain-*` / `retain-*`; unbounded growth when no retention is set | Applies your retention now (runs do the same when they finish) |
+| `output-retention` | Report files, run snapshots and raw NCC logs past `artifact-retain-*` / `retain-*` / `raw-log-retain-days`; unbounded growth when no retention is set | Applies your retention now (runs do the same when they finish) |
 | `runtime-tuning` | Settings that slow runs or fail them early: request timeout not below the cluster timeout, very short polling, inverted retry backoff, one connection per host, HTTP or debug logging | None: reports the current and a suggested value |
 | `supervisor-health` | A server in cooldown (down after too many quick restarts), restarting, restarted twice or more recently, or answering health probes slowly; quotes the panic or error line from its log. Also a state file left by a supervisor that is gone | Asks the supervisor to start a cooled-down server now; removes a stale state file |
 | `service-config` | The boot service lacks this release's settings. Linux: `StartLimitIntervalSec=0`, `Restart=always`, `LimitNOFILE`. Windows: the 72-hour task time limit, no restart on failure, battery stop. macOS: `KeepAlive`, file limit. Fails when the service starts a binary that no longer exists. Services of another install are ignored | Linux: adds the missing lines (others kept) and reloads systemd. Windows: re-registers the task (needs Administrator). macOS: reports the command to run |
@@ -268,7 +268,48 @@ outside the restart budget, and also ends a backoff or cooldown wait. In the
 UI: **Status → Supervisor** (state, last crash with log, events,
 Restart / Start now).
 
-**Supervised upgrades.** The supervisor's state file lists the features it
+**Upgrades.** From 2.4.0 on, an upgrade is carried out by the *update helper*, a
+copy of the orchestrator in `helper/` that the service manager starts only
+while there is an upgrade to do. No process runs otherwise.
+
+1. A pre-update backup is taken and the release is downloaded and verified.
+2. The new version's helper is installed with its own service definition and
+   tested on this host. Until here nothing else has changed, and any failure
+   ends with "nothing was changed".
+3. The helper saves the current version, stops the service, replaces the
+   programs and the web UI, brings the service, schedule and log timer
+   definitions up to the new version, migrates the configuration and starts it.
+4. The supervisor, API and UI must come back healthy on the new version and
+   stay up. Otherwise the helper puts programs, definitions and configuration
+   back, also after a crash or reboot in between.
+
+Where it applies: systemd, Windows Task Scheduler, launchd, and stacks started
+with `v2-start --detach`. Lines that were added to a systemd unit by hand move
+to `<unit>.d/50-local.conf`; a definition with a changed command or user is
+kept and reported. `--replace-edited` (a checkbox in the UI) replaces such a
+definition with the new one instead; the plan shows the diff first, and a
+rollback puts the edited one back. Runs cannot start during an upgrade, and on
+systemd an upgrade does not stop the service while a scheduled run goes on
+(it ends as *Nothing was changed*).
+
+| What | How |
+|------|-----|
+| In the UI | **System → Updates & backups → Updates**; the dialog shows the checks, the expected downtime and what changes on this host, with the diff of each definition. The result is *Upgraded*, *Rolled back* or *Nothing was changed*, with the reason and the log. **Roll back** stays for 24 hours, also after an adoption or `update`. |
+| On the host | `ncc-orchestrator upgrade`, `--plan`, `--status`, `--rollback`, `--to VERSION`, `--replace-edited` |
+| `ncc-orchestrator update` | Hands over to `upgrade` when an update helper runs the stack and no `--check`, `--binary-url`, `--skip-checksum-verify`, `--allow-major-upgrade` or other `--repo` is given. Otherwise, or with `--programs-only` or `NCC_UPDATE_PROGRAMS_ONLY=1`, it replaces the programs only and says why; restart the stack afterwards. With rights to the service it saves the previous version first, so `upgrade --rollback` works for 24 hours. |
+| Release manifest | `upgrade-manifest.json` may carry `min_from` (refused below it: "go to vX first") and `downtime_hint` (shown in the plan). Release builds set them with `NCC_UPGRADE_MIN_FROM` and `NCC_UPGRADE_DOWNTIME_HINT`. |
+| Without internet | `ncc-orchestrator upgrade --bundle ncc-v2-stack-<os>-<arch>.tar.gz`, with `checksums.txt`, `checksums.txt.sig` and `upgrade-manifest.json` in the same folder; see [`setup/OFFLINE_UPGRADES.md`](setup/OFFLINE_UPGRADES.md) |
+| Update banner | Admins see "Version X is available" until they dismiss it for that version. The API server looks the release up at most once a day (an hour after a failure) and keeps the result in `.ncc-update-check.json` in the data folder; `GET /api/v1/settings/update/notice` answers from it |
+| API | `GET /api/v1/settings/update/notice`, `GET /api/v1/settings/update/plan`, `POST /api/v1/settings/update/apply`, `POST /api/v1/settings/update/rollback`; progress in `upgrade` of `GET /api/v1/settings/update` |
+| After the step from 2.3.x | 2.4.0 installs the helper and brings the service up to its definitions by itself, two minutes after it starts and when no run is going on. `NCC_UPGRADE_ADOPT=0` turns this off; `ncc-orchestrator upgrade-adopt` does it by hand. |
+| Turn the helper off | `NCC_UPGRADE_HELPER=0` for the service: the supervisor upgrades as described below |
+| Logs and state | `logs/upgrade-helper.log`, `run/v2-upgrade-state.json`, and `run/upgrade/` (root or SYSTEM only) |
+| Kubernetes | `helm upgrade` checks version skew, write access, free space and a verified backup before the rollout, and that the API, UI and runner report the new version after it (`upgradeCheck` in `values.yaml`); for kustomize see `k8s/upgrade-check-job.yaml` |
+
+The API audits the result as `settings.update.result`.
+
+**Supervised upgrades** (hosts without the helper, or with
+`NCC_UPGRADE_HELPER=0`). The supervisor's state file lists the features it
 supports (`features: ["restart", "upgrade"]`) and its version. When it
 supports `upgrade`, `POST /api/v1/settings/update/apply` takes the pre-update
 backup and then writes `run/v2-supervisor-upgrade.request` instead of
@@ -281,7 +322,7 @@ the `upgrade` field of `GET /api/v1/settings/update` and
 |-------|--------------|
 | `preflight` | Free disk space for a copy of the current version and the download. |
 | `snapshot` | Copies `bin/`, `frontend-dist/` and the orchestrator binary to `run/upgrade-rollback`. |
-| `installing` | `ncc-orchestrator update [--target-version]` (checksum-verified, 12 minute limit). "Already on the latest version" ends the job as done. |
+| `installing` | `ncc-orchestrator update --programs-only [--target-version]` (checksum-verified, 12 minute limit). "Already on the latest version" ends the job as done. |
 | `restarting` | Restarts the API, then the UI. Each must start, pass a health probe and stay up for 45 s (or the probe interval + 15 s); a cooldown or two unrequested exits fail it. |
 | `verifying` | Every binary reports the same version, then `doctor --json --fix --no-disruptive`. |
 | `done` / `rolled_back` / `failed` | On a failure after the install the copy is put back and the servers restarted (`rolled_back`); a failure before it leaves the old version running (`failed`). |
@@ -297,11 +338,41 @@ the supervisor, updates work as before. In the UI: **Updates & backups →
 Updates**.
 
 `v2-install-service` now installs: on Linux `StartLimitIntervalSec=0`,
-`LimitNOFILE=65536`, `OOMScoreAdjust=-500`; on Windows a Task Scheduler
+`LimitNOFILE=65536`, `OOMScoreAdjust=-500` and a sandbox
+([systemd sandbox](SECURITY_AND_TRUST.md#systemd-sandbox-linux-service)); on Windows a Task Scheduler
 definition with no time limit (the default stopped the supervisor after 72
-hours), restart on failure every minute, and no battery stop; on macOS
+hours), no battery stop, and a second task, `ncc-orchestrator-watchdog`, that
+looks every minute and starts the supervisor again when it has died (not after
+`v2-stop`, `schtasks /End` or disabling its task); on macOS
 `ThrottleInterval` and a 65536 open-file limit. Existing installs get these
-from `service-config` (`doctor --fix`) or by re-running `v2-install-service`.
+with the upgrade (adoption), from `service-config` (`doctor --fix`) or by
+re-running `v2-install-service`; the sandbox does not come from `doctor`.
+`--api-listen` and `--ui-listen` set the addresses the service starts with.
+
+**Service user (Linux, systemd; LIN-02).** The supervisor, API, UI, NCC runs,
+schedules and log maintenance run as the system user `ncc`, which
+`v2-install-service` creates (`useradd --system`, group `ncc`, no login).
+The programs (`bin/`, `frontend-dist/`, `helper/`) stay root's; the rest of the
+install belongs to `ncc`. A second root unit, the service helper
+(`<service>-ops.path` / `<service>-ops.service`, requests in `run/ops/req/`),
+installs and removes schedule units, restarts the stack after a restore or a
+TLS change, and starts upgrades, rollbacks and adoption for the service
+(details: [systemd sandbox](SECURITY_AND_TRUST.md#systemd-sandbox-linux-service)).
+Upgrades move a root service to `ncc`, and a rollback puts it back.
+
+| Setting | Effect |
+|---------|--------|
+| `v2-install-service --service-user root` | Install the root service of 2.4.0 instead (`User=root` in the unit, no service helper). `--service-user NAME` uses another system user. |
+| `NCC_SERVICE_USER=root` (environment of the upgrade or `upgrade-adopt`) | Upgrades and adoption keep or make the service root. |
+| `/etc/ncc-orchestrator/service-user` (first line: `root` or a user name) | The same, for every upgrade and adoption on this host, including those started from the UI. |
+
+A unit with `User=` already set keeps that user. An install the service user
+cannot reach (a folder above it without `o+x`, for example `/root`) stays root,
+and the install says why. Ports below 1024 get `CAP_NET_BIND_SERVICE`; nothing
+else. Folders outside the install that the configuration names must be writable
+by `ncc` (`sudo chown -R ncc:ncc /the/folder`); the install warns about each.
+`create-schedule --type auto` uses a systemd timer when the service helper is
+there; a schedule in root's crontab is moved to a timer of `ncc` by the upgrade.
 
 **Runtime tuning.** In a container with a memory limit, the API, UI and
 runner set the Go soft memory limit to 90% of it at start (unless
@@ -707,9 +778,10 @@ A caller's role can come from a static token or an interactive login:
   `?check=1`; plain GET is a cheap status poll). `POST /api/v1/settings/update/apply`
   runs a background job that takes a **pre-update backup** with
   `v2-backup --include-stack` (config plus orchestrator/API/UI binaries and
-  `frontend-dist`, aborting if it fails), applies the checksum-verified
-  package update (orchestrator + api + ui + frontend), then **restarts the stack
-  automatically** (`v2-restart`); the UI polls the phase and reconnects when the
+  `frontend-dist`, aborting if it fails), then hands over to the update helper
+  (see **Upgrades**), or applies the checksum-verified package update and
+  **restarts the stack automatically** (`v2-restart`) where neither a supervisor
+  nor `v2-start --detach` runs it; the UI polls the phase and reconnects when the
   new version is live. **Rollback last update** restores the newest
   `pre-update-*` snapshot, including the previous software version when that
   snapshot has a stack. Optional `target_version` / `skip_checksum_verify`. Requires
@@ -929,6 +1001,7 @@ Highest to lowest precedence:
 | `retain-days` | int | `0` | `14` |
 | `artifact-retain-days` | int | `0` | `14` |
 | `artifact-retain-max-files` | int | `0` | `200` |
+| `raw-log-retain-days` | int | `0` | `30` |
 | `notify-on-regression` | bool | `false` | `true` |
 | `adaptive-parallelism` | bool | `true` | `false` |
 | `policy-gates` | csv string | — | `"new-fails>0,fail-rate>2"` |
@@ -1047,6 +1120,9 @@ ncc-orchestrator [flags]
 | `--skip-preflight-check` | bool | `true`, `false` | `false` | Skips default preflight validation before run. Useful only for controlled/debug scenarios; not recommended for production runs. |
 | `--artifact-retain-days` | int | Integer `>= 0` | `0` | Deletes generated artifacts older than N days from `output-dir-filtered` (`0` disables age-based deletion). |
 | `--artifact-retain-max-files` | int | Integer `>= 0` | `0` | Keeps only the N newest generated artifacts in `output-dir-filtered` (`0` disables count-based deletion). |
+| `--raw-log-retain-days` | int | Integer `>= 0` | `0` | Deletes raw NCC logs (`<cluster>.log` in `output-dir-logs`) older than N days when a run finishes. The newest log and the logs of every cluster in the latest report (`run-summary.json`) are always kept, and nothing is deleted when `output-dir-logs` is the report folder. `0` keeps raw logs forever (the default, so upgrades change nothing). Nested key: `runner.history.raw-log-retain-days`. |
+
+**Retention preview (dry run).** `ncc-orchestrator retention --config config.yaml --dry-run` lists what every retention rule (run history, report files, raw NCC logs) would delete now, with sizes and totals, and deletes nothing. Add `--json` for machine-readable output; `--output-dir-filtered`, `--output-dir-logs` and `--run-history-dir` override the config's folders. Without `--dry-run` the command applies the same rules immediately. The API server exposes the same preview to admins at `GET /api/v1/settings/retention/preview` (it runs the command against its config and its report and raw log folders), and **Settings → Clusters & config → Reports & history** has a "Preview what would be removed" button.
 | `--secrets-file` | string | Path to YAML/JSON key-value map | none | Secret map source when `--secrets-provider=file` is selected. |
 | `--secrets-provider` | string | `env`, `file` | none | Enables `secret://` value resolution from process environment or file-backed key map. |
 | `--severity-filter` | string | CSV subset of `FAIL,WARN,ERR,INFO` | empty (all) | Limits output rows/artifacts to selected severities. Useful for alert-focused reports but can hide context. |
@@ -1117,14 +1193,18 @@ ncc-orchestrator update
 
 By default, updates remain in the current major track (for example `v1.x` -> latest `v1.x`). Use `--allow-major-upgrade` to move across major versions (for example `v1` to `v2`) after migration review.
 
+On a stack with an update helper, `update` hands over to `upgrade` (the whole stack, checked, rolled back when unhealthy). It replaces the programs only when it cannot: with `--check`, `--binary-url`, `--skip-checksum-verify`, `--allow-major-upgrade`, another `--repo`, without a helper, or when `--programs-only` or `NCC_UPDATE_PROGRAMS_ONLY=1` asks for it. It then prints why, and the stack must be restarted afterwards.
+
 | Flag | Type | Possible values | Default | Detailed explanation |
 |---|---|---|---|---|
 | `--check` | bool | `true`, `false` | `false` | Check-only mode. Reports selected release/binary availability without downloading or replacing. |
 | `--allow-major-upgrade` | bool | `true`, `false` | `false` | Explicitly permits major-version upgrades. Required for `v1.x` -> `v2.x` transitions. |
+| `--include-prerelease` | bool | `true`, `false` | `false` | Also consider release candidates. An install that runs a candidate always does, until the release is out. |
 | `--repo` | string | `owner/repo` or GitHub repo URL | `lTSPV75BRO/Nutanix-ncc-orchestrator` | GitHub source repo used for release discovery/check/update. |
 | `--binary-url` | string | Direct binary URL | empty | Use a non-GitHub/custom artifact URL for check/update operations. |
 | `--binary-sha256` | string | 64-char SHA256 hex | empty | Required when installing via `--binary-url` (ignored for `--check`). Used to enforce artifact integrity. |
 | `--target-version` | string | Semver-like value | empty | Target version hint, recommended with `--binary-url` for track comparisons/safety checks. |
+| `--programs-only` | bool | `true`, `false` | `false` | Replace the programs only, without handing over to the update helper. Same as `NCC_UPDATE_PROGRAMS_ONLY=1`. |
 | `--help` / `-h` | bool | `true`, `false` | `false` | Prints subcommand help. |
 
 ### 6.5 `gen-test-agg`
@@ -1300,7 +1380,7 @@ These are runtime flags for v2 services (`cmd/ncc-api-server`, `cmd/ncc-ui-serve
 | `ncc-api-server` | `--log-format` | `text` | Console log format (`text` or `json`); the log file is always JSON. Env `NCC_LOG_FORMAT`. |
 | `ncc-api-server` | `--server-log-path` | `logs/ncc-api.log` | Rotated JSON log of every request, run and background job. Env `NCC_SERVER_LOG_PATH`. |
 | `ncc-api-server` | `--trusted-proxy-cidrs` | `private,loopback` | Peers whose `X-Forwarded-For` is honored (CIDRs, `loopback`, `private`, `none`); parsed right-to-left. Env `NCC_TRUSTED_PROXY_CIDRS`. Narrow to your proxy/ingress/UI-pod CIDRs. |
-| `ncc-api-server` | `--alert-history-retain-days` | `365` | Days to keep closed NCC alert instances and their events (active alerts are never pruned; `0` keeps forever). |
+| `ncc-api-server` | `--alert-history-retain-days` | `365` | Days to keep closed NCC finding instances and their events (active findings are never pruned; `0` keeps forever). |
 | `ncc-api-server` | `--audit-log-keep` | `10` | Rotated audit log generations kept (`<path>.1` … `<path>.N`). |
 | `ncc-api-server` | `--require-encrypted-user-store` | `false` | Refuse to start unless the user store is envelope-encrypted (`NCC_MASTER_KEY` / `--users-db-key-file`). Env `NCC_REQUIRE_ENCRYPTED_USER_STORE=true`. |
 | `ncc-api-server` | env `NCC_BACKUP_ENCRYPTION` | `required` | `required`: refuse plaintext backups (needs a passphrase or `NCC_BACKUP_KEY_FILE`/`NCC_BACKUP_KEY`/`NCC_BACKUP_PASSPHRASE`); `optional`: legacy behavior. |
@@ -1412,6 +1492,9 @@ single run's worth of report data.
 | `v2-restore` | `--force` | `false` | Overwrite existing files / proceed even if the stack is running. |
 | `v2-restore` | `--restart` | `false` | Force a stack restart/start after restore even if it looks stopped (restart is automatic when the stack is running). |
 | `v2-restore` | `--no-restart` | `false` | Suppress the automatic post-restore restart (e.g. staging a host for later). |
+| `v2-restore` | `--verify-only` | `false` | Check the archive without restoring or writing to the install dir: decryption, every entry readable, safe paths, manifest list and SHA-256 checksums (`sha256` in `manifest.json`), YAML/JSON config parses, secrets present (names only), config-referenced files and reports present, version compatibility (same major passes, newer minor warns, other major fails), and whether a restore would put the program files back. Prints Pass/Warn/Fail per check and exits non-zero on a fail. See [Check a backup](setup/SCHEDULE_AND_BACKUPS.md#back-up-and-restore). |
+| `v2-restore` | `--json` | `false` | With `--verify-only`, print the checks as JSON. |
+| `v2-restore` | `--trust-stack` | `false` | Also restore the backup's program files (`bin/ncc-*`, `frontend-dist/`) when this server has never installed them. Without it they are restored only when the program files on disk afterwards would be exactly one set this server recorded (`.ncc-trusted-stack.json`) or the installed set, so versions never mix; otherwise only data is restored. Command line only; the API never sets it. |
 | `v2-restart` | `--install-dir` | auto-detect (`.ncc-v2`) | Stop and re-start the stack (`v2-stop` then `v2-start --detach`), performed by the binary. |
 | `v2-reset-password` | `--user` | `admin` | Local account to reset. |
 | `v2-reset-password` | `--users-db` / `--users-db-secret[-namespace]` | `<install-dir>/.ncc-api-users.json` | User store to reset against (file or Kubernetes Secret). |
@@ -1487,7 +1570,7 @@ ncc-orchestrator v2-start \
   --wait-ready --ready-timeout 45s
 ```
 
-When `--api-only` is enabled, open `http://localhost:8081/` for backend status and API docs links (`openapi.json`, `meta/routes`). Those pages list every catalog route, including the v2.3.0 additions below.
+When `--api-only` is enabled, open `http://localhost:8081/` for backend status and API docs links (`openapi.json`, `meta/routes`). Those pages list every catalog route, including the v2.4.0 additions below.
 
 Optional views and NCC handling:
 
@@ -1511,8 +1594,34 @@ Large payload control for report endpoint:
 
 - `GET /api/v1/report/data?limit=<n>&offset=<m>`
 - Applies to large array fields (`checks_snapshot`, `agg_rows`) and returns per-field pagination metadata.
+- Every response carries a `cache` object describing the server's report cache:
+  `state` (`cold`, `warm`, `refreshing`, `stale` or `failed`), `built_at` (when
+  the oldest part of the served report was built), `refresh_started_at` while a
+  newer report is being built, `last_error` and `failed_at` after a failed
+  rebuild, and `source_run_id` / `source_run_time` from the served
+  `run-summary.json`. Existing fields are unchanged. The Overview and Findings
+  pages show a one-line notice when the state is not `warm` and check again
+  every 5 s while a newer report is being built (once a minute after a
+  failure). Prometheus: `ncc_report_cache_state`, `ncc_report_cache_age_seconds`
+  (see `docs/PROMETHEUS.md`).
 
 Machine-readable API errors:
+
+Data freshness endpoint:
+
+- `GET /api/v1/freshness` (viewer+)
+- Built from the newest 200 runs (`runs/<id>/run-summary.json` and the latest
+  `run-summary.json`), cached for a minute or until a run finishes.
+- `clusters[]`: `address`, `last_checked_at`, `ok`, `error`, `error_class`,
+  `environment`, `last_success_at` (missing when no scanned run returned
+  data), `failed_runs` (newest consecutive failures), and `fail_count`,
+  `warn_count`, `err_count`, `health_score` from the newest successful run.
+  Clusters not checked for 30 days are left out; cluster groups apply.
+- `schedules[]`: one entry per active schedule (`kind` `main` or
+  `environment`): `every`, `interval_s`, `last_run_at` (newest run of that
+  config or environment, from any source), `since`, `overdue` (more than two
+  intervals plus 10 minutes since `since`), `missed_runs`, `overdue_by_s`.
+- `schedule_overdue`: any schedule is overdue.
 
 Scheduler health endpoint:
 
@@ -1539,7 +1648,7 @@ Run config catalog (operator+):
 
 For complete v2 deployment examples, see:
 - `README.md` (Run backend / Run frontend)
-- `docs/V2_BACKEND_FRONTEND_MVP.md`
+- `docs/API_AND_UI_ARCHITECTURE.md`
 - `k8s/README.md`
 - `docs/PROMETHEUS.md` (generalized monitoring patterns for CLI, v2, and Kubernetes)
 

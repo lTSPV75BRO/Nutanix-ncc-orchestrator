@@ -33,7 +33,7 @@ func (s *apiServer) startNotificationDigestLoop(ctx context.Context) {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for {
-			s.maybeSendDigest(ctx)
+			guard("notification digest", func() { s.maybeSendDigest(ctx) })
 			select {
 			case <-ctx.Done():
 				return
@@ -159,6 +159,13 @@ func (s *apiServer) buildDigest() (title, body string) {
 		}
 		if len(viol) > max {
 			lines = append(lines, fmt.Sprintf("  … and %d more", len(viol)-max))
+		}
+	}
+	// Clusters the newest run could not reach and overdue schedules.
+	if notes := s.freshnessNotice(); len(notes) > 0 {
+		lines = append(lines, "", "Data age:")
+		for _, n := range notes {
+			lines = append(lines, "  - "+n)
 		}
 	}
 	return title, strings.Join(lines, "\n")

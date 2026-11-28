@@ -16,7 +16,7 @@ For first-time setup and full local build instructions, start with:
 
 Main components you may touch:
 
-- `cmd/ncc-orchestrator` - orchestrator runner CLI (`goNCC.go` is the root command)
+- `cmd/ncc-orchestrator` - orchestrator runner CLI (`goNCC.go` holds `main`; the root command is in `rootcmd.go`, the rest is split by area)
 - `cmd/ncc-api-server` - backend API service
 - `cmd/ncc-ui-server` - UI proxy/static server
 - `cmd/ncc-mcp-server` - optional MCP bridge
@@ -51,13 +51,17 @@ Main components you may touch:
 
 ## Required checks before PR
 
-- `go test ./...`
-- `go vet ./...`
-- `go build ./...`
-- `go test ./cmd/ncc-orchestrator` (runner CLI sanity)
+- `go build ./...` and `go vet ./...`
+- `go test -race -count=1 ./...` (needs a C compiler for the race detector)
+- `gofmt -l` on changed Go files, and `golangci-lint run ./...` (CI runs it)
 - If MCP code changed: `go build ./cmd/ncc-mcp-server`
 - If frontend changed: `cd frontend && npm test && npm run build`
-- If Kubernetes manifests changed: `kubectl kustomize k8s`
+- If Kubernetes manifests changed: `kubectl kustomize k8s`, and for the Helm chart
+  `helm lint helm/ncc-orchestrator` and `helm template` (validate the output with
+  `kubeconform -strict`)
+- If an installer or deploy script changed: run it on the target OS against a
+  locally built stack archive (see [`docs/BUILD_FROM_SCRATCH.md`](docs/BUILD_FROM_SCRATCH.md))
+  and say what you ran in the PR
 
 ## Documentation requirements
 
@@ -65,9 +69,10 @@ If your change affects behavior, flags, APIs, setup, operations, or security:
 
 - Update user-facing docs as needed, typically:
   - `docs/FEATURES_AND_CONFIG_FLAGS.md`
-  - `docs/V2_BACKEND_FRONTEND_MVP.md`
-  - `docs/MIGRATION_v1_TO_v2.md`
+  - `docs/API_AND_UI_ARCHITECTURE.md`
   - `docs/PROMETHEUS.md` (if metrics/monitoring changed)
+  - `docs/TROUBLESHOOTING.md` (new log lines or error codes an operator will search for)
+  - `docs/ROADMAP.md` (when you finish or defer something listed there)
 - For v2 release-line changes, update:
   - `docs/releases/RELEASE_NOTES_v<version>.md`
   - `CHANGELOG.md`
@@ -83,6 +88,9 @@ If your change affects behavior, flags, APIs, setup, operations, or security:
 - Frontend changes:
   - update UI tests and ensure `npm run build` passes
   - keep API usage aligned to `/api/v1/*` contracts
+  - follow [`docs/ui/DESIGN_SYSTEM.md`](docs/ui/DESIGN_SYSTEM.md): theme tokens instead of
+    hex colours, `src/ui` components, accessible names that contain the visible text
+  - add an axe test (`*.a11y.test.tsx`) for a new page; contrast needs a real browser
 - Kubernetes changes:
   - verify `k8s/README.md` instructions still match manifests
   - ensure image assumptions and volume wiring are explicit
@@ -93,6 +101,10 @@ If your change affects behavior, flags, APIs, setup, operations, or security:
 - Keep mutation endpoints strict (`application/json`, unknown field rejection, allowlisted args).
 - Preserve machine-readable fields used by automation (`error_code`, `remediation_code`, run summary schema).
 - Avoid introducing high-cardinality metrics in Prometheus outputs.
+- Log failures with enough context to diagnose them (user, client address, request id,
+  the error) and never log secrets, tokens or passwords.
+- A chart or manifest that passes `helm lint` can still fail to start: the container
+  command line is replaced by Kubernetes `args`, so pass every path flag explicitly.
 
 ## Specific contributor notes
 

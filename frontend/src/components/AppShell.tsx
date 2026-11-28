@@ -31,6 +31,7 @@ function navItems(viewer: Viewer): MenuItem[] {
 /** Menu key for the current location: the page/section path (a run's detail page belongs to Runs). */
 function selectedKey(pathname: string): string {
   const p = pathname.replace(/\/+$/, "") || "/";
+  if (p.startsWith("/integrations/")) return "/integrations";
   return p.startsWith("/runs/") ? "/runs" : p;
 }
 
@@ -41,11 +42,12 @@ function selectedKey(pathname: string): string {
  */
 function Brand({ brand, onNavigate }: { brand?: ReactNode; onNavigate?: () => void }) {
   return (
-    <Link to={OVERVIEW_PATH} className="ui-sidebar-brand" aria-label="NCC Orchestrator home" onClick={onNavigate}>
+    <Link to={OVERVIEW_PATH} className="ui-sidebar-brand" onClick={onNavigate}>
       <img src="/logo.svg" alt="" />
       <span className="ui-sidebar-brand-text">
-        <span className="ui-sidebar-brand-name">NCC Orchestrator</span>
+        <span className="ui-sidebar-brand-name">NCC Orchestrator</span>{" "}
         {brand}
+        <span className="visually-hidden"> home</span>
       </span>
     </Link>
   );
@@ -60,6 +62,7 @@ export function AppShell({
   viewer,
   brand,
   actions,
+  notice,
   children,
 }: {
   viewer: Viewer;
@@ -67,6 +70,8 @@ export function AppShell({
   brand?: ReactNode;
   /** Right side of the top bar. */
   actions?: ReactNode;
+  /** Above every page, under the top bar (the update banner). */
+  notice?: ReactNode;
   children: ReactNode;
 }) {
   const location = useLocation();
@@ -100,7 +105,16 @@ export function AppShell({
   return (
     <div className="ui-shell">
       {/* First stop for keyboard users: skip the sidebar and top bar. */}
-      <a href="#main-content" className="ui-skip-link">
+      <a
+        href="#main-content"
+        className="ui-skip-link"
+        onClick={(e) => {
+          // A bare #main-content link would change the address (and, with the
+          // hash router of the demo, open a page that does not exist).
+          e.preventDefault();
+          document.getElementById("main-content")?.focus();
+        }}
+      >
         Skip to content
       </a>
       <aside className={`ui-sidebar${collapsed ? " is-collapsed" : ""}`} aria-label="Primary">
@@ -146,11 +160,12 @@ export function AppShell({
           />
           <h1 className="ui-topbar-title">
             {icon && title ? <TitleIcon>{icon}</TitleIcon> : null}
-            <span className="ui-topbar-title-text">{title}</span>
+            <span className="ui-topbar-title-text">{title || "Page not found"}</span>
           </h1>
           <div className="ui-topbar-actions">{actions}</div>
         </header>
         <main className="ui-content" id="main-content" tabIndex={-1}>
+          {notice}
           <PageErrorBoundary key={location.pathname}>{children}</PageErrorBoundary>
         </main>
       </div>

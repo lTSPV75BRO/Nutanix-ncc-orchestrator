@@ -1,28 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  Alert,
-  Button,
-  Card,
-  DatePicker,
-  Empty,
-  Input,
-  Modal,
-  Select,
-  Space,
-  Switch,
-  Table,
-  Tag,
-  Tooltip,
-  Typography,
-} from "antd";
-import {
-  CopyOutlined,
-  DownloadOutlined,
-  FileExcelOutlined,
-  ReloadOutlined,
-  SearchOutlined,
-} from "@ant-design/icons";
+import { Alert, Button, Card, DatePicker, Drawer, Dropdown, Empty, Input, Select, Space, Switch, Table, Tooltip, Typography } from "antd";
+import { CodeOutlined, CopyOutlined, DownloadOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import dayjs, { type Dayjs } from "dayjs";
 import { useSearchParams } from "react-router";
@@ -31,53 +10,51 @@ import type { AuditLogEntry } from "../../api/types";
 import { notify } from "../../notify";
 import { formatDateTime, relativeTime } from "../../utils/datetime";
 import { StatusBadge } from "../../ui";
-import { roleColor } from "../../auth/roleColor";
 
 type Props = {
   onError: (e: unknown) => void;
 };
 
-function formatBytes(n: number): string {
-  if (!Number.isFinite(n) || n <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  let value = n;
-  let i = 0;
-  while (value >= 1024 && i < units.length - 1) {
-    value /= 1024;
-    i += 1;
-  }
-  return `${value.toFixed(value >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
-}
-
+/** Records the server writes by itself for every request; hidden unless asked for. */
+const AUTOMATIC_ACTIONS = ["http.request", "mcp.call"];
 
 const ACTION_PRESETS: { label: string; value: string }[] = [
-  { label: "All actions", value: "" },
-  { label: "Authentication (all auth events)", value: "auth." },
-  { label: "Token management (PAT/session token)", value: "auth.token." },
-  { label: "Settings (all settings changes)", value: "settings." },
-  { label: "Config changes (config + related files)", value: "settings.config" },
-  { label: "User & access management", value: "settings.users." },
-  { label: "Backups (create/restore/verify/delete/download)", value: "settings.backup." },
-  { label: "Notifications (save/test)", value: "settings.notifications." },
-  { label: "TLS / HTTPS", value: "settings.tls." },
+  { label: "All changes", value: "" },
+  { label: "Sign-ins and tokens", value: "auth." },
+  { label: "Settings", value: "settings." },
+  { label: "Users and access", value: "settings.users." },
+  { label: "Config files", value: "settings.config" },
+  { label: "Backups", value: "settings.backup." },
+  { label: "Notifications", value: "settings.notifications." },
   { label: "Updates", value: "settings.update" },
-  { label: "Schedule changes", value: "schedule." },
-  { label: "Scheduled backup config", value: "schedule.backup." },
-  { label: "Runs (preflight + trigger + cancel)", value: "runs." },
-  { label: "Health checks and repairs", value: "health.diagnostics." },
+  { label: "Schedules", value: "schedule." },
+  { label: "Runs", value: "runs." },
+  { label: "Health and repairs", value: "health.diagnostics." },
+  { label: "Blocked dashboard versions", value: "ui.blocked" },
+  { label: "MCP assistant calls", value: "mcp.call" },
 ];
 
 type AuditRow = AuditLogEntry & { __idx: number };
+
+/** The entry as stored: no UI bookkeeping, pretty-printed. */
+function entryJson(entry: AuditLogEntry): string {
+  const { __idx: _omit, ...rest } = entry as AuditRow;
+  return JSON.stringify(rest, null, 2);
+}
+
+function userOf(row: AuditLogEntry): string {
+  return String(row.user ?? row.username ?? "");
+}
 
 export function AuditLogSection({ onError }: Props) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [actionFilter, setActionFilter] = useState<string>("");
   const [onlyFailures, setOnlyFailures] = useState(false);
+  const [showAutomatic, setShowAutomatic] = useState(false);
   const [limit, setLimit] = useState(200);
   const [search, setSearch] = useState("");
   const [userFilter, setUserFilter] = useState("");
   const [range, setRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
-  const [exporting, setExporting] = useState(false);
   const [selected, setSelected] = useState<AuditLogEntry | null>(null);
 
   useEffect(() => {
@@ -96,9 +73,14 @@ export function AuditLogSection({ onError }: Props) {
   const since = range?.[0] ? range[0].format("YYYY-MM-DD") : undefined;
   const until = range?.[1] ? range[1].format("YYYY-MM-DD") : undefined;
 
+  // Asking for an automatic record by name always shows it.
+  const explicitAutomatic = AUTOMATIC_ACTIONS.some((a) => actionFilter.startsWith(a));
+  const exclude = showAutomatic || explicitAutomatic ? undefined : AUTOMATIC_ACTIONS.join(",");
+
   const queryParams: AuditQuery = {
     limit,
     action: actionFilter || undefined,
+    exclude,
     failures: onlyFailures,
     user: userFilter.trim() || undefined,
     since,
@@ -106,7 +88,7 @@ export function AuditLogSection({ onError }: Props) {
   };
 
   const audit = useQuery({
-    queryKey: ["audit", actionFilter, onlyFailures, limit, userFilter.trim(), since, until],
+    queryKey: ["audit", actionFilter, onlyFailures, limit, userFilter.trim(), since, until, exclude ?? ""],
     queryFn: () => api.audit(queryParams),
     staleTime: 5_000,
   });
@@ -121,12 +103,10 @@ export function AuditLogSection({ onError }: Props) {
     else next.delete("failures");
     if (search.trim()) next.set("search", search.trim());
     else next.delete("search");
-    const changed = next.toString() !== searchParams.toString();
-    if (changed) setSearchParams(next, { replace: true });
+    if (next.toString() !== searchParams.toString()) setSearchParams(next, { replace: true });
   }, [actionFilter, onlyFailures, userFilter, search, searchParams, setSearchParams]);
 
-  // Surface load errors exactly once per error change, not on every render
-  // (otherwise notifyError fires for every re-render in an infinite spiral).
+  // Surface load errors once per error change, not on every render.
   useEffect(() => {
     if (audit.error) onError(audit.error);
   }, [audit.error, onError]);
@@ -134,8 +114,8 @@ export function AuditLogSection({ onError }: Props) {
   const data = audit.data;
   const entries = useMemo<AuditRow[]>(() => {
     const list = (data?.entries ?? []) as AuditLogEntry[];
-    // Tag with a stable index so the Table can use a deterministic rowKey
-    // (audit lines aren't unique by ts/action alone).
+    // A stable index gives the Table a deterministic rowKey (entries are not
+    // unique by time and action alone).
     return list.map((e, idx) => ({ ...e, __idx: idx }));
   }, [data]);
 
@@ -145,77 +125,82 @@ export function AuditLogSection({ onError }: Props) {
     return entries.filter((e) => JSON.stringify(e).toLowerCase().includes(q));
   }, [entries, search]);
 
-  const successCount = filtered.filter((e) => e.success).length;
-  const failureCount = filtered.length - successCount;
+  const failureCount = filtered.filter((e) => !e.success).length;
 
   const columns = useMemo<ColumnsType<AuditRow>>(
     () => [
       {
         title: "When",
         key: "ts",
-        width: 150,
+        width: 130,
         render: (_, row) => (
           <Tooltip title={formatDateTime(row.ts)}>
-            <Typography.Text style={{ fontSize: 12 }}>{relativeTime(row.ts)}</Typography.Text>
+            <span className="audit-when">{relativeTime(row.ts)}</span>
           </Tooltip>
         ),
       },
       {
         title: "Action",
         key: "action",
-        render: (_, row) => <Typography.Text className="mono audit-action">{row.action}</Typography.Text>,
+        render: (_, row) => <span className="mono audit-action">{row.action}</span>,
       },
       {
         title: "Result",
         key: "success",
-        width: 110,
-        align: "center",
+        width: 120,
         render: (_, row) =>
           row.success ? <StatusBadge tone="ok">Succeeded</StatusBadge> : <StatusBadge tone="fail">Failed</StatusBadge>,
       },
       {
         title: "User",
         key: "user",
-        width: 150,
+        width: 170,
         render: (_, row) => {
-          const user = (row.user ?? row.username) as string | undefined;
-          const role = row.role as string | undefined;
-          if (!user) return <span>—</span>;
+          const user = userOf(row);
+          if (!user) return <span className="audit-muted">—</span>;
           return (
-            <Space size={4} wrap>
-              <Typography.Text style={{ fontSize: 12 }}>{user}</Typography.Text>
-              {role ? (
-                <Tag color={roleColor(role)}>{role}</Tag>
-              ) : null}
-            </Space>
+            <span className="audit-user">
+              {user}
+              {row.role ? <span className="audit-muted"> · {String(row.role)}</span> : null}
+            </span>
           );
         },
       },
       {
         title: "Client",
         key: "client",
-        width: 150,
-        render: (_, row) => (
-          <Typography.Text type="secondary" className="mono" style={{ fontSize: 12 }}>
-            {row.client || "—"}
-          </Typography.Text>
-        ),
+        width: 140,
+        render: (_, row) => {
+          const kind = String((row as Record<string, unknown>).client_kind ?? "");
+          const name = String((row as Record<string, unknown>).client_name ?? "");
+          // Our own dashboard is the norm; only name the other kinds.
+          const label = kind === "custom" ? name || "custom" : kind === "api" || kind === "mcp" ? kind : "";
+          return (
+            <span className="mono audit-muted">
+              {row.client || "—"}
+              {label ? <span> · {label}</span> : null}
+            </span>
+          );
+        },
       },
       {
-        title: "Auth",
-        key: "auth_mode",
-        width: 90,
-        render: (_, row) => (row.auth_mode ? <Tag>{row.auth_mode}</Tag> : <span>—</span>),
-      },
-      {
-        title: "Endpoint",
-        key: "path",
-        ellipsis: true,
+        title: <span className="visually-hidden">Details</span>,
+        key: "json",
+        width: 52,
+        align: "right",
         render: (_, row) => (
-          <Typography.Text type="secondary" className="mono" style={{ fontSize: 12 }}>
-            {row.method ? `${row.method} ` : ""}
-            {row.path || "—"}
-          </Typography.Text>
+          <Tooltip title="View JSON">
+            <Button
+              type="text"
+              size="small"
+              icon={<CodeOutlined />}
+              aria-label={`View JSON for ${row.action}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                setSelected(row);
+              }}
+            />
+          </Tooltip>
         ),
       },
     ],
@@ -223,93 +208,55 @@ export function AuditLogSection({ onError }: Props) {
   );
 
   const downloadJsonl = () => {
-    const lines = filtered.map(({ __idx: _omit, ...rest }) => JSON.stringify(rest));
-    const blob = new Blob([lines.join("\n") + (lines.length ? "\n" : "")], {
-      type: "application/x-ndjson",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `audit-${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    const lines = filtered.map((e) => JSON.stringify(JSON.parse(entryJson(e))));
+    const blob = new Blob([lines.join("\n") + (lines.length ? "\n" : "")], { type: "application/x-ndjson" });
+    saveBlob(blob, `audit-${stamp()}.jsonl`);
     notify.success("Audit entries exported as JSONL.");
   };
 
   const exportCsv = async () => {
-    setExporting(true);
     try {
       const csv = await api.auditExportCSV({ ...queryParams, limit: Math.max(limit, 1000) });
-      const blob = new Blob([csv], { type: "text/csv" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `audit-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      notify.success("Audit entries exported as CSV (server-side filtered).");
+      saveBlob(new Blob([csv], { type: "text/csv" }), `audit-${stamp()}.csv`);
+      notify.success("Audit entries exported as CSV.");
     } catch (e) {
       onError(e);
-    } finally {
-      setExporting(false);
     }
   };
 
-  const copyEntry = (entry: AuditLogEntry) => {
-    const { __idx: _omit, ...rest } = entry as AuditRow;
-    void navigator.clipboard.writeText(JSON.stringify(rest, null, 2)).then(() => {
-      notify.success("Audit entry copied to clipboard.");
-    });
+  const copyText = (text: string, done: string) => {
+    void navigator.clipboard.writeText(text).then(() => notify.success(done));
   };
+
+  const requestId = selected ? String(selected.request_id ?? "") : "";
 
   return (
     <Card className="page-card">
       <div className="config-section-head">
-        <h3 className="ui-panel-title">Recorded changes</h3>
-        <p className="ui-panel-desc">Config saves, schedule changes, sign-ins and run triggers, newest first.</p>
+        <h2 className="ui-panel-title">Audit log</h2>
+        <p className="ui-panel-desc">
+          Who changed what, newest first. Select a row, or use the code button, to see the full JSON entry.
+        </p>
       </div>
 
-      <Space size={[8, 8]} wrap style={{ marginTop: 12, width: "100%" }}>
+      <div className="audit-toolbar">
         <Select
           id="audit-action-filter"
           aria-label="Filter audit entries by action"
           value={actionFilter}
           onChange={setActionFilter}
           options={ACTION_PRESETS}
-          style={{ width: 320 }}
+          style={{ width: 220 }}
         />
-        <Select
-          id="audit-limit"
-          aria-label="Audit entries limit"
-          value={limit}
-          onChange={setLimit}
-          options={[
-            { label: "Last 50", value: 50 },
-            { label: "Last 200", value: 200 },
-            { label: "Last 500", value: 500 },
-            { label: "Last 1000", value: 1000 },
-          ]}
-          style={{ width: 140 }}
-        />
-        <Space size={6} align="center">
-          <Switch id="audit-failures-only" aria-label="Show failures only" checked={onlyFailures} onChange={setOnlyFailures} />
-          <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-            <label htmlFor="audit-failures-only">Failures only</label>
-          </Typography.Text>
-        </Space>
         <Input
           id="audit-user-filter"
           name="audit-user-filter"
           aria-label="Filter by user"
           allowClear
-          placeholder="User (exact)"
+          placeholder="User"
           value={userFilter}
           onChange={(e) => setUserFilter(e.target.value)}
-          style={{ width: 160 }}
+          style={{ width: 140 }}
           autoComplete="off"
         />
         <DatePicker.RangePicker
@@ -318,68 +265,70 @@ export function AuditLogSection({ onError }: Props) {
           onChange={(v) => setRange(v as [Dayjs | null, Dayjs | null] | null)}
           allowEmpty={[true, true]}
           disabledDate={(d) => d && d.isAfter(dayjs().endOf("day"))}
-          style={{ width: 250 }}
+          style={{ width: 240 }}
         />
         <Input
           id="audit-search"
           name="audit-search"
-          aria-label="Search audit entries (client-side)"
+          aria-label="Search the entries shown"
           allowClear
           prefix={<SearchOutlined />}
-          placeholder="Search shown…"
+          placeholder="Search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          style={{ width: 200 }}
+          style={{ width: 170 }}
           autoComplete="off"
         />
-        <Tooltip title="Refresh">
-          <Button icon={<ReloadOutlined />} onClick={() => void audit.refetch()} loading={audit.isFetching} />
+        <span className="audit-switch">
+          <Switch id="audit-failures-only" size="small" aria-label="Failures only" checked={onlyFailures} onChange={setOnlyFailures} />
+          <label htmlFor="audit-failures-only">Failures only</label>
+        </span>
+        <Tooltip title="Every API request and MCP call the server records on its own. Off by default.">
+          <span className="audit-switch">
+            <Switch id="audit-automatic" size="small" aria-label="Show automatic request records" checked={showAutomatic} onChange={setShowAutomatic} />
+            <label htmlFor="audit-automatic">Automatic requests</label>
+          </span>
         </Tooltip>
-        <Tooltip title="Download displayed entries as JSONL">
-          <Button icon={<DownloadOutlined />} onClick={downloadJsonl} disabled={filtered.length === 0} />
-        </Tooltip>
-        <Tooltip title="Export server-side filtered entries as CSV">
-          <Button icon={<FileExcelOutlined />} onClick={() => void exportCsv()} loading={exporting}>
-            CSV
-          </Button>
-        </Tooltip>
-      </Space>
+        <span className="audit-toolbar-end">
+          <Select
+            id="audit-limit"
+            aria-label="Number of entries"
+            value={limit}
+            onChange={setLimit}
+            options={[50, 200, 500, 1000].map((n) => ({ label: `Last ${n}`, value: n }))}
+            style={{ width: 110 }}
+          />
+          <Tooltip title="Refresh">
+            <Button icon={<ReloadOutlined />} aria-label="Refresh" onClick={() => void audit.refetch()} loading={audit.isFetching} />
+          </Tooltip>
+          <Dropdown
+            menu={{
+              items: [
+                { key: "jsonl", label: "Shown entries (JSONL)", disabled: filtered.length === 0, onClick: downloadJsonl },
+                { key: "csv", label: "Filtered on the server (CSV)", onClick: () => void exportCsv() },
+              ],
+            }}
+          >
+            <Button icon={<DownloadOutlined />}>Export</Button>
+          </Dropdown>
+        </span>
+      </div>
 
-      <Space size={[8, 8]} wrap style={{ marginTop: 12 }}>
-        <Tag>{filtered.length} shown</Tag>
-        <Tag>{successCount} succeeded</Tag>
-        <Tag color={failureCount > 0 ? "error" : undefined}>{failureCount} failed</Tag>
-        {data?.path ? (
-          <Tooltip title={data.path}>
-            <Tag>
-              File: <Typography.Text className="mono" style={{ fontSize: 11 }} copyable={{ text: data.path }}>{data.path}</Typography.Text>
-            </Tag>
-          </Tooltip>
-        ) : null}
-        {data ? <Tag>Size: {formatBytes(data.size || 0)}</Tag> : null}
-        {data?.mod_time ? (
-          <Tooltip title={formatDateTime(data.mod_time)}>
-            <Tag>Last entry: {relativeTime(data.mod_time)}</Tag>
-          </Tooltip>
-        ) : null}
-      </Space>
+      <p className="audit-summary">
+        {filtered.length} {filtered.length === 1 ? "entry" : "entries"}
+        {failureCount > 0 ? <span className="audit-failed"> · {failureCount} failed</span> : null}
+        {data?.mod_time ? <span className="audit-muted"> · last written {relativeTime(data.mod_time)}</span> : null}
+      </p>
 
       {audit.isError ? (
-        <Alert
-          type="error"
-          showIcon
-          style={{ marginTop: 12 }}
-          title="Couldn't load audit entries"
-          description={String(audit.error)}
-        />
+        <Alert type="error" showIcon title="Couldn't load audit entries" description={String(audit.error)} />
       ) : null}
 
       {!audit.isLoading && filtered.length === 0 ? (
         <Empty
-          style={{ marginTop: 24 }}
           description={
             entries.length === 0
-              ? "No audit entries yet. Trigger a run or save a config change to populate this log."
+              ? "Nothing recorded yet. Save a setting or start a run and it appears here."
               : "No entries match your filters."
           }
         />
@@ -390,12 +339,8 @@ export function AuditLogSection({ onError }: Props) {
           dataSource={filtered}
           loading={audit.isLoading}
           size="small"
-          style={{ marginTop: 12 }}
-          pagination={{
-            defaultPageSize: 25,
-            showSizeChanger: true,
-            pageSizeOptions: [10, 25, 50, 100],
-          }}
+          className="audit-table"
+          pagination={{ defaultPageSize: 25, showSizeChanger: true, pageSizeOptions: [10, 25, 50, 100] }}
           onRow={(row) => ({
             onClick: () => setSelected(row),
             style: { cursor: "pointer" },
@@ -403,45 +348,81 @@ export function AuditLogSection({ onError }: Props) {
         />
       )}
 
-      <Modal
-        title={selected ? `Audit entry · ${selected.action}` : "Audit entry"}
+      <Drawer
+        title={selected ? <span className="mono">{selected.action}</span> : "Audit entry"}
         open={Boolean(selected)}
-        onCancel={() => setSelected(null)}
-        footer={
-          selected
-            ? [
-                <Button key="copy" icon={<CopyOutlined />} onClick={() => copyEntry(selected)}>
-                  Copy JSON
-                </Button>,
-                <Button key="close" type="primary" onClick={() => setSelected(null)}>
-                  Close
-                </Button>,
-              ]
-            : null
+        onClose={() => setSelected(null)}
+        size={560}
+        extra={
+          selected ? (
+            <Space>
+              {requestId ? (
+                <Button size="small" onClick={() => copyText(requestId, "Request ID copied.")}>
+                  Copy request ID
+                </Button>
+              ) : null}
+              <Button size="small" icon={<CopyOutlined />} onClick={() => copyText(entryJson(selected), "Audit entry copied.")}>
+                Copy JSON
+              </Button>
+            </Space>
+          ) : null
         }
-        width={640}
       >
         {selected ? (
-          <pre
-            style={{
-              margin: 0,
-              padding: 12,
-              borderRadius: 6,
-              background: "var(--ui-surface-hover)",
-              fontSize: 12,
-              maxHeight: 420,
-              overflow: "auto",
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-all",
-            }}
-          >
-            {(() => {
-              const { __idx: _omit, ...rest } = selected as AuditRow;
-              return JSON.stringify(rest, null, 2);
-            })()}
-          </pre>
+          <>
+            <dl className="audit-facts">
+              <div>
+                <dt>When</dt>
+                <dd>{formatDateTime(selected.ts)}</dd>
+              </div>
+              <div>
+                <dt>Result</dt>
+                <dd>
+                  {selected.success ? <StatusBadge tone="ok">Succeeded</StatusBadge> : <StatusBadge tone="fail">Failed</StatusBadge>}
+                </dd>
+              </div>
+              <div>
+                <dt>User</dt>
+                <dd>{userOf(selected) || "—"}</dd>
+              </div>
+              <div>
+                <dt>Client</dt>
+                <dd className="mono">{selected.client || "—"}</dd>
+              </div>
+            </dl>
+            {!selected.success && (selected.error || selected.error_code) ? (
+              <Alert
+                type="error"
+                showIcon
+                title={String(selected.error || selected.error_code)}
+                description={selected.remediation ? String(selected.remediation) : selected.error_code ? `Error code ${String(selected.error_code)}` : undefined}
+                style={{ marginBottom: 12 }}
+              />
+            ) : null}
+            <Typography.Text type="secondary" className="audit-json-label">
+              Full entry
+            </Typography.Text>
+            <pre className="audit-json" tabIndex={0} aria-label="Audit entry as JSON">
+              {entryJson(selected)}
+            </pre>
+          </>
         ) : null}
-      </Modal>
+      </Drawer>
     </Card>
   );
+}
+
+function stamp(): string {
+  return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+function saveBlob(blob: Blob, name: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }

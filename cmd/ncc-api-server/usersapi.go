@@ -18,6 +18,7 @@ func (s *apiServer) handleUsers(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, envelope{Success: false, Error: "local accounts are not configured (start with --users-db)"})
 		return
 	}
+	s.users.refreshNow()
 	switch r.Method {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]interface{}{"users": s.users.list()}})
@@ -62,8 +63,20 @@ func (s *apiServer) handleUsers(w http.ResponseWriter, r *http.Request) {
 		if body.MustChange != nil {
 			mustChange = *body.MustChange
 		}
-		if err := s.users.upsertUser(username, hash, role, mustChange); err != nil {
-			writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: err.Error()})
+		err = s.users.upsertUser(username, hash, role, mustChange)
+		if errors.Is(err, errStoreConflict) {
+			// Another replica saved between our reload and our write. Take its
+			// version, make sure it did not create this very account, and try
+			// once more; a second conflict is reported as 409, not 500.
+			s.users.refreshNow()
+			if _, exists := s.users.lookup(username); exists {
+				writeJSON(w, http.StatusConflict, envelope{Success: false, Error: "user already exists"})
+				return
+			}
+			err = s.users.upsertUser(username, hash, role, mustChange)
+		}
+		if err != nil {
+			writeUserStoreError(w, err)
 			return
 		}
 		s.audit(r, "settings.users.create", true, map[string]interface{}{"username": username, "role": role.String()})
@@ -85,6 +98,7 @@ func (s *apiServer) handleUserByName(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "invalid username in path"})
 		return
 	}
+	s.users.refreshNow()
 	switch r.Method {
 	case http.MethodPut:
 		var body struct {

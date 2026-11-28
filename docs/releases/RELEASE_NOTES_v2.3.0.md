@@ -6,7 +6,7 @@
 > affiliated with or endorsed by Nutanix, Inc. The project is MIT licensed.
 
 v2.3.0 follows a full application audit (findings and evidence in
-[`docs/audit/`](../audit/executive-summary.md)). It replaces the first-time
+[`docs/audit/`](../audit/README.md)). It replaces the first-time
 setup modal with a setup checklist derived from the install's real state,
 redesigns the sign-in screens, makes the user store safe with several API
 replicas, makes restores roll back on failure, fixes a set of Windows-only
@@ -147,7 +147,7 @@ is now in the user menu (or beside it when sign-in is off). Every section has
 its own address, so it can be bookmarked; old `/settings?tab=…` links still
 work. Each role sees the same sections as before. This is the first step of
 a wider redesign of the signed-in pages
-([`docs/ui/redesign-plan.md`](../ui/redesign-plan.md)).
+(`docs/ui/redesign-plan.md`).
 
 ### Overview and Findings
 

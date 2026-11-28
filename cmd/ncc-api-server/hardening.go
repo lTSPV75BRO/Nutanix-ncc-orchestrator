@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"goncc/internal/mcpclient"
 	"goncc/internal/v2layout"
 )
 
@@ -809,6 +810,8 @@ func (s *apiServer) withRateLimit(next http.Handler) http.Handler {
 		"/api/v1/settings/backups/download":         true,
 		"/api/v1/settings/restore":                  true,
 		"/api/v1/settings/update/apply":             true,
+		"/api/v1/settings/update/plan":              true,
+		"/api/v1/settings/update/rollback":          true,
 		"/api/v1/health/diagnostics/support-bundle": true,
 		"/api/v1/health/migrations/config":          true,
 		"/api/v1/health/supervisor/restart":         true,
@@ -855,8 +858,10 @@ func (s *apiServer) withRateLimit(next http.Handler) http.Handler {
 		}
 		w.Header().Set("Retry-After", strconv.Itoa(retrySeconds))
 		writeJSON(w, http.StatusTooManyRequests, envelope{
-			Success: false,
-			Error:   "rate limit exceeded",
+			Success:           false,
+			Error:             "rate limit exceeded",
+			Retryable:         true,
+			RetryAfterSeconds: retrySeconds,
 			Data: map[string]interface{}{
 				"retry_after_sec": retrySeconds,
 				"path":            r.URL.Path,
@@ -904,6 +909,16 @@ func (s *apiServer) audit(r *http.Request, action string, success bool, fields m
 		}
 		payload["user_agent"] = ua
 	}
+	if tool := mcpclient.SanitizeToolName(r.Header.Get(mcpclient.ToolHeader)); tool != "" || isMCPHTTPRequest(r) {
+		payload["channel"] = "mcp"
+		if tool != "" {
+			payload["mcp_tool"] = tool
+		}
+		if ver := strings.TrimSpace(r.Header.Get(mcpclient.VersionHeader)); ver != "" {
+			payload["mcp_client_version"] = ver
+		}
+	}
+	s.decorateAuditClient(r, payload)
 	// Attribute the action to the authenticated principal (user + role) when it
 	// was resolved by withAuth. Static-token automation surfaces as the
 	// synthetic subject (e.g. "static-admin-token"); local/SSO sessions carry
@@ -915,13 +930,79 @@ func (s *apiServer) audit(r *http.Request, action string, success bool, fields m
 		if rs := p.role.String(); rs != "" {
 			payload["role"] = rs
 		}
+		if am := p.method.String(); am != "" && am != "none" {
+			payload["auth"] = am
+		}
+		if p.method == authPAT {
+			if p.patID != "" {
+				payload["pat_id"] = p.patID
+			}
+			if p.patName != "" {
+				payload["pat_name"] = p.patName
+			}
+		}
+	} else {
+		s.annotatePresentedPAT(r, payload)
 	}
+	s.attachAuditFailure(r, success, payload)
 	for k, v := range fields {
 		payload[k] = v
+	}
+	if info := requestLogInfoFrom(r.Context()); info != nil {
+		info.markAudited()
 	}
 	b, _ := json.Marshal(payload)
 	logAuditEntry(payload)
 	s.appendAuditLine(b)
+}
+
+// annotatePresentedPAT records PAT id and label when a ncc_pat_ credential is
+// present even if withAuth never stored a principal (MCP proof rejected, etc).
+// It does not touch last-used and never writes the secret.
+func (s *apiServer) annotatePresentedPAT(r *http.Request, payload map[string]interface{}) {
+	if s == nil || s.users == nil || r == nil || payload == nil {
+		return
+	}
+	tok := extractAPIToken(r)
+	if !strings.HasPrefix(tok, patPrefix) {
+		return
+	}
+	pt, found := s.users.findTokenByHash(patHash(tok))
+	if !found {
+		return
+	}
+	payload["auth"] = authPAT.String()
+	if pt.ID != "" {
+		payload["pat_id"] = pt.ID
+	}
+	if name := strings.TrimSpace(pt.Name); name != "" {
+		payload["pat_name"] = name
+	}
+	if _, has := payload["user"]; !has && strings.TrimSpace(pt.Owner) != "" {
+		payload["user"] = pt.Owner
+	}
+}
+
+// attachAuditFailure copies the response error, code, and remediation onto a
+// failed audit line so operators see why it failed and what to do.
+func (s *apiServer) attachAuditFailure(r *http.Request, success bool, payload map[string]interface{}) {
+	if success || r == nil || payload == nil {
+		return
+	}
+	info := requestLogInfoFrom(r.Context())
+	if info == nil {
+		return
+	}
+	msg, code, rem := info.failure()
+	if _, ok := payload["error"]; !ok && msg != "" {
+		payload["error"] = msg
+	}
+	if _, ok := payload["error_code"]; !ok && code != "" {
+		payload["error_code"] = code
+	}
+	if _, ok := payload["remediation"]; !ok && rem != "" {
+		payload["remediation"] = rem
+	}
 }
 
 // appendAuditLine writes a JSONL audit entry with a serialized lock so concurrent
@@ -984,7 +1065,9 @@ func rotateAuditGenerations(abs string, keep int) {
 // fields are ignored (no filtering on that dimension).
 type auditFilter struct {
 	actionPrefix string    // match entries whose "action" has this prefix
+	exclude      []string  // drop entries whose "action" has any of these prefixes
 	user         string    // case-insensitive exact match on "user"
+	channel      string    // exact channel match (e.g. mcp)
 	onlyFailures bool      // keep only failed actions
 	since        time.Time // keep entries at or after this time
 	until        time.Time // keep entries at or before this time
@@ -998,6 +1081,14 @@ func (f auditFilter) matches(entry map[string]interface{}) bool {
 			return false
 		}
 	}
+	if len(f.exclude) > 0 {
+		act, _ := entry["action"].(string)
+		for _, p := range f.exclude {
+			if p != "" && strings.HasPrefix(act, p) {
+				return false
+			}
+		}
+	}
 	if f.onlyFailures {
 		if ok, _ := entry["success"].(bool); ok {
 			return false
@@ -1006,6 +1097,12 @@ func (f auditFilter) matches(entry map[string]interface{}) bool {
 	if f.user != "" {
 		u, _ := entry["user"].(string)
 		if !strings.EqualFold(strings.TrimSpace(u), f.user) {
+			return false
+		}
+	}
+	if f.channel != "" {
+		ch, _ := entry["channel"].(string)
+		if !strings.EqualFold(strings.TrimSpace(ch), f.channel) {
 			return false
 		}
 	}
@@ -1041,28 +1138,80 @@ func (s *apiServer) auditEntries(limit int, f auditFilter) ([]map[string]interfa
 	// API shape stable for the UI even when the file doesn't exist yet.
 	out := make([]map[string]interface{}, 0, limit)
 	abs := s.absPath(s.auditLogPath)
-	data, err := os.ReadFile(abs)
+	err := readLinesNewestFirst(abs, auditTailChunk, func(ln []byte) bool {
+		ln = bytes.TrimSpace(ln)
+		if len(ln) == 0 {
+			return true
+		}
+		var entry map[string]interface{}
+		if err := json.Unmarshal(ln, &entry); err != nil {
+			return true
+		}
+		if !f.matches(entry) {
+			return true
+		}
+		out = append(out, entry)
+		return len(out) < limit
+	})
 	if err != nil {
 		if os.IsNotExist(err) {
 			return out, nil
 		}
 		return out, err
 	}
-	lines := bytes.Split(data, []byte{'\n'})
-	// Walk newest-first.
-	for i := len(lines) - 1; i >= 0 && len(out) < limit; i-- {
-		ln := bytes.TrimSpace(lines[i])
-		if len(ln) == 0 {
-			continue
-		}
-		var entry map[string]interface{}
-		if err := json.Unmarshal(ln, &entry); err != nil {
-			continue
-		}
-		if !f.matches(entry) {
-			continue
-		}
-		out = append(out, entry)
-	}
 	return out, nil
+}
+
+// auditTailChunk is how much of the audit log is read at a time from the end.
+// The page asks for the newest ~100 entries, which is a few tens of kilobytes,
+// so the whole file (up to the 5 MiB rotation size, with the lock held that every
+// request's audit write also needs) no longer has to be read and split.
+const auditTailChunk = 256 << 10
+
+// readLinesNewestFirst calls fn with each line of the file, last line first,
+// until fn returns false. It reads chunk bytes at a time backwards from the end.
+func readLinesNewestFirst(path string, chunk int, fn func(line []byte) bool) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if chunk <= 0 {
+		chunk = auditTailChunk
+	}
+	pos := st.Size()
+	var carry []byte // the start of a line whose beginning is still earlier in the file
+	for pos > 0 {
+		n := int64(chunk)
+		if n > pos {
+			n = pos
+		}
+		pos -= n
+		buf := make([]byte, int(n)+len(carry))
+		if _, err := f.ReadAt(buf[:n], pos); err != nil && err != io.EOF {
+			return err
+		}
+		copy(buf[n:], carry)
+		// buf now holds [pos, pos+n) followed by the carried line start.
+		end := len(buf)
+		for end > 0 {
+			i := bytes.LastIndexByte(buf[:end], '\n')
+			if i < 0 {
+				break
+			}
+			if !fn(buf[i+1 : end]) {
+				return nil
+			}
+			end = i
+		}
+		carry = append(carry[:0], buf[:end]...)
+	}
+	if len(carry) > 0 {
+		fn(carry)
+	}
+	return nil
 }

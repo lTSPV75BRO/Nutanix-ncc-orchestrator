@@ -1,6 +1,6 @@
 # Third-party dependency inventory
 
-This document maps the third-party packages used by NCC Orchestrator v2.3.0.
+This document maps the third-party packages used by NCC Orchestrator v2.4.0.
 It is derived from [`go.mod`](../go.mod), [`go.sum`](../go.sum),
 [`frontend/package.json`](../frontend/package.json), and
 [`frontend/package-lock.json`](../frontend/package-lock.json).
@@ -59,11 +59,12 @@ NCC Orchestrator
 | `go.opentelemetry.io/otel/sdk` | 1.46.0 | Tracer provider and sampling | Runtime |
 | `go.opentelemetry.io/otel/trace` | 1.46.0 | Trace types and propagation | Runtime |
 | `go.yaml.in/yaml/v3` | 3.0.5 | YAML parsing and serialization | Runtime |
-| `golang.org/x/crypto` | 0.58.0 | Password hashing and cryptographic helpers | Runtime |
-| `golang.org/x/oauth2` | 0.37.0 | OAuth/OIDC token exchange | Runtime |
-| `golang.org/x/sys` | 0.49.0 | OS-specific process and system APIs | Runtime |
-| `golang.org/x/term` | 0.47.0 | Terminal detection and password input | Runtime |
+| `golang.org/x/crypto` | 0.59.0 | Password hashing and cryptographic helpers | Runtime |
+| `golang.org/x/oauth2` | 0.38.0 | OAuth/OIDC token exchange | Runtime |
+| `golang.org/x/sys` | 0.50.0 | OS-specific process and system APIs | Runtime |
+| `golang.org/x/term` | 0.48.0 | Terminal detection and password input | Runtime |
 | `gopkg.in/natefinch/lumberjack.v2` | 2.2.1 | Rotating log files | Runtime |
+| `github.com/jimlambrt/gldap` | 0.1.14 | In-process LDAP server for the sign-in tests (with `hashicorp/go-hclog` and `fatih/color`, which it needs) | Tests only |
 
 The Go module also records indirect dependencies for XML signatures, LDAP
 encoding, OTel transport, gRPC/protobuf, configuration backends, terminal
@@ -88,16 +89,17 @@ the resolved module graph rather than upgraded independently.
 
 | Package | Declared version | Used for | Shipped to production? |
 | --- | --- | --- | --- |
+| `axe-core` | ^4.14.1 | Accessibility checks in the Vitest tests (MPL-2.0) | No |
 | `@testing-library/jest-dom` | ^7.0.1 | DOM assertions | No |
 | `@testing-library/react` | ^16.3.3 | Component tests | No |
 | `@types/node` | ^26.6.6 | TypeScript Node types | No |
 | `@types/react` / `@types/react-dom` | ^19.3.0 | TypeScript React types | No |
-| `@vitejs/plugin-react` | ^6.2.1 | Vite React transform | No |
+| `@vitejs/plugin-react` | ^6.3.0 | Vite React transform | No |
 | `@vitest/coverage-v8` | ^5.1.0 | Optional test coverage | No |
 | `aria-query` | ^5.3.2 | Accessibility test support | No |
-| `jsdom` | ^31.0.0 | Browser test environment | No |
+| `jsdom` | ^31.0.1 | Browser test environment | No |
 | `typescript` | ^7.0.2 | Type checking and compilation | No |
-| `vite` | ^8.3.6 | Frontend dev server and production bundling | No |
+| `vite` | ^8.3.8 | Frontend dev server and production bundling | No |
 | `vitest` | ^5.1.0 | Test runner | No |
 
 `dompurify` is pinned through the npm `overrides` field to ensure the

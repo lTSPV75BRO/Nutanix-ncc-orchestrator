@@ -30,7 +30,7 @@ func processIdentityMatches(pid int, expected ...string) (known bool, matches bo
 		}
 		raw = strings.ReplaceAll(string(data), "\x00", " ")
 	} else {
-		out, err := exec.Command("ps", "-p", fmt.Sprintf("%d", pid), "-o", "command=").Output()
+		out, err := exec.Command("ps", "-p", fmt.Sprintf("%d", pid), "-o", "command=").Output() // #nosec G702 -- fixed program; a number
 		if err != nil {
 			return false, true
 		}

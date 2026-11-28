@@ -83,6 +83,8 @@ type principal struct {
 	mustChange bool      // local account flagged for forced password change
 	expiresAt  time.Time // session expiry (zero for static-token auth)
 	groups     []string  // directory (AD/SAML) groups from the session, for cluster-group membership
+	patID      string    // personal access token id when method is authPAT
+	patName    string    // operator-supplied PAT label when method is authPAT
 }
 
 // principalCtxKey scopes the resolved principal stored on a request's context
@@ -338,7 +340,7 @@ func (s *apiServer) principalFromIdentity(ident *auth.Identity) (principal, bool
 		if !ok || role == RoleNone {
 			return principal{}, false
 		}
-		return principal{role: role, subject: ident.UserID, method: authPAT, groups: ident.Groups}, true
+		return principal{role: role, subject: ident.UserID, method: authPAT, groups: ident.Groups, patID: ident.TokenID, patName: ident.TokenName}, true
 	case auth.AuthTypeJWT:
 		role, ok := parseRole(ident.Role)
 		if !ok {
@@ -468,6 +470,10 @@ func routeMinRoleFor(p string, isRead bool) Role {
 	case p == "/api/v1/runs/config-preference":
 		// Any authenticated caller may store their own default run config.
 		return RoleViewer
+	case p == "/api/v1/audit":
+		// Who did what, from where, with which token. The dashboard shows it to
+		// operators and up; the API used to answer any signed-in viewer.
+		return RoleOperator
 	case p == "/api/v1/schedule":
 		// Reading the schedule is a plain viewer read; creating/updating or
 		// applying a recurring run is an operator action (it automates the same
@@ -639,10 +645,14 @@ func (s *apiServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.loginFailureTotal.Add(1)
 		w.Header().Set("Retry-After", strconv.Itoa(secs))
 		s.audit(r, "auth.login", false, map[string]interface{}{"username": username, "error": "throttled", "locked": true})
+		// Same shape and wording for every username (known or not); the
+		// retry time comes only from the guard's per-key failure history.
 		writeJSON(w, http.StatusTooManyRequests, envelope{
-			Success:   false,
-			Error:     fmt.Sprintf("too many failed sign-in attempts; try again in about %ds.", secs),
-			ErrorCode: "NCC_API_ACCOUNT_LOCKED",
+			Success:           false,
+			Error:             fmt.Sprintf("too many failed sign-in attempts; try again in about %ds.", secs),
+			ErrorCode:         "NCC_API_ACCOUNT_LOCKED",
+			Retryable:         true,
+			RetryAfterSeconds: secs,
 		})
 		return
 	}
@@ -678,6 +688,7 @@ func (s *apiServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 			// Operational failure (dial/bind/search): log it but keep the
 			// response generic so we don't leak directory topology.
 			log.Printf("LDAP authentication error for %q: %v", username, err)
+			serverLog.WarnContext(r.Context(), "sign-in could not reach the directory", "subsystem", "auth", "username", username, "method", "ldap", "client_ip", clientIP, "error", err.Error())
 			s.loginFailureTotal.Add(1)
 			s.audit(r, "auth.login", false, map[string]interface{}{"username": username, "method": "ldap", "error": "ldap_unavailable"})
 			writeJSON(w, http.StatusUnauthorized, envelope{Success: false, Error: "invalid username or password"})
@@ -710,6 +721,8 @@ func (s *apiServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 			s.lockoutTotal.Add(1)
 		}
 		s.audit(r, "auth.login", false, map[string]interface{}{"username": username, "locked": locked})
+		serverLog.WarnContext(r.Context(), "sign-in failed", "subsystem", "auth", "username", username, "client_ip", clientIP,
+			"local_account", hasLocal, "directory_tried", ldapProv != nil, "locked", locked)
 		writeJSON(w, http.StatusUnauthorized, envelope{Success: false, Error: "invalid username or password"})
 		return
 	}
@@ -867,7 +880,9 @@ func (s *apiServer) handleAuthRefresh(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "no refreshable session (sign in first)"})
 		return
 	}
-	token, exp, err := s.issueRoleSessionToken(cleanClientIP(r), p.subject, p.role)
+	// Carry the directory groups over: without them a refreshed AD/SAML
+	// session would lose its cluster-group access.
+	token, exp, err := s.issueRoleSessionTokenWithGroups(cleanClientIP(r), p.subject, p.role, p.groups)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: err.Error()})
 		return
@@ -1009,6 +1024,9 @@ func logAdminPasswordReset(reason, hint string) {
 func (s *apiServer) handleMe(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, envelope{Success: false, Error: "method not allowed"})
+		return
+	}
+	if rejectInvalidMCPClient(w, r) {
 		return
 	}
 	data := map[string]interface{}{

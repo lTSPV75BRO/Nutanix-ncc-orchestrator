@@ -31,7 +31,7 @@ describe("App", () => {
       </AppThemeProvider>,
     );
     expect(
-      await screen.findByRole("link", { name: /NCC Orchestrator home/i }),
+      await screen.findByRole("link", { name: /NCC Orchestrator.*home/i }),
     ).toBeInTheDocument();
     // Without sign-in, About lives in the "More options" menu.
     expect(screen.getByRole("button", { name: "More options" })).toBeInTheDocument();

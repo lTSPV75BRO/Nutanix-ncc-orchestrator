@@ -5,6 +5,7 @@ name: "ncc-orchestrator CodeQL config"
 # redirect URI, so scanning it produces an intentional open-redirect finding.
 paths-ignore:
   - tools/fakeoidc/**
+  - tools/fakesaml/**
 
 # ----------------------------------------------------------------------------
 # Why this file exists

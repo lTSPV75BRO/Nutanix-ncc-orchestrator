@@ -8,16 +8,656 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [2.4.0] - Unreleased
+## [2.4.0] - 2026-11-28
+
+Release candidates: `2.4.0-rc.1` and `2.4.0-rc.2` (fixes `verify --online`), 2026-11-24; `2.4.0-rc.3` (Linux and Windows hardening, quieter pages), 2026-11-27.
+
+### Security
+
+- **The Linux service no longer runs as root (LIN-02).** The supervisor, API, UI,
+  NCC runs, schedules and log maintenance run as the system user `ncc`, with no
+  capabilities, `ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateTmp` and
+  read-only programs (`systemd-analyze security` 1.6, was 5.9). A root service
+  helper (`ncc-orchestrator-ops.path`) applies checked requests for schedules,
+  restarts and upgrades. Upgrades move existing root services to `ncc`, schedules
+  in root's crontab included, and a rollback puts them back. To keep the root
+  service: `v2-install-service --service-user root`, or `NCC_SERVICE_USER=root`
+  or `/etc/ncc-orchestrator/service-user` for upgrades.
+- **Windows install folder (WIN-05).** `doctor --fix` removes write access for
+  ordinary users from the install folder when it holds only this product; for
+  shared or system folders it keeps reporting with the `icacls` command to run.
+- **Windows permissions tested as SYSTEM (WIN-05).** CI checks that its Windows
+  runner is elevated and runs the permission tests elevated and as SYSTEM.
+- **Released images are not replaced (REL-10).** `docker-publish.yml` queues runs
+  per branch and skips a branch run that is no longer the newest commit or whose
+  version is already tagged.
+
+- **Free release signing.** The tag release workflow now builds one coherent
+  artifact set, embeds an Ed25519 release public key, signs
+  `checksums.txt`, and publishes its detached signature. Linux binaries and
+  stack archives also carry GPG signatures and the matching public key.
+  Windows and macOS remain checksum- and provenance-verified but unsigned
+  until CA-issued publisher identities are available.
+- **Release keys are checked before the build (REL-09).** The release job signs a test
+  file with both keys and stops if a key, key ID or passphrase is wrong. Ed25519 keys
+  made with openssl (PEM) are accepted, and a build with an invalid public key fails
+  instead of producing programs that skip signature checks.
+- **Windows: a schedule no longer replaces the supervisor task (WIN-06).** Both used
+  the task name `ncc-orchestrator`. The default schedule's task is now
+  `ncc-orchestrator-schedule`; on an affected host run `v2-install-service` as
+  Administrator and save the schedule again. The UI now shows Windows schedules as
+  installed.
+- **Release candidates (REL-08).** A tag such as `v2.4.0-rc.1` is published as a
+  pre-release and never offered to stable installs. An install that runs a candidate is
+  offered newer candidates and then the release; others opt in with
+  `ncc-orchestrator update --include-prerelease`. A tag must match `VERSION`. Images of a
+  candidate do not become `:latest`.
+- **Supervisor and doctor (INS-01).** A stopping supervisor leaves the pid file of a
+  server started by hand, so restarts from the UI stop it. The scheduler check
+  understands `auto`, removed and preview-only schedules.
+- **A restore can no longer plant files the server runs (SEC-19).** Files that run,
+  or decide what runs (`run/`, other files in `bin/`, scheduler and start scripts,
+  `tls/`, certificates and keys, `backups/`), are never taken from a backup. Links are
+  refused and a file cannot replace a folder; `--verify-only` lists such files as
+  **Protected files**. The supervisor rolls back only to a copy it saved, or to a
+  version this server ran. A restore keeps this server's listener, origin, backend and
+  HTTPS settings, even empty ones. Scheduler log paths and `log-file` may not name a
+  script or program.
+- **Program files are restored only as one whole version (SEC-07b).** Mixed or partial
+  sets restore data only and say why; `--verify-only` reports **Program files**.
+- **The systemd service is sandboxed (LIN-01)**, with the log-maintenance and schedule
+  units: no new privileges, kernel settings read-only, fewer capabilities and socket
+  types. Existing installs get it from the update helper after the upgrade. Relax a
+  setting with `systemctl edit`.
+- **Windows file permissions (WIN-02).** `v2-start` and the supervisor limit the token,
+  user database, config, secrets, backups, TLS keys and logs to SYSTEM, Administrators
+  and the account running the stack, and stop ordinary users writing to `bin`,
+  `frontend-dist` and `run`. Access given to specific accounts is kept. The
+  `secrets-perms` doctor check reports and repairs it.
+- **MCP: the person confirms changes (MCP-1).** Mutating tools ask through MCP
+  elicitation when the client supports it (`NCC_MCP_CONFIRM=auto|require|off`, default
+  `auto`). Declined or unanswered prompts (2 minutes) refuse the call. The server
+  negotiates MCP revisions before 2026-07-28 so that it can ask.
+- **Releases are published only after they verify (REL-05).** The workflow attests
+  every file, uploads to a draft, verifies, publishes and verifies again; a published
+  release is never changed. `scripts/verify-published-release.sh` audits any release.
+- **Stronger password hashing (SEC-11).** New password hashes use bcrypt cost
+  12 (was 10). Existing accounts are upgraded the next time they sign in; nobody
+  is signed out and no password changes. System Health warns when sessions run
+  over plain HTTP.
+- **`GET /api/v1/metrics/rate-limit` needs a viewer session or token (SEC-10).**
+  It was public. Give monitoring that reads it a viewer token.
+- **Containers run with a read-only root filesystem (HARD-01)** in the Helm
+  chart and `k8s/`: only `/data` and a `/tmp` `emptyDir` are writable. The chart
+  sets default CPU and memory requests and the UI pod no longer mounts a service
+  account token. For a custom image that writes elsewhere, set
+  `readOnlyRootFilesystem: false`.
+- **Safer installers (WIN-03).** The cloud-init script no longer deletes an
+  existing install (`NCC_FORCE_CLEAN=1` does, on purpose), and both installers
+  check the release's build attestation with the GitHub CLI when it is installed
+  and signed in (`NCC_VERIFY_ATTESTATION=auto|require|off`).
+- **Schedules in `/api/v1/freshness` follow cluster groups (FRESH-01).** A user
+  limited to cluster groups sees only environment schedules that cover one of
+  their clusters, and the overdue flag counts only those.
+- **MCP is API-only with strict auth (SEC-12).** `ncc-mcp-server` no longer
+  execs `ncc-orchestrator`. Every tool and resource calls `ncc-api-server`
+  with a personal access token (`NCC_MCP_TOKEN`), HMAC proof
+  (`ncc-mcp-proof-v1`), and `X-NCC-MCP-Tool`. The process will not start
+  without a PAT. HTTP MCP hosts must send the same token as
+  `Authorization: Bearer` or `X-API-Token`. `NCC_MCP_API_URL` (default
+  `http://127.0.0.1:8081`) is verified on every tool call. Passwords and
+  custom schedule commands are refused. Host-only lifecycle (bootstrap,
+  install/uninstall service, start/stop stack, password reset) is refused
+  over MCP. Each MCP-originated API request is audited as `mcp.call` with
+  `channel=mcp` (filter `GET /api/v1/audit?channel=mcp`). When the caller
+  used a personal access token the entry includes `pat_id`, `pat_name`,
+  and the owning `user`. Failed calls also record `error`, `error_code`,
+  and `remediation`.
+- **The 2.4.0 stack refuses ncc-mcp-server 2.3.x, including a version
+  stamp.** A 2.3.x binary that sets its version to 2.4.0 (ldflags, env, or
+  User-Agent) is still refused: access requires a time-bound HMAC proof
+  (`ncc-mcp-proof-v1`) keyed by `NCC_MCP_TOKEN`, which only 2.4.0+ source
+  mints, plus a PAT the API accepts. Forged proofs return
+  `NCC_API_MCP_PROOF_INVALID`. Ordinary API clients and the CLI are unchanged.
+- **Restore no longer installs program files this server has never run
+  (SEC-07).** A backup's `bin/ncc-*` and `frontend-dist/` files are restored
+  only when every one matches a version this server installed or ran before
+  (recorded in `.ncc-trusted-stack.json` on start, supervised upgrade and
+  every `v2-backup`) or the installed file. Otherwise only data is restored
+  and the current version keeps running, so a crafted backup can no longer
+  run its own code on the host after the restart. Update rollback points are
+  covered automatically. `v2-restore --trust-stack` (command line only)
+  restores them anyway; the ledger is never backed up or restored.
+- **`GITHUB_TOKEN` is sent only to GitHub.** The update check attached the
+  token to any URL containing "github"; it now requires HTTPS and a
+  `github.com` or `githubusercontent.com` host.
+- Prism Central discovery responses are capped at 64 MiB per page; the SAML
+  clock-skew check no longer follows redirects; run ids containing a
+  backslash are rejected.
+- **Certificate pins hold on resumed TLS sessions.** `pin-sha256` is now
+  checked in `VerifyConnection`, which runs on every handshake, instead of
+  `VerifyPeerCertificate`, which a resumed session skips.
+- **Helm chart NetworkPolicies and PodDisruptionBudgets**, matching `k8s/`:
+  default-deny ingress, the UI port open, the API reachable only from UI
+  pods (`networkPolicy.*`), and a PDB per component with more than one
+  replica (`podDisruptionBudget.*`). Both are on by default. The egress
+  policy is opt-in (`networkPolicy.egress.enabled`) because it must also
+  allow your LDAP, webhook and Kubernetes API destinations; with Cilium the
+  Kubernetes API rule is added automatically.
+- **CI:** a gosec job (high severity and confidence; reviewed exceptions are
+  marked `#nosec` with a reason) and gitleaks over the full history
+  (reviewed false positives in `.gitleaksignore`). Workflow checkouts no
+  longer keep the job token, and every action is pinned by commit SHA.
+
+### Added
+
+- **Update helper.** Upgrades are carried out from outside the service: the new version's
+  helper is installed and tested first, then replaces the whole stack, including the
+  supervisor, and brings service, schedule and log timer definitions up to date. It puts
+  everything back when the result is not healthy, also after a crash or reboot. Works with
+  systemd, the Windows Task Scheduler, launchd and `v2-start --detach`.
+  - **Roll back** to the previous version for 24 hours (UI, `upgrade --rollback`, API).
+  - `ncc-orchestrator upgrade` with `--plan`, `--status`, `--to`, and `--bundle` for hosts
+    without internet access. The update dialog shows what changes on the host.
+  - Hosts from 2.3.x and earlier are brought up by 2.4.0 itself after it starts (once, when
+    idle, with rollback): they get the sandboxed service, the new supervisor and the log
+    timer. Turn off with `NCC_UPGRADE_ADOPT=0`. Lines added to a unit by hand are kept.
+  - Runs cannot start during an upgrade; the result is in the audit log.
+  - Helm: `helm upgrade` pulls and starts the new images before anything changes and then
+    waits until the API and UI run the new version (`upgradeCheck`). With `--atomic` a
+    failed check brings the previous revision back. Kustomize: `k8s/upgrade-check-job.yaml`.
+  - Releases publish `upgrade-manifest.json`, listed in the signed checksums.
+- **Update banner.** Admins see "Version X is available" above every page, with a link
+  to Updates & backups. Dismissing it hides it until a newer version comes out. The API
+  server looks the release up at most once a day (an hour after a failed lookup), keeps
+  the result in `.ncc-update-check.json` so restarts don't ask again, and answers
+  `GET /api/v1/settings/update/notice` from it. A manual check counts as that day's
+  lookup. Off with **Settings → Features → Update checks**.
+- **Upgrades without internet access.** New guide
+  [`docs/setup/OFFLINE_UPGRADES.md`](docs/setup/OFFLINE_UPGRADES.md) and an
+  **Integrations** guide in the app: which four files to carry in, checking them,
+  `upgrade --bundle`, rollback, and Kubernetes with an internal registry.
+- **Sign-in guides in Integrations.** Step-by-step guides for Active Directory / LDAP,
+  OpenID Connect, SAML and cluster access by team, under a new **Sign-in** category.
+  The OpenID Connect and SAML guides show this dashboard's redirect URI, entity ID and
+  reply URL, ready to copy into the identity provider.
+- **MCP import and agent skill.** Copy-paste host configs in `examples/mcp/`
+  (Cursor, Claude Desktop), `examples/mcp/forward-api.sh` for HTTP APIs behind
+  a loopback tunnel, and `skills/ncc-mcp/` (linked from `.cursor/skills/ncc-mcp`)
+  so assistants summarize findings and refuse secrets/`APPLY` by default.
+  See [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md#import-in-five-minutes).
+- **MCP red-team gates.** `run_ncc` and `replay_reports` require
+  `NCC_MCP_ALLOW_MUTATIONS` and `confirm=APPLY`. MCP refuses
+  `insecure_skip_verify`, HTTP/userinfo Prism URLs, path traversal in
+  report/run ids, API-URL credentials/query/fragment, and open-redirect
+  `callAPI` paths. Header versions are sanitized before HMAC.
+- **Audit log PAT identity and failure text.** JSONL, CSV, and the Audit log
+  page record `pat_id`, `pat_name`, and the owning `user` when a request
+  authenticated with a personal access token. Failed entries include `error`,
+  `error_code`, and `remediation` (the operator-facing solution).
+- **Audit log covers UI version and auto-records mutations.** Every audit line
+  tags `client_kind` (`ui` / `mcp` / `api`), `ui_version`, and
+  `ui_server_version`. Mutating or failed API calls that a handler did not
+  already audit are recorded as `http.request`. Compromised UI builds are
+  refused (`NCC_API_UI_VERSION_BLOCKED`): builtin **2.2.1** (node2shell) plus
+  an admin extra list, and unversioned `ncc-ui` clients by default. Manage
+  extras at Settings → Audit log or `GET/PUT /api/v1/settings/ui-versions`.
+
+### Changed
+
+- **The opening title is off by default.** An administrator turns it on under
+  Settings → Features. Installs that saved the switch keep their choice.
+- **Quieter pages.** Headings, table headers and buttons use a lighter weight,
+  labels are in sentence case, spacing follows a 4 px grid, and results show
+  as a status dot and a word with the same words everywhere (Fail, Error,
+  Warning, Info, Pass). Stat figures are no longer coloured; a dot by the
+  label carries the state. Card titles have a plain icon instead of a violet
+  tile, and buttons have no coloured shadow.
+- **Upgrades.** `upgrade --replace-edited` (also on `upgrade-adopt`, and a
+  checkbox in the UI) replaces a service definition edited on this host after
+  showing its diff; keeping it stays the default. `ncc-orchestrator update` hands
+  over to the update helper when it can, so the whole stack is checked and
+  rolled back if unhealthy (`--programs-only` keeps the old path). **Roll back**
+  is offered for 24 hours after an adoption and after `update` too. The plan in
+  the CLI and the UI lists checks, expected downtime, programs, configuration
+  and each definition's diff; a finished upgrade reads *Upgraded*, *Rolled back*
+  or *Nothing was changed*, with the reason. A Windows service task with its own
+  name is found by what it runs. `min_from` is enforced for `--bundle`, and a
+  `downtime_hint` is shown.
+- **Kubernetes upgrades are checked.** `helm upgrade` checks version skew, write
+  access to the data volume, free space (`upgradeCheck.preCheck.minFreeSpace`,
+  default 512Mi) and a verified backup before the rollout, and afterwards that the
+  API, the UI server and the runner image all report the new version. A failed
+  check stops the upgrade with nothing changed; `--atomic` keeps the old revision.
+  The same Jobs are in `k8s/upgrade-check-job.yaml`.
+- **Screen readers are tested (A11Y-03).** NVDA and VoiceOver run against the
+  demo build in CI (`screenreader.yml`).
+- **Text resize and spacing are tested (A11Y-03).** Every page is checked with
+  text at 200% and with the WCAG text-spacing overrides.
+- **Findings filters look like filters.** The Fail, Warning, Error and Info
+  counts above the findings list are now labelled "Show" and drawn as
+  bordered buttons. A selected one is filled and gets a check mark, a tooltip
+  says what a click does, and "Show all" clears the filter.
+- **Page details.** Overview's "Checks by result" bars are scaled to the
+  problems, so Fail, Error and Warning are no longer slivers next to Pass;
+  Pass shows its share of all checks. Schedule shows the next run as its one
+  figure with the exact time, and the rest as a short list. The Findings
+  toolbar keeps the view switch and turns row density and full page into
+  icon buttons; KB links are plain links; the search box says "Search
+  findings" with the syntax in its help icon. Single-sentence captions no
+  longer end with a period.
+- **Sign-in page.** Lighter headings, spacing on a 4 px grid, and shorter copy;
+  the layout, the accent on "health checks", the flowing wave and the feature
+  list stay as they were.
 
 ### Fixed
 
-- **Update fails if Github rate-limit is reached** Update checks now remain accurate when the GitHub REST API is rate limited. The public latest-release redirect is used to identify the current tag, while the UI marks the result as degraded and prevents installation until release asset metadata can be verified. A `GITHUB_TOKEN` can be supplied for a complete check and update.
+- **Unsigned local builds work again.** The build no longer expects the Linux
+  GPG public-key artifact when Linux GPG signing was not configured. Windows
+  test signing can set `NCC_WINDOWS_TIMESTAMP_URL=none` to skip external
+  timestamping for a self-signed certificate.
+- **Windows: a supervisor that died is started again (WIN-07).** Task Scheduler's restart
+  setting does not cover that. The service now has a second task,
+  `ncc-orchestrator-watchdog`, which looks every minute. `v2-stop` and
+  `schtasks /End` are respected. Existing hosts get it with the upgrade.
+- **VM templates (INS-02).** The cloud-init template and `setup-ncc.ps1` failed at the first
+  boot. Both now install the service with `v2-install-service` and keep the Prism password
+  in `secrets.json`. `NCC_CONFIG` is gone: the configuration is
+  `<install folder>/config.yaml`, the one the service reads.
+- **Windows: `v2-stop` and `v2-restart` as Administrator stop the service.** They failed
+  with "Access is denied", because Windows does not let an Administrator end a process of
+  SYSTEM by default. Without Administrator rights the error now says so.
+- **`verify --online` checks release builds (REL-11).** The frontend build wrote files into
+  the source tree, so releases counted as modified builds and the check was skipped, also
+  with `--require-signature` and in the release workflow. The build leaves the tree as it
+  is, `--require-signature` fails when nothing was checked, a candidate is compared with
+  its own release, and the workflow refuses programs from a modified tree.
+- `v2-install-service` takes `--api-listen` and `--ui-listen`.
+- **systemd: the stack comes back after a restore, TLS change or unsupervised update
+  from the UI (REL-07).** The restart was started inside the service and died with it,
+  leaving the stack stopped.
+- **Schedules survive a restore and Heal.** A cron schedule could become "every 4 hours"
+  with its lock switched on; both are kept. Heal repairs schedules saved without a task
+  name. `create-schedule --cron` accepts only five fields or an @-macro. A restore no
+  longer writes a stray file named `<nil>` in the install folder (safe to delete).
+- **Accessibility (A11Y-02):** menus and selects no longer stay invisible when the system
+  asks for reduced motion; focus returns after a dialog; links in text are underlined;
+  contrast, heading order, control labels and 320 px layouts fixed. The trend chart has a
+  Chart/Table switch. A browser suite checks all of it in CI (`npm run test:a11y`).
+- **Internal:** `goNCC.go` (18.9k lines), the API `main.go` (6.4k) and
+  `AccessSection.tsx` (3.4k) are split by area with no behaviour change (MAINT-01).
+- **Windows:** the final state of an update could be lost while the dashboard read it.
+- **`v2-start --wait-ready`** works with the default self-signed certificate.
+- **The cloud-init and Windows installers can download a release (REL-06).**
+  Their default URL used the bare version, but release tags start with `v`, so
+  GitHub answered 404. They try `v<version>` first and the bare version next, so
+  mirrors keep working.
+- **API and UI replicas stay on different nodes through a rollout (ENV-11):** the
+  spread constraint now counts each revision on its own (`matchLabelKeys`).
+- **The Helm chart is installed in CI (CI-02):** `scripts/helm-smoke-test.sh`
+  installs it on `kind` and checks sign-in, a run, the report, backup, verify,
+  retention preview and restore. The chart's `initImage` value now takes effect.
+- **Performance (measured with the benchmarks added in the same change).**
+  - *Dashboard data endpoint:* the API resolved its configured directories (a walk that follows symlinks) several
+    times per request, about three quarters of the CPU in a profile of `/report/data`. The result is now reused
+    for two seconds: 15.6 ms to 2.7 ms per request at 500 clusters on Windows (the saving is smaller on Linux,
+    which has no per-component name normalisation). Caller-supplied paths still go through the uncached
+    confinement check.
+  - *Audit log page:* it read and split the whole live file (up to 5 MiB) under the lock every audit write needs;
+    it now reads backwards from the end and stops at the newest entries, allocating 0.4 MB instead of 6 MB per
+    request.
+  - *Static assets:* the UI server compressed every JavaScript and CSS file again for every visitor at the default
+    level. Each file is now compressed once at the best level and served from memory with `ETag`, `Content-Length`,
+    304 revalidation and Range support (190 KB to 60 KB for the main bundle; 2.1 ms to 0.8 ms and 1.1 MB to 0.13 MB
+    allocated per 1 MB asset request). `Accept-Encoding: gzip;q=0` is now honoured.
+- **MCP `get_findings` filters now work, answers are smaller, and a too-large answer is an error.** The
+  tool accepted `check` and `limit` but never sent them, and the API had no `severity` filter, so an
+  assistant that asked for "FAIL only" got everything. `GET /api/v1/alerts/ncc` now takes
+  `severity` (FAIL, WARN, ERR, INFO; comma list); the tool sends `cluster`, `check`, `severity`,
+  `limit` (default 50, max 200) and `cursor`. Tool results are compact JSON instead of indented, which
+  is fewer tokens per call. An answer over the 1 MB cap used to be cut mid-JSON and returned as
+  `{"ok":true}`; it is now an error that says to narrow the request.
+- **Prism links for clusters with a DNS name.** Only IPv4 addresses got a Prism link; fully qualified
+  names (`prism.dc1.example.com`) now do too.
+- **The API status pill is gone from the header; an unreachable API raises a notice.** The Status page
+  already shows the API's state. When the dashboard cannot reach the API, a sticky "API unreachable"
+  notice appears once, with a Retry button, the tab title gets a warning mark, the dashboard checks
+  every 10 seconds instead of 30, and "API reachable again" replaces the notice when it returns.
+- **Findings: cluster names open Prism, and the list and By check views are formatted.** A cluster
+  name in the table, list, By check chips and the detail drawer now opens the cluster in Prism in a
+  new tab (a small icon beside it opens the cluster page in the dashboard). The KB badge and cluster
+  link styles were scoped to the table, so the list and By check views showed an unstyled KB link and
+  cluster links; they are styled everywhere now, and the "Refer to KB 1234 (http://...)" boilerplate
+  is dropped from the one-line summary because the KB has its own badge.
+- **Accessibility: every page passes in all three themes.** Danger text and error tags (dark),
+  success and warning tags and text and the ERR and INFO severity pills (light) were under 4.5:1;
+  column-resize handles lacked a value; the Integrations side panel scrolled without keyboard focus.
+  An axe-core sweep of 18 pages and the four Findings views is clean in dark, light and IT Professional.
+- **Dependencies:** `golang.org/x/crypto` 0.59.0, `x/sys` 0.50.0, `x/term` 0.48.0, `x/oauth2` 0.38.0, and
+  the frontend patch updates (antd 6.7.2, react-router 8.5.2, vite 8.3.8, plugin-react 6.3.0,
+  jsdom 31.0.1, vitest 5.1.1, react-query 5.108.4). `npm audit` reports 0; `govulncheck` reports only the reviewed GO-2026-6909.
+- **CI gates:** the reviewed `exec.Command` calls (no shell) carry `#nosec G702` with their reason, the
+  MCP red-team test no longer has an empty branch (staticcheck), and four reviewed gitleaks false
+  positives are listed in `.gitleaksignore`.
+- **Scripts, custom clients and download links through the UI port are no longer refused.**
+  `ncc-ui-server` stamps its version on everything it proxies, and the API took that header
+  alone as proof the caller was the dashboard, so a script using the UI port, a custom client
+  sending `X-NCC-Client`, and plain links such as the raw-output download were refused as an
+  "unversioned dashboard". Only a request that claims to be the dashboard (`X-Requested-With:
+  ncc-ui`) is held to the dashboard rules now; a blocked UI-server version still refuses
+  everything behind it. This is the root cause of the SSO case below.
+- **SAML and OIDC sign-in no longer trips the UI version gate.** Identity
+  redirects and assertion callbacks proxied through `ncc-ui-server` have its
+  server-version header but cannot carry the dashboard's SPA-version header.
+  The API now exempts only the public OIDC login/callback and `/saml/` paths,
+  so they are not refused as an unversioned dashboard.
+- **Production dashboard bundles now carry their actual UI version.** Vite
+  defines `__NCC_UI_VERSION__` from `frontend/package.json`, so the request
+  header used by the version gate is stamped at build time rather than using a
+  fallback value.
+- **Deployment agents now resolve the published release authoritatively.** The
+  copy-paste deployment prompt and runbook require GitHub's
+  `releases/latest` API rather than a web-search result, README badge, branch
+  version, or newest tag. An agent that cannot resolve it must stop for a
+  verified archive or mirror instead of guessing a GA version.
+- **MCP server returned secrets to the model.** The configuration tools handed back
+  the raw config file, including inline credentials; results are now scrubbed in
+  one place (the redacted copy replaces the raw one, and values under
+  credential-like keys, URL credentials and chat-webhook URLs are masked). The
+  server's redactor, which only caught `password:`, `token:` and `secret:` lines,
+  now matches by key name. `backup_v2_stack` used to download and discard an archive
+  and report success; it now creates a server-side snapshot and returns its name,
+  and `restore_v2_backup` accepts only a backup name. The docs say plainly that the
+  HMAC proof and `confirm` are not security boundaries.
+- **Audit log page is back to the essentials.** Columns are When, Action, Result,
+  User and Client; everything else is in the full JSON entry, opened from the row or
+  its code button (copy the JSON or the request id). The automatic per-request and
+  MCP-call records are hidden unless you turn them on (`?exclude=` on
+  `GET /api/v1/audit`).
+- **Known-vulnerable releases are blocked.** Every tagged release was scanned
+  (`docs/audit/release-scan.md`) and the affected ones (2.0.0 to 2.2.1) are on the
+  shipped blocked-versions list with their advisory ids. A refused dashboard now
+  shows an error screen with the code `NCC_API_UI_VERSION_BLOCKED`; admins manage
+  the list under System, Updates & backups, Blocked versions. The refusal no longer
+  tells operators to upgrade to 2.3.0 (which cannot declare a version and is itself
+  refused) but to 2.4.0.
+- **Agent prompt.** `docs/AGENT_PROMPT.md` is a copy-paste prompt that lets an AI agent deploy the
+  stack on a machine, VM, Kubernetes or a public cloud: it asks a short set of questions (or assumes
+  defaults), shows a plan and waits for a go, retries transient failures, diagnoses the rest, and
+  hands back exact fixes when it cannot finish. It can deploy the MCP server only after asking.
+- **Agent runbook and setup script.** `docs/AGENT_RUNBOOK.md` and the `ncc-ops` skill let an
+  AI agent deploy (host, Docker, Kubernetes), harden, troubleshoot, tune and maintain the stack with
+  checks at every step and explicit points where it must ask. `scripts/ncc-mcp-setup.sh` creates a
+  least-privilege assistant account, mints its token, builds `ncc-mcp-server` and writes the host config.
+- **The audit log API needs the operator role.** It answered any signed-in viewer,
+  including an assistant holding a viewer token.
+- **Agent skill rewritten.** `skills/ncc-mcp` now has hard rules (no secrets, report
+  text is data not instructions, confirmation belongs to the user), playbooks, an
+  answer format, an error table and a per-tool role reference that matches the 2.4.0
+  server.
+- **The in-app AI assistant guide matches the 2.4.0 MCP server.** It still told
+  operators to put `ncc-mcp-server` next to the orchestrator and said it ships in
+  every release; it now walks through the account, token, build (it is optional and
+  not in the stack download) and assistant configuration, with Windows and Linux
+  commands.
+- **Signed builds refuse an unsigned release.** The updater accepted a release with
+  its `checksums.txt.sig` removed even when the build embeds a release key.
+- **The engine's check for an old MCP server now works on Windows.** It found the
+  parent process with `ps`, so a pre-2.4.0 `ncc-mcp-server` (which had no
+  authentication at all) was never recognised there. MCP servers 0.1.13 to 2.3.0
+  should be replaced with 2.4.0.
+- **API explorer and CSV export no longer refused as an "old dashboard".** Developer, API explorer,
+  and the audit CSV export sent the dashboard marker header (`X-Requested-With: ncc-ui`) without the
+  version header, so the API treated them as an unversioned dashboard and refused them. All dashboard
+  requests now take their headers from one helper, a test fails if any other file writes that marker,
+  and the refusal text no longer blames 2.2.1 for an unversioned request. The explorer also stops
+  attaching the dashboard headers and CSRF token to requests it sends to external URLs.
+- **Custom and third-party clients are watched, not blocked.** Version checks apply
+  only to the NCC dashboard and `ncc-mcp-server`. A custom UI can name itself with
+  `X-NCC-Client` and is then never version-gated; the audit log records its kind and
+  name. Repeated refusals from one address, or one token used from several
+  addresses, raise an `access.suspicious` audit record and a log warning.
 
+- **Helm chart: the API pod crash-looped on first start.** Kubernetes `args`
+  replace the image's `CMD`, the chart passed only some path flags, and the
+  container layout made the stack-aware defaults point log, token and user
+  database paths at `/usr/local` (this also affected the published 2.3.0
+  image). The chart now passes the full flag set, and
+  `--users-db-secret`, `NCC_USERS_DB_SECRET` and `NCC_USERS_DB` suppress the
+  `--users-db` default.
+- **Helm chart: the runner CronJob failed with "mkdir logs: permission
+  denied".** It ran from the image's read-only `/workspace`; it now runs from
+  `/data` with the same explicit paths and `--skip-preflight-check` as
+  `k8s/runner-cronjob.yaml`. The PVC takes `persistence.accessMode`,
+  `persistence.storageClass` and `persistence.size`; PodDisruptionBudgets set
+  `unhealthyPodEvictionPolicy: AlwaysAllow` on Kubernetes 1.27 and later; the
+  API pod has a non-root, `fsGroup` and seccomp security context. The
+  chart-seeded `config.yaml` now sets `skip-preflight-check: true` and
+  `secrets.provider: env`, so Settings → Run now matches the CronJob instead
+  of failing `NCC_PREFLIGHT_VALIDATE_SECRETS`. That template is tracked in git
+  (`!helm/.../templates/config.yaml`); the repo-wide `config.yaml` ignore had
+  dropped it.
+- **Account management on a stale API replica.** The user list, `PUT` and
+  `POST` now reload the shared store first, so a user another replica just
+  created is visible instead of returning 404, and a store conflict on create
+  is retried once and then answered with HTTP 409 instead of 500.
+- **LDAP sign-in no longer counts directory outages toward the lockout.** A
+  dropped or busy directory during the final password check used to count as
+  a wrong password.
+- **Windows installer.** The generated `config.yaml` was invalid YAML
+  (backslash paths in double quotes); the install directory under
+  `ProgramData` was writable by every local user while the stack runs as
+  SYSTEM; and re-running the installer deleted backups and left a half-removed
+  install. It now writes valid single-quoted paths, restricts the directory to
+  SYSTEM and Administrators, and refuses to touch an existing install unless
+  `NCC_FORCE_CLEAN=1`.
+- **Restore no longer moves nested config keys to the top level.**
+  `upsertYAMLScalar` dropped indentation (post-restore path healing and the
+  CLI config helpers).
+- **`v2-install-service` installs the log maintenance timer** that only the
+  cloud-init path used to create; cloud-init extracts with `--no-same-owner`.
+- **Accessibility:** colour contrast, label-in-name, ARIA role, heading order,
+  target size and keyboard focus failures found with axe-core in a browser.
+- **Publishing workflows** disable dependency caches explicitly.
+- **`/api/v1/health` for signed-in callers** no longer resolves about ten
+  paths on every call (18 ms to under 1 ms on Windows).
+- Troubleshooting logs for LDAP steps, sign-in failures, backup and restore
+  errors, unreadable run summaries and runner version-skew refusals.
+
+- **A panic in a background job no longer takes the API server down.**
+  Scheduled backups, environment schedules, the digest, alert sync, the
+  self-heal timer, user-store reload, report-cache refresh and Prism Central
+  discovery now recover, log the stack and count in
+  `ncc_api_background_panics_total`.
+- **Schedule page in a new browser** showed the form defaults ("Every 4h")
+  as unsaved changes over the saved schedule. It now loads the saved
+  schedule unless that browser really has an unsaved draft.
+- Screen readers get a name for the Findings "open details" button and the
+  per-user role picker. "1 cluster(s)" style wording is gone from the UI,
+  the setup checklist, API messages and self-heal check results.
+- **A panic while starting or finishing a run** no longer leaves it
+  "running" for ever with its clusters locked: it is finished as failed and
+  its process stopped. A panic while merging results can no longer block
+  every later run. The in-app restart and update-watcher helpers recover too.
+- **Findings page wording.** The table is titled Findings and counts, search,
+  empty states and filters say "finding"; "alert" is kept for Prism Central
+  alerts and NCC alert fields.
+- **Findings toolbar at narrow widths.** The environment picker no longer
+  truncates to "All environme…"; below 900 px the search box takes its own
+  row and the pickers share the next one evenly.
+- **Finding details drawer redesigned.** It uses the same panels and
+  label/value lists as the rest of the app: "What it found" (detail, how to
+  fix it, cluster link, AOS and NCC), Handling, Lifecycle and Handling
+  history. Prism Central alerts get "What Prism Central reports" and a
+  Details list with created, last occurred, updated and resolved times.
+  Both open with a grid of next-step cards, each with an icon, a title and
+  a one-line hint: the **KB article** (one card per article, the first
+  highlighted; a dashed "No KB article" card otherwise), **Open in Prism**
+  (with the address), **Cluster page** and, for NCC, **This check on all
+  clusters**, which closes the drawer and searches the table for that check.
+- **One link style.** Cluster names in the findings table, the drawer, run
+  details and Insights share one look: accent colour, semibold, underline on
+  hover. The Prism icon beside a name gets a hover target, and the KB column
+  is a pill like the app's badges.
+- **Enter signs in when SSO is offered.** Enter in the username or password
+  field submits the form directly (once), instead of relying on the
+  browser's implicit form submission beside the SAML and OIDC buttons.
+- **Run details name clusters.** Clusters and checks show the cluster name
+  with its address and link to the cluster page. When some clusters could not
+  be checked, the banner lists up to 10 of them with the reason.
+- **Insights agrees with the rest of the app.** The newest run reads
+  "Partial · exit 3" as on Runs instead of "Failed (exit 3)"; health bars
+  are green from 75% so a "Good" score is no longer orange; NCC results are
+  called findings; cluster names link to the cluster page.
+- **Findings wording in the API and guides.** OpenAPI summaries and tags
+  ("NCC findings"), API messages ("NCC finding updated"), metric help, the
+  `--alert-history-retain-days` help, the README and the guides call NCC
+  results findings. Paths (`/api/v1/alerts/ncc`) and field names are
+  unchanged.
+- **Plurals in command output.** Backup, restore, run, schedule and
+  self-heal output says "1 file", "3 clusters" instead of "file(s)".
+- **Prism Central empty state.** With no PC alerts and no filters set, the
+  Findings page says Prism Central reports no alerts instead of suggesting
+  clearing filters.
+- "Stay signed in" (`/auth/refresh`) no longer drops a directory user's group
+  access.
+- **Update fails if Github rate-limit is reached** Update checks now remain accurate when the GitHub REST API is rate limited. The public latest-release redirect is used to identify the current tag, while the UI marks the result as degraded and prevents installation until release asset metadata can be verified. A `GITHUB_TOKEN` can be supplied for a complete check and update.
 - CodeQL coverage now includes the React frontend alongside Go and GitHub
   Actions. Runtime limit parsing is bounded before integer conversion, and the
   OIDC cookie security policy is documented for CodeQL. The loopback-only
   throwaway fake OIDC provider is excluded from production security scanning.
+- **Go toolchain updated to 1.27.4** to address `GO-2026-6859`, an HTTP/1
+  server crash caused by a `net/http` header race.
+- Added the separate `tools/fakesaml` test IdP. It registers NCC SP metadata,
+  seeds role-mapped users, serves a launch page for the NCC SAML login flow,
+  and supports HTTPS with a generated or supplied certificate. Its SAML
+  signing certificate and key can be persisted with `-signing-cert` and
+  `-signing-key`, preventing metadata trust failures after provider restarts.
+
+### Added
+
+- **Findings views and resizable columns.** The NCC findings have a view
+  switch: Table (every column), Focused (the finding with its detail,
+  cluster, KB and status), By check (one row per check with the clusters it
+  fails on and how many are still open; expand for each cluster) and List
+  (each finding as a short sentence). The choice is remembered. Drag a column
+  edge (or focus it and use the arrow keys) to resize; double-click or
+  **Reset columns** restores the defaults. Prism Central alerts keep the
+  table.
+- **Integrations page** (`/integrations`). Step-by-step guides for
+  ServiceNow, Prometheus & Grafana, Splunk/Elastic and other log tools,
+  Slack/email/webhooks, AI assistants (MCP) and your own scripts. Each guide
+  says what you get and need, explains the terms, fills the API server's
+  address into copy-ready settings and scripts, links to the NCC screens it
+  uses, checks that NCC is answering, and remembers which steps are done.
+- **Kubernetes alert rules.** The Helm chart renders a `PrometheusRule` with
+  `prometheusRule.enabled: true`: failed runner Job, no successful run or no
+  new report for `staleReportHours` (26), no or too few API replicas, data
+  volume below `pvcFreeRatio` free (10%), API replicas on different
+  versions, and any recovered background-job panic. See
+  `docs/PROMETHEUS.md`.
+- **Bounded-read guard.** A test (`internal/readguard`) fails the build when
+  a new `io.ReadAll` reads without `io.LimitReader` or
+  `http.MaxBytesReader`, unless the line says why with `bounded-read:`. The
+  two remaining unwrapped reads (inline artifacts, log tail) are wrapped.
+- **GitHub token scope warning.** When GitHub reports that `GITHUB_TOKEN`
+  carries scopes, the update check prints a warning naming them; a
+  fine-grained token with public read-only access, or a classic token with
+  no scopes, is enough. The release-list request now also sends the token
+  only to GitHub hosts over HTTPS.
+- **Cluster page** (`/clusters/<name or address>`). Shows health, failing
+  checks, warnings and data age; why the last run could not reach it; open
+  findings with a needs-attention/acknowledged filter; versions, environment
+  and last-checked times; and recently closed findings. Operators can rerun
+  just that cluster. Cluster names on the Overview, Findings, Run details and
+  Insights link here.
+- **Data freshness on the Overview.** Each cluster shows when it was last
+  checked (amber once that is over a day ago). A cluster the last run could
+  not reach says how old its data is ("connection refused · data from 3d
+  ago") and, on hover, how many runs in a row failed. Clusters the latest run
+  did not include, such as another environment's, are listed from their own
+  newest run, so the environment filter no longer comes up empty.
+- **"Scheduled runs have stopped" banner.** When the main schedule or an
+  environment schedule goes two intervals (plus 10 minutes) without a run,
+  the Overview says so, with a link to the schedule for operators. Paused,
+  removed or preview-only schedules and custom cron expressions that are not
+  a plain interval are not checked.
+- `GET /api/v1/freshness` (viewer+): per cluster `last_checked_at`, `ok`,
+  `last_success_at`, `failed_runs` and the counts from its newest successful
+  run; per active schedule `every`, `last_run_at`, `overdue` and
+  `missed_runs`; and `schedule_overdue`. It reads the newest 200 runs, drops
+  clusters not checked for 30 days, and limits clusters to the caller's
+  cluster groups.
+- **Version-skew protection.** Updates lists components whose version
+  differs, using the live runner CronJob image, and Run returns 409
+  `NCC_API_VERSION_SKEW` while the runner's major.minor differs from the API.
+  `/components` entries carry a `message`.
+- **Report cache visibility.** `/report/data` returns a `cache` object;
+  metrics `ncc_report_cache_state{state}` and `ncc_report_cache_age_seconds`; the Overview and Findings say when data is
+  being rebuilt or could not be refreshed, and reload when it is ready.
+- **Session and lockout clarity.** The user menu shows time left in the
+  session, a notice offers "Stay signed in" before it ends, 429 responses
+  carry `retry_after_seconds`, and sign-in and password-reset requests show a
+  live lockout countdown.
+- **Backup verification.** `v2-restore --verify-only` prints each check,
+  with `--json` and a non-zero exit on failure; manifests record a `sha256` per file; the
+  Settings Verify button lists each check.
+- **Data freshness beyond the Overview.** Insights → Clusters shows data
+  age; notifications include a
+  "Data age" line; metrics `ncc_cluster_last_success_timestamp_seconds{cluster}`
+  and `ncc_schedule_overdue{schedule,environment}`.
+- **Setup-aware empty states.** Overview, Findings, Insights, Runs and the
+  cluster page say what is missing (no clusters, no runs yet) and offer only
+  the next step the user's role allows.
+- **Safe schedule drafts.** A saved schedule draft is restored only if the
+  schedule has not changed since; host schedule saves carry
+  `resource_version` and return 409 `NCC_API_SCHEDULE_CONFLICT` when someone
+  saved first.
+- **Raw log retention.** `raw-log-retain-days` (default 0, keep) removes old
+  raw run logs separately from reports. `ncc-orchestrator retention --dry-run
+  [--json]` and `GET /api/v1/settings/retention/preview` (admin) list what
+  would be removed; Settings has a "Preview what would be removed" button.
+
+### Changed
+
+- **Documentation reorganised.** A new [`docs/README.md`](docs/README.md) indexes the docs by
+  audience; the roadmap is now [`docs/ROADMAP.md`](docs/ROADMAP.md); the 2026 review is
+  [`docs/audit/`](docs/audit/README.md) (overview, findings register, security
+  assessment); the former MVP page is [`docs/API_AND_UI_ARCHITECTURE.md`](docs/API_AND_UI_ARCHITECTURE.md)
+  and the redesign plan is [`docs/ui/DESIGN_SYSTEM.md`](docs/ui/DESIGN_SYSTEM.md). Removed the
+  v1 and v2.0.2 migration guides, the v1.x and v2.0 milestone and production-readiness
+  checklists and the October 2026 assessment (its backup-encryption procedure moved into
+  `docs/SECURITY_AND_TRUST.md`). The README has an Upgrading section, TROUBLESHOOTING
+  covers reading the logs, Kubernetes and Windows installs, and the repository has issue
+  and pull request templates.
+
+- Overview's Clusters list and the Findings "By check" view keep their
+  columns lined up from row to row: the counts, last-checked time, status,
+  severity and Details columns have fixed or shared widths instead of each
+  row sizing them to its own text.
+- File locations are no longer shown in the UI: the finding drawer drops
+  its "Run log" field, the log viewer, audit log and scheduler status no
+  longer print log file paths, and support-bundle messages no longer name
+  the server folder. Settings where you choose a log file are unchanged.
+- The live demo uses real NCC check names and KB numbers (storage pool and
+  volume group usage, remote site config, NGT certificates, recovery plans,
+  licence expiry and more) with NCC's own message layout: a "Node" line per
+  CVM and the "Refer to KB" line, so each finding's drawer links its KB
+  article. All clusters, addresses, VMs and names are still made up.
+- `internal/nccparse` has a test that parses NCC summaries laid out like
+  real Prism Element and Prism Central output (several nodes per check, an
+  `ERR :` line before a `WARN:` line, wrapped VM lists) and checks every
+  block's severity and KB line. The sample logs contain no real data.
+- The findings table no longer has an expand-icon column: click a row or the
+  finding name (a button, so it works from the keyboard) to open its details.
+- The Findings table and cluster filter no longer show each cluster's data
+  age, keeping the table about the findings themselves; data age stays on
+  the Overview, the cluster page and Insights.
+- **Narrower Kubernetes RBAC.** The API's Role is split into two: get/patch
+  on the `ncc-v2-users` Secret only (plus create), and get/patch on the
+  runner CronJob only. The namespace-wide Secret `get` and `update` are
+  removed.
+- A failed report-cache refresh is retried after 30 seconds.
 
 Release notes: [`RELEASE_NOTES_v2.4.0.md`](docs/releases/RELEASE_NOTES_v2.4.0.md).
 
@@ -26,7 +666,7 @@ Release notes: [`RELEASE_NOTES_v2.4.0.md`](docs/releases/RELEASE_NOTES_v2.4.0.md
 Setup checklist, redesigned sign-in, HA-safe user store, transactional restore,
 Windows fixes, and security hardening from a full application audit. Release
 notes: [`RELEASE_NOTES_v2.3.0.md`](docs/releases/RELEASE_NOTES_v2.3.0.md). Findings and
-evidence: [`docs/audit/`](docs/audit/executive-summary.md).
+evidence: [`docs/audit/`](docs/audit/README.md).
 
 ### Security
 
@@ -353,7 +993,7 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   (`/runs`, `/settings/config`, `/system/audit`, …); old `/settings?tab=…`
   links redirect. Roles see the same sections as before. Shared design tokens
   and building blocks (`src/ui`) for the page redesigns that follow
-  ([`docs/ui/redesign-plan.md`](docs/ui/redesign-plan.md)). System Health's
+  (`docs/ui/redesign-plan.md`). System Health's
   fix link for backup problems now opens Maintenance instead of Access.
 - **New Overview and Findings pages.** The Dashboard is split in two:
   **Overview** (`/`) answers "is everything healthy?" — health score, checks
@@ -569,7 +1209,7 @@ evidence: [`docs/audit/`](docs/audit/executive-summary.md).
   are in `build/docker/` (`docker-compose.yml` already points there); the
   reference config is `examples/example_config.yaml`; release notes are in
   `docs/releases/`; `Prometheus.md` and `IMPROVEMENTS.md` are now
-  `docs/PROMETHEUS.md` and `docs/IMPROVEMENTS.md`. Release assets, installed
+  `docs/PROMETHEUS.md` and `docs/ROADMAP.md`. Release assets, installed
   file names and the install layout are unchanged.
 - **Run config selection (breaking for API clients).** `config_path` on
   `/api/v1/runs/trigger` and `/runs/preflight` must now be the main config or
@@ -782,7 +1422,7 @@ Quick security release for the eMudhra certificate compromise (CA bundle
 kept current in images) and Node.js CVE-2026-111497 (build toolchain pinned to
 26.12.1), plus bug fixes, alert history, security hardening, and integration
 docs. Release notes: [`RELEASE_NOTES_v2.2.1.md`](docs/releases/RELEASE_NOTES_v2.2.1.md). See
-[`docs/security/security-assessment-2026-10.md`](docs/security/security-assessment-2026-10.md)
+`docs/security/security-assessment-2026-10.md`
 and [`docs/integrations/third-party-alert-integrations.md`](docs/integrations/third-party-alert-integrations.md).
 
 ### Fixed
@@ -1228,9 +1868,9 @@ Major **authentication + autonomic-operations** release on top of a maintenance/
 - **Dependency refresh.** Go modules updated (`github.com/modelcontextprotocol/go-sdk` 1.6.0→1.6.1, `golang.org/x/sys` 0.44→0.45, `mattn/go-colorable`, `mattn/go-runewidth`); OpenTelemetry SDK + OTLP/HTTP trace exporter added for the opt-in tracing. The Go directive was bumped `1.26.3 → 1.26.4` to pick up the stdlib `net/textproto` and `crypto/x509` fixes (`GO-2026-5039`, `GO-2026-5037`); `go vet`, `go test -race`, and `govulncheck` are clean. Frontend `npm audit` reports 0 vulnerabilities.
 - Version bumped to `2.1.0` across `VERSION`, the orchestrator/api/ui `main.Version` defaults, the OpenAPI spec version, `binaryGO.txt`, `frontend/package.json`, the Helm chart, and the `k8s/` image tags.
 
-### Remaining (tracked in IMPROVEMENTS.md)
+### Remaining (tracked in the roadmap)
 
-- **`goNCC.go` slimming (continued).** The extraction (`internal/model`, `internal/promtext`, `internal/retryutil`, `internal/notify`, `internal/nccparse`, `internal/httpclient`) is complete for v2.1.0. `goNCC.go` is still large; the remaining obvious candidate is the report renderers (`generateHTML` / `generateCSV` / `generateMarkdown` / `generateJSON` / `generateSARIF`), which are coupled to the combined-HTML and drilldown code and need a coordinated move. It can follow the same alias-backed, behavior-preserving pattern. See [`IMPROVEMENTS.md`](docs/IMPROVEMENTS.md).
+- **`goNCC.go` slimming (continued).** The extraction (`internal/model`, `internal/promtext`, `internal/retryutil`, `internal/notify`, `internal/nccparse`, `internal/httpclient`) is complete for v2.1.0. `goNCC.go` is still large; the remaining obvious candidate is the report renderers (`generateHTML` / `generateCSV` / `generateMarkdown` / `generateJSON` / `generateSARIF`), which are coupled to the combined-HTML and drilldown code and need a coordinated move. It can follow the same alias-backed, behavior-preserving pattern. See [`ROADMAP.md`](docs/ROADMAP.md).
 
 ### Known issues (fixed in v2.1.1)
 
@@ -1527,14 +2167,122 @@ Seven tests / twenty sub-cases added covering the package selector, install-dir 
 
 ---
 
-## [0.1.11] and earlier
+## [0.1.11] - 2026-01-19
 
-See git history and [Releases](https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases) for prior versions.
+Reconstructed from git history: this version was not tagged and had no release
+notes.
+
+### Changed
+
+- Reworked error handling and context management in the webhook and file
+  processing code paths.
+
+### Added
+
+- More configuration options and validation in the runner.
 
 ---
 
+## [0.1.10] - 2026-01-13
+
+Reconstructed from git history; no release notes were written for versions up to
+0.1.11.
+
+### Added
+
+- Cluster Name column in the per-cluster HTML report.
+- More settings can be supplied through environment variables.
+
+### Changed
+
+- Refreshed the HTML report styling (two passes).
+- Removed the per-cluster summary block from the HTML report.
+
+---
+
+## [0.1.9] - 2025-12-24
+
+### Added
+
+- **Email and webhook notifications** for run results.
+- Author information in the README; updated example `config.yaml`.
+
+---
+
+## [0.1.8] - 2025-12-23
+
+### Changed
+
+- Prometheus metrics fixes and a rewritten `Prometheus.md` (including the metrics
+  table).
+- Release stream switched to `beta`.
+
+---
+
+## [0.1.7] - 2025-12-11
+
+### Changed
+
+- Go toolchain bumped; documentation updated; `.gitignore` adjusted.
+
+---
+
+## [0.1.6] - 2025-12-10
+
+### Added
+
+- **Prometheus monitoring support**: the runner writes textfile metrics for use
+  with the node exporter.
+
+### Fixed
+
+- The severity pattern now accepts values containing spaces.
+- Build values (version and stream) are injected correctly.
+
+---
+
+## [0.1.5] - 2025-10-24
+
+### Security
+
+- Fixed a code-scanning finding (incorrect conversion between integer types).
+- Built with Go 1.25.3, which carried a security update.
+
+### Changed
+
+- Updated the LICENSE and `.gitignore`.
+
+---
+
+## [0.1.4] - 2025-10-01
+
+First public version: the NCC Orchestrator command-line tool, which runs Nutanix
+Cluster Check against clusters and collects the results. Added the README,
+LICENSE and CONTRIBUTING guide.
+
+---
+
+Before 0.1.4 there were no tagged versions. The oldest commits are the initial
+import on 2025-10-01.
+
+---
+
+[2.3.0]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.3.0
+[2.2.1]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.2.1
+[2.2.0]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.2.0
+[2.1.1]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.1.1
+[2.1.0]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.1.0
+[2.0.2]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.0.2
+[2.0.1]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.0.1
 [2.0.0]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v2.0.0
 [1.1.0]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v1.1.0
 [1.0.0]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v1.0.0
 [0.1.13]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v0.1.13
 [0.1.12]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v0.1.12
+[0.1.10]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v0.1.10
+[0.1.9]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v0.1.9
+[0.1.8]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v0.1.8
+[0.1.7]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/v0.1.7
+[0.1.6]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/0.1.6
+[0.1.5]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/0.1.5
+[0.1.4]: https://github.com/lTSPV75BRO/Nutanix-ncc-orchestrator/releases/tag/0.1.4

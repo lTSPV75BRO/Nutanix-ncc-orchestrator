@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,8 +17,13 @@ import (
 
 // Supervised upgrades. The API server takes the pre-update backup and then
 // hands the upgrade to the supervisor by writing
-// run/v2-supervisor-upgrade.request. The supervisor is the one process that
-// outlives the API and UI restarts, so it can see the upgrade through:
+// run/v2-supervisor-upgrade.request.
+//
+// When a service manager runs the supervisor, it prepares the upgrade and hands
+// it to the update helper (upgrade_stage.go, upgrade_engine.go), which also
+// replaces the supervisor and the service definitions. Otherwise, or with
+// NCC_UPGRADE_HELPER=0, the supervisor carries the upgrade out itself. It is the
+// one process that outlives the API and UI restarts, so it can see it through:
 //
 //	preflight -> snapshot -> installing -> restarting -> verifying -> done
 //	                                          \-> rolling_back -> rolled_back
@@ -77,6 +83,8 @@ type upgradeRequest struct {
 	BackupPath    string `json:"backup_path,omitempty"`
 	RequestedBy   string `json:"requested_by,omitempty"`
 	RequestedAt   string `json:"requested_at,omitempty"`
+	// ReplaceEdited: replace service definitions edited on this host.
+	ReplaceEdited bool `json:"replace_edited,omitempty"`
 }
 
 type upgradeStep struct {
@@ -106,6 +114,14 @@ type upgradeJob struct {
 	// SupervisorRestartPending: the supervisor itself still runs the old
 	// binary; it switches at the next service restart.
 	SupervisorRestartPending bool `json:"supervisor_restart_pending,omitempty"`
+	// Action and Runner: what is done ("upgrade", "adopt", "rollback"), and
+	// whether the update helper does it (upgrade_engine.go).
+	Action string `json:"action,omitempty"`
+	Runner string `json:"runner,omitempty"`
+	// Migrations: what happened to the service definitions.
+	Migrations []string `json:"migrations,omitempty"`
+	// RollbackUntil: until when the previous version can be put back by hand.
+	RollbackUntil string `json:"rollback_until,omitempty"`
 }
 
 // upgradeDoctorNote summarises the doctor run after a successful upgrade.
@@ -142,6 +158,7 @@ type upgrader struct {
 	logf       func(string, ...any)
 
 	pauseWatcher, resumeWatcher func()
+	findService                 func(installDir string) stackService
 
 	poll          time.Duration
 	verifyWindow  time.Duration // a restarted server must stay up this long
@@ -149,6 +166,8 @@ type upgrader struct {
 
 	mu  sync.Mutex
 	job *upgradeJob
+	// snapFiles: what snapshot saved (nil after a supervisor restart).
+	snapFiles map[string]string
 }
 
 func newUpgrader(cfg *superviseConfig, logf func(string, ...any)) *upgrader {
@@ -166,7 +185,8 @@ func newUpgrader(cfg *superviseConfig, logf func(string, ...any)) *upgrader {
 		restart: func(name string) {
 			_ = os.WriteFile(supervisorRestartRequestPath(cfg.installDir, name), []byte(nowRFC3339()+"\n"), 0o644)
 		},
-		runCmd: runUpgradeCommand,
+		runCmd:      runUpgradeCommand,
+		findService: findStackService,
 	}
 	for _, name := range []string{"api", "ui"} {
 		for _, c := range cfg.children {
@@ -193,7 +213,7 @@ func maxDuration(a, b time.Duration) time.Duration {
 func runUpgradeCommand(timeout time.Duration, name string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput() // #nosec G702 -- our own programs, argv only
 	return string(out), err
 }
 
@@ -228,7 +248,9 @@ func (u *upgrader) save() {
 	path := upgradeStatePath(u.installDir)
 	tmp := path + ".tmp"
 	if os.WriteFile(tmp, b, 0o644) == nil {
-		_ = os.Rename(tmp, path)
+		// Windows refuses the rename while the dashboard is reading the old file.
+		// Losing the last save would show a finished upgrade as running.
+		_ = renameWithRetry(tmp, path)
 	}
 }
 
@@ -249,18 +271,92 @@ func (u *upgrader) step(phase, format string, a ...any) {
 
 // loop resumes an interrupted upgrade, then takes new requests until ctx ends.
 func (u *upgrader) loop(ctx context.Context) {
-	if j, err := readUpgradeJob(u.installDir); err == nil && upgradeActive(j.Phase) {
-		u.job = j
-		u.resume(ctx)
+	if j, err := readUpgradeJob(u.installDir); err == nil {
+		switch {
+		case j.Runner == "helper":
+			// The update helper goes on by itself.
+		case j.Runner == "stage" || helperPhaseActive(j.Phase):
+			if upgradeActive(j.Phase) || helperPhaseActive(j.Phase) {
+				u.endStaging(j)
+			}
+		case upgradeActive(j.Phase):
+			u.job = j
+			u.resume(ctx)
+		}
 	}
 	for ctx.Err() == nil {
 		if req, ok := u.takeRequest(); ok {
-			u.run(ctx, req)
+			if svc := u.helperService(); svc != nil {
+				u.handToHelper(ctx, svc, req)
+			} else if _, ok := opsAvailable(u.installDir); ok && upgradeHelperEnabled() {
+				u.handToServiceHelper(req)
+			} else {
+				u.run(ctx, req)
+			}
 		}
 		if !sleepCtx(ctx, u.poll) {
 			return
 		}
 	}
+}
+
+// helperService returns the service the update helper can upgrade, or nil when
+// this supervisor has to do it itself.
+func (u *upgrader) helperService() stackService {
+	if u.findService == nil || !upgradeHelperEnabled() {
+		return nil
+	}
+	svc := u.findService(u.installDir)
+	if svc == nil || svc.privileged() != nil {
+		return nil
+	}
+	return svc
+}
+
+// handToHelper prepares an upgrade and gives it to the update helper.
+func (u *upgrader) handToHelper(ctx context.Context, svc stackService, req upgradeRequest) {
+	job := newJob(req.ID, helperActionUpgrade, req.TargetVersion, req.BackupPath, req.RequestedBy)
+	if req.RequestedAt != "" {
+		job.RequestedAt = req.RequestedAt
+	}
+	s := newStageOne(u.installDir, svc, newJobLog(u.installDir, u.logf, job), u.logf)
+	s.replaceEdited = req.ReplaceEdited
+	if err := s.run(ctx, req.TargetVersion); err != nil {
+		u.logf("upgrade: %v", err)
+	}
+}
+
+// handToServiceHelper: this supervisor runs unprivileged (LIN-02), so the
+// service helper (root) prepares the upgrade and gives it to the update helper.
+func (u *upgrader) handToServiceHelper(req upgradeRequest) {
+	job := newJob(req.ID, helperActionUpgrade, req.TargetVersion, req.BackupPath, req.RequestedBy)
+	if req.RequestedAt != "" {
+		job.RequestedAt = req.RequestedAt
+	}
+	log := newJobLog(u.installDir, u.logf, job)
+	log.step(upgDownloading, "The service helper prepares the upgrade")
+	r := opsRequest{Op: opUpgrade, Target: strings.TrimPrefix(req.TargetVersion, "v"), JobID: job.ID, BackupPath: req.BackupPath, RequestedBy: req.RequestedBy, RequestedAt: job.RequestedAt}
+	if _, err := submitOps(u.installDir, r, 30*time.Second, 0); err != nil {
+		u.logf("upgrade: %v", err)
+		log.fail(upgFailed, err, "Not started: %v. Nothing was changed.", err)
+	}
+}
+
+// endStaging ends a job whose preparation did not survive a restart. Nothing
+// had been changed; a request the helper has taken is the helper's.
+func (u *upgrader) endStaging(j *upgradeJob) {
+	if helperUnfinished(u.installDir) || fileExists(helperAcceptedPath(u.installDir)) {
+		return
+	}
+	unlock, err := acquireSupervisorLock(helperFile(u.installDir, "stage.lock"))
+	if err != nil {
+		return // prepared by the command line, which is still at it
+	}
+	defer unlock()
+	_ = os.Remove(helperRequestPath(u.installDir))
+	_ = os.RemoveAll(helperStageDir(u.installDir))
+	newJobLog(u.installDir, u.logf, *j).fail(upgFailed, errors.New("interrupted"),
+		"Interrupted before anything was installed; nothing was changed. Start the update again.")
 }
 
 // takeRequest consumes a pending request file, if any.
@@ -270,7 +366,7 @@ func (u *upgrader) takeRequest() (upgradeRequest, bool) {
 	if err != nil {
 		return upgradeRequest{}, false
 	}
-	_ = os.Remove(path)
+	_ = removeWithRetry(path)
 	var req upgradeRequest
 	if json.Unmarshal(b, &req) != nil {
 		u.logf("upgrade: ignoring an unreadable request")
@@ -319,7 +415,8 @@ func (u *upgrader) run(ctx context.Context, req upgradeRequest) {
 		target = "v" + strings.TrimPrefix(req.TargetVersion, "v")
 	}
 	u.step(upgInstalling, "Downloading and installing %s (checksum-verified)", target)
-	args := []string{"update"}
+	// Programs only: this supervisor is the one carrying the upgrade out.
+	args := []string{"update", "--programs-only"}
 	if req.TargetVersion != "" {
 		args = append(args, "--target-version", req.TargetVersion)
 	}
@@ -369,6 +466,7 @@ func (u *upgrader) restartAndVerify(ctx context.Context, since time.Time) {
 	}
 	u.step(upgVerifying, "Running the safe self-heal checks for the new version")
 	u.postUpgradeDoctor()
+	recordTrustedStackQuiet(u.installDir, "upgrade")
 	u.removeSnapshot()
 	u.mu.Lock()
 	u.job.SupervisorRestartPending = stripGoBuildGitSuffix(Version) != stripGoBuildGitSuffix(u.job.ToVersion) && u.job.ToVersion != ""
@@ -475,10 +573,22 @@ func (u *upgrader) snapshot() error {
 			return err
 		}
 	}
+	files, err := snapshotHashes(snap)
+	if err != nil {
+		return err
+	}
+	u.snapFiles = files
+	if err := recordUpgradeSnapshot(u.installDir, files); err != nil {
+		u.logf("upgrade: could not record the saved version: %v", err)
+	}
 	return nil
 }
 
-func (u *upgrader) removeSnapshot() { _ = os.RemoveAll(u.snapshotDir()) }
+func (u *upgrader) removeSnapshot() {
+	_ = os.RemoveAll(u.snapshotDir())
+	u.snapFiles = nil
+	_ = recordUpgradeSnapshot(u.installDir, nil)
+}
 
 // rollback puts the snapshot back and restarts the servers on it.
 func (u *upgrader) rollback(ctx context.Context, reason string) {
@@ -488,7 +598,15 @@ func (u *upgrader) rollback(ctx context.Context, reason string) {
 		u.step(upgFailed, "%s. No saved copy of the previous version was found; restore the pre-update backup %s from Updates & backups → Backups.", reason, filepath.Base(u.job.BackupPath))
 		return
 	}
+	// Only what this supervisor saved may run again (SEC-19): the folder
+	// could have been planted.
+	if err := checkUpgradeSnapshot(u.installDir, snap, u.snapFiles); err != nil {
+		u.step(upgFailed, "%s. The saved copy of the previous version was not put back because it is not trusted (%v); the installed files were left as they are. Restore the pre-update backup %s, or install that version from its release.", reason, err, filepath.Base(u.job.BackupPath))
+		return
+	}
 	u.step(upgRollingBack, "%s. Putting the previous version back", reason)
+	// What `update` kept for a rollback by hand is what goes back now.
+	dropUpdateSnapshot(u.installDir)
 	if err := installStackComponents(snap, u.installDir); err != nil {
 		u.step(upgFailed, "%s. Putting the previous version back failed (%v); restore the pre-update backup %s.", reason, err, filepath.Base(u.job.BackupPath))
 		return
@@ -518,49 +636,67 @@ func (u *upgrader) rollback(ctx context.Context, reason string) {
 	u.step(upgRolledBack, "%s. The previous version (v%s) was put back and is running.", reason, strings.TrimPrefix(u.job.FromVersion, "v"))
 }
 
+// childWatch follows one server from its published state after a restart.
+type childWatch struct {
+	since    time.Time     // when it was (re)started
+	window   time.Duration // it must stay up this long
+	exits    map[string]bool
+	lastExit string
+}
+
+// look reports whether the server is healthy now, or an error when it will not
+// become so.
+func (w *childWatch) look(st superviseChildState) (bool, error) {
+	started, serr := time.Parse(time.RFC3339, st.StartedAt)
+	if exitAt, err := time.Parse(time.RFC3339, st.LastExitAt); err == nil && !exitAt.Before(w.since) && st.LastExitReason != "requested" {
+		key := st.LastExitAt + st.LastExitReason
+		if !w.exits[key] {
+			if w.exits == nil {
+				w.exits = map[string]bool{}
+			}
+			w.exits[key] = true
+			w.lastExit = st.LastExitReason
+			if st.LastExitDetail != "" {
+				w.lastExit += " (" + st.LastExitDetail + ")"
+			}
+			if line := exitSummaryLine(st.LastExitLogTail); line != "" {
+				w.lastExit += ": " + line
+			}
+		}
+	}
+	switch {
+	case st.State == "cooldown":
+		return false, fmt.Errorf("it kept stopping (%s)", w.lastExit)
+	case len(w.exits) >= 2:
+		return false, fmt.Errorf("it stopped %d times (%s)", len(w.exits), w.lastExit)
+	case st.State == "running" && serr == nil && !started.Before(w.since) && time.Since(started) >= w.window:
+		if !st.Probed {
+			return true, nil
+		}
+		if st.LastProbeOK != nil && *st.LastProbeOK {
+			if at, err := time.Parse(time.RFC3339, st.LastProbeAt); err == nil && !at.Before(started) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 // awaitHealthy waits for a server started at or after since to be running,
 // to pass its health probe, and to stay up for verifyWindow.
 func (u *upgrader) awaitHealthy(ctx context.Context, name string, since time.Time) error {
 	since = since.Truncate(time.Second)
 	deadline := time.Now().Add(u.verifyTimeout)
-	seenExits := map[string]bool{}
-	var lastExit string
+	watch := &childWatch{since: since, window: u.verifyWindow}
 	for {
 		if st, ok := u.childState(name); ok {
-			started, serr := time.Parse(time.RFC3339, st.StartedAt)
-			if exitAt, err := time.Parse(time.RFC3339, st.LastExitAt); err == nil && !exitAt.Before(since) && st.LastExitReason != "requested" {
-				key := st.LastExitAt + st.LastExitReason
-				if !seenExits[key] {
-					seenExits[key] = true
-					lastExit = st.LastExitReason
-					if st.LastExitDetail != "" {
-						lastExit += " (" + st.LastExitDetail + ")"
-					}
-					if line := exitSummaryLine(st.LastExitLogTail); line != "" {
-						lastExit += ": " + line
-					}
-				}
-			}
-			switch {
-			case st.State == "cooldown":
-				return fmt.Errorf("it kept stopping (%s)", lastExit)
-			case len(seenExits) >= 2:
-				return fmt.Errorf("it stopped %d times (%s)", len(seenExits), lastExit)
-			case st.State == "running" && serr == nil && !started.Before(since) && time.Since(started) >= u.verifyWindow:
-				probeOK := !st.Probed
-				if st.LastProbeOK != nil && *st.LastProbeOK {
-					if at, err := time.Parse(time.RFC3339, st.LastProbeAt); err == nil && !at.Before(started) {
-						probeOK = true
-					}
-				}
-				if probeOK {
-					return nil
-				}
+			if healthy, err := watch.look(st); err != nil || healthy {
+				return err
 			}
 		}
 		if time.Now().After(deadline) {
-			if lastExit != "" {
-				return fmt.Errorf("not healthy after %s (last stop: %s)", shortDuration(u.verifyTimeout), lastExit)
+			if watch.lastExit != "" {
+				return fmt.Errorf("not healthy after %s (last stop: %s)", shortDuration(u.verifyTimeout), watch.lastExit)
 			}
 			return fmt.Errorf("not healthy after %s", shortDuration(u.verifyTimeout))
 		}
@@ -612,22 +748,7 @@ func (u *upgrader) versionsMatch() error {
 // postUpgradeDoctor runs the non-disruptive doctor checks with fixes, so a
 // new release's checks (service definition, config schema, ...) apply at once.
 func (u *upgrader) postUpgradeDoctor() {
-	note := &upgradeDoctorNote{}
-	out, err := u.runCmd(3*time.Minute, u.selfPath, "doctor", "--json", "--fix", "--no-disruptive", "--install-dir", u.installDir)
-	var rep healReport
-	if jerr := json.Unmarshal([]byte(jsonObject(out)), &rep); jerr != nil {
-		note.Error = upgradeErrorLine(out, err)
-	} else {
-		note.Summary = rep.Summary
-		for _, r := range rep.Results {
-			if r.Fixed {
-				note.Fixed = append(note.Fixed, r.Title)
-			}
-			if r.Status == healFail {
-				note.Failing = append(note.Failing, r.Title)
-			}
-		}
-	}
+	note := runDoctorFixes(u.runCmd, u.installDir, u.selfPath)
 	u.mu.Lock()
 	u.job.Doctor = note
 	u.mu.Unlock()

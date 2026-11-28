@@ -21,7 +21,7 @@ import { useAuth } from "../../auth/AuthContext";
 import { useLocalStorageState } from "../../hooks/useLocalStorageState";
 import { CodeEditor } from "../../components/CodeEditor";
 import { notify } from "../../notify";
-import { EmptyState, ListToolbar, matchesSearch, middleEllipsis, Panel, StatusBadge, VirtualList, type Tone } from "../../ui";
+import { EmptyState, ListToolbar, matchesSearch, Panel, StatusBadge, VirtualList, type Tone } from "../../ui";
 
 type Props = {
   onError: (e: unknown) => void;
@@ -247,7 +247,7 @@ export function LogsSection({ onError }: Props) {
       <Panel
         title="Sources"
         icon={<FileTextOutlined />}
-        description="Everything the orchestrator's processes write under logs/, newest first. Passwords, tokens and webhook secrets are removed before lines are written."
+        description="Everything the orchestrator's processes write, newest first. Passwords, tokens and webhook secrets are removed before lines are written."
         extra={
           isAdmin && levelQuery.data ? (
             <span className="logs-level-control">
@@ -292,14 +292,10 @@ export function LogsSection({ onError }: Props) {
                   aria-label="Log file"
                   value={file ?? files[0]}
                   onChange={setFile}
-                  options={files.map((f) => ({ value: f, label: f }))}
+                  options={files.map((f, i) => ({ value: f, label: i === 0 ? "Current" : `Earlier (${i})` }))}
                   popupMatchSelectWidth={false}
                 />
-              ) : (
-                <Typography.Text code copyable={fileName ? { text: fileName } : false} title={fileName}>
-                  {middleEllipsis(fileName || "—", 60)}
-                </Typography.Text>
-              )}
+              ) : null}
               {logQuery.data?.size ? <span>{formatBytes(logQuery.data.size)}</span> : null}
             </span>
           </div>
@@ -353,7 +349,7 @@ export function LogsSection({ onError }: Props) {
         ) : !logQuery.data && logQuery.isLoading ? (
           <EmptyState title="Loading…" />
         ) : logQuery.data && !logQuery.data.exists ? (
-          <EmptyState icon={<FileTextOutlined />} title="This log hasn't been written yet" description={`${fileName || "The file"} appears once the process writes to it.`} />
+          <EmptyState icon={<FileTextOutlined />} title="This log hasn't been written yet" description="It appears here once the process writes to it" />
         ) : shown.length === 0 ? (
           <EmptyState icon={<FilterOutlined />} title={entries.length ? "No lines match" : "The log is empty"} description={entries.length ? "Try another search or level." : undefined} />
         ) : raw ? (

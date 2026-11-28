@@ -64,6 +64,7 @@ runner:
     retain-days: 30                 # --retain-days / NCC_RETAIN_DAYS  0 = unlimited
     artifact-retain-days: 0         # --artifact-retain-days / NCC_ARTIFACT_RETAIN_DAYS
     artifact-retain-max-files: 0    # --artifact-retain-max-files / NCC_ARTIFACT_RETAIN_MAX_FILES
+    raw-log-retain-days: 0          # --raw-log-retain-days / NCC_RAW_LOG_RETAIN_DAYS  0 = keep raw NCC logs forever
   policy:
     gates: ""                       # --policy-gates / NCC_POLICY_GATES
     notify-on-regression: false     # --notify-on-regression / NCC_NOTIFY_ON_REGRESSION

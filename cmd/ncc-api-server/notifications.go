@@ -452,7 +452,7 @@ func (s *apiServer) saveNotificationStatus(st notificationState) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o600)
+	return writeSecretFile(path, b)
 }
 
 func (s *apiServer) loadLegacyNotificationState() (notificationState, error) {
@@ -544,7 +544,7 @@ func (s *apiServer) saveNotificationsToConfig(st notificationState) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(cfgPath, out, 0o600)
+	return writeSecretFile(cfgPath, out)
 }
 
 // loadConfigDocument reads config.yaml as written (nested keys stay nested).
@@ -996,6 +996,10 @@ func (s *apiServer) notifyRunFinished(runErr error) {
 		"started_at": startedAt.Format(time.RFC3339),
 		"output_dir": s.absPath(s.outputDir),
 	}
+	// Clusters the newest run could not reach and overdue schedules.
+	if lines := s.freshnessNotice(); len(lines) > 0 {
+		details["freshness"] = lines
+	}
 	if runErr != nil {
 		if !st.Events.RunFailure {
 			return
@@ -1216,6 +1220,14 @@ func notificationText(event string, details map[string]interface{}) string {
 					lines = append(lines, fmt.Sprintf("  … and %d more", len(list)-10))
 					break
 				}
+				lines = append(lines, "  - "+item)
+			}
+		}
+	}
+	if v, ok := take("freshness"); ok {
+		if list, ok := v.([]string); ok && len(list) > 0 {
+			lines = append(lines, "", "Data age:")
+			for _, item := range list {
 				lines = append(lines, "  - "+item)
 			}
 		}

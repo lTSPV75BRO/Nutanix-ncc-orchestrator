@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -234,6 +235,7 @@ func (s *apiServer) handleRestore(w http.ResponseWriter, r *http.Request) {
 	if !restarting {
 		msg = "Backup restored. Restart the stack (v2-stop then v2-start) for the restored config, accounts, and token to take effect."
 	}
+	msg += restoreStackNote(out)
 	writeJSON(w, http.StatusOK, envelope{
 		Success: true,
 		Message: msg,
@@ -281,8 +283,10 @@ func (s *apiServer) postRestoreValidateAndSelfHeal(installDir string) []string {
 	if err == nil && len(raw) > 0 {
 		var st map[string]interface{}
 		if json.Unmarshal(raw, &st) == nil {
-			certPath := strings.TrimSpace(fmt.Sprintf("%v", st["ui_tls_cert_file"]))
-			keyPath := strings.TrimSpace(fmt.Sprintf("%v", st["ui_tls_key_file"]))
+			// Absent keys stay "" ("%v" would turn nil into "<nil>").
+			certPath, _ := st["ui_tls_cert_file"].(string)
+			keyPath, _ := st["ui_tls_key_file"].(string)
+			certPath, keyPath = strings.TrimSpace(certPath), strings.TrimSpace(keyPath)
 			if certPath != "" && keyPath != "" {
 				if healed := healMissingTLSPair(certPath, keyPath, installDir); healed {
 					notes = append(notes, "repaired missing UI TLS cert/key from self-signed fallback")
@@ -304,11 +308,14 @@ func (s *apiServer) postRestoreValidateAndSelfHeal(installDir string) []string {
 type persistedScheduleState struct {
 	Type     string `json:"type"`
 	Action   string `json:"action"`
+	Cron     string `json:"cron"`
 	Every    string `json:"every"`
 	Config   string `json:"config"`
 	LogPath  string `json:"log_path"`
 	WithLock bool   `json:"with_lock"`
 	TaskName string `json:"task_name"`
+	// PrintOnly: saved as a preview and never applied.
+	PrintOnly bool `json:"print_only"`
 }
 
 func (s *apiServer) healMissingScheduleArtifacts(installDir string) (bool, string) {
@@ -324,7 +331,17 @@ func (s *apiServer) healMissingScheduleArtifacts(installDir string) (bool, strin
 	if strings.TrimSpace(st.Action) != "" && !strings.EqualFold(strings.TrimSpace(st.Action), "create") {
 		return false, ""
 	}
+	if st.PrintOnly {
+		return false, ""
+	}
 	schedType := strings.ToLower(strings.TrimSpace(st.Type))
+	if schedType == "" || schedType == "auto" {
+		// create-schedule resolves it; on Windows the task is not recreated here.
+		schedType = "cron"
+		if runtime.GOOS == "windows" {
+			return false, ""
+		}
+	}
 	if schedType != "systemd" && schedType != "cron" {
 		return false, ""
 	}
@@ -332,11 +349,10 @@ func (s *apiServer) healMissingScheduleArtifacts(installDir string) (bool, strin
 	if taskName == "" {
 		taskName = "ncc-orchestrator"
 	}
-	// If the generated runner already exists, we don't need to recreate.
-	// (systemd: logs/ncc-sched-<task>.sh, cron: logs/ncc-scheduler.sh)
+	// A systemd schedule whose runner script exists needs nothing; for cron,
+	// create-schedule replaces its own crontab line, so repeating it is safe.
 	systemdRunner := filepath.Join(installDir, "logs", fmt.Sprintf("ncc-sched-%s.sh", taskName))
-	cronRunner := filepath.Join(installDir, "logs", "ncc-scheduler.sh")
-	if fileExists(systemdRunner) || fileExists(cronRunner) {
+	if schedType == "systemd" && fileExists(systemdRunner) {
 		return false, ""
 	}
 
@@ -358,8 +374,11 @@ func (s *apiServer) healMissingScheduleArtifacts(installDir string) (bool, strin
 		"--every", every,
 		"--log-path", logPath,
 		"--task-name", taskName,
-		"--with-lock", fmt.Sprintf("%t", st.WithLock),
+		fmt.Sprintf("--with-lock=%t", st.WithLock),
 		"--print-only=false",
+	}
+	if cron := strings.TrimSpace(st.Cron); cron != "" {
+		args = append(args, "--cron", cron)
 	}
 	if _, err := s.runOrchestratorEnv(args, 30*time.Second, nil); err != nil {
 		return false, ""
@@ -400,7 +419,7 @@ func normalizeScheduleStatePaths(statePath, installDir string) bool {
 	if err != nil {
 		return false
 	}
-	return os.WriteFile(statePath, updated, 0o600) == nil
+	return writeSecretFile(statePath, updated) == nil
 }
 
 // outputDirConfigKeys are the config.yaml keys naming a directory the
@@ -508,14 +527,14 @@ func healMissingTLSPair(certPath, keyPath, installDir string) bool {
 	}
 	if !fileExists(certPath) {
 		if b, err := os.ReadFile(fallbackCert); err == nil {
-			if err := os.WriteFile(certPath, b, 0o600); err != nil {
+			if err := writeSecretFile(certPath, b); err != nil {
 				return false
 			}
 		}
 	}
 	if !fileExists(keyPath) {
 		if b, err := os.ReadFile(fallbackKey); err == nil {
-			if err := os.WriteFile(keyPath, b, 0o600); err != nil {
+			if err := writeSecretFile(keyPath, b); err != nil {
 				return false
 			}
 		}
@@ -545,23 +564,54 @@ func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }
 
+const stackServiceUnit = "ncc-orchestrator.service"
+
+// cgroupInStackService reports whether a /proc/<pid>/cgroup listing (v1 or v2)
+// places the process in the stack's systemd service.
+func cgroupInStackService(cgroup string) bool {
+	for _, line := range strings.Split(cgroup, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasSuffix(line, "/"+stackServiceUnit) || strings.Contains(line, "/"+stackServiceUnit+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func runsInStackService() bool {
+	b, err := os.ReadFile("/proc/self/cgroup")
+	return err == nil && cgroupInStackService(string(b))
+}
+
 // detachedSystemdRestartScript is the /bin/sh -c body used after an in-app
 // update/restore. It must stay valid when passed as one -c argument: join with
 // newlines, not "; ", because `then;` is a syntax error and would skip the
 // systemctl restart.
-func detachedSystemdRestartScript(installDir string) string {
+//
+// inService: this process runs in the service's cgroup, and so does the script.
+// Stopping the service kills the script (KillMode=control-group), so it only
+// queues one restart job, which systemd completes on its own. Otherwise (a
+// stack started by hand while the unit is installed) the script outlives the
+// stop and clears the leftovers that hold the ports first.
+func detachedSystemdRestartScript(installDir string, inService bool) string {
 	installQ := shellSingleQuote(installDir)
 	orchBin := filepath.Join(installDir, "bin", "ncc-orchestrator")
 	orchBinQ := shellSingleQuote(orchBin)
-	return strings.Join([]string{
+	lines := []string{
 		"set -e",
 		"if command -v chcon >/dev/null 2>&1; then",
 		"  chcon -t bin_t " + shellSingleQuote(filepath.Join(installDir, "bin", "ncc-orchestrator")) + " " + shellSingleQuote(filepath.Join(installDir, "bin", "ncc-api-server")) + " " + shellSingleQuote(filepath.Join(installDir, "bin", "ncc-ui-server")) + " >/dev/null 2>&1 || true",
 		"fi",
-		"systemctl stop ncc-orchestrator.service >/dev/null 2>&1 || true",
-		"if [ -x " + orchBinQ + " ]; then " + orchBinQ + " v2-stop --install-dir " + installQ + " >/dev/null 2>&1 || true; fi",
-		"systemctl restart ncc-orchestrator.service",
-	}, "\n")
+	}
+	if inService {
+		lines = append(lines, "systemctl --no-block restart "+stackServiceUnit)
+	} else {
+		lines = append(lines,
+			"systemctl stop "+stackServiceUnit+" >/dev/null 2>&1 || true",
+			"if [ -x "+orchBinQ+" ]; then "+orchBinQ+" v2-stop --install-dir "+installQ+" >/dev/null 2>&1 || true; fi",
+			"systemctl restart "+stackServiceUnit)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // spawnDetachedRestart launches a detached restart that preserves the current
@@ -575,7 +625,9 @@ func detachedSystemdRestartScript(installDir string) string {
 // response flush before the stop signal lands.
 func (s *apiServer) spawnDetachedRestart(installDir string) bool {
 	base := s.orchestratorBaseCommand()
-	useSystemd := hasSystemdStackService()
+	// An unprivileged service (LIN-02) cannot call systemctl: v2-restart asks
+	// its service helper (root) instead.
+	useSystemd := !serviceUnprivileged() && hasSystemdStackService()
 	if !useSystemd && len(base) == 0 {
 		return false
 	}
@@ -584,7 +636,7 @@ func (s *apiServer) spawnDetachedRestart(installDir string) bool {
 	if !useSystemd && base[0] == "go" {
 		return false
 	}
-	go func() {
+	go guard("in-app restart", func() {
 		// Give the response time to reach the client before we tear down.
 		time.Sleep(2 * time.Second)
 		logf := filepath.Join(installDir, "logs", "v2-restart.log")
@@ -596,12 +648,9 @@ func (s *apiServer) spawnDetachedRestart(installDir string) bool {
 		build := func() *exec.Cmd {
 			var cmd *exec.Cmd
 			if useSystemd {
-				// Restart the service in a detached shell so we can do a best-effort
-				// pre-clean first:
-				//  1) relabel binaries for SELinux (fixes status=203/EXEC),
-				//  2) stop detached leftovers that can hold :8080/:8081 and cause
-				//     supervisor child bind failures during restart.
-				script := detachedSystemdRestartScript(installDir)
+				// A shell, so the binaries can be relabelled for SELinux first
+				// (fixes status=203/EXEC).
+				script := detachedSystemdRestartScript(installDir, runsInStackService())
 				cmd = exec.Command("/bin/sh", "-c", script)
 			} else {
 				// Argument vector, never a shell string: install paths with
@@ -621,20 +670,29 @@ func (s *apiServer) spawnDetachedRestart(installDir string) bool {
 		cmd, err := startDetached(build)
 		if err != nil {
 			log.Printf("in-app restart could not start the restarter: %v", err)
-			// Only an in-flight software update is waiting on this restart;
-			// surface the failure there instead of leaving it "restarting".
-			updateJob.mu.Lock()
-			waiting := updateJob.inProgress && updateJob.phase == updPhaseRestart
-			updateJob.mu.Unlock()
-			if waiting {
-				updateJob.fail("update installed, but the automatic restart could not be started (" + redactPaths(err.Error()) + "); restart the stack (v2-restart) to load the new version")
-			}
+			failWaitingUpdate("update installed, but the automatic restart could not be started (" + redactPaths(err.Error()) + "); restart the stack (v2-restart) to load the new version")
 			return
 		}
-		// Release so we don't wait on it; it continues after we exit.
-		_ = cmd.Process.Release()
-	}()
+		// Normally the restart ends this process first. Still being here after
+		// the restarter failed means nothing was restarted, so say so. (Exit
+		// code -1 is the stop signal of the restart itself.)
+		if err := cmd.Wait(); err != nil && cmd.ProcessState.ExitCode() > 0 {
+			log.Printf("in-app restart failed (see %s): %v", logf, err)
+			failWaitingUpdate("update installed, but the automatic restart failed; restart the stack (v2-restart) to load the new version")
+		}
+	})
 	return true
+}
+
+// failWaitingUpdate fails an in-app update that waits on the restart, instead
+// of leaving it "restarting". Other callers of the restart have no job.
+func failWaitingUpdate(msg string) {
+	updateJob.mu.Lock()
+	waiting := updateJob.inProgress && updateJob.phase == updPhaseRestart
+	updateJob.mu.Unlock()
+	if waiting {
+		updateJob.fail(msg)
+	}
 }
 
 // ensureApplyUpdateWatcher installs the systemd path unit that restarts the
@@ -645,13 +703,20 @@ func (s *apiServer) ensureApplyUpdateWatcher() {
 	if s.capabilities.Kubernetes || s.capabilities.ImmutableUpdates {
 		return
 	}
-	if !hasSystemdStackService() {
+	if serviceUnprivileged() || !hasSystemdStackService() {
 		return
 	}
-	go func() {
+	go guard("update watcher install", func() {
 		_, _ = s.runOrchestrator([]string{
 			"v2-install-update-watcher",
 			"--install-dir", s.maintenanceInstallDir(),
 		}, 45*time.Second)
-	}()
+	})
+}
+
+// serviceUnprivileged: this server runs as an ordinary user on Linux (the
+// service user of LIN-02, or a stack started by hand), which can neither write
+// units nor call systemctl.
+func serviceUnprivileged() bool {
+	return runtime.GOOS == "linux" && os.Geteuid() != 0
 }

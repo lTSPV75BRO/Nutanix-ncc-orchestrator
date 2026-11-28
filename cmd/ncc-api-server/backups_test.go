@@ -154,3 +154,58 @@ func TestApiRouteCatalogInOpenAPI(t *testing.T) {
 		}
 	}
 }
+
+// TestParseBackupVerifyReport pins that the verify endpoint reads the JSON
+// check list from `v2-restore --verify-only --json`, even with the CLI's
+// error line after it, and counts failures and warnings.
+func TestParseBackupVerifyReport(t *testing.T) {
+	out := `{
+  "archive": "manual-x.tar.gz",
+  "running_version": "2.4.0",
+  "secrets": [".ncc-api-token"],
+  "checks": [
+    {"name": "Archive", "status": "pass", "message": "ok"},
+    {"name": "Secrets", "status": "warn", "message": "w"},
+    {"name": "Version", "status": "fail", "message": "Different major versions are not compatible."}
+  ],
+  "ok": false
+}
+Error: backup verification failed: Version: Different major versions are not compatible.
+`
+	rep, ok := parseBackupVerifyReport(out)
+	if !ok {
+		t.Fatal("report not parsed")
+	}
+	if rep.OK || rep.failed() != 1 || rep.warnings() != 1 || len(rep.Secrets) != 1 {
+		t.Fatalf("unexpected report: %+v", rep)
+	}
+	if _, ok := parseBackupVerifyReport("Archive OK: old text output\n"); ok {
+		t.Fatal("plain text must not parse as a report")
+	}
+}
+
+// TestCountBackupArchivesMatchesListing pins that the cheap count used by the
+// setup checklist agrees with the full listing and ignores other files.
+func TestCountBackupArchivesMatchesListing(t *testing.T) {
+	install := t.TempDir()
+	s := &apiServer{repoRoot: install, configPath: filepath.Join(install, "config.yaml")}
+	if n := s.countBackupArchives(); n != 0 {
+		t.Fatalf("no directory: got %d, want 0", n)
+	}
+	dir := s.backupsDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"manual-1.tar.gz", "manual-2.tar.gz.enc", "notes.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := s.listBackupEntries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.countBackupArchives(); got != len(entries) || got != 2 {
+		t.Fatalf("count = %d, listing = %d, want 2", got, len(entries))
+	}
+}

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"goncc/internal/plural"
 )
 
 // Setup checklist ("onboarding").
@@ -89,7 +91,7 @@ func (s *apiServer) saveOnboardingState(st onboardingState) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(path, append(b, '\n'), 0o644)
+	return writeFileAtomic(path, append(b, '\n'), 0o600)
 }
 
 // isPlaceholderTarget reports sample values shipped in example/dummy configs
@@ -130,10 +132,10 @@ func (s *apiServer) onboardingClusterStep() onboardingStep {
 	switch {
 	case len(clusters) > 0:
 		step.Done = true
-		step.Detail = fmt.Sprintf("%d cluster(s) configured.", len(clusters))
+		step.Detail = plural.Count(len(clusters), "cluster") + " configured."
 	case len(pcs) > 0:
 		step.Done = true
-		step.Detail = fmt.Sprintf("%d Prism Central source(s) configured.", len(pcs))
+		step.Detail = plural.Count(len(pcs), "Prism Central source") + " configured."
 	case len(files) > 0:
 		step.Done = true
 		step.Detail = "Clusters are read from a clusters file."
@@ -162,7 +164,7 @@ func (s *apiServer) onboardingRunStep() onboardingStep {
 		step.Detail = "No completed run yet."
 	case v.ClustersOK > 0:
 		step.Done = true
-		step.Detail = fmt.Sprintf("Last run checked %d cluster(s)", v.ClustersOK)
+		step.Detail = "Last run checked " + plural.Count(int(v.ClustersOK), "cluster")
 		if v.ClustersFailed > 0 {
 			step.Detail += fmt.Sprintf("; %d failed", v.ClustersFailed)
 		}
@@ -254,13 +256,13 @@ func (s *apiServer) onboardingBackupStep() onboardingStep {
 		AdminOnly:   true,
 	}
 	sched, err := s.loadBackupSchedule()
-	entries, _ := s.listBackupEntries()
+	backups := s.countBackupArchives()
 	switch {
 	case err == nil && sched.Enabled:
 		step.Done = true
-		step.Detail = fmt.Sprintf("Scheduled every %s; %d backup(s) on disk.", strings.TrimSpace(sched.Every), len(entries))
-	case len(entries) > 0:
-		step.Detail = fmt.Sprintf("%d backup(s) on disk, but no schedule. Turn on scheduled backups.", len(entries))
+		step.Detail = fmt.Sprintf("Scheduled every %s; %s on disk.", strings.TrimSpace(sched.Every), plural.Count(backups, "backup"))
+	case backups > 0:
+		step.Detail = plural.Count(backups, "backup") + " on disk, but no schedule. Turn on scheduled backups."
 	default:
 		step.Detail = "No backups yet."
 	}

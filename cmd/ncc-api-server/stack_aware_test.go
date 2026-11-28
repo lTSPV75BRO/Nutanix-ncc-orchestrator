@@ -88,3 +88,27 @@ func TestApplyStackAwareDefaults_RespectsExplicitOverrides(t *testing.T) {
 		t.Errorf("output-dir not auto-resolved: got %q", outputDir)
 	}
 }
+
+// Regression: with the container layout (/usr/local/bin/ncc-api-server next to
+// ncc-orchestrator) the stack-aware default filled --users-db even when a
+// Kubernetes Secret backend was configured, and the API pod died with
+// "--users-db and --users-db-secret are mutually exclusive".
+func TestStackAwareKeepsUsersDBUnsetForConfiguredBackends(t *testing.T) {
+	t.Setenv("NCC_USERS_DB_SECRET", "")
+	t.Setenv("NCC_USERS_DB", "")
+	if stackAwareKeepsUsersDBUnset(&apiServer{}) {
+		t.Fatal("no backend configured: the stack default may apply")
+	}
+	if !stackAwareKeepsUsersDBUnset(&apiServer{usersDBSecret: "ncc-v2-users"}) {
+		t.Fatal("--users-db-secret must suppress the stack default")
+	}
+	t.Setenv("NCC_USERS_DB_SECRET", "ncc-v2-users")
+	if !stackAwareKeepsUsersDBUnset(&apiServer{}) {
+		t.Fatal("NCC_USERS_DB_SECRET must suppress the stack default")
+	}
+	t.Setenv("NCC_USERS_DB_SECRET", "")
+	t.Setenv("NCC_USERS_DB", "/data/users.json")
+	if !stackAwareKeepsUsersDBUnset(&apiServer{}) {
+		t.Fatal("NCC_USERS_DB must suppress the stack default")
+	}
+}

@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter } from "react-router";
 import App from "./App";
+import { BlockedGate } from "./components/BlockedVersionScreen";
 import { SiteIntro } from "./components/SiteIntro";
 import "antd/dist/reset.css";
 import "./styles.css";
@@ -34,8 +35,10 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <AppThemeProvider>
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>
-          <App />
-          <SiteIntro />
+          <BlockedGate>
+            <App />
+            <SiteIntro />
+          </BlockedGate>
         </BrowserRouter>
       </QueryClientProvider>
     </AppThemeProvider>

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -71,7 +72,11 @@ func (s *apiServer) refreshPrismCentralLocked(pc, key string) {
 	}
 	s.pcInflight[key] = true
 	go func() {
-		clusters, err := s.discoverPrismCentralClusters(pc)
+		var clusters []pcCluster
+		var err error
+		if guard("Prism Central discovery", func() { clusters, err = s.discoverPrismCentralClusters(pc) }) {
+			err = errors.New("discovery failed unexpectedly; see the server log")
+		}
 		s.pcCacheMu.Lock()
 		defer s.pcCacheMu.Unlock()
 		if s.pcCache == nil {

@@ -228,7 +228,7 @@ func encryptBackupFile(path string, key []byte, mode byte, salt []byte) error {
 		_ = os.Remove(tmpName)
 		return err
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := renameSecretFile(tmpName, path); err != nil {
 		_ = os.Remove(tmpName)
 		return err
 	}

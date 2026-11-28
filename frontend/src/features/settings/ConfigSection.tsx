@@ -51,6 +51,7 @@ import { CodeEditor, inferEditorLanguage } from "../../components/CodeEditor";
 import type { ConfigRelatedFileBatchOperation, ConfigRelatedFileInfo } from "../../api/types";
 import { EnvironmentsModal } from "./EnvironmentsModal";
 import { PolicyGateBuilderSection } from "./PolicyGateBuilderSection";
+import { RetentionPreviewPanel } from "./RetentionPreviewPanel";
 import { SecretsMigrationModal } from "./SecretsMigrationModal";
 import { notify } from "../../notify";
 import { ItemList, SaveBar, TitleIcon, middleEllipsis } from "../../ui";
@@ -439,7 +440,7 @@ function SectionForm({
       <div className="config-section-head">
         <TitleIcon size="lg">{SECTION_ICONS[section.icon]}</TitleIcon>
         <div>
-          <h3 className="ui-panel-title">{section.title}</h3>
+          <h2 className="ui-panel-title">{section.title}</h2>
           <p className="ui-panel-desc">{section.description}</p>
         </div>
       </div>
@@ -675,7 +676,7 @@ export function ConfigSection({ onError }: Props) {
   const switchTarget = async (next: string) => {
     if (next === target) return;
     if (dirty) {
-      notify.warning({ message: "Unsaved changes", description: "Save or revert them before opening another file." });
+      notify.warning({ message: "Unsaved changes", description: "Save or revert them before opening another file" });
       return;
     }
     await load(false, true, undefined, next);
@@ -871,7 +872,7 @@ export function ConfigSection({ onError }: Props) {
             type="warning"
             showIcon
             title="The form is unavailable while the YAML has an error"
-            description="Switch to YAML to fix it, or Revert to the saved file."
+            description="Switch to YAML to fix it, or Revert to the saved file"
           />
         ) : (
           <Row gutter={[16, 16]}>
@@ -977,6 +978,10 @@ export function ConfigSection({ onError }: Props) {
                             onApplyPolicyGates={(csv) => edit("policy-gates", csv)}
                           />
                         </Card>
+                      ) : section.id === "outputs" && show === "all" && !query ? (
+                        <Card size="small" className="config-subcard">
+                          <RetentionPreviewPanel />
+                        </Card>
                       ) : null
                     }
                   />
@@ -984,7 +989,7 @@ export function ConfigSection({ onError }: Props) {
 
                 {others.length > 0 && show === "all" && !query ? (
                   <Card className="page-card" id="config-section-other">
-                    <Typography.Title level={4} style={{ margin: 0 }}>
+                    <Typography.Title level={2} className="section-subheading" style={{ margin: 0 }}>
                       Other keys in this file
                     </Typography.Title>
                     <Typography.Text type="secondary" className="section-subtitle">
@@ -1027,7 +1032,7 @@ export function ConfigSection({ onError }: Props) {
               <LinkOutlined />
             </TitleIcon>
             <div>
-            <Typography.Title level={4} className="section-title">
+            <Typography.Title level={2} className="section-title">
               Linked files
             </Typography.Title>
             <Typography.Text type="secondary" className="section-subtitle">

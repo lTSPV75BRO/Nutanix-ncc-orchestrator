@@ -9,6 +9,7 @@ import { sectionHref } from "../../navigation";
 import { notify, notifyError } from "../../notify";
 import { formatTime } from "../../utils/datetime";
 import { formatDuration } from "../../utils/freshness";
+import { plural } from "../../utils/text";
 
 const CHILD_LABEL: Record<string, string> = { api: "API server", ui: "Web UI server" };
 
@@ -250,7 +251,7 @@ export function platformFindings(p: PlatformData): { type: "warning" | "info"; t
       text: `This ${ARCH_LABEL[arch.binary] ?? arch.binary} build runs under emulation on an ${ARCH_LABEL[arch.native] ?? arch.native} machine. Install the ${p.host.os}/${arch.native} package for better speed and memory use.`,
     });
   }
-  if (cgroup.oom_kills) out.push({ type: "warning", text: `The container killed processes for memory ${cgroup.oom_kills} time(s). Raise its memory limit.` });
+  if (cgroup.oom_kills) out.push({ type: "warning", text: `The container killed processes for memory ${plural(cgroup.oom_kills, "time")}. Raise its memory limit.` });
   if (memory.total_bytes && memory.available_bytes && memory.available_bytes / memory.total_bytes < 0.1) {
     out.push({ type: "warning", text: "Less than 10% of memory is available." });
   }

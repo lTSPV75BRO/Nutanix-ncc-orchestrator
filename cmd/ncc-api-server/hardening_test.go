@@ -142,9 +142,23 @@ func TestSanitizeExtraArgs(t *testing.T) {
 // Every allowlisted extra arg must be a flag the runner's root command
 // actually defines; this is the drift that let --no-html et al. through.
 func TestExtraArgsAllowlistMatchesRunnerFlags(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join("..", "ncc-orchestrator", "goNCC.go"))
-	if err != nil {
-		t.Skipf("runner source not available: %v", err)
+	// The runner's commands and flags are spread over several files of the
+	// orchestrator package (goNCC.go, rootcmd.go, ...), so scan all of its
+	// non-test sources.
+	var src []byte
+	runnerFiles, _ := filepath.Glob(filepath.Join("..", "ncc-orchestrator", "*.go"))
+	for _, rf := range runnerFiles {
+		if strings.HasSuffix(rf, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(rf)
+		if err != nil {
+			t.Skipf("runner source not available: %v", err)
+		}
+		src = append(src, b...)
+	}
+	if len(src) == 0 {
+		t.Skip("runner source not available")
 	}
 	for flagName := range extraArgsAllowed {
 		name := strings.TrimPrefix(flagName, "--")
@@ -287,5 +301,11 @@ func TestRunExtraArgsEndpointMatchesAllowlist(t *testing.T) {
 				t.Fatalf("published example for %s is rejected: %v", o.Flag, err)
 			}
 		}
+	}
+}
+
+func TestAuditLogIsNotReadableByViewers(t *testing.T) {
+	if got := routeMinRoleFor("/api/v1/audit", true); got < RoleOperator {
+		t.Fatalf("audit log read needs operator or higher, got %s", got)
 	}
 }

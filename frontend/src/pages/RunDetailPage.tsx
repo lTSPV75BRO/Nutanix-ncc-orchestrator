@@ -6,12 +6,14 @@ import { ArrowLeftOutlined, ClusterOutlined, RedoOutlined, DisconnectOutlined, D
 import { api, ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import type { RunPreset } from "../features/runs/NewRunDrawer";
-import { sectionHref } from "../navigation";
+import { useClusterDirectory } from "../hooks/useClusterDirectory";
+import { clusterPath, sectionHref } from "../navigation";
 import { EmptyState, KeyValueList, ListToolbar, matchesSearch, Panel, StatTile, StatusBadge, toneFor, type Tone } from "../ui";
 import { formatDateTime, relativeTime } from "../utils/datetime";
 import { formatDuration } from "../utils/freshness";
 import { asArray, asRecord, toNumber } from "../utils/report";
 import { runStatusTone } from "../utils/runStatus";
+import { plural } from "../utils/text";
 
 type ClusterResult = {
   address: string;
@@ -77,6 +79,18 @@ export function RunDetailPage() {
   const { canOperate } = useAuth();
   const [sev, setSev] = useState<SevFilter>("all");
   const [clusterSearch, setClusterSearch] = useState("");
+  // Run summaries record addresses only; names come from the latest report.
+  const { nameOf } = useClusterDirectory();
+  const clusterLink = (address: string) => {
+    if (!address || address === "—") return <span className="mono">{address || "—"}</span>;
+    const name = nameOf(address);
+    return (
+      <Link to={clusterPath(address)} className="run-cluster-link">
+        <span className="cluster-page-link">{name}</span>
+        {name !== address ? <span className="mono run-cluster-address">{address}</span> : null}
+      </Link>
+    );
+  };
   const [clusterFilter, setClusterFilter] = useState<ClusterFilter>("all");
   const [checkSearch, setCheckSearch] = useState("");
   const q = useQuery({ queryKey: ["runs", "detail", id], queryFn: () => api.runById(id), enabled: Boolean(id), retry: false });
@@ -139,8 +153,8 @@ export function RunDetailPage() {
     return k;
   }, [clusters]);
   const shownClusters = useMemo(
-    () => clusters.filter((c) => (clusterFilter === "all" || clusterBucket(c) === clusterFilter) && matchesSearch(clusterSearch, c.address, c.error)),
-    [clusters, clusterFilter, clusterSearch],
+    () => clusters.filter((c) => (clusterFilter === "all" || clusterBucket(c) === clusterFilter) && matchesSearch(clusterSearch, c.address, nameOf(c.address), c.error)),
+    [clusters, clusterFilter, clusterSearch, nameOf],
   );
   const sevCounts = useMemo(() => {
     const k: Record<string, number> = {};
@@ -148,8 +162,8 @@ export function RunDetailPage() {
     return k;
   }, [checks]);
   const shownChecks = useMemo(
-    () => checks.filter((c) => (sev === "all" || c.severity === sev) && matchesSearch(checkSearch, c.cluster, c.check, c.detail)),
-    [checks, sev, checkSearch],
+    () => checks.filter((c) => (sev === "all" || c.severity === sev) && matchesSearch(checkSearch, c.cluster, nameOf(c.cluster), c.check, c.detail)),
+    [checks, sev, checkSearch, nameOf],
   );
 
   if (q.isLoading) {
@@ -182,6 +196,7 @@ export function RunDetailPage() {
   const at = run.timestamp || run.mod_time;
   const clustersTotal = (run.clusters_ok ?? 0) + (run.clusters_failed ?? 0);
   const failTotal = (run.fail_total ?? 0) + (run.err_total ?? 0);
+  const unreachable = clusters.filter((c) => !c.ok).slice(0, 10);
   const failureClasses = Object.entries(asRecord(summary.failure_classes)).filter(([, n]) => toNumber(n) > 0);
 
   return (
@@ -250,7 +265,25 @@ export function RunDetailPage() {
         />
       </div>
 
-      {st.hint ? <Alert type="info" showIcon title={st.hint} /> : null}
+      {st.hint ? (
+        <Alert
+          type="info"
+          showIcon
+          title={st.hint}
+          description={
+            unreachable.length > 0 ? (
+              <ul className="run-unreachable">
+                {unreachable.map((c) => (
+                  <li key={c.address}>
+                    {clusterLink(c.address)}
+                    <span>{c.error || (c.errorClass ? c.errorClass.replace(/_/g, " ") : "No reason recorded")}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : undefined
+          }
+        />
+      ) : null}
 
       <Tabs
         className="run-tabs"
@@ -261,7 +294,7 @@ export function RunDetailPage() {
             children: (
               <Panel flush>
                 {clusters.length === 0 ? (
-                  <EmptyState title="No per-cluster results" description="This run did not record results per cluster." />
+                  <EmptyState title="No per-cluster results" description="This run did not record results per cluster" />
                 ) : (
                   <>
                   <ListToolbar
@@ -285,14 +318,14 @@ export function RunDetailPage() {
                     dataSource={shownClusters}
                     pagination={PAGE}
                     scroll={{ x: 640 }}
-                    locale={{ emptyText: <EmptyState title="No matching clusters" description="Try another search or filter." /> }}
+                    locale={{ emptyText: <EmptyState title="No matching clusters" description="Try another search or filter" /> }}
                     columns={[
                       {
                         title: "Cluster",
                         dataIndex: "address",
                         key: "address",
-                        sorter: (a, b) => a.address.localeCompare(b.address),
-                        render: (v: string) => <span className="mono">{v}</span>,
+                        sorter: (a, b) => nameOf(a.address).localeCompare(nameOf(b.address)),
+                        render: (v: string) => clusterLink(v),
                       },
                       {
                         title: "Status",
@@ -372,7 +405,7 @@ export function RunDetailPage() {
                   }}
                   columns={[
                     { title: "Severity", dataIndex: "severity", key: "severity", width: 110, render: (v: string) => <StatusBadge tone={toneFor(v)}>{v}</StatusBadge> },
-                    { title: "Cluster", dataIndex: "cluster", key: "cluster", width: 160, render: (v: string) => <span className="mono">{v}</span> },
+                    { title: "Cluster", dataIndex: "cluster", key: "cluster", width: 180, render: (v: string) => clusterLink(v) },
                     { title: "Check", dataIndex: "check", key: "check", width: 260 },
                     {
                       title: "Detail",
@@ -411,7 +444,7 @@ export function RunDetailPage() {
                 </Panel>
                 {failureClasses.length > 0 ? (
                   <Panel title="Why clusters could not be checked" icon={<DisconnectOutlined />}>
-                    <KeyValueList items={failureClasses.map(([k, n]) => ({ label: k, value: `${toNumber(n)} cluster(s)` }))} />
+                    <KeyValueList items={failureClasses.map(([k, n]) => ({ label: k, value: plural(toNumber(n), "cluster") }))} />
                   </Panel>
                 ) : null}
                 {regression.previous_timestamp ? (
@@ -431,7 +464,7 @@ export function RunDetailPage() {
                     />
                   </Panel>
                 ) : null}
-                <Panel title="Saved files" icon={<FolderOpenOutlined />} description="JSON documents archived with this run." flush>
+                <Panel title="Saved files" icon={<FolderOpenOutlined />} description="JSON documents archived with this run" flush>
                   {Object.keys(files).length === 0 ? (
                     <EmptyState title="No files saved" />
                   ) : (

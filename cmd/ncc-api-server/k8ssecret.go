@@ -80,7 +80,9 @@ func (c *k8sSecretClient) do(method, path, contentType string, body []byte) (int
 	if body != nil {
 		rdr = bytes.NewReader(body)
 	}
-	req, err := http.NewRequest(method, c.base+path, rdr)
+	// c.base is the in-cluster API server from the service-account
+	// environment; path is built by secretPath from fixed names.
+	req, err := http.NewRequest(method, c.base+path, rdr) // #nosec G704 -- in-cluster Kubernetes API only
 	if err != nil {
 		return 0, nil, err
 	}
@@ -89,7 +91,7 @@ func (c *k8sSecretClient) do(method, path, contentType string, body []byte) (int
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(req) // #nosec G704 -- see above
 	if err != nil {
 		return 0, nil, err
 	}

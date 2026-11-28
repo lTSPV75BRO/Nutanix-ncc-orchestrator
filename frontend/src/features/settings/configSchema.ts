@@ -1,5 +1,5 @@
 // Every runner setting the config file accepts (see validateConfigFileRawTypes
-// and normalizeCanonicalConfig in cmd/ncc-orchestrator/goNCC.go). Each field
+// and normalizeCanonicalConfig in cmd/ncc-orchestrator/config_load.go). Each field
 // knows its flat key and its path in the nested `schema-version: 1` layout, so
 // the form reads and writes whichever shape the open file uses.
 
@@ -57,7 +57,7 @@ export const SECTIONS: SectionDef[] = [
   {
     id: "targets",
     title: "Clusters",
-    description: "Which clusters each run checks: a list you keep, or everything a Prism Central manages.",
+    description: "Which clusters each run checks: a list you keep, or everything a Prism Central manages",
     icon: "cluster",
     fields: [
       {
@@ -137,7 +137,7 @@ export const SECTIONS: SectionDef[] = [
   {
     id: "connection",
     title: "Sign-in & connection",
-    description: "The account runs sign in with, certificate checks, and which Nutanix APIs to call.",
+    description: "The account runs sign in with, certificate checks, and which Nutanix APIs to call",
     icon: "connection",
     fields: [
       {
@@ -220,7 +220,7 @@ export const SECTIONS: SectionDef[] = [
   {
     id: "execution",
     title: "Run behavior",
-    description: "Timeouts, parallelism, retries, and what a run does when something goes wrong.",
+    description: "Timeouts, parallelism, retries, and what a run does when something goes wrong",
     icon: "perf",
     fields: [
       { key: "timeout", label: "Per-cluster timeout", type: "duration", path: R("execution", "timeout"), group: "Timing", defaultValue: "15m" },
@@ -317,7 +317,7 @@ export const SECTIONS: SectionDef[] = [
   {
     id: "outputs",
     title: "Reports & history",
-    description: "What each run saves, where, and for how long.",
+    description: "What each run saves, where, and for how long",
     icon: "outputs",
     fields: [
       {
@@ -345,6 +345,7 @@ export const SECTIONS: SectionDef[] = [
       { key: "retain-days", label: "Keep runs for (days)", type: "int", path: R("history", "retain-days"), group: "Run history", defaultValue: "0", min: 0, help: "0 means no age limit." },
       { key: "artifact-retain-days", label: "Keep report files for (days)", type: "int", path: R("history", "artifact-retain-days"), group: "Run history", defaultValue: "0", min: 0, help: "0 means no age limit." },
       { key: "artifact-retain-max-files", label: "Most report files to keep", type: "int", path: R("history", "artifact-retain-max-files"), group: "Run history", defaultValue: "0", min: 0, help: "0 means no limit." },
+      { key: "raw-log-retain-days", label: "Keep raw NCC logs for (days)", type: "int", path: R("history", "raw-log-retain-days"), group: "Run history", defaultValue: "0", min: 0, help: "0 keeps them. The newest log and the clusters in the latest report are always kept." },
       { key: "prom-enabled", label: "Write Prometheus metrics", type: "boolean", path: ["prometheus", "enabled"], group: "Prometheus", defaultValue: "false", help: "A metrics file after each run, for the node exporter's textfile collector." },
       { key: "prom-dir", label: "Metrics folder", type: "string", path: ["storage", "prom-dir"], group: "Prometheus", defaultValue: "promfiles" },
     ],
@@ -352,7 +353,7 @@ export const SECTIONS: SectionDef[] = [
   {
     id: "filtering",
     title: "Filtering & policy",
-    description: "Which findings reports include, and the conditions that fail a run.",
+    description: "Which findings reports include, and the conditions that fail a run",
     icon: "policy",
     fields: [
       {
@@ -378,7 +379,7 @@ export const SECTIONS: SectionDef[] = [
         path: R("filtering", "exclude-alert-titles"),
         group: "What to report",
         wide: true,
-        help: "NCC alert titles to drop from reports.",
+        help: "NCC check titles to drop from reports.",
       },
       { key: "exclude-alert-titles-file", label: "Leave-out list file", type: "string", path: R("filtering", "exclude-alert-titles-file"), group: "What to report", help: "One title per line.", placeholder: "exclusions.txt" },
       {
@@ -457,7 +458,7 @@ export const SECTIONS: SectionDef[] = [
   {
     id: "logging",
     title: "Logging",
-    description: "The runner's own log file and how much it writes.",
+    description: "The runner's own log file and how much it writes",
     icon: "logs",
     fields: [
       { key: "log-file", label: "Log file", type: "string", path: ["logging", "file"], group: "Runner log", defaultValue: "logs/ncc-runner.log", wide: true },
@@ -482,7 +483,7 @@ export const SECTIONS: SectionDef[] = [
   {
     id: "secrets",
     title: "Secrets",
-    description: "Where secret:// references in this file are looked up.",
+    description: "Where secret:// references in this file are looked up",
     icon: "secrets",
     fields: [
       {

@@ -68,6 +68,7 @@ type upgradeRequest struct {
 	BackupPath    string `json:"backup_path,omitempty"`
 	RequestedBy   string `json:"requested_by,omitempty"`
 	RequestedAt   string `json:"requested_at,omitempty"`
+	ReplaceEdited bool   `json:"replace_edited,omitempty"`
 }
 
 type upgradeJob struct {
@@ -88,7 +89,11 @@ type upgradeJob struct {
 	Steps                    []map[string]interface{} `json:"steps"`
 	Doctor                   map[string]interface{}   `json:"doctor,omitempty"`
 	SupervisorRestartPending bool                     `json:"supervisor_restart_pending,omitempty"`
-	// Stale: the job says it is running but no supervisor is there to run it.
+	Action                   string                   `json:"action,omitempty"`
+	Runner                   string                   `json:"runner,omitempty"`
+	Migrations               []string                 `json:"migrations,omitempty"`
+	RollbackUntil            string                   `json:"rollback_until,omitempty"`
+	// Stale: the job says it is running but nobody is there to run it.
 	Stale bool `json:"stale,omitempty"`
 }
 
@@ -97,7 +102,7 @@ func upgradeJobActive(j *upgradeJob) bool {
 	case "preflight", "snapshot", "installing", "restarting", "verifying", "rolling_back":
 		return !j.Stale
 	}
-	return false
+	return helperUpgradePhases[j.Phase] && !j.Stale
 }
 
 func (s *apiServer) upgradeStatePath() string {
@@ -114,7 +119,12 @@ func (s *apiServer) readUpgradeJob() *upgradeJob {
 	if json.Unmarshal(b, &j) != nil {
 		return nil
 	}
-	if upgradeJobActive(&j) && !s.supervisorSupports("upgrade") {
+	switch {
+	case !upgradeJobActive(&j):
+	case j.helperJob() || helperUpgradePhases[j.Phase]:
+		// The supervisor is down for a part of it.
+		j.Stale = j.outOfTouch(time.Now())
+	case !s.supervisorSupports("upgrade"):
 		// It resumes when the supervisor starts again.
 		j.Stale = true
 	}

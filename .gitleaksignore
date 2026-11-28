@@ -1,0 +1,24 @@
+# Reviewed gitleaks findings (false positives): fixed test passwords and
+# base64 test keys in *_test.go, and prose such as "API token, scheduler/
+# notifications" in code comments and the CHANGELOG. One fingerprint per line.
+
+05555e60b85f03c811813c7aa07a03b711c37694:cmd/ncc-api-server/backupschedule_test.go:generic-api-key:77
+121d6aead10aba716093b6bdae779f7f9d7c4cb4:CHANGELOG.md:generic-api-key:20
+121d6aead10aba716093b6bdae779f7f9d7c4cb4:cmd/ncc-api-server/main.go:generic-api-key:3027
+121d6aead10aba716093b6bdae779f7f9d7c4cb4:cmd/ncc-api-server/main.go:generic-api-key:3274
+5e09fdf75561b3c855c74451e2bd9f9563f83f4a:CHANGELOG.md:generic-api-key:24
+5e09fdf75561b3c855c74451e2bd9f9563f83f4a:frontend/src/features/settings/AccessSection.tsx:generic-api-key:804
+7b54d74499e50bc228930df506deccee60303596:CHANGELOG.md:generic-api-key:24
+951af479a61e6637b6e2dc4a172cd3f2e4f052d3:cmd/ncc-api-server/main.go:generic-api-key:3352
+951af479a61e6637b6e2dc4a172cd3f2e4f052d3:cmd/ncc-api-server/main.go:generic-api-key:3636
+a90b15c0c7a3673fdb897908d9a9c9a5dcc8bc24:cmd/ncc-api-server/e2e_test.go:generic-api-key:159
+a90b15c0c7a3673fdb897908d9a9c9a5dcc8bc24:cmd/ncc-api-server/passwordpolicy_test.go:generic-api-key:71
+a90b15c0c7a3673fdb897908d9a9c9a5dcc8bc24:cmd/ncc-api-server/recovery_test.go:generic-api-key:134
+a90b15c0c7a3673fdb897908d9a9c9a5dcc8bc24:cmd/ncc-api-server/userdb_test.go:generic-api-key:221
+a90b15c0c7a3673fdb897908d9a9c9a5dcc8bc24:cmd/ncc-api-server/userdb_test.go:generic-api-key:224
+af296aa60fd4178fcd0703ac13d38ba404d8dcea:cmd/ncc-api-server/backupschedule_test.go:generic-api-key:77
+# 2026-11-23 review: prose about MCP mutations, fixed test strings for the redactor, and an example wget command.
+0d2d60c9eddb2580d9e6534967c2093fd44aeecc:docs/AI_INTEGRATION.md:generic-api-key:52
+1a130012e457536208c0d90f6b537536f7a7dfe4:cmd/ncc-api-server/redact_text_test.go:generic-api-key:17
+1a130012e457536208c0d90f6b537536f7a7dfe4:cmd/ncc-api-server/redact_text_test.go:generic-api-key:30
+f4bc43e2a72721404e03a730356b2be7591666be:docs/audit/environment-test-results.md:generic-api-key:96

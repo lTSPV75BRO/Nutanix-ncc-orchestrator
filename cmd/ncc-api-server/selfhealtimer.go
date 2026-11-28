@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"goncc/internal/plural"
 )
 
 // selfHealReport is the parsed output of the orchestrator's `doctor --json`.
@@ -49,9 +51,14 @@ func (s *apiServer) startSelfHealLoop(ctx context.Context) {
 			return
 		case <-first.C:
 		}
-		if _, err := s.runSelfHealOnce(ctx, s.selfHealAutoFix); err != nil {
-			serverLog.Error("self-heal check failed to run", "error", err.Error())
+		runOnce := func() {
+			guard("self-heal", func() {
+				if _, err := s.runSelfHealOnce(ctx, s.selfHealAutoFix); err != nil {
+					serverLog.Error("self-heal check failed to run", "error", err.Error())
+				}
+			})
 		}
+		runOnce()
 		ticker := time.NewTicker(s.selfHealInterval)
 		defer ticker.Stop()
 		for {
@@ -59,9 +66,7 @@ func (s *apiServer) startSelfHealLoop(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if _, err := s.runSelfHealOnce(ctx, s.selfHealAutoFix); err != nil {
-					serverLog.Error("self-heal check failed to run", "error", err.Error())
-				}
+				runOnce()
 			}
 		}
 	}()
@@ -185,7 +190,7 @@ func (s *apiServer) runSelfHealOnceWithOptions(ctx context.Context, opts selfHea
 				}
 			}
 		}
-		s.notifyOperationalFailure("selfheal_failure", fmt.Sprintf("NCC self-heal found %d failing check(s)", rep.Summary["fail"]), map[string]interface{}{
+		s.notifyOperationalFailure("selfheal_failure", "NCC self-heal found "+plural.Count(int(rep.Summary["fail"]), "failing check"), map[string]interface{}{
 			"fail":   rep.Summary["fail"],
 			"warn":   rep.Summary["warn"],
 			"ok":     rep.Summary["ok"],

@@ -1,6 +1,6 @@
 # Third-party alert integrations (ServiceNow, Prometheus, and others)
 
-Applies to NCC Orchestrator **v2.3.0** and later. Everything in this guide is
+Applies to NCC Orchestrator **v2.4.0** and later. Everything in this guide is
 taken from the shipped API (`cmd/ncc-api-server`). Where an integration needs
 something the product does not provide yet, the section says so and labels it
 **Proposed enhancement**.
@@ -169,7 +169,7 @@ Every create/revoke is written to the audit log (`auth.token.create`,
 | Integration need | Minimum role | Endpoints |
 | --- | --- | --- |
 | Read alerts, history, runs, metrics | **viewer** | `GET /api/v1/alerts/ncc*`, `GET /api/v1/runs*`, `GET /api/v1/report/data`, `GET /metrics` |
-| Acknowledge / resolve / reopen NCC alerts from the ticket | **operator** | `POST /api/v1/alerts/ncc/{id}/{action}`, `POST /api/v1/alerts/ncc-dispositions` |
+| Acknowledge / resolve / reopen NCC findings from the ticket | **operator** | `POST /api/v1/alerts/ncc/{id}/{action}`, `POST /api/v1/alerts/ncc-dispositions` |
 | Anything under `/api/v1/settings/*` | admin | Do not grant to integrations |
 
 **Cluster groups** apply to integrations exactly as to users: a non-admin
@@ -427,8 +427,7 @@ Troubleshooting checklist
   store; Prometheus: `tls_config.ca_file`).
 * Restrict network access to the API port to the integration hosts.
 * After the October 2026 eMudhra intermediate-CA compromise, refresh client
-  trust stores/images so revoked certificates are no longer trusted (see
-  `docs/security/security-assessment-2026-10.md`).
+  trust stores/images so revoked certificates are no longer trusted.
 
 ## 10. ServiceNow
 
@@ -564,7 +563,7 @@ v2.2.1 adds aggregate alert lifecycle gauges:
 
 | Metric | Type | Labels | Description |
 | --- | --- | --- | --- |
-| `ncc_alerts_active` | gauge | `state`, `detection`, `severity` | Active (not closed) NCC alert instances |
+| `ncc_alerts_active` | gauge | `state`, `detection`, `severity` | Active (not closed) NCC finding instances |
 | `ncc_alerts_store_up` | gauge | — | `1` if the lifecycle store is readable |
 | `ncc_alerts_last_ingested_run_timestamp_seconds` | gauge | — | Run last applied to the lifecycle |
 | `ncc_alerts_events_total` | gauge | — | Lifecycle events retained |

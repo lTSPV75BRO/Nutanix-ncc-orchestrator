@@ -15,7 +15,7 @@ describe("AboutDialog", () => {
       <AboutDialog
         open
         onClose={() => undefined}
-        build={{ version: "2.3.0-abc123", buildDate: "2026-10-31", stream: "stable", goVersion: "go1.27.3", os: "linux", arch: "amd64" }}
+        build={{ version: "2.3.0-abc123", buildDate: "2026-10-31", stream: "stable", goVersion: "go1.27.4", os: "linux", arch: "amd64" }}
       />,
     );
     expect(screen.getByText("About NCC Orchestrator")).toBeInTheDocument();

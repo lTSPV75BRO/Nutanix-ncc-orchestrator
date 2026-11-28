@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"goncc/internal/hostinfo"
+	"goncc/internal/plural"
 	"goncc/internal/runtimetune"
 )
 
@@ -376,9 +377,13 @@ func checkWindowsTask(hc *healContext, res healResult) healResult {
 		return res
 	}
 	gaps := windowsTaskGaps(taskXML)
+	if _, ok := queryWindowsTaskXML(watchdogTaskName(supervisorServiceName)); !ok {
+		gaps = append(gaps, "nothing starts it again when it has died (no task "+watchdogTaskName(supervisorServiceName)+")")
+	}
+	const good = "scheduled task " + supervisorServiceName + " has no time limit and is started again when it has died"
 	if len(gaps) == 0 {
 		res.Status = healOK
-		res.Message = "scheduled task " + supervisorServiceName + " has no time limit and restarts on failure"
+		res.Message = good
 		return res
 	}
 	res.Status = healWarn
@@ -397,8 +402,8 @@ func checkWindowsTask(hc *healContext, res healResult) healResult {
 	}
 	res.Status = healOK
 	res.Fixed = true
-	res.FixMsg = "re-registered scheduled task " + supervisorServiceName + " with no time limit and restart on failure"
-	res.Message = "scheduled task " + supervisorServiceName + " has no time limit and restarts on failure"
+	res.FixMsg = "re-registered scheduled task " + supervisorServiceName + " with no time limit, and the task that starts it again"
+	res.Message = good
 	return res
 }
 
@@ -691,7 +696,7 @@ func checkCgroupLimits(hc *healContext) healResult {
 	}
 	if l.OOMKills > 0 {
 		res.Status = healWarn
-		res.Message += fmt.Sprintf("; the kernel killed processes for memory %d time(s)", l.OOMKills)
+		res.Message += "; the kernel killed processes for memory " + plural.Count(int(l.OOMKills), "time")
 		hints = append(hints, "raise the memory limit or lower runner concurrency")
 	}
 	if len(hints) > 0 {
@@ -716,6 +721,6 @@ func binariesChecked(n int) string {
 func runPlatformCommand(timeout time.Duration, name string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput() // #nosec G702 -- no shell; the program name is a constant and a task name is one argument
 	return string(out), err
 }

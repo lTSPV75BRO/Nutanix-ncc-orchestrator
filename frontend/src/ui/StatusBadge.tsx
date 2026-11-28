@@ -15,7 +15,21 @@ export function toneFor(value: string | undefined | null): Tone {
   return "neutral";
 }
 
-/** Small coloured status label with a dot. Pass `tone`, or let `toneFor(children)` pick it. */
+const SEVERITY_WORDS: Record<string, string> = {
+  FAIL: "Fail",
+  WARN: "Warning",
+  ERR: "Error",
+  INFO: "Info",
+  PASS: "Pass",
+  UNKNOWN: "Unknown",
+};
+
+/** The one word every page uses for an NCC severity (FAIL → "Fail", ERR → "Error"). */
+export function severityLabel(value: string): string {
+  return SEVERITY_WORDS[value.trim().toUpperCase()] ?? value;
+}
+
+/** A status dot in the tone's colour and the word beside it. Pass `tone`, or let `toneFor(children)` pick it. */
 export function StatusBadge({ tone, children }: { tone?: Tone; children: ReactNode }) {
   const t = tone ?? (typeof children === "string" ? toneFor(children) : "neutral");
   return (

@@ -17,5 +17,13 @@ func exists(pid int) bool {
 	return err == nil || errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.EPERM)
 }
 
+func terminate(pid int) error {
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	return p.Kill()
+}
+
 // POSIX callers read the full argv (/proc or ps) instead.
 func imagePath(int) (string, error) { return "", errors.ErrUnsupported }

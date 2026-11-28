@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -119,6 +118,9 @@ func (j *updateJobState) tryBegin(target string) bool {
 // so a compromised admin session can't install an unverified release.
 type updateApplyRequest struct {
 	TargetVersion string `json:"target_version,omitempty"`
+	// ReplaceEdited: replace service definitions edited on this host instead
+	// of keeping them (the update helper only).
+	ReplaceEdited bool `json:"replace_edited,omitempty"`
 }
 
 // handleUpdateCheck (GET /api/v1/settings/update) reports the current version,
@@ -151,10 +153,13 @@ func (s *apiServer) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		"current_version":     Version,
 		"supported":           supported,
 		"job":                 updateJob.snapshot(),
-		"supervised_upgrades": s.supervisorSupports("upgrade"),
+		"supervised_upgrades": s.supervisorSupports("upgrade") || s.handStartedStack(),
 	}
 	if up := s.readUpgradeJob(); up != nil {
 		data["upgrade"] = up
+	}
+	if offer := s.readRollbackOffer(time.Now()); offer != nil {
+		data["rollback"] = offer
 	}
 
 	updateJob.mu.Lock()
@@ -189,6 +194,8 @@ func (s *apiServer) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 			avail, _ := data["update_available"].(bool)
 			latest, _ := data["latest_version"].(string)
 			s.setUpdateCheck(avail, latest)
+			// A manual check also counts as the banner's daily lookup.
+			s.recordUpdateNotice(updateNoticeFromCheck(data))
 		}
 	}
 	writeJSON(w, http.StatusOK, envelope{Success: true, Data: data})
@@ -232,6 +239,8 @@ func parseUpdateCheckJSON(out string, data map[string]interface{}) bool {
 			LatestOverall   string `json:"latest_overall"`
 			UpdateAvailable bool   `json:"update_available"`
 			HasPackage      bool   `json:"has_package"`
+			CheckDegraded   bool   `json:"check_degraded"`
+			CheckError      string `json:"check_error"`
 		}
 		if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
 			return false
@@ -247,6 +256,12 @@ func parseUpdateCheckJSON(out string, data map[string]interface{}) bool {
 		}
 		data["update_available"] = parsed.UpdateAvailable
 		data["has_package"] = parsed.HasPackage
+		if parsed.CheckDegraded {
+			data["check_degraded"] = true
+		}
+		if parsed.CheckError != "" {
+			data["check_error"] = parsed.CheckError
+		}
 		return true
 	}
 	return false
@@ -339,7 +354,7 @@ func (s *apiServer) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if up := s.readUpgradeJob(); up != nil && upgradeJobActive(up) {
-		writeJSON(w, http.StatusConflict, envelope{Success: false, Error: "the supervisor is still carrying out an upgrade (" + up.Phase + ")"})
+		writeJSON(w, http.StatusConflict, envelope{Success: false, Error: "an upgrade is still in progress (" + up.Phase + ")"})
 		return
 	}
 
@@ -348,7 +363,7 @@ func (s *apiServer) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	supervised := s.supervisorSupports("upgrade")
+	supervised := s.supervisorSupports("upgrade") || s.handStartedStack()
 	requestedBy := ""
 	if p, ok := principalFromContext(r.Context()); ok {
 		requestedBy = p.subject
@@ -362,7 +377,7 @@ func (s *apiServer) handleUpdateApply(w http.ResponseWriter, r *http.Request) {
 
 	msg := "Update started: taking a backup, applying the update, then restarting the stack. This page will reconnect when the new version is live."
 	if supervised {
-		msg = "Update started: taking a backup, then the supervisor installs the update, restarts each server and checks it is healthy. If a server does not come back, the previous version is put back automatically."
+		msg = "Update started: a backup is taken, the new version is installed and the services are checked. If they do not come back healthy, the previous version is put back automatically."
 	}
 	writeJSON(w, http.StatusAccepted, envelope{Success: true, Message: msg, Data: updateJob.snapshot()})
 }
@@ -375,7 +390,7 @@ func (s *apiServer) runUpdateJob(req updateApplyRequest, supervised bool, reques
 	// 1. Pre-update backup. We refuse to apply the update if the backup fails,
 	//    since the whole point is to have a rollback point first.
 	backupDir := filepath.Join(installDir, "backups")
-	if err := os.MkdirAll(backupDir, 0o700); err != nil {
+	if err := mkdirPrivate(backupDir); err != nil {
 		s.updateFailedTotal.Add(1)
 		updateJob.fail("could not create backup directory: " + err.Error())
 		return
@@ -415,22 +430,28 @@ func (s *apiServer) runUpdateJob(req updateApplyRequest, supervised bool, reques
 	updateJob.mu.Unlock()
 
 	if supervised {
-		// 2'. Hand over to the supervisor, which outlives the restarts.
-		if err := s.requestSupervisedUpgrade(upgradeRequest{
+		// 2'. Hand over to the supervisor, or (no supervisor) to a process of its
+		// own. Either outlives this server and brings in the update helper.
+		handOver := s.requestSupervisedUpgrade
+		if !s.supervisorSupports("upgrade") {
+			handOver = s.startHandStartedUpgrade
+		}
+		if err := handOver(upgradeRequest{
 			ID:            stamp,
 			TargetVersion: req.TargetVersion,
 			BackupPath:    backupPath,
 			RequestedBy:   requestedBy,
 			RequestedAt:   time.Now().UTC().Format(time.RFC3339),
+			ReplaceEdited: req.ReplaceEdited,
 		}); err != nil {
 			s.updateFailedTotal.Add(1)
-			updateJob.fail("could not hand the update to the supervisor (a pre-update backup was saved as " + filepath.Base(backupPath) + "): " + err.Error())
+			updateJob.fail("could not hand the update over (a pre-update backup was saved as " + filepath.Base(backupPath) + "): " + err.Error())
 			return
 		}
 		updateJob.mu.Lock()
 		updateJob.inProgress = false
 		updateJob.phase = updPhaseSupervised
-		updateJob.message = "Backup saved. The supervisor is installing the update."
+		updateJob.message = "Backup saved. The update is being installed."
 		updateJob.finishedAt = time.Now()
 		updateJob.mu.Unlock()
 		return
@@ -443,7 +464,8 @@ func (s *apiServer) runUpdateJob(req updateApplyRequest, supervised bool, reques
 	if req.TargetVersion != "" {
 		args = append(args, "--target-version", req.TargetVersion)
 	}
-	out, err := s.runOrchestrator(args, 12*time.Minute)
+	// Programs only: this server restarts the stack itself below.
+	out, err := s.runOrchestratorEnv(args, 12*time.Minute, []string{"NCC_UPDATE_PROGRAMS_ONLY=1"})
 	if err != nil {
 		s.updateFailedTotal.Add(1)
 		updateJob.fail("update failed and was not applied (a pre-update backup was saved as " + filepath.Base(backupPath) + "): " + redactPaths(firstNonEmptyLine(lastErrorLine(out), err.Error())))

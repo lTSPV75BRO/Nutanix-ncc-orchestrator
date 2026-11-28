@@ -13,6 +13,7 @@ import type {
   DiagnosticsData,
   ExtraArgOption,
   FeatureFlags,
+  FreshnessData,
   HealHistoryData,
   HealthData,
   MeData,
@@ -37,7 +38,7 @@ import type {
   UserAccount,
 } from "../api/types";
 
-export const DEMO_VERSION = "2.3.0";
+export const DEMO_VERSION = "2.4.0";
 
 const NOW = Date.now();
 const MIN = 60_000;
@@ -127,21 +128,107 @@ const CLUSTERS: DemoCluster[] = FLEET ? generatedFleet(FLEET) : SAMPLE_CLUSTERS;
 
 type CheckTemplate = { check: string; severity: "FAIL" | "WARN" | "ERR" | "INFO"; detail: (c: DemoCluster, n: number) => string };
 
+// Check names and KB numbers are NCC's own; every address, VM, container and
+// plan in the details is made up. Details keep NCC's layout: one "Node <ip>:"
+// line per CVM that reported, then the "Refer to KB" line the drawer links.
+function kb(id: number, check: string) {
+  return `Refer to KB ${id} (http://portal.nutanix.com/kb/${id}) for details on ${check}`;
+}
+function node(c: DemoCluster, n: number, ...lines: string[]) {
+  return [`Node ${cvm(c, n)}:`, ...lines].join("\n");
+}
+function block(check: string, id: number, ...parts: string[]) {
+  return [...parts, kb(id, check)].join("\n");
+}
+
 const CHECKS: CheckTemplate[] = [
-  { check: "disk_usage_check", severity: "FAIL", detail: (_c, n) => `Storage container 'default-container' usage is ${85 + (n % 9)}%, above the 85% threshold.` },
-  { check: "ntp_server_reachability_check", severity: "FAIL", detail: (c) => `NTP server 10.0.0.123 is not reachable from CVM ${cvm(c, 2)}.` },
-  { check: "degraded_node_check", severity: "FAIL", detail: (c) => `Node ${cvm(c, 3)} was marked degraded 2 times in the last 24 hours.` },
-  { check: "nic_link_down_check", severity: "FAIL", detail: (c) => `NIC eth3 on host ${host(c, 1)} is down (link was up at last check).` },
-  { check: "cvm_memory_usage_check", severity: "WARN", detail: (c, n) => `CVM ${cvm(c, 1)} memory usage is ${90 + (n % 6)}% (threshold 90%).` },
-  { check: "dimm_ce_check", severity: "WARN", detail: (c) => `Correctable ECC errors on DIMM A2 of host ${host(c, 2)} (34 in 24 h).` },
-  { check: "stale_recovery_points_check", severity: "WARN", detail: (_c, n) => `${3 + (n % 5)} recovery points are older than the 30-day retention policy.` },
-  { check: "cvm_time_drift_check", severity: "WARN", detail: (c) => `CVM ${cvm(c, 4)} clock differs from the cluster leader by 1.8 s.` },
-  { check: "hypervisor_disk_space_check", severity: "WARN", detail: (c) => `Host ${host(c, 3)} /scratch partition is 82% used.` },
-  { check: "cluster_services_status", severity: "ERR", detail: () => "The check could not complete: Genesis did not answer within 120 s." },
-  { check: "ipmi_sel_log_fetch_check", severity: "ERR", detail: (c) => `Could not read the IPMI SEL from ${host(c, 1)}: connection refused.` },
-  { check: "protection_domain_snapshot_schedule_check", severity: "INFO", detail: () => "Protection domain 'pd-gold' has no schedule; snapshots are manual." },
-  { check: "aos_ncc_version_compatibility_check", severity: "INFO", detail: (c) => `NCC ${c.ncc} is compatible with AOS ${c.aos}; a newer NCC is available.` },
-  { check: "vm_memory_overcommit_check", severity: "INFO", detail: (_c, n) => `${2 + (n % 4)} VMs have memory overcommit enabled.` },
+  {
+    check: "storage_pool_space_usage_check",
+    severity: "FAIL",
+    detail: (c, n) => block("storage_pool_space_usage_check", 2475, node(c, 1, `FAIL: StoragePool sp-default space usage (${90 + (n % 8)}.${n % 10} %) above 90 %`)),
+  },
+  {
+    check: "vg_space_usage_check",
+    severity: "FAIL",
+    detail: (c, n) => block("vg_space_usage_check", 4600, node(c, 1, `FAIL: Volume Group vg-data-0${1 + (n % 3)} space usage (${91 + (n % 7)} %) above 90 %`)),
+  },
+  {
+    check: "remote_site_config_check",
+    severity: "FAIL",
+    detail: (c) => block("remote_site_config_check", 3335, node(c, 2, "FAIL: Remote site: dr-site-01", "Number of vstores mapped for the local site on the remote site are not same.", "")),
+  },
+  {
+    check: "ngt_client_cert_expiry_check",
+    severity: "FAIL",
+    detail: (c, n) => block("ngt_client_cert_expiry_check", 10075, node(c, 1, `FAIL: NGT Client Cert is already expired for VM : vm-app-0${1 + (n % 9)} before ${12 + (n % 60)} days`, "")),
+  },
+  {
+    check: "host_boot_disk_uvm_check",
+    severity: "WARN",
+    detail: (c) => block("host_boot_disk_uvm_check", 9963, node(c, 2, "WARN: Found 2 user VMs on hostbootdisk:", "  vm-migrate-01", "  vm-migrate-02"), node(c, 3, "WARN: Found 1 user VMs on hostbootdisk:", "  vm-tools-01")),
+  },
+  {
+    check: "backup_schedule_check",
+    severity: "WARN",
+    detail: (c) =>
+      block(
+        "backup_schedule_check",
+        1910,
+        node(c, 1, "WARN: Backup schedule does not exist for protection domain pd-gold protecting some entities. If this protection domain is created for use by backup software, this warning can be ignored."),
+      ),
+  },
+  {
+    check: "file_server_container_check",
+    severity: "WARN",
+    detail: (c) => block("file_server_container_check", 6944, node(c, 1, "WARN: Unexpected VMs are present on fileserver containers.", "Container ctr-files has unexpected VMs: ['vm-app-01', 'vm-app-02']", "")),
+  },
+  {
+    check: "pcvm_disk_usage_check",
+    severity: "WARN",
+    detail: (c, n) => block("pcvm_disk_usage_check", 5228, node(c, 1, `WARN: Platform disk space usage in Prism Central VM ${cvm(c, 1)} exceeds ${75 + (n % 3) * 5}% for disk(s): b'/dev/sdf1'`)),
+  },
+  {
+    check: "recovery_plan_entities_protection_check",
+    severity: "WARN",
+    detail: (c) => block("recovery_plan_entities_protection_check", 5795, node(c, 1, "WARN: Unprotected entities in recovery_plan rp-tier1: VMs: vm-app-01, vm-app-02")),
+  },
+  {
+    check: "uvm_ide_disk_check",
+    severity: "ERR",
+    detail: (c) =>
+      block(
+        "uvm_ide_disk_check",
+        2998,
+        node(c, 3, "ERR : node (service_vm_id: 11) : Vdisk adapter in vmdk file of a UVM is not ide, but config file shows it its ide. Discrepancy found."),
+        node(c, 1, "WARN: 2 Virtual Machine on this node has an IDE attached disk: ['vm-legacy-01', 'vm-legacy-02']"),
+      ),
+  },
+  {
+    check: "check_cvm_ssh_security",
+    severity: "INFO",
+    detail: (c) => block("check_cvm_ssh_security", 14104, node(c, 1, "INFO: Password-based remote login is enabled on the cluster. It is recommended to use key-based ssh access instead of password-based ssh access for better security.")),
+  },
+  {
+    check: "ec_enablement_check",
+    severity: "INFO",
+    detail: (c, n) => block("ec_enablement_check", 14293, node(c, 1, `INFO: Consider enabling erasure coding on container ctr-general to get ${15 + (n % 12)}% space savings.`)),
+  },
+  {
+    check: "ngt_installer_version_check",
+    severity: "INFO",
+    detail: (c) =>
+      block("ngt_installer_version_check", 5487, node(c, 1, "INFO: Following VMs do not have latest NGT version installed:", " VM: vm-db-01 - NGT installed version: 4.3, NGT latest version: 4.6", "")),
+  },
+  {
+    check: "recovery_plan_last_test_status_check",
+    severity: "INFO",
+    detail: (c) => block("recovery_plan_last_test_status_check", 5793, node(c, 1, "INFO: Test Failover has not been run on Recovery Plans rp-tier1, rp-tier2")),
+  },
+  {
+    check: "weekly_pre_expiry",
+    severity: "INFO",
+    detail: (c) => block("weekly_pre_expiry", 2469, node(c, 1, "INFO: The setup has license(s) that are about to expire. Detailed license info:", "LIC-00000001 - 80 CORES NCI Ultimate is expiring on 2026-12-31")),
+  },
 ];
 
 function octets(c: DemoCluster) {
@@ -149,9 +236,6 @@ function octets(c: DemoCluster) {
 }
 function cvm(c: DemoCluster, n: number) {
   return `${octets(c)}.${30 + n}`;
-}
-function host(c: DemoCluster, n: number) {
-  return `${octets(c)}.${50 + n}`;
 }
 
 type Row = { cluster: string; severity: string; check: string; detail: string; clusterName: string; clusterVersion: string; nccVersion: string };
@@ -295,8 +379,8 @@ const DRILLDOWN = {
   new_fail_count: 2,
   resolved_fail_count: 1,
   clusters: [
-    { address: failRows[0]?.cluster ?? "10.20.1.11", new_failures: [failRows[0]?.check ?? "disk_usage_check"] },
-    { address: failRows[1]?.cluster ?? "10.90.0.11", new_failures: [failRows[1]?.check ?? "nic_link_down_check"], resolved_failures: ["cvm_time_drift_check"] },
+    { address: failRows[0]?.cluster ?? "10.20.1.11", new_failures: [failRows[0]?.check ?? "storage_pool_space_usage_check"] },
+    { address: failRows[1]?.cluster ?? "10.90.0.11", new_failures: [failRows[1]?.check ?? "remote_site_config_check"], resolved_failures: ["vg_space_usage_check"] },
   ],
 };
 
@@ -306,8 +390,8 @@ const FLAKY = {
   min_transitions: 3,
   total_flaky_checks: 2,
   checks: [
-    { cluster: "10.90.0.11", check_name: "cvm_time_drift_check", transitions: 5, observations: 10, states: ["PASS", "WARN", "PASS", "WARN", "PASS", "WARN"], current: "WARN" },
-    { cluster: "10.30.1.11", check_name: "ntp_server_reachability_check", transitions: 3, observations: 10, states: ["PASS", "FAIL", "PASS", "FAIL"], current: "FAIL" },
+    { cluster: "10.90.0.11", check_name: "pcvm_disk_usage_check", transitions: 5, observations: 10, states: ["PASS", "WARN", "PASS", "WARN", "PASS", "WARN"], current: "WARN" },
+    { cluster: "10.30.1.11", check_name: "ngt_client_cert_expiry_check", transitions: 3, observations: 10, states: ["PASS", "FAIL", "PASS", "FAIL"], current: "FAIL" },
   ],
 };
 
@@ -332,6 +416,7 @@ const nonPass = AGG_ROWS.length;
 
 export const REPORT: ReportData = {
   run_summary: RUN_SUMMARY,
+  cache: { state: "warm", built_at: RUN_SUMMARY.timestamp, source_run_time: RUN_SUMMARY.timestamp },
   ncc_summary_counts: {
     total_plugins: nccTotal,
     pass: nccTotal - nonPass,
@@ -553,7 +638,7 @@ export const HEALTH: HealthData = {
   version: DEMO_VERSION,
   build_date: "2026-11-01T00:00:00Z",
   stream: "Demo",
-  go_version: "go1.27.3",
+  go_version: "go1.27.4",
   os: "linux",
   arch: "amd64",
   login_enabled: true,
@@ -561,7 +646,7 @@ export const HEALTH: HealthData = {
   saml_enabled: false,
   oidc_enabled: false,
   ldap_enabled: false,
-  intro_title: true,
+  intro_title: false,
   cookie_secure: true,
 };
 
@@ -576,7 +661,7 @@ export const FEATURES: FeatureFlags = {
   alert_handling: true,
   self_heal: true,
   update_checks: true,
-  intro_title: true,
+  intro_title: false,
 };
 
 export const ONBOARDING: OnboardingStatus = {
@@ -643,6 +728,21 @@ export const SCHEDULE: ScheduleState = {
   task_name: "ncc-orchestrator-scan",
   print_only: false,
   updated_at: iso(NOW - 20 * DAY),
+};
+
+/** Unreachable clusters last returned data the day before (one failed run). */
+export const FRESHNESS: FreshnessData = {
+  generated_at: iso(NOW),
+  clusters: clusterSummaries.map((c) => ({
+    address: c.address,
+    last_checked_at: iso(LATEST_RUN_AT),
+    ok: c.ok,
+    ...(c.ok
+      ? { last_success_at: iso(LATEST_RUN_AT), fail_count: c.fail_count ?? 0, warn_count: c.warn_count ?? 0, err_count: c.err_count ?? 0, health_score: c.health_score }
+      : { error: c.error, error_class: c.error_class, last_success_at: iso(LATEST_RUN_AT - DAY), failed_runs: 1, fail_count: 0, warn_count: 0, err_count: 0 }),
+  })),
+  schedules: [{ kind: "main", every: "1d", interval_s: 86400, last_run_at: iso(LATEST_RUN_AT), since: iso(LATEST_RUN_AT), overdue: false }],
+  schedule_overdue: false,
 };
 
 export const SCHEDULE_HEALTH: ScheduleHealthData = {
@@ -780,7 +880,7 @@ export const PLATFORM: PlatformData = {
     arch: { binary: "amd64", native: "amd64", emulated: false, known: true },
     cpus: 8,
     gomaxprocs: 8,
-    go_version: "go1.27.3",
+    go_version: "go1.27.4",
     memory: { total_bytes: 16 * 2 ** 30, available_bytes: 9.4 * 2 ** 30 },
     cgroup: {},
     kubernetes: false,
@@ -844,7 +944,7 @@ export const AUDIT: AuditLogData = {
 
 export const EXTRA_ARGS: { options: ExtraArgOption[] } = {
   options: [
-    { flag: "--checks", takes_value: true, label: "Only these checks", help: "Comma-separated NCC check names.", example: "disk_usage_check" },
+    { flag: "--checks", takes_value: true, label: "Only these checks", help: "Comma-separated NCC check names.", example: "storage_pool_space_usage_check,vg_space_usage_check" },
     { flag: "--parallel", takes_value: true, label: "Parallel clusters", help: "How many clusters to check at once.", example: "4" },
   ],
 };
@@ -887,7 +987,7 @@ export const API_LOG = {
   path: "logs/ncc-api.log",
   exists: true,
   content: [
-    apiLine(NOW - 3 * HOUR, "INFO", "ncc-api-server starting", { listen: ":8080", version: "v2.3.0", log_level: "info", auth: "local" }),
+    apiLine(NOW - 3 * HOUR, "INFO", "ncc-api-server starting", { listen: ":8080", version: "v2.4.0", log_level: "info", auth: "local" }),
     apiLine(NOW - 3 * HOUR + 1_000, "INFO", "self-heal timer armed", { interval: "6h0m0s" }),
     apiLine(LATEST_RUN_AT - 1_000, "INFO", "environment schedule fired", { environment: "prod", schedule: "0 */6 * * *" }),
     apiLine(LATEST_RUN_AT, "INFO", "run accepted", { run_id: LATEST_RUN_ID, source: "schedule", environment: "prod" }),

@@ -10,21 +10,54 @@ metadata:
   name: ncc-v2-runner
   namespace: {{ .Values.namespace }}
 automountServiceAccountToken: false
+# The API server calls the Kubernetes API for two things only, each with its
+# own Role: the user-database Secret (--users-db-secret in api.yaml) and the
+# runner CronJob (NCC_RUNNER_CRONJOB). It never lists, watches or deletes
+# anything, and never touches Jobs, Pods, ConfigMaps or Events.
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: ncc-v2-api
+  name: ncc-v2-users-secret
   namespace: {{ .Values.namespace }}
 rules:
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "create"]
+  # Load and save the user database: GET and a JSON merge PATCH on the one
+  # Secret named in --users-db-secret.
   - apiGroups: [""]
     resources: ["secrets"]
     resourceNames: ["ncc-v2-users"]
-    verbs: ["get", "update", "patch"]
-  # Settings > Schedule reads and patches the runner CronJob (cronjob.yaml).
+    verbs: ["get", "patch"]
+  # First start creates that Secret when it is missing. Kubernetes cannot
+  # limit `create` to a name, so this rule is namespace-wide; the API only
+  # ever POSTs the Secret above.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ncc-v2-api-users-secret
+  namespace: {{ .Values.namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: ncc-v2-api
+    namespace: {{ .Values.namespace }}
+roleRef:
+  kind: Role
+  name: ncc-v2-users-secret
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ncc-v2-runner-cronjob
+  namespace: {{ .Values.namespace }}
+rules:
+  # Settings > Schedule reads the runner CronJob (cronjob.yaml) and patches
+  # its schedule and suspend flag. The same GET gives the runner image tag
+  # for the version-skew check. Run now does not create Jobs: the API pod
+  # runs the orchestrator itself.
   - apiGroups: ["batch"]
     resources: ["cronjobs"]
     resourceNames: ["ncc-orchestrator"]
@@ -33,12 +66,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: ncc-v2-api
+  name: ncc-v2-api-runner-cronjob
   namespace: {{ .Values.namespace }}
 subjects:
   - kind: ServiceAccount
     name: ncc-v2-api
+    namespace: {{ .Values.namespace }}
 roleRef:
   kind: Role
-  name: ncc-v2-api
+  name: ncc-v2-runner-cronjob
   apiGroup: rbac.authorization.k8s.io

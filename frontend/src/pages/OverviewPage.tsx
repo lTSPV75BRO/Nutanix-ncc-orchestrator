@@ -2,16 +2,18 @@ import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, Button, Select, Skeleton, Tooltip } from "antd";
-import { ArrowRightOutlined, ClusterOutlined, HistoryOutlined, PieChartOutlined, ReloadOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { ArrowRightOutlined, ClusterOutlined, HistoryOutlined, PieChartOutlined, ReloadOutlined } from "@ant-design/icons";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
-import { SetupBanner } from "../features/onboarding/SetupChecklist";
+import { SetupBanner, useOnboarding } from "../features/onboarding/SetupChecklist";
+import { SetupEmptyState } from "../features/onboarding/SetupEmptyState";
+import { ReportCacheNotice, reportRefetchInterval } from "../features/report/ReportCacheNotice";
 import { RunsTable } from "../features/runs/RunsTable";
 import { useRunsActive } from "../hooks/useRunsActive";
-import { sectionHref } from "../navigation";
+import { clusterPath, sectionHref } from "../navigation";
 import { EmptyState, ListToolbar, matchesSearch, Panel, StatTile, StatusBadge, VirtualList, type Tone } from "../ui";
-import { formatDateTime, relativeTime } from "../utils/datetime";
-import { formatDuration, freshness } from "../utils/freshness";
+import { ageMs, formatDateTime, relativeTime } from "../utils/datetime";
+import { formatDuration, freshness, mergeFreshness, overdueScheduleText, type OverviewClusterRow as ClusterRow } from "../utils/freshness";
 import { asArray, asRecord, buildClusterNameMap, resolveClusterName, toNumber, weightedHealthScore } from "../utils/report";
 
 // Same query as the Findings page, so moving between them reuses the cache.
@@ -24,7 +26,31 @@ const SEVERITIES: Array<{ key: string; label: string; count: (c: Record<string, 
   { key: "INFO", label: "Info", count: (c) => toNumber(c.info), tone: "info" },
 ];
 
-type ClusterRow = { name: string; address: string; ok: boolean; error: string; fail: number; warn: number; err: number; score: number | null };
+const DAY_MS = 24 * 3600_000;
+
+/** Text after the cluster name: counts, or why it has no current data. */
+function clusterDetail(c: ClusterRow): string {
+  if (c.ok) return clusterCounts(c);
+  const why = c.error || "Unreachable";
+  if (!c.checkedAt) return why;
+  if (!c.lastDataAt) return `${why} · no data yet`;
+  return `${why} · data from ${relativeTime(c.lastDataAt)}`;
+}
+
+/** Tooltip for the age column. */
+function clusterAgeTitle(c: ClusterRow): string {
+  if (!c.checkedAt) return "";
+  const parts = [`Last checked ${formatDateTime(c.checkedAt)}.`];
+  if (!c.ok) {
+    parts.push(c.lastDataAt ? `Last data ${formatDateTime(c.lastDataAt)}.` : "No run has returned data for it yet.");
+    if ((c.failedRuns ?? 0) > 1) parts.push(`The last ${c.failedRuns} runs could not check it.`);
+  }
+  return parts.join(" ");
+}
+
+function sortClusters(rows: ClusterRow[]): ClusterRow[] {
+  return [...rows].sort((a, b) => Number(a.ok) - Number(b.ok) || b.fail + b.err - (a.fail + a.err) || b.warn - a.warn || a.name.localeCompare(b.name));
+}
 
 function clusterStatus(c: ClusterRow): { tone: Tone; label: string } {
   if (!c.ok) return { tone: "fail", label: "Not checked" };
@@ -62,7 +88,7 @@ function ClusterHealthList({ clusters }: { clusters: ClusterRow[] }) {
     return k;
   }, [clusters]);
   const shown = useMemo(
-    () => clusters.filter((c) => (filter === "all" || clusterBucket(c) === filter) && matchesSearch(search, c.name, c.error)),
+    () => clusters.filter((c) => (filter === "all" || clusterBucket(c) === filter) && matchesSearch(search, c.name, c.address, c.error)),
     [clusters, filter, search],
   );
   const filters = [
@@ -86,7 +112,7 @@ function ClusterHealthList({ clusters }: { clusters: ClusterRow[] }) {
         />
       ) : null}
       {shown.length === 0 ? (
-        <EmptyState title="No matching clusters" description="Try another search or filter." />
+        <EmptyState title="No matching clusters" description="Try another search or filter" />
       ) : (
         <VirtualList
           className="overview-clusters"
@@ -97,12 +123,16 @@ function ClusterHealthList({ clusters }: { clusters: ClusterRow[] }) {
           itemKey={(c) => c.name}
           renderRow={(c) => {
             const st = clusterStatus(c);
+            const old = c.checkedAt ? ageMs(c.checkedAt) > DAY_MS : false;
             return (
-              <Link to={`/findings?clusters=${encodeURIComponent(c.name)}`} className="overview-cluster-row">
+              <Link to={clusterPath(c.address || c.name)} className="overview-cluster-row">
                 <span className="overview-cluster-name" title={c.error || c.name}>
                   {c.name}
                 </span>
-                <span className="overview-cluster-counts">{c.ok ? clusterCounts(c) : c.error || "Unreachable"}</span>
+                <span className="overview-cluster-counts" title={clusterDetail(c)}>{clusterDetail(c)}</span>
+                <span className={`overview-cluster-age${old ? " is-old" : ""}`} title={clusterAgeTitle(c)}>
+                  {c.checkedAt ? relativeTime(c.checkedAt) : ""}
+                </span>
                 <StatusBadge tone={st.tone}>{st.label}</StatusBadge>
               </Link>
             );
@@ -131,20 +161,34 @@ export function OverviewPage() {
     queryKey: ["report-data", "preview", PREVIEW_LIMIT],
     queryFn: () => api.reportDataWithPagination({ limit: PREVIEW_LIMIT }),
     staleTime: 30_000,
+    // While the server builds a newer report, check back until it is ready.
+    refetchInterval: (q) => reportRefetchInterval(q.state.data),
   });
   const runs = useQuery({
     queryKey: ["runs", "recent"],
     queryFn: () => api.runs({ limit: 6 }),
     staleTime: 30_000,
   });
+  const freshnessQuery = useQuery({
+    queryKey: ["freshness"],
+    queryFn: api.freshness,
+    staleTime: 30_000,
+    refetchInterval: 5 * 60_000,
+  });
   const active = useRunsActive();
   const running = active.data?.active === true;
+  const onboarding = useOnboarding(isAdmin || canOperate);
+  // No schedule, and the setup banner (which would say so) is hidden.
+  const scheduleStep = onboarding.data?.steps.find((s) => s.id === "schedule");
+  const scheduleMissing =
+    canOperate && Boolean(onboarding.data?.completed || onboarding.data?.dismissed) && Boolean(scheduleStep && !scheduleStep.done && !scheduleStep.skipped);
 
   const data = report.data;
   const counts = asRecord(data?.ncc_summary_counts);
   const runSummary = asRecord(data?.run_summary);
   const timestamp = String(runSummary.timestamp || "");
   const totalChecks = toNumber(counts.total_plugins);
+  const maxProblem = Math.max(0, ...SEVERITIES.map((s) => s.count(counts)));
   const score = weightedHealthScore(counts);
   const fresh = freshness(timestamp);
   const clustersOk = toNumber(runSummary.clusters_ok);
@@ -168,19 +212,20 @@ export function OverviewPage() {
     // them in the SLO export.
     const fromRun = asArray(asRecord(data.run_summary).clusters).map((c) => asRecord(c));
     const source = fromRun.length > 0 ? fromRun : asArray(asRecord(data.slo_dashboard).clusters).map((c) => asRecord(c));
-    return source
-      .map((c) => ({
-        name: resolveClusterName(c.address, nameMap) || String(c.address || "—"),
-        address: String(c.address || ""),
-        ok: c.ok === undefined ? String(c.status || "").toLowerCase() !== "error" : Boolean(c.ok),
-        error: String(c.error || ""),
-        fail: toNumber(c.fail_count),
-        warn: toNumber(c.warn_count),
-        err: toNumber(c.err_count),
-        score: c.health_score === undefined ? null : toNumber(c.health_score),
-      }))
-      .sort((a, b) => Number(a.ok) - Number(b.ok) || b.fail + b.err - (a.fail + a.err) || b.warn - a.warn || a.name.localeCompare(b.name));
-  }, [data]);
+    const rows = source.map((c) => ({
+      name: resolveClusterName(c.address, nameMap) || String(c.address || "—"),
+      address: String(c.address || ""),
+      ok: c.ok === undefined ? String(c.status || "").toLowerCase() !== "error" : Boolean(c.ok),
+      error: String(c.error || ""),
+      fail: toNumber(c.fail_count),
+      warn: toNumber(c.warn_count),
+      err: toNumber(c.err_count),
+      score: c.health_score === undefined ? null : toNumber(c.health_score),
+    }));
+    return sortClusters(mergeFreshness(rows, freshnessQuery.data?.clusters, (a) => resolveClusterName(a, nameMap)));
+  }, [data, freshnessQuery.data]);
+  const fromEarlierRuns = clusters.length - asArray(asRecord(data?.run_summary).clusters).length;
+  const overdueSchedules = (freshnessQuery.data?.schedules ?? []).filter((s) => s.overdue);
 
   // Environment filter for the cluster list ("" = every cluster).
   const environmentsQuery = useQuery({ queryKey: ["environments"], queryFn: api.listEnvironments, staleTime: 60_000 });
@@ -247,11 +292,52 @@ export function OverviewPage() {
     <div className="overview">
       <SetupBanner />
       {header}
+      <ReportCacheNotice cache={data?.cache} />
 
       {report.isError && !data ? (
-        <Alert type="error" showIcon title="Couldn't load the latest results" description="Refresh to try again." />
+        <Alert type="error" showIcon title="Couldn't load the latest results" description="Refresh to try again" />
       ) : null}
 
+      {overdueSchedules.length > 0 ? (
+        <Alert
+          type="warning"
+          showIcon
+          title="Scheduled runs have stopped"
+          description={
+            <>
+              {overdueSchedules.length > 1 ? (
+                <ul className="overview-violations">
+                  {overdueSchedules.map((s) => (
+                    <li key={`${s.kind}-${s.id ?? ""}`}>{overdueScheduleText(s)}</li>
+                  ))}
+                </ul>
+              ) : (
+                overdueScheduleText(overdueSchedules[0])
+              )}{" "}
+              Results here may be out of date.
+            </>
+          }
+          action={
+            canOperate ? (
+              <Link to={sectionHref("schedule")}>
+                <Button size="small">Check the schedule</Button>
+              </Link>
+            ) : undefined
+          }
+        />
+      ) : null}
+      {scheduleMissing && !noRunYet && overdueSchedules.length === 0 ? (
+        <Alert
+          type="info"
+          showIcon
+          title="No schedule: NCC runs only when someone starts it"
+          action={
+            <Link to={sectionHref("schedule")}>
+              <Button size="small">Set a schedule</Button>
+            </Link>
+          }
+        />
+      ) : null}
       {regression.has_regression ? (
         <Alert
           type="error"
@@ -283,29 +369,7 @@ export function OverviewPage() {
 
       {noRunYet ? (
         <Panel>
-          <EmptyState
-            icon={<ThunderboltOutlined />}
-            title={running ? "The first run is in progress" : "No results yet"}
-            description={
-              running
-                ? "Results appear here as soon as it finishes."
-                : "Run NCC across your clusters to see their health, findings and trends here."
-            }
-            actions={
-              running ? (
-                <Button onClick={() => navigate(sectionHref("runs"))}>Watch the run</Button>
-              ) : (
-                <>
-                  {canOperate ? (
-                    <Button type="primary" onClick={() => navigate(sectionHref("runs"))}>
-                      Start a run
-                    </Button>
-                  ) : null}
-                  {isAdmin ? <Button onClick={() => navigate(sectionHref("config"))}>Configure clusters</Button> : null}
-                </>
-              )
-            }
-          />
+          <SetupEmptyState />
         </Panel>
       ) : (
         <>
@@ -338,13 +402,15 @@ export function OverviewPage() {
           <div className="overview-grid">
             <Panel
               title="Checks by result" icon={<PieChartOutlined />}
-              description="From the latest run. Select one to see those findings."
+              description="From the latest run; select one to see those findings"
               flush
             >
               <ul className="overview-severity">
                 {SEVERITIES.map((s) => {
                   const n = s.count(counts);
-                  const pct = totalChecks > 0 ? (n / totalChecks) * 100 : 0;
+                  // Bars are scaled to the largest problem count, not to every
+                  // check: passes would otherwise shrink problems to slivers.
+                  const pct = maxProblem > 0 ? (n / maxProblem) * 100 : 0;
                   return (
                     <li key={s.key}>
                       <Link to={`/findings?sev=${s.key}`} className="overview-severity-row">
@@ -358,13 +424,12 @@ export function OverviewPage() {
                   );
                 })}
                 <li>
-                  <div className="overview-severity-row is-static">
+                  <div className="overview-severity-row is-static is-pass">
                     <StatusBadge tone="ok">Pass</StatusBadge>
-                    <span className="overview-bar" aria-hidden="true">
-                      <span
-                        className="overview-bar-fill tone-ok"
-                        style={{ width: `${totalChecks > 0 ? Math.min(100, (toNumber(counts.pass) / totalChecks) * 100) : 0}%` }}
-                      />
+                    <span className="overview-pass-share">
+                      {totalChecks > 0
+                        ? `${((toNumber(counts.pass) / totalChecks) * 100).toFixed(1)}% of ${totalChecks.toLocaleString()} checks`
+                        : null}
                     </span>
                     <span className="overview-count">{toNumber(counts.pass).toLocaleString()}</span>
                   </div>
@@ -374,7 +439,13 @@ export function OverviewPage() {
 
             <Panel
               title="Clusters" icon={<ClusterOutlined />}
-              description={clusters.length ? `${clusters.length} in the latest run` : undefined}
+              description={
+                clusters.length
+                  ? fromEarlierRuns > 0
+                    ? `${clusters.length} clusters, each from its newest run`
+                    : `${clusters.length} in the latest run`
+                  : undefined
+              }
               flush
               extra={
                 environments.length > 0 && clusters.length > 0 ? (
@@ -390,9 +461,9 @@ export function OverviewPage() {
               }
             >
               {clusters.length === 0 ? (
-                <EmptyState icon={<ClusterOutlined />} title="No per-cluster results" description="The latest run did not record results per cluster." />
+                <EmptyState icon={<ClusterOutlined />} title="No per-cluster results" description="The latest run did not record results per cluster" />
               ) : shownClusters.length === 0 ? (
-                <EmptyState icon={<ClusterOutlined />} title={`No ${environment} clusters in the latest run`} description="Run this environment to see its clusters here." />
+                <EmptyState icon={<ClusterOutlined />} title={`No ${environment} clusters in the latest run`} description="Run this environment to see its clusters here" />
               ) : (
                 <ClusterHealthList key={environment} clusters={shownClusters} />
               )}
@@ -416,7 +487,7 @@ export function OverviewPage() {
           runs={(runs.data ?? []).slice(0, 5)}
           loading={runs.isLoading}
           onOpen={(r) => navigate(`/runs/${encodeURIComponent(r.id)}`)}
-          empty={<EmptyState title="No runs yet" description="Runs you start, and scheduled runs, appear here." />}
+          empty={<EmptyState title="No runs yet" description="Runs you start, and scheduled runs, appear here" />}
         />
       </Panel>
     </div>

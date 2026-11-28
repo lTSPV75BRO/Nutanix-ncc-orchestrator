@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"goncc/internal/plural"
 )
 
 // Server-side backup management lives under <install>/backups. Two producers
@@ -49,6 +51,23 @@ type backupEntry struct {
 // (plaintext .tar.gz or encrypted .tar.gz.enc).
 func isBackupArchiveName(name string) bool {
 	return strings.HasSuffix(name, backupFileSuffix) || strings.HasSuffix(name, backupEncSuffix)
+}
+
+// restoreStackNote explains, after a successful restore, that the backup's
+// program files were left out and why (v2-restore prints "program files not
+// trusted" and a "reason:" line; SEC-07).
+func restoreStackNote(out string) string {
+	if !strings.Contains(out, "stack restored: no (program files not trusted)") {
+		return ""
+	}
+	why := "this server has never run that version"
+	switch {
+	case strings.Contains(out, "\nreason: mixed versions"):
+		why = "they would mix files from different versions"
+	case strings.Contains(out, "\nreason: incomplete version"):
+		why = "they are only part of a version"
+	}
+	return " The backup's program files were not installed because " + why + "; your data was restored and the current version keeps running. To go back to that version, install it from its release."
 }
 
 // backupArchiveIncludesStack reports whether a plaintext backup also holds
@@ -114,7 +133,8 @@ func backupKeyConfigured() bool {
 //
 // Encryption is AES-256-GCM (backupcrypt.go) with the key kept outside the
 // archive. Existing plaintext archives are NOT re-encrypted by this change;
-// see docs/security/security-assessment-2026-10.md for the migration procedure.
+// see docs/SECURITY_AND_TRUST.md (Backup archive encryption) for how to
+// re-encrypt or retire them.
 const backupEncryptionEnv = "NCC_BACKUP_ENCRYPTION"
 
 func backupEncryptionRequired() bool {
@@ -252,6 +272,24 @@ func (s *apiServer) safeBackupPath(name string) (string, bool) {
 	return full, true
 }
 
+// countBackupArchives counts the backup archives on disk without opening any of
+// them. listBackupEntries inspects every unencrypted archive to see whether it
+// includes the stack, which is far too slow for callers that only need a count
+// (the setup checklist is polled on every page load).
+func (s *apiServer) countBackupArchives() int {
+	ents, err := os.ReadDir(s.backupsDir())
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, e := range ents {
+		if !e.IsDir() && isBackupArchiveName(e.Name()) {
+			n++
+		}
+	}
+	return n
+}
+
 func (s *apiServer) listBackupEntries() ([]backupEntry, error) {
 	dir := s.backupsDir()
 	ents, err := os.ReadDir(dir)
@@ -357,7 +395,7 @@ func (s *apiServer) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := mkdirPrivate(dir); err != nil {
 		writeJSON(w, http.StatusInternalServerError, envelope{Success: false, Error: "create backups dir: " + sanitizeErr(err)})
 		return
 	}
@@ -372,7 +410,7 @@ func (s *apiServer) handleBackupCreate(w http.ResponseWriter, r *http.Request) {
 		args = append(args, "--encrypt")
 	}
 	if out, err := s.runOrchestratorEnv(args, 2*time.Minute, extraEnv); err != nil {
-		s.audit(r, "settings.backup.create", false, map[string]interface{}{"encrypted": false, "key_source": keySource})
+		s.audit(r, "settings.backup.create", false, map[string]interface{}{"encrypted": false, "key_source": keySource, "error": tailString(redactPaths(firstNonEmptyLine(out, err.Error())), 300)})
 		s.notifyOperationalFailure("backup_failure", "NCC backup snapshot failed", map[string]interface{}{
 			"encrypted": encrypt,
 			"error":     redactPaths(firstNonEmptyLine(out, "snapshot failed")),
@@ -448,7 +486,7 @@ func (s *apiServer) handleBackupRestoreNamed(w http.ResponseWriter, r *http.Requ
 	}
 	out, err := s.runOrchestratorEnv([]string{"v2-restore", "--install-dir", installDir, "--input-file", archivePath, "--force", "--no-restart"}, 3*time.Minute, extraEnv)
 	if err != nil {
-		s.audit(r, "settings.backup.restore", false, map[string]interface{}{"install_dir": installDir, "name": body.Name})
+		s.audit(r, "settings.backup.restore", false, map[string]interface{}{"install_dir": installDir, "name": body.Name, "error": tailString(redactPaths(firstNonEmptyLine(out, err.Error())), 300)})
 		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "restore failed: " + strings.TrimSpace(out)})
 		return
 	}
@@ -469,6 +507,7 @@ func (s *apiServer) handleBackupRestoreNamed(w http.ResponseWriter, r *http.Requ
 			msg = "Previous software version and configuration restored. Restart the stack (v2-stop then v2-start) to load them."
 		}
 	}
+	msg += restoreStackNote(out)
 	writeJSON(w, http.StatusOK, envelope{
 		Success: true,
 		Message: msg,
@@ -521,14 +560,77 @@ func (s *apiServer) handleBackupVerifyNamed(w http.ResponseWriter, r *http.Reque
 	if passphrase != "" {
 		extraEnv = []string{"NCC_BACKUP_PASSPHRASE=" + passphrase}
 	}
-	out, err := s.runOrchestratorEnv([]string{"v2-restore", "--input-file", archivePath, "--verify-only"}, 2*time.Minute, extraEnv)
-	if err != nil {
+	out, err := s.runOrchestratorEnv([]string{"v2-restore", "--install-dir", s.maintenanceInstallDir(), "--input-file", archivePath, "--verify-only", "--json"}, 2*time.Minute, extraEnv)
+	report, parsed := parseBackupVerifyReport(out)
+	data := map[string]interface{}{"output": strings.TrimSpace(out)}
+	if parsed {
+		data = map[string]interface{}{"report": report}
+	}
+	if err != nil || (parsed && !report.OK) {
 		s.audit(r, "settings.backup.verify", false, map[string]interface{}{"name": filepath.Base(archivePath)})
-		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "verification failed: " + firstNonEmptyLine(out, err.Error()), Data: map[string]interface{}{"output": strings.TrimSpace(out)}})
+		msg := firstNonEmptyLine(out, "verification failed")
+		if parsed {
+			msg = "the backup failed " + plural.Count(report.failed(), "check")
+		} else if err != nil {
+			msg = firstNonEmptyLine(out, err.Error())
+		}
+		writeJSON(w, http.StatusBadRequest, envelope{Success: false, Error: "verification failed: " + msg, Data: data})
 		return
 	}
 	s.audit(r, "settings.backup.verify", true, map[string]interface{}{"name": filepath.Base(archivePath)})
-	writeJSON(w, http.StatusOK, envelope{Success: true, Message: "Backup verified: the archive is intact and restorable.", Data: map[string]interface{}{"output": strings.TrimSpace(out)}})
+	msg := "Backup verified: the archive is intact and restorable."
+	if parsed && report.warnings() > 0 {
+		msg = "Backup verified with " + plural.Count(report.warnings(), "warning") + "."
+	}
+	writeJSON(w, http.StatusOK, envelope{Success: true, Message: msg, Data: data})
+}
+
+// backupVerifyCheck / backupVerifyReport mirror the JSON that
+// `v2-restore --verify-only --json` prints (cmd/ncc-orchestrator/backupverify.go).
+type backupVerifyCheck struct {
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
+type backupVerifyReport struct {
+	Archive        string              `json:"archive"`
+	Encrypted      bool                `json:"encrypted"`
+	BackupVersion  string              `json:"backup_version,omitempty"`
+	RunningVersion string              `json:"running_version"`
+	CreatedAt      string              `json:"created_at,omitempty"`
+	Files          int                 `json:"files"`
+	Bytes          int64               `json:"bytes"`
+	Secrets        []string            `json:"secrets"`
+	Checks         []backupVerifyCheck `json:"checks"`
+	OK             bool                `json:"ok"`
+}
+
+func (r backupVerifyReport) count(status string) int {
+	n := 0
+	for _, c := range r.Checks {
+		if c.Status == status {
+			n++
+		}
+	}
+	return n
+}
+
+func (r backupVerifyReport) failed() int   { return r.count("fail") }
+func (r backupVerifyReport) warnings() int { return r.count("warn") }
+
+// parseBackupVerifyReport pulls the JSON report out of the orchestrator's
+// combined output (stderr may add an error line after it).
+func parseBackupVerifyReport(out string) (backupVerifyReport, bool) {
+	var rep backupVerifyReport
+	i := strings.Index(out, "{")
+	if i < 0 {
+		return rep, false
+	}
+	if err := json.NewDecoder(strings.NewReader(out[i:])).Decode(&rep); err != nil || len(rep.Checks) == 0 {
+		return backupVerifyReport{}, false
+	}
+	return rep, true
 }
 
 // handleBackupDelete removes a server-side backup archive by name.

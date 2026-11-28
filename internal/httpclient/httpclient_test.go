@@ -3,8 +3,10 @@ package httpclient
 import (
 	"bytes"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +39,40 @@ func TestPinVerifier(t *testing.T) {
 	verifyBad := pinVerifier([]string{"deadbeef"})
 	if err := verifyBad([][]byte{raw}, nil); err == nil {
 		t.Fatalf("expected non-matching pin to be rejected")
+	}
+}
+
+// The pin must hold on resumed TLS sessions too, which skip
+// VerifyPeerCertificate but not VerifyConnection.
+func TestPinConnectionVerifierOnResumedSessions(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	defer srv.Close()
+	sum := sha256.Sum256(srv.Certificate().Raw)
+	pin := hex.EncodeToString(sum[:])
+
+	get := func(pins []string, cache tls.ClientSessionCache) error {
+		tr := &http.Transport{TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true, // #nosec G402 -- test of the pin check
+			VerifyConnection:   pinConnectionVerifier(pins),
+			ClientSessionCache: cache,
+		}, DisableKeepAlives: true}
+		defer tr.CloseIdleConnections()
+		resp, err := (&http.Client{Transport: tr}).Get(srv.URL)
+		if err == nil {
+			resp.Body.Close()
+		}
+		return err
+	}
+
+	cache := tls.NewLRUClientSessionCache(4)
+	for i := 0; i < 2; i++ {
+		if err := get([]string{pin}, cache); err != nil {
+			t.Fatalf("request %d with the right pin: %v", i, err)
+		}
+	}
+	// Same cache (a resumable session exists), wrong pin: still rejected.
+	if err := get([]string{"deadbeef"}, cache); err == nil {
+		t.Fatal("wrong pin accepted on a resumable session")
 	}
 }
 

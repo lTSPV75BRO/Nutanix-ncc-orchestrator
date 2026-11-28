@@ -1,7 +1,7 @@
 {
   "schema_version": "2.0",
   "framework": "NIST CSF 2.0",
-  "profile": "Current Profile, NCC Orchestrator v2.3.0",
+  "profile": "Current Profile, NCC Orchestrator v2.4.0",
   "profile_doc": "docs/compliance/NIST_CSF_PROFILE.md",
   "related": [
     "docs/compliance/SSDF_PRACTICES.md",

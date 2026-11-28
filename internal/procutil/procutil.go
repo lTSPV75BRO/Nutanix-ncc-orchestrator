@@ -1,4 +1,4 @@
-// Package procutil answers "is this PID a live process?" portably. The
+// Package procutil answers "is this PID a live process?" portably, and ends one. The
 // POSIX idiom (os.FindProcess + Signal(0)) does not work on Windows, where
 // Process.Signal only supports Kill and returns an error for every other
 // signal, so a signal-0 probe reports every live process as dead there.
@@ -15,6 +15,16 @@ func Exists(pid int) bool {
 		return false
 	}
 	return exists(pid)
+}
+
+// Terminate ends the process at once. It returns os.ErrProcessDone when there is
+// no such process. On Windows an elevated Administrator can also end a process
+// of another account, such as the service that runs as SYSTEM.
+func Terminate(pid int) error {
+	if pid <= 0 {
+		return errors.New("invalid pid")
+	}
+	return terminate(pid)
 }
 
 // ImagePath returns the full path of the executable running as pid. It is

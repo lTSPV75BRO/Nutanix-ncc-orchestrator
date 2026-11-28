@@ -1,7 +1,6 @@
 package main
 
 import (
-	"compress/gzip"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
@@ -33,47 +32,6 @@ import (
 	"goncc/internal/v2layout"
 )
 
-// gzipResponseWriter wraps an http.ResponseWriter and transparently compresses
-// the body when the client advertised `gzip` in Accept-Encoding. Compression is
-// applied lazily on the first Write so handlers that produce no body (304/204)
-// don't incur the overhead.
-type gzipResponseWriter struct {
-	http.ResponseWriter
-	gz          *gzip.Writer
-	wroteHeader bool
-}
-
-func (g *gzipResponseWriter) WriteHeader(status int) {
-	if !g.wroteHeader {
-		g.wroteHeader = true
-		// Content-Length is wrong once we gzip; remove it so chunked transfer is
-		// used and add the encoding/vary headers.
-		g.Header().Del("Content-Length")
-		g.Header().Set("Content-Encoding", "gzip")
-		existingVary := g.Header().Get("Vary")
-		if existingVary == "" {
-			g.Header().Set("Vary", "Accept-Encoding")
-		} else if !strings.Contains(existingVary, "Accept-Encoding") {
-			g.Header().Set("Vary", existingVary+", Accept-Encoding")
-		}
-	}
-	g.ResponseWriter.WriteHeader(status)
-}
-
-func (g *gzipResponseWriter) Write(b []byte) (int, error) {
-	if !g.wroteHeader {
-		g.WriteHeader(http.StatusOK)
-	}
-	return g.gz.Write(b)
-}
-
-func (g *gzipResponseWriter) Close() error {
-	if g.gz == nil {
-		return nil
-	}
-	return g.gz.Close()
-}
-
 // shouldGzipPath returns true for text-y assets that compress well. We avoid
 // gzipping already-compressed payloads (images, fonts in woff2, etc.) since
 // the CPU cost outweighs the byte savings.
@@ -87,8 +45,17 @@ func shouldGzipPath(p string) bool {
 	return false
 }
 
+// acceptsGzip reports whether the client accepts gzip. "gzip;q=0" means it does not.
 func acceptsGzip(r *http.Request) bool {
-	return strings.Contains(strings.ToLower(r.Header.Get("Accept-Encoding")), "gzip")
+	for _, part := range strings.Split(strings.ToLower(r.Header.Get("Accept-Encoding")), ",") {
+		name, params, _ := strings.Cut(strings.TrimSpace(part), ";")
+		if strings.TrimSpace(name) != "gzip" {
+			continue
+		}
+		params = strings.ReplaceAll(params, " ", "")
+		return params != "q=0" && params != "q=0.0" && params != "q=0.00" && params != "q=0.000"
+	}
+	return false
 }
 
 // hashedAssetRe matches Vite's content-hashed filenames such as
@@ -277,7 +244,7 @@ func detectBackendLogin(backendURL string, transport *http.Transport) bool {
 // package. Without this match the ui-server would silently keep its
 // in-source defaults (e.g. `stream: dev`) even on a tagged release.
 var (
-	Version     = "2.3.0"
+	Version     = "2.4.0"
 	BuildDate   = "unknown"
 	Stream      = "dev"
 	GoVersion   = "unknown"
@@ -635,7 +602,13 @@ func main() {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
 	}
-	applyUIHeaders := func(w http.ResponseWriter, isTLS bool) { applyHeaders(w, isTLS, uiCSP) }
+	applyUIHeaders := func(w http.ResponseWriter, isTLS bool) {
+		applyHeaders(w, isTLS, uiCSP)
+		// Isolate the dashboard from windows it did not open.
+		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+		// Read by the Helm post-upgrade check: the UI's own version.
+		w.Header().Set("X-NCC-UI-Version", Version)
+	}
 	applyAPIHeaders := func(w http.ResponseWriter, isTLS bool) { applyHeaders(w, isTLS, apiCSP) }
 	proxy := newAPIProxy(apiProxyConfig{
 		Backend:          backend,
@@ -648,6 +621,7 @@ func main() {
 		TokenFile:        tokenFile,
 		AbsTokenFile:     absTokenFile,
 		TokenOverrideSet: apiToken != "",
+		UIServerVersion:  Version,
 	})
 
 	originSet := map[string]struct{}{}
@@ -709,8 +683,24 @@ func main() {
 	}))
 	staticFS := http.Dir(dir)
 	fileServer := http.FileServer(staticFS)
+	assets := newGzipAssets(staticFS)
 	indexPath := filepath.Join(dir, "index.html")
 	serveIndex := func(w http.ResponseWriter, r *http.Request) {
+		// The shell is the first request of every page load, so send it
+		// compressed from the same cache as the assets.
+		if r.Method == http.MethodGet && acceptsGzip(r) {
+			if e := assets.entry("/index.html"); e != nil {
+				h := w.Header()
+				h.Set("Content-Type", "text/html; charset=utf-8")
+				h.Set("Content-Encoding", "gzip")
+				h.Set("Cache-Control", "no-store")
+				h.Add("Vary", "Accept-Encoding")
+				h.Set("Content-Length", strconv.Itoa(len(e.body)))
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(e.body)
+				return
+			}
+		}
 		b, err := os.ReadFile(indexPath)
 		if err != nil {
 			http.Error(w, "index.html not found", http.StatusInternalServerError)
@@ -727,11 +717,7 @@ func main() {
 	// text-y assets, then delegates to the underlying http.FileServer.
 	serveStatic := func(w http.ResponseWriter, r *http.Request) {
 		setStaticCacheHeaders(w, r.URL.Path)
-		if shouldGzipPath(r.URL.Path) && acceptsGzip(r) {
-			gz := gzip.NewWriter(w)
-			grw := &gzipResponseWriter{ResponseWriter: w, gz: gz}
-			defer grw.Close()
-			fileServer.ServeHTTP(grw, r)
+		if assets.serve(w, r) {
 			return
 		}
 		fileServer.ServeHTTP(w, r)

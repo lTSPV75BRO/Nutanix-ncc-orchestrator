@@ -117,7 +117,7 @@ export function EnvironmentSchedulesPanel() {
           loading={schedules.isLoading}
           pagination={false}
           scroll={{ x: 760 }}
-          locale={{ emptyText: <EmptyState title="No environment schedules" description="Add one to run an environment on a timetable, for example prod every day at 02:00." /> }}
+          locale={{ emptyText: <EmptyState title="No environment schedules" description="Add one to run an environment on a timetable, for example prod every day at 02:00" /> }}
           columns={[
             {
               title: "Environment",

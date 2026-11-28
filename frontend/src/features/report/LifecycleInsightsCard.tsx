@@ -43,11 +43,11 @@ export function LifecycleInsightsCard({ enabled }: { enabled: boolean }) {
 
   return (
     <Card className="page-card">
-      <Typography.Title level={4} className="section-title">
+      <Typography.Title level={2} className="section-title">
         Alert aging and recurrence
       </Typography.Title>
       <Typography.Text type="secondary" className="section-subtitle">
-        How long open NCC alerts have been waiting, how fast they get handled, and which ones keep coming back.
+        How long open NCC findings have been waiting, how fast they get handled, and which ones keep coming back.
       </Typography.Text>
 
       {alerts.isLoading ? (
@@ -57,7 +57,7 @@ export function LifecycleInsightsCard({ enabled }: { enabled: boolean }) {
           Alert history is not available from this server.
         </Typography.Paragraph>
       ) : (alerts.data ?? []).length === 0 ? (
-        <Empty style={{ marginTop: 16 }} description="No NCC alert history yet." />
+        <Empty style={{ marginTop: 16 }} description="No NCC finding history yet" />
       ) : (
         <>
           <Row gutter={[12, 12]} style={{ marginTop: 16 }}>
@@ -116,7 +116,7 @@ export function LifecycleInsightsCard({ enabled }: { enabled: boolean }) {
 
           {insights.recurring.length > 0 ? (
             <>
-              <Typography.Title level={5} style={{ marginTop: 20 }}>
+              <Typography.Title level={3} className="section-subheading" style={{ marginTop: 20 }}>
                 Keeps coming back
               </Typography.Title>
               <Typography.Text type="secondary">
@@ -152,7 +152,7 @@ export function LifecycleInsightsCard({ enabled }: { enabled: boolean }) {
 
           {insights.looksFixed.length > 0 ? (
             <>
-              <Typography.Title level={5} style={{ marginTop: 20 }}>
+              <Typography.Title level={3} className="section-subheading" style={{ marginTop: 20 }}>
                 Open but no longer reported
               </Typography.Title>
               <Typography.Text type="secondary">

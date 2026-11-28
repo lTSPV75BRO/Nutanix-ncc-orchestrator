@@ -417,12 +417,21 @@ const gets: Record<string, Handler> = {
   "/api/v1/alerts": () => fx.PC_ALERTS,
   "/api/v1/alerts/ncc": (u) => {
     const includeClosed = u.searchParams.get("include_closed") === "true";
-    const items = alerts().filter((a) => includeClosed || a.state !== "resolved");
+    // Like the API: cluster matches the address or the name, check the check name.
+    const cluster = (u.searchParams.get("cluster") || "").toLowerCase();
+    const check = (u.searchParams.get("check") || "").toLowerCase();
+    const items = alerts().filter(
+      (a) =>
+        (includeClosed || a.state !== "resolved") &&
+        (!cluster || a.cluster.toLowerCase() === cluster || (a.cluster_name ?? "").toLowerCase() === cluster) &&
+        (!check || a.check.toLowerCase() === check),
+    );
     return { items, count: items.length, next_cursor: "", last_run: latestSummary().timestamp };
   },
   "/api/v1/alerts/ncc-dispositions": () => ({ items: dispositions() }),
   "/api/v1/schedule": () => fx.SCHEDULE,
   "/api/v1/schedule/health": () => fx.SCHEDULE_HEALTH,
+  "/api/v1/freshness": () => fx.FRESHNESS,
   "/api/v1/health/diagnostics": () => fx.DIAGNOSTICS,
   "/api/v1/health/history": () => fx.HEAL_HISTORY,
   "/api/v1/health/autoheal": () => fx.AUTOHEAL,
@@ -441,7 +450,20 @@ const gets: Record<string, Handler> = {
   "/api/v1/settings/notifications/status": () => state.saved["/api/v1/settings/notifications/status"] ?? fx.NOTIFICATION_STATUS,
   "/api/v1/settings/backups": () => ({ ...fx.BACKUPS, backups: state.backups }),
   "/api/v1/settings/backups/schedule": () => fx.BACKUP_SCHEDULE,
+  "/api/v1/settings/retention/preview": () => ({
+    dry_run: true,
+    generated_at: new Date().toISOString(),
+    rules: [
+      { id: "runs", title: "Run history", dir: "outputfiles/runs", enabled: true, settings: { "retain-last": 500, "retain-days": 30 }, count: 0, bytes: 0, items: [] },
+      { id: "artifacts", title: "Report files", dir: "outputfiles", enabled: false, settings: { "artifact-retain-days": 0, "artifact-retain-max-files": 0 }, count: 0, bytes: 0, items: [] },
+      { id: "raw-logs", title: "Raw NCC logs", dir: "nccfiles", enabled: false, settings: { "raw-log-retain-days": 0 }, count: 0, bytes: 0, items: [] },
+    ],
+    total_count: 0,
+    total_bytes: 0,
+  }),
   "/api/v1/settings/update": () => fx.UPDATE_STATUS,
+  "/api/v1/settings/update/notice": () => ({ current_version: fx.UPDATE_STATUS.current_version, update_available: false }),
+  "/api/v1/settings/update/plan": () => ({ current_version: fx.UPDATE_STATUS.current_version, up_to_date: true, helper: "ready", kind: "systemd", service: "systemd service ncc-orchestrator.service" }),
   "/api/v1/settings/sso": () => ({ enabled: false }),
   "/api/v1/settings/oidc": () => ({ enabled: false }),
   "/api/v1/settings/ldap": () => ({ enabled: false }),

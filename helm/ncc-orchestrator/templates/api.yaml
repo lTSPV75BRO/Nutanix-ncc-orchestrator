@@ -13,6 +13,15 @@ spec:
       labels: { app: ncc-orchestrator-v2, component: api }
     spec:
       serviceAccountName: ncc-v2-api
+      # Same pod security context as the runner CronJob and the UI: the
+      # init container and the API run as uid 1000 and /data is group-owned.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
@@ -24,10 +33,19 @@ spec:
             matchLabels:
               app: ncc-orchestrator-v2
               component: api
+          # Spread each revision on its own: the old pods of a rollout otherwise
+          # count, and both new replicas could end up on one node.
+          matchLabelKeys: ["pod-template-hash"]
       initContainers:
         - name: seed-config
-          image: busybox:1.37
+          image: {{ .Values.initImage }}
           command: ["sh", "-c", "mkdir -p /data/config && test -f /data/config/config.yaml || cp /config-cm/config.yaml /data/config/config.yaml"]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: {{ .Values.readOnlyRootFilesystem }}
+            capabilities: { drop: ["ALL"] }
           volumeMounts:
             - { name: config-cm, mountPath: /config-cm, readOnly: true }
             - { name: data, mountPath: /data }
@@ -35,7 +53,7 @@ spec:
         - name: api
           image: "{{ .Values.images.api.repository }}:{{ .Values.images.api.tag }}"
           imagePullPolicy: {{ .Values.images.api.pullPolicy }}
-          args: ["--listen", ":8081", "--repo-root", "/data", "--config-path", "/data/config/config.yaml", "--output-dir", "/data/outputfiles", "--orchestrator-bin", "/usr/local/bin/ncc-orchestrator", "--cors-origin", "$(NCC_UI_ORIGIN)", "--users-db-secret", "ncc-v2-users", "--cookie-secure"]
+          args: ["--listen", ":8081", "--repo-root", "/data", "--config-path", "/data/config/config.yaml", "--output-dir", "/data/outputfiles", "--log-dir", "/data/nccfiles", "--runner-log-path", "/data/logs/ncc-runner.log", "--audit-log-path", "/data/logs/ncc-audit.log", "--notifications-state-path", "/data/logs/.ncc-api-notifications.json", "--token-file-path", "/data/auth/.ncc-api-token", "--orchestrator-bin", "/usr/local/bin/ncc-orchestrator", "--cors-origin", "$(NCC_UI_ORIGIN)", "--users-db", "", "--users-db-secret", "ncc-v2-users", "--cookie-secure"]
           env:
             - name: NCC_RUNTIME_MODE
               value: kubernetes
@@ -82,10 +100,14 @@ spec:
             runAsNonRoot: true
             runAsUser: 1000
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: {{ .Values.readOnlyRootFilesystem }}
             capabilities: { drop: ["ALL"] }
           volumeMounts:
             - { name: data, mountPath: /data }
+            - { name: tmp, mountPath: /tmp }
       volumes:
+        - name: tmp
+          emptyDir: {}
         - name: config-cm
           configMap: { name: {{ .Values.configMapName }} }
         - name: data

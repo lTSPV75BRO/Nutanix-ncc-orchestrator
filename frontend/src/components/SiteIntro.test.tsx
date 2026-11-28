@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { INTRO_EXIT_MS, INTRO_HOLD_MS, OFF_KEY, SiteIntro } from "./SiteIntro";
+import { INTRO_EXIT_MS, INTRO_HOLD_MS, ON_KEY, SiteIntro } from "./SiteIntro";
 
 const health = vi.hoisted(() => vi.fn());
 vi.mock("../api/client", () => ({ api: { health } }));
@@ -10,6 +10,8 @@ describe("opening title", () => {
     vi.useFakeTimers();
     window.sessionStorage.clear();
     window.localStorage.clear();
+    // An administrator turned the title on, and this browser saw that before.
+    window.localStorage.setItem(ON_KEY, "1");
     health.mockReset();
     health.mockResolvedValue({ status: "ok", intro_title: true });
   });
@@ -24,7 +26,7 @@ describe("opening title", () => {
       await vi.dynamicImportSettled();
     });
     expect(screen.getByRole("img", { name: "NCC Orchestrator" })).toBeInTheDocument();
-    expect(screen.getByText("Cluster healthcheck platform")).toBeInTheDocument();
+    expect(screen.getByText("NCC health checks for every cluster")).toBeInTheDocument();
 
     act(() => {
       vi.advanceTimersByTime(INTRO_HOLD_MS);
@@ -61,21 +63,34 @@ describe("opening title", () => {
       await Promise.resolve();
     });
     expect(screen.queryByTestId("site-intro")).toBeNull();
-    expect(window.localStorage.getItem(OFF_KEY)).toBe("1");
+    expect(window.localStorage.getItem(ON_KEY)).toBeNull();
 
     cleanup();
     render(<SiteIntro />);
     expect(screen.queryByTestId("site-intro")).toBeNull();
   });
 
-  it("plays again once the switch is back on", async () => {
-    window.localStorage.setItem(OFF_KEY, "1");
+  it("is off by default: nothing shows unless the server says it is on", async () => {
+    window.localStorage.removeItem(ON_KEY);
+    health.mockResolvedValue({ status: "ok" });
     render(<SiteIntro />);
     expect(screen.queryByTestId("site-intro")).toBeNull();
     await act(async () => {
       await Promise.resolve();
     });
-    expect(window.localStorage.getItem(OFF_KEY)).toBeNull();
+    expect(screen.queryByTestId("site-intro")).toBeNull();
+    expect(window.localStorage.getItem(ON_KEY)).toBeNull();
+  });
+
+  it("plays once the switch is turned on, from the first frame next time", async () => {
+    window.localStorage.removeItem(ON_KEY);
+    render(<SiteIntro />);
+    expect(screen.queryByTestId("site-intro")).toBeNull();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("site-intro")).toBeInTheDocument();
+    expect(window.localStorage.getItem(ON_KEY)).toBe("1");
 
     cleanup();
     render(<SiteIntro />);

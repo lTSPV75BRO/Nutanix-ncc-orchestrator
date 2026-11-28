@@ -3,20 +3,20 @@ namespace: ncc-orchestrator-v2
 images:
   runner:
     repository: docker.io/prajwalnutant/nutanix-ncc-orchestrator
-    tag: "2.3.0"
+    tag: "2.4.0"
     pullPolicy: IfNotPresent
   api:
     repository: docker.io/prajwalnutant/ncc-api-server
-    tag: "2.3.0"
+    tag: "2.4.0"
     pullPolicy: IfNotPresent
   ui:
     repository: docker.io/prajwalnutant/ncc-ui-server
-    tag: "2.3.0"
+    tag: "2.4.0"
     pullPolicy: IfNotPresent
 
 image:
   repository: docker.io/prajwalnutant/nutanix-ncc-orchestrator
-  tag: "2.3.0"
+  tag: "2.4.0"
   pullPolicy: IfNotPresent
 
 cronjob:
@@ -59,15 +59,117 @@ ingress:
 # memory — ~1 GiB measured at 7,000 clusters / 200k findings, well under
 # 256Mi for small fleets. When setting a memory limit for the api, also set
 # apiGoMemLimit to ~90% of it so the Go heap stays under the limit.
+# The defaults are requests only (no limits), for the scheduler.
 resources:
-  api: {}
-  ui: {}
+  api:
+    requests: { cpu: 100m, memory: 256Mi }
+  ui:
+    requests: { cpu: 50m, memory: 64Mi }
+  runner:
+    requests: { cpu: 100m, memory: 256Mi }
+
+# Containers run with a read-only root filesystem; only /data (the PVC) and
+# /tmp (an emptyDir) are writable. Set to false only to work around a custom
+# image that writes elsewhere.
+readOnlyRootFilesystem: true
 
 # GOMEMLIMIT for the api-server, e.g. "1800MiB" with a 2Gi limit. Empty = unset.
 apiGoMemLimit: ""
 
+# NetworkPolicies (same as k8s/networkpolicy-*.yaml). Ingress rules are on by
+# default: default-deny, the UI port from uiIngressFrom and in-cluster
+# namespaces, and the API only from UI pods.
+networkPolicy:
+  enabled: true
+  uiIngressFrom: ["0.0.0.0/0"]
+  # Extra peers allowed to reach the API on 8081 (e.g. a Prometheus
+  # namespace), as NetworkPolicy `from` entries.
+  apiIngressFrom: []
+  # Egress restriction is opt-in: it must allow every destination the stack
+  # talks to. Add 389/636 for LDAP and your webhook ports as needed.
+  egress:
+    enabled: false
+    cidrs: ["0.0.0.0/0"]
+    ports: [443, 9440, 587]
+    # The API needs the Kubernetes API. "auto" adds a CiliumNetworkPolicy
+    # when Cilium is installed; without Cilium add the API server address to
+    # cidrs and its port (443 or 6443) to ports.
+    ciliumKubeAPI: auto
+
+# PodDisruptionBudgets for the API and UI (only when replicas > 1).
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Alert rules for the Prometheus Operator (PrometheusRule). Needs the
+# monitoring.coreos.com CRDs and kube-state-metrics; the ncc_* rules need
+# Prometheus to scrape the API's /metrics. See docs/PROMETHEUS.md.
+prometheusRule:
+  enabled: false
+  # Extra labels, e.g. the release label your Prometheus selects rules by.
+  labels: {}
+  # Warn when no run has succeeded, or no report arrived, for this long.
+  staleReportHours: 26
+  # Warn when the data volume has less than this fraction free.
+  pvcFreeRatio: 0.1
+
+# Hook Jobs of `helm upgrade`. Before anything changes, the new images are
+# pulled and started once, then the preCheck below runs against the old stack.
+# Afterwards the API, the UI and the runner image must all report the new
+# version. When a check fails the release is marked failed and, with --atomic
+# (--rollback-on-failure in Helm 4), the previous revision comes back. Why a
+# check failed: kubectl -n <namespace> logs job/ncc-v2-upgrade-preflight
+# (before) or job/ncc-v2-upgrade-check (after).
+upgradeCheck:
+  enabled: true
+  # How long pulling the new images may take.
+  pullTimeoutSeconds: 240
+  # How long the API and UI may take to run the new version.
+  timeout: 5m
+  # The version to expect: "auto" takes it from the API image tag when that is
+  # a plain version; "" accepts any version.
+  expectVersion: auto
+  # Checks before the rollout (hook Job ncc-v2-upgrade-preflight). It runs with
+  # the API's user and group, on the node the API runs on, and mounts the data
+  # volume. The first three run before the backup; any failure stops the
+  # upgrade before anything changed.
+  preCheck:
+    # Take a backup through the running API and verify it. Fails the upgrade
+    # when the API cannot make one (for example no backup key where encryption
+    # is required). Needs the api-token key of the credentials Secret. Set false
+    # to skip it (also needed when the API is down on purpose).
+    backup: true
+    # Refuse when the data volume has less than this free, before and after the
+    # backup (which is stored on it). "0" turns the check off.
+    minFreeSpace: 512Mi
+    # Refuse a downgrade, and a target older than minFrom can be installed over.
+    skew: true
+    # The release's `min_from` (upgrade-manifest.json): the oldest version it
+    # installs over. "" = no limit. Set it when a release says "go to X first".
+    minFrom: ""
+    # Allow a target older than the running version (a deliberate rollback by
+    # upgrade). Restoring a backup is the safer way back.
+    allowDowngrade: false
+    # Write and remove a file in /data as the API's user.
+    permissions: true
+    # How long the running API may take to answer before the check gives up.
+    apiTimeout: 30s
+    # Deadline of the whole Job (the backup is part of it).
+    timeoutSeconds: 600
+
 configMapName: ncc-orchestrator-config
 pvcName: ncc-orchestrator-output
+
+# Storage for /data (config, reports, run history, logs). Two or more API
+# replicas share it, so the default is ReadWriteMany and needs a storage class
+# that supports it (NFS, CephFS, ...). Leave storageClass empty to use the
+# cluster default, which is often ReadWriteOnce-only: then the PVC never binds
+# on a multi-node cluster. For a single replica (api.replicas=1, ui.replicas=1)
+# on RWO-only storage set accessMode to ReadWriteOnce.
+persistence:
+  accessMode: ReadWriteMany
+  storageClass: ""
+  size: 10Gi
 secretName: ncc-orchestrator-credentials
 
 initImage: busybox:1.37

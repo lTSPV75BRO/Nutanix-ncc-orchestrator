@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "ncc-orchestrator": {
+      "command": "/absolute/path/to/ncc-mcp-server",
+      "env": {
+        "NCC_MCP_TOKEN": "ncc_pat_REPLACE_ME",
+        "NCC_MCP_API_URL": "http://127.0.0.1:8081",
+        "NCC_MCP_PROFILE": "readonly"
+      }
+    }
+  }
+}

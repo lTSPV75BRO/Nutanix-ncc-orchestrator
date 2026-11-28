@@ -32,22 +32,22 @@ type MetricMeta = {
 };
 
 const METRICS: MetricMeta[] = [
-  { key: "new-fails", label: "New fails", hint: "Number of checks newly failing vs the previous run." },
-  { key: "resolved-fails", label: "Resolved fails", hint: "Number of previously failing checks now passing." },
-  { key: "fail-rate", label: "Fail rate", hint: "Percentage of checks failing across all clusters.", unit: "%" },
-  { key: "clusters-failed", label: "Failed clusters", hint: "Clusters with at least one failed check." },
-  { key: "max-cluster-failures", label: "Max cluster failures", hint: "Highest fail count from a single cluster." },
-  { key: "regressions", label: "Regressions", hint: "Checks that worsened in severity vs the previous run." },
-  { key: "flaky-checks", label: "Flaky checks", hint: "Checks toggling between PASS/FAIL across recent runs." },
-  { key: "min-health-score", label: "Min health score", hint: "Lowest cluster health score across all clusters." },
-  { key: "avg-health-score", label: "Avg health score", hint: "Mean cluster health score across all clusters." },
-  { key: "timeout-clusters", label: "Timeout clusters", hint: "Clusters that timed out during the run." },
-  { key: "auth-failures", label: "Auth failures", hint: "Authentication errors observed during the run." },
-  { key: "network-failures", label: "Network failures", hint: "Network-class errors during the run." },
-  { key: "api-failures", label: "API failures", hint: "Generic API errors observed during the run." },
-  { key: "parser-failures", label: "Parser failures", hint: "NCC log parsing errors during the run." },
-  { key: "rate-limit-failures", label: "Rate-limit failures", hint: "HTTP 429s encountered during the run." },
-  { key: "unknown-failures", label: "Unknown failures", hint: "Failures that don't fit other classes." },
+  { key: "new-fails", label: "New fails", hint: "Number of checks newly failing vs the previous run" },
+  { key: "resolved-fails", label: "Resolved fails", hint: "Number of previously failing checks now passing" },
+  { key: "fail-rate", label: "Fail rate", hint: "Percentage of checks failing across all clusters", unit: "%" },
+  { key: "clusters-failed", label: "Failed clusters", hint: "Clusters with at least one failed check" },
+  { key: "max-cluster-failures", label: "Max cluster failures", hint: "Highest fail count from a single cluster" },
+  { key: "regressions", label: "Regressions", hint: "Checks that worsened in severity vs the previous run" },
+  { key: "flaky-checks", label: "Flaky checks", hint: "Checks toggling between PASS/FAIL across recent runs" },
+  { key: "min-health-score", label: "Min health score", hint: "Lowest cluster health score across all clusters" },
+  { key: "avg-health-score", label: "Avg health score", hint: "Mean cluster health score across all clusters" },
+  { key: "timeout-clusters", label: "Timeout clusters", hint: "Clusters that timed out during the run" },
+  { key: "auth-failures", label: "Auth failures", hint: "Authentication errors observed during the run" },
+  { key: "network-failures", label: "Network failures", hint: "Network-class errors during the run" },
+  { key: "api-failures", label: "API failures", hint: "Generic API errors observed during the run" },
+  { key: "parser-failures", label: "Parser failures", hint: "NCC log parsing errors during the run" },
+  { key: "rate-limit-failures", label: "Rate-limit failures", hint: "HTTP 429s encountered during the run" },
+  { key: "unknown-failures", label: "Unknown failures", hint: "Failures that don't fit other classes" },
 ];
 
 const OPERATORS = [

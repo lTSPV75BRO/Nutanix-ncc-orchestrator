@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -182,5 +183,63 @@ func TestPostRestoreSelfHealIncludesSchedulerNormalizationNote(t *testing.T) {
 	joined := strings.Join(notes, " | ")
 	if !strings.Contains(joined, "normalized scheduler state paths to install-root defaults") {
 		t.Fatalf("expected normalization note, got: %v", notes)
+	}
+}
+
+// A start state without TLS paths (plain HTTP, or the self-signed default)
+// must not be "repaired" into files named "<nil>".
+func TestPostRestoreSelfHealIgnoresMissingTLSPaths(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.MkdirAll(filepath.Join(dir, "tls"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		startStateFileName:      `{"ui_listen":":8080"}`,
+		"tls/ui-selfsigned.crt": "CERT",
+		"tls/ui-selfsigned.key": "KEY",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := &apiServer{configPath: filepath.Join(dir, "config.yaml")}
+	if notes := s.postRestoreValidateAndSelfHeal(dir); len(notes) != 0 {
+		t.Errorf("notes = %v", notes)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "<nil>")); err == nil {
+		t.Error(`wrote a file named "<nil>"`)
+	}
+}
+
+// A restore re-created a "15 2 * * *" schedule as every 4 hours, and turned the
+// lock on: the cron expression was dropped, and "--with-lock false" as two
+// arguments parses as true.
+func TestHealMissingScheduleArtifactsKeepsCronAndLock(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a POSIX shell stub")
+	}
+	dir := t.TempDir()
+	bin, calls := filepath.Join(dir, "orch"), filepath.Join(dir, "calls")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf '[%s]' \"$@\" > '"+calls+"'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The API leaves with_lock out when it is off.
+	state := `{"type":"cron","action":"create","cron":"15 2 * * *"}`
+	if err := os.WriteFile(filepath.Join(dir, scheduleStateFileName), []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := &apiServer{repoRoot: dir, orchestratorBin: bin}
+	if healed, _ := s.healMissingScheduleArtifacts(dir); !healed {
+		t.Fatal("not healed")
+	}
+	got, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"[--cron][15 2 * * *]", "[--with-lock=false]"} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("args lack %s: %s", want, got)
+		}
 	}
 }

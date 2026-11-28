@@ -20,12 +20,12 @@ type Props = {
 };
 
 const SLICES: { key: keyof ReportData; label: string; description: string }[] = [
-  { key: "run_summary", label: "Run summary", description: "Totals for the latest run." },
-  { key: "checks_snapshot", label: "Check results", description: "Check results across clusters." },
-  { key: "drilldown_diff", label: "Run comparison", description: "How this run differs from the previous one." },
-  { key: "flaky_checks", label: "Flaky checks", description: "Checks that pass and fail across recent runs." },
-  { key: "regression_summary", label: "Change summary", description: "What got better or worse since the previous run." },
-  { key: "slo_dashboard", label: "Service health", description: "Health and failure rate for each cluster." },
+  { key: "run_summary", label: "Run summary", description: "Totals for the latest run" },
+  { key: "checks_snapshot", label: "Check results", description: "Check results across clusters" },
+  { key: "drilldown_diff", label: "Run comparison", description: "How this run differs from the previous one" },
+  { key: "flaky_checks", label: "Flaky checks", description: "Checks that pass and fail across recent runs" },
+  { key: "regression_summary", label: "Change summary", description: "What got better or worse since the previous run" },
+  { key: "slo_dashboard", label: "Service health", description: "Health and failure rate for each cluster" },
 ];
 
 function describe(value: unknown): string {
